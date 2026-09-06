@@ -2043,7 +2043,7 @@ FILL_PNL_RE = re.compile(r'\bpnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
 FILL_FEE_RE = re.compile(r'\bfee=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
 FILL_EVENT_TS_RE = re.compile(r'\[fill\]\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z\b')
 SYNC_EXCLUDE_FILES = {'approved_coins.json', 'config_run.json', 'ignored_coins.json', 'running_version.txt'}
-PB8_PNL_CACHE_VERSION = 1
+PB8_PNL_CACHE_VERSION = 2
 HISTORY_WINDOW_HOURS = 24 * 28
 
 # shared helpers (used by both counting and dump mode)
@@ -2283,6 +2283,11 @@ def _count_hourly_files(files, needle, from_hour, to_hour):
         except Exception as exc:
             _log(SERVICE, f'[monitor-history] Failed to read {fp}: {exc}', level='WARNING')
     return buckets
+
+def _pb8_archive_log_matches(filename, name):
+    return os.path.basename(filename).endswith(
+        '_run_v8_' + name + '_config.json.log'
+    )
 
 def _pb8_pnl_summary(files):
     latest_summary = None
@@ -3011,10 +3016,12 @@ for name, process_info in sorted(running_v8.items()):
         import glob as _glob8
         log_real = os.path.realpath(native_log) if os.path.isfile(native_log) else ''
         for fp in sorted(
-            _glob8.glob(os.path.join(PB8DIR, 'logs', '*' + name + '*.log')),
+            _glob8.glob(os.path.join(PB8DIR, 'logs', '*.log')),
             key=os.path.getmtime, reverse=True,
         ):
             if not os.path.isfile(fp) or os.path.islink(fp):
+                continue
+            if not _pb8_archive_log_matches(fp, name):
                 continue
             if log_real and os.path.realpath(fp) == log_real:
                 continue

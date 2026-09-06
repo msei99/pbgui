@@ -338,6 +338,7 @@ body {
   border-radius: 4px; padding: var(--sp-sm); resize: vertical;
   color: var(--text); tab-size: 4;
 }
+.json-editor.compact-json-editor { min-height: 72px; max-height: 180px; }
 textarea.json-invalid,
 textarea.json-invalid:focus {
   border-color: var(--red);
@@ -944,65 +945,65 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 
     <div class="subsection-title" data-v8-only>PB8 Runtime</div>
     <div class="form-row cols-8" data-v8-only>
-    <div class="form-group" style="grid-column:span 2">
-      <label><span data-tip="Hours PB8 keeps an exchange-reported unavailable symbol in its in-memory cooldown. 0 disables the cooldown. The state resets when PB8 restarts.">exchange_symbol_unavailable_cooldown_hours</span></label>
-      <input type="number" id="f-exchange-symbol-cooldown" min="0" max="876600" step="0.1" value="6">
-    </div>
-    <div class="form-group" style="grid-column:span 2">
-      <label><span data-tip="Optional path to a PB8 custom-endpoints definition. Leave blank to use built-in endpoints.">custom_endpoints_path</span></label>
-      <input type="text" id="f-custom-endpoints-path" value="" placeholder="default">
-    </div>
-    <div class="form-group" style="grid-column:span 4">
-      <label><span data-tip="Expert diagnostic reporting thresholds only; these values do not gate startup or trading. Use canonical phase names with elapsed_ms and/or since_previous_ms non-negative integer values. An empty object uses runtime defaults.">startup_phase_budgets (Expert/Diagnostic)</span></label>
-      <textarea class="json-editor" id="f-startup-phase-budgets" rows="4">{}</textarea>
-      <div id="f-startup-phase-budgets-status" class="field-status field-status-inline" aria-live="polite"></div>
-    </div>
+      <div class="form-group" style="grid-column:span 2">
+        <label><span data-tip="Hours PB8 keeps an exchange-reported unavailable symbol in its in-memory cooldown. 0 disables the cooldown. The state resets when PB8 restarts.">exchange_symbol_unavailable_cooldown_hours</span></label>
+        <input type="number" id="f-exchange-symbol-cooldown" min="0" max="876600" step="0.1" value="6">
+      </div>
+      <div class="form-group" style="grid-column:span 2">
+        <label><span data-tip="Optional path to a PB8 custom-endpoints definition. Leave blank to use built-in endpoints.">custom_endpoints_path</span></label>
+        <input type="text" id="f-custom-endpoints-path" value="" placeholder="default">
+      </div>
+      <div class="form-group" style="grid-column:span 4">
+        <label><span data-tip="Expert diagnostic reporting thresholds only; these values do not gate startup or trading. Use canonical phase names with elapsed_ms and/or since_previous_ms non-negative integer values. An empty object uses runtime defaults.">startup_phase_budgets (Expert/Diagnostic)</span></label>
+        <textarea class="json-editor compact-json-editor" id="f-startup-phase-budgets" rows="3">{}</textarea>
+        <div id="f-startup-phase-budgets-status" class="field-status field-status-inline" aria-live="polite"></div>
+      </div>
     </div>
 
     <div class="subsection-title" data-v8-only>Logging</div>
     <div class="form-row cols-8" data-v8-only>
-    <div class="form-group">
-      <label><span data-tip="Directory used by PB8 for its own log files.">logging.dir</span></label>
-      <input type="text" id="f-log-dir" value="logs">
-    </div>
-    <div class="form-group">
-      <label><span data-tip="Maximum size in MiB of one PB8 log file before rotation.">logging.max_bytes_mb</span></label>
-      <input type="number" id="f-log-max-bytes" min="0" step="1" value="10">
-    </div>
-    <div class="form-group">
-      <label><span data-tip="Number of rotated PB8 log files retained.">logging.backup_count</span></label>
-      <input type="number" id="f-log-backup-count" min="0" step="1" value="5">
-    </div>
-    <div class="form-group" style="justify-content:flex-end">
-      <div class="chk-row"><input type="checkbox" id="f-log-persist"><label for="f-log-persist">logging.persist_to_file</label></div>
-    </div>
-    <div class="form-group" style="justify-content:flex-end">
-      <div class="chk-row"><input type="checkbox" id="f-log-rotation"><label for="f-log-rotation">logging.rotation</label></div>
-    </div>
-    <div class="form-group" style="grid-column:span 3">
-      <label><span data-tip="PB8 live-event debug profiles as a JSON array.">logging.live_event_debug_profiles</span></label>
-      <textarea class="json-editor" id="f-log-debug-profiles" rows="4">[]</textarea>
-      <div id="f-log-debug-profiles-status" class="field-status field-status-inline" aria-live="polite"></div>
-    </div>
+      <div class="form-group">
+        <label><span data-tip="Directory used by PB8 for its own log files.">logging.dir</span></label>
+        <input type="text" id="f-log-dir" value="logs">
+      </div>
+      <div class="form-group">
+        <label><span data-tip="Maximum size in MiB of one PB8 log file before rotation.">logging.max_bytes_mb</span></label>
+        <input type="number" id="f-log-max-bytes" min="0" step="1" value="10">
+      </div>
+      <div class="form-group">
+        <label><span data-tip="Number of rotated PB8 log files retained.">logging.backup_count</span></label>
+        <input type="number" id="f-log-backup-count" min="0" step="1" value="5">
+      </div>
+      <div class="form-group" style="justify-content:flex-end;gap:var(--sp-xs)">
+        <div class="chk-row"><input type="checkbox" id="f-log-persist"><label for="f-log-persist">logging.persist_to_file</label></div>
+        <div class="chk-row"><input type="checkbox" id="f-log-rotation"><label for="f-log-rotation">logging.rotation</label></div>
+      </div>
+      <div class="form-group" style="grid-column:span 4">
+        <label><span data-tip="PB8 live-event debug profiles as a JSON array.">logging.live_event_debug_profiles</span></label>
+        <textarea class="json-editor compact-json-editor" id="f-log-debug-profiles" rows="3">[]</textarea>
+        <div id="f-log-debug-profiles-status" class="field-status field-status-inline" aria-live="polite"></div>
+      </div>
     </div>
 
     <div class="subsection-title" data-v8-only>Monitoring</div>
     <div class="form-row cols-8" data-v8-only>
-    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-enabled"><label for="f-monitor-enabled">monitor.enabled</label></div></div>
-    <div class="form-group"><label>monitor.root_dir</label><input type="text" id="f-monitor-root-dir" value="monitor"></div>
-    <div class="form-group"><label>monitor.snapshot_interval_seconds</label><input type="number" id="f-monitor-snapshot-interval" min="0" step="0.1" value="1"></div>
-    <div class="form-group"><label>monitor.checkpoint_interval_minutes</label><input type="number" id="f-monitor-checkpoint" min="0" step="0.1" value="10"></div>
-    <div class="form-group"><label>monitor.event_rotation_mb</label><input type="number" id="f-monitor-rotation-mb" min="0" step="1" value="128"></div>
-    <div class="form-group"><label>monitor.event_rotation_minutes</label><input type="number" id="f-monitor-rotation-minutes" min="0" step="1" value="60"></div>
-    <div class="form-group"><label>monitor.max_total_bytes</label><input type="number" id="f-monitor-max-bytes" min="0" step="1" value="1073741824"></div>
-    <div class="form-group"><label>monitor.price_tick_min_interval_ms</label><input type="number" id="f-monitor-price-interval" min="0" step="1" value="500"></div>
-    <div class="form-group"><label>monitor.retain_days</label><input type="number" id="f-monitor-retain-days" min="0" step="0.1" value="7"></div>
-    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-compress"><label for="f-monitor-compress">monitor.compress_rotated_segments</label></div></div>
-    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-emit-candles"><label for="f-monitor-emit-candles">monitor.emit_completed_candles</label></div></div>
-    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-raw-fills"><label for="f-monitor-raw-fills">monitor.include_raw_fill_payloads</label></div></div>
-    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-retain-candles"><label for="f-monitor-retain-candles">monitor.retain_candles</label></div></div>
-    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-retain-fills"><label for="f-monitor-retain-fills">monitor.retain_fills</label></div></div>
-    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-retain-ticks"><label for="f-monitor-retain-ticks">monitor.retain_price_ticks</label></div></div>
+      <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-enabled"><label for="f-monitor-enabled">monitor.enabled</label></div></div>
+      <div class="form-group"><label>monitor.root_dir</label><input type="text" id="f-monitor-root-dir" value="monitor"></div>
+      <div class="form-group"><label>monitor.snapshot_interval_seconds</label><input type="number" id="f-monitor-snapshot-interval" min="0" step="0.1" value="1"></div>
+      <div class="form-group"><label>monitor.checkpoint_interval_minutes</label><input type="number" id="f-monitor-checkpoint" min="0" step="0.1" value="10"></div>
+      <div class="form-group"><label>monitor.event_rotation_mb</label><input type="number" id="f-monitor-rotation-mb" min="0" step="1" value="128"></div>
+      <div class="form-group"><label>monitor.event_rotation_minutes</label><input type="number" id="f-monitor-rotation-minutes" min="0" step="1" value="60"></div>
+      <div class="form-group"><label>monitor.max_total_bytes</label><input type="number" id="f-monitor-max-bytes" min="0" step="1" value="1073741824"></div>
+      <div class="form-group"><label>monitor.price_tick_min_interval_ms</label><input type="number" id="f-monitor-price-interval" min="0" step="1" value="500"></div>
+    </div>
+    <div class="form-row cols-8" data-v8-only>
+      <div class="form-group"><label>monitor.retain_days</label><input type="number" id="f-monitor-retain-days" min="0" step="0.1" value="7"></div>
+      <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-compress"><label for="f-monitor-compress">monitor.compress_rotated_segments</label></div></div>
+      <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-emit-candles"><label for="f-monitor-emit-candles">monitor.emit_completed_candles</label></div></div>
+      <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-raw-fills"><label for="f-monitor-raw-fills">monitor.include_raw_fill_payloads</label></div></div>
+      <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-retain-candles"><label for="f-monitor-retain-candles">monitor.retain_candles</label></div></div>
+      <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-retain-fills"><label for="f-monitor-retain-fills">monitor.retain_fills</label></div></div>
+      <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-retain-ticks"><label for="f-monitor-retain-ticks">monitor.retain_price_ticks</label></div></div>
     </div>
   </div>
 </div>
@@ -2321,6 +2322,16 @@ function cloneRunConfigValue(value) {
   return JSON.parse(JSON.stringify(value == null ? {} : value));
 }
 
+function pb8LogDirValue(value) {
+  var logDir = String(value == null ? '' : value).trim();
+  return !logDir || /^(none|null)$/i.test(logDir) ? 'logs' : logDir;
+}
+
+function pb8MonitorRootDirValue(value) {
+  var rootDir = String(value == null ? '' : value).trim();
+  return !rootDir || /^(none|null)$/i.test(rootDir) ? 'monitor' : rootDir;
+}
+
 function getRunStrategyDefault(side, strategy) {
   var defaults = editorMetadata.strategy_defaults || {};
   var sideDefaults = defaults[side] && typeof defaults[side] === 'object' ? defaults[side] : {};
@@ -2558,14 +2569,14 @@ function populateForm(opts) {
   setVal('f-forager-ws-audit', live.forager_ws_candle_rest_audit_minutes != null ? live.forager_ws_candle_rest_audit_minutes : 30);
   setVal('f-custom-endpoints-path', live.custom_endpoints_path != null ? live.custom_endpoints_path : '');
   setVal('f-startup-phase-budgets', JSON.stringify(live.startup_phase_budgets || {}, null, 2));
-  setVal('f-log-dir', logging.dir || 'logs');
+  setVal('f-log-dir', pb8LogDirValue(logging.dir));
   setVal('f-log-max-bytes', logging.max_bytes_mb != null ? logging.max_bytes_mb : 10);
   setVal('f-log-backup-count', logging.backup_count != null ? logging.backup_count : 5);
   setChk('f-log-persist', logging.persist_to_file !== false);
   setChk('f-log-rotation', logging.rotation !== false);
   setVal('f-log-debug-profiles', JSON.stringify(logging.live_event_debug_profiles || [], null, 2));
   setChk('f-monitor-enabled', monitor.enabled !== false);
-  setVal('f-monitor-root-dir', monitor.root_dir || 'monitor');
+  setVal('f-monitor-root-dir', pb8MonitorRootDirValue(monitor.root_dir));
   setVal('f-monitor-snapshot-interval', monitor.snapshot_interval_seconds != null ? monitor.snapshot_interval_seconds : 1);
   setVal('f-monitor-checkpoint', monitor.checkpoint_interval_minutes != null ? monitor.checkpoint_interval_minutes : 10);
   setVal('f-monitor-rotation-mb', monitor.event_rotation_mb != null ? monitor.event_rotation_mb : 128);

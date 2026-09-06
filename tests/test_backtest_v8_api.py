@@ -232,7 +232,12 @@ def test_result_run_draft_reuses_canonical_result_without_pb8_prepare(
 
     result_dir = tmp_path / "result-1"
     result_dir.mkdir()
-    config = {"live": {"user": "alice"}, "pbgui": {"enabled_on": "old-host"}}
+    config = {
+        "live": {"user": "alice"},
+        "logging": {"dir": "None", "level": 1},
+        "monitor": {"root_dir": "None", "enabled": True},
+        "pbgui": {"enabled_on": "old-host"},
+    }
     (result_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
     monkeypatch.setattr(backtest_v8, "_resolve_result_dir", lambda _path, **_kwargs: result_dir)
     captured = {}
@@ -247,6 +252,8 @@ def test_result_run_draft_reuses_canonical_result_without_pb8_prepare(
 
     assert result == {"draft_id": "draft-1", "expires_in": 300, "name": "result-1"}
     assert captured["config"]["live"]["user"] == "alice"
+    assert captured["config"]["logging"] == {"dir": "logs", "level": 1}
+    assert captured["config"]["monitor"] == {"root_dir": "monitor", "enabled": True}
     assert captured["config"]["pbgui"] == {"enabled_on": "disabled", "runtime": "pb8"}
 
 

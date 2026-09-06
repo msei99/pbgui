@@ -128,6 +128,24 @@ def test_every_runtime_control_has_forward_and_reverse_mapping() -> None:
         assert f"'{field_id}'" in collect or f"'{field_id}'" in populate, f"{field_id} has no config mapping"
 
 
+def test_pb8_runtime_json_fields_share_compact_desktop_rows() -> None:
+    """PB8 diagnostic JSON editors use free desktop columns without adding rows."""
+
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    runtime = page.split('<div class="subsection-title" data-v8-only>PB8 Runtime</div>', 1)[1]
+    runtime = runtime.split('<!-- Filters section -->', 1)[0]
+    pb8_runtime = runtime.split('<div class="subsection-title" data-v8-only>Logging</div>', 1)[0]
+    logging = runtime.split('<div class="subsection-title" data-v8-only>Logging</div>', 1)[1]
+    logging = logging.split('<div class="subsection-title" data-v8-only>Monitoring</div>', 1)[0]
+
+    assert ".json-editor.compact-json-editor { min-height: 72px; max-height: 180px; }" in page
+    assert 'class="json-editor compact-json-editor" id="f-startup-phase-budgets" rows="3"' in runtime
+    assert 'class="json-editor compact-json-editor" id="f-log-debug-profiles" rows="3"' in runtime
+    assert pb8_runtime.count('<div class="form-row cols-8" data-v8-only>') == 1
+    assert logging.count('<div class="form-row cols-8" data-v8-only>') == 1
+    assert runtime.count('<div class="form-row cols-8" data-v8-only>') == 4
+
+
 def test_zero_values_are_not_replaced_by_editor_defaults() -> None:
     """Valid numeric zeroes must survive the Config-to-Form path unchanged."""
 
@@ -867,6 +885,8 @@ def test_populate_form_restores_every_runtime_field_into_its_control() -> None:
         _page_function(page, name)
         for name in (
             "cloneRunConfigValue",
+            "pb8LogDirValue",
+            "pb8MonitorRootDirValue",
             "getRunStrategyDefault",
             "cacheRunStrategyBlocks",
             "selectRunStrategyConfig",
@@ -945,6 +965,18 @@ def test_populate_form_restores_every_runtime_field_into_its_control() -> None:
         assert.equal(checked['f-notices-ignore'], false);
         assert.deepEqual(JSON.parse(nodes['f-long-json'].value).strategy, {{alpha: {{entry: 1}}}});
         assert.equal(JSON.parse(nodes['cfg-raw-json'].value).live.strategy_kind, 'alpha');
+        cfg.logging.dir = 'None';
+        populateForm();
+        assert.equal(restored['f-log-dir'], 'logs');
+        cfg.logging.dir = null;
+        populateForm();
+        assert.equal(restored['f-log-dir'], 'logs');
+        cfg.monitor.root_dir = 'None';
+        populateForm();
+        assert.equal(restored['f-monitor-root-dir'], 'monitor');
+        cfg.monitor.root_dir = null;
+        populateForm();
+        assert.equal(restored['f-monitor-root-dir'], 'monitor');
         """
     )
     _run_node(script)

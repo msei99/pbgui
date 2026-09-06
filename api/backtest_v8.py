@@ -2810,6 +2810,18 @@ def create_result_run_draft(body: dict = Body(...), session: SessionToken = Depe
     if not config:
         raise HTTPException(status_code=404, detail="Result config not found")
     candidate = copy.deepcopy(config)
+    logging_config = candidate.get("logging") if isinstance(candidate.get("logging"), dict) else {}
+    log_dir = logging_config.get("dir")
+    if log_dir is None or (isinstance(log_dir, str) and log_dir.strip().lower() in {"none", "null"}):
+        logging_config["dir"] = "logs"
+    candidate["logging"] = logging_config
+    monitor_config = candidate.get("monitor") if isinstance(candidate.get("monitor"), dict) else {}
+    monitor_root = monitor_config.get("root_dir")
+    if monitor_root is None or (
+        isinstance(monitor_root, str) and monitor_root.strip().lower() in {"none", "null"}
+    ):
+        monitor_config["root_dir"] = "monitor"
+    candidate["monitor"] = monitor_config
     pbgui = candidate.get("pbgui") if isinstance(candidate.get("pbgui"), dict) else {}
     pbgui["runtime"] = "pb8"
     pbgui["enabled_on"] = "disabled"

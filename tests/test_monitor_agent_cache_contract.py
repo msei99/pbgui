@@ -1811,6 +1811,29 @@ def test_embedded_pb8_pnl_uses_fill_timestamp_and_skips_batch_summaries() -> Non
     assert counters == {"et": 0, "ct": 1, "pt": 2.5}
 
 
+def test_embedded_pb8_archive_logs_require_exact_instance_identity() -> None:
+    """A short PB8 name must not inherit archived logs from overlapping names."""
+
+    prefix = 'python3 -u -c "\n'
+    source = monitor_mod.INSTANCE_COLLECT_SCRIPT[len(prefix):-2]
+    tree = ast.parse(source)
+    selected = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_pb8_archive_log_matches"
+    ]
+    namespace = {"os": os}
+    exec(compile(ast.Module(body=selected, type_ignores=[]), "<pb8-log-match>", "exec"), namespace)
+    matches = namespace["_pb8_archive_log_matches"]
+
+    exact = "20260905_094335_passivbot_live__home_mani_software_pbgui_data_run_v8_HYPErQuantum_config.json.log"
+    prefixed = "20260905_094335_passivbot_live__home_mani_software_pbgui_data_run_v8_hl_HYPErQuantum_config.json.log"
+    suffixed = "20260905_094335_passivbot_live__home_mani_software_pbgui_data_run_v8_HYPErQuantum5_config.json.log"
+
+    assert matches(exact, "HYPErQuantum") is True
+    assert matches(prefixed, "HYPErQuantum") is False
+    assert matches(suffixed, "HYPErQuantum") is False
+
+
 def test_embedded_pb8_history_uses_hourly_logs_and_latest_net_summary(tmp_path: Path) -> None:
     """PB8 history reports exact log buckets and advances its latest canonical total."""
 
