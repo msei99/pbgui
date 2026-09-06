@@ -424,6 +424,21 @@ def resolve_local_log_path(filename: str) -> Optional[Path]:
         if not fp.resolve().is_relative_to(run_root):
             return None
         return fp
+    if filename.startswith("BotBackup:"):
+        try:
+            instance_name, version, backup_id, log_name = filename[10:].rsplit(":", 3)
+            instance_name = _validate_remote_log_instance_name(instance_name)
+        except (ValueError, TypeError):
+            return None
+        if version != "8" or not backup_id.isdigit() or log_name not in {
+            "passivbot.log", "passivbot_err.log", "passivbot_err.log.old",
+        }:
+            return None
+        backup_root = (root / "data" / "backup" / "v8").resolve()
+        fp = backup_root / instance_name / backup_id / log_name
+        if fp.is_symlink() or not fp.resolve().is_relative_to(backup_root):
+            return None
+        return fp
     else:
         fp = local_logs_dir() / filename
         if not fp.resolve().is_relative_to(local_logs_dir().resolve()):

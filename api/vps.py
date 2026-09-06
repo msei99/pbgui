@@ -226,6 +226,33 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
     return matches
 
 
+async def get_bot_log_tail(hostname: str, bot_name: str, *, pb_version: str = "7", lines: int = 500) -> str:
+    """Return a bounded remote bot log tail through the shared SSH streamer."""
+
+    if not _streamer or not hostname or not bot_name:
+        return ""
+    version = "8" if str(pb_version).strip().lower() in {"8", "v8", "pb8"} else "7"
+    line_limit = max(1, min(int(lines or 500), 10_000))
+    discovered: list[str] = []
+    if _monitor:
+        host_logs = _monitor.store.bot_logs.get(hostname) or {}
+        discovered = list(host_logs.get(f"{version}:{bot_name}") or [])
+        if not discovered and version == "7":
+            discovered = list(host_logs.get(bot_name) or [])
+    paths = [
+        path for path in discovered
+        if str(path).endswith((".log", ".log.old"))
+    ]
+    if not paths:
+        paths = [
+            f"data/run_v{version}/{bot_name}/passivbot_err.log.old",
+            f"data/run_v{version}/{bot_name}/passivbot_err.log",
+            f"software/pb{version}/logs/{bot_name}.log",
+        ]
+    output = await _streamer.get_recent_log_files(hostname, list(dict.fromkeys(paths)), line_limit)
+    return str(output or "")
+
+
 def get_monitor_state_snapshot() -> dict:
     """Return the same full-state snapshot used by the VPS Monitor WebSocket."""
     if not _monitor:

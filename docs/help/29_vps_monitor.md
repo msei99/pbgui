@@ -51,7 +51,7 @@ The detail panel shows heartbeat and effective ages, every required file state, 
 ## Tabs and workflow
 
 - **Dashboard**: host, SSH, telemetry, and monitor-agent health
-- **Instances**: running and deployed PB7/PB8 bot instances with explicit runtime identity; log and kill actions keep that identity so equal names cannot target the wrong runtime
+- **Instances**: running and deployed PB7/PB8 bot instances with explicit runtime identity, config/running version drift, and stopped or disabled state. Equal PB7/PB8 names remain separate rows, and log and kill actions keep that identity so they cannot target the wrong runtime. A stopped PB8 row is shown only from a fresh explicit monitor-agent observation; stale or unstamped inventory never invents a stopped bot.
 - **Services**: PBCluster, PBRun, PBData, PBCoinData, and PBMonitorAgent status and restart actions
 - **Live Logs**: real-time service and bot log streams
 

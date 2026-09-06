@@ -36,7 +36,7 @@ Frequently used PB8-specific backtest fields have structured controls:
 
 ## Queue
 
-The V8 queue is stored separately under `data/bt_v8_queue`. **Start** launches `<venv_pb8>/bin/passivbot backtest <snapshot>`. **Stop**, **Restart**, **Delete**, and **Clear Finished** affect only V8 queue items.
+The V8 queue is stored separately under `data/bt_v8_queue`. **Start** launches `<venv_pb8>/bin/passivbot backtest <snapshot>`. **Stop**, **Restart**, **Delete**, and **Clear Finished** affect only V8 queue items. Live queue updates use the version-specific `/api/backtest-v8/ws/bt8` WebSocket; the historical `/ws/bt7` route remains an authenticated compatibility alias.
 
 PB8 Pareto drafts opened from Optimize preserve each candidate's configured start/end date and exchange group instead of replacing the batch with one shared range or splitting Combined scenarios into single-exchange jobs. Automatic validation drafts additionally carry distinct Training, Holdout, and Full timeranges; the resulting names remain directly selectable together in **Compare**.
 

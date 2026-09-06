@@ -47,6 +47,15 @@ def test_retention_report_ignores_stale_async_responses() -> None:
     assert "requestGeneration !== retentionReportGeneration" in HTML
 
 
+def test_retention_confirmation_preserves_original_generation() -> None:
+    """Background polling cannot pair stale form values with a newer CAS generation."""
+
+    function = HTML.split("function saveRetentionPolicy()", 1)[1].split("function renderClusterParts", 1)[0]
+    assert function.index("var expectedGeneration = retentionPolicyGeneration;") < function.index("window.PBGuiConfirm")
+    assert "expected_generation: expectedGeneration" in function
+    assert "expected_generation: retentionPolicyGeneration" not in function
+
+
 def test_automatic_retention_status_uses_existing_five_second_feed() -> None:
     """Cleanup lifecycle status renders automatically without remote diagnostics."""
 

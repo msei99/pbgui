@@ -228,6 +228,51 @@ def test_concrete_monitor_rows_use_delegation_not_inline_names() -> None:
     assert "data-monitor-action=\"restart-service\"" in source
 
 
+def test_pb8_instance_rows_preserve_runtime_and_freshness() -> None:
+    """PB8 rows stay distinct from PB7 and stale snapshots cannot invent stopped bots."""
+
+    source = HTML_PATH.read_text(encoding="utf-8")
+    functions = "\n\n".join([
+        _extract_function(source, "isFreshV8Observation"),
+        _extract_function(source, "buildInstanceRows"),
+    ])
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const MONITOR_AGENT_COLLECTOR_STALE_SECONDS = 30;
+        {functions}
+        const fresh = {{snapshot_generated_at: 95, snapshot_checked_at: 96}};
+        const state = {{
+          instances: {{host: [
+            {{u: 'same', p: '7', m: [], c: 1}},
+            {{u: 'same', p: '8', m: [], c: 2}}
+          ]}},
+          v7_instances: {{host: [{{name: 'same', cv: 2, rv: 2, eo: 'host', running: true}}]}},
+          v8_instances: {{host: [
+            {{name: 'same', cv: 3, rv: 2, eo: 'host', running: true, ...fresh}},
+            {{name: 'stopped', cv: 4, rv: 0, eo: 'host', running: false, ...fresh}},
+            {{name: 'disabled', cv: 5, rv: 0, eo: 'disabled', running: false, ...fresh}},
+            {{name: 'stale', cv: 6, rv: 0, eo: 'host', running: false,
+              snapshot_generated_at: 1, snapshot_checked_at: 1}},
+            {{name: 'unknown', cv: 7, rv: 0, eo: 'host', running: false}}
+          ]}}
+        }};
+        const rows = buildInstanceRows(state, 100);
+        assert.equal(rows.length, 4);
+        assert.deepEqual(
+          rows.filter(row => row.name === 'same').map(row => [row.version, row.pbVersion, row.syncStatus]),
+          [['V7', '7', 'synced'], ['V8', '8', 'outdated']]
+        );
+        assert.equal(rows.find(row => row.name === 'stopped').syncStatus, 'stopped');
+        assert.equal(rows.find(row => row.name === 'disabled').syncStatus, 'disabled');
+        assert.equal(rows.some(row => row.name === 'stale'), false);
+        assert.equal(rows.some(row => row.name === 'unknown'), false);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
 def test_agent_details_escape_and_bound_errors_and_show_every_required_file() -> None:
     """Untrusted collector diagnostics must remain bounded text in generated HTML."""
     _run_agent_assertions(

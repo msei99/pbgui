@@ -21,6 +21,17 @@ from api import backtest_v8
 from master_update_lock import acquire_master_update_lock
 
 
+def test_pb8_queue_websocket_has_canonical_and_legacy_routes() -> None:
+    """New clients use bt8 while the historical bt7 path remains compatible."""
+
+    paths = {
+        route.path
+        for route in backtest_v8.router.routes
+        if getattr(route, "endpoint", None) is backtest_v8.ws_backtest
+    }
+    assert paths == {"/ws/bt7", "/ws/bt8"}
+
+
 def _patch_roots(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path, Path]:
     """Redirect all PB8 backtest state to an isolated temporary tree."""
     configs = tmp_path / "data" / "bt_v8"

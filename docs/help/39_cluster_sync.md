@@ -1,6 +1,6 @@
 # Cluster Sync
 
-Cluster Sync keeps multiple PBGui masters and VPS runners on the same desired V7 and API-key state without using an external storage service.
+Cluster Sync keeps multiple PBGui masters and VPS runners on the same desired PB7, PB8, and API-key state without using an external storage service.
 
 Use it when you run more than one master, run bots across multiple VPS, or want VPS nodes to keep enough local state to reboot safely when no master is online.
 
@@ -19,7 +19,7 @@ A cluster is a group of PBGui installations that share one replicated cluster st
 | **Cluster** | The whole PBGui sync group. It has one stable `cluster_id`. |
 | **Node** | One PBGui installation. A node can be a master or a VPS runner. |
 | **Master** | PBGui server used to manage configs, API keys, VPS nodes and sync state. |
-| **VPS runner** | Server that can run PB7 bots and store a local copy of cluster state. |
+| **VPS runner** | Server that can run PB7/PB8 bots and store a local copy of cluster state. |
 | **Desired state** | The cluster decision about which bot should exist, where it should run, and whether it should run. |
 | **Operation log** | Append-only history of cluster changes. PBGui rebuilds desired state from it. |
 
@@ -33,6 +33,7 @@ Cluster Sync covers:
 
 - V7 bot configs, including coin override JSON files.
 - V7 desired state: start, stop, move, delete and tombstone.
+- PB8 config bundles and a separate PB8 desired-state lifecycle.
 - Explicit V7 forced-mode config changes such as Panic, Graceful Stop and Take Profit Only.
 - API-key distribution for `api-keys.json`.
 - CMC pool credentials for all active state replicas and TradFi vault profiles for masters.
@@ -80,9 +81,9 @@ no designated last node or service restart.
 
 ---
 
-## V7 bots and desired state
+## PB7/PB8 bots and desired state
 
-For each V7 instance, desired state stores:
+For each PB7 or PB8 instance, its runtime-specific desired-state map stores:
 
 - the current config version
 - whether the bot should be running or stopped
@@ -142,7 +143,10 @@ Retention** to view the cluster-wide policy and live automatic cleanup status.
 
 The values in **Retention** and **History Days** are drafts until you click
 **Save Retention Policy**. The allowed history window is 1 to 3650 days; the
-default is seven days.
+default is seven days. The confirmation keeps the policy generation that was
+shown with those draft values. If another operator changes the policy while
+the dialog is open, the save is rejected and the current policy must be
+reviewed again.
 
 The available settings are:
 
@@ -288,7 +292,9 @@ do not open network ports. PBGui leaves every existing firewall rule untouched.
 
 The dedicated **Cluster Sync** page is the main place to monitor Cluster Sync.
 
-The page is split into Overview, Setup, Nodes, Credentials, V7 State, Tombstones, Retention and Oplog sections. It refreshes local status, nodes, desired state and recent oplog entries in the background, and updates changed cards and node-table fields in place instead of reloading the whole screen.
+The page is split into Overview, Setup, Nodes, Credentials, Bot State, Tombstones, Retention and Oplog sections. Bot State and Tombstones show PB7 and PB8 in separate tables. Node rows show whether `pb8_instances_v1` is advertised. It refreshes local status, nodes, desired state and recent oplog entries in the background, and updates changed cards and node-table fields in place instead of reloading the whole screen.
+
+The Oplog lists the reverse of the cluster's replay order: newer timestamps first, with ties ordered by node (actor), then its numeric sequence. Sequence counters from different nodes are independent, not a shared global clock. Refresh reads the validated operation list under the history lock without an additional full state rebuild. Retained cluster data with a missing or damaged identity is reported as an error, not as empty history. Credential and policy entries show their non-secret identifier in the Target column. If only the Oplog request fails, Status, Nodes and Desired State continue to refresh while the history panel reports that it is unavailable.
 
 The page shows:
 
@@ -304,10 +310,10 @@ The page shows:
 - an explicit Join & Sync action for reachable nodes without cluster identity
 - a read-only Preview action for joined nodes that compares remote state for diagnostics or retry
 - editable node sync mode, SSH endpoint, Remote PBGui Dir and outbound peer allowlist
-- disabled-node removal for stale nodes that no longer own V7 configs
+- disabled-node removal for stale nodes that no longer own PB7 or PB8 configs
 - signed history-retention policy and bounded read-only per-node cleanup reports
 
-Bootstrap writes explicit local `ADD_NODE` operations for known VPS Manager hosts and `UPSERT_CONFIG` operations for local configs. When VPS Monitor metadata is available, Bootstrap preserves whether a known host is a master or VPS runner. It never infers deletes from missing files or missing VPS entries and it does not clear tombstones. The probe column runs a read-only restricted `hello` command when available; it does not install keys, write remote files, start bots, stop bots, or deploy anything.
+Bootstrap writes explicit local `ADD_NODE` operations for known VPS Manager hosts, `UPSERT_CONFIG` operations for local V7 configs, and `UPSERT_PB8_CONFIG` operations for complete local PB8 bundles. Apply is bound to the cluster generation shown in the preview and is rejected if concurrent cluster activity changes that generation before confirmation. When VPS Monitor metadata is available, Bootstrap preserves whether a known host is a master or VPS runner. It never infers deletes from missing files or missing VPS entries and it does not clear either runtime's tombstones. The probe column runs a read-only restricted `hello` command when available; it does not install keys, write remote files, start bots, stop bots, or deploy anything.
 
 Node sync mode controls which nodes PBCluster may contact:
 
@@ -343,7 +349,7 @@ From the Preview window, **Push Missing Ops + Rebuild** is an explicit retry/dia
 
 After operations and config blobs are synchronized, the Preview window shows separate **V7 Config Materialization Preview** and **PB8 Config Reconciliation Preview** cards. **Materialize V7 Configs** writes assigned, non-conflicted V7 JSON configs into remote `data/run_v7`. **Reconcile PB8 Configs** exactly reconciles the assigned `data/run_v8` JSON bundle, including backed-up obsolete-file removal and tombstoned-directory deletion. Both manual retries refuse to run while remote state differs or required blobs are missing or invalid.
 
-PB8 live configs use separate `UPSERT_PB8_CONFIG` and `DELETE_PB8_CONFIG` operations, `pb8_instances` / `pb8_tombstones` desired-state maps, and exact bundle manifests for `data/run_v8`. A peer must advertise `pb8_instances_v1`; when active PB8 desired state exists, older peers are blocked instead of receiving an operation stream they cannot interpret. Materialization requires the local PB8 checkout plus a current owner-only PB8 exchange-key projection. It atomically reconciles the complete JSON bundle, backs up removed files under `data/backup/v8`, and never starts or stops bots. PBRun starts after a manual materialization only when V7, PB8, and API-key previews are all current.
+PB8 live configs use separate `UPSERT_PB8_CONFIG` and `DELETE_PB8_INSTANCE` operations, `pb8_instances` / `pb8_tombstones` desired-state maps, and exact bundle manifests for `data/run_v8`. A peer must advertise `pb8_instances_v1`; when active PB8 desired state exists, older peers are blocked instead of receiving an operation stream they cannot interpret. The PB8 table offers Start, Stop, stopped-only Move to capable nodes, and guarded Delete. Every action is bound to the displayed cluster generation; Delete additionally verifies stopped runtime observations and backs up the current bundle. Materialization requires the local PB8 checkout plus a current owner-only PB8 exchange-key projection. It atomically reconciles the complete JSON bundle, backs up removed files under `data/backup/v8`, and never starts or stops bots. PBRun starts after a manual materialization only when V7, PB8, and API-key previews are all current.
 
 The Preview window also shows **API-key Materialization Preview**. **Materialize API Keys** is the manual retry action for installing `api-keys.json` from the replicated secret blob. Master nodes create a normal `data/api-keys/` backup first when an existing file differs; VPS runner nodes skip local backups. The write is atomic and verifies the final hash.
 

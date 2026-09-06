@@ -3496,10 +3496,11 @@ async function openLogPanel() {
     if (value === ('BotErr:' + INSTANCE_NAME) || value === ('BotErr:' + INSTANCE_NAME + ':' + runtimeNumber)) return true;
     if (value === ('data/run_v' + runtimeNumber + '/' + INSTANCE_NAME + '/passivbot_err.log')) return true;
     if (value === ('data/run_v' + runtimeNumber + '/' + INSTANCE_NAME + '/passivbot_err.log.old')) return true;
+    if (runEditorAdapter.isV8 && value.indexOf('BotBackup:' + INSTANCE_NAME + ':8:') === 0) return true;
     return value.indexOf((runEditorAdapter.isV8 ? 'pb8/logs/' : 'pb7/logs/')) === 0 && value.indexOf(INSTANCE_NAME) >= 0;
   }
 
-  function _initViewer(host) {
+  function _initViewer(host, defaultFile) {
     if (_runLogViewer) { _runLogViewer.close(); _runLogViewer = null; }
     var isLocal = (!host || host === 'local');
     _runLogViewer = new LogViewerPanel({
@@ -3507,7 +3508,7 @@ async function openLogPanel() {
       wsBase: WS_BASE,
       defaultHost: isLocal ? 'local' : host,
       defaultService: isLocal ? 'PBRun' : svc,
-      defaultFile: isLocal ? svc : '',
+      defaultFile: isLocal ? (defaultFile || svc) : '',
       localFileFilter: isLocal ? isLocalBotLogFile : null,
       presets: 'trading',
       showRestart: true,
@@ -3519,10 +3520,28 @@ async function openLogPanel() {
   badge.textContent = 'searching...';
   badge.className = 'disabled';
   if (runEditorAdapter.isV8) {
-    var isCurrentLocal = !!MASTER_NAME && enabledOn === MASTER_NAME;
-    badge.textContent = enabledOn === 'disabled' ? 'local' : enabledOn;
-    badge.className = isCurrentLocal || enabledOn === 'disabled' ? 'disabled' : 'connected';
-    _initViewer(isCurrentLocal || enabledOn === 'disabled' ? 'local' : enabledOn);
+    apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/log-smart?lines=1')
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(data) {
+      var masterHost = data.master || MASTER_NAME || '';
+      var host = data.host || '';
+      if (data.backup_file) {
+        badge.textContent = data.source_label || ('backup v' + (data.version || '?'));
+        badge.className = 'disabled';
+        _initViewer('local', data.backup_file);
+        return;
+      }
+      var isLocal = !host || host === masterHost;
+      badge.textContent = host ? (host + (data.version ? ' (v' + data.version + ')' : '')) : 'local';
+      badge.className = isLocal ? 'disabled' : 'connected';
+      _initViewer(isLocal ? 'local' : host);
+    })
+    .catch(function() {
+      var isCurrentLocal = !!MASTER_NAME && enabledOn === MASTER_NAME;
+      badge.textContent = enabledOn === 'disabled' ? 'local' : enabledOn;
+      badge.className = isCurrentLocal || enabledOn === 'disabled' ? 'disabled' : 'connected';
+      _initViewer(isCurrentLocal || enabledOn === 'disabled' ? 'local' : enabledOn);
+    });
     return;
   }
   apiFetch('/last-active-host/' + encodeURIComponent(INSTANCE_NAME))

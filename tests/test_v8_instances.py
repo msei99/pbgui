@@ -554,6 +554,142 @@ def test_backup_retention_draft_and_delete_use_complete_pb8_bundles(
     assert not instance_backups.exists()
 
 
+def test_restore_backup_replaces_complete_bundle_as_new_disabled_version(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Rollback restores every referenced override and publishes a monotonic stopped version."""
+
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    first = _payload(note="restore-me")
+    first["config"]["coin_overrides"] = {"BTC": {"override_config_path": "BTC.json"}}
+    first["override_configs"] = {"BTC.json": {"bot": {"long": {"risk": {"n_positions": 1}}}}}
+    asyncio.run(v8_instances.save_v8_instance_config("alice", first, True, session=None))
+    asyncio.run(v8_instances.save_v8_instance_config("alice", _payload(note="current"), False, session=None))
+
+    result = asyncio.run(v8_instances.restore_v8_instance("alice", "1", session=None))
+
+    bundle = tmp_path / "data" / "run_v8" / "alice"
+    saved = json.loads((bundle / "config.json").read_text(encoding="utf-8"))
+    override = json.loads((bundle / "BTC.json").read_text(encoding="utf-8"))
+    desired = json.loads((tmp_path / "data" / "cluster" / "desired_state.json").read_text(encoding="utf-8"))
+    assert saved["pbgui"]["version"] == 3
+    assert saved["pbgui"]["enabled_on"] == "disabled"
+    assert saved["pbgui"]["note"] == "restore-me"
+    assert override["bot"]["long"]["risk"]["n_positions"] == 1
+    assert desired["pb8_instances"]["alice"]["version"] == "3"
+    assert desired["pb8_instances"]["alice"]["desired_state"] == "stopped"
+    assert result["restored_backup_id"] == "1"
+    assert result["pre_restore_backup_id"] == "2"
+
+
+def test_restore_backup_rejects_running_instance_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The atomic rollback path fails closed before backup, publication, or placement."""
+
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    asyncio.run(v8_instances.save_v8_instance_config("alice", _payload(note="v1"), True, session=None))
+    asyncio.run(v8_instances.save_v8_instance_config("alice", _payload(note="v2"), False, session=None))
+    config_path = tmp_path / "data" / "run_v8" / "alice" / "config.json"
+    before = config_path.read_bytes()
+    monkeypatch.setattr(
+        v8_instances,
+        "_assert_v8_instance_stopped",
+        lambda *_args: (_ for _ in ()).throw(
+            v8_instances.HTTPException(status_code=409, detail="PB8 instance is running")
+        ),
+    )
+
+    with pytest.raises(v8_instances.HTTPException) as exc_info:
+        asyncio.run(v8_instances.restore_v8_instance("alice", "1", session=None))
+
+    assert exc_info.value.status_code == 409
+    assert config_path.read_bytes() == before
+    assert sorted(path.name for path in (tmp_path / "data" / "backup" / "v8" / "alice").iterdir()) == ["1"]
+
+
+def test_restore_backup_rejects_missing_or_unsafe_backup_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Rollback validates backup identity before touching live state."""
+
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    asyncio.run(v8_instances.save_v8_instance_config("alice", _payload(), True, session=None))
+
+    with pytest.raises(v8_instances.HTTPException) as missing:
+        asyncio.run(v8_instances.restore_v8_instance("alice", "99", session=None))
+    with pytest.raises(v8_instances.HTTPException) as unsafe:
+        asyncio.run(v8_instances.restore_v8_instance("alice", "../1", session=None))
+
+    assert missing.value.status_code == 404
+    assert unsafe.value.status_code == 400
+
+
+def test_last_active_host_and_smart_log_fall_back_to_pb8_backup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Stopped PB8 post-mortems resolve the last remote host and captured error log."""
+
+    from api import vps
+
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    current_dir = tmp_path / "data" / "run_v8" / "alice"
+    backup_dir = tmp_path / "data" / "backup" / "v8" / "alice" / "7"
+    current_dir.mkdir(parents=True)
+    backup_dir.mkdir(parents=True)
+    (current_dir / "config.json").write_text(
+        json.dumps(_payload()["config"]), encoding="utf-8"
+    )
+    backup_config = _payload(enabled_on="worker-a")["config"]
+    backup_config["pbgui"]["version"] = 7
+    (backup_dir / "config.json").write_text(json.dumps(backup_config), encoding="utf-8")
+    (backup_dir / "passivbot_err.log").write_text("line one\nlast traceback\n", encoding="utf-8")
+
+    async def no_remote_log(*_args, **_kwargs) -> str:
+        return ""
+
+    monkeypatch.setattr(vps, "get_bot_log_tail", no_remote_log)
+    host = v8_instances.get_v8_last_active_host("alice", session=None)
+    smart = asyncio.run(v8_instances.get_v8_instance_log_smart("alice", lines=500, session=None))
+
+    assert host["host"] == "worker-a"
+    assert host["version"] == "7"
+    assert host["backup_file"] == "BotBackup:alice:8:7:passivbot_err.log"
+    assert smart["source"] == "backup:7"
+    assert smart["host"] == "master-a"
+    assert smart["log"] == "line one\nlast traceback\n"
+
+
+def test_pb8_snapshot_captures_available_logs_without_requiring_them(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Immutable PB8 backups include available supervisor and runtime logs for later diagnosis."""
+
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    asyncio.run(v8_instances.save_v8_instance_config("alice", _payload(), True, session=None))
+    instance_dir = tmp_path / "data" / "run_v8" / "alice"
+    (instance_dir / "passivbot_err.log").write_text("supervisor failure\n", encoding="utf-8")
+    runtime_log = tmp_path / "pb8" / "logs" / "alice.log"
+    runtime_log.parent.mkdir(parents=True)
+    runtime_log.write_text("runtime failure\n", encoding="utf-8")
+
+    backup_id = v8_instances._snapshot_v8_bundle("alice", instance_dir)
+    backup = tmp_path / "data" / "backup" / "v8" / "alice" / backup_id
+
+    assert (backup / "passivbot_err.log").read_text(encoding="utf-8") == "supervisor failure\n"
+    assert (backup / "passivbot.log").read_text(encoding="utf-8") == "runtime failure\n"
+
+
 def test_save_rejects_stale_editor_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A stale structured editor cannot overwrite a newer PB8 bundle."""
 

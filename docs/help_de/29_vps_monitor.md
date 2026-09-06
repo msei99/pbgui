@@ -51,7 +51,7 @@ Der Detailbereich zeigt Heartbeat- und effektive Alter, den Status jeder erforde
 ## Tabs und Workflow
 
 - **Dashboard**: Host-, SSH-, Telemetrie- und Monitor-Agent-Gesundheit
-- **Instances**: laufende und bereitgestellte PB7-/PB8-Bot-Instanzen mit expliziter Runtime-Identitaet; Log- und Kill-Aktionen behalten diese Identitaet bei, damit gleiche Namen nicht die falsche Runtime treffen
+- **Instances**: laufende und bereitgestellte PB7-/PB8-Bot-Instanzen mit expliziter Runtime-Identitaet, Drift zwischen Config-/Running-Version sowie Stopped-/Disabled-Status. Gleiche PB7-/PB8-Namen bleiben getrennte Zeilen; Log- und Kill-Aktionen behalten die Runtime bei und treffen nicht die falsche Instanz. Eine gestoppte PB8-Zeile erscheint nur aus einer frischen, ausdruecklichen Monitor-Agent-Beobachtung; stale oder nicht gestempelte Inventardaten erfinden keinen gestoppten Bot.
 - **Services**: Status und Neustartaktionen für PBCluster, PBRun, PBData, PBCoinData und PBMonitorAgent
 - **Live Logs**: Echtzeit-Streams für Service- und Bot-Logs
 

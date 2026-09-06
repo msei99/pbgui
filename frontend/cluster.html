@@ -521,10 +521,13 @@
           <div class="cluster-section" data-cluster-section-panel="instances">
             <section class="panel">
               <div class="panel-head">
-                <div class="panel-title">V7 Desired State</div>
+                <div class="panel-title">Bot Desired State</div>
                 <div class="panel-note" id="instances-note"></div>
               </div>
+              <div class="panel-note" style="padding:0 var(--sp-md) var(--sp-xs)">Passivbot v7</div>
               <div class="table-wrap" id="instances-table"></div>
+              <div class="panel-note" style="padding:var(--sp-md) var(--sp-md) var(--sp-xs)">Passivbot v8</div>
+              <div class="table-wrap" id="pb8-instances-table"></div>
             </section>
           </div>
 
@@ -534,7 +537,10 @@
                 <div class="panel-title">Tombstones</div>
                 <div class="panel-note">Explicit deletes that prevent stale config resurrection.</div>
               </div>
+              <div class="panel-note" style="padding:0 var(--sp-md) var(--sp-xs)">Passivbot v7</div>
               <div class="table-wrap" id="tombstones-table"></div>
+              <div class="panel-note" style="padding:var(--sp-md) var(--sp-md) var(--sp-xs)">Passivbot v8</div>
+              <div class="table-wrap" id="pb8-tombstones-table"></div>
             </section>
           </div>
 
@@ -2554,7 +2560,9 @@
             if (tableId === 'bootstrap' && lastBootstrapPlan) renderBootstrap(lastBootstrapPlan);
             if (tableId === 'nodes' && lastNodesPayload) renderNodes(lastNodesPayload);
             if (tableId === 'instances' && lastInstancesPayload) renderInstances(lastInstancesPayload);
+            if (tableId === 'pb8-instances' && lastInstancesPayload) renderInstances(lastInstancesPayload);
             if (tableId === 'tombstones' && lastTombstonesPayload) renderTombstones(lastTombstonesPayload);
+            if (tableId === 'pb8-tombstones' && lastTombstonesPayload) renderTombstones(lastTombstonesPayload);
             if (tableId === 'oplog' && lastOplogPayload) renderOplog(lastOplogPayload);
           });
         });
@@ -2565,6 +2573,7 @@
         var items = [
           { key: 'nodes', label: 'Nodes', value: counts.nodes || 0, cls: '' },
           { key: 'instances', label: 'V7 Instances', value: counts.instances || 0, cls: 'good' },
+          { key: 'pb8_instances', label: 'PB8 Instances', value: counts.pb8_instances || 0, cls: 'good' },
           { key: 'conflicts', label: 'Conflicts', value: counts.conflicts || 0, cls: counts.conflicts ? 'bad' : 'good' },
           { key: 'tombstones', label: 'Tombstones', value: counts.tombstones || 0, cls: counts.tombstones ? 'warn' : '' },
           { key: 'oplog', label: 'Oplog Ops', value: counts.oplog || 0, cls: '' }
@@ -3160,8 +3169,13 @@
         var btn = document.getElementById('bootstrap-apply-btn');
         if (btn && btn.disabled) return;
         var counts = (lastBootstrapPlan && lastBootstrapPlan.counts) || {};
+        var expectedGeneration = Number(lastBootstrapPlan && lastBootstrapPlan.generation);
         var writeCount = Number(counts.add || 0) + Number(counts.update || 0);
         if (writeCount <= 0) return;
+        if (!Number.isInteger(expectedGeneration) || expectedGeneration < 0) {
+          setMessage('Bootstrap preview is stale or incomplete; reload it before applying.', 'err');
+          return;
+        }
         if (typeof window.PBGuiConfirm !== 'function') {
           setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
           return;
@@ -3173,16 +3187,16 @@
           confirmText: 'Apply Bootstrap'
         }).then(function (accepted) {
           if (!accepted) return;
-          runBootstrapApply();
+          runBootstrapApply(expectedGeneration);
         });
       }
 
-      function runBootstrapApply() {
+      function runBootstrapApply(expectedGeneration) {
         var btn = document.getElementById('bootstrap-apply-btn');
         if (btn && btn.disabled) return;
         if (btn) { btn.disabled = true; btn.textContent = 'Applying...'; }
         setMessage('Applying bootstrap operations...', '');
-        return fetchJson('/bootstrap', { method: 'POST' }).then(function (payload) {
+        return fetchJson('/bootstrap?expected_generation=' + encodeURIComponent(expectedGeneration), { method: 'POST' }).then(function (payload) {
           renderBootstrap(payload.after || {});
           var counts = (payload.result && payload.result.counts) || {};
           var kind = counts.failed ? 'warn' : 'ok';
@@ -3211,6 +3225,7 @@
           + sortHeader('nodes', 'key', 'Key')
           + sortHeader('nodes', 'login_key', 'Login Key')
           + sortHeader('nodes', 'probe', 'Probe')
+          + sortHeader('nodes', 'pb8', 'PB8')
           + '<th>Action</th>'
           + sortHeader('nodes', 'updated', 'Updated')
           + '</tr></thead><tbody></tbody></table>';
@@ -3275,7 +3290,7 @@
         if (row) return row;
         row = document.createElement('tr');
         row.setAttribute('data-node-id', nodeId);
-        ['node', 'role', 'pbname', 'address', 'sync', 'peers', 'key', 'login_key', 'probe', 'action', 'updated'].forEach(function (field) {
+        ['node', 'role', 'pbname', 'address', 'sync', 'peers', 'key', 'login_key', 'probe', 'pb8', 'action', 'updated'].forEach(function (field) {
           var cell = document.createElement('td');
           cell.setAttribute('data-field', field);
           row.appendChild(cell);
@@ -3310,6 +3325,8 @@
         updateNodeCell(row, 'key', '<span class="pill ' + (keyKnown ? 'good' : 'warn') + '">' + esc(keySummary(node, probe)) + '</span>', node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint || '');
         updateNodeCell(row, 'login_key', '<span class="pill ' + loginKeyPill(loginKey.status) + '">' + esc(loginKey.label) + '</span>', loginKey.title || '');
         updateNodeCell(row, 'probe', '<span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span>', probeTitle);
+        var supportsPb8 = Array.isArray(node.capabilities) && node.capabilities.indexOf('pb8_instances_v1') >= 0;
+        updateNodeCell(row, 'pb8', '<span class="pill ' + (supportsPb8 ? 'good' : 'warn') + '">' + (supportsPb8 ? 'Ready' : 'Unsupported') + '</span>');
         updateNodeCell(row, 'action', nodeActionHtml(node, mode, probeStatus));
         updateNodeCell(row, 'updated', esc(timeText(node.updated_at)));
       }
@@ -3334,6 +3351,7 @@
           key: function (node) { return node.cluster_ssh_fingerprint || ''; },
           login_key: function (node) { return loginKeyStatus(node, syncMode(node)).label || ''; },
           probe: function (node) { return (remoteProbeMap[node.node_id] || {}).status || ''; },
+          pb8: function (node) { return Array.isArray(node.capabilities) && node.capabilities.indexOf('pb8_instances_v1') >= 0; },
           updated: function (node) { return Number(node.updated_at || 0); }
         });
         var tbody = ensureNodesTable();
@@ -3351,15 +3369,14 @@
         });
       }
 
-      function renderInstances(payload) {
-        lastInstancesPayload = payload;
-        var instances = Array.isArray(payload.instances) ? payload.instances : [];
-        document.getElementById('instances-note').textContent = instances.length + ' instance(s)';
+      function renderInstanceTable(payload, key, containerId, sortId, runtimeLabel) {
+        var instances = Array.isArray(payload[key]) ? payload[key] : [];
+        var container = document.getElementById(containerId);
         if (!instances.length) {
-          document.getElementById('instances-table').innerHTML = '<div class="empty">No V7 desired state has been recorded yet. Existing bots need bootstrap/migration before this becomes complete.</div>';
+          container.innerHTML = '<div class="empty">No ' + esc(runtimeLabel) + ' desired state has been recorded yet. Existing bots need bootstrap/migration before this becomes complete.</div>';
           return;
         }
-        var instanceRows = sortedRows('instances', instances, {
+        var instanceRows = sortedRows(sortId, instances, {
           instance: function (item) { return item.instance || ''; },
           desired: function (item) { return item.desired_state || ''; },
           assigned: function (item) { return nodeLabel(item.assigned_host); },
@@ -3369,13 +3386,14 @@
           conflict: function (item) { return item.conflicted === true; }
         });
         var html = '<table><thead><tr>'
-          + sortHeader('instances', 'instance', 'Instance')
-          + sortHeader('instances', 'desired', 'Desired')
-          + sortHeader('instances', 'assigned', 'Assigned Node')
-          + sortHeader('instances', 'version', 'Version')
-          + sortHeader('instances', 'manifest', 'Manifest')
-          + sortHeader('instances', 'updated', 'Updated')
-          + sortHeader('instances', 'conflict', 'Conflict')
+          + sortHeader(sortId, 'instance', 'Instance')
+          + sortHeader(sortId, 'desired', 'Desired')
+          + sortHeader(sortId, 'assigned', 'Assigned Node')
+          + sortHeader(sortId, 'version', 'Version')
+          + sortHeader(sortId, 'manifest', 'Manifest')
+          + sortHeader(sortId, 'updated', 'Updated')
+          + sortHeader(sortId, 'conflict', 'Conflict')
+          + (key === 'pb8_instances' ? '<th>Action</th>' : '')
           + '</tr></thead><tbody>';
         instanceRows.forEach(function (item) {
           var running = item.desired_state === 'running';
@@ -3388,21 +3406,95 @@
             + '<td><span class="mono hash" title="' + esc(item.config_manifest_hash || '') + '">' + esc(item.config_manifest_hash || 'n/a') + '</span></td>'
             + '<td>' + esc(timeText(item.updated_at)) + '</td>'
             + '<td><span class="pill ' + (conflicted ? 'bad' : 'good') + '">' + (conflicted ? 'Conflict' : 'Clean') + '</span></td>'
+            + (key === 'pb8_instances' ? '<td class="actions">'
+              + '<button class="btn small primary pb8-state-btn" type="button" data-pb8-action="' + (running ? 'stop' : 'start') + '" data-pb8-instance="' + esc(item.instance) + '">' + (running ? 'Stop' : 'Start') + '</button> '
+              + '<button class="btn small pb8-state-btn" type="button" data-pb8-action="move" data-pb8-instance="' + esc(item.instance) + '" data-pb8-host="' + esc(item.assigned_host || '') + '">Move</button> '
+              + '<button class="btn small warn pb8-state-btn" type="button" data-pb8-action="delete" data-pb8-instance="' + esc(item.instance) + '">Delete</button>'
+              + '</td>' : '')
             + '</tr>';
         });
         html += '</tbody></table>';
-        document.getElementById('instances-table').innerHTML = html;
-        attachSortHandlers('instances-table');
+        container.innerHTML = html;
+        attachSortHandlers(containerId);
+        if (key === 'pb8_instances') attachPb8InstanceActions(container);
       }
 
-      function renderTombstones(payload) {
-        lastTombstonesPayload = payload;
-        var tombstones = Array.isArray(payload.tombstones) ? payload.tombstones : [];
+      function pb8ActionRequest(name, action, targetNodeId) {
+        var generation = Number((lastInstancesPayload || {}).generation);
+        if (!Number.isFinite(generation)) {
+          return Promise.reject(new Error('PB8 desired-state generation is unavailable. Refresh and retry.'));
+        }
+        return fetchJson('/pb8-instances/' + encodeURIComponent(name) + '/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: action,
+            expected_generation: generation,
+            target_node_id: targetNodeId || null
+          })
+        }).then(function (result) {
+          setMessage((result.changed === false ? 'No change needed for ' : 'Applied ' + action + ' to ') + name + '.', 'ok');
+          return loadCluster({ force: true, keepProbes: true });
+        });
+      }
+
+      async function runPb8InstanceAction(button) {
+        var name = button.getAttribute('data-pb8-instance') || '';
+        var action = button.getAttribute('data-pb8-action') || '';
+        var targetNodeId = '';
+        if (action === 'move') {
+          var currentHost = button.getAttribute('data-pb8-host') || '';
+          var choices = Object.keys(nodeMap).filter(function (nodeId) {
+            var node = nodeMap[nodeId] || {};
+            return nodeId !== currentHost && Array.isArray(node.capabilities) && node.capabilities.indexOf('pb8_instances_v1') >= 0;
+          }).map(function (nodeId) {
+            return { label: nodeLabel(nodeId), value: nodeId, primary: true };
+          });
+          choices.push({ label: 'Cancel', value: '' });
+          targetNodeId = await window.PBGuiDialogs.choose({
+            title: 'Move PB8 instance',
+            message: 'Select the new host for ' + name + '. The instance must be stopped.',
+            actions: choices
+          });
+          if (!targetNodeId) return;
+        }
+        if (action === 'delete' && !(await window.PBGuiDialogs.confirm({
+          title: 'Delete PB8 instance',
+          message: 'Delete ' + name + ' and publish its tombstone?',
+          detail: 'PBGui verifies that the bot is stopped on every relevant host and backs up the current bundle before deletion.',
+          confirmText: 'Delete'
+        }))) return;
+        button.disabled = true;
+        pb8ActionRequest(name, action, targetNodeId).catch(function (err) {
+          setMessage('PB8 ' + action + ' failed: ' + err.message, 'err');
+        }).finally(function () {
+          button.disabled = false;
+        });
+      }
+
+      function attachPb8InstanceActions(container) {
+        container.querySelectorAll('.pb8-state-btn').forEach(function (button) {
+          button.addEventListener('click', function () { runPb8InstanceAction(button); });
+        });
+      }
+
+      function renderInstances(payload) {
+        lastInstancesPayload = payload;
+        var v7Count = Array.isArray(payload.instances) ? payload.instances.length : 0;
+        var pb8Count = Array.isArray(payload.pb8_instances) ? payload.pb8_instances.length : 0;
+        document.getElementById('instances-note').textContent = v7Count + ' V7 and ' + pb8Count + ' PB8 instance(s)';
+        renderInstanceTable(payload, 'instances', 'instances-table', 'instances', 'V7');
+        renderInstanceTable(payload, 'pb8_instances', 'pb8-instances-table', 'pb8-instances', 'PB8');
+      }
+
+      function renderTombstoneTable(payload, key, containerId, sortId, runtimeLabel) {
+        var tombstones = Array.isArray(payload[key]) ? payload[key] : [];
+        var container = document.getElementById(containerId);
         if (!tombstones.length) {
-          document.getElementById('tombstones-table').innerHTML = '<div class="empty">No tombstones recorded.</div>';
+          container.innerHTML = '<div class="empty">No ' + esc(runtimeLabel) + ' tombstones recorded.</div>';
           return;
         }
-        var tombstoneRows = sortedRows('tombstones', tombstones, {
+        var tombstoneRows = sortedRows(sortId, tombstones, {
           instance: function (item) { return item.instance || ''; },
           version: function (item) { return item.version || ''; },
           deleted_by: function (item) { return nodeLabel(item.deleted_by); },
@@ -3410,11 +3502,11 @@
           op_id: function (item) { return item.op_id || ''; }
         });
         var html = '<table><thead><tr>'
-          + sortHeader('tombstones', 'instance', 'Instance')
-          + sortHeader('tombstones', 'version', 'Version')
-          + sortHeader('tombstones', 'deleted_by', 'Deleted By')
-          + sortHeader('tombstones', 'deleted_at', 'Deleted At')
-          + sortHeader('tombstones', 'op_id', 'Op ID')
+          + sortHeader(sortId, 'instance', 'Instance')
+          + sortHeader(sortId, 'version', 'Version')
+          + sortHeader(sortId, 'deleted_by', 'Deleted By')
+          + sortHeader(sortId, 'deleted_at', 'Deleted At')
+          + sortHeader(sortId, 'op_id', 'Op ID')
           + '</tr></thead><tbody>';
         tombstoneRows.forEach(function (item) {
           html += '<tr>'
@@ -3426,12 +3518,23 @@
             + '</tr>';
         });
         html += '</tbody></table>';
-        document.getElementById('tombstones-table').innerHTML = html;
-        attachSortHandlers('tombstones-table');
+        container.innerHTML = html;
+        attachSortHandlers(containerId);
+      }
+
+      function renderTombstones(payload) {
+        lastTombstonesPayload = payload;
+        renderTombstoneTable(payload, 'tombstones', 'tombstones-table', 'tombstones', 'V7');
+        renderTombstoneTable(payload, 'pb8_tombstones', 'pb8-tombstones-table', 'pb8-tombstones', 'PB8');
       }
 
       function renderOplog(payload) {
         lastOplogPayload = payload;
+        if (payload && payload.oplog_error) {
+          document.getElementById('oplog-note').textContent = 'Unavailable';
+          document.getElementById('oplog-table').innerHTML = '<div class="empty">Local cluster history is temporarily unavailable: ' + esc(payload.oplog_error) + '</div>';
+          return;
+        }
         var operations = Array.isArray(payload.operations) ? payload.operations : [];
         document.getElementById('oplog-note').textContent = operations.length + ' shown of ' + (payload.count || 0);
         if (!operations.length) {
@@ -3441,7 +3544,7 @@
         var operationRows = sortedRows('oplog', operations, {
           created_at: function (op) { return Number(op.created_at || 0); },
           op: function (op) { return op.op || ''; },
-          target: function (op) { return op.instance || op.node_id || (op.api_serial ? 'api-keys' : 'cluster'); },
+          target: operationTarget,
           actor: function (op) { return nodeLabel(op.actor); },
           seq: function (op) { return Number(op.seq || 0); },
           op_id: function (op) { return op.op_id || ''; }
@@ -3455,7 +3558,7 @@
           + sortHeader('oplog', 'op_id', 'Op ID')
           + '</tr></thead><tbody>';
         operationRows.forEach(function (op) {
-          var target = op.instance || op.node_id || (op.api_serial ? 'api-keys' : 'cluster');
+          var target = operationTarget(op);
           html += '<tr>'
             + '<td>' + esc(timeText(op.created_at)) + '</td>'
             + '<td><span class="pill blue">' + esc(op.op || 'op') + '</span></td>'
@@ -3468,6 +3571,13 @@
         html += '</tbody></table>';
         document.getElementById('oplog-table').innerHTML = html;
         attachSortHandlers('oplog-table');
+      }
+
+      function operationTarget(op) {
+        return op.instance || op.node_id || op.secret_id || op.key_id || op.api_key_id
+          || op.entry_id || op.quota_domain_id || op.authority_node_id || op.profile_id
+          || op.profile_name || op.provider || op.policy_mode || op.mode
+          || (op.api_serial !== undefined ? 'api-keys' : 'cluster');
       }
 
       function retentionModeText(mode) {
@@ -3764,6 +3874,7 @@
       function saveRetentionPolicy() {
         var mode = String((document.getElementById('retention-mode') || {}).value || 'report_only');
         var historyDays = Number((document.getElementById('retention-history-days') || {}).value || 0);
+        var expectedGeneration = retentionPolicyGeneration;
         if (['report_only', 'oplog_and_blobs'].indexOf(mode) < 0 || !Number.isInteger(historyDays) || historyDays < 1 || historyDays > 3650) {
           setMessage('Choose whether retention is enabled and enter 1 to 3650 history days.', 'err');
           return;
@@ -3790,7 +3901,7 @@
           fetchJson('/retention/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode: mode, history_days: historyDays, expected_generation: retentionPolicyGeneration })
+            body: JSON.stringify({ mode: mode, history_days: historyDays, expected_generation: expectedGeneration })
           }).then(function () {
             setMessage('Retention policy saved. PBCluster applies it automatically when the cluster is healthy.', 'ok');
             return loadCluster({ force: true, keepProbes: true });
@@ -3851,11 +3962,20 @@
           fetchJson('/status'),
           fetchJson('/nodes'),
           fetchJson('/desired-state'),
-          fetchJson('/oplog?limit=50')
+          fetchJson('/oplog?limit=50').catch(function (err) {
+            return { oplog_error: String((err && err.message) || 'Request failed') };
+          })
         ]).then(function (parts) {
           if (requestGeneration !== clusterLoadGeneration) return parts;
           renderClusterParts(parts, { force: options.force === true });
-          if (!silent) setMessage('Cluster state refreshed.', 'ok');
+          if (!silent) {
+            setMessage(
+              parts[3] && parts[3].oplog_error
+                ? 'Cluster state refreshed; local history is temporarily unavailable.'
+                : 'Cluster state refreshed.',
+              parts[3] && parts[3].oplog_error ? 'warn' : 'ok'
+            );
+          }
           if (!options.auto) loadBootstrapPreview(true).catch(function () {});
           return parts;
         }).catch(function (err) {

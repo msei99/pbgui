@@ -15,7 +15,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from api import cluster
-from api import v7_instances
+from api import v7_instances, v8_instances
 from cluster_credential_publisher import ClusterCredentialPublisher
 from cluster_credentials import ensure_node_key_material, sign_operation
 from credential_store import CredentialStore
@@ -36,6 +36,7 @@ NODE_A = "pbgui-node-00000000-0000-4000-8000-00000000000a"
 NODE_B = "pbgui-node-00000000-0000-4000-8000-00000000000b"
 NODE_C = "pbgui-node-00000000-0000-4000-8000-00000000000c"
 HASH_A = "sha256:" + "a" * 64
+HASH_B = "sha256:" + "b" * 64
 LOCAL_CLUSTER_PUBLIC_KEY = "ssh-ed25519 aGVsbG8= pbgui-cluster:local"
 REMOTE_CLUSTER_PUBLIC_KEY = "ssh-ed25519 d29ybGQ= pbgui-cluster:remote"
 
@@ -267,7 +268,15 @@ def test_get_status_reports_materialized_counts(monkeypatch, tmp_path: Path) -> 
 
     assert status["read_only"] is True
     assert status["identity"]["cluster_id"] == CLUSTER_ID
-    assert status["counts"] == {"nodes": 2, "instances": 1, "conflicts": 0, "tombstones": 0, "oplog": 3}
+    assert status["counts"] == {
+        "nodes": 2,
+        "instances": 1,
+        "pb8_instances": 0,
+        "conflicts": 0,
+        "tombstones": 0,
+        "pb8_tombstones": 0,
+        "oplog": 3,
+    }
     assert status["warnings"] == []
 
 
@@ -449,6 +458,30 @@ def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: P
     assert report["counts"]["nodes_cleanup_verified"] == 2
     assert report["counts"]["cluster_cleanup_verified"] is True
     assert report["reports"][1]["blob_gc"]["eligible_blobs"] == 3
+
+
+def test_retention_report_survives_unreadable_cleanup_status(monkeypatch, tmp_path: Path) -> None:
+    """Corrupt cleanup metadata does not hide the otherwise valid retention report."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"})
+    monkeypatch.setattr(
+        cluster,
+        "retention_cleanup_status",
+        lambda _root: (_ for _ in ()).throw(ValueError("corrupt cleanup metadata")),
+    )
+
+    report = asyncio.run(cluster.get_retention_report(session=None))
+
+    automatic = report["reports"][0]["automatic_cleanup"]
+    assert automatic["oplog"] == {
+        "status": "error",
+        "blockers": ["retention_status_unavailable"],
+    }
+    assert automatic["blobs"] == automatic["oplog"]
+    assert report["counts"]["nodes_cleanup_verified"] == 0
+    assert report["counts"]["cluster_cleanup_verified"] is False
 
 
 def test_isolated_cluster_read_bypasses_monitor_pool(monkeypatch, tmp_path: Path) -> None:
@@ -657,8 +690,8 @@ def test_get_status_includes_automatic_retention_lifecycle(monkeypatch, tmp_path
     ]
 
 
-def test_get_desired_state_returns_instances_and_tombstones(monkeypatch, tmp_path: Path) -> None:
-    """Desired state endpoint returns V7 instances and explicit delete tombstones."""
+def test_get_desired_state_returns_v7_and_pb8_instances_and_tombstones(monkeypatch, tmp_path: Path) -> None:
+    """Desired state endpoint projects both runtime namespaces and their tombstones."""
 
     root = _init_cluster(tmp_path)
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
@@ -675,6 +708,19 @@ def test_get_desired_state_returns_instances_and_tombstones(monkeypatch, tmp_pat
         created_at=101,
     )
     append_operation(root, "DELETE_INSTANCE", {"instance": "bybit_BTCUSDT", "version": "7"}, created_at=102)
+    append_operation(
+        root,
+        "UPSERT_PB8_CONFIG",
+        {
+            "instance": "pb8_user",
+            "version": "5",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_B,
+        },
+        created_at=103,
+    )
+    append_operation(root, "DELETE_PB8_INSTANCE", {"instance": "old_pb8", "version": "8"}, created_at=104)
 
     payload = cluster.get_desired_state(session=None)
 
@@ -699,6 +745,27 @@ def test_get_desired_state_returns_instances_and_tombstones(monkeypatch, tmp_pat
             "op_id": f"{NODE_A}:00000002",
         }
     ]
+    assert payload["pb8_instances"] == [
+        {
+            "instance": "pb8_user",
+            "version": "5",
+            "desired_state": "running",
+            "assigned_host": NODE_A,
+            "config_manifest_hash": HASH_B,
+            "updated_by": NODE_A,
+            "updated_at": 103,
+            "conflicted": False,
+        }
+    ]
+    assert payload["pb8_tombstones"] == [
+        {
+            "instance": "old_pb8",
+            "version": "8",
+            "deleted_by": NODE_A,
+            "deleted_at": 104,
+            "op_id": f"{NODE_A}:00000004",
+        }
+    ]
 
 
 def test_get_oplog_returns_recent_operations_newest_first(monkeypatch, tmp_path: Path) -> None:
@@ -716,6 +783,141 @@ def test_get_oplog_returns_recent_operations_newest_first(monkeypatch, tmp_path:
     assert [op["op"] for op in payload["operations"]] == ["STOP_INSTANCE", "START_INSTANCE"]
 
 
+def test_pb8_cluster_lifecycle_actions_are_generation_and_capability_guarded(monkeypatch, tmp_path: Path) -> None:
+    """Cluster operators can stop, move, and start PB8 only against current capable state."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    for created_at, (node_id, name) in enumerate(((NODE_A, "master"), (NODE_B, "worker")), start=101):
+        append_operation(
+            root,
+            "ADD_NODE",
+            {
+                "node_id": node_id,
+                "role": "master" if node_id == NODE_A else "vps",
+                "pbname": name,
+                "capabilities": ["pb8_instances_v1"],
+            },
+            created_at=created_at,
+        )
+    append_operation(
+        root,
+        "UPSERT_PB8_CONFIG",
+        {
+            "instance": "pb8_user",
+            "version": "4",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+    )
+
+    generation = cluster.get_desired_state(session=None)["generation"]
+    stopped = cluster.mutate_pb8_instance_state(
+        "pb8_user",
+        cluster.PB8InstanceActionIn(action="stop", expected_generation=generation),
+        session=None,
+    )
+    generation += 1
+    moved = cluster.mutate_pb8_instance_state(
+        "pb8_user",
+        cluster.PB8InstanceActionIn(action="move", expected_generation=generation, target_node_id=NODE_B),
+        session=None,
+    )
+    generation += 1
+    started = cluster.mutate_pb8_instance_state(
+        "pb8_user",
+        cluster.PB8InstanceActionIn(action="start", expected_generation=generation),
+        session=None,
+    )
+    desired = cluster.get_desired_state(session=None)["pb8_instances"][0]
+
+    assert stopped["action"] == "stop"
+    assert moved["action"] == "move"
+    assert started["action"] == "start"
+    assert desired["assigned_host"] == NODE_B
+    assert desired["version"] == "5"
+    assert desired["desired_state"] == "running"
+    with pytest.raises(HTTPException) as stale:
+        cluster.mutate_pb8_instance_state(
+            "pb8_user",
+            cluster.PB8InstanceActionIn(action="stop", expected_generation=generation),
+            session=None,
+        )
+    assert stale.value.status_code == 409
+
+
+def _forbidden_snapshot(*_args: Any, **_kwargs: Any) -> Any:
+    """Fail the test if an oplog read replays the full materialized state."""
+
+    pytest.fail("oplog read must not rebuild materialized cluster state")
+
+
+def test_get_oplog_reverses_causal_replay_order_on_identical_timestamps(monkeypatch, tmp_path: Path) -> None:
+    """Production-valid IDs retain actor precedence and numeric sequence ordering."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "_load_cluster_snapshot", _forbidden_snapshot)
+    for actor, seq in ((NODE_A, 99_999_999), (NODE_A, 100_000_000), (NODE_B, 1)):
+        write_operation(root, {
+            "schema_version": 1, "cluster_id": CLUSTER_ID,
+            "actor": actor, "seq": seq, "created_at": 1000,
+            "op_id": f"{actor}:{seq:08d}", "op": "STOP_INSTANCE", "instance": "bot",
+        })
+
+    expected = list(reversed(load_operations(root, expected_cluster_id=CLUSTER_ID)))
+    assert sorted(expected, key=lambda op: (op["created_at"], op["op_id"]), reverse=True) != expected
+    assert sorted(
+        expected, key=lambda op: (op["created_at"], op["seq"], op["actor"], op["op_id"]), reverse=True,
+    ) != expected
+    calls = []
+
+    def counted_load(*args, **kwargs):
+        """Keep the real loader and ensure the endpoint requests it only once."""
+        calls.append((args, kwargs))
+        return load_operations(*args, **kwargs)
+
+    monkeypatch.setattr(cluster, "load_operations", counted_load)
+    payload = cluster.get_oplog(limit=2, session=None)
+
+    assert len(calls) == 1
+    assert payload["count"] == 3
+    assert payload["operations"] == expected[:2]
+    assert [(op["actor"], op["seq"]) for op in payload["operations"]] == [
+        (NODE_B, 1), (NODE_A, 100_000_000),
+    ]
+
+
+def test_get_oplog_returns_empty_without_initializing_identity(monkeypatch, tmp_path: Path) -> None:
+    """Reads on an unconfigured node stay read-only instead of replaying or creating state."""
+
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "_load_cluster_snapshot", _forbidden_snapshot)
+
+    payload = cluster.get_oplog(limit=10, session=None)
+
+    assert payload == {"count": 0, "operations": []}
+    assert not (tmp_path / "data" / "cluster").exists()
+
+
+def test_get_oplog_surfaces_invalid_identity_instead_of_empty_result(monkeypatch, tmp_path: Path) -> None:
+    """A corrupt local identity must not be masked as an empty oplog."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
+    root = tmp_path / "data" / "cluster"
+    root.mkdir(parents=True)
+    (root / "cluster_id").write_text("not-a-cluster-id\n", encoding="utf-8")
+    (root / "node_id").write_text("pbgui-node-00000000-0000-4000-8000-00000000000a\n", encoding="utf-8")
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "_load_cluster_snapshot", _forbidden_snapshot)
+
+    with pytest.raises(HTTPException) as error:
+        cluster.get_oplog(limit=10, session=None)
+
+    assert error.value.status_code == 500
+
+
 def test_get_status_initializes_empty_cluster_identity(monkeypatch, tmp_path: Path) -> None:
     """Status endpoint initializes local identity without appending any cluster operations."""
 
@@ -726,7 +928,15 @@ def test_get_status_initializes_empty_cluster_identity(monkeypatch, tmp_path: Pa
 
     assert status["identity"]["cluster_id"].startswith("pbgui-cluster-")
     assert status["identity"]["node_id"].startswith("pbgui-node-")
-    assert status["counts"] == {"nodes": 0, "instances": 0, "conflicts": 0, "tombstones": 0, "oplog": 0}
+    assert status["counts"] == {
+        "nodes": 0,
+        "instances": 0,
+        "pb8_instances": 0,
+        "conflicts": 0,
+        "tombstones": 0,
+        "pb8_tombstones": 0,
+        "oplog": 0,
+    }
     assert status["warnings"] == ["No cluster node membership operation has been recorded yet."]
     assert not (tmp_path / "data" / "cluster" / "cluster_nodes.json").exists()
     assert not (tmp_path / "data" / "cluster" / "desired_state.json").exists()
@@ -1443,6 +1653,41 @@ def test_remove_cluster_node_rejects_local_active_or_assigned_nodes(monkeypatch,
     assert "assigned V7 configs" in assigned_exc.value.detail
 
 
+def test_remove_cluster_node_rejects_pb8_only_assignment(monkeypatch) -> None:
+    """A disabled host cannot be removed while any PB8 config still targets it."""
+
+    remote = {
+        "node_id": NODE_B,
+        "role": "vps",
+        "sync_mode": "disabled",
+        "sync_enabled": False,
+    }
+    snapshot = {
+        "identity": {"node_id": NODE_A},
+        "cluster_nodes": {"nodes": {NODE_A: {"node_id": NODE_A}, NODE_B: remote}},
+        "desired_state": {
+            "instances": {},
+            "pb8_instances": {
+                "pb8_bot": {
+                    "assigned_host": NODE_B,
+                    "desired_state": "stopped",
+                },
+            },
+            "secrets": {},
+        },
+    }
+    monkeypatch.setattr(cluster, "_load_cluster_snapshot", lambda: snapshot)
+    writes: list[str] = []
+    monkeypatch.setattr(cluster, "append_operation", lambda *_args, **_kwargs: writes.append("remove"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        cluster.remove_cluster_node(NODE_B, session=None)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Node still has assigned PB8 configs: pb8_bot"
+    assert writes == []
+
+
 def test_repair_node_cluster_ssh_reads_remote_key_and_installs_master_key(monkeypatch, tmp_path: Path) -> None:
     """Cluster SSH repair stores the remote public key and installs the master key."""
 
@@ -1836,13 +2081,69 @@ def test_apply_bootstrap_records_missing_local_config(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(v7_instances, "_monitor", None)
     _patch_cluster_config_loader(monkeypatch)
 
-    result = cluster.apply_bootstrap(session=None)
+    preview = cluster.get_bootstrap_preview(session=None)
+    result = cluster.apply_bootstrap(expected_generation=preview["generation"], session=None)
     desired = _read_json(tmp_path / "data" / "cluster" / "desired_state.json")
 
+    assert preview["generation"] == 0
     assert result["result"]["counts"]["applied"] == 1
     assert result["after"]["counts"]["skip"] == 1
     assert desired["instances"]["test_inst"]["version"] == "4"
     assert "test_inst" not in desired["tombstones"]
+
+
+def test_pb8_bootstrap_previews_and_applies_local_bundle(monkeypatch, tmp_path: Path) -> None:
+    """PB8 bootstrap publishes its complete local bundle in the separate desired-state namespace."""
+
+    _init_cluster(tmp_path)
+    instance_dir = tmp_path / "data" / "run_v8" / "pb8_user"
+    instance_dir.mkdir(parents=True)
+    config = {
+        "config_version": "v8.0.0",
+        "live": {"user": "pb8_user"},
+        "pbgui": {"version": 6, "enabled_on": "disabled"},
+    }
+    (instance_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v8_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "load_pb8_config", lambda path: _read_json(Path(path)))
+
+    preview = cluster.get_bootstrap_preview(session=None)
+    item = next(item for item in preview["items"] if item.get("type") == "pb8_instance")
+    result = cluster.apply_bootstrap(expected_generation=preview["generation"], session=None)
+    desired = _read_json(tmp_path / "data" / "cluster" / "desired_state.json")
+
+    assert item["action"] == "add"
+    assert item["version"] == "6"
+    assert preview["run_v8_root"] == str(tmp_path / "data" / "run_v8")
+    assert result["result"]["counts"]["applied"] == 1
+    assert desired["pb8_instances"]["pb8_user"]["version"] == "6"
+    assert desired["pb8_instances"]["pb8_user"]["desired_state"] == "stopped"
+    assert "pb8_user" not in desired["pb8_tombstones"]
+
+
+def test_apply_bootstrap_rejects_changed_generation(monkeypatch, tmp_path: Path) -> None:
+    """Bootstrap never applies a plan after cluster state changed since preview."""
+
+    root = _init_cluster(tmp_path)
+    _write_v7_config(tmp_path, "test_inst", 4)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    _patch_cluster_config_loader(monkeypatch)
+    preview = cluster.get_bootstrap_preview(session=None)
+    append_operation(
+        root,
+        "ADD_NODE",
+        {"node_id": NODE_A, "role": "master", "pbname": "master"},
+        created_at=101,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        cluster.apply_bootstrap(expected_generation=preview["generation"], session=None)
+
+    assert exc_info.value.status_code == 409
+    assert "Refresh the bootstrap preview" in exc_info.value.detail
+    assert [operation["op"] for operation in load_operations(root)] == ["ADD_NODE"]
 
 
 def test_remote_status_reports_successful_hello(monkeypatch, tmp_path: Path) -> None:

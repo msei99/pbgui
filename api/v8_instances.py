@@ -351,6 +351,19 @@ def _snapshot_v8_bundle_unlocked(name: str, instance_dir: Path) -> str:
             destination = stage / filename
             shutil.copy2(source, destination)
             secure_private_file(destination)
+        optional_logs = {
+            "passivbot_err.log": instance_dir / "passivbot_err.log",
+            "passivbot_err.log.old": instance_dir / "passivbot_err.log.old",
+        }
+        runtime_dir = str(pbgui_purefunc.pb8dir() or "").strip()
+        if runtime_dir:
+            optional_logs["passivbot.log"] = Path(runtime_dir) / "logs" / f"{name}.log"
+        for filename, source in optional_logs.items():
+            if source.is_symlink() or not source.is_file():
+                continue
+            destination = stage / filename
+            shutil.copy2(source, destination)
+            secure_private_file(destination)
         os.replace(stage, target)
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)
@@ -1018,6 +1031,99 @@ def _desired_pb8_state() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]
     )
 
 
+def _read_log_tail(path: Path, lines: int) -> str:
+    """Read a bounded local log tail without following a final symlink."""
+
+    if path.is_symlink() or not path.is_file():
+        return ""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            content = handle.readlines()
+    except OSError:
+        return ""
+    return "".join(content[-lines:])
+
+
+def _backup_log_info(name: str) -> dict[str, str]:
+    """Return the newest safe PB8 backup log and its virtual viewer identifier."""
+
+    instance_root = _backup_root() / name
+    if not instance_root.is_dir() or instance_root.is_symlink():
+        return {}
+    with _backup_lock():
+        for backup_dir in _backup_dirs_unlocked(instance_root):
+            for filename in ("passivbot_err.log", "passivbot_err.log.old", "passivbot.log"):
+                path = backup_dir / filename
+                if path.is_file() and not path.is_symlink():
+                    return {
+                        "backup_id": backup_dir.name,
+                        "backup_file": f"BotBackup:{name}:8:{backup_dir.name}:{filename}",
+                        "path": str(path),
+                    }
+    return {}
+
+
+def _last_active_v8_host(name: str) -> dict[str, Any]:
+    """Resolve current or historical PB8 placement without treating it as live proof."""
+
+    master = _master_hostname()
+    config_path = _config_path(name)
+    current_config: dict[str, Any] = {}
+    if config_path.is_file() and not config_path.is_symlink():
+        try:
+            current_config = load_pb8_config(config_path)
+        except PB8ConfigurationError:
+            current_config = {}
+    pbgui = current_config.get("pbgui") if isinstance(current_config.get("pbgui"), dict) else {}
+    enabled_on = str(pbgui.get("enabled_on") or "disabled")
+    if enabled_on != "disabled":
+        return {"name": name, "host": enabled_on, "version": str(pbgui.get("version") or ""), "master": master, "source": "current"}
+
+    store = getattr(_monitor, "store", None) if _monitor is not None else None
+    observations = getattr(store, "v8_instances", {}) if store is not None else {}
+    candidates: list[tuple[float, str, dict[str, Any]]] = []
+    for host, rows in observations.items() if isinstance(observations, dict) else []:
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and row.get("name") == name:
+                observed_at = max(float(row.get("snapshot_generated_at") or 0), float(row.get("snapshot_checked_at") or 0))
+                candidates.append((observed_at, str(host), row))
+    if candidates:
+        _observed_at, host, row = max(candidates, key=lambda item: item[0])
+        return {"name": name, "host": host, "version": str(row.get("version") or ""), "master": master, "source": "monitor"}
+
+    backup_instance_root = _backup_root() / name
+    backup_dirs: list[Path] = []
+    if backup_instance_root.is_dir() and not backup_instance_root.is_symlink():
+        with _backup_lock():
+            backup_dirs = _backup_dirs_unlocked(backup_instance_root)
+    for backup_dir in backup_dirs:
+        try:
+            backup_config = load_pb8_config(backup_dir / "config.json")
+        except PB8ConfigurationError:
+            continue
+        backup_pbgui = backup_config.get("pbgui") if isinstance(backup_config.get("pbgui"), dict) else {}
+        host = str(backup_pbgui.get("enabled_on") or "disabled")
+        if host != "disabled":
+            result = {"name": name, "host": host, "version": backup_dir.name, "master": master, "source": "backup"}
+            for filename in ("passivbot_err.log", "passivbot_err.log.old", "passivbot.log"):
+                log_path = backup_dir / filename
+                if log_path.is_file() and not log_path.is_symlink():
+                    result.update({
+                        "backup_id": backup_dir.name,
+                        "backup_file": f"BotBackup:{name}:8:{backup_dir.name}:{filename}",
+                    })
+                    break
+            return result
+
+    desired, _tombstones, nodes = _desired_pb8_state()
+    record = desired.get(name) if isinstance(desired.get(name), dict) else {}
+    node = nodes.get(record.get("assigned_host")) if isinstance(nodes.get(record.get("assigned_host")), dict) else {}
+    host = str(node.get("pbname") or node.get("hostname") or "")
+    return {"name": name, "host": host, "version": str(record.get("version") or ""), "master": master, "source": "desired" if host else "none"}
+
+
 def _list_instances() -> list[dict[str, Any]]:
     """Load canonical local PB8 configs and merge desired deployment state."""
 
@@ -1513,6 +1619,7 @@ async def save_v8_instance_config(
     if not isinstance(config, dict):
         raise HTTPException(status_code=400, detail="config must be an object")
     candidate = copy.deepcopy(config)
+    require_stopped = body.get("_require_stopped") is True
     expected_version = body.get("expected_version") if isinstance(body, dict) else None
     if expected_version is not None:
         try:
@@ -1552,6 +1659,10 @@ async def save_v8_instance_config(
         existed = path.is_file()
         if create_only and existed:
             raise HTTPException(status_code=409, detail=f"PB8 instance '{name}' already exists")
+        if require_stopped:
+            if not existed:
+                raise HTTPException(status_code=404, detail=f"PB8 instance '{name}' not found")
+            _assert_v8_instance_stopped(name, path.parent)
         current_version = _current_version(name)
         if expected_version not in (None, 0) and expected_version != current_version:
             raise HTTPException(
@@ -1939,6 +2050,64 @@ def delete_v8_instance(name: str, session: SessionToken = Depends(require_auth))
     }
 
 
+@router.get("/instances/{name}/last-active-host")
+def get_v8_last_active_host(name: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Return current or historical PB8 placement for post-mortem navigation."""
+
+    name = _validate_name(name)
+    return _last_active_v8_host(name)
+
+
+@router.get("/instances/{name}/log-smart")
+async def get_v8_instance_log_smart(
+    name: str,
+    lines: int = Query(500, ge=1, le=10000),
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Read PB8 logs from the active host, local files, or the newest backup."""
+
+    name = _validate_name(name)
+    host_info = _last_active_v8_host(name)
+    host = str(host_info.get("host") or "")
+    master = str(host_info.get("master") or "")
+    if host and host != master:
+        try:
+            from api.vps import get_bot_log_tail
+
+            remote_log = await get_bot_log_tail(host, name, pb_version="8", lines=lines)
+        except Exception as exc:
+            _log(SERVICE, f"Remote PB8 log lookup failed for '{name}' on '{host}': {exc.__class__.__name__}", level="WARNING")
+            remote_log = ""
+        if remote_log:
+            return {**host_info, "log": remote_log, "source": "remote", "source_label": f"last active ({host})"}
+
+    local_candidates = [
+        _instance_dir(name) / "passivbot_err.log",
+        _instance_dir(name) / "passivbot_err.log.old",
+    ]
+    runtime_dir = str(pbgui_purefunc.pb8dir() or "").strip()
+    if runtime_dir:
+        local_candidates.append(Path(runtime_dir) / "logs" / f"{name}.log")
+    for path in local_candidates:
+        log = _read_log_tail(path, lines)
+        if log:
+            return {**host_info, "host": master, "log": log, "source": "local", "source_label": "local PB8 log"}
+
+    backup = _backup_log_info(name)
+    if backup:
+        return {
+            **host_info,
+            "host": master,
+            "version": backup["backup_id"],
+            "backup_id": backup["backup_id"],
+            "backup_file": backup["backup_file"],
+            "log": _read_log_tail(Path(backup["path"]), lines),
+            "source": f"backup:{backup['backup_id']}",
+            "source_label": f"last active (backup {backup['backup_id']})",
+        }
+    return {**host_info, "log": "", "source": "none", "source_label": "no PB8 log found"}
+
+
 @router.get("/backup-settings")
 def get_v8_backup_settings(session: SessionToken = Depends(require_auth)) -> dict[str, int]:
     """Return PB8 live backup retention settings."""
@@ -2046,6 +2215,49 @@ def create_v8_backup_draft(
         "edit_url": str(edit_url),
         "backup_files": sorted(path.name for path in backup_dir.iterdir() if path.is_file() and path.name != "config.json"),
     }
+
+
+@router.post("/restore/{name}/{backup_id}")
+async def restore_v8_instance(
+    name: str,
+    backup_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Restore an immutable backup through the normal stopped bundle-save pipeline."""
+
+    name = _validate_name(name)
+    backup_id = _validate_backup_id(backup_id)
+    with _backup_lock():
+        _backup_dir, config, overrides_by_coin = _load_backup_bundle_unlocked(name, backup_id)
+    references = _referenced_overrides(config)
+    override_files = {
+        filename: copy.deepcopy(overrides_by_coin[coin])
+        for coin, filename in references.items()
+    }
+    pbgui = config.get("pbgui") if isinstance(config.get("pbgui"), dict) else {}
+    pbgui = dict(pbgui)
+    pbgui.pop("from_backup_config", None)
+    pbgui["enabled_on"] = "disabled"
+    config["pbgui"] = pbgui
+    result = await save_v8_instance_config(
+        name,
+        {
+            "config": config,
+            "override_configs": override_files,
+            "expected_version": _current_version(name),
+            "_require_stopped": True,
+        },
+        False,
+        session,
+    )
+    result["restored_backup_id"] = backup_id
+    result["pre_restore_backup_id"] = result.get("backup_id")
+    _log(
+        SERVICE,
+        f"Restored PB8 live instance '{name}' from backup {backup_id} as v{result['version']}",
+        level="INFO",
+    )
+    return result
 
 
 @router.delete("/backups/{name}/{backup_id}")

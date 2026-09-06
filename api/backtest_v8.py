@@ -2469,6 +2469,7 @@ def get_queue(session: SessionToken = Depends(require_auth)) -> dict:
     return {"items": _load_queue()}
 
 
+@router.websocket("/ws/bt8")
 @router.websocket("/ws/bt7")
 async def ws_backtest(websocket: WebSocket) -> None:
     """Push the V8 queue in the same message contract consumed by the shared page."""

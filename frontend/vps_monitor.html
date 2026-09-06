@@ -1939,26 +1939,39 @@ function toggleCard(header) {
 }
 
 // ── Instances ──────────────────────────────────────────────
-function renderInstances() {
-  if (!state) return;
-  const allInst = state.instances || {};
-  const allV7 = state.v7_instances || {};
+function isFreshV8Observation(item, nowSeconds) {
+  const generatedAt = Number(item && item.snapshot_generated_at);
+  const checkedAt = Number(item && item.snapshot_checked_at);
+  return Number.isFinite(generatedAt) && generatedAt > 0
+    && Number.isFinite(checkedAt) && checkedAt > 0
+    && nowSeconds - generatedAt <= MONITOR_AGENT_COLLECTOR_STALE_SECONDS
+    && nowSeconds - checkedAt <= MONITOR_AGENT_COLLECTOR_STALE_SECONDS;
+}
 
-  // Build v7 lookup: "host|name" → {cv, rv, eo, running}
+function buildInstanceRows(snapshot, nowSeconds) {
+  const allInst = snapshot.instances || {};
+  const allV7 = snapshot.v7_instances || {};
+  const allV8 = snapshot.v8_instances || {};
   const v7map = {};
   for (const [host, list] of Object.entries(allV7)) {
     for (const v of list) {
-      v7map[host + '|' + v.name] = v;
+      v7map[host + '|7|' + v.name] = v;
+    }
+  }
+  const v8map = {};
+  for (const [host, list] of Object.entries(allV8)) {
+    for (const v of list) {
+      v8map[host + '|8|' + v.name] = v;
     }
   }
 
-  // Build flat list from running instances (monitors)
   const rows = [];
-  const seen = new Set();  // track "host|name" to avoid duplicates
+  const seen = new Set();
   for (const [host, instances] of Object.entries(allInst)) {
     for (const inst of instances) {
-      const vmap = {'7': 'V7', '6': 'Multi', 's': 'Single'};
-      const version = vmap[inst.p] || inst.p || '?';
+      const runtime = String(inst.p || '?');
+      const versionMap = {'8': 'V8', '7': 'V7', '6': 'Multi', 's': 'Single'};
+      const version = versionMap[runtime] || runtime;
       const memList = inst.m || [];
       const memMB = memList[0] ? (memList[0] / 1048576).toFixed(1) : '0';
       const swapMB = memList[9] ? (memList[9] / 1048576).toFixed(1) : '0';
@@ -1966,22 +1979,23 @@ function renderInstances() {
       const startStr = startTs ? new Date(startTs * 1000).toISOString().slice(0,16).replace('T',' ') : '?';
 
       const name = inst.u || '?';
-      const key = host + '|' + name;
+      const key = host + '|' + runtime + '|' + name;
       seen.add(key);
-      const v7 = v7map[key];
-      const configVer = v7 ? v7.cv : null;
-      const runningVer = v7 ? v7.rv : null;
-      const enabledOn = v7 ? v7.eo : null;
+      const detail = runtime === '8' ? v8map[key] : (runtime === '7' ? v7map[key] : null);
+      const detailFresh = runtime !== '8' || isFreshV8Observation(detail, nowSeconds);
+      const configVer = detail ? detail.cv : null;
+      const runningVer = detail ? detail.rv : null;
+      const enabledOn = detail ? detail.eo : null;
       let syncStatus = '';
-      if (v7) {
-        if (v7.cv === v7.rv && v7.running) syncStatus = 'synced';
-        else if (v7.running && v7.cv !== v7.rv) syncStatus = 'outdated';
+      if (detail && detailFresh) {
+        if (detail.cv === detail.rv && detail.running) syncStatus = 'synced';
+        else if (detail.running && detail.cv !== detail.rv) syncStatus = 'outdated';
         else syncStatus = 'pending';
       }
 
       rows.push({
         host, version, name, start: startStr,
-        pbVersion: inst.p || '?',
+        pbVersion: runtime,
         memMB: parseFloat(memMB), swapMB: parseFloat(swapMB), cpu: inst.c || 0,
         cpu60s: Number.isFinite(Number(inst.cpu_60s)) ? Number(inst.cpu_60s) : 0,
         cpu60sWindow: Number.isFinite(Number(inst.cpu_60s_window)) ? Number(inst.cpu_60s_window) : 0,
@@ -1995,10 +2009,9 @@ function renderInstances() {
     }
   }
 
-  // Add non-running v7 instances (stopped bots still deployed)
   for (const [host, list] of Object.entries(allV7)) {
     for (const v of list) {
-      const key = host + '|' + v.name;
+      const key = host + '|7|' + v.name;
       if (seen.has(key)) continue;
       let syncStatus = 'stopped';
       if (v.eo === 'disabled') syncStatus = 'disabled';
@@ -2016,21 +2029,48 @@ function renderInstances() {
     }
   }
 
+  for (const [host, list] of Object.entries(allV8)) {
+    for (const v of list) {
+      const key = host + '|8|' + v.name;
+      if (seen.has(key) || v.running !== false || !isFreshV8Observation(v, nowSeconds)) continue;
+      rows.push({
+        host, version: 'V8', name: v.name, start: '–',
+        pbVersion: '8',
+        memMB: 0, swapMB: 0, cpu: 0, cpu60s: 0, cpu60sWindow: 0,
+        pnlToday: 0, fillsToday: 0,
+        pnlHist: 0, fillsHist: 0,
+        errorsToday: 0, errors4w: 0,
+        tbsToday: 0, tbs4w: 0,
+        lastError: '', lastTB: '', lastInfo: '',
+        configVer: v.cv, runningVer: v.rv, enabledOn: v.eo,
+        syncStatus: v.eo === 'disabled' ? 'disabled' : 'stopped',
+      });
+    }
+  }
+  return rows;
+}
+
+function renderInstances() {
+  if (!state) return;
+  const rows = buildInstanceRows(state, Date.now() / 1000);
+
   // Filters
   const servers = ['All', ...new Set(rows.map(r => r.host))].sort();
   const versions = ['All', ...new Set(rows.map(r => r.version))].sort();
 
   const filtersEl = document.getElementById('inst-filters');
-  // Only rebuild filters if they changed
-  if (!filtersEl.dataset.built) {
+  const filterOptions = JSON.stringify([servers, versions]);
+  if (filtersEl.dataset.options !== filterOptions) {
+    if (!servers.includes(instFilterServer)) instFilterServer = 'All';
+    if (!versions.includes(instFilterVersion)) instFilterVersion = 'All';
     filtersEl.innerHTML = `
       <label>Server: <select id="f-server">${servers.map(s => `<option${s===instFilterServer?' selected':''}>${esc(s)}</option>`).join('')}</select></label>
       <label>Version: <select id="f-version">${versions.map(v => `<option${v===instFilterVersion?' selected':''}>${esc(v)}</option>`).join('')}</select></label>
       <label><input type="checkbox" id="f-errors" ${instFilterErrors?'checked':''}> Only with errors</label>
       <label><input type="checkbox" id="f-others" ${instFilterOthers?'checked':''}> Show other</label>
     `;
-    filtersEl.dataset.built = '1';
-    document.getElementById('f-server').onchange = (e) => { instFilterServer = e.target.value; filtersEl.dataset.built = ''; renderInstances(); };
+    filtersEl.dataset.options = filterOptions;
+    document.getElementById('f-server').onchange = (e) => { instFilterServer = e.target.value; renderInstances(); };
     document.getElementById('f-version').onchange = (e) => { instFilterVersion = e.target.value; renderInstances(); };
     document.getElementById('f-errors').onchange = (e) => { instFilterErrors = e.target.checked; renderInstances(); };
     document.getElementById('f-others').onchange = (e) => { instFilterOthers = e.target.checked; renderInstances(); };

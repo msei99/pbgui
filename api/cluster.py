@@ -19,7 +19,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import asyncssh
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -41,6 +41,7 @@ from master.cluster_state import (
     append_operation,
     build_config_manifest,
     ClusterStateError,
+    ClusterPaths,
     cluster_node_was_removed,
     compute_config_manifest_hash,
     credential_lifecycle_status,
@@ -79,6 +80,7 @@ from master.cluster_checkpoint import (
     verify_checkpoint_commit_proof,
 )
 from pb7_config import load_pb7_config
+from pb8_config import load_pb8_config
 from pbgui_purefunc import PBGDIR
 from operation_store import DurableOperationStore
 
@@ -110,6 +112,16 @@ class ClusterRetentionSettingsIn(BaseModel):
     mode: str
     history_days: int = Field(ge=1, le=3650)
     expected_generation: int = Field(ge=0)
+
+
+class PB8InstanceActionIn(BaseModel):
+    """Validated PB8 desired-state action from the Cluster operator UI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["start", "stop", "move", "delete"]
+    expected_generation: int = Field(ge=0)
+    target_node_id: str | None = None
 
 
 class _SelfJoinPasswordSSHRunner:
@@ -1038,10 +1050,46 @@ def _tombstone_list(desired_state: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _pb8_instance_list(desired_state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return materialized PB8 instances as a stable list."""
+
+    instances = desired_state.get("pb8_instances") if isinstance(desired_state, dict) else {}
+    if not isinstance(instances, dict):
+        return []
+    result: list[dict[str, Any]] = []
+    for name in sorted(instances):
+        item = instances.get(name)
+        row = dict(item) if isinstance(item, dict) else {}
+        row["instance"] = name
+        result.append(row)
+    return result
+
+
+def _pb8_tombstone_list(desired_state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return materialized PB8 tombstones as a stable list."""
+
+    tombstones = desired_state.get("pb8_tombstones") if isinstance(desired_state, dict) else {}
+    if not isinstance(tombstones, dict):
+        return []
+    result: list[dict[str, Any]] = []
+    for name in sorted(tombstones):
+        item = tombstones.get(name)
+        row = dict(item) if isinstance(item, dict) else {}
+        row["instance"] = name
+        result.append(row)
+    return result
+
+
 def _run_v7_root() -> Path:
     """Return the local V7 instance directory root."""
 
     return Path(PBGDIR) / "data" / "run_v7"
+
+
+def _run_v8_root() -> Path:
+    """Return the local PB8 instance directory root."""
+
+    return Path(PBGDIR) / "data" / "run_v8"
 
 
 def _vps_hosts_root() -> Path:
@@ -4638,7 +4686,9 @@ def _build_bootstrap_plan() -> dict[str, Any]:
     identity = snapshot["identity"]
     cluster_nodes = snapshot["cluster_nodes"]
     desired_state = snapshot["desired_state"]
+    generation = int(cluster_nodes.get("generation") or 0)
     run_root = _run_v7_root()
+    run_v8_root = _run_v8_root()
     host_node_ids = _read_host_node_ids()
     items: list[dict[str, Any]] = []
     counts: dict[str, int] = {"add": 0, "update": 0, "skip": 0, "blocked_tombstone": 0, "error": 0}
@@ -4686,16 +4736,18 @@ def _build_bootstrap_plan() -> dict[str, Any]:
             counts["error"] += 1
         items.append(item)
 
-    if not run_root.is_dir():
+    if not run_root.is_dir() and not run_v8_root.is_dir():
         return {
+            "generation": generation,
             "run_v7_root": str(run_root),
+            "run_v8_root": str(run_v8_root),
             "counts": counts,
             "items": items,
             "can_apply": bool(counts.get("add") or counts.get("update")),
-            "message": "No local V7 instance directory exists.",
+            "message": "No local V7 or PB8 instance directory exists.",
         }
 
-    for instance_dir in sorted(path for path in run_root.iterdir() if path.is_dir()):
+    for instance_dir in sorted(path for path in run_root.iterdir() if path.is_dir()) if run_root.is_dir() else []:
         name = instance_dir.name
         config_path = instance_dir / "config.json"
         item: dict[str, Any] = {"type": "instance", "instance": name, "path": str(instance_dir)}
@@ -4765,19 +4817,86 @@ def _build_bootstrap_plan() -> dict[str, Any]:
             counts["error"] += 1
         items.append(item)
 
+    pb8_instances = desired_state.get("pb8_instances") if isinstance(desired_state.get("pb8_instances"), dict) else {}
+    pb8_tombstones = desired_state.get("pb8_tombstones") if isinstance(desired_state.get("pb8_tombstones"), dict) else {}
+    for instance_dir in sorted(path for path in run_v8_root.iterdir() if path.is_dir()) if run_v8_root.is_dir() else []:
+        name = instance_dir.name
+        config_path = instance_dir / "config.json"
+        item = {"type": "pb8_instance", "instance": name, "path": str(instance_dir)}
+        try:
+            _validate_instance_name(name)
+            current = pb8_instances.get(name) if isinstance(pb8_instances.get(name), dict) else {}
+            if not config_path.is_file():
+                if current:
+                    item.update({
+                        "action": "skip",
+                        "reason": "local PB8 config.json is missing; desired state already tracks this instance",
+                        "current_version": str(current.get("version") or ""),
+                    })
+                    counts["skip"] += 1
+                else:
+                    item.update({"action": "error", "reason": "missing PB8 config.json"})
+                    counts["error"] += 1
+                items.append(item)
+                continue
+            cfg = load_pb8_config(config_path)
+            pbgui = cfg.get("pbgui") if isinstance(cfg.get("pbgui"), dict) else {}
+            enabled_on = str(pbgui.get("enabled_on") or "disabled").strip() or "disabled"
+            version = str(pbgui.get("version", 0))
+            desired = "running" if enabled_on != "disabled" else "stopped"
+            manifest_hash = compute_config_manifest_hash(build_config_manifest(instance_dir))
+            assignment = _resolve_bootstrap_assignment(identity, enabled_on, host_node_ids)
+            item.update({
+                "version": version,
+                "enabled_on": enabled_on,
+                "desired_state": desired,
+                "config_manifest_hash": manifest_hash,
+                "assigned_host": assignment["assigned_host"],
+                "assigned_label": assignment["assigned_label"],
+                "assigned_role": assignment["assigned_role"],
+                "will_create_node_mapping": assignment["will_create_node_mapping"],
+                "current_version": str(current.get("version") or "") if current else "",
+                "current_manifest_hash": str(current.get("config_manifest_hash") or "") if current else "",
+            })
+            if name in pb8_tombstones:
+                item.update({"action": "blocked_tombstone", "reason": "PB8 instance is tombstoned; restore explicitly instead"})
+            elif not current:
+                item.update({"action": "add", "reason": "not present in PB8 desired state"})
+            elif current.get("conflicted") is True:
+                item.update({"action": "error", "reason": "PB8 desired state is conflicted"})
+            else:
+                same_state = (
+                    str(current.get("version") or "") == version
+                    and str(current.get("desired_state") or "") == desired
+                    and str(current.get("config_manifest_hash") or "") == manifest_hash
+                    and bool(assignment["assigned_host"])
+                    and str(current.get("assigned_host") or "") == assignment["assigned_host"]
+                )
+                item.update({
+                    "action": "skip" if same_state else "update",
+                    "reason": "already matches PB8 desired state" if same_state else "local PB8 config differs from desired state",
+                })
+            counts[item["action"]] = counts.get(item["action"], 0) + 1
+        except Exception as exc:
+            item.update({"action": "error", "reason": str(exc)})
+            counts["error"] += 1
+        items.append(item)
+
     return {
+        "generation": generation,
         "run_v7_root": str(run_root),
+        "run_v8_root": str(run_v8_root),
         "counts": counts,
         "items": items,
         "can_apply": bool(counts.get("add") or counts.get("update")),
-        "message": "Bootstrap records non-replica VPS inventory and UPSERT_CONFIG operations. It never infers deletes.",
+        "message": "Bootstrap records non-replica VPS inventory plus V7 and PB8 config upserts. It never infers deletes.",
     }
 
 
 def _apply_bootstrap_plan(plan: dict[str, Any]) -> dict[str, Any]:
     """Apply add/update items from a previously generated bootstrap plan."""
 
-    from api import v7_instances
+    from api import v7_instances, v8_instances
 
     applied: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -4825,12 +4944,35 @@ def _apply_bootstrap_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 else:
                     append_operation(_cluster_root(), "UPDATE_NODE", node_payload)
                 applied.append({"type": item_type, "name": name, "action": action})
+            elif item_type == "pb8_instance":
+                _validate_instance_name(name)
+                instance_dir = _run_v8_root() / name
+                cfg = load_pb8_config(instance_dir / "config.json")
+                current_version = item.get("current_version")
+                parent_version = int(current_version) if str(current_version or "").isdigit() else 0
+                operation = v8_instances._record_upsert(
+                    name,
+                    instance_dir,
+                    cfg,
+                    parent_version=parent_version,
+                    is_new=not bool(current_version),
+                )
+                if operation is None:
+                    raise ClusterStateError("PB8 cluster config upsert was not recorded")
+                applied.append({"type": item_type, "name": name, "action": action})
             else:
                 _validate_instance_name(name)
                 instance_dir = _run_v7_root() / name
                 cfg = load_pb7_config(instance_dir / "config.json", neutralize_added=False)
                 parent_version = item.get("current_version") or None
-                v7_instances._record_cluster_config_upsert(name, instance_dir, cfg, parent_version=parent_version)
+                operation = v7_instances._record_cluster_config_upsert(
+                    name,
+                    instance_dir,
+                    cfg,
+                    parent_version=parent_version,
+                )
+                if operation is None:
+                    raise ClusterStateError("cluster config upsert was not recorded")
                 applied.append({"type": item_type, "name": name, "action": action})
         except Exception as exc:
             failed.append({"type": item_type, "name": name, "action": action, "reason": str(exc)})
@@ -4859,13 +5001,15 @@ def get_status(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     nodes = _node_list(cluster_nodes)
     instances = _instance_list(desired_state)
     tombstones = _tombstone_list(desired_state)
+    pb8_instances = _pb8_instance_list(desired_state)
+    pb8_tombstones = _pb8_tombstone_list(desired_state)
     credentials = _credential_status(snapshot)
-    conflict_count = sum(1 for item in instances if item.get("conflicted") is True)
+    conflict_count = sum(1 for item in instances + pb8_instances if item.get("conflicted") is True)
     warnings: list[str] = []
     if not nodes:
         warnings.append("No cluster node membership operation has been recorded yet.")
     if conflict_count:
-        warnings.append(f"{conflict_count} V7 instance conflict(s) need review.")
+        warnings.append(f"{conflict_count} bot instance conflict(s) need review.")
 
     return {
         "read_only": True,
@@ -4879,8 +5023,10 @@ def get_status(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
         "counts": {
             "nodes": len(nodes),
             "instances": len(instances),
+            "pb8_instances": len(pb8_instances),
             "conflicts": conflict_count,
             "tombstones": len(tombstones),
+            "pb8_tombstones": len(pb8_tombstones),
             "oplog": int(cluster_nodes.get("generation") or 0),
         },
         "api_keys": desired_state.get("api_keys"),
@@ -4939,6 +5085,19 @@ async def get_retention_report(
         _log(SERVICE, f"Local retention report failed: {type(exc).__name__}: {exc}", level="ERROR")
         raise HTTPException(status_code=500, detail="Failed to build local retention report") from exc
     local_items = list(local_preview.get("items") or [])[:200]
+    try:
+        local_cleanup = retention_cleanup_status(_cluster_root())
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"Local retention cleanup status unavailable: {type(exc).__name__}: {exc}",
+            level="WARNING",
+        )
+        unavailable = {
+            "status": "error",
+            "blockers": ["retention_status_unavailable"],
+        }
+        local_cleanup = {"oplog": dict(unavailable), "blobs": dict(unavailable)}
     reports: list[dict[str, Any]] = [{
         "node_id": local_node_id,
         "pbname": str(identity.get("created_from_pbname") or "local"),
@@ -4946,7 +5105,7 @@ async def get_retention_report(
         "items": local_items,
         "items_truncated": int(local_preview.get("eligible_operations") or 0) > len(local_items),
         "migration_seal": checkpoint["migration_seal"],
-        "automatic_cleanup": retention_cleanup_status(_cluster_root()),
+        "automatic_cleanup": local_cleanup,
     }]
     remote_limit = asyncio.Semaphore(4)
 
@@ -5172,6 +5331,7 @@ def remove_cluster_node(node_id: str, session: SessionToken = Depends(require_au
         raise HTTPException(status_code=400, detail="Only disabled cluster nodes can be removed")
     desired_state = snapshot["desired_state"] if isinstance(snapshot.get("desired_state"), dict) else {}
     instances = desired_state.get("instances") if isinstance(desired_state, dict) else {}
+    pb8_instances = desired_state.get("pb8_instances") if isinstance(desired_state, dict) else {}
     assigned_instances = [
         str(name)
         for name, item in (instances if isinstance(instances, dict) else {}).items()
@@ -5180,6 +5340,14 @@ def remove_cluster_node(node_id: str, session: SessionToken = Depends(require_au
     if assigned_instances:
         preview = ", ".join(sorted(assigned_instances)[:5])
         raise HTTPException(status_code=400, detail=f"Node still has assigned V7 configs: {preview}")
+    assigned_pb8_instances = [
+        str(name)
+        for name, item in (pb8_instances if isinstance(pb8_instances, dict) else {}).items()
+        if isinstance(item, dict) and str(item.get("assigned_host") or "") == str(node.get("node_id") or "")
+    ]
+    if assigned_pb8_instances:
+        preview = ", ".join(sorted(assigned_pb8_instances)[:5])
+        raise HTTPException(status_code=400, detail=f"Node still has assigned PB8 configs: {preview}")
     secrets = desired_state.get("secrets") if isinstance(desired_state.get("secrets"), dict) else {}
     affected_credentials = {"cmc": 0, "tradfi": 0}
     for secret in secrets.values():
@@ -5792,15 +5960,95 @@ async def resolve_cluster_migration_conflict(
 
 @router.get("/desired-state")
 def get_desired_state(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
-    """Return materialized V7 desired state and tombstones."""
+    """Return materialized V7/PB8 desired state and tombstones."""
 
     snapshot = _load_cluster_snapshot()
     desired_state = snapshot["desired_state"]
     return {
+        "generation": int(snapshot["cluster_nodes"].get("generation") or 0),
         "desired_state": desired_state,
         "instances": _instance_list(desired_state),
         "tombstones": _tombstone_list(desired_state),
+        "pb8_instances": _pb8_instance_list(desired_state),
+        "pb8_tombstones": _pb8_tombstone_list(desired_state),
         "credentials": _credential_status(snapshot),
+    }
+
+
+@router.post("/pb8-instances/{name}/action")
+def mutate_pb8_instance_state(
+    name: str,
+    body: PB8InstanceActionIn,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Apply one explicit PB8 lifecycle action with generation and capability guards."""
+
+    _validate_instance_name(name)
+    snapshot = _load_cluster_snapshot()
+    generation = int(snapshot["cluster_nodes"].get("generation") or 0)
+    if generation != body.expected_generation:
+        raise HTTPException(status_code=409, detail="Cluster state changed. Refresh PB8 desired state before retrying.")
+    current = snapshot["desired_state"].get("pb8_instances", {}).get(name)
+    if not isinstance(current, dict):
+        raise HTTPException(status_code=404, detail=f"PB8 instance '{name}' not found")
+    if current.get("conflicted") is True:
+        raise HTTPException(status_code=409, detail=f"PB8 instance '{name}' is conflicted")
+    if body.action == "delete":
+        from api import v8_instances
+
+        result = v8_instances.delete_v8_instance(name, session)
+        result["action"] = "delete"
+        _request_pbcluster_sync(_cluster_root())
+        return result
+
+    nodes = snapshot["cluster_nodes"].get("nodes")
+    nodes = nodes if isinstance(nodes, dict) else {}
+    assigned_host = str(current.get("assigned_host") or "")
+    operation_name = ""
+    operation_payload: dict[str, Any] = {"instance": name}
+    if body.action == "start":
+        target = nodes.get(assigned_host)
+        capabilities = target.get("capabilities") if isinstance(target, dict) else []
+        if "pb8_instances_v1" not in {str(item) for item in capabilities or []}:
+            raise HTTPException(status_code=409, detail="Assigned node does not advertise PB8 Cluster support")
+        if current.get("desired_state") == "running":
+            return {"ok": True, "changed": False, "action": "start", "instance": name}
+        operation_name = "START_PB8_INSTANCE"
+    elif body.action == "stop":
+        if current.get("desired_state") == "stopped":
+            return {"ok": True, "changed": False, "action": "stop", "instance": name}
+        operation_name = "STOP_PB8_INSTANCE"
+    else:
+        target_node_id = str(body.target_node_id or "")
+        target = nodes.get(target_node_id)
+        if not isinstance(target, dict):
+            raise HTTPException(status_code=422, detail="A registered target node is required")
+        if "pb8_instances_v1" not in {str(item) for item in target.get("capabilities") or []}:
+            raise HTTPException(status_code=409, detail="Target node does not advertise PB8 Cluster support")
+        if current.get("desired_state") != "stopped":
+            raise HTTPException(status_code=409, detail="Stop the PB8 instance before moving it")
+        if target_node_id == assigned_host:
+            return {"ok": True, "changed": False, "action": "move", "instance": name}
+        version = int(current.get("version") or 0)
+        operation_name = "MOVE_PB8_INSTANCE"
+        operation_payload.update({
+            "version": str(version + 1),
+            "parent_version": str(version),
+            "from": assigned_host,
+            "to": target_node_id,
+            "desired_state": "stopped",
+            "config_manifest_hash": str(current.get("config_manifest_hash") or ""),
+        })
+    operation = append_operation(_cluster_root(), operation_name, operation_payload)
+    rebuild_materialized_state(_cluster_root())
+    _request_pbcluster_sync(_cluster_root())
+    _log(SERVICE, f"Applied {operation_name} for PB8 instance '{name}'", level="INFO")
+    return {
+        "ok": True,
+        "changed": True,
+        "action": body.action,
+        "instance": name,
+        "op_id": operation["op_id"],
     }
 
 
@@ -5811,15 +6059,43 @@ def get_oplog(
 ) -> dict[str, Any]:
     """Return recent local cluster operations, newest first."""
 
-    snapshot = _load_cluster_snapshot()
-    root = Path(snapshot["cluster_root"])
-    cluster_id = str(snapshot["identity"].get("cluster_id") or "")
     try:
-        operations = load_operations(root, expected_cluster_id=cluster_id)
-    except ClusterStateError as exc:
+        root = _cluster_root()
+        paths = ClusterPaths.from_root(root)
+        if root.is_symlink():
+            raise ClusterStateError("cluster root must not be a symlink")
+        try:
+            has_state = any(root.iterdir())
+        except FileNotFoundError:
+            has_state = False
+        if not has_state:
+            return {"count": 0, "operations": []}
+        for path in (root / ".append_sequence", root / ".append_sequence.lock"):
+            if path.is_symlink():
+                raise ClusterStateError("cluster history lock must not be a symlink")
+        # Checkpoint replacement/pruning uses this same history transaction.
+        # Residual state without a valid identity is an error, not an empty log.
+        with advisory_file_lock(root / ".append_sequence"):
+            for path in (paths.cluster_id, paths.node_id, paths.node_identity):
+                if path.is_symlink():
+                    raise ClusterStateError("cluster identity must not contain symlinks")
+            identity = read_local_identity(root)
+            operations = load_operations(root, expected_cluster_id=str(identity["cluster_id"]))
+    except HTTPException:
+        raise
+    except Exception as exc:
         _log(SERVICE, f"Failed to load cluster oplog: {exc}", level="ERROR")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    operations.sort(key=lambda item: (int(item.get("created_at") or 0), str(item.get("op_id") or "")), reverse=True)
+        raise HTTPException(status_code=500, detail="Failed to load cluster oplog") from exc
+    # Reverse the canonical replay order; seq is numeric and local to its actor.
+    operations.sort(
+        key=lambda item: (
+            int(item["created_at"]),
+            str(item["actor"]),
+            int(item["seq"]),
+            str(item["op_id"]),
+        ),
+        reverse=True,
+    )
     return {
         "count": len(operations),
         "operations": operations[:limit],
@@ -5840,11 +6116,24 @@ def get_bootstrap_preview(session: SessionToken = Depends(require_auth)) -> dict
 
 
 @router.post("/bootstrap")
-def apply_bootstrap(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+def apply_bootstrap(
+    expected_generation: Annotated[int | None, Query(ge=0)] = None,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
     """Write local V7 configs into the cluster oplog as explicit UPSERT_CONFIG ops."""
 
     try:
         plan = _build_bootstrap_plan()
+        current_generation = int(plan.get("generation") or 0)
+        if expected_generation is not None and current_generation != expected_generation:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Cluster generation changed "
+                    f"(expected {expected_generation}, current {current_generation}). "
+                    "Refresh the bootstrap preview."
+                ),
+            )
         result = _apply_bootstrap_plan(plan)
         return {
             "ok": result["counts"]["failed"] == 0,

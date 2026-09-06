@@ -560,6 +560,18 @@ def test_log_panel_waits_for_remote_assignment_before_opening() -> None:
     assert "_editorInitPromise = init();" in page
 
 
+def test_pb8_log_panel_uses_smart_history_and_backup_viewer_alias() -> None:
+    """PB8 log opening resolves remote history and keeps backup paths server-side."""
+
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    open_log_panel = _page_function(page, "openLogPanel")
+
+    assert "'/instances/' + encodeURIComponent(INSTANCE_NAME) + '/log-smart?lines=1'" in open_log_panel
+    assert "if (data.backup_file)" in open_log_panel
+    assert "_initViewer('local', data.backup_file)" in open_log_panel
+    assert "BotBackup:' + INSTANCE_NAME + ':8:" in open_log_panel
+
+
 def test_save_waits_for_editor_initialization_before_validating_raw_json() -> None:
     """An early Save click must not validate the temporarily empty Raw JSON field."""
 
@@ -1022,3 +1034,15 @@ def test_run_strategy_switch_replaces_key_caches_edits_and_marks_runtime_default
         """
     )
     _run_node(script)
+
+
+def test_pb8_backups_offer_guarded_direct_rollback() -> None:
+    """PB8 backup rows retain editor loading and add an explicit shared-modal rollback."""
+
+    source = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+    assert "data-restore-name" in source
+    assert "runEditorAdapter.isV8 && b.currently_exists" in source
+    assert "data-rollback-name" in source
+    assert "async function rollbackBackup(name, ts)" in source
+    assert "window.PBGuiDialogs.confirm" in source
+    assert "'/restore/' + encodeURIComponent(name)" in source

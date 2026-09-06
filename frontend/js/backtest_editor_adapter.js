@@ -139,7 +139,7 @@
       archiveApiBase: function (apiBase) {
         return String(apiBase || '').replace(/\/backtest-v[78]$/, '/backtest-v7');
       },
-      websocketPath: isV8 ? '/api/backtest-v8/ws/bt7' : '/api/backtest-v7/ws/bt7',
+      websocketPath: isV8 ? '/api/backtest-v8/ws/bt8' : '/api/backtest-v7/ws/bt7',
       queueLogFile: function (filename) {
         return (isV8 ? 'backtests_v8/' : 'backtests/') + filename + '.log';
       },
