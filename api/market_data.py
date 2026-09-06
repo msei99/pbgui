@@ -22,6 +22,7 @@ from hyperliquid_best_1m import (
     resolve_tradfi_symbol,
 )
 from credential_store import CredentialStore
+from api.page_templates import render_page_urls, script_json
 from market_data import (
     _get_pb7_root_dir,
     _get_pb8_root_dir,
@@ -169,20 +170,13 @@ def get_main_page(
     html_path = PBGDIR / "frontend" / "market_data_main.html"
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api/market-data"
-
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
+    html = render_page_urls(request, html, "/api/market-data")
 
     from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION
 
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
 
     nav_js = PBGDIR / "frontend" / "pbgui_nav.js"
@@ -190,13 +184,6 @@ def get_main_page(
     html = html.replace("%%NAV_HASH%%", nav_hash)
 
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
-
-
-def _get_request_origin(request: Request) -> str:
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    return f"{scheme}://{host}" + (f":{port}" if port else "")
 
 
 def _normalize_settings_exchange(exchange: str) -> str:
@@ -1225,53 +1212,33 @@ def _touch_exchange_refresh_flag(exchange: str) -> None:
     flag_path.touch()
 
 
-def _render_market_data_status_html(request: Request, token: str, exchange: str) -> str:
+def _render_market_data_status_html(request: Request, exchange: str) -> str:
     exchange_param = str(exchange or "").strip().lower()
     html_path = PBGDIR / "frontend" / "market_data_status.html"
     html_content = html_path.read_text(encoding="utf-8")
-
-    browser_origin = _get_request_origin(request)
-    api_host_str = request.url.netloc or request.headers.get("host", "127.0.0.1")
-    api_base_str = browser_origin + "/api"
 
     instance_id = f"mds_fastapi_{exchange_param}".replace("-", "_")
     html_content = html_content.replace("__MDS_ROOT_ID__", instance_id)
     html_content = html_content.replace("__MDS_ID__", f"{instance_id}_")
 
     html_content = html_content.replace(
-        'data-token=""', f'data-token="{token}"'
-    ).replace(
         'data-exchange=""', f'data-exchange="{exchange_param}"'
-    ).replace(
-        'data-api-host=""', f'data-api-host="{api_host_str}"'
-    ).replace(
-        'data-api-base=""', f'data-api-base="{api_base_str}"'
     )
-    return html_content
+    return render_page_urls(request, html_content, "/api")
 
 
-def _render_hl_data_actions_html(request: Request, token: str, initial_section: str = "") -> str:
+def _render_hl_data_actions_html(request: Request, initial_section: str = "") -> str:
     html_path = PBGDIR / "frontend" / "hl_data_actions.html"
     html_content = html_path.read_text(encoding="utf-8")
-
-    browser_origin = _get_request_origin(request)
-    api_host_str = request.url.netloc or request.headers.get("host", "127.0.0.1")
-    api_base_str = browser_origin + "/api"
 
     instance_id = "hlda_fastapi_market_data"
     html_content = html_content.replace("__HLDA_ROOT__", instance_id)
     html_content = html_content.replace("__HLDA__", f"{instance_id}_")
 
     html_content = html_content.replace(
-        'data-token=""', f'data-token="{token}"'
-    ).replace(
-        'data-api-base=""', f'data-api-base="{api_base_str}"'
-    ).replace(
-        'data-api-host=""', f'data-api-host="{api_host_str}"'
-    ).replace(
         'data-initial-section=""', f'data-initial-section="{initial_section}"'
     )
-    return html_content
+    return render_page_urls(request, html_content, "/api")
 
 
 BEST_1M_EXCHANGES: dict[str, dict[str, str]] = {
@@ -3547,7 +3514,7 @@ def get_market_data_status_monitor(
     if not _get_exchange_status_key(exchange_clean) or not _get_exchange_flag_prefix(exchange_clean):
         return HTMLResponse("<div>Unknown exchange</div>", status_code=404)
 
-    html = _render_market_data_status_html(request=request, token=session.token, exchange=exchange_clean)
+    html = _render_market_data_status_html(request=request, exchange=exchange_clean)
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
@@ -3563,7 +3530,6 @@ def get_hyperliquid_data_actions(
 
     html = _render_hl_data_actions_html(
         request=request,
-        token=session.token,
         initial_section=section_clean,
     )
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})

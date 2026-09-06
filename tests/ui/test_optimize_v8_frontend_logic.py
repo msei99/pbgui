@@ -1934,8 +1934,9 @@ def test_cookie_auth_and_v7_migration_are_available_from_the_shared_page() -> No
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
     api_v7 = (ROOT / "api" / "optimize_v7.py").read_text(encoding="utf-8")
 
-    assert "if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN" in page
-    assert "Object.assign({}, init.headers || {}, { Authorization" not in page
+    assert "%%TOKEN%%" not in page
+    assert "Authorization" not in page
+    assert "credentials: 'same-origin'" in page
     assert "cfg-migrate-v8" in page
     assert "pareto-migrate-v8" in page
     assert "migrateOptimizeConfigToV8" in page
@@ -1951,7 +1952,9 @@ def test_cookie_auth_and_v7_migration_are_available_from_the_shared_page() -> No
     assert "showOptimizeMigrationReviewWarnings" not in page
     assert "V8 conversion review recommended" not in page
     assert "/api/optimize-v8/migrate-v7" in page
-    assert "json.dumps(\"\")" in api_v7
+    assert "authFetch(BASE_PREFIX + '/api/optimize-v8/migrate-v7'" in page
+    assert "window.location.href = BASE_PREFIX + '/api/optimize-v8/main_page" in page
+    assert "render_page_urls(request, html, \"/api/optimize-v7\")" in api_v7
 
     optimize_migration = _page_function(page, "migrateOptimizeConfigToV8")
     pareto_migration = _page_function(page, "migrateParetoConfigToV8")

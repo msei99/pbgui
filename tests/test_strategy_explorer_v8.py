@@ -205,10 +205,10 @@ def test_main_page_uses_cookie_auth_placeholders_without_session_token() -> None
             "path": "/api/strategy-explorer-v8/main_page",
             "raw_path": b"/api/strategy-explorer-v8/main_page",
             "query_string": b"",
-            "headers": [],
+            "headers": [(b"host", b"attacker.example")],
             "client": ("127.0.0.1", 1234),
             "server": ("example.test", 443),
-            "root_path": "",
+            "root_path": "/api/team",
         }
     )
 
@@ -216,7 +216,9 @@ def test_main_page_uses_cookie_auth_placeholders_without_session_token() -> None
     body = response.body.decode("utf-8")
 
     assert secret not in body
-    assert "https://example.test/api/strategy-explorer-v8" in body
+    assert "/api/team/api/strategy-explorer-v8" in body
+    assert "attacker.example" not in body
+    assert "/api/team/app/" in body
     assert "opaque-id" in body
     assert "%%API_BASE%%" not in body
 

@@ -20,6 +20,8 @@ Die Seite nutzt die normale FastAPI-Shell:
 
 Der Guide-Button im FastAPI-Header oeffnet das gemeinsame Help-System.
 
+Browser-Anfragen verwenden das HttpOnly-PBGui-Session-Cookie; der Session-Token wird weder in die Seite gerendert noch in einem Browser-Bearer-Header gesendet. API- und lokale Asset-Pfade behalten den konfigurierten ASGI-Mount-Prefix. Help-Markdown wird bereinigt; Links und Bilder werden vor der Anzeige auf HTTP(S)-URLs begrenzt.
+
 ## Sidebar-Aktionen
 
 - `Refresh Selected Exchange`

@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PBGui — Help & Tutorials</title>
-  <script src="/app/vendor/marked.min.js?v=1"></script>
-  <script src="/app/vendor/purify.min.js?v=1"></script>
+  <script src="./vendor/marked.min.js?v=1"></script>
+  <script src="./vendor/purify.min.js?v=1"></script>
   <style>
     :root {
       --fs-xs: 11px;
@@ -545,20 +545,20 @@
 
   <script>
     var _query = new URLSearchParams(window.location.search);
-    var TOKEN = '';
     var API_BASE = '%%API_BASE%%';
     var WS_BASE = '%%WS_BASE%%';
     var PBGUI_VERSION = '%%VERSION%%';
     var PBGUI_SERIAL = '%%SERIAL%%';
     var TOPIC = _query.get('topic') || '';
+    var APP_PREFIX = (function () {
+      var marker = window.location.pathname.lastIndexOf('/app/');
+      return marker >= 0 ? window.location.pathname.slice(0, marker) : '';
+    }());
+    function appPath(path) {
+      return APP_PREFIX + path;
+    }
     function hasInjectedPlaceholder(value) {
       return typeof value === 'string' && value.indexOf('%%') !== -1;
-    }
-
-    function authHeaders() {
-      return TOKEN && !hasInjectedPlaceholder(TOKEN)
-        ? { 'Authorization': 'Bearer ' + TOKEN }
-        : {};
     }
 
     function syncNavMeta() {
@@ -597,7 +597,7 @@
     async function ensurePageMeta() {
       if (!hasInjectedPlaceholder(PBGUI_VERSION) && !hasInjectedPlaceholder(PBGUI_SERIAL)) return;
       try {
-        var response = await fetch('/api/help/meta', { cache: 'no-store', headers: authHeaders() });
+        var response = await fetch(appPath('/api/help/meta'), { cache: 'no-store', credentials: 'same-origin' });
         if (!response.ok) return;
 
         var data = await response.json();
@@ -647,15 +647,54 @@
       }
 
       function renderMarkdown(md) {
-        return DOMPurify.sanitize(marked.parse(String(md || '')));
+        var sanitized = DOMPurify.sanitize(marked.parse(String(md || '')), {
+          USE_PROFILES: { html: true }
+        });
+        var template = document.createElement('template');
+        template.innerHTML = sanitized;
+        Array.from(template.content.querySelectorAll('a[href],img[src]')).forEach(function (element) {
+          var attribute = element.tagName === 'A' ? 'href' : 'src';
+          if (!isSafeHelpUrl(element.getAttribute(attribute))) element.removeAttribute(attribute);
+          if (element.tagName === 'A' && element.getAttribute('target') === '_blank') {
+            element.setAttribute('rel', 'noopener noreferrer');
+          }
+        });
+        return template.innerHTML;
+      }
+
+      function isSafeHelpUrl(rawUrl) {
+        try {
+          var parsed = new URL(String(rawUrl || '').trim(), window.location.origin);
+          return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+        } catch (error) {
+          return false;
+        }
       }
 
       function stripHtml(html) {
-        return String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        var template = document.createElement('template');
+        template.innerHTML = DOMPurify.sanitize(String(html || ''), { USE_PROFILES: { html: true } });
+        return String(template.content.textContent || '').replace(/\s+/g, ' ').trim();
       }
 
       function escapeRegExp(value) {
         return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      }
+
+      function appendHighlighted(parent, text, expr) {
+        var value = String(text || '');
+        var offset = 0;
+        var match;
+        expr.lastIndex = 0;
+        while ((match = expr.exec(value)) !== null) {
+          parent.appendChild(document.createTextNode(value.slice(offset, match.index)));
+          var mark = document.createElement('mark');
+          mark.textContent = match[0];
+          parent.appendChild(mark);
+          offset = match.index + match[0].length;
+          if (!match[0].length) expr.lastIndex += 1;
+        }
+        parent.appendChild(document.createTextNode(value.slice(offset)));
       }
 
       function clearSearch() {
@@ -694,11 +733,17 @@
         } catch (error) {
           return;
         }
-        helpContent.innerHTML = rawHtml.replace(/(<[^>]+>)|([^<]+)/g, function (_, tag, text) {
-          if (tag) return tag;
-          return text.replace(expr, function (match) {
-            return '<mark>' + match + '</mark>';
-          });
+        helpContent.innerHTML = rawHtml;
+        var walker = document.createTreeWalker(helpContent, NodeFilter.SHOW_TEXT);
+        var textNodes = [];
+        var node;
+        while ((node = walker.nextNode())) textNodes.push(node);
+        textNodes.forEach(function (textNode) {
+          expr.lastIndex = 0;
+          if (!expr.test(textNode.nodeValue || '')) return;
+          var fragment = document.createDocumentFragment();
+          appendHighlighted(fragment, textNode.nodeValue || '', expr);
+          textNode.parentNode.replaceChild(fragment, textNode);
         });
         searchMarks = Array.from(helpContent.querySelectorAll('mark'));
         updateSearchCount();
@@ -715,7 +760,7 @@
           callback('');
           return;
         }
-        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: authHeaders() })
+        fetch(appPath('/api/help/content?file=') + encodeURIComponent(topic.file) + '&lang=' + helpLang, { credentials: 'same-origin' })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -743,26 +788,32 @@
           return;
         }
         helpSearchCount.textContent = results.length + (results.length === 1 ? ' topic' : ' topics');
-        var html = '<div class="gs-results">';
+        var container = document.createElement('div');
+        container.className = 'gs-results';
         results.forEach(function (result) {
-          html += '<div class="gs-item" data-idx="' + result.idx + '">';
-          html += '<div class="gs-topic">' + result.title + '</div>';
+          var item = document.createElement('div');
+          item.className = 'gs-item';
+          item.dataset.idx = String(result.idx);
+          var title = document.createElement('div');
+          title.className = 'gs-topic';
+          title.textContent = String(result.title || '');
+          item.appendChild(title);
           result.snippets.forEach(function (snippet) {
-            html += '<div class="gs-snip">...' + snippet.replace(expr, '<mark>$1</mark>') + '...</div>';
+            var snippetElement = document.createElement('div');
+            snippetElement.className = 'gs-snip';
+            appendHighlighted(snippetElement, '...' + snippet + '...', expr);
+            item.appendChild(snippetElement);
           });
-          html += '</div>';
-        });
-        html += '</div>';
-        helpContent.innerHTML = html;
-        helpContent.querySelectorAll('.gs-item').forEach(function (item) {
           item.addEventListener('click', function () {
-            var idx = parseInt(item.getAttribute('data-idx'), 10);
+            var idx = parseInt(item.dataset.idx, 10);
             helpSearchGlobal.checked = false;
             globalMode = false;
             helpSearch.placeholder = 'Search in topic...';
             loadTopic(idx);
           });
+          container.appendChild(item);
         });
+        helpContent.replaceChildren(container);
       }
 
       function showGlobalResults(term) {
@@ -834,7 +885,7 @@
         searchIndex = -1;
         helpSearchCount.textContent = '';
         helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: authHeaders() })
+        fetch(appPath('/api/help/content?file=') + encodeURIComponent(topic.file) + '&lang=' + helpLang, { credentials: 'same-origin' })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -853,7 +904,7 @@
 
       function loadHelpIndex(keyword) {
         helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/index?lang=' + helpLang, { headers: authHeaders() })
+        fetch(appPath('/api/help/index?lang=') + helpLang, { credentials: 'same-origin' })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -1093,12 +1144,12 @@
     window.PBGUI_NAV_CONFIG = {
       subtitle: 'HELP',
       current: 'help',
-      token: TOKEN,
+      authenticated: true,
       apiBase: API_BASE,
       version: PBGUI_VERSION,
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="/app/pbgui_nav.js?v=1785"></script>
+  <script src="./pbgui_nav.js?v=1787"></script>
 </body>
 </html>

@@ -1957,7 +1957,6 @@ def get_editor_page(
 ) -> HTMLResponse:
     """Serve the full dashboard grid editor HTML page."""
     html = _dashboard_page_html(request, "dashboard_editor.html")
-    html = html.replace("%%TOKEN%%", "")
     html = html.replace("%%DASHBOARD_NAME%%", _script_json(name))
     html = html.replace("%%VIEW_ONLY%%", "1" if view_only else "0")
     html = html.replace("%%STANDALONE%%", "1" if standalone else "0")
@@ -1989,7 +1988,6 @@ def get_main_page(
 
     html = _dashboard_page_html(request, "dashboard_main.html")
 
-    html = html.replace('"%%TOKEN%%"',         _json.dumps(""))
     html = html.replace('"%%CURRENT%%"',       _script_json(current))
 
     from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION
@@ -2028,7 +2026,6 @@ def get_templates_page(
 ) -> HTMLResponse:
     """Serve the template manager popup page."""
     html = _dashboard_page_html(request, "dashboard_templates.html")
-    html = html.replace('"%%TOKEN%%"', '""')
     html = html.replace('%%CURRENT%%', _script_json(current))
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 

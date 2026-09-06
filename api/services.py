@@ -28,6 +28,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.auth import require_auth, SessionToken
+from api.page_templates import render_page_urls, script_json
 from api.vps import get_monitor
 from cluster_credential_publisher import ClusterCredentialPublisher, CredentialPublicationError
 from cmc_leases import CmcLeaseAuthority
@@ -2526,6 +2527,23 @@ def get_api_server_settings(session: SessionToken = Depends(require_auth)) -> Di
     if enabled_hosts_val and enabled_hosts_val.strip():
         enabled_hosts = [h.strip() for h in enabled_hosts_val.split(",") if h.strip()]
 
+    alert_settings = dict(monitor.get_alert_settings()) if monitor else {
+        "offline_gui": True,
+        "service_gui": True,
+        "system_gui": True,
+        "instance_gui": True,
+        "ssh_lost_telegram": True,
+        "ssh_recovered_telegram": True,
+        "service_down_telegram": True,
+        "service_restart_started_telegram": True,
+        "service_recovered_telegram": True,
+        "system_problem_telegram": True,
+        "system_recovered_telegram": True,
+        "instance_problem_telegram": True,
+        "instance_recovered_telegram": True,
+    }
+    alert_settings.pop("telegram_token", None)
+    alert_settings.pop("telegram_chat_id", None)
     return {
         "host": obj.host,
         "port": obj.port,
@@ -2533,23 +2551,13 @@ def get_api_server_settings(session: SessionToken = Depends(require_auth)) -> Di
         "enabled_hosts": enabled_hosts,
         "available_hosts": _available_vps_hosts(),
         "monitor_config": _load_monitor_config_values(),
-        **(monitor.get_alert_settings() if monitor else {
-            "telegram_token": ini_value("main", "telegram_token"),
-            "telegram_chat_id": ini_value("main", "telegram_chat_id"),
-            "offline_gui": True,
-            "service_gui": True,
-            "system_gui": True,
-            "instance_gui": True,
-            "ssh_lost_telegram": True,
-            "ssh_recovered_telegram": True,
-            "service_down_telegram": True,
-            "service_restart_started_telegram": True,
-            "service_recovered_telegram": True,
-            "system_problem_telegram": True,
-            "system_recovered_telegram": True,
-            "instance_problem_telegram": True,
-            "instance_recovered_telegram": True,
-        }),
+        **alert_settings,
+        "telegram_configured": bool(
+            ini_value("main", "telegram_token").strip()
+            and ini_value("main", "telegram_chat_id").strip()
+        ),
+        "telegram_token": None,
+        "telegram_chat_id": None,
         "apply": apply_metadata("api_server_full"),
     }
 
@@ -2560,8 +2568,9 @@ class APIServerSettings(BaseModel):
     auto_restart: bool = True
     enabled_hosts: List[str] = []
     monitor_config: Dict[str, float] = Field(default_factory=dict)
-    telegram_token: str = ""
-    telegram_chat_id: str = ""
+    telegram_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    clear_telegram_credentials: bool = False
     offline_gui: bool = True
     service_gui: bool = True
     system_gui: bool = True
@@ -2579,9 +2588,17 @@ class APIServerSettings(BaseModel):
 
 @router.post("/settings/api-server")
 def save_api_server_settings(
-    body: APIServerSettings, session: SessionToken = Depends(require_auth)
+    body: APIServerSettings,
+    session: SessionToken = Depends(require_auth),
 ) -> Dict[str, Any]:
     try:
+        telegram_token = str(body.telegram_token or "").strip()
+        telegram_chat_id = str(body.telegram_chat_id or "").strip()
+        if body.clear_telegram_credentials and (telegram_token or telegram_chat_id):
+            raise HTTPException(
+                status_code=422,
+                detail="Cannot replace and clear Telegram credentials in the same request",
+            )
         mod = importlib.import_module("PBApiServer")
         host = body.host.strip() if body.host else "0.0.0.0"
         port = max(1024, min(65535, body.port))
@@ -2593,13 +2610,22 @@ def save_api_server_settings(
         monitor_values = _validated_monitor_values(body.monitor_config)
 
         def mutate_ini(parser) -> None:
-            updates = {
+            updates: dict[str, dict[str, str]] = {
                 "api_server": {"host": host, "port": str(port)},
                 "vps_monitor": {"auto_restart": str(body.auto_restart), "enabled_hosts": ",".join(sorted(body.enabled_hosts))},
                 "monitor": {field: str(value) for field, value in monitor_values.items()},
-                "main": {"telegram_token": body.telegram_token.strip(), "telegram_chat_id": body.telegram_chat_id.strip()},
                 "vps_monitor_alerts": {key: "true" if bool(values[key]) else "false" for key in values if key.endswith("_gui") or key.endswith("_telegram")},
             }
+            if body.clear_telegram_credentials:
+                updates["main"] = {"telegram_token": "", "telegram_chat_id": ""}
+            else:
+                telegram_updates = {}
+                if telegram_token:
+                    telegram_updates["telegram_token"] = telegram_token
+                if telegram_chat_id:
+                    telegram_updates["telegram_chat_id"] = telegram_chat_id
+                if telegram_updates:
+                    updates["main"] = telegram_updates
             for section, section_values in updates.items():
                 if not parser.has_section(section):
                     parser.add_section(section)
@@ -2909,26 +2935,17 @@ def get_main_page(
     request: Request,
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
-    """Serve the standalone Services Monitor page with token injected server-side."""
+    """Serve the standalone Services Monitor page using cookie authentication."""
     html_path = Path(__file__).parent.parent / "frontend" / "services_monitor.html"
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_services_base = origin + "/api/services"
-    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
-
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_services_base))
-    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+    html = render_page_urls(request, html, "/api/services")
 
     from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
 
     nav_js = Path(__file__).parent.parent / "frontend" / "pbgui_nav.js"

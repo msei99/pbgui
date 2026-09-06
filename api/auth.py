@@ -1239,7 +1239,6 @@ def main_page(
     html_path = _frontend_template_path("welcome.html")
     html = html_path.read_text(encoding="utf-8")
 
-    html = html.replace('"%%TOKEN%%"', '""')
     html = html.replace('"%%API_ORIGIN%%"', json.dumps(_request_origin(request)))
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace('%%VERSION%%', PBGUI_VERSION)

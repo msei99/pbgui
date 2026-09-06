@@ -527,7 +527,7 @@ Im Job-Panel können u. a. angezeigt werden:
 
 ## Tiingo-Credentials
 
-Der Tiingo-Token wird direkt unter **Settings -> TradFi / Tiingo** angezeigt, angelegt oder ersetzt; erweiterte Profil-Metadaten werden unter **Setup -> API Keys -> TradFi** verwaltet. Beide Wege verwenden denselben Credential Vault. Das Eingabefeld wird nie vorbefüllt; der gespeicherte Key wird erst nach einem ausdrücklichen Klick auf das Auge angefordert und beim Verbergen oder Verlassen der Seite wieder gelöscht. Tiingo nicht in `pbgui.ini` eintragen und PB7-TradFi-Einträge nicht manuell bearbeiten.
+Der Tiingo-Token wird direkt unter **Settings -> TradFi / Tiingo** angezeigt, angelegt oder ersetzt; erweiterte Profil-Metadaten werden unter **Setup -> API Keys -> TradFi** verwaltet. **Get API token** oeffnet Tiingos offizielle Token-Seite, **Official usage** die autoritative API-Usage-Anzeige von Tiingo statt der lokalen PBGui-Zaehler. Beide Credential-Wege verwenden denselben PBGui-Vault. Das Eingabefeld wird nie vorbefüllt; der gespeicherte Key wird erst nach einem ausdrücklichen Klick auf das Auge angefordert und beim Verbergen oder Verlassen der Seite wieder gelöscht. Tiingo nicht in `pbgui.ini` eintragen und PB7-TradFi-Einträge nicht manuell bearbeiten.
 
 Diese Seite bietet eine ausdrückliche Anzeige sowie eine sichere Eingabe zum Erstellen oder Ersetzen des aktiven Tiingo-Vault-Tokens, Runtime-Quota-Werte (Stunde/Tag/Monatsbandbreite), Provider-Links und Mapping-Werkzeuge. Profil- und Settings-Antworten bleiben frei von Secrets.
 

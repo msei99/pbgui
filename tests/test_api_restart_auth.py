@@ -31,8 +31,8 @@ def test_shared_nav_does_not_send_an_undefined_bearer_token() -> None:
     source = Path("frontend/pbgui_nav.js").read_text(encoding="utf-8")
     restart_block = source[source.index("fetch(origin2 + '/api/server-restart'"):source.index("showRestartOverlay(origin2", source.index("fetch(origin2 + '/api/server-restart'"))]
 
-    assert "authOptions(c2.token" in restart_block
-    assert "'Authorization': 'Bearer ' + c2.token" not in restart_block
+    assert "authOptions({ method: 'POST' })" in restart_block
+    assert "Authorization" not in restart_block
     assert "JSON.stringify({ token: c2.token })" not in restart_block
 
 

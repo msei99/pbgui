@@ -14,11 +14,10 @@
       window.PBGuiNotify.log(message, level || 'info');
       return;
     }
-    var token = window.TOKEN || window.API_TOKEN || (window.PBGUI_NAV_CONFIG && window.PBGUI_NAV_CONFIG.token);
-    if (!token) return;
     fetch('/api/notify_log', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ msg: message, level: level || 'info' })
     }).catch(function () {});
   }

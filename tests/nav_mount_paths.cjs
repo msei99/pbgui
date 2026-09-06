@@ -116,7 +116,7 @@ async function main() {
     assert.equal(b.requests.at(-1).input, app + '/api/vps/alerts/ack-all');
 
     b.nodes['pbgui-guide-btn'].click();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/shared_help_overlay.js?v=6');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/shared_help_overlay.js?v=7');
     b.assets.at(-1).onerror();
     assert.equal(c.location.href, app + '/app/help.html?v=1766');
     b.nodes['pbgui-ai-btn'].click();
@@ -132,11 +132,10 @@ async function main() {
     c.WS_BASE = ws;
     assert.equal(c.testNav._getWsBase(), ws); // Server already included the mount.
 
-    c.TOKEN = 'test-only-bearer';
     c.PBGuiNotify.log('test notification', 'info');
     assert.equal(b.requests.at(-1).input, app + '/api/notify_log');
-    assert.equal(b.requests.at(-1).options.headers.Authorization, 'Bearer test-only-bearer');
-    c.TOKEN = '';
+    assert.equal(b.requests.at(-1).options.credentials, 'same-origin');
+    assert.equal(b.requests.at(-1).options.headers.Authorization, undefined);
 
     // Origin allowlisting must not compare an origin to origin-plus-prefix.
     assert.equal(c.PBGuiAI.continuePageAction(app + '/api/v8/main_page', 'safe'), true);
@@ -161,7 +160,6 @@ async function main() {
 
     // The interceptor must pass arbitrary strings, URL/Request inputs and
     // request options through unchanged, with no prefix or credential injection.
-    c.TOKEN = 'test-only-bearer';
     const options = {method: 'PUT', headers: {'X-Test': 'test'}, credentials: 'omit'};
     for (const input of ['/api/custom', prefix + '/api/custom', 'relative', 'https://external.test/api/custom',
       new URL('https://external.test/api/custom'), new Request('https://external.test/api/custom', {method: 'POST', body: 'test'})]) {
@@ -169,7 +167,6 @@ async function main() {
       assert.equal(b.requests.at(-1).input, input);
       assert.equal(b.requests.at(-1).options, options);
     }
-    c.TOKEN = '';
     b.nodes['pbgui-logout-btn'].click();
     await flush();
     assert.equal(b.requests.at(-1).input, app + '/api/auth/logout');

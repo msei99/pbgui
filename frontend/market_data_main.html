@@ -3079,7 +3079,9 @@
                   <div class="eyebrow">Tiingo Settings (stock-perp)</div>
                 </div>
                 <div class="panel-actions">
-                  <button class="btn secondary" id="btn-test-tiingo" type="button">Test Tiingo</button>
+                  <a class="btn small secondary" href="https://www.tiingo.com/account/api/token" target="_blank" rel="noopener noreferrer">Get API token</a>
+                  <a class="btn small secondary" href="https://www.tiingo.com/account/api/usage" target="_blank" rel="noopener noreferrer">Official usage</a>
+                  <button class="btn small secondary" id="btn-test-tiingo" type="button">Test Tiingo</button>
                 </div>
               </div>
               <div class="callout" id="settings-tiingo-credential-status">
@@ -3637,7 +3639,6 @@
   <div id="toast-stack"></div>
 
   <script>
-    var TOKEN = "%%TOKEN%%";
     var API_BASE = "%%API_BASE%%";
     var PBGUI_VERSION = "%%VERSION%%";
     var PBGUI_SERIAL = "%%SERIAL%%";
@@ -3645,17 +3646,17 @@
     window.PBGUI_NAV_CONFIG = {
       subtitle: 'Market Data',
       current: 'info_market_data_fastapi',
-      token: TOKEN,
+      authenticated: true,
       apiBase: API_BASE,
       version: PBGUI_VERSION,
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=6"></script>
+  <script src="/app/js/shared_help_overlay.js?v=7"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
   <script src="/app/js/log_viewer_panel.js?v=29"></script>
-  <script src="/app/js/pbgui_dialogs.js?v=8"></script>
-  <script src="/app/js/editor_shared.js?v=14"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=9"></script>
+  <script src="/app/js/editor_shared.js?v=15"></script>
   <script src="/app/plotly.min.js?v=1"></script>
   <script>
     (function () {
@@ -3976,7 +3977,7 @@
         var topic = helpTopics[index];
         if (!topic || !helpContent) return;
         helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { credentials: 'same-origin' })
           .then(function (response) { return response.json(); })
           .then(function (payload) {
             helpContent.innerHTML = mdToHtml(payload.content || '');
@@ -3991,7 +3992,7 @@
         var helpTocList = document.getElementById('help-toc-list');
         if (!helpTocList) return;
         helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch('/api/help/index?lang=' + helpLang, { credentials: 'same-origin' })
           .then(function (response) { return response.json(); })
           .then(function (data) {
             helpTopics = data || [];
@@ -4081,7 +4082,7 @@
 
         window._openMarketDataHelp = function () {
           if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-          window.PBGuiSharedHelp.open(helpDefaultTopic, { token: TOKEN });
+          window.PBGuiSharedHelp.open(helpDefaultTopic);
         };
         window.PBGUI_HELP_OPENER = window._openMarketDataHelp;
       }
@@ -4967,8 +4968,7 @@
         return fetch('/api/notify_log', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + TOKEN
+            'Content-Type': 'application/json'
           },
           body: JSON.stringify({
             msg: String(message == null ? '' : message),
@@ -8856,7 +8856,6 @@
         uiState.activityViewer = new LogViewerPanel({
           containerId: 'activity-log-target',
           wsBase: getWsBase(),
-          token: TOKEN,
           defaultHost: 'local',
           defaultFile: 'MarketData.log',
           presets: 'system',

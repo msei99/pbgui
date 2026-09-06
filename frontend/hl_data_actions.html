@@ -470,7 +470,7 @@
 </style>
 
 <div id="__HLDA_ROOT__" class="hlda-root"
-    data-token="" data-api-base="" data-api-host="" data-initial-section="">
+    data-api-base="%%API_BASE_ATTR%%" data-base-prefix="%%BASE_PREFIX_ATTR%%" data-initial-section="">
 
     <div class="hlda-section" id="__HLDA__sec-download">
         <div class="hlda-sh" id="__HLDA__sh-download" data-action="toggle-section" data-id="download">
@@ -516,9 +516,8 @@
     if (!ROOT) { console.error('[HLDA] Root element not found'); return; }
 
     // Config from data-* attributes
-    var TOKEN = ROOT.getAttribute('data-token') || '';
     var API_BASE = ROOT.getAttribute('data-api-base') || '';
-    var API_HOST = ROOT.getAttribute('data-api-host') || '';
+    var BASE_PREFIX = ROOT.getAttribute('data-base-prefix') || '';
     var INITIAL_SECTION = String(ROOT.getAttribute('data-initial-section') || '').toLowerCase();
     var SHOW_ONLY_SECTION = (INITIAL_SECTION === 'download' || INITIAL_SECTION === 'build') ? INITIAL_SECTION : '';
     var P = '__HLDA__';
@@ -537,8 +536,8 @@
     function authOptions(options) {
         var opts = Object.assign({}, options || {});
         var headers = Object.assign({}, opts.headers || {});
-        if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
         opts.headers = headers;
+        opts.credentials = 'same-origin';
         return opts;
     }
 
@@ -1642,7 +1641,7 @@
 
     function connectWS() {
         var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var wsUrl = proto + '//' + API_HOST + '/ws/jobs';
+        var wsUrl = proto + '//' + window.location.host + BASE_PREFIX + '/ws/jobs';
         try {
             ws = new WebSocket(wsUrl);
             ws.onopen = function() {

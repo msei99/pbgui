@@ -1074,17 +1074,15 @@
         <div id="diffContent" style="flex:1; overflow:auto;"></div>
     </div>
 
-    <script src="/app/js/pbgui_dialogs.js?v=8"></script>
+    <script src="/app/js/pbgui_dialogs.js?v=9"></script>
     <script>
     // ── Config ──────────────────────────────────────────────
     // Browser authentication uses the same-origin HttpOnly session cookie.
     // The server replaces "%%PLACEHOLDER%%" (with quotes) via html.replace(),
     // so guard strings must use a DIFFERENT form to avoid being replaced too.
-    var TOKEN          = "%%TOKEN%%";
     var API_BASE       = "%%API_BASE%%";
     var PBGUI_VERSION  = "%%VERSION%%";
     var PBGUI_SERIAL   = "%%SERIAL%%";
-    if (TOKEN          === "%%" + "TOKEN%%")    TOKEN          = "";
     if (API_BASE       === "%%" + "API_BASE%%") API_BASE       = "/api/api-keys";
     if (PBGUI_VERSION  === "%%" + "VERSION%%")  PBGUI_VERSION  = "";
     if (PBGUI_SERIAL   === "%%" + "SERIAL%%")   PBGUI_SERIAL   = "";
@@ -3441,7 +3439,6 @@
             _logViewer = new LogViewerPanel({
                 containerId : 'logViewerTarget',
                 wsBase      : _getWsBase(),
-                token       : TOKEN,
                 defaultFile : 'ApiKeys.log',
                 height      : 'calc(100vh - 300px)',
             });
@@ -3773,7 +3770,7 @@
         serial:   PBGUI_SERIAL
     };
     </script>
-    <script src="/app/js/shared_help_overlay.js?v=6"></script>
+    <script src="/app/js/shared_help_overlay.js?v=7"></script>
     <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

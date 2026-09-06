@@ -51,6 +51,15 @@ def test_page_urls_use_only_asgi_prefix_and_rewrite_assets(root, expected):
     assert "evil.test" not in rendered
 
 
+def test_page_url_attribute_markers_preserve_encoded_mount_paths() -> None:
+    """HTML data attributes receive URL text rather than JavaScript escape sequences."""
+    request = Request({"type": "http", "root_path": "/my gui"})
+    html = 'data-api="%%API_BASE_ATTR%%" data-prefix="%%BASE_PREFIX_ATTR%%"'
+    rendered = render_page_urls(request, html, "/api")
+    assert rendered == 'data-api="/my%20gui/api" data-prefix="/my%20gui"'
+    assert "\\u0025" not in rendered
+
+
 @pytest.mark.parametrize("root", ["relative", "//evil.test", "//", "/../x", "/./x", "/x/../", "/a\\b", "/a\n", "/a\x7f", 123, None])
 def test_page_urls_reject_invalid_asgi_mounts(root):
     """Malformed deployment prefixes fail closed before page serialization."""
@@ -67,23 +76,16 @@ def test_page_urls_reject_non_local_api_paths(api_path):
     assert exc.value.status_code == 500
 
 
-@pytest.mark.parametrize(("scheme", "host", "expected"), [
-    ("https", "example.test", "wss://example.test/pbgui"),
-    ("http", "example.test:8080", "ws://example.test:8080/pbgui"),
-    ("https", "[2001:db8::1]:8443", "wss://[2001:db8::1]:8443/pbgui"),
-])
-def test_websocket_origin_preserves_scheme_ipv6_port_and_mount(scheme, host, expected):
-    """WebSocket URLs use the same validated visible authority as auth pages."""
-    request = Request({"type": "http", "scheme": scheme, "path": "/page", "root_path": "/pbgui",
-                       "query_string": b"", "headers": [(b"host", host.encode())]})
-    assert json.loads(render_page_urls(request, '"%%WS_BASE%%"', "/api")) == expected
-
-
-@pytest.mark.parametrize("hosts", [[b"evil.test@safe.test"], [b"safe.test:bad"], [b"safe.test\\evil"], [b"safe.test", b"other.test"]])
-def test_websocket_origin_rejects_malformed_or_duplicate_authorities(hosts):
-    """A WebSocket marker must not relax the established origin validation."""
-    request = Request({"type": "http", "scheme": "https", "path": "/page", "query_string": b"",
-                       "headers": [(b"host", host) for host in hosts]})
-    with pytest.raises(HTTPException) as exc:
-        render_page_urls(request, '"%%WS_BASE%%"', "/api")
-    assert exc.value.status_code == 400
+def test_websocket_origin_is_browser_derived_and_uses_mount_prefix():
+    """WebSocket URLs ignore request authorities and use the loaded page origin."""
+    request = Request({
+        "type": "http",
+        "root_path": "/pbgui",
+        "headers": [(b"host", b"attacker.example")],
+    })
+    rendered = render_page_urls(request, 'var ws = "%%WS_BASE%%";', "/api")
+    assert rendered == (
+        "var ws = (window.location.protocol === 'https:' ? 'wss://' : 'ws://')"
+        ' + window.location.host + "/pbgui";'
+    )
+    assert "attacker.example" not in rendered

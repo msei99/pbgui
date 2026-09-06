@@ -1663,9 +1663,8 @@
     </div>
   </div>
 
-  <script src="/app/js/editor_shared.js?v=14"></script>
+  <script src="/app/js/editor_shared.js?v=15"></script>
   <script>
-    var TOKEN = "%%TOKEN%%";
     var API_BASE = "%%API_BASE%%";
     var PBGUI_VERSION = "%%VERSION%%";
     var PBGUI_SERIAL = "%%SERIAL%%";
@@ -1740,232 +1739,13 @@
       unmatched: { key: 'coin', dir: 'asc' },
       hip3: { key: 'volume_24h', dir: 'desc' }
     };
-    var helpLang = 'EN';
-    var helpTopics = [];
-    var helpSel = 0;
     var helpDefaultTopic = 'coin data';
 
-    function mdToHtml(md) {
-      var lines = md.split('\n');
-      var html = '';
-      var inPre = false;
-      var preBuf = '';
-      var inUl = false;
-      var inOl = false;
-
-      function flushList() {
-        if (inUl) { html += '</ul>'; inUl = false; }
-        if (inOl) { html += '</ol>'; inOl = false; }
-      }
-
-      function inlineFormat(text) {
-        text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-        text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
-        text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-        text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        text = text.replace(/__(.+?)__/g, '<strong>$1</strong>');
-        text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
-        text = text.replace(/_(.+?)_/g, '<em>$1</em>');
-        return text;
-      }
-
-      for (var i = 0; i < lines.length; i += 1) {
-        var line = lines[i];
-        if (line.match(/^```/)) {
-          if (!inPre) {
-            flushList();
-            inPre = true;
-            preBuf = '';
-          } else {
-            html += '<pre><code>' + preBuf.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</code></pre>';
-            inPre = false;
-          }
-          continue;
-        }
-        if (inPre) {
-          preBuf += (preBuf ? '\n' : '') + line;
-          continue;
-        }
-        if (line.match(/^---+$/) || line.match(/^\*\*\*+$/)) {
-          flushList();
-          html += '<hr>';
-          continue;
-        }
-        var heading = line.match(/^(#{1,6})\s+(.*)/);
-        if (heading) {
-          flushList();
-          var level = heading[1].length;
-          html += '<h' + level + '>' + inlineFormat(heading[2]) + '</h' + level + '>';
-          continue;
-        }
-        if (line.match(/^>\s?/)) {
-          flushList();
-          html += '<blockquote>' + inlineFormat(line.replace(/^>\s?/, '')) + '</blockquote>';
-          continue;
-        }
-        var ulMatch = line.match(/^[\-*]\s+(.*)/);
-        if (ulMatch) {
-          if (!inUl) {
-            if (inOl) { html += '</ol>'; inOl = false; }
-            html += '<ul>';
-            inUl = true;
-          }
-          html += '<li>' + inlineFormat(ulMatch[1]) + '</li>';
-          continue;
-        }
-        var olMatch = line.match(/^\d+\.\s+(.*)/);
-        if (olMatch) {
-          if (!inOl) {
-            if (inUl) { html += '</ul>'; inUl = false; }
-            html += '<ol>';
-            inOl = true;
-          }
-          html += '<li>' + inlineFormat(olMatch[1]) + '</li>';
-          continue;
-        }
-        if (line.trim() === '') {
-          flushList();
-          html += '<p></p>';
-          continue;
-        }
-        flushList();
-        html += '<p>' + inlineFormat(line) + '</p>';
-      }
-      flushList();
-      return html;
-    }
-
-    function renderHelpToc() {
-      var helpFilter = document.getElementById('help-toc-filter');
-      var helpTocList = document.getElementById('help-toc-list');
-      var filterValue = helpFilter.value.trim().toLowerCase();
-      helpTocList.innerHTML = '';
-      helpTopics.forEach(function (topic, index) {
-        if (filterValue && topic.title.toLowerCase().indexOf(filterValue) === -1) return;
-        var item = document.createElement('div');
-        item.className = 'toc-item' + (index === helpSel ? ' active' : '');
-        item.textContent = topic.title;
-        item.addEventListener('click', function () {
-          loadHelpTopic(index);
-        });
-        helpTocList.appendChild(item);
-      });
-    }
-
-    function loadHelpTopic(index) {
-      var helpContent = document.getElementById('help-content');
-      helpSel = index;
-      renderHelpToc();
-      var topic = helpTopics[index];
-      if (!topic) return;
-      helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-      fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
-        .then(function (response) { return response.json(); })
-        .then(function (payload) {
-          helpContent.innerHTML = mdToHtml(payload.content || '');
-          helpContent.scrollTop = 0;
-        })
-        .catch(function () {
-          helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>';
-        });
-    }
-
-    function loadHelpIndex(keyword) {
-      var helpTocList = document.getElementById('help-toc-list');
-      helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-      fetch('/api/help/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
-        .then(function (response) { return response.json(); })
-        .then(function (data) {
-          helpTopics = data || [];
-          renderHelpToc();
-          if (!helpTopics.length) {
-            document.getElementById('help-content').innerHTML = '<div class="help-loading">No help topics available.</div>';
-            return;
-          }
-          var startIdx = 0;
-          if (keyword) {
-            var search = keyword.toLowerCase();
-            for (var i = 0; i < helpTopics.length; i += 1) {
-              if (helpTopics[i].title.toLowerCase().indexOf(search) !== -1 ||
-                  (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(search.replace(/\s+/g, '_')) !== -1)) {
-                startIdx = i;
-                break;
-              }
-            }
-          }
-          loadHelpTopic(startIdx);
-        })
-        .catch(function () {
-          helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>';
-        });
-    }
-
-    function initHelpOverlay() {
-      var helpOvl = document.getElementById('help-ovl');
-      var helpFilter = document.getElementById('help-toc-filter');
-      var helpDragHandle = document.getElementById('help-drag-handle');
-      var helpLangEN = document.getElementById('help-lang-en');
-      var helpLangDE = document.getElementById('help-lang-de');
-      var helpClose = document.getElementById('help-close');
-
-      helpFilter.addEventListener('input', renderHelpToc);
-      helpLangEN.addEventListener('click', function () {
-        if (helpLang === 'EN') return;
-        helpLang = 'EN';
-        helpLangEN.classList.add('active');
-        helpLangDE.classList.remove('active');
-        loadHelpIndex(helpDefaultTopic);
-      });
-      helpLangDE.addEventListener('click', function () {
-        if (helpLang === 'DE') return;
-        helpLang = 'DE';
-        helpLangDE.classList.add('active');
-        helpLangEN.classList.remove('active');
-        loadHelpIndex(helpDefaultTopic);
-      });
-      helpClose.addEventListener('click', function () {
-        helpOvl.classList.remove('visible');
-      });
-      document.addEventListener('keydown', function (event) {
-        if (event.key === 'Escape') {
-          helpOvl.classList.remove('visible');
-        }
-      });
-
-      (function () {
-        var startX;
-        var startY;
-        var boxLeft;
-        var boxTop;
-        helpDragHandle.addEventListener('mousedown', function (event) {
-          event.preventDefault();
-          var rect = helpOvl.getBoundingClientRect();
-          helpOvl.style.transform = 'none';
-          helpOvl.style.left = rect.left + 'px';
-          helpOvl.style.top = rect.top + 'px';
-          startX = event.clientX;
-          startY = event.clientY;
-          boxLeft = rect.left;
-          boxTop = rect.top;
-          function onMove(moveEvent) {
-            helpOvl.style.left = (boxLeft + moveEvent.clientX - startX) + 'px';
-            helpOvl.style.top = (boxTop + moveEvent.clientY - startY) + 'px';
-          }
-          function onUp() {
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-          }
-          document.addEventListener('mousemove', onMove);
-          document.addEventListener('mouseup', onUp);
-        });
-      }());
-
-      window._openCoinDataHelp = function () {
-        if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-        window.PBGuiSharedHelp.open(helpDefaultTopic, { token: TOKEN });
-      };
-      window.PBGUI_HELP_OPENER = window._openCoinDataHelp;
-    }
+    window._openCoinDataHelp = function () {
+      if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+      window.PBGuiSharedHelp.open(helpDefaultTopic);
+    };
+    window.PBGUI_HELP_OPENER = window._openCoinDataHelp;
 
     function getUiStorageKey() {
       return 'coin-data-ui-state';
@@ -2025,9 +1805,8 @@
       window.history.replaceState({}, '', nextUrl);
     }
 
-    function authHeaders() {
+    function jsonHeaders() {
       return {
-        'Authorization': 'Bearer ' + TOKEN,
         'Content-Type': 'application/json'
       };
     }
@@ -2161,7 +1940,7 @@
       if (loadStateController) loadStateController.abort();
       loadStateController = new AbortController();
       setActionStatus('Loading Coin Data...', false);
-      return fetch(buildStateUrl(), { cache: 'no-store', signal: loadStateController.signal })
+      return fetch(buildStateUrl(), { cache: 'no-store', credentials: 'same-origin', signal: loadStateController.signal })
         .then(function (response) {
           if (!response.ok) throw new Error('HTTP ' + response.status);
           return response.json();
@@ -2181,7 +1960,7 @@
     }
 
     function pollRefreshJob(jobId, okFallback) {
-      return fetch(buildRefreshJobUrl(jobId), { cache: 'no-store' })
+      return fetch(buildRefreshJobUrl(jobId), { cache: 'no-store', credentials: 'same-origin' })
         .then(function (response) {
           if (!response.ok) {
             return response.json().catch(function () { return {}; }).then(function (payload) {
@@ -2231,7 +2010,8 @@
       setActionStatus(busyTitle + '...', false);
       return fetch(API_BASE + path, {
         method: 'POST',
-        headers: authHeaders(),
+        credentials: 'same-origin',
+        headers: jsonHeaders(),
         body: JSON.stringify({
           exchange: filters.exchange,
           market_cap: filters.market_cap,
@@ -3172,7 +2952,6 @@
 
     loadUiState();
     loadFiltersFromQuery();
-    initHelpOverlay();
     window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
     initNumberSteppers();
     bindControls();
@@ -3197,13 +2976,13 @@
     window.PBGUI_NAV_CONFIG = {
       subtitle: 'COIN DATA',
       current: 'info_coin_data',
-      token: TOKEN,
+      authenticated: true,
       apiBase: API_BASE,
       version: PBGUI_VERSION,
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=6"></script>
+  <script src="/app/js/shared_help_overlay.js?v=7"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

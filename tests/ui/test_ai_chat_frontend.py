@@ -57,7 +57,7 @@ def test_ai_chat_avoids_native_confirmation_dialogs_and_external_assets() -> Non
 
 def test_ai_chat_requires_shared_dialog_approval_for_proposals() -> None:
     """Mutation proposals must use the explicit PBGui modal before approval."""
-    assert "/app/js/pbgui_dialogs.js?v=8" in HTML
+    assert "/app/js/pbgui_dialogs.js?v=9" in HTML
     assert "window.PBGuiDialogs.confirm" in HTML
     assert "/proposals/" in HTML
     assert "Review & approve" in HTML

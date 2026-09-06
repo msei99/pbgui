@@ -20,6 +20,8 @@ The page uses the normal FastAPI shell:
 
 The Guide button in the FastAPI header opens the shared Help system.
 
+Browser requests use the HttpOnly PBGui session cookie; the session token is never rendered into the page or sent in a browser Bearer header. API and local asset paths retain the configured ASGI mount prefix. Help Markdown is sanitized, and links or images are limited to HTTP(S) URLs before content is displayed.
+
 ## Sidebar actions
 
 - `Refresh Selected Exchange`

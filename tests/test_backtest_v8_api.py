@@ -257,11 +257,12 @@ def test_shared_backtest_refine_builder_routes_pb8_actions_to_pb8() -> None:
 
     assert "'/api/optimize-'" in source
     assert "'/api/backtest-'" in source
-    assert "if (String(token || '').trim()) headers.Authorization" in source
-    assert "saveOptimizePresetConfig(TOKEN, name, config, BACKTEST_VERSION)" in page
-    assert "queueOptimizePreset(TOKEN, name, BACKTEST_VERSION)" in page
-    assert "openOptimizeSeedDraft(TOKEN, config, name, BACKTEST_VERSION)" in page
-    assert "optimize_preset_builder.js?v=3" in page
+    assert "credentials: 'same-origin'" in source
+    assert "Authorization" not in source
+    assert "saveOptimizePresetConfig(name, config, BACKTEST_VERSION)" in page
+    assert "queueOptimizePreset(name, BACKTEST_VERSION)" in page
+    assert "openOptimizeSeedDraft(config, name, BACKTEST_VERSION)" in page
+    assert "optimize_preset_builder.js?v=4" in page
 
 
 def test_concurrent_pb8_draft_creation_stays_bounded() -> None:
@@ -1173,8 +1174,10 @@ def test_main_page_renders_shared_editor_without_exposing_session_token(monkeypa
     assert "current:  BACKTEST_NAV_CURRENT" in html
     assert "backtestEditorAdapter.isV8 ? 'v8_backtest' : 'v7_backtest'" in html
     assert 'var BACKTEST_VERSION = "v8"' in html
-    assert 'var API_BASE      = "https://example.test/api/backtest-v8"' in html
-    assert 'var TOKEN         = ""' in html
+    assert 'var API_BASE      = "/api/backtest-v8"' in html
+    assert "window.location.host + BASE_PREFIX" in html
+    assert "example.test" not in html
+    assert "var TOKEN" not in html
     assert "function showConfigEditor(" in html
     assert "Canonical V8 Config" not in html
 

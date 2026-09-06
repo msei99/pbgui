@@ -1742,12 +1742,8 @@ def create_backup_draft(
     draft_id = _secrets.token_urlsafe(16)
     _draft_configs[draft_id] = (time.time(), cfg)
 
-    params = {
-        "token": session.token,
-        "name": name,
-        "draft_id": draft_id,
-    }
-    edit_url = str(request.url_for("get_edit_page")) + "?" + urlencode(params)
+    edit_page = request.url_for("get_edit_page").include_query_params(name=name, draft_id=draft_id)
+    edit_url = edit_page.path + (f"?{edit_page.query}" if edit_page.query else "")
     return {
         "ok": True,
         "name": name,

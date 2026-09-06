@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 
 from api.auth import SessionToken, require_auth
+from api.page_templates import render_page_urls, script_json
 from api.strategy_explorer_movie import movie_builder_status
 from api.strategy_explorer_sim import simulation_modes
 from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION
@@ -131,30 +132,6 @@ def _get_draft_config(draft_id: str) -> dict[str, Any] | None:
     return copy.deepcopy(config)
 
 
-def _page_context(request: Request, session: SessionToken) -> dict[str, str]:
-    """Build replacement values for the standalone HTML page."""
-    del session
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    return {
-        "token": "",
-        "api_base": origin + "/api/strategy-explorer",
-        "ws_base": origin.replace("http://", "ws://").replace("https://", "wss://"),
-    }
-
-
-def _script_json(value: Any) -> str:
-    """Serialize one inline-script value without permitting an HTML end tag."""
-    return (
-        json.dumps(value)
-        .replace("&", "\\u0026")
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-    )
-
-
 @router.get("/main_page", response_class=HTMLResponse)
 def main_page(
     request: Request,
@@ -168,15 +145,12 @@ def main_page(
         raise HTTPException(404, "v7_strategy_explorer.html not found")
 
     html = html_path.read_text(encoding="utf-8")
-    ctx = _page_context(request, session)
+    html = render_page_urls(request, html, "/api/strategy-explorer")
     replacements = {
-        '"%%TOKEN%%"': _script_json(ctx["token"]),
-        '"%%API_BASE%%"': _script_json(ctx["api_base"]),
-        '"%%WS_BASE%%"': _script_json(ctx["ws_base"]),
-        '"%%DRAFT_ID%%"': _script_json(str(draft_id or "")),
-        '"%%RESULT_PATH%%"': _script_json(str(result_path or "")),
-        '"%%VERSION%%"': _script_json(PBGUI_VERSION),
-        '"%%SERIAL%%"': _script_json(PBGUI_SERIAL),
+        '"%%DRAFT_ID%%"': script_json(str(draft_id or "")),
+        '"%%RESULT_PATH%%"': script_json(str(result_path or "")),
+        '"%%VERSION%%"': script_json(PBGUI_VERSION),
+        '"%%SERIAL%%"': script_json(PBGUI_SERIAL),
     }
     for token, value in replacements.items():
         html = html.replace(token, value)

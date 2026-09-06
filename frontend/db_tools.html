@@ -292,12 +292,12 @@
   </div>
 
   <script>
-    window.TOKEN = "%%TOKEN%%";
     window.API_BASE = "%%API_BASE%%";
-    window.WS_BASE = "%%WS_BASE%%";
+    window.BASE_PREFIX = "%%BASE_PREFIX%%";
+    window.WS_BASE = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + window.BASE_PREFIX;
     window.PBGUI_VERSION = "%%VERSION%%";
     window.PBGUI_SERIAL = "%%SERIAL%%";
-    window.PBGUI_NAV_CONFIG = { subtitle: 'DB TOOLS', current: 'system_db_tools' };
+    window.PBGUI_NAV_CONFIG = { subtitle: 'DB TOOLS', current: 'system_db_tools', authenticated: true };
   </script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
   <script src="/app/js/pbgui_datepicker.js?v=1"></script>
@@ -310,10 +310,9 @@
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
     function apiFetch(path, options) {
       options = options || {};
-      const headers = options.headers || {};
-      headers.Authorization = 'Bearer ' + TOKEN;
+      const headers = Object.assign({}, options.headers || {});
       if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-      return fetch(API_BASE + path, Object.assign({}, options, { headers: headers, cache: 'no-store' })).then(function (resp) {
+      return fetch(API_BASE + path, Object.assign({}, options, { headers: headers, cache: 'no-store', credentials: 'same-origin' })).then(function (resp) {
         if (!resp.ok) return resp.json().catch(function () { return {}; }).then(function (data) { throw new Error(data.detail || ('HTTP ' + resp.status)); });
         return resp.json();
       });
@@ -746,7 +745,6 @@
       state.logViewer = new LogViewerPanel({
         containerId: 'dbtools-log-viewer-target',
         wsBase: WS_BASE,
-        token: TOKEN,
         defaultHost: 'local',
         defaultFile: '',
         presets: 'system',

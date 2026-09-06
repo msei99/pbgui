@@ -16,6 +16,7 @@ from fastapi import HTTPException, Request
 
 from api import cluster
 from api import v7_instances, v8_instances
+from api.page_templates import script_json
 from cluster_credential_publisher import ClusterCredentialPublisher
 from cluster_credentials import ensure_node_key_material, sign_operation
 from credential_store import CredentialStore
@@ -355,18 +356,18 @@ def test_retention_report_is_read_only_and_main_page_exposes_no_session_token(
 
 
 @pytest.mark.parametrize(
-    ("scheme", "host", "prefix", "expected_prefix", "ws_origin"),
+    ("scheme", "host", "prefix", "expected_prefix"),
     [
-        ("http", "localhost:8000", "", "", "ws://localhost:8000"),
-        ("https", "example.com", "/pbgui", "/pbgui", "wss://example.com"),
-        ("http", "[::1]:8000", "/pbgui/", "/pbgui", "ws://[::1]:8000"),
-        ("https", "[2001:db8::1]", "/my gui", "/my%20gui", "wss://[2001:db8::1]"),
+        ("http", "localhost:8000", "", ""),
+        ("https", "example.com", "/pbgui", "/pbgui"),
+        ("http", "[::1]:8000", "/pbgui/", "/pbgui"),
+        ("https", "[2001:db8::1]", "/my gui", "/my%20gui"),
     ],
 )
 def test_cluster_page_urls_preserve_mount_and_ipv6(
-    scheme: str, host: str, prefix: str, expected_prefix: str, ws_origin: str,
+    scheme: str, host: str, prefix: str, expected_prefix: str,
 ) -> None:
-    """Page URLs stay same-origin, IPv6-safe and mounted without session tokens."""
+    """Page URLs are browser-origin relative, mounted, and free of session tokens."""
 
     import re
     from urllib.parse import urljoin
@@ -378,15 +379,18 @@ def test_cluster_page_urls_preserve_mount_and_ipv6(
     })
     response = cluster.get_main_page(request, session=SimpleNamespace(token="never-render"))
     html = response.body.decode()
-    globals_ = {
-        name: json.loads(value)
+    globals_source = {
+        name: value
         for name, value in re.findall(r"window\.(API_BASE|WS_BASE|PBGUI_BASE_PREFIX) = (.*?);", html)
     }
-    assert globals_ == {
+    assert {name: json.loads(value) for name, value in globals_source.items() if name != "WS_BASE"} == {
         "API_BASE": expected_prefix + "/api/cluster",
-        "WS_BASE": ws_origin + expected_prefix,
         "PBGUI_BASE_PREFIX": expected_prefix,
     }
+    assert globals_source["WS_BASE"] == (
+        "(window.location.protocol === 'https:' ? 'wss://' : 'ws://')"
+        " + window.location.host + " + script_json(expected_prefix)
+    )
     for asset in re.findall(r'(?:href|src)="([^"]*/app/[^"]*)"', html):
         assert asset.startswith(expected_prefix + "/app/")
     page = f"{scheme}://{host}{expected_prefix}/api/cluster/main_page"

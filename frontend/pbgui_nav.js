@@ -8,7 +8,7 @@
  *        </script>
  *        <script src="/app/pbgui_nav.js"></script>
  *   3. The following globals must be set anywhere before this script runs:
- *        TOKEN, API_BASE, PBGUI_VERSION
+ *        API_BASE, PBGUI_VERSION
  *
  * The 'current' value in PBGUI_NAV_CONFIG must match a 'page' key in NAV_GROUPS below.
  * The active nav group is highlighted automatically.
@@ -592,7 +592,6 @@
   function cfg() {
     var c = window.PBGUI_NAV_CONFIG || {};
     return {
-      token:    c.token    !== undefined ? c.token    : (window.TOKEN    || ''),
       authenticated: c.authenticated === true,
       apiBase:  c.apiBase  !== undefined ? c.apiBase  : (window.API_BASE || ''),
       version:  c.version  !== undefined ? c.version  : (window.PBGUI_VERSION || ''),
@@ -603,11 +602,11 @@
     };
   }
 
-  function authOptions(token, options) {
+  function authOptions(options) {
     var opts = Object.assign({}, options || {});
     var headers = Object.assign({}, opts.headers || {});
-    if (token) headers.Authorization = 'Bearer ' + token;
     opts.headers = headers;
+    opts.credentials = 'same-origin';
     return opts;
   }
 
@@ -1009,7 +1008,22 @@
 
   function _getBasePrefix() {
     var prefix = window.PBGUI_BASE_PREFIX;
-    if (prefix === undefined || prefix === '') return '';
+    if (prefix === undefined) prefix = window.BASE_PREFIX;
+    if (prefix === undefined) {
+      var apiBase = String(cfg().apiBase || '');
+      try {
+        var apiPath = new URL(apiBase, window.location.origin).pathname;
+        var apiMarker = apiPath.lastIndexOf('/api/');
+        if (apiMarker >= 0) prefix = apiPath.slice(0, apiMarker);
+      } catch (_) {
+        prefix = undefined;
+      }
+    }
+    if (prefix === undefined) {
+      var appMarker = window.location.pathname.lastIndexOf('/app/');
+      prefix = appMarker >= 0 ? window.location.pathname.slice(0, appMarker) : '';
+    }
+    if (prefix === '') return '';
     // The server supplies an encoded ASGI path, never an origin or a URL.
     if (typeof prefix !== 'string' || !/^\/(?:[A-Za-z0-9._~/-]|%[0-9a-f]{2})*$/i.test(prefix)
         || prefix.indexOf('//') === 0) throw new Error('Invalid PBGui mount path');
@@ -1032,10 +1046,6 @@
     return _getApiOrigin() + _getBasePrefix();
   }
 
-  function _notificationToken() {
-    return cfg().token || window.TOKEN || window.API_TOKEN || '';
-  }
-
   function _normalizeNotificationLevel(level) {
     var value = String(level || 'info').toLowerCase();
     if (value === 'success') return 'ok';
@@ -1046,11 +1056,11 @@
 
   function logUiNotification(message, level) {
     var text = String(message == null ? '' : message).trim();
-    var token = _notificationToken();
-    if (!text || !token) return;
+    if (!text) return;
     fetch(_getAppBase() + '/api/notify_log', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ msg: text, level: _normalizeNotificationLevel(level) })
     }).catch(function () {});
   }
@@ -1296,9 +1306,8 @@
   }
 
   function fetchAlerts() {
-    var c = cfg();
     var apiOrigin = _getAppBase();
-    fetch(apiOrigin + '/api/vps/alerts', authOptions(c.token, { cache: 'no-store' }))
+    fetch(apiOrigin + '/api/vps/alerts', authOptions({ cache: 'no-store' }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('alerts failed');
         return resp.json();
@@ -1318,9 +1327,8 @@
   }
 
   function ackAlert(alertId) {
-    var c = cfg();
     var apiOrigin = _getAppBase();
-    fetch(apiOrigin + '/api/vps/alerts/ack', authOptions(c.token, {
+    fetch(apiOrigin + '/api/vps/alerts/ack', authOptions({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: alertId })
@@ -1338,9 +1346,8 @@
   }
 
   function ackAllAlerts() {
-    var c = cfg();
     var apiOrigin = _getAppBase();
-    fetch(apiOrigin + '/api/vps/alerts/ack-all', authOptions(c.token, { method: 'POST' }))
+    fetch(apiOrigin + '/api/vps/alerts/ack-all', authOptions({ method: 'POST' }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('ack-all failed');
         return resp.json();
@@ -1724,7 +1731,6 @@
      ════════════════════════════════════ */
   function setupHandlers() {
     var c = cfg();
-    var TOKEN   = c.token;
     var guideTopic = GUIDE_TOPICS[c.current] || '00_overview';
     installNotificationHooks();
 
@@ -1791,17 +1797,17 @@
         return;
       }
       if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {
-        window.PBGuiSharedHelp.open(guideTopic, { token: TOKEN });
+        window.PBGuiSharedHelp.open(guideTopic);
         return;
       }
 
       guideBtn.disabled = true;
       var script = document.createElement('script');
-      script.src = _appPath('/app/js/shared_help_overlay.js?v=6');
+      script.src = _appPath('/app/js/shared_help_overlay.js?v=7');
       script.onload = function () {
         guideBtn.disabled = false;
         if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {
-          window.PBGuiSharedHelp.open(guideTopic, { token: TOKEN });
+          window.PBGuiSharedHelp.open(guideTopic);
           return;
         }
         navTo('help');
@@ -1875,7 +1881,7 @@
 
     var logoutBtn = document.getElementById('pbgui-logout-btn');
     if (logoutBtn) {
-      logoutBtn.style.display = (TOKEN || c.authenticated) ? 'inline-flex' : 'none';
+      logoutBtn.style.display = c.authenticated ? 'inline-flex' : 'none';
       logoutBtn.addEventListener('click', function () { performLogout(); });
     }
 
@@ -1932,15 +1938,11 @@
           confirmText: 'Restart'
         }).then(function (confirmed) {
           if (!confirmed) return;
-          var c2 = cfg();
           var origin2 = _getAppBase();
           restartBtn.disabled = true;
           restartBtn.classList.add('disabled');
           restartBtn.innerHTML = '<span class="nav-restart-dot"></span>Restarting...';
-          fetch(origin2 + '/api/server-restart', authOptions(c2.token, {
-            method: 'POST',
-            credentials: 'same-origin'
-          })).then(function(resp) {
+          fetch(origin2 + '/api/server-restart', authOptions({ method: 'POST' })).then(function(resp) {
             if (!resp.ok) {
               return resp.json().catch(function () { return {}; }).then(function (data) {
                 var detail = (data && data.detail) ? String(data.detail) : 'Restart failed.';
@@ -1949,12 +1951,12 @@
             }
             return resp.json().catch(function () { return {}; });
           }).then(function(data) {
-            showRestartOverlay(origin2, c2.token, data && Array.isArray(data.restart_services) ? data.restart_services : []);
+            showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : []);
           }).catch(function(err) {
             restartBtn.disabled = false;
             restartBtn.classList.remove('disabled');
             restartBtn.innerHTML = '<span class="nav-restart-dot"></span>Restart';
-            fetchRestartStatus(c2.token, origin2);
+            fetchRestartStatus(origin2);
             showNavConfirm({
               title: 'Restart failed',
               message: 'The PBGui service restart request was rejected.',
@@ -1970,9 +1972,9 @@
 
     function startRestartStatusWatch() {
       stopRestartStatusWatch();
-      fetchRestartStatus(TOKEN, apiOrigin);
-      _restartPollTimer = setInterval(function () { fetchRestartStatus(TOKEN, apiOrigin); }, 30000);
-      setupRestartSSE(TOKEN, apiOrigin);
+      fetchRestartStatus(apiOrigin);
+      _restartPollTimer = setInterval(function () { fetchRestartStatus(apiOrigin); }, 30000);
+      setupRestartSSE(apiOrigin);
     }
     startRestartStatusWatch();
     window.addEventListener('pagehide', stopRestartStatusWatch);
@@ -1981,7 +1983,7 @@
     });
   }
 
-  function showRestartOverlay(origin, token, requestedServices) {
+  function showRestartOverlay(origin, requestedServices) {
     /* Remove any existing overlay first */
     var existing = document.getElementById('pbgui-restart-overlay');
     if (existing) existing.remove();
@@ -2008,7 +2010,7 @@
     function probe() {
       attempts++;
       if (statusEl) statusEl.textContent = 'Reconnecting\u2026 (' + attempts + '/' + maxAttempts + ')';
-      fetch(apiBase + '/api/server-status', authOptions(token, { cache: 'no-store', credentials: 'same-origin' }))
+      fetch(apiBase + '/api/server-status', authOptions({ cache: 'no-store' }))
         .then(function (r) {
           if (!r.ok) throw new Error('status unavailable');
           return r.json();
@@ -2028,10 +2030,7 @@
                 if (label) requestedRestartServices[label] = true;
               });
               if (statusEl) statusEl.textContent = 'Restarting remaining outdated services...';
-              fetch(apiBase + '/api/server-restart', authOptions(token, {
-                method: 'POST',
-                credentials: 'same-origin'
-              })).then(function (response) {
+              fetch(apiBase + '/api/server-restart', authOptions({ method: 'POST' })).then(function (response) {
                 if (response.ok) return;
                 return response.json().catch(function () { return {}; }).then(function (payload) {
                   throw new Error((payload && payload.detail) ? String(payload.detail) : 'remaining service restart failed');
@@ -2115,9 +2114,9 @@
       : 'Authentication disabled on ' + bindHost + '. Anyone who can reach this address has full access.';
   }
 
-  function fetchRestartStatus(token, apiOrigin) {
+  function fetchRestartStatus(apiOrigin) {
     if (!apiOrigin) return;
-    fetch(apiOrigin + '/api/server-status', authOptions(token, { cache: 'no-store' }))
+    fetch(apiOrigin + '/api/server-status', authOptions({ cache: 'no-store' }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('server-status failed');
         return resp.json();
@@ -2128,7 +2127,7 @@
       .catch(function () {});
   }
 
-  function setupRestartSSE(token, apiOrigin) {
+  function setupRestartSSE(apiOrigin) {
     if (!apiOrigin) return;
     if (_restartEventSource) _restartEventSource.close();
     var url = apiOrigin + '/api/server-status/stream';
@@ -2144,11 +2143,11 @@
       if (_restartEventSource !== es) return;
       es.close();
       _restartEventSource = null;
-      fetchRestartStatus(token, apiOrigin);
+      fetchRestartStatus(apiOrigin);
       if (_restartRetryTimer) clearTimeout(_restartRetryTimer);
       _restartRetryTimer = setTimeout(function() {
         _restartRetryTimer = null;
-        setupRestartSSE(token, apiOrigin);
+        setupRestartSSE(apiOrigin);
       }, 15000);
     };
   }
@@ -2178,10 +2177,10 @@
   }
 
   /* ════════════════════════════════════
-     TOKEN KEEP-ALIVE & 401 REDIRECT
+     SESSION KEEP-ALIVE & 401 REDIRECT
      ════════════════════════════════════ */
 
-  /* Redirect to the standalone root login when token is invalid/expired. */
+  /* Redirect to the standalone root login when the session is invalid/expired. */
   var _authRedirecting = false;
   function replaceTopLocation(url) {
     try {
@@ -2207,13 +2206,9 @@
   }
 
   function performLogout() {
-    var c = cfg();
     var origin = _getAppBase();
 
-    fetch(origin + '/api/auth/logout', authOptions(c.token, {
-      method: 'POST',
-      credentials: 'same-origin'
-    })).finally(function () {
+    fetch(origin + '/api/auth/logout', authOptions({ method: 'POST' })).finally(function () {
       redirectToLogin();
     });
   }
@@ -2233,9 +2228,8 @@
 
   function confirmTokenStillValid() {
     if (_authCheckPending) return;
-    var c = cfg();
     _authCheckPending = true;
-    _origFetch(tokenRefreshUrl(), authOptions(c.token, { method: 'POST' }))
+    _origFetch(tokenRefreshUrl(), authOptions({ method: 'POST' }))
       .then(function (r) {
         if (r.status === 401) {
           redirectToLogin();
@@ -2248,10 +2242,9 @@
 
   function startTokenRefresh() {
     if (_refreshTimer) return;
-    var c = cfg();
     function doRefresh() {
       if (_authRedirecting) return;
-      _origFetch(tokenRefreshUrl(), authOptions(c.token, { method: 'POST' }))
+      _origFetch(tokenRefreshUrl(), authOptions({ method: 'POST' }))
         .then(function (r) {
           if (r.status === 401) { redirectToLogin(); return; }
           if (r.ok) { var ai = document.getElementById('pbgui-ai-btn'); if (ai) ai.style.display = 'inline-flex'; }

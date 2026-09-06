@@ -40,6 +40,15 @@ def _extract_function(source: str, name: str) -> str:
     raise AssertionError(f"Could not extract JavaScript function {name!r}")
 
 
+def test_tiingo_settings_link_to_official_token_and_usage_pages() -> None:
+    """Tiingo setup should expose its token and authoritative usage destinations."""
+    source = PAGE.read_text(encoding="utf-8")
+
+    assert 'href="https://www.tiingo.com/account/api/token"' in source
+    assert 'href="https://www.tiingo.com/account/api/usage"' in source
+    assert source.count('target="_blank" rel="noopener noreferrer"') >= 2
+
+
 def test_tiingo_token_save_reuses_profile_and_clears_secret_input() -> None:
     """Direct configuration should update the active vault profile without retaining the token."""
     source = PAGE.read_text(encoding="utf-8")

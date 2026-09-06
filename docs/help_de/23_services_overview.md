@@ -71,6 +71,8 @@ Ein stabiles Setup startet die Dienste üblicherweise in dieser Reihenfolge:
 5. **PBAPIServer** — aktiviert Dashboard, VPS Monitor, Job Queue und Echtzeit-Features
 6. **PBAPIServer VPS Monitoring Alerts** — konfiguriert Telegram-Routing und die GUI-Sichtbarkeit der Alarme direkt in den API-Server-Einstellungen, wenn genutzt
 
+Gespeicherte Telegram Bot Tokens und Chat IDs sind nur schreibbar. Die Einstellungsseite zeigt lediglich, ob beide Werte konfiguriert sind. Leere Felder behalten die gespeicherten Werte bei; ein neuer Wert ersetzt den bisherigen, und die explizite Clear-Option entfernt beide Credentials.
+
 ## Schnelle Fehlersuche
 
 ## Wann Einstellungen wirksam werden

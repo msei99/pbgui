@@ -133,6 +133,9 @@ outside the approved roots are never removed.
 
 Browser access to the Logging page uses the same-origin HttpOnly session
 cookie. Session tokens are not rendered into the page or JavaScript.
+The API path remains relative to the current browser origin and retains the
+configured ASGI mount prefix, so an incoming Host header cannot redirect log
+requests.
 
 The central logger redacts common credentials from messages, tags, codes,
 URLs, exceptions, tracebacks, and nested metadata. This includes passwords,

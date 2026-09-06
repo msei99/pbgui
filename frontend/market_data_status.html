@@ -265,7 +265,7 @@
     }
 </style>
 
-<div class="mds-root" id="__MDS_ROOT_ID__" data-token="" data-exchange="" data-api-host="" data-api-base="">
+<div class="mds-root" id="__MDS_ROOT_ID__" data-exchange="" data-api-base="%%API_BASE_ATTR%%" data-base-prefix="%%BASE_PREFIX_ATTR%%">
     <div class="mds-container">
         <div class="mds-content-wrapper" id="__MDS_ID__content-wrapper">
             <div class="mds-controls">
@@ -320,7 +320,7 @@
     </div>
 </div>
 
-<script src="/app/js/pbgui_dialogs.js?v=8"></script>
+<script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
 (function() {
     // === Per-instance scope: all DOM queries use this root ===
@@ -332,10 +332,9 @@
     function $(id) { return document.getElementById(ID_PREFIX + id); }
 
     // === Config (read from data-* attributes on root element) ===
-    var API_TOKEN = root.getAttribute('data-token') || '';
     var EXCHANGE = (root.getAttribute('data-exchange') || '').trim().toLowerCase();
-    var API_HOST = root.getAttribute('data-api-host') || window.location.host;
-    var API_BASE = root.getAttribute('data-api-base') || (window.location.origin + '/api');
+    var API_BASE = root.getAttribute('data-api-base') || '/api';
+    var BASE_PREFIX = root.getAttribute('data-base-prefix') || '';
 
     // === WebSocket ===
     var ws = null;
@@ -355,8 +354,8 @@
     };
 
     // === Init ===
-    if (!API_TOKEN || !EXCHANGE) {
-        root.innerHTML = '\x3cdiv class="mds-empty-state">\x3cdiv class="mds-empty-state-icon">\u26A0\x3c/div>\x3cdiv>Missing token or exchange parameter\x3c/div>\x3c/div>';
+    if (!EXCHANGE) {
+        root.innerHTML = '\x3cdiv class="mds-empty-state">\x3cdiv class="mds-empty-state-icon">\u26A0\x3c/div>\x3cdiv>Missing exchange parameter\x3c/div>\x3c/div>';
         return;
     }
 
@@ -389,7 +388,7 @@
     function connectWebSocket() {
         if (destroyed) return;
         var wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var wsUrl = wsProtocol + '//' + API_HOST + '/ws/market-data?exchange=' + encodeURIComponent(EXCHANGE);
+        var wsUrl = wsProtocol + '//' + window.location.host + BASE_PREFIX + '/ws/market-data?exchange=' + encodeURIComponent(EXCHANGE);
 
         ws = new WebSocket(wsUrl);
 
@@ -546,7 +545,8 @@
     function callAPI(endpoint, body, successMessage) {
         fetch(API_BASE + endpoint, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API_TOKEN },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         })
         .then(function(resp) { return resp.json(); })
@@ -566,8 +566,7 @@
         fetch('/api/notify_log', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + API_TOKEN
+                'Content-Type': 'application/json'
             },
             body: JSON.stringify({ msg: String(message == null ? '' : message), level: type || 'info' })
         }).catch(function() {});

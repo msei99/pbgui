@@ -72,16 +72,16 @@ def test_log_viewer_close_4001_is_terminal_and_redirects() -> None:
 
 
 def test_cookie_authenticated_pages_keep_logout_visible_without_a_token() -> None:
-    """Explicit page authentication must expose cookie logout while token pages remain supported."""
+    """Explicit page authentication exposes cookie logout without browser token support."""
 
     nav = NAV.read_text(encoding="utf-8")
     manager = (ROOT / "frontend" / "vps_manager.html").read_text(encoding="utf-8")
     monitor = (ROOT / "frontend" / "vps_monitor.html").read_text(encoding="utf-8")
 
     assert "authenticated: c.authenticated === true" in nav
-    assert "(TOKEN || c.authenticated) ? 'inline-flex' : 'none'" in nav
-    assert "headers.Authorization = 'Bearer ' + token" in nav
-    assert "credentials: 'same-origin'" in nav
+    assert "c.authenticated ? 'inline-flex' : 'none'" in nav
+    assert "Authorization" not in nav
+    assert "opts.credentials = 'same-origin'" in nav
     assert "authenticated: true" in manager
     assert "authenticated: true" in monitor
     for source in (manager, monitor):

@@ -1,6 +1,7 @@
 """Safe inline JSON and same-origin URLs for server-rendered pages."""
 
 import json
+import html as html_module
 import re
 from urllib.parse import quote
 
@@ -37,12 +38,15 @@ def render_page_urls(request: Request, html: str, api_path: str) -> str:
     prefix = quote(root_path.rstrip("/"), safe="/")
     html = html.replace('"%%API_BASE%%"', script_json(prefix + api_path))
     html = html.replace('"%%BASE_PREFIX%%"', script_json(prefix))
+    html = html.replace("%%API_BASE_ATTR%%", html_module.escape(prefix + api_path, quote=True))
+    html = html.replace("%%BASE_PREFIX_ATTR%%", html_module.escape(prefix, quote=True))
     if '"%%WS_BASE%%"' in html:
-        from api.auth import _request_origin
-
-        origin = _request_origin(request)
-        ws_origin = ("wss://" if origin.startswith("https://") else "ws://") + origin.split("://", 1)[1]
-        html = html.replace('"%%WS_BASE%%"', script_json(ws_origin + prefix))
+        ws_base = (
+            "(window.location.protocol === 'https:' ? 'wss://' : 'ws://')"
+            " + window.location.host + "
+            + script_json(prefix)
+        )
+        html = html.replace('"%%WS_BASE%%"', ws_base)
     return re.sub(
         r"(\b(?:src|href)\s*=\s*)([\"'])/app/",
         lambda match: match[1] + match[2] + prefix + "/app/",

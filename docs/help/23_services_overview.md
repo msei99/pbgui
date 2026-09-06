@@ -71,6 +71,8 @@ A healthy setup usually starts services in this order:
 5. **PBAPIServer** — enables Dashboard, VPS Monitor, Job Queue, and real-time features
 6. **PBAPIServer VPS Monitoring Alerts** — configure Telegram routing and in-GUI alert visibility inside the API server settings when needed
 
+Stored Telegram Bot Tokens and Chat IDs are write-only. The settings page shows only whether both values are configured. Leaving the fields blank preserves the stored values; enter a new value to replace it, or select the explicit clear option to remove both credentials.
+
 ## Troubleshooting
 
 ## When settings apply

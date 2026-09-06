@@ -2650,14 +2650,14 @@ textarea.json-invalid:focus {
 <div id="toast-stack"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=14"></script>
+<script src="/app/js/editor_shared.js?v=15"></script>
 <script src="/app/js/suite_editor.js?v=25"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
-<script src="/app/js/pbgui_dialogs.js?v=8"></script>
+<script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
-var TOKEN = "%%TOKEN%%";
 var API_BASE = "%%API_BASE%%";
-var WS_BASE = "%%WS_BASE%%";
+var BASE_PREFIX = "%%BASE_PREFIX%%";
+var WS_BASE = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + BASE_PREFIX;
 var LIMITS_META = %%LIMITS_META%%;
 var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL = "%%SERIAL%%";
@@ -5194,6 +5194,7 @@ function toast(message, kind) {
   var notifyHeaders = authenticatedHeaders({ 'Content-Type': 'application/json' });
   fetch('/api/notify_log', {
     method: 'POST',
+    credentials: 'same-origin',
     headers: notifyHeaders,
     body: JSON.stringify({ msg: String(message == null ? '' : message), level: kind || 'info' })
   }).catch(function() {});
@@ -5208,9 +5209,7 @@ function toast(message, kind) {
 }
 
 function authenticatedHeaders(extra) {
-  var headers = Object.assign({}, extra || {});
-  if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
-  return headers;
+  return Object.assign({}, extra || {});
 }
 
 function setBanner(kind, message) {
@@ -5263,7 +5262,7 @@ async function apiFetch(path, opts) {
   var init = opts || {};
   var headers = authenticatedHeaders(init.headers);
   if (!headers['Content-Type'] && init.body) headers['Content-Type'] = 'application/json';
-  var response = await fetch(API_BASE + path, Object.assign({}, init, { headers: headers }));
+  var response = await fetch(API_BASE + path, Object.assign({}, init, { headers: headers, credentials: 'same-origin' }));
   var text = await response.text();
   if (!response.ok) {
     throw buildHttpError(response, text);
@@ -5321,7 +5320,7 @@ async function authFetch(url, opts) {
   var init = opts || {};
   var headers = authenticatedHeaders(init.headers);
   if (!headers['Content-Type'] && init.body) headers['Content-Type'] = 'application/json';
-  var response = await fetch(url, Object.assign({}, init, { headers: headers }));
+  var response = await fetch(url, Object.assign({}, init, { headers: headers, credentials: 'same-origin' }));
   var text = await response.text();
   if (!response.ok) {
     throw buildHttpError(response, text);
@@ -8733,6 +8732,7 @@ async function optFetchV7Json(path, opts) {
   opts = opts || {};
   var v7Base = optimizeEditorAdapter.metadataApiBase();
   opts.headers = authenticatedHeaders(opts.headers);
+  opts.credentials = 'same-origin';
   var response = await fetch(v7Base + path, opts);
   var data = await response.json();
   if (!response.ok) throw new Error((data && data.detail) || response.statusText || 'Request failed');
@@ -10649,7 +10649,6 @@ function initOptimizeOhlcvPreflightController() {
     syncRoot: 'configs-editor',
     pageLabel: 'Optimize',
     apiBase: API_BASE,
-    token: TOKEN,
     loadConfig: function() {
       return getOptimizeOhlcvPreflightPayload();
     }
@@ -13025,7 +13024,6 @@ function ensureLogViewer() {
   state.logViewer = new LogViewerPanel({
     containerId: 'log-viewer-target',
     wsBase: WS_BASE,
-    token: TOKEN,
     defaultHost: 'local',
     defaultFile: '',
     presets: 'system',
@@ -13398,7 +13396,7 @@ async function migrateOptimizeConfigToV8(name) {
   var response;
   showMigrationDraftLoadingState(true);
   try {
-    response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
+    response = await authFetch(BASE_PREFIX + '/api/optimize-v8/migrate-v7', {
       method: 'POST',
       body: JSON.stringify({ source_name: name, target_name: targetName })
     });
@@ -13413,7 +13411,7 @@ async function migrateOptimizeConfigToV8(name) {
     await showOptimizeMigrationError(new Error('PB8 migration did not return an editor preview.'));
     return;
   }
-  window.location.href = window.location.origin + '/api/optimize-v8/main_page?migration_draft_id=' + encodeURIComponent(response.draft_id)
+  window.location.href = BASE_PREFIX + '/api/optimize-v8/main_page?migration_draft_id=' + encodeURIComponent(response.draft_id)
     + '&draft_name=' + encodeURIComponent(migratedName);
 }
 
@@ -13422,7 +13420,7 @@ async function migrateParetoConfigToV8(path, name) {
   var response;
   showMigrationDraftLoadingState(true);
   try {
-    response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
+    response = await authFetch(BASE_PREFIX + '/api/optimize-v8/migrate-v7', {
       method: 'POST',
       body: JSON.stringify({ source_path: path, target_name: targetName })
     });
@@ -13437,7 +13435,7 @@ async function migrateParetoConfigToV8(path, name) {
     await showOptimizeMigrationError(new Error('PB8 migration did not return an editor preview.'));
     return;
   }
-  window.location.href = window.location.origin + '/api/optimize-v8/main_page?migration_draft_id=' + encodeURIComponent(response.draft_id)
+  window.location.href = BASE_PREFIX + '/api/optimize-v8/main_page?migration_draft_id=' + encodeURIComponent(response.draft_id)
     + '&draft_name=' + encodeURIComponent(migratedName);
 }
 
@@ -14540,7 +14538,7 @@ init().catch(handleError);
     if (_topicCache[idx] !== undefined) { callback(_topicCache[idx]); return; }
     var topic = helpTopics[idx];
     if (!topic) { callback(''); return; }
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: authenticatedHeaders() })
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { credentials: 'same-origin', headers: authenticatedHeaders() })
       .then(function(response) { return response.json(); })
       .then(function(data) {
         _topicCache[idx] = mdToHtml(data.content || '');
@@ -14648,7 +14646,7 @@ init().catch(handleError);
     _sIdx = -1;
     helpSearchCount.textContent = '';
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: authenticatedHeaders() })
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { credentials: 'same-origin', headers: authenticatedHeaders() })
       .then(function(response) { return response.json(); })
       .then(function(data) {
         _rawHtml = mdToHtml(data.content || '');
@@ -14665,7 +14663,7 @@ init().catch(handleError);
 
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/index?lang=' + helpLang, { headers: authenticatedHeaders() })
+    fetch(docsBase + '/docs/index?lang=' + helpLang, { credentials: 'same-origin', headers: authenticatedHeaders() })
       .then(function(response) { return response.json(); })
       .then(function(data) {
         helpTopics = data || [];
@@ -14777,7 +14775,7 @@ init().catch(handleError);
   window._openOptimizeHelp = function(anchor) {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
     var topic = optimizeEditorAdapter.isV8 ? '43_pbv8_optimize' : '36_pbv7_optimize';
-    window.PBGuiSharedHelp.open(topic, { token: TOKEN, anchor: anchor || '' });
+    window.PBGuiSharedHelp.open(topic, { anchor: anchor || '' });
   };
   window.PBGUI_SCENARIO_GENERATOR_HELP = function() {
     window._openOptimizeHelp('scenario-generator');
@@ -14856,13 +14854,13 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 window.PBGUI_NAV_CONFIG = {
   subtitle: optimizeEditorAdapter.navSubtitle,
   current: optimizeEditorAdapter.navCurrent,
-  token: TOKEN,
+  authenticated: true,
   apiBase: API_BASE,
   version: PBGUI_VERSION,
   serial: PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/shared_help_overlay.js?v=6"></script>
+<script src="/app/js/shared_help_overlay.js?v=7"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

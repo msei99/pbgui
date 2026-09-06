@@ -188,6 +188,85 @@ def test_api_server_save_uses_one_ini_generation_and_marks_bind_change(monkeypat
     assert restart_keys == {("api_server", "host"), ("api_server", "port")}
 
 
+def test_api_server_settings_redact_stored_telegram_credentials(monkeypatch) -> None:
+    """The settings GET reports credential status without returning either stored value."""
+    fake_module = SimpleNamespace(PBApiServer=lambda: SimpleNamespace(host="127.0.0.1", port=8000))
+    fake_monitor = SimpleNamespace(get_alert_settings=lambda: {
+        "telegram_token": "monitor-secret",
+        "telegram_chat_id": "monitor-chat",
+        "offline_gui": True,
+    })
+    snapshot = configparser.ConfigParser()
+    snapshot.read_dict({"main": {"telegram_token": "stored-secret", "telegram_chat_id": "stored-chat"}})
+    monkeypatch.setattr(services.importlib, "import_module", lambda name: fake_module)
+    monkeypatch.setattr(services, "get_monitor", lambda: fake_monitor)
+    monkeypatch.setattr(services, "load_ini_snapshot", lambda: snapshot)
+    monkeypatch.setattr(services, "_available_vps_hosts", lambda: [])
+    monkeypatch.setattr(services, "_load_monitor_config_values", lambda: {})
+
+    result = services.get_api_server_settings(SimpleNamespace())
+
+    assert result["telegram_configured"] is True
+    assert result["telegram_token"] is None
+    assert result["telegram_chat_id"] is None
+    assert "monitor-secret" not in json.dumps(result)
+    assert "monitor-chat" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(("clear", "token", "chat", "expected"), [
+    (False, None, None, ("stored-secret", "stored-chat")),
+    (False, "new-secret", None, ("new-secret", "stored-chat")),
+    (False, None, "new-chat", ("stored-secret", "new-chat")),
+    (True, None, None, ("", "")),
+])
+def test_api_server_save_preserves_or_explicitly_updates_telegram_credentials(
+    monkeypatch, clear, token, chat, expected,
+) -> None:
+    """Blank fields preserve credentials while explicit replacements and clearing remain available."""
+    fake_module = SimpleNamespace(
+        PBApiServer=lambda: SimpleNamespace(host="127.0.0.1", port=8000),
+        mark_runtime_restart_required=lambda reason: None,
+    )
+    saved: list[configparser.ConfigParser] = []
+
+    def capture_update(mutator) -> None:
+        parser = configparser.ConfigParser()
+        parser.add_section("main")
+        parser.set("main", "telegram_token", "stored-secret")
+        parser.set("main", "telegram_chat_id", "stored-chat")
+        mutator(parser)
+        saved.append(parser)
+
+    monkeypatch.setattr(services.importlib, "import_module", lambda name: fake_module)
+    monkeypatch.setattr(services, "update_ini", capture_update)
+    body = services.APIServerSettings(
+        telegram_token=token,
+        telegram_chat_id=chat,
+        clear_telegram_credentials=clear,
+    )
+
+    result = services.save_api_server_settings(body, SimpleNamespace())
+
+    assert result["ok"] is True
+    assert saved[0].get("main", "telegram_token") == expected[0]
+    assert saved[0].get("main", "telegram_chat_id") == expected[1]
+
+
+def test_api_server_save_rejects_replacing_and_clearing_telegram_credentials(monkeypatch) -> None:
+    """One request cannot ambiguously replace and clear Telegram credentials."""
+    monkeypatch.setattr(
+        services.importlib,
+        "import_module",
+        lambda name: (_ for _ in ()).throw(AssertionError("validation must happen before persistence")),
+    )
+    with pytest.raises(services.HTTPException) as exc_info:
+        services.save_api_server_settings(
+            services.APIServerSettings(telegram_token="new-secret", clear_telegram_credentials=True),
+            SimpleNamespace(),
+        )
+    assert exc_info.value.status_code == 422
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 def test_api_server_save_rejects_non_finite_monitor_values_before_publish(monkeypatch, value) -> None:
     """NaN and infinities never reach the combined INI transaction."""

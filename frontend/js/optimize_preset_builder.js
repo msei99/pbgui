@@ -68,11 +68,10 @@
     document.head.appendChild(style);
   }
 
-  function apiJson(url, token, options) {
+  function apiJson(url, options) {
     options = options || {};
     var headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
-    if (String(token || '').trim()) headers.Authorization = 'Bearer ' + String(token).trim();
-    return fetch(url, Object.assign({}, options, { headers: headers })).then(function (res) {
+    return fetch(url, Object.assign({}, options, { headers: headers, credentials: 'same-origin' })).then(function (res) {
       if (!res.ok) {
         return res.text().then(function (text) {
           var detail = text || ('HTTP ' + res.status);
@@ -95,38 +94,54 @@
     return out;
   }
 
+  function basePrefix() {
+    var prefix = window.PBGUI_BASE_PREFIX;
+    if (prefix === undefined) prefix = window.BASE_PREFIX;
+    if (prefix === undefined) {
+      var apiBase = String(window.API_BASE || '');
+      try {
+        var apiPath = new URL(apiBase, window.location.origin).pathname;
+        var apiMarker = apiPath.lastIndexOf('/api/');
+        prefix = apiMarker >= 0 ? apiPath.slice(0, apiMarker) : '';
+      } catch (_) {
+        prefix = '';
+      }
+    }
+    return String(prefix || '').replace(/\/+$/, '');
+  }
+
   function optimizeApiBase(version) {
-    return window.location.origin + '/api/optimize-' + (String(version || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7');
+    return basePrefix() + '/api/optimize-' + (String(version || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7');
   }
 
   function backtestApiBase(version) {
-    return window.location.origin + '/api/backtest-' + (String(version || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7');
+    return basePrefix() + '/api/backtest-' + (String(version || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7');
   }
 
-  function saveOptimizePresetConfig(token, name, config, version) {
+  function saveOptimizePresetConfig(name, config, version) {
     var encoded = encodeURIComponent(name);
     var apiBase = optimizeApiBase(version);
-    return apiJson(apiBase + '/configs/' + encoded, token, {
+    return apiJson(apiBase + '/configs/' + encoded, {
       method: 'PUT',
       body: JSON.stringify(config)
     }).then(function () {
-      return apiJson(apiBase + '/configs/' + encoded, token);
+      return apiJson(apiBase + '/configs/' + encoded);
     }).then(function (saved) {
       if (!saved || !saved.config) throw new Error('Saved optimize config could not be reloaded.');
       return saved.config;
     });
   }
 
-  function queueOptimizePreset(token, name, version) {
-    return apiJson(optimizeApiBase(version) + '/queue', token, {
+  function queueOptimizePreset(name, version) {
+    return apiJson(optimizeApiBase(version) + '/queue', {
       method: 'POST',
       body: JSON.stringify({ name: name })
     });
   }
 
-  function openOptimizeSeedDraft(token, config, draftName, version) {
+  function openOptimizeSeedDraft(config, draftName, version) {
     var runtime = String(version || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7';
-    return apiJson(backtestApiBase(runtime) + '/optimize-draft', token, {
+    return apiJson(backtestApiBase(runtime) + '/optimize-draft', {
       method: 'POST',
       body: JSON.stringify({ config: extractConfigSections(config) })
     }).then(function (draft) {

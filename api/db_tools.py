@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from api.auth import SessionToken, require_auth
+from api.page_templates import render_page_urls, script_json
 from logging_helpers import human_log as _log
 from master.async_pool import remote_path_join
 import pbgui_purefunc
@@ -2943,21 +2944,12 @@ def get_main_page(request: Request, session: SessionToken = Depends(require_auth
 
     html_path = Path(__file__).parent.parent / "frontend" / "db_tools.html"
     html = html_path.read_text(encoding="utf-8")
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api/db-tools"
-    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
-
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
-    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+    html = render_page_urls(request, html, "/api/db-tools")
     from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION
 
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
     nav_js = Path(__file__).parent.parent / "frontend" / "pbgui_nav.js"
     nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION

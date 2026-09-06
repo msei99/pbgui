@@ -37,6 +37,7 @@ from typing import Any, Callable, Optional
 import psutil
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from api.page_templates import render_page_urls, script_json
 
 from api.archive_helpers import (
     ARCHIVE_LAYOUT_ROOT,
@@ -2831,21 +2832,12 @@ def main_page(
         raise HTTPException(404, "v7_backtest.html not found")
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api/backtest-v7"
-    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
-
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
-    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+    html = render_page_urls(request, html, "/api/backtest-v7")
 
     from pbgui_purefunc import PBGUI_VERSION, PBGUI_SERIAL
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
     html = html.replace("%%BACKTEST_VERSION%%", "v7")
     html = html.replace("%%BACKTEST_LABEL%%", "V7")

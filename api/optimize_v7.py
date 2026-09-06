@@ -35,6 +35,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from api.archive_helpers import ensure_config_version
 from api.auth import SessionToken, authenticate_websocket, require_auth
+from api.page_templates import render_page_urls, script_json
 from api.pb7_bridge import (
     get_bot_param_keys,
     get_hsl_signal_modes,
@@ -2479,22 +2480,13 @@ def main_page(
         raise HTTPException(404, "v7_optimize.html not found")
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api/optimize-v7"
-    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
-
-    html = html.replace('"%%TOKEN%%"', json.dumps(""))
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
-    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+    html = render_page_urls(request, html, "/api/optimize-v7")
     html = html.replace("%%LIMITS_META%%", json.dumps(get_optimize_limits_meta_payload()))
 
     from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
     html = html.replace("%%OPTIMIZE_VERSION%%", "v7")
     html = html.replace("%%BACKTEST_VERSION%%", "v7")

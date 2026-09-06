@@ -138,6 +138,9 @@ werden nie entfernt.
 Die Logging-Seite authentifiziert Browser ausschließlich über das
 Same-Origin-HttpOnly-Session-Cookie. Session-Tokens werden nicht in HTML oder
 JavaScript gerendert.
+Der API-Pfad bleibt relativ zum aktuellen Browser-Origin und behaelt den
+konfigurierten ASGI-Mount-Prefix. Ein eingehender Host-Header kann Log-Anfragen
+daher nicht umleiten.
 
 Der zentrale Logger entfernt übliche Zugangsdaten aus Meldungen, Tags, Codes,
 URLs, Exceptions, Tracebacks und verschachtelten Metadaten. Dazu gehören

@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from api.archive_helpers import _read_json_object_nofollow, atomic_write_json, config_version_info
 from api.auth import SessionToken, authenticate_websocket, require_auth
+from api.page_templates import render_page_urls, script_json
 from api.backtest_price import build_market_price_payload
 from api.v8_instances import store_v8_editor_draft
 from api.pb8_ohlcv_tools import (
@@ -1923,12 +1924,11 @@ def main_page(request: Request, session: SessionToken = Depends(require_auth)) -
     if not html_path.exists():
         raise HTTPException(status_code=404, detail="v7_backtest.html not found")
     html = html_path.read_text(encoding="utf-8")
-    origin = str(request.base_url).rstrip("/")
+    html = render_page_urls(request, html, "/api/backtest-v8")
     replacements = {
-        '"%%TOKEN%%"': json.dumps(""),
-        '"%%API_BASE%%"': json.dumps(origin + "/api/backtest-v8"),
-        '"%%WS_BASE%%"': json.dumps(origin.replace("http://", "ws://").replace("https://", "wss://")),
+        '"%%VERSION%%"': script_json(PBGUI_VERSION),
         "%%VERSION%%": PBGUI_VERSION,
+        '"%%SERIAL%%"': script_json(PBGUI_SERIAL),
         "%%SERIAL%%": PBGUI_SERIAL,
         "%%BACKTEST_VERSION%%": "v8",
         "%%BACKTEST_LABEL%%": "V8",

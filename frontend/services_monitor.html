@@ -831,6 +831,10 @@
               <input class="form-input medium" type="text" id="apiserver-telegram-chat-id" placeholder="e.g. -1001234567">
             </div>
           </div>
+          <label class="form-hint" style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;cursor:pointer;">
+            <input type="checkbox" id="apiserver-clear-telegram" style="accent-color:#ef4444;">
+            Clear the stored Bot Token and Chat ID on save
+          </label>
           <div id="apiserver-alert-routing-wrap"></div>
           <div style="margin-top:1rem;">
             <button class="form-btn save" onclick="saveApiServerSettings()">&#128190; Save</button>
@@ -894,11 +898,11 @@
   </div>
 </div>
 
-<!-- Token / base URL injection (server-side replacement) -->
+<!-- Same-origin URL configuration (server-side replacement) -->
 <script>
-  var TOKEN         = "%%TOKEN%%";
-  var API_BASE      = "%%API_BASE%%";   /* http://host:port/api/services */
-  var WS_BASE       = "%%WS_BASE%%";   /* ws://host:port                */
+  var API_BASE      = "%%API_BASE%%";
+  var BASE_PREFIX   = "%%BASE_PREFIX%%";
+  var WS_BASE       = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + BASE_PREFIX;
   var PBGUI_VERSION = "%%VERSION%%";
   var PBGUI_SERIAL  = "%%SERIAL%%";
 </script>
@@ -906,13 +910,13 @@
 window.PBGUI_NAV_CONFIG = {
   subtitle: 'SERVICES',
   current:  'system_services',
-  token:    TOKEN,
+  authenticated: true,
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/pbgui_dialogs.js?v=8"></script>
-<script src="/app/js/shared_help_overlay.js?v=6"></script>
+<script src="/app/js/pbgui_dialogs.js?v=9"></script>
+<script src="/app/js/shared_help_overlay.js?v=7"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
 <script>
@@ -1107,7 +1111,7 @@ window.PBGUI_NAV_CONFIG = {
   window._openServicesHelp = function() {
     var kw = window._servicesGuideKeyword || 'services_overview';
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-    window.PBGuiSharedHelp.open(kw, { token: TOKEN });
+    window.PBGuiSharedHelp.open(kw);
   };
   window.PBGUI_HELP_OPENER = window._openServicesHelp;
 }());
@@ -1173,8 +1177,8 @@ window.PBGUI_NAV_CONFIG = {
   function authOptions(options) {
     var opts = Object.assign({}, options || {});
     var headers = Object.assign({}, opts.headers || {});
-    if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
     opts.headers = headers;
+    opts.credentials = 'same-origin';
     return opts;
   }
 
@@ -1759,7 +1763,6 @@ window.PBGUI_NAV_CONFIG = {
         _workerLogViewer = new LogViewerPanel({
           containerId: 'worker-log',
           wsBase: WS_BASE,
-          token: TOKEN,
           defaultFile: item.log_file,
           height: '100%'
         });
@@ -1935,7 +1938,6 @@ window.PBGUI_NAV_CONFIG = {
       var viewer = new LogViewerPanel({
         containerId: 'log-' + svcId,
         wsBase:      WS_BASE,
-        token:       TOKEN,
         defaultFile: svc.logFile,
         showRestart: true,
         height:      'calc(100vh - 200px)',
@@ -2010,7 +2012,7 @@ window.PBGUI_NAV_CONFIG = {
             throw new Error(detail);
           });
         }
-        if (typeof showRestartOverlay === 'function') showRestartOverlay(origin, TOKEN);
+        if (typeof showRestartOverlay === 'function') showRestartOverlay(origin);
       })
       .catch(function (err) {
         _resultPopup(
@@ -2055,8 +2057,18 @@ window.PBGUI_NAV_CONFIG = {
       renderVpsHosts(data.available_hosts || [], data.enabled_hosts || []);
       var monitorWrap = document.getElementById('apiserver-monitor-config-wrap');
       if (monitorWrap) monitorWrap.innerHTML = renderMonitorSettingsFields(data.monitor_config || {});
-      _setVal('apiserver-telegram-token', data.telegram_token || '');
-      _setVal('apiserver-telegram-chat-id', data.telegram_chat_id || '');
+      var telegramToken = document.getElementById('apiserver-telegram-token');
+      var telegramChatId = document.getElementById('apiserver-telegram-chat-id');
+      var clearTelegram = document.getElementById('apiserver-clear-telegram');
+      if (telegramToken) {
+        telegramToken.value = '';
+        telegramToken.placeholder = data.telegram_configured ? 'Stored value hidden - enter to replace' : 'Paste token...';
+      }
+      if (telegramChatId) {
+        telegramChatId.value = '';
+        telegramChatId.placeholder = data.telegram_configured ? 'Stored value hidden - enter to replace' : 'e.g. -1001234567';
+      }
+      if (clearTelegram) clearTelegram.checked = false;
       applyAlertRoutingSettings(data);
     }
   }
@@ -2323,10 +2335,11 @@ window.PBGUI_NAV_CONFIG = {
 
   function _logUiNotification(message, level) {
     var text = String(message == null ? '' : message).trim();
-    if (!text || !TOKEN) return;
+    if (!text) return;
     fetch('/api/notify_log', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ msg: text, level: level || 'info' })
     }).catch(function () {});
   }
@@ -3314,7 +3327,7 @@ window.PBGUI_NAV_CONFIG = {
     }, 'pbdata-save-msg');
   };
 
-  window.saveApiServerSettings = function () {
+  window.saveApiServerSettings = async function () {
     var hosts = [];
     document.querySelectorAll('#vps-hosts-select .tag:not(.inactive)').forEach(function (el) { hosts.push(el.getAttribute('data-host')); });
     var body = {
@@ -3322,16 +3335,32 @@ window.PBGUI_NAV_CONFIG = {
       port:         parseInt(_val('apiserver-port') || '8000', 10),
       auto_restart: !!(document.getElementById('apiserver-auto-restart') || {}).checked,
       enabled_hosts: hosts,
-      monitor_config: collectMonitorConfigFromForm(),
-      telegram_token: _val('apiserver-telegram-token'),
-      telegram_chat_id: _val('apiserver-telegram-chat-id')
+      monitor_config: collectMonitorConfigFromForm()
     };
+    var telegramToken = _val('apiserver-telegram-token').trim();
+    var telegramChatId = _val('apiserver-telegram-chat-id').trim();
+    var clearTelegram = !!(document.getElementById('apiserver-clear-telegram') || {}).checked;
+    if (clearTelegram) {
+      var confirmed = await window.PBGuiDialogs.confirm({
+        title: 'Clear Telegram credentials',
+        message: 'Remove the stored Bot Token and Chat ID?',
+        detail: 'Telegram alerts will stop until both values are configured again.',
+        confirmText: 'Clear credentials'
+      });
+      if (!confirmed) return;
+      body.clear_telegram_credentials = true;
+    } else {
+      if (telegramToken) body.telegram_token = telegramToken;
+      if (telegramChatId) body.telegram_chat_id = telegramChatId;
+    }
     Object.assign(body, collectAlertRoutingFromForm());
-    _post('/settings/api-server', body, 'apiserver-save-msg');
+    _post('/settings/api-server', body, 'apiserver-save-msg', function () {
+      loadSettings('api-server');
+    });
   };
 
-  function _post(ep, body, msgId) {
-    fetch(API_BASE + ep, authOptions({
+  function _post(ep, body, msgId, onSuccess) {
+    return fetch(API_BASE + ep, authOptions({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -3340,6 +3369,7 @@ window.PBGUI_NAV_CONFIG = {
     .then(function (d) {
       var message = d && d.apply && d.apply.message ? String(d.apply.message) : 'Saved';
       _flash(msgId, d.ok ? message : (d.detail || 'Error'), !d.ok);
+      if (d.ok && typeof onSuccess === 'function') onSuccess(d);
     })
     .catch(function (e) { _flash(msgId, 'Error: ' + e.message, true); });
   }

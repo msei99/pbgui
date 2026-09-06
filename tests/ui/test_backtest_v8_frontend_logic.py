@@ -443,6 +443,7 @@ def test_v7_run_manual_review_conversion_opens_unsaved_pb8_editor_draft() -> Non
         f"""
         const assert = require('node:assert/strict');
         let requestBody = null;
+        const BASE_PREFIX = '/mounted';
         const window = {{
           location: {{origin: 'https://example.test', href: ''}},
           PBGuiDialogs: {{alert() {{ throw new Error('alert must not open for a review draft'); }}}}
@@ -662,6 +663,7 @@ def test_v7_backtest_manual_review_conversion_opens_unsaved_pb8_editor_draft() -
         f"""
         const assert = require('node:assert/strict');
         let requestBody = null;
+        const BASE_PREFIX = '/mounted';
         const window = {{
           location: {{origin: 'https://example.test', href: ''}},
           PBGuiDialogs: {{alert() {{ throw new Error('alert must not open for a review draft'); }}}}
@@ -681,7 +683,7 @@ def test_v7_backtest_manual_review_conversion_opens_unsaved_pb8_editor_draft() -
           assert.equal(requestBody.allow_manual_review_output, true);
           assert.equal(
             window.location.href,
-            'https://example.test/api/backtest-v8/main_page?opt_draft_id=review-draft&draft_name=demo_v8'
+            '/mounted/api/backtest-v8/main_page?opt_draft_id=review-draft&draft_name=demo_v8'
           );
         }}).catch(error => {{ console.error(error); process.exit(1); }});
         """
@@ -712,6 +714,7 @@ def test_v7_backtest_successful_conversion_always_opens_unsaved_draft() -> None:
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
+        const BASE_PREFIX = '/mounted';
         const window = {{
           location: {{origin: 'https://example.test', href: ''}},
           PBGuiDialogs: {{alert() {{ throw new Error('success dialog must not open'); }}}}
@@ -731,7 +734,7 @@ def test_v7_backtest_successful_conversion_always_opens_unsaved_draft() -> None:
         migrateV7SourceToV8({{source_type: 'backtest_config', source_name: 'demo', target_name: 'demo_v8'}}).then(() => {{
           assert.equal(
             window.location.href,
-            'https://example.test/api/backtest-v8/main_page?opt_draft_id=clean-draft&draft_name=demo_v8'
+            '/mounted/api/backtest-v8/main_page?opt_draft_id=clean-draft&draft_name=demo_v8'
           );
         }}).catch(error => {{ console.error(error); process.exit(1); }});
         """
@@ -749,7 +752,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
     shell_source = (ROOT / "frontend" / "js" / "backtest_shell.js").read_text(encoding="utf-8")
     adapter_source = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
 
-    assert '/app/css/backtest_shell.css?v=4' in v7_source
+    assert '/app/css/backtest_shell.css?v=5' in v7_source
     assert '/app/js/backtest_shell.js?v=5' in v7_source
     assert '/app/js/backtest_editor_adapter.js?v=12' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
@@ -2159,6 +2162,8 @@ def test_optimize_validation_results_render_as_collapsible_candidate_groups() ->
         _renderResultsTableInto(host, data, null, rth, {{showVersion: true, groupValidation: true}});
         assert.equal((host.innerHTML.match(/result-group-row/g) || []).length, 1);
         assert.equal((host.innerHTML.match(/class="result-group-member" hidden/g) || []).length, 2);
+        assert.match(host.innerHTML, /class="result-group-compare"/);
+        assert.ok(host.innerHTML.indexOf('result-group-compare') < host.innerHTML.indexOf('result-group-toggle'));
         assert.match(host.innerHTML, /&lt;candidate&gt;/);
         assert.ok(host.innerHTML.indexOf('/group-a') < host.innerHTML.indexOf('/group-b'));
         assert.ok(host.innerHTML.indexOf('/group-b') < host.innerHTML.indexOf('/solo'));
@@ -2172,6 +2177,45 @@ def test_optimize_validation_results_render_as_collapsible_candidate_groups() ->
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "groupValidation: true" in source
     assert "tbody tr[data-path]:not([hidden])" in source
+
+
+def test_optimize_validation_group_compare_selects_and_opens_all_members() -> None:
+    """The compact group action compares every member without expanding the group."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("resultGroupKey", "compareResultGroup")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const group = {{kind: 'optimize_validate', id: 'batch:0'}};
+        const results = [
+          {{backtest_version: 'v8', path: '/group-a', result_group: group}},
+          {{backtest_version: 'v8', path: '/solo'}},
+          {{backtest_version: 'v8', path: '/group-b', result_group: group}}
+        ];
+        const _activeResultsCtx = {{data: results}};
+        const compareArea = {{}};
+        const document = {{getElementById: id => id === 'compare-chart-area' ? compareArea : null}};
+        let selected = null;
+        let compared = null;
+        const setSelectedResults = paths => {{ selected = paths; }};
+        const _compareResultPaths = (paths, resultSet, target, chartId) => {{
+          compared = {{paths, resultSet, target, chartId}};
+        }};
+        const toast = () => assert.fail('Compare should not show an error');
+        {functions}
+        compareResultGroup({{dataset: {{resultGroupKey: 'v8:batch:0'}}}});
+        assert.deepEqual(selected, ['/group-a', '/group-b']);
+        assert.deepEqual(compared.paths, selected);
+        assert.equal(compared.resultSet, results);
+        assert.equal(compared.target, compareArea);
+        assert.equal(compared.chartId, 'compare-chart-div');
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_backtest_archive_enables_strategy_for_v8_rows() -> None:

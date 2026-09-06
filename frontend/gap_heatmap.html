@@ -220,7 +220,6 @@
 </style>
 
 <div class="hm-root" id="__HM_ROOT_ID__"
-     data-token=""
      data-exchange=""
      data-dataset=""
      data-coin=""
@@ -283,7 +282,6 @@
     if (!root) return;
 
     // ---------------------------------------------------------------- config
-    var TOKEN    = root.dataset.token    || '';
     var EXCHANGE = root.dataset.exchange || '';
     var DATASET  = root.dataset.dataset  || '';
     var COIN     = root.dataset.coin     || '';
@@ -323,9 +321,9 @@
     var minutesAbort  = null;  // AbortController for minutes SSE
     var newestDataDay = null;  // YYYYMMDD — last day with actual l2Book data
 
-    // ---------------------------------------------------------------- auth header
-    function authHeaders() {
-        return {'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json'};
+    // ---------------------------------------------------------------- JSON header
+    function jsonHeaders() {
+        return {'Content-Type': 'application/json'};
     }
 
     // ---------------------------------------------------------------- Plotly loader
@@ -365,7 +363,7 @@
 
     function apiGet(path, qs, cb, cbErr) {
         var url = API_BASE + path + '?' + qs;
-        fetch(url, {method: 'GET', headers: authHeaders()})
+        fetch(url, {method: 'GET', credentials: 'same-origin', headers: jsonHeaders()})
             .then(function(r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -466,7 +464,7 @@
     function loadOverview(silent) {
         if (!silent) setLoading(elOvChart, 'Loading overview\u2026');
         var url = API_BASE + '/heatmap/overview-stream?' + buildQS();
-        fetch(url, {method: 'GET', headers: authHeaders()})
+        fetch(url, {method: 'GET', credentials: 'same-origin', headers: jsonHeaders()})
             .then(function(response) {
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 var reader = response.body.getReader();
@@ -559,7 +557,7 @@
                     '&show_oos='     + (showOos     ? 'true' : 'false');
         var url = API_BASE + '/heatmap/minutes-stream?' + buildQS(extra);
 
-        fetch(url, {method: 'GET', headers: authHeaders(), signal: minutesAbort.signal})
+        fetch(url, {method: 'GET', credentials: 'same-origin', headers: jsonHeaders(), signal: minutesAbort.signal})
             .then(function(response) {
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 var reader = response.body.getReader();
@@ -697,9 +695,9 @@
     function showToast(msg, cls) {
         fetch('/api/notify_log', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + TOKEN
+                'Content-Type': 'application/json'
             },
             body: JSON.stringify({ msg: String(msg == null ? '' : msg), level: cls || 'info' })
         }).catch(function() {});
@@ -748,7 +746,7 @@
                       '&coin=' + encodeURIComponent(COIN) +
                       '&start_day=' + encodeURIComponent(sd) +
                       '&end_day=' + encodeURIComponent(today);
-            fetch(url, {method: 'POST', headers: authHeaders()})
+            fetch(url, {method: 'POST', credentials: 'same-origin', headers: jsonHeaders()})
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     elBtnDlOvMissing.disabled = false;
@@ -783,7 +781,7 @@
                       encodeURIComponent(EXCHANGE) +
                       '&coin=' + encodeURIComponent(COIN) +
                       '&month=' + encodeURIComponent(currentMonth);
-            fetch(url, {method: 'POST', headers: authHeaders()})
+            fetch(url, {method: 'POST', credentials: 'same-origin', headers: jsonHeaders()})
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     elBtnDlL2book.disabled = false;
@@ -812,7 +810,7 @@
     }
 
     function wsConnect() {
-        if (!TOKEN || !EXCHANGE) return;
+        if (!EXCHANGE) return;
         wsSetState('reconnecting');
         var wsBase = API_ORIGIN.replace(/^http/, 'ws');
         var url = wsBase + '/ws/heatmap-watch?exchange=' + encodeURIComponent(EXCHANGE) +

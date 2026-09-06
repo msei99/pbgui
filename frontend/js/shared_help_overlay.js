@@ -2,7 +2,6 @@
   'use strict';
 
   var state = {
-    token: '',
     lang: localStorage.getItem('help-lang') || 'EN',
     topics: [],
     selectedIndex: 0,
@@ -19,6 +18,24 @@
     indexRequestSeq: 0,
     topicRequestSeq: 0
   };
+
+  function appPath(path) {
+    var prefix = window.PBGUI_BASE_PREFIX;
+    if (prefix === undefined) prefix = window.BASE_PREFIX;
+    if (prefix === undefined) {
+      var apiBase = String(window.API_BASE || '');
+      try {
+        var apiPath = new URL(apiBase, window.location.origin).pathname;
+        var apiMarker = apiPath.lastIndexOf('/api/');
+        if (apiMarker >= 0) prefix = apiPath.slice(0, apiMarker);
+      } catch (_) {}
+    }
+    if (prefix === undefined) {
+      var appMarker = window.location.pathname.lastIndexOf('/app/');
+      prefix = appMarker >= 0 ? window.location.pathname.slice(0, appMarker) : '';
+    }
+    return String(prefix || '').replace(/\/+$/, '') + path;
+  }
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
@@ -53,20 +70,16 @@
     state.depsPromise = Promise.resolve()
       .then(function () {
         if (window.marked) return;
-        return loadScript('/app/vendor/marked.min.js?v=1');
+        return loadScript(appPath('/app/vendor/marked.min.js?v=1'));
       })
       .then(function () {
         if (window.DOMPurify) return;
-        return loadScript('/app/vendor/purify.min.js?v=1');
+        return loadScript(appPath('/app/vendor/purify.min.js?v=1'));
       })
       .then(function () {
         if (window.marked) window.marked.setOptions({ gfm: true, breaks: true });
       });
     return state.depsPromise;
-  }
-
-  function authHeaders() {
-    return state.token ? { 'Authorization': 'Bearer ' + state.token } : {};
   }
 
   function injectCss() {
@@ -175,7 +188,28 @@
   function dom(id) { return document.getElementById(id); }
 
   function renderMarkdown(md) {
-    return window.DOMPurify.sanitize(window.marked.parse(String(md || '')));
+    var sanitized = window.DOMPurify.sanitize(window.marked.parse(String(md || '')), {
+      USE_PROFILES: { html: true }
+    });
+    var template = document.createElement('template');
+    template.innerHTML = sanitized;
+    Array.prototype.slice.call(template.content.querySelectorAll('a[href],img[src]')).forEach(function (element) {
+      var attribute = element.tagName === 'A' ? 'href' : 'src';
+      if (!isSafeHelpUrl(element.getAttribute(attribute))) element.removeAttribute(attribute);
+      if (element.tagName === 'A' && element.getAttribute('target') === '_blank') {
+        element.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+    return template.innerHTML;
+  }
+
+  function isSafeHelpUrl(rawUrl) {
+    try {
+      var parsed = new URL(String(rawUrl || '').trim(), window.location.origin);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch (_) {
+      return false;
+    }
   }
 
   function escapeRegExp(value) {
@@ -183,7 +217,25 @@
   }
 
   function stripHtml(html) {
-    return String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    var template = document.createElement('template');
+    template.innerHTML = window.DOMPurify.sanitize(String(html || ''), { USE_PROFILES: { html: true } });
+    return String(template.content.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function appendHighlighted(parent, text, expr) {
+    var value = String(text || '');
+    var offset = 0;
+    var match;
+    expr.lastIndex = 0;
+    while ((match = expr.exec(value)) !== null) {
+      parent.appendChild(document.createTextNode(value.slice(offset, match.index)));
+      var mark = document.createElement('mark');
+      mark.textContent = match[0];
+      parent.appendChild(mark);
+      offset = match.index + match[0].length;
+      if (!match[0].length) expr.lastIndex += 1;
+    }
+    parent.appendChild(document.createTextNode(value.slice(offset)));
   }
 
   function slugifyText(value) {
@@ -253,11 +305,20 @@
     }
     var expr;
     try { expr = new RegExp('(' + escapeRegExp(term) + ')', 'gi'); } catch (_) { return; }
-    dom('pbgui-shared-help-content').innerHTML = state.rawHtml.replace(/(<[^>]+>)|([^<]+)/g, function (_, tag, text) {
-      if (tag) return tag;
-      return text.replace(expr, function (match) { return '<mark>' + match + '</mark>'; });
+    var content = dom('pbgui-shared-help-content');
+    content.innerHTML = state.rawHtml;
+    var walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+    var textNodes = [];
+    var node;
+    while ((node = walker.nextNode())) textNodes.push(node);
+    textNodes.forEach(function (textNode) {
+      expr.lastIndex = 0;
+      if (!expr.test(textNode.nodeValue || '')) return;
+      var fragment = document.createDocumentFragment();
+      appendHighlighted(fragment, textNode.nodeValue || '', expr);
+      textNode.parentNode.replaceChild(fragment, textNode);
     });
-    state.searchMarks = Array.prototype.slice.call(dom('pbgui-shared-help-content').querySelectorAll('mark'));
+    state.searchMarks = Array.prototype.slice.call(content.querySelectorAll('mark'));
     updateSearchCount();
     if (state.searchMarks.length) gotoMark(0);
   }
@@ -272,7 +333,7 @@
       callback('');
       return;
     }
-    fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + state.lang, { headers: authHeaders() })
+    fetch(appPath('/api/help/content?file=') + encodeURIComponent(topic.file) + '&lang=' + state.lang, { credentials: 'same-origin' })
       .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
       .then(function (data) {
         state.topicCache[index] = renderMarkdown(data.content || '');
@@ -293,26 +354,32 @@
       return;
     }
     dom('pbgui-shared-help-search-count').textContent = results.length + (results.length === 1 ? ' topic' : ' topics');
-    var html = '<div class="pbgui-shared-help-gs-results">';
+    var container = document.createElement('div');
+    container.className = 'pbgui-shared-help-gs-results';
     results.forEach(function (result) {
-      html += '<div class="pbgui-shared-help-gs-item" data-idx="' + result.idx + '">';
-      html += '<div class="pbgui-shared-help-gs-topic">' + result.title + '</div>';
+      var item = document.createElement('div');
+      item.className = 'pbgui-shared-help-gs-item';
+      item.dataset.idx = String(result.idx);
+      var title = document.createElement('div');
+      title.className = 'pbgui-shared-help-gs-topic';
+      title.textContent = String(result.title || '');
+      item.appendChild(title);
       result.snippets.forEach(function (snippet) {
-        html += '<div class="pbgui-shared-help-gs-snip">...' + snippet.replace(expr, '<mark>$1</mark>') + '...</div>';
+        var snippetElement = document.createElement('div');
+        snippetElement.className = 'pbgui-shared-help-gs-snip';
+        appendHighlighted(snippetElement, '...' + snippet + '...', expr);
+        item.appendChild(snippetElement);
       });
-      html += '</div>';
-    });
-    html += '</div>';
-    dom('pbgui-shared-help-content').innerHTML = html;
-    Array.prototype.slice.call(dom('pbgui-shared-help-content').querySelectorAll('.pbgui-shared-help-gs-item')).forEach(function (item) {
       item.addEventListener('click', function () {
-        var idx = parseInt(item.getAttribute('data-idx'), 10);
+        var idx = parseInt(item.dataset.idx, 10);
         dom('pbgui-shared-help-search-global').checked = false;
         state.globalMode = false;
         dom('pbgui-shared-help-search').placeholder = 'Search in topic...';
         loadTopic(idx);
       });
+      container.appendChild(item);
     });
+    dom('pbgui-shared-help-content').replaceChildren(container);
   }
 
   function showGlobalResults(term) {
@@ -381,7 +448,7 @@
     state.searchIndex = -1;
     dom('pbgui-shared-help-search-count').textContent = '';
     dom('pbgui-shared-help-content').innerHTML = '<div class="pbgui-shared-help-loading">Loading...</div>';
-    fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + state.lang, { headers: authHeaders() })
+    fetch(appPath('/api/help/content?file=') + encodeURIComponent(topic.file) + '&lang=' + state.lang, { credentials: 'same-origin' })
       .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
       .then(function (data) {
         if (requestSeq !== state.topicRequestSeq) return;
@@ -408,7 +475,7 @@
     state.currentKeyword = String(keyword || 'overview');
     state.pendingAnchor = String(anchor || '');
     dom('pbgui-shared-help-toc-list').innerHTML = '<div class="pbgui-shared-help-loading">Loading...</div>';
-    fetch('/api/help/index?lang=' + state.lang, { headers: authHeaders() })
+    fetch(appPath('/api/help/index?lang=') + state.lang, { credentials: 'same-origin' })
       .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
       .then(function (data) {
         if (requestSeq !== state.indexRequestSeq) return;
@@ -539,7 +606,6 @@
 
   function openHelp(keyword, options) {
     options = options || {};
-    state.token = String(options.token !== undefined ? options.token : (window.TOKEN || ''));
     ensureDom();
     syncLangButtons();
     return ensureDeps().then(function () {
