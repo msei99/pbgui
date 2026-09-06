@@ -12658,6 +12658,7 @@ async function backtestSelectedSweepHoldouts() {
   if (includeHoldouts && !state.paretoSweepEnabled && !includeFullTimerange) {
     throw new Error('The selected result has no Sweep Holdout plan.');
   }
+  var validationBatchId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   var queueItems = [];
   var missingHoldouts = 0;
   for (var index = 0; index < selectedPaths.length; index++) {
@@ -12669,6 +12670,23 @@ async function backtestSelectedSweepHoldouts() {
     var holdouts = Array.isArray(sweep.holdout_scenarios) ? sweep.holdout_scenarios : [];
     var backtest = payload.config && payload.config.backtest || {};
     var trainingScenarios = Array.isArray(backtest.scenarios) ? backtest.scenarios : [];
+    var validationGroupId = optimizeEditorAdapter.isV8 ? validationBatchId + ':' + index : '';
+    var validationGroupLabel = String(item.name || 'Pareto candidate');
+    var markValidationConfig = function(config, itemLabel) {
+      if (!validationGroupId) return config;
+      var pbgui = config.pbgui && typeof config.pbgui === 'object' && !Array.isArray(config.pbgui)
+        ? config.pbgui
+        : {};
+      config.pbgui = pbgui;
+      pbgui.backtest_result_group = {
+        schema_version: 1,
+        kind: 'optimize_validate',
+        id: validationGroupId,
+        label: validationGroupLabel,
+        item: String(itemLabel || '')
+      };
+      return config;
+    };
     if (includeTraining && !trainingScenarios.length) {
       throw new Error('Sweep training dates are unavailable for ' + (item.name || 'candidate') + '.');
     }
@@ -12682,7 +12700,10 @@ async function backtestSelectedSweepHoldouts() {
         var trainingName = String(item.name || 'pareto') + '_' + trainingLabel;
         queueItems.push({
           name: trainingName,
-          config: extractConfigSections(buildSweepHoldoutBacktestConfig(payload.config, training, trainingName)),
+          config: extractConfigSections(markValidationConfig(
+            buildSweepHoldoutBacktestConfig(payload.config, training, trainingName),
+            trainingLabel
+          )),
           override_configs: payload.override_configs,
           preserve_timerange: true,
           preserve_exchanges: true
@@ -12697,7 +12718,10 @@ async function backtestSelectedSweepHoldouts() {
         var draftName = String(item.name || 'pareto') + '_' + holdoutLabel;
         queueItems.push({
           name: draftName,
-          config: extractConfigSections(buildSweepHoldoutBacktestConfig(payload.config, holdout, draftName)),
+          config: extractConfigSections(markValidationConfig(
+            buildSweepHoldoutBacktestConfig(payload.config, holdout, draftName),
+            holdoutLabel
+          )),
           override_configs: payload.override_configs,
           preserve_timerange: true,
           preserve_exchanges: true
@@ -12708,7 +12732,10 @@ async function backtestSelectedSweepHoldouts() {
       var fullRangeName = String(item.name || 'pareto') + '_full_timerange';
       queueItems.push({
         name: fullRangeName,
-        config: extractConfigSections(buildSweepFullTimerangeBacktestConfig(payload.config, fullRangeName)),
+        config: extractConfigSections(markValidationConfig(
+          buildSweepFullTimerangeBacktestConfig(payload.config, fullRangeName),
+          'full_timerange'
+        )),
         override_configs: payload.override_configs,
         preserve_timerange: true,
         preserve_exchanges: true

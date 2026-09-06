@@ -7,6 +7,7 @@ import copy
 import csv
 import datetime
 import gzip
+import hashlib
 import json
 import math
 import multiprocessing
@@ -1256,6 +1257,71 @@ def _result_config(result_dir: Path) -> dict:
     return {}
 
 
+def _result_group(config: dict) -> dict | None:
+    """Return bounded PBGui grouping metadata for an Optimize Validate result."""
+    pbgui = config.get("pbgui") if isinstance(config.get("pbgui"), dict) else {}
+    raw = pbgui.get("backtest_result_group")
+    if not isinstance(raw, dict) or raw.get("kind") != "optimize_validate":
+        return None
+    schema_version = raw.get("schema_version")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version != 1:
+        return None
+
+    def bounded_text(value: object, limit: int) -> str:
+        if not isinstance(value, str):
+            return ""
+        text = value.strip()
+        if not text or any(ord(char) < 32 for char in text):
+            return ""
+        return text[:limit]
+
+    group_id = bounded_text(raw.get("id"), 160)
+    label = bounded_text(raw.get("label"), 128)
+    item = bounded_text(raw.get("item"), 128)
+    if not group_id or not label:
+        return None
+    result = {"kind": "optimize_validate", "id": group_id, "label": label}
+    if item:
+        result["item"] = item
+    return result
+
+
+def _derived_optimize_result_group(config: dict, relative_parts: tuple[str, ...]) -> dict | None:
+    """Derive grouping for Optimize candidate results written without PBGui metadata."""
+    if not relative_parts:
+        return None
+    source_name = relative_parts[0]
+    candidate = source_name[:64].lower()
+    if len(candidate) != 64 or any(char not in "0123456789abcdef" for char in candidate):
+        return None
+    suffix = source_name[64:]
+    if suffix and not suffix.startswith(("_train_", "_holdout_", "_full_timerange")):
+        return None
+
+    identity = copy.deepcopy(config)
+    identity.pop("pbgui", None)
+    backtest = identity.get("backtest")
+    if isinstance(backtest, dict):
+        for key in ("start_date", "end_date", "base_dir", "suite_enabled", "scenarios", "reducer", "aggregate"):
+            backtest.pop(key, None)
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    fingerprint = hashlib.sha256(encoded).hexdigest()[:16]
+
+    item = suffix.removeprefix("_")
+    if not item and "suite_runs" in relative_parts:
+        suite_index = relative_parts.index("suite_runs")
+        if len(relative_parts) > suite_index + 2:
+            item = relative_parts[suite_index + 2]
+    if not item:
+        item = "full_timerange"
+    return {
+        "kind": "optimize_validate",
+        "id": f"derived:{candidate}:{fingerprint}",
+        "label": candidate,
+        "item": item[:128],
+    }
+
+
 def _sanitize_optimize_preset_name(value: object, *, default: str) -> str:
     """Return a filesystem-safe PB8 optimize preset name."""
     name = str(value or "").strip() or default
@@ -1480,6 +1546,9 @@ def _list_results(
             parts = relative.parts
             result_dir = resolved.parent
             config = _result_config(result_dir)
+            result_group = _result_group(config) or (
+                _derived_optimize_result_group(config, parts) if not legacy else None
+            )
             backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
             live = config.get("live") if isinstance(config.get("live"), dict) else {}
             approved = live.get("approved_coins") if isinstance(live.get("approved_coins"), dict) else {}
@@ -1602,6 +1671,7 @@ def _list_results(
                     "pos_long": _bot_risk_value(config, "long", "n_positions"),
                     "pos_short": _bot_risk_value(config, "short", "n_positions"),
                     "liquidated": bool(analysis.get("liquidated", False)),
+                    **({"result_group": result_group} if result_group else {}),
                 }
             )
         except (OSError, RuntimeError, ValueError) as exc:

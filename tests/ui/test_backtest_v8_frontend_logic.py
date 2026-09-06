@@ -749,7 +749,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
     shell_source = (ROOT / "frontend" / "js" / "backtest_shell.js").read_text(encoding="utf-8")
     adapter_source = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
 
-    assert '/app/css/backtest_shell.css?v=3' in v7_source
+    assert '/app/css/backtest_shell.css?v=4' in v7_source
     assert '/app/js/backtest_shell.js?v=5' in v7_source
     assert '/app/js/backtest_editor_adapter.js?v=12' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
@@ -2125,6 +2125,53 @@ def test_backtest_v8_results_render_strategy_without_changing_v7_rows() -> None:
     )
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_optimize_validation_results_render_as_collapsible_candidate_groups() -> None:
+    """PB8 Optimize validation members stay adjacent behind one collapsible header."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("resultGroupKey", "_renderResultsTableInto")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const window = {{}};
+        let _activeResultsCtx = null;
+        const _selectedResultPaths = new Set();
+        const _expandedResultGroups = new Set();
+        const backtestEditorAdapter = {{version: 'v8'}};
+        const esc = value => String(value == null ? '' : value)
+          .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+        const fmt = value => String(value == null ? '' : value);
+        const fmtDate = value => String(value || '');
+        const BACKTEST_RESULT_COLUMN_DEFINITIONS = [];
+        {functions}
+        const rth = label => '<th>' + label + '</th>';
+        const group = {{kind: 'optimize_validate', id: 'batch:0', label: '<candidate>'}};
+        const data = [
+          {{backtest_version: 'v8', config_name: 'candidate_holdout', result_name: 'a', path: '/group-a', result_group: group}},
+          {{backtest_version: 'v8', config_name: 'solo', result_name: 'run', path: '/solo'}},
+          {{backtest_version: 'v8', config_name: 'candidate_full', result_name: 'b', path: '/group-b', result_group: group}}
+        ];
+        const host = {{innerHTML: ''}};
+        _renderResultsTableInto(host, data, null, rth, {{showVersion: true, groupValidation: true}});
+        assert.equal((host.innerHTML.match(/result-group-row/g) || []).length, 1);
+        assert.equal((host.innerHTML.match(/class="result-group-member" hidden/g) || []).length, 2);
+        assert.match(host.innerHTML, /&lt;candidate&gt;/);
+        assert.ok(host.innerHTML.indexOf('/group-a') < host.innerHTML.indexOf('/group-b'));
+        assert.ok(host.innerHTML.indexOf('/group-b') < host.innerHTML.indexOf('/solo'));
+
+        _expandedResultGroups.add(resultGroupKey(data[0]));
+        _renderResultsTableInto(host, data, null, rth, {{showVersion: true, groupValidation: true}});
+        assert.doesNotMatch(host.innerHTML, /class="result-group-member" hidden/);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "groupValidation: true" in source
+    assert "tbody tr[data-path]:not([hidden])" in source
 
 
 def test_backtest_archive_enables_strategy_for_v8_rows() -> None:

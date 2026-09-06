@@ -1482,6 +1482,15 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
                     "strategy_kind": "ema_anchor",
                     "approved_coins": {"long": ["BTC"], "short": ["ETH"]},
                 },
+                "pbgui": {
+                    "backtest_result_group": {
+                        "schema_version": 1,
+                        "kind": "optimize_validate",
+                        "id": "validation-123:0",
+                        "label": "candidate-a",
+                        "item": "holdout_01",
+                    }
+                },
             }
         ),
         encoding="utf-8",
@@ -1515,6 +1524,64 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
     assert results[0]["strategy"] == "ema_anchor"
     assert results[0]["twe_long"] == 2.0
     assert results[0]["pos_long"] == 6
+    assert results[0]["result_group"] == {
+        "kind": "optimize_validate",
+        "id": "validation-123:0",
+        "label": "candidate-a",
+        "item": "holdout_01",
+    }
+
+
+def test_results_derive_optimize_candidate_groups_without_pbgui_metadata(tmp_path, monkeypatch) -> None:
+    """Historical Suite, Holdout, and Full results group by candidate and strategy identity."""
+    root = tmp_path / "pb8" / "backtests" / "pbgui"
+    candidate = "d38a64d850004376ebe771dc927be6c0c849cebbfd93a743ba8afc2a0a036482"
+    common = {
+        "backtest": {"starting_balance": 1000, "exchanges": ["hyperliquid"]},
+        "bot": {"long": {"risk": {"total_wallet_exposure_limit": 6.55}}},
+        "live": {"strategy_kind": "trailing_martingale", "approved_coins": {}},
+    }
+
+    def write_result(relative: Path, *, start: str, end: str, twe: float = 6.55) -> Path:
+        """Write one minimal PB8 result with period-specific orchestration fields."""
+        result_dir = root / relative
+        result_dir.mkdir(parents=True)
+        config = copy.deepcopy(common)
+        config["backtest"].update({"base_dir": f"backtests/pbgui/{relative.parts[0]}", "start_date": start, "end_date": end})
+        config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = twe
+        (result_dir / "analysis.json").write_text(json.dumps({"gain_usd": 1.2}), encoding="utf-8")
+        (result_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+        return result_dir / "analysis.json"
+
+    suite = write_result(
+        Path(candidate) / "suite_runs" / "2026-08-31T21_19_57" / "train_05_20260303_90d" / "hyperliquid" / "run-suite",
+        start="2026-03-03",
+        end="2026-05-31",
+    )
+    holdout = write_result(
+        Path(f"{candidate}_holdout_01") / "hyperliquid" / "run-holdout",
+        start="2026-06-01",
+        end="2026-08-31",
+    )
+    full = write_result(
+        Path(candidate) / "hyperliquid" / "run-full",
+        start="2020-03-03",
+        end="2026-09-01",
+    )
+    changed = write_result(
+        Path(candidate) / "hyperliquid" / "run-changed",
+        start="2020-03-03",
+        end="2026-09-01",
+        twe=5.0,
+    )
+    monkeypatch.setattr(backtest_v8, "_results_root", lambda: root)
+
+    by_path = {item["path"]: item for item in backtest_v8._list_results([suite, holdout, full, changed])}
+
+    grouped = [by_path[str(path.parent)]["result_group"] for path in (suite, holdout, full)]
+    assert len({group["id"] for group in grouped}) == 1
+    assert [group["item"] for group in grouped] == ["train_05_20260303_90d", "holdout_01", "full_timerange"]
+    assert by_path[str(changed.parent)]["result_group"]["id"] != grouped[0]["id"]
 
 
 def test_results_support_newest_first_pagination_and_config_filter(tmp_path, monkeypatch) -> None:

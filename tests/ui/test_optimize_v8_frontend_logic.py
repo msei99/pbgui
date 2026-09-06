@@ -440,7 +440,7 @@ def test_sweep_holdout_both_mode_queues_holdout_and_continuous_jobs() -> None:
           paretoSweepEnabled: true,
           paretos: [{{path: '/candidate.json', name: 'candidate'}}]
         }};
-        const optimizeEditorAdapter = {{paretoFilePath: path => path}};
+        const optimizeEditorAdapter = {{isV8: true, paretoFilePath: path => path}};
         const el = id => id === 'holdout-validation-mode'
           ? {{value: 'holdout_and_full_timerange'}}
           : null;
@@ -472,6 +472,11 @@ def test_sweep_holdout_both_mode_queues_holdout_and_continuous_jobs() -> None:
           assert.equal(queued[0].config.backtest.start_date, '2026-06-01');
           assert.equal(queued[1].config.backtest.start_date, '2024-01-01');
           assert.equal(queued[0].override_configs['HYPE.json'].bot.constructor, Object);
+          const groups = queued.map(item => item.config.pbgui.backtest_result_group);
+          assert.equal(groups[0].kind, 'optimize_validate');
+          assert.equal(groups[0].id, groups[1].id);
+          assert.equal(groups[0].label, 'candidate');
+          assert.deepEqual(groups.map(group => group.item), ['holdout_01', 'full_timerange']);
         }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
         """
     )
@@ -498,7 +503,7 @@ def test_all_timeranges_validation_queues_training_holdout_and_full_jobs() -> No
           selectedParetos: new Set(['/candidate.json']), paretoSweepEnabled: true,
           paretos: [{{path: '/candidate.json', name: 'candidate'}}]
         }};
-        const optimizeEditorAdapter = {{paretoFilePath: path => path}};
+        const optimizeEditorAdapter = {{isV8: true, paretoFilePath: path => path}};
         const el = id => id === 'holdout-validation-mode' ? {{value: 'all_timeranges'}} : null;
         const normalizeParetoBacktestPayload = data => ({{config: data.config, override_configs: data.override_configs}});
         const extractConfigSections = config => config;
@@ -529,6 +534,11 @@ def test_all_timeranges_validation_queues_training_holdout_and_full_jobs() -> No
           assert.equal(queued.every(item => item.preserve_timerange === true), true);
           assert.equal(queued.every(item => item.preserve_exchanges === true), true);
           assert.equal(queued.every(item => JSON.stringify(item.config.backtest.exchanges) === '["binance","bybit"]'), true);
+          const groupIds = new Set(queued.map(item => item.config.pbgui.backtest_result_group.id));
+          assert.equal(groupIds.size, 1);
+          assert.deepEqual(queued.map(item => item.config.pbgui.backtest_result_group.item), [
+            'train_01', 'train_02', 'holdout_01', 'full_timerange'
+          ]);
         }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
         """
     )
@@ -550,7 +560,7 @@ def test_full_timerange_validation_works_without_sweep_holdouts() -> None:
           selectedParetos: new Set(['/candidate.json']), paretoSweepEnabled: false,
           paretos: [{{path: '/candidate.json', name: 'candidate'}}]
         }};
-        const optimizeEditorAdapter = {{paretoFilePath: path => path}};
+        const optimizeEditorAdapter = {{isV8: true, paretoFilePath: path => path}};
         const el = id => id === 'holdout-validation-mode' ? {{value: 'full_timerange'}} : null;
         const normalizeParetoBacktestPayload = data => ({{config: data.config, override_configs: {{}}}});
         const extractConfigSections = config => config;
@@ -566,6 +576,7 @@ def test_full_timerange_validation_works_without_sweep_holdouts() -> None:
           assert.equal(queued.length, 1);
           assert.equal(queued[0].name, 'candidate_full_timerange');
           assert.equal(queued[0].config.backtest.start_date, '2024-01-01');
+          assert.equal(queued[0].config.pbgui.backtest_result_group.kind, 'optimize_validate');
         }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
         """
     )

@@ -47,6 +47,15 @@ button, input, select, textarea { font-family: var(--font); }
 .tbl tr.selected td:first-child { border-left: 3px solid var(--accent); }
 .tbl td.actions-cell { white-space: nowrap; overflow: visible; padding: 4px 6px; }
 .sort-arrow { margin-left: 4px; font-size: var(--fs-xs); }
+.tbl tr.result-group-row td { padding: 0; max-width: none; overflow: visible; background: rgba(77,166,255,.07); border-bottom-color: rgba(77,166,255,.28); }
+.tbl tr.result-group-row:hover td { background: rgba(77,166,255,.11); }
+.result-group-toggle { width: 100%; display: flex; align-items: center; gap: var(--sp-sm); padding: 8px 10px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.result-group-toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.result-group-chevron { width: 12px; color: var(--accent); font-size: var(--fs-xs); }
+.result-group-kind { color: var(--accent); font-size: var(--fs-xs); font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.result-group-toggle strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-group-count { flex: none; margin-left: auto; color: var(--text-dim); font-size: var(--fs-xs); }
+.tbl tr.result-group-member td:first-child { padding-left: 30px; }
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: var(--fs-xs); font-weight: 600; letter-spacing: .3px; }
 .badge-queued { background: rgba(160,164,171,.15); color: var(--text-dim); }

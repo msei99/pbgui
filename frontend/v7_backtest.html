@@ -721,7 +721,7 @@ textarea.json-invalid:focus {
 .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
-<link rel="stylesheet" href="/app/css/backtest_shell.css?v=3">
+<link rel="stylesheet" href="/app/css/backtest_shell.css?v=4">
 </head>
 <body>
 
@@ -6080,6 +6080,22 @@ function fetchCSV(path, file, result) {
 
 /* ── Results table — icon buttons + row-click selection ── */
 var _resSort = 'modified', _resSortAsc = false;
+var _expandedResultGroups = new Set();
+
+function resultGroupKey(result) {
+  var group = result && result.result_group;
+  if (!group || group.kind !== 'optimize_validate' || !group.id) return '';
+  return String(result.backtest_version || '') + ':' + String(group.id);
+}
+
+function toggleResultGroup(button) {
+  var key = String(button && button.dataset && button.dataset.resultGroupKey || '');
+  if (!key) return;
+  if (_expandedResultGroups.has(key)) _expandedResultGroups.delete(key);
+  else _expandedResultGroups.add(key);
+  renderResults();
+}
+
 function setResSort(col) {
   if (_resSort === col) _resSortAsc = !_resSortAsc;
   else { _resSort = col; _resSortAsc = false; }
@@ -6170,6 +6186,16 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     return;
   }
 
+  var validationGroups = new Map();
+  if (options.groupValidation) {
+    data.forEach(function(result, index) {
+      var key = resultGroupKey(result);
+      if (!key) return;
+      if (!validationGroups.has(key)) validationGroups.set(key, { indices: [], result: result });
+      validationGroups.get(key).indices.push(index);
+    });
+  }
+
   /* Columns: Version | Backtest Name | Strategy | Exch. | Result Time | exact metrics | balances | TWE | POS | Actions */
   var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
     (showVersion && hasColumn('backtest_version') ? rthFn('Version', 'backtest_version') : '') +
@@ -6194,7 +6220,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     '\x3Cth style="text-align:center">Actions\x3C/th>' +
     '\x3C/tr>\x3C/thead>\x3Ctbody>';
 
-  data.forEach(function(r, i) {
+  function appendResultRow(r, i, grouped, hidden) {
     r = r || {};
     var btName = r.display_name || (r.config_name + '/' + (r.exchange_dir || '') + '/' + r.result_name);
     var coinsText = r.coins_text || (Array.isArray(r.coins) ? r.coins.join(', ') : '');
@@ -6203,7 +6229,12 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     var convertAction = options.allowV8Convert && r.backtest_version === 'v7'
       ? '\x3Cbutton class="icon-btn" onclick="convertResultToV8(' + i + ')" title="Convert this V7 result config to V8">V8\x3C/button>'
       : '';
-    html += '\x3Ctr data-idx="' + i + '" data-path="' + esc(r.path) + '"' + (_selectedResultPaths.has(r.path) ? ' class="selected"' : '') + liqStyle + '>' +
+    var rowClasses = [];
+    if (_selectedResultPaths.has(r.path)) rowClasses.push('selected');
+    if (grouped) rowClasses.push('result-group-member');
+    html += '\x3Ctr data-idx="' + i + '" data-path="' + esc(r.path) + '"' +
+      (rowClasses.length ? ' class="' + rowClasses.join(' ') + '"' : '') +
+      (hidden ? ' hidden' : '') + liqStyle + '>' +
       (showVersion && hasColumn('backtest_version') ? '\x3Ctd>PB' + esc((r.backtest_version || '').toUpperCase()) + '\x3C/td>' : '') +
       '\x3Ctd title="' + esc(btName) + esc(liqTitle) + '" style="max-width:250px">' + (r.liquidated ? '\x3Cspan style="color:var(--red)" title="Liquidated">\u26a0\ufe0f\x3C/span> ' : '') + esc(btName) + '\x3C/td>' +
       (showStrategy && hasColumn('strategy') ? '\x3Ctd class="mono">' + esc(r.strategy || '-') + '\x3C/td>' : '') +
@@ -6232,6 +6263,35 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
         convertAction +
       '\x3C/td>' +
       '\x3C/tr>';
+  }
+
+  var renderedGroups = new Set();
+  data.forEach(function(r, i) {
+    var groupKey = options.groupValidation ? resultGroupKey(r) : '';
+    var group = groupKey ? validationGroups.get(groupKey) : null;
+    if (!group || group.indices.length < 2) {
+      appendResultRow(r, i, false, false);
+      return;
+    }
+    if (renderedGroups.has(groupKey)) return;
+    renderedGroups.add(groupKey);
+    var expanded = _expandedResultGroups.has(groupKey);
+    var resultGroup = group.result.result_group || {};
+    var groupLabel = resultGroup.label || group.result.config_name || 'Pareto candidate';
+    var countLabel = group.indices.length + (group.indices.length === 1 ? ' result' : ' results');
+    html += '\x3Ctr class="result-group-row">' +
+      '\x3Ctd colspan="99">' +
+        '\x3Cbutton type="button" class="result-group-toggle" data-result-group-key="' + esc(groupKey) + '"' +
+          ' aria-expanded="' + (expanded ? 'true' : 'false') + '" onclick="toggleResultGroup(this)">' +
+          '\x3Cspan class="result-group-chevron" aria-hidden="true">' + (expanded ? '▼' : '▶') + '\x3C/span>' +
+          '\x3Cspan class="result-group-kind">Optimize validation\x3C/span>' +
+          '\x3Cstrong>' + esc(groupLabel) + '\x3C/strong>' +
+          '\x3Cspan class="result-group-count">' + esc(countLabel) + '\x3C/span>' +
+        '\x3C/button>' +
+      '\x3C/td>\x3C/tr>';
+    group.indices.forEach(function(memberIndex) {
+      appendResultRow(data[memberIndex], memberIndex, true, !expanded);
+    });
   });
   html += '\x3C/tbody>\x3C/table>';
   el.innerHTML = html;
@@ -6270,7 +6330,7 @@ function renderResults() {
       return 0;
     });
 
-    _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, showStrategy: true, allowV8Convert: !backtestEditorAdapter.isV8, columnContext: 'results' });
+    _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, showStrategy: true, allowV8Convert: !backtestEditorAdapter.isV8, groupValidation: true, columnContext: 'results' });
   } catch (e) {
     if (el) el.innerHTML = '\x3Cdiv class="empty-state">Failed to render results: ' + esc(e.message || e) + '\x3C/div>';
     toast('Render results failed: ' + (e.message || e), 'err');
@@ -6401,7 +6461,7 @@ function setResultRowSelection(row, selected) {
 
 (function() {
   function rowsOfRes() {
-    return Array.from(document.querySelectorAll('#results-list .tbl tbody tr'));
+    return Array.from(document.querySelectorAll('#results-list .tbl tbody tr[data-path]:not([hidden])'));
   }
   function rowIdxAtY(rows, y) {
     var idx = 0;
@@ -6424,7 +6484,7 @@ function setResultRowSelection(row, selected) {
   document.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
     var tr = e.target.closest('#results-list .tbl tbody tr');
-    if (!tr || e.target.closest('.actions-cell')) return;
+    if (!tr || !tr.dataset.path || e.target.closest('.actions-cell')) return;
     e.preventDefault(); /* prevent text-selection / drag cursor */
     _rowDragStart = { tr: tr, y: e.clientY };
     _rowDragSelecting = false;
@@ -6666,23 +6726,23 @@ function deselectAllConfigs() {
 }
 
 function selectAllResults() {
-  document.querySelectorAll('#results-list .tbl tbody tr').forEach(function(tr) { setResultRowSelection(tr, true); });
+  document.querySelectorAll('#results-list .tbl tbody tr[data-path]').forEach(function(tr) { setResultRowSelection(tr, true); });
 }
 
 function deselectAllResults() {
   _selectedResultPaths.clear();
-  document.querySelectorAll('#results-list .tbl tbody tr').forEach(function(tr) { setResultRowSelection(tr, false); });
+  document.querySelectorAll('#results-list .tbl tbody tr[data-path]').forEach(function(tr) { setResultRowSelection(tr, false); });
 }
 
 function getSelectedResults() {
   var sel = [];
-  document.querySelectorAll('#results-list .tbl tbody tr.selected').forEach(function(tr) { sel.push(tr.dataset.path); });
+  document.querySelectorAll('#results-list .tbl tbody tr[data-path].selected').forEach(function(tr) { sel.push(tr.dataset.path); });
   return sel;
 }
 
 function setSelectedResults(paths) {
   _selectedResultPaths = new Set((paths || []).map(function(path) { return String(path || ''); }).filter(Boolean));
-  document.querySelectorAll('#results-list .tbl tbody tr').forEach(function(tr) {
+  document.querySelectorAll('#results-list .tbl tbody tr[data-path]').forEach(function(tr) {
     setResultRowSelection(tr, _selectedResultPaths.has(tr.dataset.path));
   });
 }

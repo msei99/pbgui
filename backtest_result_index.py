@@ -18,6 +18,7 @@ from secure_files import ensure_private_directory
 
 SERVICE = "BacktestResultIndex"
 _DB_NAME = "backtest_results.sqlite"
+_SUMMARY_SCHEMA_VERSION = 2
 _LOCK = threading.RLock()
 _CONFIG_NAMES = ("config.json", "analysis_config.json", "config_used.json", "backtest_config.json")
 
@@ -76,7 +77,11 @@ def _file_signature(path: Path) -> tuple[int, int, int]:
 def result_signature(analysis_path: Path) -> str:
     """Fingerprint summary-bearing files without reading their contents."""
     result_dir = analysis_path.parent
-    values = [["pbgui_version", PBGUI_VERSION], [analysis_path.name, *_file_signature(analysis_path)]]
+    values = [
+        ["pbgui_version", PBGUI_VERSION],
+        ["summary_schema", _SUMMARY_SCHEMA_VERSION],
+        [analysis_path.name, *_file_signature(analysis_path)],
+    ]
     for name in _CONFIG_NAMES:
         candidate = result_dir / name
         signature = _file_signature(candidate)
