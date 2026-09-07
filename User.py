@@ -3,17 +3,20 @@ import socket
 import hashlib
 import os
 import uuid
+from functools import wraps
 from pathlib import Path
 from datetime import datetime, timezone
 from api_key_state import strip_runtime_extra
 from logging_helpers import human_log as _log
-from pb7_api_keys import PB7ApiKeysMergeWriter, exchange_payload
+from pb7_api_keys import PB7ApiKeysConflictError, PB7ApiKeysMergeWriter, exchange_payload
+from file_lock import advisory_file_lock
 import pbgui_purefunc
 from pbgui_purefunc import pb7dir, PBGDIR, is_pb7_installed
 from secure_files import (
     atomic_write_private_bytes,
     ensure_private_directory,
     ensure_private_directory_tree,
+    read_regular_file_nofollow,
 )
 
 SERVICE = "User"
@@ -29,6 +32,73 @@ _API_KEY_SECRET_FIELDS = frozenset({
     "private_key",
     "privateKey",
 })
+
+
+class ApiKeysPublicationError(RuntimeError):
+    """Credentials were persisted, but publication/projection still needs retry."""
+
+
+class ApiKeysPersistenceUnavailableError(RuntimeError):
+    """The authoritative PB7 credential store is unavailable."""
+
+
+def _serialized_exchange_save(func):
+    """Keep local saves and cluster projection in one cross-process transaction."""
+    @wraps(func)
+    def wrapped(self, *args, **kwargs):
+        from master.cluster_state import default_cluster_root
+        from cluster_sync_command import _materialize_api_keys
+
+        if not is_pb7_installed() or not Path(self.api7_path).parent.is_dir():
+            raise ApiKeysPersistenceUnavailableError("PB7 is not installed/configured; credentials were not saved")
+        root = default_cluster_root(Path(PBGDIR))
+        pending = root.parent / "credentials" / "exchange_publication.pending"
+        with advisory_file_lock(Path(PBGDIR) / "data" / "api-keys" / ".write"):
+            ensure_private_directory(pending.parent)
+            result = func(self, *args, **kwargs)
+            try:
+                pending.unlink()
+                preview = _materialize_api_keys(root, write=False)
+                if preview.get("can_apply"):
+                    _materialize_api_keys(root, write=True)
+                elif preview.get("status") != "current":
+                    raise RuntimeError("Local exchange-key projection is unavailable")
+            except Exception:
+                _log(SERVICE, "Credentials saved; local exchange-key projection requires retry", level="ERROR")
+                raise ApiKeysPublicationError(
+                    "Credentials saved; local projection is pending. PBCluster will retry; reload before editing again."
+                ) from None
+            return result
+    return wrapped
+
+
+def _exchange_publication_hash(payload: dict) -> str:
+    """Identify an exchange snapshot, including its generation but excluding TradFi."""
+    return hashlib.sha256(_canonical_json_bytes(exchange_payload(payload))).hexdigest()
+
+
+def _exchange_publication_committed(intent: dict, payload: dict) -> bool:
+    """Prove a pending write committed, or reject an unrelated credential snapshot."""
+    if (
+        not isinstance(intent, dict)
+        or intent.get("version") != 1
+        or not isinstance(intent.get("before_pending"), bool)
+        or any(
+            not isinstance(intent.get(key), str)
+            or len(intent[key]) != 64
+            or any(char not in "0123456789abcdef" for char in intent[key])
+            for key in ("before_hash", "after_hash")
+        )
+        or intent["before_hash"] == intent["after_hash"]
+    ):
+        raise RuntimeError("Invalid exchange publication intent")
+    current_hash = _exchange_publication_hash(payload)
+    if current_hash == intent.get("after_hash"):
+        return True
+    if current_hash == intent.get("before_hash"):
+        return intent.get("before_pending") is True
+    raise PB7ApiKeysConflictError("Exchange publication intent conflicts with credential storage")
+
 
 class User:
     def __init__(self):
@@ -304,7 +374,9 @@ class Users:
         self.users.sort(key=lambda x: x.name)
         self._loaded_api_serial = int(self._top_level_extras.get("_api_serial") or 0)
 
+    @_serialized_exchange_save
     def save(self):
+        """Persist exchange credentials and require publication before reporting success."""
         save_users = dict(self._top_level_extras) if isinstance(self._top_level_extras, dict) else {}
 
         # Migrate old sync field names → new api field names (one-time, transparent)
@@ -357,11 +429,39 @@ class Users:
                 Path(self.api7_path),
                 Path(PBGDIR) / "data" / "credentials" / "pb7_projection.json",
             )
-            merged = writer.write_exchange_payload(
-                save_users,
-                expected_generation=self._loaded_api_serial,
-                backup_path=destination if Path(self.api7_path).exists() else None,
-            )
+            pending = writer.projection_status_path.with_name("exchange_publication.pending")
+            with writer._locked():
+                before = writer.read()
+                if int(before.get("_api_serial") or 0) != self._loaded_api_serial:
+                    raise PB7ApiKeysConflictError("Exchange API-key generation changed before save")
+                previous = (
+                    read_regular_file_nofollow(pending, pending.parent) if pending.exists() else None
+                )
+                intent = {
+                    "version": 1,
+                    "before_hash": _exchange_publication_hash(before),
+                    "after_hash": _exchange_publication_hash(save_users),
+                    "before_pending": (
+                        _exchange_publication_committed(json.loads(previous), before) if previous else False
+                    ),
+                }
+                try:
+                    atomic_write_private_bytes(pending, json.dumps(intent, indent=4).encode("utf-8"))
+                    merged = writer.write_exchange_payload(
+                        save_users,
+                        expected_generation=self._loaded_api_serial,
+                        backup_path=destination if Path(self.api7_path).exists() else None,
+                    )
+                except Exception:
+                    try:
+                        if _exchange_publication_hash(writer.read()) == intent["before_hash"]:
+                            if previous is None:
+                                pending.unlink(missing_ok=True)
+                            else:
+                                atomic_write_private_bytes(pending, previous)
+                    except Exception:
+                        _log(SERVICE, "Could not resolve failed exchange write; publication intent retained", level="ERROR")
+                    raise
             self._loaded_api_serial = int(save_users["_api_serial"])
             self._top_level_extras.update({
                 "_api_serial": save_users["_api_serial"],
@@ -369,15 +469,17 @@ class Users:
                 "_api_by": save_users["_api_by"],
             })
             _record_cluster_api_keys_update(exchange_payload(merged))
+        else:
+            raise ApiKeysPersistenceUnavailableError("PB7 is not installed/configured; credentials were not saved")
 
 
-def _record_cluster_api_keys_update(payload: dict) -> None:
-    """Record an API-key file update in Cluster Sync without blocking saves."""
+def _record_cluster_api_keys_update(payload: dict, cluster_root: Path | None = None) -> None:
+    """Publish exchange credentials, surfacing failures for durable retry."""
 
     try:
         from master.cluster_state import append_operation, default_cluster_root, ensure_local_identity, rebuild_materialized_state
 
-        cluster_root = default_cluster_root(Path(PBGDIR))
+        cluster_root = cluster_root or default_cluster_root(Path(PBGDIR))
         ensure_local_identity(cluster_root, role="master", pbname=_cluster_pbname())
         payload = exchange_payload(payload)
         raw_secret = json.dumps(payload, indent=4).encode("utf-8")
@@ -396,9 +498,14 @@ def _record_cluster_api_keys_update(payload: dict) -> None:
                 "credential_protocol_version": 2,
             },
         )
-        rebuild_materialized_state(cluster_root)
-    except Exception as exc:
-        _log(SERVICE, f"Cluster oplog update skipped for api-keys.json: {exc}", level="WARNING")
+        state = rebuild_materialized_state(cluster_root)
+        if (state.get("desired_state", {}).get("api_keys") or {}).get("secret_blob_hash") != secret_blob_hash:
+            raise RuntimeError("Published exchange credentials are not the current desired state")
+    except Exception:
+        _log(SERVICE, "Credentials saved; Cluster API-key publication requires retry", level="ERROR")
+        raise ApiKeysPublicationError(
+            "Credentials saved; cluster publication is pending. PBCluster will retry; reload before editing again."
+        ) from None
 
 
 def _redact_api_keys_payload(value):

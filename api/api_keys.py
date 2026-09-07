@@ -59,6 +59,8 @@ def _serialized_api_keys_write(func):
     """Hold the API-key transaction lock across load, validation, and save."""
     @wraps(func)
     def wrapped(*args, **kwargs):
+        from User import ApiKeysPersistenceUnavailableError, ApiKeysPublicationError
+
         lock_target = _Path(_PBGDIR) / "data" / "api-keys" / ".write"
         with advisory_file_lock(lock_target):
             try:
@@ -68,7 +70,11 @@ def _serialized_api_keys_write(func):
                     status_code=409,
                     detail="A pending API key update conflicts with credential storage",
                 ) from exc
-            return func(*args, **kwargs)
+            try:
+                return func(*args, **kwargs)
+            except (ApiKeysPersistenceUnavailableError, ApiKeysPublicationError) as exc:
+                _log(SERVICE, str(exc), level="ERROR")
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return wrapped
 
@@ -1402,10 +1408,29 @@ def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
                 setattr(user, field, value)
             raise HTTPException(status_code=409, detail="API key data changed concurrently; reload before retrying") from recovery_exc
         if committed_after_error:
-            pass
+            from User import ApiKeysPublicationError
+
+            if isinstance(exc, ApiKeysPublicationError):
+                raise exc
+            # A write can raise after replacement but before publication starts.
+            root = default_cluster_root(_Path(_PBGDIR))
+            if (root.parent / "credentials" / "exchange_publication.pending").exists():
+                from cluster_sync_command import _materialize_api_keys
+
+                try:
+                    _materialize_api_keys(root, write=True)
+                except Exception:
+                    _log(SERVICE, "Recovered credentials still require exchange publication/projection", level="ERROR")
+                    raise ApiKeysPublicationError(
+                        "Credentials saved; publication/projection is pending. PBCluster will retry; reload before editing again."
+                    ) from None
         else:
             for field, value in original_values.items():
                 setattr(user, field, value)
+            from User import ApiKeysPersistenceUnavailableError
+
+            if isinstance(exc, ApiKeysPersistenceUnavailableError):
+                raise exc
             status_code = 409 if isinstance(exc, PB7ApiKeysConflictError) else 500
             detail = "API key data changed concurrently; reload before retrying" if status_code == 409 else "Failed to update API key user"
             _log(

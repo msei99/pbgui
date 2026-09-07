@@ -15,6 +15,25 @@ from fastapi import HTTPException
 from master.cluster_state import default_cluster_root, load_operations, read_local_identity, rebuild_materialized_state
 
 
+@pytest.fixture(autouse=True)
+def isolated_api_key_paths(tmp_path, monkeypatch):
+    """Keep legacy tests and newly synchronous projection away from runtime data."""
+    import api_key_state
+    import cluster_sync_command
+    from api import api_keys
+
+    monkeypatch.setattr(user_module, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(user_module, "pb7dir", lambda: str(tmp_path / "pb7"))
+    monkeypatch.setattr(cluster_sync_command, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster_sync_command, "pb7dir", lambda: user_module.pb7dir())
+    monkeypatch.setattr(cluster_sync_command, "pb8dir", lambda: "")
+    monkeypatch.setattr(api_keys, "_PBGDIR", str(tmp_path))
+    monkeypatch.setattr(api_key_state, "_STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(api_key_state, "_LEGACY_STATE_FILE", tmp_path / "legacy.json")
+    monkeypatch.setattr(api_key_state, "_TRANSACTION_FILE", tmp_path / "transaction.json")
+    monkeypatch.setattr(api_key_state, "_API_KEY_WRITE_TARGET", tmp_path / "data/api-keys/.write")
+
+
 def test_weex_requires_passphrase_server_side(monkeypatch) -> None:
     """WEEX credentials must fail closed even when a client bypasses the browser form."""
     from api import api_keys

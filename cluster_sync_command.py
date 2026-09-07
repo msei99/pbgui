@@ -1650,6 +1650,33 @@ def _repair_local_v7_config_blobs(
 
 
 def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
+    """Serialize projection with saves and recover unpublished local credentials first."""
+
+    pending = Path(cluster_root).parent / "credentials" / "exchange_publication.pending"
+    with advisory_file_lock(Path(PBGDIR) / "data" / "api-keys" / ".write"):
+        if pending.is_symlink():
+            raise ClusterSyncCommandError("Refusing symlinked exchange publication marker")
+        if pending.exists():
+            if not write:
+                return {"ok": True, "read_only": True, "can_apply": True,
+                        "status": "pending", "action": "write",
+                        "reason": "Local exchange-key publication requires retry",
+                        "counts": {"write": 1, "current": 0, "error": 0, "missing": 0, "written": 0}}
+            from User import _exchange_publication_committed, _record_cluster_api_keys_update
+            from secure_files import read_regular_file_nofollow
+
+            _name, target, status_path = _api_keys_projection_targets(cluster_root)[0]
+            writer = PB7ApiKeysMergeWriter(target, status_path)
+            with writer._locked():
+                intent = json.loads(read_regular_file_nofollow(pending, pending.parent))
+                current = writer.read()
+                if _exchange_publication_committed(intent, current):
+                    _record_cluster_api_keys_update(exchange_payload(current), Path(cluster_root))
+                pending.unlink()
+        return _project_api_keys(cluster_root, write=write)
+
+
+def _project_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
     """Preview or merge exchange keys from the desired secret blob."""
 
     materialized = _safe_state_call(
@@ -1663,6 +1690,9 @@ def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
         plan.update({"ok": True, "read_only": True})
         return plan
     if not plan.get("can_apply"):
+        if plan.get("status") == "current":
+            plan.update({"ok": True, "read_only": False})
+            return plan
         raise ClusterSyncCommandError(str(plan.get("reason") or "api-keys materialization is not ready"))
 
     secret_hash = str(plan.get("secret_blob_hash") or "")
@@ -1676,7 +1706,9 @@ def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
         current = writer.read()
         if exchange_payload(current) == exchange_payload(source_payload):
             continue
-        changed_hl_users.update(_changed_hl_credential_users(current, source_payload))
+        # Runtime state belongs to the authoritative PB7 snapshot, not PB8 drift.
+        if projection_name == "pb7":
+            changed_hl_users.update(_changed_hl_credential_users(current, source_payload))
         backup_file = None
         if projection_name == "pb7" and not is_vps_runner and target.is_file():
             backup_dir = Path(PBGDIR) / "data" / "api-keys"

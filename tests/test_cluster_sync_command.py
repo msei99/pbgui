@@ -44,6 +44,20 @@ NODE_C = "pbgui-node-00000000-0000-4000-8000-00000000000c"
 HASH_A = "sha256:" + "a" * 64
 
 
+@pytest.fixture(autouse=True)
+def isolated_projection_paths(tmp_path, monkeypatch):
+    """Prevent default projection paths and transaction locks touching real runtimes."""
+    import api_key_state
+
+    monkeypatch.setattr(cluster_sync_command, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster_sync_command, "pb7dir", lambda: str(tmp_path / "pb7"))
+    monkeypatch.setattr(cluster_sync_command, "pb8dir", lambda: "")
+    monkeypatch.setattr(api_key_state, "_STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(api_key_state, "_LEGACY_STATE_FILE", tmp_path / "legacy.json")
+    monkeypatch.setattr(api_key_state, "_TRANSACTION_FILE", tmp_path / "transaction.json")
+    monkeypatch.setattr(api_key_state, "_API_KEY_WRITE_TARGET", tmp_path / "data/api-keys/.write")
+
+
 def _init_cluster(tmp_path: Path) -> Path:
     """Create a deterministic cluster with one historical remote member."""
 
@@ -1840,7 +1854,7 @@ def test_materialize_api_keys_preview_and_apply_writes_secret_blob(
     else:
         assert result["backup_skipped"] == "vps_runner"
         assert "backup" not in result
-        assert not (tmp_path / "data" / "api-keys").exists()
+        assert not list((tmp_path / "data" / "api-keys").glob("*.json"))
     after = run_command(root, NODE_B, "materialize-api-keys-preview")
     assert after["counts"]["current"] == 1
 
