@@ -28,12 +28,14 @@ Browser requests use the HttpOnly PBGui session cookie; the session token is nev
   - Fetches markets, updates the copy-trading cache, rebuilds mapping, and refreshes prices for the current exchange
 - `Refresh All Exchanges`
   - Runs the same workflow for all V7 exchanges
+  - If only some exchanges succeed, their new state is available immediately and the status line lists the failed exchanges; a run where every exchange fails is reported as an error
 - `Refresh CMC + Selected Exchange`
   - Reloads CMC listings and metadata, then refreshes the selected exchange so the visible table immediately uses the new CMC data
   - Shows a centered busy overlay with real percentage progress based on the completed refresh steps while the existing workflow is running
 - `Refresh CMC + All Exchanges`
   - Reloads CMC listings and metadata, then rebuilds all exchanges so every exchange mapping is aligned with the new CMC data in one run
   - Uses the same real-percentage busy overlay across the longer full rebuild workflow
+  - Uses the same partial/error summary as `Refresh All Exchanges` and retains per-exchange diagnostics for polling
 - `Matched Symbols`
   - Shows the matched main result table
 - `CMC Unmatched`
@@ -61,6 +63,7 @@ On VPS targets, readiness is secret-free capability metadata: protocol version, 
 Main filters:
 
 - Exchange
+- Quotes via a compact multi-select. Coin Data defaults to `USDT` when that quote exists; Hyperliquid defaults to both `USDC` and `USDT0`. Any quote family present in the selected exchange mapping can be selected explicitly.
 - Minimum `market_cap` updates while typing, keeps decimal input stable while editing, and uses `250` as the editor-style `+/-` step
 - Maximum `vol/mcap` updates while typing, preserves direct decimal input such as `0.` and `0,`, and makes `+/-` jump across readable rounded thresholds derived from the current exchange data instead of tiny raw-value steps
 - Tags via the same searchable chip-based multiselect used in PBv7 Run/Backtest, without checkboxes inside the dropdown
@@ -74,6 +77,7 @@ FastAPI UI improvements:
 - full-width table layout with balanced column distribution, so the page uses the available width without oversized gaps between values
 - active desktop table view expands to use the remaining window height instead of leaving empty space below the table
 - sortable table headers for matched, unmatched, and HIP-3 views
+- unavailable CMC market cap, 24-hour volume, and `vol/mcap` values are shown as `N/A` and sort after known values
 - hover tooltips for tags, notices, and long values
 - row selection with a centered floating detail panel that auto-fits its content on open when the browser window allows it, can be dragged and resized from every side and corner, shows all tags without truncation, offers a direct `Open CMC` link when a mapping exists, and uses an `X` close button instead of only showing the notice below the table
 - a single active main table view, switched from the sidebar, instead of showing matched and auxiliary tables at the same time
@@ -90,6 +94,7 @@ The page contains:
 ## Hyperliquid notes
 
 - Quote preference defaults to `USDC`, then `USDT0`
+- The default includes both quote families when both are available; selecting either quote explicitly filters matched, unmatched, and HIP-3 rows. This Coin Data view selection does not change the USDT-linear rules used by PB7/PB8 configurations.
 - If no HIP-3 symbols are found, Coin Data can auto-rebuild Hyperliquid mapping once
 - HIP-3 rows are shown separately and use the dedicated `DEX` selector; CMC-based filters such as `market_cap`, `vol/mcap`, and tags apply to matched non-HIP-3 rows
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import sys
 from typing import Optional
+import uuid
 
 from file_lock import advisory_file_lock
 from pbgui_purefunc import load_ini_snapshot, update_ini
@@ -65,6 +66,9 @@ LOG_GROUPS: dict[str, str] = {
 
 DEFAULT_ROTATE_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_ROTATE_BACKUP_COUNT = 1
+MAX_ROTATE_MAX_BYTES = 10_240 * 1024 * 1024
+MAX_ROTATE_BACKUP_COUNT = 20
+_ROTATED_LOG_RE = re.compile(r"^(?P<base>.+\.log)\.\d+$")
 MANAGED_LOG_SCOPES: dict[str, dict[str, object]] = {
     "api_console": {"label": "API console", "description": "PBApiServer.console.log", "paths": ("PBApiServer.console.log",)},
     "jobs": {"label": "Jobs", "description": "jobs/*.log", "paths": ("jobs",)},
@@ -138,6 +142,13 @@ def _normalize_rotate_key(value: str) -> str:
         return key or "default"
     except Exception:
         return "default"
+
+
+def canonical_log_lock_target(path: str | Path) -> Path:
+    """Return the current log path which owns a rotated generation's lock."""
+    target = Path(path)
+    match = _ROTATED_LOG_RE.fullmatch(target.name)
+    return target.with_name(match.group("base")) if match else target
 
 
 def _is_sensitive_key(value) -> bool:
@@ -291,7 +302,7 @@ def get_managed_scope_settings(scope_id: str) -> tuple[int, int]:
     if cfg is None:
         return DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
     key = _normalize_rotate_key(scope_id)
-    return (
+    return _bounded_rotate_settings(
         _parse_positive_int(cfg.get("logging", f"managed_{key}_max_bytes", fallback=str(default_max_bytes)), default_max_bytes),
         _parse_nonnegative_int(cfg.get("logging", f"managed_{key}_backup_count", fallback=str(default_backup_count)), default_backup_count),
     )
@@ -302,9 +313,10 @@ def set_managed_scope_settings(scope_id: str, max_bytes: int, backup_count: int)
     if scope_id not in MANAGED_LOG_SCOPES:
         raise ValueError("Unknown managed log scope")
     key = _normalize_rotate_key(scope_id)
+    max_bytes, backup_count = _bounded_rotate_settings(max_bytes, backup_count)
     _update_rotate_ini({
-        f"managed_{key}_max_bytes": str(_parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)),
-        f"managed_{key}_backup_count": str(_parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)),
+        f"managed_{key}_max_bytes": str(max_bytes),
+        f"managed_{key}_backup_count": str(backup_count),
     })
 
 
@@ -328,6 +340,14 @@ def _parse_nonnegative_int(value, default_value: int) -> int:
     return int(default_value)
 
 
+def _bounded_rotate_settings(max_bytes, backup_count) -> tuple[int, int]:
+    """Return valid rotation settings capped at supported operational limits."""
+    return (
+        min(_parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES), MAX_ROTATE_MAX_BYTES),
+        min(_parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT), MAX_ROTATE_BACKUP_COUNT),
+    )
+
+
 def get_rotate_defaults() -> tuple[int, int]:
     """Return default rotation settings (max_bytes, backup_count)."""
     try:
@@ -343,16 +363,17 @@ def get_rotate_defaults() -> tuple[int, int]:
             cfg.get('logging', 'rotate_default_backup_count', fallback=str(DEFAULT_ROTATE_BACKUP_COUNT)),
             DEFAULT_ROTATE_BACKUP_COUNT,
         )
-        return max_bytes, backup_count
+        return _bounded_rotate_settings(max_bytes, backup_count)
     except Exception:
         return DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
 
 
 def set_rotate_defaults(max_bytes: int, backup_count: int):
     """Persist default rotation settings in pbgui.ini under [logging]."""
+    max_bytes, backup_count = _bounded_rotate_settings(max_bytes, backup_count)
     _update_rotate_ini({
-        'rotate_default_max_bytes': str(_parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)),
-        'rotate_default_backup_count': str(_parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)),
+        'rotate_default_max_bytes': str(max_bytes),
+        'rotate_default_backup_count': str(backup_count),
     })
 
 
@@ -378,7 +399,7 @@ def get_rotate_settings(service: str = None, logfile: str = None) -> tuple[int, 
         scope_settings = get_managed_scope_settings(scope_id) if scope_id else (default_max_bytes, default_backup_count)
         max_bytes = _parse_positive_int(cfg.get('logging', max_option, fallback=str(scope_settings[0])), scope_settings[0])
         backup_count = _parse_nonnegative_int(cfg.get('logging', backup_option, fallback=str(scope_settings[1])), scope_settings[1])
-        return max_bytes, backup_count
+        return _bounded_rotate_settings(max_bytes, backup_count)
     except Exception:
         return default_max_bytes, default_backup_count
 
@@ -386,16 +407,17 @@ def get_rotate_settings(service: str = None, logfile: str = None) -> tuple[int, 
 def set_rotate_settings(service: str, max_bytes: int, backup_count: int):
     """Persist per-service rotation settings in pbgui.ini under [logging]."""
     key = _normalize_rotate_key(_physical_log_stem(service=service))
+    max_bytes, backup_count = _bounded_rotate_settings(max_bytes, backup_count)
     _update_rotate_ini({
-        f'rotate_{key}_max_bytes': str(_parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)),
-        f'rotate_{key}_backup_count': str(_parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)),
+        f'rotate_{key}_max_bytes': str(max_bytes),
+        f'rotate_{key}_backup_count': str(backup_count),
     })
 
 
 def trim_logfile_to_max_bytes(path: str, max_bytes: int = DEFAULT_ROTATE_MAX_BYTES):
-    """Trim `path` in place to the last `max_bytes` bytes, aligned to a newline."""
+    """Replace `path` with its last `max_bytes` bytes, aligned to a newline."""
     try:
-        with advisory_file_lock(Path(path)):
+        with advisory_file_lock(canonical_log_lock_target(path)):
             _trim_logfile_to_max_bytes_unlocked(Path(path), max_bytes)
     except Exception as exc:
         _write_fallback_error("trim logfile", exc)
@@ -404,20 +426,41 @@ def trim_logfile_to_max_bytes(path: str, max_bytes: int = DEFAULT_ROTATE_MAX_BYT
 def _trim_logfile_to_max_bytes_unlocked(path: Path, max_bytes: int) -> None:
     if not path.exists():
         return
-    max_bytes = _parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)
+    max_bytes, _ = _bounded_rotate_settings(max_bytes, DEFAULT_ROTATE_BACKUP_COUNT)
     if path.stat().st_size <= max_bytes:
         return
-    data = path.read_bytes()
+    with path.open("rb") as handle:
+        mode = os.fstat(handle.fileno()).st_mode & 0o7777
+        data = handle.read()
     tail = data[-max_bytes:]
     newline = tail.find(b'\n')
     if newline != -1 and newline + 1 < len(tail):
         tail = tail[newline + 1:]
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    _atomic_replace_log_content(path, tail, mode)
+
+
+def _atomic_replace_log_content(path: Path, content: bytes, mode: int) -> None:
+    """Durably replace one log path with unique-temp content and its prior mode."""
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    fd: Optional[int] = None
     try:
-        tmp.write_bytes(tail)
-        os.replace(tmp, path)
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as handle:
+            fd = None
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
-        tmp.unlink(missing_ok=True)
+        if fd is not None:
+            os.close(fd)
+        temp.unlink(missing_ok=True)
 
 
 def set_service_min_level(service: str, level: Optional[str]):
@@ -512,14 +555,14 @@ def rotate_logfile_if_oversize(path: str, max_bytes: int = DEFAULT_ROTATE_MAX_BY
     This function is intentionally simple and safe to call before writes.
     """
     try:
-        with advisory_file_lock(Path(path)):
+        with advisory_file_lock(canonical_log_lock_target(path)):
             _rotate_logfile_if_oversize_unlocked(Path(path), max_bytes, backup_count)
     except Exception as exc:
         _write_fallback_error("rotate logfile", exc)
 
 
 def _rotate_logfile_if_oversize_unlocked(path: Path, max_bytes: int, backup_count: int) -> None:
-    backup_count = _parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
+    max_bytes, backup_count = _bounded_rotate_settings(max_bytes, backup_count)
     _prune_rotated_generations_unlocked(path, backup_count)
     if not path.exists() or path.stat().st_size <= int(max_bytes):
         return
@@ -537,7 +580,7 @@ def _rotate_logfile_if_oversize_unlocked(path: Path, max_bytes: int, backup_coun
 
 def _prune_rotated_generations_unlocked(path: Path, backup_count: int) -> None:
     """Remove numeric generations outside the configured retention count."""
-    backup_count = _parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
+    _, backup_count = _bounded_rotate_settings(DEFAULT_ROTATE_MAX_BYTES, backup_count)
     prefix = f"{path.name}."
     for candidate in path.parent.glob(f"{path.name}.*"):
         suffix = candidate.name.removeprefix(prefix)
@@ -553,7 +596,7 @@ def rotate_managed_log_before_open(path: str | Path, scope_id: str | None = None
         raise ValueError("Path is not in a managed log scope")
     max_bytes, backup_count = get_managed_scope_settings(resolved_scope)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with advisory_file_lock(log_path):
+    with advisory_file_lock(canonical_log_lock_target(log_path)):
         _rotate_logfile_if_oversize_unlocked(log_path, max_bytes, backup_count)
     return log_path
 
@@ -567,7 +610,7 @@ def append_managed_transcript_line(path: str | Path, text: str, scope_id: str | 
     max_bytes, backup_count = get_managed_scope_settings(resolved_scope)
     line = _redact_text(text).rstrip("\r\n") + "\n"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with advisory_file_lock(log_path):
+    with advisory_file_lock(canonical_log_lock_target(log_path)):
         _rotate_logfile_if_oversize_unlocked(log_path, max_bytes, backup_count)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(line)
@@ -584,7 +627,7 @@ def purge_log_to_rotated(
     Returns (success: bool, message: str).
     """
     try:
-        with advisory_file_lock(Path(path)):
+        with advisory_file_lock(canonical_log_lock_target(path)):
             return _purge_log_to_rotated_unlocked(Path(path), max_bytes, backup_count)
     except Exception as exc:
         return False, f"Failed to purge logfile: {_redact_text(exc)}"
@@ -594,33 +637,29 @@ def _purge_log_to_rotated_unlocked(p: Path, max_bytes: int, backup_count: int):
     if not p.exists():
         return False, "Logfile does not exist"
 
-    max_bytes = _parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)
-    backup_count = _parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
-    if backup_count <= 0:
-        with p.open("r+b") as handle:
-            handle.truncate(0)
-        _prune_rotated_generations_unlocked(p, backup_count)
-        return True, f"Truncated {p.name}; rotated backups are disabled"
-
-    with p.open("rb") as handle:
-        handle.seek(max(0, p.stat().st_size - max_bytes))
+    max_bytes, backup_count = _bounded_rotate_settings(max_bytes, backup_count)
+    with p.open("r+b") as handle:
+        stat_result = os.fstat(handle.fileno())
+        mode = stat_result.st_mode & 0o7777
+        handle.seek(max(0, stat_result.st_size - max_bytes))
         content = handle.read()
-    temp = p.with_name(f".{p.name}.purge.{os.getpid()}.tmp")
-    try:
-        temp.write_bytes(content)
-        os.chmod(temp, p.stat().st_mode & 0o777)
-        _prune_rotated_generations_unlocked(p, backup_count)
-        oldest = Path(f"{p}.{backup_count}")
-        oldest.unlink(missing_ok=True)
-        for idx in range(backup_count - 1, 0, -1):
-            source = Path(f"{p}.{idx}")
-            if source.exists():
-                os.replace(source, Path(f"{p}.{idx + 1}"))
-        os.replace(temp, Path(f"{p}.1"))
-        with p.open("r+b") as handle:
-            handle.truncate(0)
-    finally:
-        temp.unlink(missing_ok=True)
+        if backup_count <= 0:
+            _prune_rotated_generations_unlocked(p, backup_count)
+        else:
+            _prune_rotated_generations_unlocked(p, backup_count)
+            oldest = Path(f"{p}.{backup_count}")
+            oldest.unlink(missing_ok=True)
+            for idx in range(backup_count - 1, 0, -1):
+                source = Path(f"{p}.{idx}")
+                if source.exists():
+                    os.replace(source, Path(f"{p}.{idx + 1}"))
+            _atomic_replace_log_content(Path(f"{p}.1"), content, mode)
+        handle.seek(0)
+        handle.truncate(0)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if backup_count <= 0:
+        return True, f"Truncated {p.name}; rotated backups are disabled"
     return True, f"Rotated {p.name} with {backup_count} backup generation(s) and truncated the current log"
 
 
@@ -757,7 +796,7 @@ def human_log(service: str, msg: str, user: str = None, tags=None, level: str = 
             Path(logfile).parent.mkdir(parents=True, exist_ok=True)
 
         rotate_max_bytes, rotate_backup_count = get_rotate_settings(service=service, logfile=logfile)
-        with advisory_file_lock(Path(logfile)):
+        with advisory_file_lock(canonical_log_lock_target(logfile)):
             _rotate_logfile_if_oversize_unlocked(Path(logfile), rotate_max_bytes, rotate_backup_count)
             with open(logfile, 'a', encoding='utf-8') as f:
                 f.write(line.rstrip() + '\n')

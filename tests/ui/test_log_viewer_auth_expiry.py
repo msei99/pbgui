@@ -47,6 +47,7 @@ def test_log_viewer_close_4001_is_terminal_and_redirects() -> None:
         panel._closed = false;
         panel._authExpired = false;
         panel._reconnectTimer = 0;
+        panel._wsGeneration = 0;
         panel._streaming = false;
         panel._pendingRestartCommand = {{cmd: 'restart_service'}};
         panel._q = () => ({{textContent: ''}});
@@ -69,6 +70,283 @@ def test_log_viewer_close_4001_is_terminal_and_redirects() -> None:
     result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     assert "open()  { this._closed = false; if (!this._authExpired) this._connect(); }" in source
+
+
+def test_replaced_log_viewer_socket_callbacks_cannot_mutate_current_state() -> None:
+    """Every callback from a disconnected socket must be inert after replacement."""
+
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const sockets = [];
+        const redirects = [];
+        let handled = 0;
+        let subscriptions = 0;
+        let timers = 0;
+        class FakeWebSocket {{
+          static OPEN = 1;
+          static CLOSING = 2;
+          static CLOSED = 3;
+          constructor(url) {{ this.url = url; this.readyState = 0; this.sent = []; sockets.push(this); }}
+          close() {{ this.readyState = FakeWebSocket.CLOSED; }}
+          send(raw) {{ this.sent.push(JSON.parse(raw)); }}
+        }}
+        globalThis.WebSocket = FakeWebSocket;
+        globalThis.window = {{location: {{replace: value => redirects.push(value)}}}};
+        globalThis.setTimeout = function () {{ timers += 1; return timers; }};
+        globalThis.clearTimeout = function () {{}};
+        {source}
+
+        const conn = {{textContent: 'initial'}};
+        const panel = Object.create(LogViewerPanel.prototype);
+        panel._wsBase = 'ws://example.test';
+        panel._ws = null;
+        panel._wsGeneration = 0;
+        panel._closed = false;
+        panel._authExpired = false;
+        panel._reconnectTimer = 0;
+        panel._restartTimeout = 0;
+        panel._streaming = false;
+        panel._pendingRestartCommand = null;
+        panel._restartAttempt = null;
+        panel._q = name => name === 'conn' ? conn : null;
+        panel._updateStreamBtn = () => {{}};
+        panel._handleMsg = () => {{ handled += 1; }};
+        panel._subscribe = () => {{ subscriptions += 1; }};
+        panel._flushPendingRestart = () => false;
+
+        panel._connect();
+        const oldSocket = sockets[0];
+        const oldOpen = oldSocket.onopen;
+        const oldMessage = oldSocket.onmessage;
+        const oldError = oldSocket.onerror;
+        const oldClose = oldSocket.onclose;
+
+        panel._connect();
+        const currentSocket = sockets[1];
+        assert.equal(oldSocket.onopen, null);
+        assert.equal(oldSocket.onmessage, null);
+        assert.equal(oldSocket.onerror, null);
+        assert.equal(oldSocket.onclose, null);
+
+        oldOpen();
+        oldMessage({{data: '{{"type":"state"}}'}});
+        oldError();
+        oldClose({{code: 4001}});
+        assert.equal(panel._ws, currentSocket);
+        assert.equal(panel._authExpired, false);
+        assert.equal(panel._closed, false);
+        assert.equal(panel._streaming, false);
+        assert.equal(conn.textContent, 'initial');
+        assert.equal(handled, 0);
+        assert.equal(subscriptions, 0);
+        assert.equal(timers, 0);
+        assert.deepEqual(redirects, []);
+
+        currentSocket.readyState = FakeWebSocket.OPEN;
+        currentSocket.onopen();
+        assert.equal(conn.textContent, 'connected');
+        assert.equal(subscriptions, 1);
+        assert.deepEqual(currentSocket.sent, [{{cmd: 'list_local_logs'}}]);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
+def test_log_viewer_buffers_and_dom_keep_the_newest_configured_lines() -> None:
+    """Snapshots, RAF queues, and rendered nodes must remain bounded at the newest end."""
+
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const frames = [];
+        globalThis.window = {{}};
+        globalThis.WebSocket = {{OPEN: 1, CLOSING: 2, CLOSED: 3}};
+        globalThis.requestAnimationFrame = callback => {{ frames.push(callback); return frames.length; }};
+        globalThis.document = {{
+          createDocumentFragment: () => ({{
+            children: [],
+            appendChild(node) {{ this.children.push(node); }}
+          }})
+        }};
+        {source}
+
+        const terminal = {{
+          children: [],
+          scrollTop: 0,
+          clientHeight: 10,
+          scrollHeight: 10,
+          get childElementCount() {{ return this.children.length; }},
+          get firstChild() {{ return this.children[0]; }},
+          appendChild(node) {{
+            if (Array.isArray(node.children)) this.children.push(...node.children);
+            else this.children.push(node);
+            this.scrollHeight = this.children.length;
+          }},
+          removeChild(node) {{
+            assert.equal(node, this.children[0]);
+            this.children.shift();
+          }}
+        }};
+        const panel = Object.create(LogViewerPanel.prototype);
+        panel._MAX = 3;
+        panel._lines = [];
+        panel._lineBase = 0;
+        panel._pending = [];
+        panel._rafPending = false;
+        panel._normalizeIncomingLines = lines => lines.slice();
+        panel._buildDiv = (line, num) => ({{line, num}});
+        panel._q = name => name === 'terminal' ? terminal : null;
+        panel._updateMatchCount = () => {{}};
+
+        panel._replaceLines(['snapshot-1', 'snapshot-2', 'snapshot-3', 'snapshot-4']);
+        assert.deepEqual(panel._lines, ['snapshot-2', 'snapshot-3', 'snapshot-4']);
+        assert.equal(panel._lineBase, 1);
+
+        panel._lines = [];
+        panel._lineBase = 0;
+        panel._ingestLines(['line-1', 'line-2', 'line-3', 'line-4', 'line-5']);
+        panel._ingestLines(['line-6', 'line-7']);
+        assert.deepEqual(panel._lines, ['line-5', 'line-6', 'line-7']);
+        assert.deepEqual(panel._pending.map(item => item.line), ['line-5', 'line-6', 'line-7']);
+        assert.equal(frames.length, 1);
+
+        frames.shift()();
+        assert.deepEqual(terminal.children.map(item => item.line), ['line-5', 'line-6', 'line-7']);
+        assert.equal(terminal.childElementCount, 3);
+
+        panel._q = () => ({{value: '999999'}});
+        assert.equal(panel._getLines(), LogViewerPanel.MAX_LINES);
+        panel._q = () => ({{value: '0'}});
+        assert.equal(panel._getLines(), 200);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    assert '<option value="50000">Max (50,000)</option>' in source
+    assert '<option value="0">All</option>' not in source
+
+
+def test_chunked_full_render_defers_live_lines_until_frozen_snapshot_finishes() -> None:
+    """Lines arriving between RAF chunks remain ordered, unique, and bounded in the DOM."""
+
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const frames = [];
+        globalThis.window = {{}};
+        globalThis.WebSocket = {{OPEN: 1, CLOSING: 2, CLOSED: 3}};
+        globalThis.requestAnimationFrame = callback => {{ frames.push(callback); return frames.length; }};
+        const terminal = {{
+          children: [],
+          scrollTop: 0,
+          clientHeight: 10,
+          scrollHeight: 10,
+          get childElementCount() {{ return this.children.length; }},
+          get firstChild() {{ return this.children[0]; }},
+          get innerHTML() {{ return ''; }},
+          set innerHTML(_value) {{ this.children = []; }},
+          appendChild(node) {{
+            const additions = Array.isArray(node.children) ? node.children : [node];
+            additions.forEach(child => {{ child.parent = this; this.children.push(child); }});
+            this.scrollHeight = this.children.length;
+          }},
+          insertBefore(node, reference) {{
+            const index = this.children.indexOf(reference);
+            assert.notEqual(index, -1);
+            const additions = Array.isArray(node.children) ? node.children : [node];
+            additions.forEach(child => {{ child.parent = this; }});
+            this.children.splice(index, 0, ...additions);
+          }},
+          removeChild(node) {{
+            const index = this.children.indexOf(node);
+            assert.notEqual(index, -1);
+            this.children.splice(index, 1);
+          }}
+        }};
+        globalThis.document = {{
+          createDocumentFragment: () => ({{children: [], appendChild(node) {{ this.children.push(node); }}}}),
+          createElement: () => ({{
+            style: {{}},
+            textContent: '',
+            parent: null,
+            remove() {{ if (this.parent) this.parent.removeChild(this); }}
+          }})
+        }};
+        {source}
+
+        const panel = Object.create(LogViewerPanel.prototype);
+        panel._MAX = 5;
+        panel._CHUNK = 2;
+        panel._lines = ['line-1', 'line-2', 'line-3', 'line-4', 'line-5'];
+        panel._lineBase = 0;
+        panel._pending = [];
+        panel._rafPending = false;
+        panel._fullRenderPending = false;
+        panel._renderAbort = 0;
+        panel._searchTerm = '';
+        panel._normalizeIncomingLines = lines => lines.slice();
+        panel._buildDiv = (line, num) => ({{line, num}});
+        panel._q = name => name === 'terminal' ? terminal : null;
+        panel._updateMatchCount = () => {{}};
+
+        panel._renderFull();
+        assert.equal(frames.length, 1);
+        frames.shift()();
+        assert.deepEqual(terminal.children.filter(item => item.line).map(item => item.line), ['line-1', 'line-2']);
+
+        panel._ingestLines(['line-6', 'line-7']);
+        assert.deepEqual(panel._lines, ['line-3', 'line-4', 'line-5', 'line-6', 'line-7']);
+        assert.deepEqual(panel._pending.map(item => item.line), ['line-6', 'line-7']);
+        while (frames.length) frames.shift()();
+
+        assert.deepEqual(terminal.children.map(item => item.line), ['line-3', 'line-4', 'line-5', 'line-6', 'line-7']);
+        assert.deepEqual(terminal.children.map(item => item.num), [3, 4, 5, 6, 7]);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
+def test_remote_log_info_uses_subscription_sid_to_reject_delayed_metadata() -> None:
+    """A delayed size response from an old selection cannot update the active viewer."""
+
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        globalThis.window = {{}};
+        globalThis.WebSocket = {{OPEN: 1}};
+        {source}
+        const sent = [];
+        const sizes = [];
+        const panel = Object.create(LogViewerPanel.prototype);
+        panel._host = 'host';
+        panel._service = 'PBRun';
+        panel._sid = 4;
+        panel._streaming = false;
+        panel._ws = {{readyState: 1, send: raw => sent.push(JSON.parse(raw))}};
+        panel._isLocal = () => false;
+        panel._unsubscribe = () => {{}};
+        panel._clear = () => {{}};
+        panel._getLines = () => 200;
+        panel._updateStreamBtn = () => {{}};
+        panel._showFileSize = size => sizes.push(size);
+
+        const sid = panel._subscribe();
+        assert.equal(sid, 5);
+        assert.deepEqual(sent[1], {{cmd: 'get_log_info', host: 'host', service: 'PBRun', sid: 5}});
+        panel._handleMsg({{type: 'log_info', sid: 4, size: 10}});
+        panel._handleMsg({{type: 'log_info', sid: 5, size: 20}});
+        assert.deepEqual(sizes, [20]);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
 def test_cookie_authenticated_pages_keep_logout_visible_without_a_token() -> None:
@@ -154,8 +432,8 @@ def test_every_log_viewer_asset_reference_uses_current_cache_version() -> None:
         references.extend((path, match.group(0)) for match in re.finditer(r"log_viewer_panel\.js\?v=\d+", source))
 
     assert references
-    assert all(reference.endswith("?v=29") for _path, reference in references), references
-    assert "log_viewer_panel.js?v=29" in NAV.read_text(encoding="utf-8")
+    assert all(reference.endswith("?v=30") for _path, reference in references), references
+    assert "log_viewer_panel.js?v=30" in NAV.read_text(encoding="utf-8")
 
 
 def test_remote_default_host_is_rendered_before_vps_state_arrives() -> None:

@@ -12,10 +12,23 @@ import threading
 import time
 from pathlib import Path
 
+import psutil
+
+from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 from credential_process_registry import ProcessCapabilityHeartbeat
 from master.cluster_sync_worker import ClusterSyncWorker
 from pbgui_purefunc import PBGDIR
+from process_identity import (
+    ProcessIdentity,
+    clear_process_identity,
+    identities_match,
+    process_identity,
+    read_process_identity,
+    signal_exact_process,
+    write_process_identity,
+)
+from secure_files import atomic_write_private_text
 
 SERVICE = "PBCluster"
 _RUNTIME_SERIAL_POLL_SECONDS = 1.0
@@ -23,11 +36,7 @@ _RUNTIME_SERIAL_POLL_SECONDS = 1.0
 
 def _atomic_write_text(path: Path, value: str) -> None:
     """Atomically write one small text file."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(value, encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_private_text(path, value)
 
 
 class PBCluster:
@@ -61,7 +70,21 @@ class PBCluster:
     def run_foreground(self) -> None:
         """Run PBCluster until it receives SIGTERM or SIGINT."""
 
-        _atomic_write_text(self.pidfile, str(os.getpid()))
+        with advisory_file_lock(self.pidfile):
+            if self.is_running():
+                _log(SERVICE, "Already running - exit", level="INFO")
+                return
+            try:
+                _atomic_write_text(self.pidfile, f"{os.getpid()}\n")
+                identity = process_identity(os.getpid())
+                if identity is None:
+                    raise RuntimeError("Could not persist PBCluster process identity")
+                write_process_identity(self.pidfile, identity)
+            except Exception:
+                if self._read_pid() == os.getpid():
+                    self.pidfile.unlink(missing_ok=True)
+                    clear_process_identity(self.pidfile)
+                raise
         watcher_stop = threading.Event()
         reload_requested = threading.Event()
 
@@ -94,7 +117,10 @@ class PBCluster:
                 watcher_stop.set()
                 watcher.join(timeout=max(2.0, _RUNTIME_SERIAL_POLL_SECONDS * 2))
                 try:
-                    self.pidfile.unlink(missing_ok=True)
+                    with advisory_file_lock(self.pidfile):
+                        if self._read_pid() == os.getpid():
+                            self.pidfile.unlink(missing_ok=True)
+                            clear_process_identity(self.pidfile)
                 except OSError:
                     pass
         if reload_requested.is_set():
@@ -123,41 +149,74 @@ class PBCluster:
     def stop(self) -> None:
         """Stop a running PBCluster process recorded in the pid file."""
 
-        try:
-            pid = int(self.pidfile.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            return
-        if pid == os.getpid():
-            self.worker.stop()
-            return
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            try:
-                self.pidfile.unlink(missing_ok=True)
-            except OSError:
-                pass
-        except PermissionError as exc:
-            _log(SERVICE, f"Permission denied while stopping PBCluster pid {pid}: {exc}", level="ERROR")
+        with advisory_file_lock(self.pidfile):
+            pid = self._read_pid()
+            if pid is None:
+                return
+            if pid == os.getpid():
+                self.worker.stop()
+                return
+            owner = self._process_identity(pid)
+            if owner is None:
+                return
+            persisted = read_process_identity(self.pidfile)
+            if persisted is not None and not identities_match(persisted, owner):
+                return
+            if persisted is None:
+                write_process_identity(self.pidfile, owner)
+        signal_exact_process(owner, signal.SIGTERM)
 
     def is_running(self) -> bool:
         """Return whether the pid file points to a live PBCluster process."""
 
+        pid = self._read_pid()
+        if pid is None:
+            return False
+        if self._pid_matches(pid):
+            return True
+        try:
+            if not psutil.pid_exists(pid):
+                with advisory_file_lock(self.pidfile):
+                    if self._read_pid() == pid:
+                        self.pidfile.unlink(missing_ok=True)
+                        clear_process_identity(self.pidfile)
+        except OSError:
+            pass
+        return False
+
+    def _read_pid(self) -> int | None:
+        """Read the current positive PID value without changing ownership state."""
         try:
             pid = int(self.pidfile.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
+            return None
+        return pid if pid > 0 else None
+
+    def _pid_matches(self, pid: int) -> bool:
+        """Verify that PID executes this installation's PBCluster script."""
+        current = self._process_identity(pid)
+        if current is None:
             return False
+        persisted = read_process_identity(self.pidfile)
+        return persisted is None or identities_match(persisted, current)
+
+    def _process_identity(self, pid: int) -> ProcessIdentity | None:
+        """Return PID/create-time only for this installation's PBCluster script."""
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            try:
-                self.pidfile.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return False
-        except PermissionError:
-            return True
-        return True
+            process = psutil.Process(pid)
+            identity = ProcessIdentity(int(pid), float(process.create_time()))
+            cwd = Path(process.cwd())
+            expected = (self.pbgdir / "PBCluster.py").resolve(strict=False)
+            for raw_arg in process.cmdline():
+                arg = Path(str(raw_arg))
+                if arg.name.lower() != "pbcluster.py":
+                    continue
+                candidate = arg if arg.is_absolute() else cwd / arg
+                if candidate.resolve(strict=False) == expected:
+                    return identity
+        except (OSError, psutil.Error, ValueError):
+            return None
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:

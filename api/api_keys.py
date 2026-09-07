@@ -29,11 +29,14 @@ from pydantic import BaseModel, Field
 from api.auth import SessionToken, require_auth
 from api.page_templates import render_page_urls, script_json
 from api_key_state import (
+    ApiKeyStateTransactionConflictError,
     RUNTIME_STATE_KEYS,
+    begin_user_state_transaction,
     clear_user_state,
     delete_user_state,
+    finish_user_state_transaction,
+    get_pending_user_state_transaction,
     get_user_state,
-    rename_user_state,
     strip_runtime_extra,
     update_user_state,
 )
@@ -43,7 +46,7 @@ from credential_reconciler import reconcile_pending_credentials
 from logging_helpers import human_log as _log
 from file_lock import advisory_file_lock
 from master.cluster_state import default_cluster_root, ensure_local_identity, read_local_identity, rebuild_materialized_state
-from pb7_api_keys import PB7ApiKeysMergeWriter, project_active_tradfi_profiles
+from pb7_api_keys import PB7ApiKeysConflictError, PB7ApiKeysMergeWriter, project_active_tradfi_profiles
 import pbgui_purefunc
 from pbgui_purefunc import PBGDIR as _PBGDIR
 
@@ -58,6 +61,13 @@ def _serialized_api_keys_write(func):
     def wrapped(*args, **kwargs):
         lock_target = _Path(_PBGDIR) / "data" / "api-keys" / ".write"
         with advisory_file_lock(lock_target):
+            try:
+                _resolve_pending_user_update()
+            except ApiKeyStateTransactionConflictError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A pending API key update conflicts with credential storage",
+                ) from exc
             return func(*args, **kwargs)
 
     return wrapped
@@ -113,6 +123,7 @@ class UserCreateUpdate(BaseModel):
     quote: Optional[str] = None
     options: Optional[dict] = None
     extra: Optional[dict] = None
+    new_name: Optional[str] = None
 
 
 class UserKeyRevealRequest(BaseModel):
@@ -193,6 +204,19 @@ def _get_users():
     return Users()
 
 
+def _validate_user_name(value: str, field_name: str = "Username") -> str:
+    """Normalize a user name and reject unsafe persisted identifiers."""
+    name = str(value or "").strip()
+    if (
+        not name
+        or name in {".", ".."}
+        or any(char in name for char in ("/", "\\", "\x00"))
+        or any(ord(char) < 32 for char in name)
+    ):
+        raise HTTPException(status_code=400, detail=f"{field_name} is invalid")
+    return name
+
+
 def _credential_store() -> CredentialStore:
     """Return the local owner-only credential vault."""
 
@@ -264,6 +288,9 @@ def _hl_expiry_from_state(user) -> dict:
     if user.exchange != "hyperliquid":
         return result
     state = get_user_state(user.name)
+    stored_fingerprint = state.get("hl_credential_fingerprint")
+    if not stored_fingerprint or stored_fingerprint != _hl_credential_fingerprint(user):
+        return result
     vu = state.get("hl_valid_until")
     if vu is None:
         return result
@@ -298,6 +325,9 @@ def _bybit_expiry_from_state(user) -> dict:
     if user.exchange != "bybit":
         return result
     state = get_user_state(user.name)
+    stored_fingerprint = state.get("bybit_credential_fingerprint")
+    if not stored_fingerprint or stored_fingerprint != _expiry_credential_fingerprint(user):
+        return result
     eat = state.get("bybit_expires_at")
     if eat is None:
         return result
@@ -366,6 +396,7 @@ def _user_to_detail(user, in_use: bool) -> UserDetail:
 
 _hl_expiry_cache: dict[str, HLExpiryInfo] = {}
 _hl_expiry_cache_ts: float = 0.0
+_hl_expiry_cache_fingerprints: dict[str, str] = {}
 _hl_expiry_cache_lock = threading.Lock()
 _HL_EXPIRY_CACHE_TTL = 300  # 5 minutes
 
@@ -411,19 +442,193 @@ def _hl_credential_fingerprint(user, agent_address: Optional[str] = None) -> Opt
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _expiry_credential_fingerprint(user) -> str:
+    """Return an opaque marker for one user's expiry-relevant credential generation."""
+    exchange = str(getattr(user, "exchange", "") or "")
+    if exchange == "hyperliquid":
+        values = {
+            "exchange": exchange,
+            "private_key": str(getattr(user, "private_key", "") or ""),
+            "wallet_address": str(getattr(user, "wallet_address", "") or ""),
+            "is_vault": bool(getattr(user, "is_vault", False)),
+        }
+    elif exchange == "bybit":
+        values = {
+            "exchange": exchange,
+            "key": str(getattr(user, "key", "") or ""),
+            "secret": str(getattr(user, "secret", "") or ""),
+        }
+    else:
+        values = {"exchange": exchange}
+    encoded = json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _user_record_marker(user, generation: int) -> str:
+    """Hash one complete persisted user record and its api-keys generation."""
+    values = {
+        "generation": int(generation),
+        "name": str(getattr(user, "name", "") or ""),
+        "exchange": str(getattr(user, "exchange", "") or ""),
+        "key": getattr(user, "key", None),
+        "secret": getattr(user, "secret", None),
+        "passphrase": getattr(user, "passphrase", None),
+        "wallet_address": getattr(user, "wallet_address", None),
+        "private_key": getattr(user, "private_key", None),
+        "is_vault": bool(getattr(user, "is_vault", False)),
+        "quote": getattr(user, "quote", None),
+        "options": getattr(user, "options", None),
+        "extra": strip_runtime_extra(getattr(user, "extra", None)),
+    }
+    encoded = json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _resolve_pending_user_update() -> str | None:
+    """Resolve an interrupted state journal from authoritative credential storage."""
+    global _hl_expiry_cache_ts, _bybit_expiry_cache_ts
+    lock_target = _Path(_PBGDIR) / "data" / "api-keys" / ".write"
+    with advisory_file_lock(lock_target):
+        transaction = get_pending_user_state_transaction()
+        if transaction is None:
+            return None
+        users = _get_users()
+        generation = int(getattr(users, "_loaded_api_serial", 0) or 0)
+        old_name = str(transaction["old_name"])
+        new_name = str(transaction["new_name"])
+        before_user = users.find_user(old_name)
+        after_user = users.find_user(new_name)
+        before_matches = before_user is not None and _user_record_marker(before_user, generation) == transaction["before_marker"]
+        after_matches = after_user is not None and _user_record_marker(after_user, generation) == transaction["after_marker"]
+        if after_matches and not before_matches:
+            finish_user_state_transaction(str(transaction["id"]), commit=True)
+            outcome = "committed"
+        elif before_matches and not after_matches:
+            finish_user_state_transaction(str(transaction["id"]), commit=False)
+            outcome = "rolled_back"
+        else:
+            raise ApiKeyStateTransactionConflictError("Credential storage changed while an API-key update was pending")
+        with _hl_expiry_cache_lock:
+            _hl_expiry_cache.pop(old_name, None)
+            _hl_expiry_cache.pop(new_name, None)
+            _hl_expiry_cache_ts = 0.0
+        with _bybit_expiry_cache_lock:
+            _bybit_expiry_cache.pop(old_name, None)
+            _bybit_expiry_cache.pop(new_name, None)
+            _bybit_expiry_cache_ts = 0.0
+        return outcome
+
+
+def _recover_user_update_or_409() -> None:
+    """Resolve an interrupted update before serving account-bound data."""
+    try:
+        _resolve_pending_user_update()
+    except ApiKeyStateTransactionConflictError as exc:
+        raise HTTPException(status_code=409, detail="A pending API key update conflicts with credential storage") from exc
+
+
+def _capture_expiry_context(user, users_obj) -> tuple[str, str, str, int | None]:
+    """Capture the authoritative identity and credential generation before network I/O."""
+    generation = getattr(users_obj, "_loaded_api_serial", None)
+    return (
+        str(getattr(user, "name", "") or ""),
+        str(getattr(user, "exchange", "") or ""),
+        _expiry_credential_fingerprint(user),
+        int(generation) if generation is not None else None,
+    )
+
+
+def _expiry_fingerprints(users_obj, exchange: str) -> dict[str, str]:
+    """Snapshot expiry-relevant credential identities for cache validation."""
+    return {
+        str(user.name): _expiry_credential_fingerprint(user)
+        for user in users_obj
+        if str(getattr(user, "exchange", "") or "") == exchange
+    }
+
+
+def _commit_expiry_result(
+    context: tuple[str, str, str, int | None],
+    info: HLExpiryInfo | BybitExpiryInfo,
+    **state_fields: Any,
+) -> None:
+    """Persist expiry data only if the loaded credential generation is current."""
+    name, exchange, fingerprint, generation = context
+    lock_target = _Path(_PBGDIR) / "data" / "api-keys" / ".write"
+    with advisory_file_lock(lock_target):
+        _resolve_pending_user_update()
+        current_users = _get_users()
+        current_user = current_users.find_user(name)
+        current_generation = getattr(current_users, "_loaded_api_serial", None)
+        if (
+            current_user is None
+            or str(getattr(current_user, "exchange", "") or "") != exchange
+            or _expiry_credential_fingerprint(current_user) != fingerprint
+            or (generation is not None and int(current_generation or 0) != generation)
+        ):
+            raise HTTPException(status_code=409, detail="API key changed while expiry data was being fetched; retry")
+        update_user_state(name, **state_fields)
+
+
+def _publish_expiry_cache(
+    exchange: str,
+    contexts: dict[str, tuple[str, str, str, int | None]],
+    result: dict[str, HLExpiryInfo | BybitExpiryInfo],
+    expected_generation: int | None,
+) -> None:
+    """Publish one complete cache only after revalidating every network result."""
+    global _hl_expiry_cache, _hl_expiry_cache_ts, _hl_expiry_cache_fingerprints
+    global _bybit_expiry_cache, _bybit_expiry_cache_ts, _bybit_expiry_cache_fingerprints
+    lock_target = _Path(_PBGDIR) / "data" / "api-keys" / ".write"
+    with advisory_file_lock(lock_target):
+        _resolve_pending_user_update()
+        current_users = _get_users()
+        current_generation = getattr(current_users, "_loaded_api_serial", None)
+        if expected_generation is not None and int(current_generation or 0) != expected_generation:
+            raise HTTPException(status_code=409, detail="API key changed while expiry data was being fetched; retry")
+        for name, context in contexts.items():
+            expected_name, expected_exchange, fingerprint, generation = context
+            current_user = current_users.find_user(name)
+            if (
+                expected_name != name
+                or expected_exchange != exchange
+                or current_user is None
+                or str(getattr(current_user, "exchange", "") or "") != exchange
+                or _expiry_credential_fingerprint(current_user) != fingerprint
+                or (generation is not None and int(current_generation or 0) != generation)
+            ):
+                raise HTTPException(status_code=409, detail="API key changed while expiry data was being fetched; retry")
+        if exchange == "hyperliquid":
+            with _hl_expiry_cache_lock:
+                _hl_expiry_cache = dict(result)
+                _hl_expiry_cache_fingerprints = {
+                    name: context[2] for name, context in contexts.items()
+                }
+                _hl_expiry_cache_ts = time.time()
+        elif exchange == "bybit":
+            with _bybit_expiry_cache_lock:
+                _bybit_expiry_cache = dict(result)
+                _bybit_expiry_cache_fingerprints = {
+                    name: context[2] for name, context in contexts.items()
+                }
+                _bybit_expiry_cache_ts = time.time()
+
+
 def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
     """Check one Hyperliquid key and persist state for saved credentials only."""
     from datetime import datetime, timezone
 
     info = HLExpiryInfo(name=user.name, is_vault=user.is_vault)
     persist_state = users_obj is not None
+    expiry_context = _capture_expiry_context(user, users_obj) if persist_state else None
 
     if not user.private_key:
         info.status = "no_expiry"
         info.error = "No private key configured"
-        if persist_state:
-            update_user_state(
-                user.name,
+        if expiry_context is not None:
+            _commit_expiry_result(
+                expiry_context,
+                info,
                 hl_valid_until=None,
                 hl_credential_fingerprint=_hl_credential_fingerprint(user),
             )
@@ -470,9 +675,10 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
 
         if not matched:
             info.status = "no_expiry"
-            if persist_state:
-                update_user_state(
-                    user.name,
+            if expiry_context is not None:
+                _commit_expiry_result(
+                    expiry_context,
+                    info,
                     hl_valid_until=None,
                     hl_credential_fingerprint=credential_fingerprint,
                 )
@@ -481,9 +687,10 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
         valid_until = matched.get("validUntil")
         if valid_until is None:
             info.status = "no_expiry"
-            if persist_state:
-                update_user_state(
-                    user.name,
+            if expiry_context is not None:
+                _commit_expiry_result(
+                    expiry_context,
+                    info,
                     hl_valid_until=None,
                     hl_credential_fingerprint=credential_fingerprint,
                 )
@@ -505,15 +712,20 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
         else:
             info.status = "ok"
 
-        if persist_state:
-            update_user_state(
-                user.name,
+        if expiry_context is not None:
+            _commit_expiry_result(
+                expiry_context,
+                info,
                 hl_valid_until=int(valid_until),
                 hl_credential_fingerprint=credential_fingerprint,
             )
 
         return info
 
+    except HTTPException:
+        raise
+    except ApiKeyStateTransactionConflictError as exc:
+        raise HTTPException(status_code=409, detail="API key update recovery is required before saving expiry data") from exc
     except Exception as e:
         info.status = "error"
         info.error = str(e)
@@ -524,24 +736,28 @@ def _refresh_hl_expiry_cache(users_obj=None) -> dict[str, HLExpiryInfo]:
     """Fetch HL expiry from exchange API for all HL users and persist to local state."""
     global _hl_expiry_cache, _hl_expiry_cache_ts
 
-    now = time.time()
-    with _hl_expiry_cache_lock:
-        if now - _hl_expiry_cache_ts < _HL_EXPIRY_CACHE_TTL and _hl_expiry_cache:
-            return dict(_hl_expiry_cache)
-
     if users_obj is None:
         users_obj = _get_users()
+    current_fingerprints = _expiry_fingerprints(users_obj, "hyperliquid")
+    now = time.time()
+    with _hl_expiry_cache_lock:
+        if (
+            now - _hl_expiry_cache_ts < _HL_EXPIRY_CACHE_TTL
+            and _hl_expiry_cache
+            and _hl_expiry_cache_fingerprints == current_fingerprints
+        ):
+            return dict(_hl_expiry_cache)
 
     result: dict[str, HLExpiryInfo] = {}
+    contexts: dict[str, tuple[str, str, str, int | None]] = {}
     for user in users_obj:
         if user.exchange == "hyperliquid":
+            contexts[user.name] = _capture_expiry_context(user, users_obj)
             info = _check_hl_expiry_single(user, users_obj=users_obj)
             result[user.name] = info
 
-    with _hl_expiry_cache_lock:
-        _hl_expiry_cache = result
-        _hl_expiry_cache_ts = time.time()
-
+    generation = getattr(users_obj, "_loaded_api_serial", None)
+    _publish_expiry_cache("hyperliquid", contexts, result, int(generation) if generation is not None else None)
     return result
 
 
@@ -549,6 +765,7 @@ def _refresh_hl_expiry_cache(users_obj=None) -> dict[str, HLExpiryInfo]:
 
 _bybit_expiry_cache: dict[str, "BybitExpiryInfo"] = {}
 _bybit_expiry_cache_ts: float = 0.0
+_bybit_expiry_cache_fingerprints: dict[str, str] = {}
 _bybit_expiry_cache_lock = threading.Lock()
 _BYBIT_EXPIRY_CACHE_TTL = 300  # 5 minutes
 
@@ -559,11 +776,20 @@ def _check_bybit_expiry_single(user, users_obj=None) -> "BybitExpiryInfo":
     import ccxt as _ccxt
 
     info = BybitExpiryInfo(name=user.name)
+    persist_state = users_obj is not None
+    expiry_context = _capture_expiry_context(user, users_obj) if persist_state else None
 
     if not user.key or not user.secret:
         info.status = "error"
         info.error = "No API key/secret configured"
-        clear_user_state(user.name, ("bybit_expires_at", "bybit_ips"))
+        if expiry_context is not None:
+            _commit_expiry_result(
+                expiry_context,
+                info,
+                bybit_expires_at=None,
+                bybit_ips=None,
+                bybit_credential_fingerprint=None,
+            )
         return info
 
     try:
@@ -578,7 +804,14 @@ def _check_bybit_expiry_single(user, users_obj=None) -> "BybitExpiryInfo":
         # IP-bound keys → expiredAt is epoch "1970-01-01T00:00:00Z" → treat as no_expiry
         if not expires_at or expires_at.startswith("1970-01-01"):
             info.status = "no_expiry"
-            update_user_state(user.name, bybit_expires_at="no_expiry", bybit_ips=info.ips)
+            if expiry_context is not None:
+                _commit_expiry_result(
+                    expiry_context,
+                    info,
+                    bybit_expires_at="no_expiry",
+                    bybit_ips=info.ips,
+                    bybit_credential_fingerprint=expiry_context[2],
+                )
             return info
 
         info.expires_at_iso = expires_at
@@ -595,9 +828,20 @@ def _check_bybit_expiry_single(user, users_obj=None) -> "BybitExpiryInfo":
         else:
             info.status = "ok"
 
-        update_user_state(user.name, bybit_expires_at=expires_at, bybit_ips=info.ips)
+        if expiry_context is not None:
+            _commit_expiry_result(
+                expiry_context,
+                info,
+                bybit_expires_at=expires_at,
+                bybit_ips=info.ips,
+                bybit_credential_fingerprint=expiry_context[2],
+            )
         return info
 
+    except HTTPException:
+        raise
+    except ApiKeyStateTransactionConflictError as exc:
+        raise HTTPException(status_code=409, detail="API key update recovery is required before saving expiry data") from exc
     except Exception as e:
         info.status = "error"
         info.error = str(e)
@@ -614,24 +858,28 @@ def _refresh_bybit_expiry_cache(users_obj=None) -> dict[str, "BybitExpiryInfo"]:
     """Fetch Bybit expiry from exchange API for all Bybit users and persist to local state."""
     global _bybit_expiry_cache, _bybit_expiry_cache_ts
 
-    now = time.time()
-    with _bybit_expiry_cache_lock:
-        if now - _bybit_expiry_cache_ts < _BYBIT_EXPIRY_CACHE_TTL and _bybit_expiry_cache:
-            return dict(_bybit_expiry_cache)
-
     if users_obj is None:
         users_obj = _get_users()
+    current_fingerprints = _expiry_fingerprints(users_obj, "bybit")
+    now = time.time()
+    with _bybit_expiry_cache_lock:
+        if (
+            now - _bybit_expiry_cache_ts < _BYBIT_EXPIRY_CACHE_TTL
+            and _bybit_expiry_cache
+            and _bybit_expiry_cache_fingerprints == current_fingerprints
+        ):
+            return dict(_bybit_expiry_cache)
 
     result: dict[str, "BybitExpiryInfo"] = {}
+    contexts: dict[str, tuple[str, str, str, int | None]] = {}
     for user in users_obj:
         if user.exchange == "bybit":
-            info = _check_bybit_expiry_single(user, users_obj=None)
+            contexts[user.name] = _capture_expiry_context(user, users_obj)
+            info = _check_bybit_expiry_single(user, users_obj=users_obj)
             result[user.name] = info
 
-    with _bybit_expiry_cache_lock:
-        _bybit_expiry_cache = result
-        _bybit_expiry_cache_ts = time.time()
-
+    generation = getattr(users_obj, "_loaded_api_serial", None)
+    _publish_expiry_cache("bybit", contexts, result, int(generation) if generation is not None else None)
     return result
 
 
@@ -670,6 +918,7 @@ def list_users(
     session: SessionToken = Depends(require_auth),
 ) -> list[UserSummary]:
     """List all API key users with summary info."""
+    _recover_user_update_or_409()
     users = _get_users()
     in_use_names = _get_in_use_names()
     result = []
@@ -683,8 +932,12 @@ def get_meta(
     session: SessionToken = Depends(require_auth),
 ) -> dict:
     """Return api-keys.json editor metadata: serial, timestamp, author."""
+    _recover_user_update_or_409()
     users = _get_users()
-    return users.api_meta
+    return {
+        **users.api_meta,
+        "capabilities": {"combined_user_update": True},
+    }
 
 
 @router.get("/exchanges")
@@ -709,6 +962,7 @@ def get_hl_expiry_all(
     Pass force=true to bypass the 5-minute cache.
     """
     global _hl_expiry_cache_ts
+    _recover_user_update_or_409()
 
     if force:
         with _hl_expiry_cache_lock:
@@ -729,6 +983,7 @@ def get_bybit_expiry_all(
     Pass force=true to bypass the 5-minute cache.
     """
     global _bybit_expiry_cache_ts
+    _recover_user_update_or_409()
 
     if force:
         with _bybit_expiry_cache_lock:
@@ -922,6 +1177,7 @@ def get_user(
     session: SessionToken = Depends(require_auth),
 ) -> UserDetail:
     """Get details for a single API key user (secrets masked)."""
+    _recover_user_update_or_409()
     users = _get_users()
     user = users.find_user(name)
     if not user:
@@ -941,9 +1197,7 @@ def create_user(
     from User import User
     from Exchange import Exchanges, Passphrase
 
-    if not name or not name.strip():
-        raise HTTPException(status_code=400, detail="Username is required")
-    name = name.strip()
+    name = _validate_user_name(name)
 
     if data.exchange not in Exchanges.list():
         raise HTTPException(status_code=400, detail=f"Unknown exchange: {data.exchange}")
@@ -994,10 +1248,21 @@ def update_user(
     name: str = PathParam(..., description="User name"),
     session: SessionToken = Depends(require_auth),
 ) -> UserDetail:
-    """Update an existing API key user."""
+    """Update and optionally rename one API key user in a durable transaction."""
+    return _update_user_transaction(name, data)
+
+
+def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
+    """Apply the shared locked transaction used by PUT and compatibility PATCH."""
     from Exchange import Exchanges, Passphrase
     global _hl_expiry_cache_ts, _bybit_expiry_cache_ts
 
+    try:
+        _resolve_pending_user_update()
+    except ApiKeyStateTransactionConflictError as exc:
+        raise HTTPException(status_code=409, detail="A pending API key update conflicts with credential storage") from exc
+
+    final_name = _validate_user_name(data.new_name if data.new_name is not None else name)
     if data.exchange not in Exchanges.list():
         raise HTTPException(status_code=400, detail=f"Unknown exchange: {data.exchange}")
 
@@ -1009,7 +1274,20 @@ def update_user(
     user = users.find_user(name)
     if not user:
         raise HTTPException(status_code=404, detail=f"User '{name}' not found")
+    if final_name != name and users.find_user(final_name):
+        raise HTTPException(status_code=409, detail=f"A user named '{final_name}' already exists")
     exchange_changed = data.exchange != user.exchange
+    in_use = _is_user_in_use(name)
+    if in_use and final_name != name:
+        raise HTTPException(
+            status_code=409,
+            detail=f"User '{name}' is in use by active instances and cannot be renamed",
+        )
+    if in_use and exchange_changed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot modify exchange: user '{name}' is currently in use",
+        )
     if not is_hl:
         if data.key == "":
             raise HTTPException(status_code=400, detail="API Key is required")
@@ -1039,55 +1317,146 @@ def update_user(
     wallet_changed = data.wallet_address != old_wallet_address
     vault_changed = data.is_vault != old_is_vault
     exchange_changed = data.exchange != old_exchange
-    user.exchange = data.exchange
-    if data.key is not None:
-        user.key = data.key
-    # Masked fields: null means "leave unchanged" (frontend "••• leave blank to keep" UX)
-    if data.secret is not None:
-        user.secret = data.secret
-    if data.passphrase is not None:
-        user.passphrase = data.passphrase
-    user.wallet_address = data.wallet_address
-    if data.private_key is not None:
-        user.private_key = data.private_key
-    if exchange_changed:
-        if is_hl:
-            user.key = None
-            user.secret = None
-            user.passphrase = None
-        else:
-            user.wallet_address = None
-            user.private_key = None
-            user.is_vault = False
-            if data.exchange not in Passphrase.list():
+    clear_keys: tuple[str, ...] = ()
+    if not exchange_changed and data.exchange == "hyperliquid" and (private_key_changed or wallet_changed or vault_changed):
+        clear_keys = ("hl_valid_until", "hl_credential_fingerprint")
+    elif not exchange_changed and data.exchange == "bybit" and (key_changed or secret_changed):
+        clear_keys = ("bybit_expires_at", "bybit_ips", "bybit_credential_fingerprint")
+
+    original_values = {
+        "name": user.name,
+        "exchange": user.exchange,
+        "key": user.key,
+        "secret": user.secret,
+        "passphrase": user.passphrase,
+        "wallet_address": user.wallet_address,
+        "private_key": user.private_key,
+        "is_vault": user.is_vault,
+        "quote": user.quote,
+        "options": user.options,
+        "extra": user.extra,
+    }
+    loaded_generation = int(getattr(users, "_loaded_api_serial", 0) or 0)
+    before_marker = _user_record_marker(user, loaded_generation)
+    transaction_id = None
+    committed_after_error = False
+    try:
+        user.name = final_name
+        user.exchange = data.exchange
+        if data.key is not None:
+            user.key = data.key
+        # Masked fields: null means "leave unchanged" (frontend "saved - leave blank to keep" UX)
+        if data.secret is not None:
+            user.secret = data.secret
+        if data.passphrase is not None:
+            user.passphrase = data.passphrase
+        user.wallet_address = data.wallet_address
+        if data.private_key is not None:
+            user.private_key = data.private_key
+        if exchange_changed:
+            if is_hl:
+                user.key = None
+                user.secret = None
                 user.passphrase = None
-    user.is_vault = data.is_vault
-    user.quote = data.quote
-    user.options = data.options
-    user.extra = strip_runtime_extra(data.extra)
+            else:
+                user.wallet_address = None
+                user.private_key = None
+                user.is_vault = False
+                if data.exchange not in Passphrase.list():
+                    user.passphrase = None
+        user.is_vault = data.is_vault
+        user.quote = data.quote
+        user.options = data.options
+        user.extra = strip_runtime_extra(data.extra)
+        after_marker = _user_record_marker(user, loaded_generation + 1)
+        transaction_id = begin_user_state_transaction(
+            name,
+            final_name,
+            before_marker=before_marker,
+            after_marker=after_marker,
+            clear_all=exchange_changed,
+            clear_keys=clear_keys,
+        )
+    except ApiKeyStateTransactionConflictError as exc:
+        for field, value in original_values.items():
+            setattr(user, field, value)
+        raise HTTPException(status_code=409, detail="Another API key update requires recovery") from exc
+    except Exception as exc:
+        for field, value in original_values.items():
+            setattr(user, field, value)
+        _log(
+            SERVICE,
+            f"Failed to prepare API key user update: {name} -> {final_name}: {exc}",
+            level="ERROR",
+            meta={"traceback": traceback.format_exc()},
+        )
+        raise HTTPException(status_code=500, detail="Failed to prepare API key user update") from exc
 
-    users.save()
+    try:
+        users.save()
+    except Exception as exc:
+        try:
+            committed_after_error = _resolve_pending_user_update() == "committed"
+        except ApiKeyStateTransactionConflictError as recovery_exc:
+            for field, value in original_values.items():
+                setattr(user, field, value)
+            raise HTTPException(status_code=409, detail="API key data changed concurrently; reload before retrying") from recovery_exc
+        if committed_after_error:
+            pass
+        else:
+            for field, value in original_values.items():
+                setattr(user, field, value)
+            status_code = 409 if isinstance(exc, PB7ApiKeysConflictError) else 500
+            detail = "API key data changed concurrently; reload before retrying" if status_code == 409 else "Failed to update API key user"
+            _log(
+                SERVICE,
+                f"Failed to persist API key user update: {name} -> {final_name}: {exc}",
+                level="ERROR",
+                meta={"traceback": traceback.format_exc()},
+            )
+            raise HTTPException(status_code=status_code, detail=detail) from exc
 
-    if exchange_changed:
-        clear_user_state(name)
-    else:
-        if user.exchange == "hyperliquid" and (private_key_changed or wallet_changed or vault_changed):
-            clear_user_state(name, ("hl_valid_until",))
-        if user.exchange == "bybit" and (key_changed or secret_changed):
-            clear_user_state(name, ("bybit_expires_at", "bybit_ips"))
+    if not committed_after_error:
+        try:
+            finish_user_state_transaction(str(transaction_id), commit=True)
+        except Exception as exc:
+            try:
+                if _resolve_pending_user_update() == "committed":
+                    committed_after_error = True
+            except Exception:
+                pass
+            if not committed_after_error:
+                _log(
+                    SERVICE,
+                    f"API key user update awaits runtime-state recovery: {name} -> {final_name}",
+                    level="ERROR",
+                    meta={"traceback": traceback.format_exc()},
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Credentials were saved, but runtime-state recovery is pending; retry after checking API status",
+                ) from exc
+
+    if committed_after_error:
+        _log(
+            SERVICE,
+            f"Recovered API key user update after an interrupted save: {name} -> {final_name}",
+            level="WARNING",
+        )
 
     # Invalidate expiry caches when credentials changed
-    if exchange_changed or old_exchange == "hyperliquid" or user.exchange == "hyperliquid":
+    if final_name != name or exchange_changed or old_exchange == "hyperliquid" or user.exchange == "hyperliquid":
         with _hl_expiry_cache_lock:
             _hl_expiry_cache.pop(name, None)
+            _hl_expiry_cache.pop(final_name, None)
             _hl_expiry_cache_ts = 0.0
-    if exchange_changed or old_exchange == "bybit" or user.exchange == "bybit":
+    if final_name != name or exchange_changed or old_exchange == "bybit" or user.exchange == "bybit":
         with _bybit_expiry_cache_lock:
             _bybit_expiry_cache.pop(name, None)
+            _bybit_expiry_cache.pop(final_name, None)
             _bybit_expiry_cache_ts = 0.0
 
-    _log(SERVICE, f"Updated API key user: {name} ({data.exchange})")
-    in_use = _is_user_in_use(name)
+    _log(SERVICE, f"Updated API key user: {name} -> {final_name} ({data.exchange})")
     return _user_to_detail(user, in_use)
 
 
@@ -1102,43 +1471,27 @@ def rename_user(
     name: str = PathParam(..., description="Current user name"),
     session: SessionToken = Depends(require_auth),
 ) -> UserDetail:
-    """Rename an API key user. Fails if the user is in use."""
-    global _hl_expiry_cache_ts, _bybit_expiry_cache_ts
-    new_name = data.new_name.strip()
-    if not new_name:
-        raise HTTPException(status_code=400, detail="New name must not be empty")
-    if new_name == name:
-        users = _get_users()
-        user = users.find_user(name)
-        if not user:
-            raise HTTPException(status_code=404, detail=f"User '{name}' not found")
-        return _user_to_detail(user, _is_user_in_use(name))
-
+    """Compatibility wrapper for the same locked combined-update transaction."""
+    try:
+        _resolve_pending_user_update()
+    except ApiKeyStateTransactionConflictError as exc:
+        raise HTTPException(status_code=409, detail="A pending API key update conflicts with credential storage") from exc
     users = _get_users()
     user = users.find_user(name)
     if not user:
         raise HTTPException(status_code=404, detail=f"User '{name}' not found")
-    if _is_user_in_use(name):
-        raise HTTPException(
-            status_code=409,
-            detail=f"User '{name}' is in use by active instances and cannot be renamed",
-        )
-    if users.find_user(new_name):
-        raise HTTPException(status_code=409, detail=f"A user named '{new_name}' already exists")
-
-    user.name = new_name
-    users.save()
-    rename_user_state(name, new_name)
-    with _hl_expiry_cache_lock:
-        _hl_expiry_cache.pop(name, None)
-        _hl_expiry_cache.pop(new_name, None)
-        _hl_expiry_cache_ts = 0.0
-    with _bybit_expiry_cache_lock:
-        _bybit_expiry_cache.pop(name, None)
-        _bybit_expiry_cache.pop(new_name, None)
-        _bybit_expiry_cache_ts = 0.0
-    _log(SERVICE, f"Renamed API key user: {name} → {new_name}")
-    return _user_to_detail(user, False)
+    return _update_user_transaction(
+        name,
+        UserCreateUpdate(
+            new_name=data.new_name,
+            exchange=user.exchange,
+            wallet_address=user.wallet_address,
+            is_vault=user.is_vault,
+            quote=user.quote,
+            options=user.options,
+            extra=strip_runtime_extra(user.extra),
+        ),
+    )
 
 
 @router.delete("/{name}")
@@ -1179,6 +1532,7 @@ def reveal_user_key(
     session: SessionToken = Depends(require_auth),
 ) -> dict:
     """Reveal only one explicitly selected third-party API key without caching it."""
+    _recover_user_update_or_409()
     users = _get_users()
     user = users.find_user(body.name)
     if not user:
@@ -1257,6 +1611,7 @@ def test_connection(
     from Exchange import Exchange
     import copy
 
+    _recover_user_update_or_409()
     users = _get_users()
     user = users.find_user(name)
     if not user:
@@ -1298,6 +1653,7 @@ def test_connection(
 
 def _get_hl_expiry_for_user(name: str, private_key: Optional[str] = None) -> HLExpiryInfo:
     """Check one user's saved key or an unsaved preview override."""
+    _recover_user_update_or_409()
     users = _get_users()
     user = users.find_user(name)
     if not user:
@@ -1345,6 +1701,7 @@ def get_bybit_expiry_single(
     Persists the expiry date (not IPs) to user.extra in api-keys.json.
     IPs are returned in the response but never stored.
     """
+    _recover_user_update_or_409()
     users = _get_users()
     user = users.find_user(name)
     if not user:

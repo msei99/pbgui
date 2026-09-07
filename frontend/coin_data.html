@@ -334,7 +334,7 @@
 
     .filters-grid {
       display: grid;
-      grid-template-columns: minmax(180px, 1fr) minmax(130px, 0.7fr) minmax(130px, 0.7fr) minmax(240px, 1.45fr) auto auto;
+      grid-template-columns: minmax(160px, 0.9fr) minmax(130px, 0.65fr) minmax(130px, 0.65fr) minmax(210px, 1.25fr) minmax(150px, 0.8fr) auto;
       gap: var(--sp-sm);
       align-items: end;
     }
@@ -566,6 +566,38 @@
 
     .ms-option.selected {
       color: #63b3ed;
+    }
+
+    .quote-picker {
+      min-height: var(--input-h);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .quote-picker-button {
+      min-height: 28px;
+      padding: 3px 9px;
+      border: 1px solid #2d3748;
+      border-radius: 7px;
+      background: #111827;
+      color: #cbd5e0;
+      font: inherit;
+      font-size: var(--fs-sm);
+      cursor: pointer;
+    }
+
+    .quote-picker-button:hover,
+    .quote-picker-button:focus-visible {
+      border-color: #4a5568;
+      outline: none;
+    }
+
+    .quote-picker-button.selected {
+      border-color: rgba(99, 179, 237, 0.24);
+      background: rgba(99, 179, 237, 0.12);
+      color: #90cdf4;
     }
 
     .details-card {
@@ -1499,8 +1531,9 @@
                 <div class="ms-dropdown" id="tag-options"></div>
               </div>
             </div>
-            <div class="filters-status">
-              <span class="pill" id="quotes-pill">Quotes: -</span>
+            <div class="field">
+              <span class="field-label" id="quote-filter-label">Quotes</span>
+              <div class="quote-picker" id="quote-picker" role="group" aria-labelledby="quote-filter-label"></div>
             </div>
             <div class="filters-reset">
               <button class="btn" id="btn-reset-filters">Reset</button>
@@ -1679,8 +1712,9 @@
     }
 
     function formatCompact(value) {
+      if (value == null || value === '') return 'N/A';
       var num = Number(value);
-      if (!isFinite(num)) return '-';
+      if (!isFinite(num)) return 'N/A';
       var abs = Math.abs(num);
       if (abs >= 1e12) return (num / 1e12).toFixed(abs >= 1e13 ? 0 : 2) + 'T';
       if (abs >= 1e9) return (num / 1e9).toFixed(abs >= 1e10 ? 0 : 2) + 'B';
@@ -1690,8 +1724,9 @@
     }
 
     function formatPrice(value) {
+      if (value == null || value === '') return 'N/A';
       var num = Number(value);
-      if (!isFinite(num)) return '-';
+      if (!isFinite(num)) return 'N/A';
       if (num === 0) return '$0';
       if (Math.abs(num) >= 1000) return '$' + formatCompact(num);
       if (Math.abs(num) >= 1) return '$' + num.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
@@ -1699,8 +1734,9 @@
     }
 
     function formatRatio(value) {
+      if (value == null || value === '') return 'N/A';
       var num = Number(value);
-      if (!isFinite(num)) return '-';
+      if (!isFinite(num)) return 'N/A';
       return num.toFixed(4) + 'x';
     }
 
@@ -1720,6 +1756,7 @@
       market_cap: 0,
       vol_mcap: 10,
       tags: [],
+      quotes: [],
       only_cpt: false
     };
     var filterDrafts = {
@@ -1784,6 +1821,11 @@
       if (params.get('market_cap')) filters.market_cap = Number(params.get('market_cap')) || 0;
       if (params.get('vol_mcap')) filters.vol_mcap = Number(params.get('vol_mcap')) || 0;
       if (params.get('only_cpt') === '1') filters.only_cpt = true;
+      if (params.get('quotes')) {
+        filters.quotes = params.get('quotes').split(',').map(function (quote) {
+          return quote.trim().toUpperCase();
+        }).filter(Boolean);
+      }
       if (params.get('tags')) {
         filters.tags = params.get('tags').split(',').map(function (tag) {
           return tag.trim();
@@ -1800,6 +1842,8 @@
       params.set('vol_mcap', String(filters.vol_mcap || 0));
       if (filters.tags.length) params.set('tags', filters.tags.join(','));
       else params.delete('tags');
+      if (filters.quotes.length) params.set('quotes', filters.quotes.join(','));
+      else params.delete('quotes');
       if (filters.only_cpt) params.set('only_cpt', '1'); else params.delete('only_cpt');
       var nextUrl = window.location.pathname + '?' + params.toString();
       window.history.replaceState({}, '', nextUrl);
@@ -1814,6 +1858,18 @@
     function buildRefreshJobUrl(jobId) {
       var params = new URLSearchParams();
       return API_BASE + '/refresh/jobs/' + encodeURIComponent(jobId) + '?' + params.toString();
+    }
+
+    function buildRefreshPayload() {
+      var payload = {
+        exchange: filters.exchange,
+        market_cap: filters.market_cap,
+        vol_mcap: filters.vol_mcap,
+        tags: filters.tags,
+        only_cpt: filters.only_cpt && supportsCopyTradingFilter(filters.exchange)
+      };
+      if (filters.quotes.length) payload.quotes = filters.quotes;
+      return payload;
     }
 
     function updateBusyProgress(percent, subtle) {
@@ -1852,7 +1908,30 @@
       var node = document.getElementById('action-status');
       if (!node) return;
       node.textContent = message || 'Ready.';
-      node.style.color = isError ? '#fca5a5' : '#94a3b8';
+      node.style.color = isError === 'warning' ? '#fbbf24' : (isError ? '#fca5a5' : '#94a3b8');
+    }
+
+    function refreshJobMessage(job, fallback) {
+      var partial = (job.exchange_results || []).filter(function (result) {
+        return !!result.partial;
+      });
+      var failed = (job.exchange_results || []).filter(function (result) {
+        return !result.ok && !result.partial;
+      }).map(function (result) {
+        return result.exchange || 'exchange';
+      });
+      var message = job.result_message || job.error || job.message || fallback;
+      if (partial.length && message.toLowerCase().indexOf('partial price coverage') === -1) {
+        message += ' Partial price coverage: ' + partial.map(function (result) {
+          var coverage = result.price_update || {};
+          return (result.exchange || 'exchange') + ' '
+            + Number(coverage.priced || 0) + '/' + Number(coverage.requested || 0);
+        }).join(', ') + '.';
+      }
+      if (failed.length && message.toLowerCase().indexOf('failed:') === -1) {
+        message += ' Failed: ' + failed.join(', ') + '.';
+      }
+      return message;
     }
 
     function toggleButtonState(buttonId, active) {
@@ -1909,6 +1988,7 @@
       params.set('vol_mcap', String(filters.vol_mcap || 0));
       if (filters.only_cpt && supportsCopyTradingFilter(exchange)) params.set('only_cpt', 'true');
       filters.tags.forEach(function (tag) { params.append('tags', tag); });
+      filters.quotes.forEach(function (quote) { params.append('quotes', quote); });
       return API_BASE + '/state?' + params.toString();
     }
 
@@ -1918,6 +1998,7 @@
       filters.market_cap = Number(nextState.filters.market_cap || 0);
       filters.vol_mcap = Number(nextState.filters.vol_mcap || 0);
       filters.tags = (nextState.filters.tags || []).slice();
+      filters.quotes = (nextState.filters.quotes || []).slice();
       filters.only_cpt = !!nextState.filters.only_cpt;
       normalizeExchangeSpecificState(filters.exchange);
       if (uiState.selectedKey) {
@@ -1973,14 +2054,15 @@
           var job = payload.job || {};
           if (busyJobId !== jobId) return;
           updateBusyProgress(Number(job.percent || 0), job.message || 'Working...');
-          if (job.status === 'completed') {
+          if (job.status === 'completed' || job.status === 'partial') {
             if (job.state) applyServerState(job.state);
-            setActionStatus(job.result_message || okFallback, false);
+            setActionStatus(refreshJobMessage(job, okFallback), job.status === 'partial' ? 'warning' : false);
             hideBusy();
             return;
           }
           if (job.status === 'error') {
-            setActionStatus(job.error || job.message || 'Refresh failed', true);
+            if (job.state) applyServerState(job.state);
+            setActionStatus(refreshJobMessage(job, 'Refresh failed'), true);
             hideBusy();
           }
         });
@@ -2012,13 +2094,7 @@
         method: 'POST',
         credentials: 'same-origin',
         headers: jsonHeaders(),
-        body: JSON.stringify({
-          exchange: filters.exchange,
-          market_cap: filters.market_cap,
-          vol_mcap: filters.vol_mcap,
-          tags: filters.tags,
-          only_cpt: filters.only_cpt && supportsCopyTradingFilter(filters.exchange)
-        })
+        body: JSON.stringify(buildRefreshPayload())
       })
         .then(function (response) {
           if (!response.ok) {
@@ -2080,7 +2156,6 @@
       document.getElementById('btn-view-unmatched').textContent = 'CMC Unmatched (' + (serverState.counts.unmatched_visible || 0) + ')';
       document.getElementById('btn-view-hip3').textContent = 'HIP-3 Symbols (' + hip3CountLabel + ')';
       document.getElementById('btn-only-cpt').textContent = 'Only Copy Trading';
-      document.getElementById('quotes-pill').textContent = 'Quotes: ' + ((serverState.options.quote_filter || []).join(', ') || '-');
       document.getElementById('main-panel-title').textContent = 'Matched symbols (' + (serverState.counts.main || 0) + ')';
       document.getElementById('main-panel-meta').textContent = serverState.meta.exchange_line + ' | ' + serverState.meta.cmc_line;
       document.getElementById('main-panel-meta').title = [
@@ -2176,6 +2251,35 @@
       input.value = '';
       input.placeholder = tags.length ? 'Select tags...' : 'No tags available';
       tagMsController.rebuild('tag-filter-wrap', tags, filters.tags, { silent: true });
+    }
+
+    function renderQuoteFilter() {
+      var picker = document.getElementById('quote-picker');
+      var quotes = (serverState.options.available_quotes || []).slice();
+      picker.innerHTML = quotes.map(function (quote) {
+        var selected = filters.quotes.indexOf(quote) !== -1;
+        return '<button type="button" class="quote-picker-button' + (selected ? ' selected' : '') + '"' +
+          ' data-quote="' + escapeHtml(quote) + '" aria-pressed="' + (selected ? 'true' : 'false') + '">' +
+          escapeHtml(quote) + '</button>';
+      }).join('');
+      if (!quotes.length) {
+        picker.textContent = 'N/A';
+        return;
+      }
+      Array.prototype.forEach.call(picker.querySelectorAll('.quote-picker-button'), function (button) {
+        button.addEventListener('click', function () {
+          var quote = button.getAttribute('data-quote');
+          var index = filters.quotes.indexOf(quote);
+          if (index !== -1) {
+            if (filters.quotes.length === 1) return;
+            filters.quotes.splice(index, 1);
+          } else {
+            filters.quotes.push(quote);
+          }
+          uiState.selectedKey = '';
+          loadState();
+        });
+      });
     }
 
     function normalizeFilterNumberText(rawValue) {
@@ -2357,6 +2461,18 @@
       loadState();
     }
 
+    function compareCoinRowTieBreak(left, right) {
+      var fields = ['coin', 'symbol', 'ccxt_symbol'];
+      for (var index = 0; index < fields.length; index += 1) {
+        var field = fields[index];
+        var leftValue = String(left[field] || '').trim().toUpperCase();
+        var rightValue = String(right[field] || '').trim().toUpperCase();
+        if (leftValue < rightValue) return -1;
+        if (leftValue > rightValue) return 1;
+      }
+      return 0;
+    }
+
     function sortRows(rows, tableName) {
       var state = sortState[tableName];
       var direction = state.dir === 'asc' ? 1 : -1;
@@ -2365,11 +2481,13 @@
         var rv = right[state.key];
         if (typeof lv === 'boolean') lv = lv ? 1 : 0;
         if (typeof rv === 'boolean') rv = rv ? 1 : 0;
-        if (lv == null && rv == null) return 0;
+        if (lv == null && rv == null) return compareCoinRowTieBreak(left, right);
         if (lv == null) return 1;
         if (rv == null) return -1;
-        if (typeof lv === 'number' && typeof rv === 'number') return (lv - rv) * direction;
-        return String(lv).localeCompare(String(rv)) * direction;
+        var comparison = typeof lv === 'number' && typeof rv === 'number'
+          ? (lv - rv) * direction
+          : String(lv).localeCompare(String(rv)) * direction;
+        return comparison || compareCoinRowTieBreak(left, right);
       });
     }
 
@@ -2658,6 +2776,7 @@
       renderSidebarMeta();
       renderSummaries();
       renderTagFilter();
+      renderQuoteFilter();
       renderUnmatchedRows();
       renderMainRows();
       renderHip3Rows();
@@ -2704,6 +2823,7 @@
       filterDrafts.market_cap = null;
       filterDrafts.vol_mcap = null;
       filters.tags = [];
+      filters.quotes = [];
       filters.only_cpt = false;
       syncToggleButtons();
       loadState();
@@ -2894,6 +3014,7 @@
         filters.exchange = event.target.value;
         filters.hip3_dex = '';
         filters.tags = [];
+        filters.quotes = [];
         normalizeExchangeSpecificState(filters.exchange);
         uiState.selectedKey = '';
         loadState();

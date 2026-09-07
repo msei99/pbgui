@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.auth import require_auth, SessionToken
 from api.page_templates import render_page_urls, script_json
@@ -31,6 +31,8 @@ from logging_helpers import (
     set_rotate_settings,
     get_managed_scope_settings,
     set_managed_scope_settings,
+    MAX_ROTATE_BACKUP_COUNT,
+    MAX_ROTATE_MAX_BYTES,
 )
 
 SERVICE = "ApiLogging"
@@ -50,8 +52,8 @@ _RETIRED_LOG_STEMS = {
 class RotationSaveIn(BaseModel):
     """Body for POST /rotation — saves one rotation rule."""
     scope: str       # "default" or service/log-stem name
-    max_mb: int
-    backup_count: int
+    max_mb: int = Field(ge=1, le=MAX_ROTATE_MAX_BYTES // (1024 * 1024))
+    backup_count: int = Field(ge=0, le=MAX_ROTATE_BACKUP_COUNT)
 
 
 # ── Endpoints ─────────────────────────────────────────────────
@@ -75,6 +77,7 @@ def list_log_files(session: SessionToken = Depends(require_auth)) -> dict:
 
         variants: list[str] = []
         _, backup_count = get_rotate_settings(logfile=str(p))
+        backup_count = min(backup_count, MAX_ROTATE_BACKUP_COUNT)
         for i in range(1, backup_count + 1):
             rp = logging_helpers.LOG_ROOT / f"{name}.{i}"
             if rp.is_file():
@@ -155,6 +158,11 @@ def save_rotation(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _log(SERVICE, f"Managed rotation for '{scope_id}' updated: max={body.max_mb} MB, files={backup_count}", level="INFO")
     else:
+        if not _BASE_LOG_NAME_RE.fullmatch(f"{body.scope}.log"):
+            raise HTTPException(status_code=400, detail="Invalid log rotation scope")
+        managed_scope = logging_helpers.resolve_managed_log_scope(logging_helpers.LOG_ROOT / f"{body.scope}.log")
+        if managed_scope:
+            raise HTTPException(status_code=400, detail=f"Use managed:{managed_scope} for this log")
         set_rotate_settings(body.scope, max_bytes, backup_count)
         _log(SERVICE, f"Rotation for '{body.scope}' updated: max={body.max_mb} MB, files={backup_count}", level="INFO")
 

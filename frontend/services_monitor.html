@@ -470,7 +470,7 @@
     .gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
     .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
   </style>
-  <script src="/app/js/log_viewer_panel.js?v=29"></script>
+  <script src="/app/js/log_viewer_panel.js?v=30"></script>
 </head>
 <body>
 <!-- ── Prices overlay ── -->
@@ -1146,6 +1146,8 @@ window.PBGUI_NAV_CONFIG = {
   var _settingsLoaded = {};
   var _workers = { counts: { total: 0, running: 0 }, groups: [] };
   var _workerIndex = {};
+  var _workersGeneration = 0;
+  var _workerActionPending = Object.create(null);
   var _selectedWorkerId = '';
   var _currentPanelId = 'overview';
   var _migrationStatus = null;
@@ -1296,10 +1298,25 @@ window.PBGUI_NAV_CONFIG = {
   }
 
   /* ── Worker status polling ─────────────────────────────── */
+  function workerResponseJson(response, fallbackMessage) {
+    return response.json().catch(function () {
+      if (!response.ok) return {};
+      throw new Error(fallbackMessage + ' Invalid response from server.');
+    }).then(function (data) {
+      if (!response.ok) {
+        var detail = data && (data.detail || data.error);
+        throw new Error(detail ? String(detail) : fallbackMessage + ' HTTP ' + response.status + '.');
+      }
+      return data;
+    });
+  }
+
   window.fetchWorkers = function (force) {
-    fetch(API_BASE + '/workers/status', authOptions())
-      .then(function (r) { return r.json(); })
+    var generation = ++_workersGeneration;
+    return fetch(API_BASE + '/workers/status', authOptions())
+      .then(function (response) { return workerResponseJson(response, 'Worker status request failed.'); })
       .then(function (data) {
+        if (generation !== _workersGeneration) return;
         _workers = data || { counts: { total: 0, running: 0 }, groups: [] };
         rebuildWorkerIndex();
         updateWorkersSummary();
@@ -1307,11 +1324,16 @@ window.PBGUI_NAV_CONFIG = {
         renderWorkers();
         scheduleWorkers();
       })
-      .catch(function () {
+      .catch(function (error) {
+        if (generation !== _workersGeneration) return;
         if (force) {
           var groups = document.getElementById('workers-groups');
           if (groups && _currentPanelId === 'workers') {
-            groups.innerHTML = '<div class="worker-detail-empty">Failed to load worker status.</div>';
+            groups.innerHTML = '';
+            var statusError = document.createElement('div');
+            statusError.className = 'worker-detail-empty';
+            statusError.textContent = 'Failed to load worker status: ' + (error && error.message ? error.message : 'Request failed.');
+            groups.appendChild(statusError);
           }
         }
         scheduleWorkers();
@@ -1320,7 +1342,7 @@ window.PBGUI_NAV_CONFIG = {
 
   function scheduleWorkers() {
     clearTimeout(_workersTimer);
-    if (_currentPanelId === 'workers') {
+    if (_currentPanelId === 'workers' && Object.keys(_workerActionPending).length === 0) {
       _workersTimer = setTimeout(function () { window.fetchWorkers(false); }, 5000);
     }
   }
@@ -1615,16 +1637,18 @@ window.PBGUI_NAV_CONFIG = {
   function renderWorkerActionButtons(item, compact) {
     if (!item || item.available === false) return '';
     var cls = compact ? 'card-btn' : 'ctrl-btn';
+    var pending = _workerActionPending[item.id] || '';
+    var disabledAttr = pending ? ' disabled' : '';
     var html = '';
     if (item.running) {
       if (item.can_stop !== false) {
-        html += '<button class="' + cls + ' stop" onclick="workerConfirmAction(\'' + item.id + '\',\'stop\');event.stopPropagation()">&#9632; Stop</button>';
+        html += '<button class="' + cls + ' stop" onclick="workerConfirmAction(\'' + item.id + '\',\'stop\');event.stopPropagation()"' + disabledAttr + '>&#9632; ' + (pending === 'stop' ? 'Stopping...' : 'Stop') + '</button>';
         if (item.can_start !== false) {
-          html += '<button class="' + cls + ' restart" onclick="workerRestart(\'' + item.id + '\');event.stopPropagation()">&#8635; Restart</button>';
+          html += '<button class="' + cls + ' restart" onclick="workerRestart(\'' + item.id + '\');event.stopPropagation()"' + disabledAttr + '>&#8635; ' + (pending === 'restart' ? 'Restarting...' : 'Restart') + '</button>';
         }
       }
     } else if (item.can_start !== false) {
-      html += '<button class="' + cls + ' start" onclick="workerAction(\'' + item.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>';
+      html += '<button class="' + cls + ' start" onclick="workerAction(\'' + item.id + '\',\'start\');event.stopPropagation()"' + disabledAttr + '>&#9654; ' + (pending === 'start' ? 'Starting...' : 'Start') + '</button>';
     }
     return html;
   }
@@ -1811,11 +1835,41 @@ window.PBGUI_NAV_CONFIG = {
     return window.workerAction(workerId, 'restart');
   };
 
+  function showWorkerActionError(workerId, action, error) {
+    var item = _workerIndex[workerId] || {};
+    var label = item.label || workerId;
+    var detail = error && error.message ? error.message : 'Worker action failed.';
+    if (window.PBGuiDialogs && typeof window.PBGuiDialogs.alert === 'function') {
+      window.PBGuiDialogs.alert({
+        title: 'Worker action failed',
+        message: 'Could not ' + action + ' worker "' + label + '".',
+        detail: detail,
+        level: 'error'
+      });
+      return;
+    }
+    _resultPopup('Worker action failed', 'Could not ' + action + ' worker "' + label + '".', detail, false, false);
+  }
+
   window.workerAction = function (workerId, action) {
+    if (_workerActionPending[workerId]) return Promise.resolve();
+    _workerActionPending[workerId] = action;
+    ++_workersGeneration;
+    clearTimeout(_workersTimer);
+    _workersTimer = null;
+    renderWorkers();
     return fetch(API_BASE + '/workers/' + encodeURIComponent(workerId) + '/' + encodeURIComponent(action), authOptions({ method: 'POST' }))
-      .then(function (r) { return r.json(); })
-      .then(function () { window.fetchWorkers(true); })
-      .catch(function () {});
+      .then(function (response) { return workerResponseJson(response, 'Worker action failed.'); })
+      .then(function () { return window.fetchWorkers(true); })
+      .catch(function (error) {
+        showWorkerActionError(workerId, action, error);
+        return window.fetchWorkers(false);
+      })
+      .finally(function () {
+        delete _workerActionPending[workerId];
+        renderWorkers();
+        scheduleWorkers();
+      });
   };
 
   /* ── Overview cards ────────────────────────────────────── */

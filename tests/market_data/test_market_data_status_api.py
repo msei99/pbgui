@@ -739,8 +739,7 @@ def test_okx_best_1m_queue_enqueues_selected_range(monkeypatch, tmp_path) -> Non
         return SimpleNamespace(job_id="okx-1", path=str(tmp_path / "okx-1.json"))
 
     monkeypatch.setattr("task_queue.enqueue_job", fake_enqueue_job)
-    monkeypatch.setattr("task_queue.read_worker_pid", lambda: 12345)
-    monkeypatch.setattr("task_queue.is_pid_running", lambda _pid: True)
+    monkeypatch.setattr("task_worker_ownership.ensure_task_worker_started", lambda: None)
     monkeypatch.setattr("market_data.append_exchange_download_log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "subprocess.Popen",

@@ -4,7 +4,11 @@ import asyncio
 import os
 import shlex
 import signal
+import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +21,7 @@ from master.async_store import VPSStore
 from master.vps_monitor_client import RemoteLogStreamerProxy
 from master.vps_monitor_daemon import VPSMonitorRPCDaemon
 from Exchange import Exchange
+from file_lock import advisory_file_lock
 
 
 class FakePool:
@@ -235,6 +240,593 @@ def test_remote_log_line_count_rejects_unsafe_values(value):
 def test_remote_log_line_count_accepts_supported_values(value, expected):
     """Accept integer line counts used by the shared log viewer."""
     assert async_logs.normalize_remote_log_lines(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("next_stream_id", "next_sid"),
+    [("stream-2", "sid-2"), ("stream-1", "sid-2")],
+)
+def test_remote_log_push_discards_data_when_subscription_changes_during_read(
+    monkeypatch: pytest.MonkeyPatch, next_stream_id: str, next_sid: str,
+) -> None:
+    """An awaited old-stream read must never be emitted under a newer subscription SID."""
+
+    state = {"stream_id": "stream-1", "sid": "sid-1"}
+
+    class RaceStreamer:
+        """Change the active subscription while the first async read is suspended."""
+
+        def __init__(self) -> None:
+            self.read_count = 0
+
+        async def read_stream_async(self, stream_id: str, max_lines: int) -> list[str]:
+            """Return stale data once, then data belonging to the current pair."""
+            assert max_lines == 50
+            self.read_count += 1
+            if self.read_count == 1:
+                assert stream_id == "stream-1"
+                state.update(stream_id=next_stream_id, sid=next_sid)
+                await asyncio.sleep(0)
+                return ["stale"]
+            assert stream_id == next_stream_id
+            return ["fresh"]
+
+        async def get_stream_status_async(self, stream_id: str) -> dict[str, str]:
+            """Describe the stream whose lines are about to be emitted."""
+            return {"hostname": "host", "log_path": stream_id}
+
+    class CaptureWebSocket:
+        """Stop the infinite push loop after the first emitted payload."""
+
+        def __init__(self) -> None:
+            self.messages: list[dict] = []
+
+        async def send_json(self, message: dict) -> None:
+            """Capture one message and cancel the loop."""
+            self.messages.append(message)
+            raise asyncio.CancelledError
+
+    streamer = RaceStreamer()
+    websocket = CaptureWebSocket()
+    monkeypatch.setattr(vps_api, "_streamer", streamer)
+    monkeypatch.setattr(vps_api, "LOG_PUSH_INTERVAL", 0)
+
+    asyncio.run(vps_api._push_log_loop(
+        websocket,
+        lambda: (state["stream_id"], state["sid"]),
+    ))
+
+    assert streamer.read_count == 2
+    assert websocket.messages == [{
+        "type": "log_lines",
+        "lines": ["fresh"],
+        "host": "host",
+        "service": next_stream_id,
+        "sid": next_sid,
+    }]
+
+
+@pytest.mark.parametrize("value", [-1, 50_001, True, "not-a-number"])
+def test_local_log_requests_reject_unbounded_or_invalid_line_counts(
+    monkeypatch: pytest.MonkeyPatch, value: object,
+) -> None:
+    """Local one-shot reads must reject the same unsafe counts as remote reads."""
+
+    class CaptureStreamer:
+        """Record local reads without touching runtime log files."""
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int]] = []
+
+        def get_local_logs(self, filename: str, lines: int) -> tuple[list[str], int]:
+            """Capture validated arguments."""
+            self.calls.append((filename, lines))
+            return [], 0
+
+    streamer = CaptureStreamer()
+    monkeypatch.setattr(vps_api, "_streamer", streamer)
+
+    response = vps_api._cmd_get_local_logs({"file": "PBRun.log", "lines": value})
+
+    assert response["type"] == "error"
+    assert streamer.calls == []
+
+
+def test_local_log_subscription_rejects_oversized_line_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local subscriptions must reject oversized snapshots before resolving a file."""
+
+    class CaptureWebSocket:
+        """Capture validation errors returned by the subscription command."""
+
+        def __init__(self) -> None:
+            self.messages: list[dict] = []
+
+        async def send_json(self, message: dict) -> None:
+            """Record the WebSocket response."""
+            self.messages.append(message)
+
+    websocket = CaptureWebSocket()
+    resolved: list[str] = []
+    monkeypatch.setattr(
+        vps_api,
+        "resolve_local_log_path",
+        lambda filename: resolved.append(filename),
+    )
+
+    subscription = asyncio.run(vps_api._cmd_subscribe_local_logs(
+        websocket,
+        {"file": "PBRun.log", "lines": 50_001},
+    ))
+
+    assert subscription is None
+    assert websocket.messages == [{
+        "type": "error",
+        "error": "lines must be between 0 and 50000",
+    }]
+    assert resolved == []
+
+
+def test_legacy_all_log_request_is_bounded_to_remote_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy local and remote zero values now request only 50,000 lines."""
+
+    class CaptureStreamer:
+        """Record the bounded local log request."""
+
+        def __init__(self) -> None:
+            self.local_lines: int | None = None
+            self.remote_lines: int | None = None
+
+        def get_local_logs(self, filename: str, lines: int) -> tuple[list[str], int]:
+            """Capture the normalized line limit."""
+            del filename
+            self.local_lines = lines
+            return ["newest"], 1
+
+        async def get_recent_logs(self, hostname: str, service: str, lines: int) -> str:
+            """Capture the normalized remote line limit."""
+            del hostname, service
+            self.remote_lines = lines
+            return "newest"
+
+    streamer = CaptureStreamer()
+    monkeypatch.setattr(vps_api, "_streamer", streamer)
+
+    response = vps_api._cmd_get_local_logs({"file": "PBRun.log", "lines": 0})
+    remote_response = asyncio.run(vps_api._cmd_get_logs({
+        "host": "host",
+        "service": "PBRun",
+        "lines": 0,
+    }))
+
+    assert response["lines"] == ["newest"]
+    assert remote_response["lines"] == ["newest"]
+    assert streamer.local_lines == streamer.remote_lines == async_logs.MAX_REMOTE_LOG_LINES == 50_000
+
+
+def test_remote_log_info_echoes_subscription_sid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Metadata responses carry the selection SID supplied by the viewer."""
+
+    class InfoStreamer:
+        """Return one fixed remote file size."""
+
+        async def get_log_info(self, _host: str, _service: str, _version: str | None) -> dict:
+            return {"size": 42}
+
+    monkeypatch.setattr(vps_api, "_streamer", InfoStreamer())
+
+    response = asyncio.run(vps_api._cmd_get_log_info({
+        "host": "host", "service": "PBRun", "sid": "selection-7",
+    }))
+
+    assert response == {
+        "type": "log_info",
+        "host": "host",
+        "service": "PBRun",
+        "size": 42,
+        "sid": "selection-7",
+    }
+
+
+def test_remote_subscription_is_inactive_while_previous_stop_is_suspended(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replacement clears the old stream/SID pair before awaiting its stop."""
+
+    class SuspendedStopStreamer:
+        """Suspend the first stop while recording any push-loop reads."""
+
+        def __init__(self) -> None:
+            self.stream_count = 0
+            self.stop_started = asyncio.Event()
+            self.release_stop = asyncio.Event()
+            self.push_reads: list[str] = []
+            self.reads_at_stop = 0
+            self.detached: list[str] = []
+
+        async def start_stream(self, _host: str, _service: str) -> str:
+            self.stream_count += 1
+            return f"stream-{self.stream_count}"
+
+        async def get_recent_logs(self, _host: str, _service: str, _lines: int) -> str:
+            return "snapshot\n"
+
+        async def read_stream_async(self, stream_id: str, max_lines: int) -> list[str]:
+            if max_lines == 50:
+                self.push_reads.append(stream_id)
+            return []
+
+        async def stop_stream_async(self, stream_id: str) -> None:
+            assert stream_id == "stream-1"
+            self.reads_at_stop = len(self.push_reads)
+            self.stop_started.set()
+            await self.release_stop.wait()
+
+        def detach_stream(self, stream_id: str) -> None:
+            self.detached.append(stream_id)
+
+    class TwoSubscriptionWebSocket:
+        """Issue a replacement after the first subscription snapshot arrives."""
+
+        client = "test-client"
+
+        def __init__(self) -> None:
+            self.first_sent = asyncio.Event()
+            self.messages: list[dict] = []
+
+        async def iter_text(self):
+            yield '{"cmd":"subscribe_logs","host":"host","service":"PBRun","sid":"one"}'
+            await self.first_sent.wait()
+            yield '{"cmd":"subscribe_logs","host":"host","service":"PBRun","sid":"two"}'
+
+        async def send_json(self, message: dict) -> None:
+            self.messages.append(message)
+            if message.get("type") == "logs" and message.get("sid") == "one":
+                self.first_sent.set()
+
+    async def exercise() -> tuple[SuspendedStopStreamer, TwoSubscriptionWebSocket]:
+        streamer = SuspendedStopStreamer()
+        websocket = TwoSubscriptionWebSocket()
+        monkeypatch.setattr(vps_api, "_streamer", streamer)
+        monkeypatch.setattr(vps_api, "LOG_PUSH_INTERVAL", 0)
+        task = asyncio.create_task(vps_api.ws_vps(websocket))
+        await asyncio.wait_for(streamer.stop_started.wait(), 1)
+        await asyncio.sleep(0.01)
+        assert streamer.push_reads[streamer.reads_at_stop:] == []
+        streamer.release_stop.set()
+        await asyncio.wait_for(task, 1)
+        return streamer, websocket
+
+    async def authenticate(_websocket):
+        return object()
+
+    async def send_no_state(_websocket):
+        return None
+
+    monkeypatch.setattr(vps_api, "authenticate_websocket", authenticate)
+    monkeypatch.setattr(vps_api, "_send_full_state", send_no_state)
+    monkeypatch.setattr(vps_api, "_log", lambda *_args, **_kwargs: None)
+    streamer, websocket = asyncio.run(exercise())
+
+    assert [message.get("sid") for message in websocket.messages if message.get("type") == "logs"] == ["one", "two"]
+    assert streamer.detached == ["stream-2"]
+
+
+def test_failed_initial_remote_snapshot_send_releases_registered_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disconnect cleanup sees a stream registered before its initial send."""
+
+    class InitialSendStreamer:
+        """Create one stream and record disconnect detachment."""
+
+        def __init__(self) -> None:
+            self.detached: list[str] = []
+
+        async def start_stream(self, _host: str, _service: str) -> str:
+            return "stream-created"
+
+        async def get_recent_logs(self, _host: str, _service: str, _lines: int) -> str:
+            return "snapshot\n"
+
+        def detach_stream(self, stream_id: str) -> None:
+            self.detached.append(stream_id)
+
+    class FailedSendWebSocket:
+        """Disconnect while sending the first remote snapshot."""
+
+        client = "test-client"
+
+        async def iter_text(self):
+            yield '{"cmd":"subscribe_logs","host":"host","service":"PBRun","sid":"current"}'
+
+        async def send_json(self, _message: dict) -> None:
+            raise vps_api.WebSocketDisconnect
+
+    async def authenticate(_websocket):
+        return object()
+
+    async def send_no_state(_websocket):
+        return None
+
+    streamer = InitialSendStreamer()
+    monkeypatch.setattr(vps_api, "_streamer", streamer)
+    monkeypatch.setattr(vps_api, "authenticate_websocket", authenticate)
+    monkeypatch.setattr(vps_api, "_send_full_state", send_no_state)
+    monkeypatch.setattr(vps_api, "_log", lambda *_args, **_kwargs: None)
+
+    asyncio.run(vps_api.ws_vps(FailedSendWebSocket()))
+
+    assert streamer.detached == ["stream-created"]
+
+
+def test_local_log_delta_buffers_split_writes(tmp_path) -> None:
+    """Emit records only after a newline joins writes split across polling chunks."""
+    path = tmp_path / "split.log"
+    path.write_bytes(b"")
+    _content, _size, sub = async_logs.AsyncLogStreamer.initialize_local_log_subscription(
+        path, "split.log",
+    )
+
+    with path.open("ab") as handle:
+        handle.write(b"hel")
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub, max_bytes=2) == []
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub, max_bytes=2) == []
+
+    with path.open("ab") as handle:
+        handle.write(b"lo\nnext")
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub, max_bytes=64) == ["hello"]
+    assert sub.partial == b"next"
+
+    with path.open("ab") as handle:
+        handle.write(b"\n")
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["next"]
+
+
+def test_local_log_delta_preserves_blank_lines(tmp_path) -> None:
+    """Keep intentional empty records between newline delimiters."""
+    path = tmp_path / "blank.log"
+    path.write_bytes(b"")
+    _content, _size, sub = async_logs.AsyncLogStreamer.initialize_local_log_subscription(
+        path, "blank.log",
+    )
+    with path.open("ab") as handle:
+        handle.write(b"first\n\nthird\n")
+
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["first", "", "third"]
+
+
+def test_local_snapshot_cap_includes_unterminated_final_line(tmp_path) -> None:
+    """Appending a partial final record must not make an N-line snapshot N+1."""
+    path = tmp_path / "partial.log"
+    path.write_bytes(b"first\nsecond\npartial")
+
+    assert async_logs.tail_file(path, 2) == ["second", "partial"]
+
+
+def test_remote_stream_preserves_blank_lines_and_normalizes_crlf() -> None:
+    """Remote live output retains empty records without leaking CR terminators."""
+
+    async def exercise() -> list[str]:
+        streamer = async_logs.AsyncLogStreamer(FakePool())
+        stream = async_logs.LogStream("stream", "host", "data/logs/PBRun.log")
+
+        class Output:
+            """Yield fixed remote records and then stop the worker cleanly."""
+
+            def __init__(self) -> None:
+                self.lines = iter(["first\r\n", "\r\n", "third\n"])
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self.lines)
+                except StopIteration:
+                    stream.active = False
+                    raise StopAsyncIteration
+
+        process = SimpleNamespace(stdout=Output(), close=lambda: None)
+
+        async def start_process(_hostname: str, _command: str):
+            return process
+
+        streamer._pool.start_process = start_process
+        await streamer._stream_worker(stream, "/tmp/test.log")
+        return list(stream.buffer)
+
+    assert asyncio.run(exercise()) == ["first", "", "third"]
+
+
+def test_local_log_delta_resets_on_file_replacement(tmp_path) -> None:
+    """Read a replacement from byte zero after its descriptor identity changes."""
+    path = tmp_path / "replace.log"
+    path.write_bytes(b"old\n")
+    _content, _size, sub = async_logs.AsyncLogStreamer.initialize_local_log_subscription(
+        path, "replace.log",
+    )
+    old_identity = sub.identity
+    replacement = tmp_path / "replacement.log"
+    replacement.write_bytes(b"new\n")
+    replacement.replace(path)
+
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["new"]
+    assert sub.identity != old_identity
+
+
+def test_local_log_delta_resets_on_in_place_truncation(tmp_path) -> None:
+    """Reset cursor and partial state when the same inode shrinks below the cursor."""
+    path = tmp_path / "truncate.log"
+    path.write_bytes(b"before\npending")
+    _content, _size, sub = async_logs.AsyncLogStreamer.initialize_local_log_subscription(
+        path, "truncate.log",
+    )
+    identity = sub.identity
+    path.write_bytes(b"new\n")
+
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["new"]
+    assert sub.identity == identity
+    assert sub.partial == b""
+
+
+def test_local_log_subscription_snapshot_handoff_has_no_gap(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An append during initial snapshot delivery remains after the atomic cursor."""
+    path = tmp_path / "handoff.log"
+    path.write_bytes(b"before\n")
+    monkeypatch.setattr(vps_api, "resolve_local_log_path", lambda _filename: path)
+
+    class AppendDuringSendWebSocket:
+        """Append once while the initial WebSocket snapshot is being delivered."""
+
+        def __init__(self) -> None:
+            self.messages: list[dict] = []
+
+        async def send_json(self, message: dict) -> None:
+            """Capture the snapshot and append before subscription setup returns."""
+            self.messages.append(message)
+            with path.open("ab") as handle:
+                handle.write(b"during-send\n")
+            await asyncio.sleep(0)
+
+    websocket = AppendDuringSendWebSocket()
+    sub = asyncio.run(vps_api._cmd_subscribe_local_logs(
+        websocket, {"file": "handoff.log", "lines": 200, "sid": "current"},
+    ))
+
+    assert sub is not None
+    assert sub.identity is not None
+    assert websocket.messages[0]["lines"] == ["before"]
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["during-send"]
+
+
+def test_local_log_delta_bounds_unterminated_line(tmp_path) -> None:
+    """Retain only the viewer-sized tail of a line that never terminates."""
+    path = tmp_path / "long.log"
+    path.write_bytes(b"")
+    _content, _size, sub = async_logs.AsyncLogStreamer.initialize_local_log_subscription(
+        path, "long.log",
+    )
+    limit = async_logs.MAX_LOCAL_LOG_PARTIAL_BYTES
+    with path.open("ab") as handle:
+        handle.write(b"a" * 100 + b"b" * limit)
+
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub, max_bytes=limit + 100) == []
+    assert sub.partial == b"b" * limit
+    with path.open("ab") as handle:
+        handle.write(b"\n")
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["b" * limit]
+    assert sub.partial == b""
+
+
+def test_local_log_unsubscribe_clears_cursor_state(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The WebSocket unsubscribe command releases identity and buffered content."""
+    sub = async_logs.LocalLogSub(
+        file=tmp_path / "cleanup.log",
+        name="cleanup.log",
+        pos=42,
+        sid="old",
+        identity=(1, 2),
+        partial=b"unfinished",
+    )
+
+    class UnsubscribeWebSocket:
+        """Provide one subscribe command followed by its matching unsubscribe."""
+
+        client = "test-client"
+
+        async def iter_text(self):
+            """Yield the command sequence consumed by the endpoint."""
+            yield '{"cmd":"subscribe_local_logs"}'
+            yield '{"cmd":"unsubscribe_local_logs"}'
+
+        async def send_json(self, _message: dict) -> None:
+            """Accept endpoint messages without external I/O."""
+
+    async def authenticate(_websocket):
+        """Authenticate the isolated fake socket."""
+        return object()
+
+    async def send_no_state(_websocket):
+        """Avoid reading monitor runtime state in this focused test."""
+
+    async def subscribe(_websocket, _request):
+        """Return the prepared cursor whose cleanup is under test."""
+        return sub
+
+    monkeypatch.setattr(vps_api, "authenticate_websocket", authenticate)
+    monkeypatch.setattr(vps_api, "_send_full_state", send_no_state)
+    monkeypatch.setattr(vps_api, "_cmd_subscribe_local_logs", subscribe)
+    monkeypatch.setattr(vps_api, "_log", lambda *_args, **_kwargs: None)
+
+    asyncio.run(vps_api.ws_vps(UnsubscribeWebSocket()))
+
+    assert sub.pos == 0
+    assert sub.identity is None
+    assert sub.partial == b""
+
+
+def test_local_log_reads_use_managed_file_physical_lock(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot and delta reads coordinate on the writer's path lock target."""
+    path = tmp_path / "data" / "logs" / "managed.log"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"current\n")
+    rotated_path = Path(f"{path}.1")
+    rotated_path.write_bytes(b"before\n")
+    lock_targets: list[object] = []
+
+    @contextmanager
+    def observed_lock(target):
+        lock_targets.append(target)
+        yield
+
+    monkeypatch.setattr(async_logs, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(async_logs, "advisory_file_lock", observed_lock)
+    _content, _size, sub = async_logs.AsyncLogStreamer.initialize_local_log_subscription(
+        rotated_path, "managed.log.1",
+    )
+    with rotated_path.open("ab") as handle:
+        handle.write(b"after\n")
+
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["after"]
+    assert lock_targets == [path, path]
+
+
+def test_rotated_log_read_contends_on_current_log_writer_lock(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Foo.log.1 read waits on the canonical Foo.log writer lock."""
+    path = tmp_path / "data" / "logs" / "managed.log"
+    path.parent.mkdir(parents=True)
+    rotated_path = Path(f"{path}.1")
+    rotated_path.write_text("rotated\n", encoding="utf-8")
+    started = threading.Event()
+    finished = threading.Event()
+    result: list[str] = []
+    monkeypatch.setattr(async_logs, "_project_root", lambda: tmp_path)
+
+    def read_rotated() -> None:
+        started.set()
+        result.extend(async_logs.tail_file(rotated_path, 1))
+        finished.set()
+
+    with advisory_file_lock(path):
+        thread = threading.Thread(target=read_rotated)
+        thread.start()
+        assert started.wait(1)
+        time.sleep(0.05)
+        assert not finished.is_set()
+    thread.join(2)
+
+    assert finished.is_set()
+    assert result == ["rotated"]
 
 
 def test_get_recent_logs_rejects_injection_before_remote_command():

@@ -18,8 +18,12 @@ Das Streaming startet automatisch — neue Zeilen werden live angehängt.
 ## Lines-Dropdown
 
 Legt fest, wie viele Zeilen beim Öffnen oder Wechseln einer Datei geladen werden.  
-Optionen: 200 / 500 / 1000 / 2000 / 5000 / 10000 / 25000 / All.  
+Optionen: 200 / 500 / 1000 / 2000 / 5000 / 10000 / 25000 / Max (50,000).
 Beim Ändern des Werts wird die Datei mit der neuen Anzahl neu geladen.
+Die ausgewaehlte Anzahl begrenzt zugleich den Live-Puffer im Browser und die
+gerenderten Zeilen. Beim Erreichen des Limits werden die aeltesten angezeigten
+Zeilen verworfen; die neuesten bleiben erhalten. **Max (50,000)** ist ein
+begrenzter Datei-Tail und nicht die vollstaendige Datei.
 
 ## Version-Dropdown
 
@@ -81,12 +85,15 @@ hoechstens den konfigurierten Maximalgroessen-Tail. Bei Backup-Anzahl `0` wird
 der aktuelle Inhalt verworfen und vorhandene numerische Generationen werden
 entfernt. Purge-Fehler werden geloggt; Browser-Antworten bleiben generisch und
 legen keine Dateisystem-Exceptiondetails offen.
+Bei verwalteten Purge-/Trim-Vorgaengen ersetzt PBGui die aktuelle Datei, damit
+Live-Viewer den Reset erkennen. Wenn ein externes Programm denselben Inode
+zwischen zwei Viewer-Abfragen leert und neu befuellt, gilt diese Garantie nicht.
 
 ## Fehlerbehebung
 
 - **Keine Log-Dateien aufgelistet**: Sicherstellen, dass PBGui-Dienste mindestens einmal gestartet wurden
 - **Streaming stoppt**: API-Server-WebSocket-Verbindung unterbrochen — der Viewer verbindet sich automatisch neu
-- **„All" ist langsam**: Sehr große Dateien können einen Moment brauchen; bei großen Logs ein Zeilenlimit setzen
+- **Max (50,000) ist langsam**: Fuer grosse oder schnell wachsende Logs eine kleinere Zeilenanzahl verwenden
 
 ---
 

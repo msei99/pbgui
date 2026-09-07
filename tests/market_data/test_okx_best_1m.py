@@ -1232,6 +1232,45 @@ def test_bitget_coin_options_fallback_excludes_non_usdt_or_inactive_markets(monk
     assert market_data.get_market_data_coin_options("bitget") == ["BTC"]
 
 
+def test_hyperliquid_coin_options_fallback_normalizes_hip3_aliases(monkeypatch, tmp_path) -> None:
+    """Legacy mapping rows without coin preserve canonical HIP-3 names."""
+
+    import market_data
+
+    mapping_path = tmp_path / "data" / "coindata" / "hyperliquid" / "mapping.json"
+    mapping_path.parent.mkdir(parents=True)
+    mapping_path.write_text(
+        json.dumps([{
+            "coin": "",
+            "ccxt_symbol": "XYZ-TSLA/USDC:USDC",
+            "quote": "USDC",
+            "swap": True,
+            "active": True,
+            "linear": True,
+        }]),
+        encoding="utf-8",
+    )
+
+    class FailingCoinData:
+        """Force get_market_data_coin_options through its mapping fallback."""
+
+        def filter_mapping(self, **_kwargs):
+            """Simulate an unavailable CoinData cache."""
+
+            raise RuntimeError("cache unavailable")
+
+    monkeypatch.setattr(market_data, "__file__", str(tmp_path / "market_data.py"))
+    monkeypatch.setattr(market_data, "CoinData", FailingCoinData)
+    monkeypatch.setattr(
+        market_data,
+        "normalize_symbol",
+        lambda symbol: "XYZ-TSLA" if symbol == "XYZ-TSLA/USDC:USDC" else "",
+    )
+    monkeypatch.setattr(market_data, "_filter_live_market_data_coin_options", lambda _exchange, coins: coins)
+
+    assert market_data.get_market_data_coin_options("hyperliquid") == ["xyz:TSLA"]
+
+
 def test_bitget_heatmap_overview_reads_source_index() -> None:
     """Bitget remains in the source-index-backed 1m heatmap exchange set."""
 

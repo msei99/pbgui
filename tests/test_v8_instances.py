@@ -210,6 +210,32 @@ def test_pb8_coin_filter_projects_namespaced_hyperliquid_aliases(monkeypatch) ->
     assert result == {"approved": ["xyz:TSLA"], "ignored": [], "unresolved": []}
 
 
+def test_editor_market_data_uses_default_ratio_view_but_rejects_positive_market_cap(monkeypatch) -> None:
+    """Editor filtering keeps unknown ratios by default while positive market cap stays active."""
+    import PBCoinData
+    from api import editor_market_data
+
+    class FakeCoinData:
+        """Expose the expected core classifications to the editor adapter."""
+
+        def filter_mapping(self, **kwargs):
+            if kwargs["market_cap_min_m"] == 0 and kwargs["vol_mcap_max"] >= 10:
+                return ["KNOWN", "UNKNOWN"], []
+            return ["KNOWN"], ["UNKNOWN"]
+
+    monkeypatch.setattr(PBCoinData, "CoinData", FakeCoinData)
+
+    assert editor_market_data.symbols("binance") == ["KNOWN", "UNKNOWN"]
+    assert editor_market_data.filter_symbols("binance", 0, 10.0, False, False, "") == (
+        ["KNOWN", "UNKNOWN"],
+        [],
+    )
+    assert editor_market_data.filter_symbols("binance", 1, 10.0, False, False, "") == (
+        ["KNOWN"],
+        ["UNKNOWN"],
+    )
+
+
 def test_pb8_market_route_maps_resolver_unavailability_to_503(monkeypatch) -> None:
     """Incomplete PB8 catalogs must fail as retryable service errors without CoinData fallback."""
     monkeypatch.setattr(

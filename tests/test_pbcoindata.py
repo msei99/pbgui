@@ -37,6 +37,7 @@ import importlib.util
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1159,6 +1160,162 @@ class TestMappingQueryFunctions:
         assert approved == ["SHIB"]
         assert ignored == ["BTC", "MEME"]
 
+    @pytest.mark.parametrize(
+        ("market_cap_min_m", "vol_mcap_max"),
+        [(1, 10.0), (0, 9.0)],
+    )
+    def test_unknown_cmc_metrics_fail_each_active_numeric_criterion(
+        self,
+        coindata,
+        tmp_workdir,
+        market_cap_min_m,
+        vol_mcap_max,
+    ):
+        """Unavailable CMC values cannot pass an enabled market-cap or ratio filter."""
+        coindata.save_exchange_mapping("binance", [
+            {
+                "coin": "KNOWN",
+                "symbol": "KNOWNUSDT",
+                "quote": "USDT",
+                "cmc_id": 1,
+                "market_cap": 10_000_000,
+                "volume_24h": 1_000_000,
+            },
+            {
+                "coin": "UNKNOWN",
+                "symbol": "UNKNOWNUSDT",
+                "quote": "USDT",
+                "cmc_id": None,
+                "market_cap": 0,
+                "volume_24h": 0,
+            },
+        ])
+
+        approved, ignored = coindata.filter_mapping(
+            "binance",
+            market_cap_min_m=market_cap_min_m,
+            vol_mcap_max=vol_mcap_max,
+            quote_filter=["USDT"],
+        )
+
+        assert approved == ["KNOWN"]
+        assert ignored == ["UNKNOWN"]
+
+    @pytest.mark.parametrize("vol_mcap_max", [10.0, 12.0, float("inf")])
+    def test_unknown_cmc_metrics_remain_visible_when_numeric_filters_are_disabled(
+        self, coindata, tmp_workdir, vol_mcap_max
+    ):
+        """The availability path retains unmatched rows and exposes nullable metrics."""
+        coindata.save_exchange_mapping("binance", [
+            {
+                "coin": "UNKNOWN",
+                "symbol": "UNKNOWNUSDT",
+                "quote": "USDT",
+                "cmc_id": None,
+                "market_cap": 0,
+                "volume_24h": 0,
+            },
+        ])
+
+        approved, ignored = coindata.filter_mapping(
+            "binance",
+            market_cap_min_m=0,
+            vol_mcap_max=vol_mcap_max,
+            quote_filter=["USDT"],
+        )
+        rows = coindata.filter_mapping_rows(
+            "binance",
+            market_cap_min_m=0,
+            vol_mcap_max=vol_mcap_max,
+            quote_filter=["USDT"],
+        )
+
+        assert approved == ["UNKNOWN"]
+        assert ignored == []
+        assert rows[0]["market_cap"] is None
+        assert rows[0]["volume_24h"] is None
+        assert rows[0]["vol/mcap"] is None
+        assert rows[0]["vol_mcap"] is None
+
+    def test_filter_mapping_rows_is_deterministic_for_reversed_equal_market_caps(
+        self, coindata, tmp_workdir
+    ):
+        """Equal and unknown market caps sort by normalized coin, native, then CCXT symbol."""
+        mapping = [
+            {
+                "coin": " gamma ",
+                "symbol": "GAMMAUSDT",
+                "ccxt_symbol": "GAMMA/USDT:USDT",
+                "quote": "USDT",
+                "market_cap": None,
+                "volume_24h": None,
+            },
+            {
+                "coin": "BETA",
+                "symbol": "BETAUSDT",
+                "ccxt_symbol": "BETA/USDT:USDT",
+                "quote": "USDT",
+                "market_cap": 10,
+                "volume_24h": 0,
+            },
+            {
+                "coin": "DELTA",
+                "symbol": "DELTAUSDT",
+                "ccxt_symbol": "DELTA/USDT:USDT",
+                "quote": "USDT",
+                "market_cap": None,
+                "volume_24h": None,
+            },
+            {
+                "coin": " alpha",
+                "symbol": "ALPHAUSDT",
+                "ccxt_symbol": "ALPHA/USDT:USDT",
+                "quote": "USDT",
+                "market_cap": 10,
+                "volume_24h": 0,
+            },
+            {
+                "coin": "SAME",
+                "symbol": "SAMEUSDT",
+                "ccxt_symbol": "SAME-B/USDT:USDT",
+                "quote": "USDT",
+                "market_cap": 5,
+                "volume_24h": 0,
+            },
+            {
+                "coin": "same",
+                "symbol": "sameusdt",
+                "ccxt_symbol": "SAME-A/USDT:USDT",
+                "quote": "USDT",
+                "market_cap": 5,
+                "volume_24h": 0,
+            },
+        ]
+
+        def filter_symbols(rows):
+            coindata.save_exchange_mapping("binance", rows)
+            filtered = coindata.filter_mapping_rows(
+                "binance",
+                market_cap_min_m=0,
+                vol_mcap_max=float("inf"),
+                quote_filter=["USDT"],
+                use_cache=False,
+            )
+            return [row["ccxt_symbol"] for row in filtered]
+
+        forward = filter_symbols(mapping)
+        reversed_order = filter_symbols(list(reversed(mapping)))
+
+        assert forward == [
+            "ALPHA/USDT:USDT",
+            "BETA/USDT:USDT",
+            "SAME-A/USDT:USDT",
+            "SAME-B/USDT:USDT",
+            "DELTA/USDT:USDT",
+            "GAMMA/USDT:USDT",
+        ]
+        assert reversed_order == forward
+
     def test_kucoin_active_filter_matches_passivbot_market_filter(self, coindata, tmp_workdir):
         """KuCoin follows Passivbot's active/swap/linear/USDT market eligibility."""
         coindata.save_exchange_mapping("kucoin", [
@@ -1379,8 +1536,45 @@ class TestBuildMapping:
         assert "xyz" in dexes
         assert "cash" in dexes
 
+    @pytest.mark.parametrize("market_id", ["xyz:TSLA", "110001"])
+    def test_build_mapping_hip3_coin_uses_hyperliquid_base_for_string_and_numeric_ids(
+        self, coindata, tmp_workdir, market_id
+    ):
+        """Known Hyperliquid HIP-3 context derives the coin independently of its market ID."""
+        ccxt_symbol = "XYZ-TSLA/USDC:USDC"
+        coindata.save_ccxt_markets("hyperliquid", {
+            ccxt_symbol: {
+                "id": market_id,
+                "symbol": ccxt_symbol,
+                "base": "XYZ-TSLA",
+                "quote": "USDC",
+                "swap": True,
+                "spot": False,
+                "active": True,
+                "linear": True,
+                "contractSize": 1.0,
+                "info": {"hip3": True, "dex": "xyz", "onlyIsolated": True},
+                "limits": {
+                    "amount": {"min": 0.01},
+                    "cost": {"min": 10},
+                    "leverage": {"max": 10},
+                },
+                "precision": {"amount": 0.01, "price": 0.01},
+            }
+        })
+
+        with patch("Exchange.Exchange") as exchange_cls:
+            exchange_cls.return_value.fetch_prices.return_value = {}
+            assert coindata.build_mapping("hyperliquid") is True
+
+        mapping = coindata.load_mapping("hyperliquid", use_cache=False)
+        assert len(mapping) == 1
+        assert mapping[0]["symbol"] == market_id
+        assert mapping[0]["coin"] == "XYZ-TSLA"
+        assert mapping[0]["is_hip3"] is True
+
     def test_build_mapping_hip3_cmc_defaults(self, coindata, tmp_workdir, sample_hyperliquid_ccxt_markets):
-        """HIP-3 records have null/zero CMC fields."""
+        """HIP-3 records have nullable unavailable CMC metrics."""
         coindata.save_ccxt_markets("hyperliquid", sample_hyperliquid_ccxt_markets)
         coindata.build_mapping("hyperliquid")
         mapping = coindata.load_exchange_mapping("hyperliquid")
@@ -1388,10 +1582,38 @@ class TestBuildMapping:
         hip3 = [r for r in mapping if r["is_hip3"]]
         for record in hip3:
             assert record["cmc_id"] is None
-            assert record["cmc_rank"] == 0
-            assert record["market_cap"] == 0
-            assert record["volume_24h"] == 0
+            assert record["cmc_rank"] is None
+            assert record["market_cap"] is None
+            assert record["volume_24h"] is None
+            assert record["vol_mcap"] is None
             assert record["tags"] == []
+
+    def test_build_mapping_preserves_null_for_missing_matched_cmc_metrics(
+        self, coindata, tmp_workdir, sample_ccxt_markets
+    ):
+        """A CMC match with absent quote metrics persists null rather than fabricated zero."""
+        coindata.save_ccxt_markets("binance", sample_ccxt_markets)
+        coindata.data = {
+            "data": [
+                {
+                    "id": 1,
+                    "symbol": "BTC",
+                    "name": "Bitcoin",
+                    "slug": "bitcoin",
+                    "self_reported_market_cap": None,
+                    "quote": {"USD": {"price": 100_000}},
+                }
+            ]
+        }
+
+        assert coindata.build_mapping("binance") is True
+
+        btc = next(row for row in coindata.load_mapping("binance") if row["base"] == "BTC")
+        assert btc["cmc_id"] == 1
+        assert btc["cmc_rank"] is None
+        assert btc["market_cap"] is None
+        assert btc["volume_24h"] is None
+        assert btc["vol_mcap"] is None
 
     def test_build_mapping_fetches_prices_on_first_run(self, coindata, tmp_workdir, sample_ccxt_markets):
         """build_mapping fetches live prices when no previous mapping exists."""
@@ -2062,6 +2284,42 @@ class TestListSymbols:
         assert "BTC" in approved
         assert "ETH" in approved
 
+    def test_legacy_list_paths_preserve_nullable_unknown_semantics(self, coindata, tmp_workdir):
+        """Legacy list helpers include unknowns only while CMC criteria are disabled."""
+        row = {
+            "symbol": "UNKNOWNUSDT",
+            "coin": "UNKNOWN",
+            "quote": "USDT",
+            "cmc_id": None,
+            "swap": True,
+            "active": True,
+            "linear": True,
+            "market_cap": None,
+            "volume_24h": None,
+            "copy_trading": False,
+            "tags": [],
+        }
+        coindata.save_exchange_mapping("binance", [row])
+        coindata._exchange = "binance"
+        coindata._market_cap = 0
+        coindata._vol_mcap = 10.0
+
+        coindata.list_symbols()
+        disabled_approved, disabled_ignored = coindata.filter_by_market_cap(
+            ["UNKNOWNUSDT"],
+            0,
+        )
+        active_approved, active_ignored = coindata.filter_by_market_cap(
+            ["UNKNOWNUSDT"],
+            1,
+        )
+
+        assert coindata._symbols_data[0]["market_cap"] is None
+        assert coindata._symbols_data[0]["volume_24h"] is None
+        assert coindata._symbols_data[0]["vol/mcap"] is None
+        assert (disabled_approved, disabled_ignored) == (["UNKNOWN"], [])
+        assert (active_approved, active_ignored) == ([], ["UNKNOWN"])
+
 
 # ============================================================================
 # Phase 1.7 Equivalence Tests (mapping vs ini/legacy)
@@ -2320,7 +2578,7 @@ class TestCMCEnrichment:
         assert "defi" in eth["tags"]
 
     def test_no_cmc_data_uses_defaults(self, coindata, tmp_workdir, sample_ccxt_markets):
-        """Without CMC data, mapping uses zero/null defaults."""
+        """Without CMC data, mapping uses nullable unavailable metrics."""
         coindata.save_ccxt_markets("binance", sample_ccxt_markets)
         coindata.data = None
         coindata.build_mapping("binance")
@@ -2328,13 +2586,14 @@ class TestCMCEnrichment:
 
         for record in mapping:
             assert record["cmc_id"] is None
-            assert record["cmc_rank"] == 0
-            assert record["market_cap"] == 0
-            assert record["volume_24h"] == 0
+            assert record["cmc_rank"] is None
+            assert record["market_cap"] is None
+            assert record["volume_24h"] is None
+            assert record["vol_mcap"] is None
             assert record["tags"] == []
 
     def test_empty_cmc_data_uses_defaults(self, coindata, tmp_workdir, sample_ccxt_markets):
-        """Empty CMC data dict uses defaults."""
+        """Empty CMC data dict uses nullable unavailable metrics."""
         coindata.save_ccxt_markets("binance", sample_ccxt_markets)
         coindata.data = {"data": []}
         coindata.build_mapping("binance")
@@ -2342,10 +2601,12 @@ class TestCMCEnrichment:
 
         for record in mapping:
             assert record["cmc_id"] is None
-            assert record["market_cap"] == 0
+            assert record["market_cap"] is None
+            assert record["volume_24h"] is None
+            assert record["vol_mcap"] is None
 
     def test_unmatched_coin_gets_defaults(self, coindata, tmp_workdir):
-        """Coin not in CMC data gets zero/null defaults."""
+        """Coin not in CMC data gets nullable unavailable metrics."""
         markets = {
             "XYZZY/USDT:USDT": {
                 "id": "XYZZYUSDT", "symbol": "XYZZY/USDT:USDT",
@@ -2364,7 +2625,9 @@ class TestCMCEnrichment:
 
         xyzzy = mapping[0]
         assert xyzzy["cmc_id"] is None
-        assert xyzzy["market_cap"] == 0
+        assert xyzzy["market_cap"] is None
+        assert xyzzy["volume_24h"] is None
+        assert xyzzy["vol_mcap"] is None
 
     def test_data_driven_matching_for_multiplier_symbol(self, coindata, tmp_workdir, sample_cmc_data):
         """Data-driven matching resolves multiplier-prefixed exchange symbols."""
@@ -2602,8 +2865,10 @@ class TestCMCEnrichment:
         assert len(hip3) > 0
         for record in hip3:
             assert record["cmc_id"] is None
-            assert record["cmc_rank"] == 0
-            assert record["market_cap"] == 0
+            assert record["cmc_rank"] is None
+            assert record["market_cap"] is None
+            assert record["volume_24h"] is None
+            assert record["vol_mcap"] is None
 
     def test_crypto_enriched_hip3_not(self, coindata, tmp_workdir, sample_hyperliquid_ccxt_markets, sample_cmc_data):
         """On Hyperliquid, crypto gets CMC data but HIP-3 doesn't."""
@@ -2618,7 +2883,9 @@ class TestCMCEnrichment:
 
         tsla = next(r for r in mapping if "TSLA" in r["base"])
         assert tsla["cmc_id"] is None
-        assert tsla["market_cap"] == 0
+        assert tsla["market_cap"] is None
+        assert tsla["volume_24h"] is None
+        assert tsla["vol_mcap"] is None
 
 
 # ============================================================================
@@ -2997,6 +3264,55 @@ class TestFetchCopyTradingSymbols:
             result = coindata.fetch_copy_trading_symbols("binance")
         assert sorted(result) == ["BTCUSDT", "ETHUSDT"]
 
+    @pytest.mark.parametrize("exchange", ["binance", "bitget"])
+    def test_authenticated_success_empty_clears_stale_cache(
+        self, coindata, tmp_workdir, exchange
+    ):
+        """A verified empty authenticated response is persisted as authoritative."""
+        coindata.save_copy_trading_symbols(exchange, ["BTCUSDT"])
+
+        with patch.object(coindata, "_fetch_cpt_with_user_discovery", return_value=[]):
+            result = coindata.fetch_copy_trading_symbols(exchange)
+
+        assert result == []
+        assert coindata.load_copy_trading_symbols(exchange, use_cache=False) == []
+
+    @pytest.mark.parametrize("exchange", ["binance", "bitget"])
+    def test_authenticated_unavailable_retains_stale_cache(
+        self, coindata, tmp_workdir, exchange
+    ):
+        """Authentication/API unavailability retains the last verified symbols."""
+        coindata.save_copy_trading_symbols(exchange, ["BTCUSDT"])
+
+        with patch.object(coindata, "_fetch_cpt_with_user_discovery", return_value=None):
+            result = coindata.fetch_copy_trading_symbols(exchange)
+
+        assert result == ["BTCUSDT"]
+        assert coindata.load_copy_trading_symbols(exchange, use_cache=False) == ["BTCUSDT"]
+
+    def test_bybit_success_empty_clears_stale_cache(self, coindata, tmp_workdir):
+        """Usable Bybit market data with no CPT symbols persists a verified empty list."""
+        coindata.save_copy_trading_symbols("bybit", ["BTCUSDT"])
+        markets = {
+            "ETH/USDT:USDT": {
+                "id": "ETHUSDT",
+                "swap": True,
+                "active": True,
+                "linear": True,
+                "info": {"copyTrading": "none"},
+            }
+        }
+
+        assert coindata.fetch_copy_trading_symbols("bybit", markets) == []
+        assert coindata.load_copy_trading_symbols("bybit", use_cache=False) == []
+
+    def test_bybit_unavailable_markets_retain_stale_cache(self, coindata, tmp_workdir):
+        """Missing Bybit market discovery data does not clear a prior verified result."""
+        coindata.save_copy_trading_symbols("bybit", ["BTCUSDT"])
+
+        assert coindata.fetch_copy_trading_symbols("bybit", {}) == ["BTCUSDT"]
+        assert coindata.load_copy_trading_symbols("bybit", use_cache=False) == ["BTCUSDT"]
+
 
 # ============================================================================
 # Copy Trading in build_mapping() Tests
@@ -3249,6 +3565,22 @@ class TestBuildMappingCopyTrading:
         assert btc["copy_trading"] is True, "BTC was True in previous mapping → preserved"
         assert eth["copy_trading"] is False, "ETH was False in previous mapping → stays False"
 
+    @pytest.mark.parametrize("exchange", ["binance", "bitget"])
+    def test_successful_empty_cpt_cache_clears_previous_mapping_flags(
+        self, coindata, tmp_workdir, sample_ccxt_markets, exchange
+    ):
+        """An authoritative empty cache clears stale true flags during rebuild."""
+        coindata.save_ccxt_markets(exchange, sample_ccxt_markets)
+        coindata.save_exchange_mapping(exchange, [
+            {"symbol": "BTCUSDT", "copy_trading": True, "price_last": 95_000.0},
+        ])
+        coindata.save_copy_trading_symbols(exchange, [])
+
+        assert coindata.build_mapping(exchange) is True
+
+        mapping = coindata.load_mapping(exchange, use_cache=False)
+        assert not any(row.get("copy_trading") for row in mapping)
+
 
 # ============================================================================
 # CPT User Discovery Tests
@@ -3385,14 +3717,14 @@ class TestCPTUserDiscovery:
         assert coindata._load_cpt_user("bitget") == "bitget_new"
 
     def test_no_candidates_returns_empty(self, coindata, tmp_workdir):
-        """No candidate users returns empty list."""
+        """No candidate users reports discovery as unavailable."""
         with patch.object(coindata, '_get_cpt_candidate_users', return_value=[]):
             with patch.dict('sys.modules', {'User': MagicMock()}):
                 result = coindata._fetch_cpt_with_user_discovery("bitget")
-        assert result == []
+        assert result is None
 
     def test_all_users_fail_returns_empty(self, coindata, tmp_workdir):
-        """When all users fail, returns empty list."""
+        """When all users fail, reports unavailability rather than success-empty."""
         user1 = MagicMock()
         user1.name = "user1"
         user2 = MagicMock()
@@ -3402,7 +3734,60 @@ class TestCPTUserDiscovery:
             with patch.object(coindata, '_try_fetch_cpt_for_user', return_value=None):
                 with patch.dict('sys.modules', {'User': MagicMock()}):
                     result = coindata._fetch_cpt_with_user_discovery("bitget")
+        assert result is None
+
+    @pytest.mark.parametrize(
+        ("exchange", "method_name"),
+        [
+            ("binance", "sapiGetCopytradingFuturesLeadsymbol"),
+            ("bitget", "privateCopyGetV2CopyMixTraderConfigQuerySymbols"),
+        ],
+    )
+    def test_authenticated_api_empty_payload_is_success_empty(
+        self, coindata, tmp_workdir, exchange, method_name
+    ):
+        """Both authenticated integrations recognize a valid empty data list."""
+        exchange_client = MagicMock()
+        setattr(exchange_client.instance, method_name, MagicMock(return_value={"data": []}))
+        user = SimpleNamespace(name="cpt-user")
+
+        with patch("Exchange.Exchange", return_value=exchange_client):
+            result = coindata._try_fetch_cpt_for_user(exchange, user)
+
         assert result == []
+
+    @pytest.mark.parametrize("exchange", ["binance", "bitget"])
+    def test_authenticated_api_error_is_unavailable(self, coindata, tmp_workdir, exchange):
+        """Both authenticated integrations retain failure as the None sentinel."""
+        exchange_client = MagicMock()
+        exchange_client.connect.side_effect = RuntimeError("API unavailable")
+
+        with patch("Exchange.Exchange", return_value=exchange_client):
+            result = coindata._try_fetch_cpt_for_user(
+                exchange,
+                SimpleNamespace(name="cpt-user"),
+            )
+
+        assert result is None
+
+    @pytest.mark.parametrize("exchange", ["binance", "bitget"])
+    def test_authenticated_api_malformed_payload_is_unavailable(
+        self, coindata, tmp_workdir, exchange
+    ):
+        """A response without a verified data list cannot clear the prior cache."""
+        exchange_client = MagicMock()
+        if exchange == "binance":
+            exchange_client.instance.sapiGetCopytradingFuturesLeadsymbol.return_value = {}
+        else:
+            exchange_client.instance.privateCopyGetV2CopyMixTraderConfigQuerySymbols.return_value = {}
+
+        with patch("Exchange.Exchange", return_value=exchange_client):
+            result = coindata._try_fetch_cpt_for_user(
+                exchange,
+                SimpleNamespace(name="cpt-user"),
+            )
+
+        assert result is None
 
 
 # ============================================================================
@@ -3672,7 +4057,7 @@ class TestUpdatePrices:
             ok = coindata.update_prices("hyperliquid")
             duration = time.perf_counter() - start
 
-        assert ok is True
+        assert ok is False
         assert FakeExchange.fetch_price_calls == 0, "Hyperliquid should skip per-symbol fallback"
         # The exact counter above proves that the slow fallback was skipped;
         # retain only a broad guard against an unrelated stall on loaded CI hosts.
@@ -3682,6 +4067,258 @@ class TestUpdatePrices:
         priced = [r for r in updated if float(r.get("price_last") or 0) > 0]
         assert len(priced) == 1
         assert priced[0]["ccxt_symbol"] == "BTC/USDC:USDC"
+        assert coindata.price_update_result("hyperliquid") == {
+            "ok": False,
+            "partial": True,
+            "requested": 3,
+            "priced": 1,
+            "recovered": 0,
+            "missing": 2,
+            "failed": 0,
+        }
+
+    def test_update_prices_bitget_partitions_only_by_product_type(self, coindata, tmp_workdir):
+        """Mixed Bitget settlement families use one bulk call per product type, not N+1."""
+        mapping = []
+        markets = {}
+        for quote in ("USDT", "USDC"):
+            for base in ("BTC", "ETH", "SOL"):
+                symbol = f"{base}/{quote}:{quote}"
+                mapping.append({
+                    "exchange": "bitget",
+                    "symbol": f"{base}{quote}",
+                    "ccxt_symbol": symbol,
+                    "quote": quote,
+                    "active": True,
+                    "linear": True,
+                    "contract_size": 1.0,
+                    "min_amount": 0.01,
+                    "min_cost": 0.0,
+                })
+                markets[symbol] = {"symbol": symbol, "settle": quote, "linear": True}
+        coindata.save_exchange_mapping("bitget", mapping)
+        coindata.save_ccxt_markets("bitget", markets)
+
+        class FakeExchange:
+            batch_calls = []
+            individual_calls = 0
+
+            def __init__(self, _exchange_id):
+                self.instance = SimpleNamespace()
+
+            def connect(self):
+                return None
+
+            def fetch_prices(self, symbols, _market_type):
+                FakeExchange.batch_calls.append(tuple(symbols))
+                return {symbol: {"last": 100.0, "timestamp": 1} for symbol in symbols}
+
+            def fetch_price(self, _symbol, _market_type):
+                FakeExchange.individual_calls += 1
+                return {"last": 100.0, "timestamp": 1}
+
+        with patch("Exchange.Exchange", FakeExchange):
+            assert coindata.update_prices("bitget") is True
+
+        assert len(FakeExchange.batch_calls) == 2
+        assert {frozenset(call) for call in FakeExchange.batch_calls} == {
+            frozenset(row["ccxt_symbol"] for row in mapping if row["quote"] == "USDT"),
+            frozenset(row["ccxt_symbol"] for row in mapping if row["quote"] == "USDC"),
+        }
+        assert FakeExchange.individual_calls == 0
+        assert coindata.price_update_result("bitget") == {
+            "ok": True,
+            "partial": False,
+            "requested": 6,
+            "priced": 6,
+            "recovered": 0,
+            "missing": 0,
+            "failed": 0,
+        }
+
+    @pytest.mark.parametrize("exchange_id", ["okx", "kucoin"])
+    def test_update_prices_category_wide_exchange_uses_one_bulk_call(
+        self, coindata, tmp_workdir, exchange_id
+    ):
+        """Category-wide adapters are not redundantly called for arbitrary symbol chunks."""
+        mapping = [
+            {
+                "exchange": exchange_id,
+                "symbol": f"COIN{index}USDT",
+                "ccxt_symbol": f"COIN{index}/USDT:USDT",
+                "quote": "USDT",
+                "active": True,
+                "linear": True,
+                "contract_size": 1.0,
+                "min_amount": 1.0,
+                "min_cost": 0.0,
+            }
+            for index in range(75)
+        ]
+        coindata.save_exchange_mapping(exchange_id, mapping)
+
+        class FakeExchange:
+            batch_calls = 0
+
+            def __init__(self, _exchange_id):
+                self.instance = SimpleNamespace()
+
+            def connect(self):
+                return None
+
+            def fetch_prices(self, symbols, _market_type):
+                FakeExchange.batch_calls += 1
+                return {symbol: {"last": 1.0, "timestamp": 1} for symbol in symbols}
+
+            def fetch_price(self, _symbol, _market_type):
+                raise AssertionError("complete bulk response must not use individual fallback")
+
+        with patch("Exchange.Exchange", FakeExchange):
+            assert coindata.update_prices(exchange_id) is True
+
+        assert FakeExchange.batch_calls == 1
+        assert coindata.price_update_result(exchange_id)["requested"] == 75
+
+    def test_update_prices_caps_individual_recovery(self, coindata, tmp_workdir):
+        """A partial bulk response cannot fan out into an unbounded ticker request loop."""
+        limit = PBCoinData_mod._PRICE_INDIVIDUAL_FALLBACK_LIMIT
+        mapping = [
+            {
+                "exchange": "okx",
+                "symbol": f"COIN{index}USDT",
+                "ccxt_symbol": f"COIN{index}/USDT:USDT",
+                "quote": "USDT",
+                "active": True,
+                "linear": True,
+                "contract_size": 1.0,
+                "min_amount": 1.0,
+                "min_cost": 0.0,
+            }
+            for index in range(limit + 5)
+        ]
+        coindata.save_exchange_mapping("okx", mapping)
+
+        class FakeExchange:
+            individual_calls = []
+
+            def __init__(self, _exchange_id):
+                self.instance = SimpleNamespace()
+
+            def connect(self):
+                return None
+
+            def fetch_prices(self, _symbols, _market_type):
+                return {}
+
+            def fetch_price(self, symbol, _market_type):
+                FakeExchange.individual_calls.append(symbol)
+                return {"last": 2.0, "timestamp": 1}
+
+        with patch("Exchange.Exchange", FakeExchange):
+            assert coindata.update_prices("okx") is False
+
+        assert len(FakeExchange.individual_calls) == limit
+        result = coindata.price_update_result("okx")
+        assert result == {
+            "ok": False,
+            "partial": True,
+            "requested": limit + 5,
+            "priced": limit,
+            "recovered": limit,
+            "missing": 5,
+            "failed": 0,
+        }
+
+    def test_update_prices_zero_valid_prices_is_failure(self, coindata, tmp_workdir):
+        """A completed Hyperliquid allMids request with no valid prices is not success."""
+        coindata.save_exchange_mapping("hyperliquid", [{
+            "exchange": "hyperliquid",
+            "symbol": "BTC",
+            "ccxt_symbol": "BTC/USDC:USDC",
+            "quote": "USDC",
+            "active": True,
+            "linear": True,
+        }])
+
+        class FakeExchange:
+            individual_calls = 0
+
+            def __init__(self, _exchange_id):
+                self.instance = SimpleNamespace()
+
+            def connect(self):
+                return None
+
+            def fetch_prices(self, _symbols, _market_type):
+                return {"BTC/USDC:USDC": {"last": 0}}
+
+            def fetch_price(self, _symbol, _market_type):
+                FakeExchange.individual_calls += 1
+                return {"last": 1}
+
+        with patch("Exchange.Exchange", FakeExchange):
+            assert coindata.update_prices("hyperliquid") is False
+
+        assert FakeExchange.individual_calls == 0
+        assert coindata.price_update_result("hyperliquid") == {
+            "ok": False,
+            "partial": False,
+            "requested": 1,
+            "priced": 0,
+            "recovered": 0,
+            "missing": 1,
+            "failed": 0,
+        }
+
+    @pytest.mark.parametrize(
+        ("failure", "expected_calls", "expected_waits"),
+        [
+            ("transient", 3, [0.25, 0.5]),
+            ("permanent", 1, []),
+        ],
+    )
+    def test_update_prices_retries_only_transient_batch_failures(
+        self, coindata, tmp_workdir, monkeypatch, failure, expected_calls, expected_waits
+    ):
+        """Batch retry uses bounded backoff and never retries permanent CCXT errors."""
+        from ccxt.base.errors import BadRequest, NetworkError
+
+        coindata.save_exchange_mapping("hyperliquid", [{
+            "exchange": "hyperliquid",
+            "symbol": "BTC",
+            "ccxt_symbol": "BTC/USDC:USDC",
+            "quote": "USDC",
+            "active": True,
+            "linear": True,
+        }])
+        waits = []
+        monkeypatch.setattr(PBCoinData_mod, "sleep", waits.append)
+
+        class FakeExchange:
+            batch_calls = 0
+
+            def __init__(self, _exchange_id):
+                self.instance = SimpleNamespace()
+
+            def connect(self):
+                return None
+
+            def fetch_prices(self, symbols, _market_type):
+                FakeExchange.batch_calls += 1
+                if failure == "transient" and FakeExchange.batch_calls < 3:
+                    raise NetworkError("temporary network failure")
+                if failure == "permanent":
+                    raise BadRequest("invalid request")
+                return {symbols[0]: {"last": 100.0, "timestamp": 1}}
+
+            def fetch_price(self, _symbol, _market_type):
+                raise AssertionError("Hyperliquid fallback must stay disabled")
+
+        with patch("Exchange.Exchange", FakeExchange):
+            assert coindata.update_prices("hyperliquid") is (failure == "transient")
+
+        assert FakeExchange.batch_calls == expected_calls
+        assert waits == expected_waits
 
 
 # ============================================================================

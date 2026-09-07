@@ -1472,7 +1472,7 @@ function fetchBackups() {
         if (canRestore) {
           html += '\x3Cbutton class="btn-restore" data-restore-name="' + esc(b.name) + '" data-restore-ts="' + esc(item.id) + '">Load in editor\x3C/button>';
         }
-        if (runEditorAdapter.isV8 && b.currently_exists) {
+        if (runListAdapter.isV8 && b.currently_exists) {
           html += '\x3Cbutton class="btn-rollback" data-rollback-name="' + esc(b.name) + '" data-rollback-ts="' + esc(item.id) + '">Rollback\x3C/button>';
         }
         html += '\x3Cbutton class="btn-del-backup" data-del-name="' + esc(b.name) + '" data-del-ts="' + esc(item.id) + '">\u2716\x3C/button>';

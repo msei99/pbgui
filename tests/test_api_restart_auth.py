@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -233,3 +234,118 @@ def test_blocked_restart_releases_master_update_reservation(monkeypatch) -> None
 
     assert error.value.status_code == 409
     assert lease.released is True
+
+
+def test_root_restart_spawn_ack_failure_returns_error_before_success(monkeypatch) -> None:
+    """The root async route does not claim success when direct child preparation fails."""
+    class Lease:
+        """Track release and detach operations for a restart reservation."""
+
+        def __init__(self) -> None:
+            self.releases = 0
+
+        def release(self) -> None:
+            self.releases += 1
+
+        def detach(self) -> None:
+            return None
+
+    leases = (Lease(), Lease(), Lease())
+    threaded: list[str] = []
+
+    async def to_thread(function, *args, **kwargs):
+        threaded.append(function.__name__)
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(PBApiServer.asyncio, "to_thread", to_thread)
+    monkeypatch.setattr(PBApiServer, "_acquire_api_restart_leases", lambda: leases)
+    monkeypatch.setattr(PBApiServer, "_restart_block_state", lambda: asyncio.sleep(0, result=(False, "")))
+    monkeypatch.setattr(
+        PBApiServer,
+        "_restart_status_payload",
+        lambda: {"restart_services": [{"unit": "pbgui-api.service", "label": "PBGui API Server"}]},
+    )
+    monkeypatch.setattr(PBApiServer, "_restart_current_api_systemd_unit", lambda _units: False)
+    monkeypatch.setattr(
+        PBApiServer,
+        "_prepare_direct_api_replacement",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("ack failed")),
+    )
+    monkeypatch.setattr(PBApiServer, "_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(PBApiServer, "_api_restart_lease", None)
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(PBApiServer.server_restart(session=object()))
+
+    assert error.value.status_code == 500
+    assert "ack failed" in str(error.value.detail)
+    assert [lease.releases for lease in leases] == [1, 1, 1]
+    assert PBApiServer._api_restart_lease is None
+    assert threaded == [
+        "<lambda>",
+        "<lambda>",
+        "<lambda>",
+        "<lambda>",
+        "_release_api_restart_leases",
+    ]
+
+
+def test_root_restart_lock_order_is_global_service_then_update(monkeypatch) -> None:
+    """Root restart uses one stable order shared with individual service actions."""
+    events: list[str] = []
+
+    class Lease:
+        """Minimal ordered lease double."""
+
+        def release(self) -> None:
+            events.append("release")
+
+    monkeypatch.setattr(
+        PBApiServer,
+        "acquire_service_lifecycle_lock",
+        lambda _root, service, _action, timeout: events.append(service) or Lease(),
+    )
+    monkeypatch.setattr(
+        PBApiServer,
+        "acquire_master_update_lock",
+        lambda _root: events.append("master-update") or Lease(),
+    )
+
+    leases = PBApiServer._acquire_api_restart_leases()
+
+    assert events == ["all-services", "api-server", "master-update"]
+    PBApiServer._release_api_restart_leases(leases)
+
+
+def test_restart_blockers_keep_local_registry_reads_on_event_loop(monkeypatch) -> None:
+    """Only the blocking VPS deployment inspection is delegated to a worker thread."""
+    from api import cluster, coin_data, dashboard, db_tools, pareto_explorer, vps_manager
+
+    event_loop_thread = threading.get_ident()
+    local_threads: list[int] = []
+    external_threads: list[int] = []
+
+    def local_reason(*_args) -> str:
+        local_threads.append(threading.get_ident())
+        return ""
+
+    for module in (cluster, coin_data, dashboard, db_tools, pareto_explorer):
+        monkeypatch.setattr(module, "restart_block_reason", local_reason)
+    monkeypatch.setattr(PBApiServer, "profit_sweep_restart_block_reason", local_reason)
+    monkeypatch.setattr(PBApiServer, "ai_restart_block_reason", local_reason)
+    monkeypatch.setattr(PBApiServer, "credential_migration_restart_block_reason", local_reason)
+
+    def inspect_deploys() -> dict[str, bool]:
+        external_threads.append(threading.get_ident())
+        return {"active": False}
+
+    monkeypatch.setattr(
+        vps_manager,
+        "get_service_instance",
+        lambda: SimpleNamespace(active_vps_deploy_summary=inspect_deploys),
+    )
+
+    assert asyncio.run(PBApiServer._restart_block_state()) == (False, "")
+    assert local_threads == [event_loop_thread] * 8
+    assert len(external_threads) == 1
+    assert external_threads[0] != event_loop_thread

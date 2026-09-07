@@ -452,6 +452,39 @@ class TestDynamicIgnoreRuntime:
         assert approved_set | ignored_set == available_set, "every available symbol must be classified"
         assert save_calls["count"] == 1
 
+    def test_watch_default_ratio_keeps_unknown_cmc_coin_approved(self, monkeypatch):
+        """The default ratio view does not classify unavailable CMC metrics as ignored."""
+
+        class FakeCoinDataUnknown(FakeCoinData):
+            def filter_mapping(
+                self,
+                exchange,
+                market_cap_min_m,
+                vol_mcap_max,
+                only_cpt,
+                notices_ignore,
+                tags,
+                active_only,
+                quote_filter,
+                use_cache,
+            ):
+                if market_cap_min_m == 0 and (
+                    vol_mcap_max == float("inf") or vol_mcap_max >= 10
+                ):
+                    return ["KNOWN", "UNKNOWN"], []
+                return ["KNOWN"], ["UNKNOWN"]
+
+        di = DynamicIgnore()
+        di.coindata = FakeCoinDataUnknown()
+        di.coindata.market_cap = 0
+        di.coindata.vol_mcap = 10
+        di.path = "dummy"
+        monkeypatch.setattr(di, "save", lambda: None)
+
+        assert di.watch() is True
+        assert di.approved_coins == ["KNOWN", "UNKNOWN"]
+        assert di.ignored_coins == []
+
     def test_watch_manual_symbols_outside_available_are_preserved(self, monkeypatch):
         """Manual _long/_short symbols outside available mapping universe are preserved.
 

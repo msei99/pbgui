@@ -252,6 +252,28 @@ def test_managed_scope_validation_and_external_paths(isolated_paths):
     assert logging_helpers.resolve_managed_log_scope(root / "outside.log") is None
 
 
+def test_persisted_rotation_settings_are_clamped_without_rewriting(isolated_paths):
+    """Oversized legacy values are bounded in memory without mutating the INI file."""
+    ini_path, log_root = isolated_paths
+    ini_path.parent.mkdir(parents=True)
+    original = (
+        "[logging]\n"
+        "rotate_default_max_bytes = 999999999999\n"
+        "rotate_default_backup_count = 999999\n"
+        "rotate_pbgui_max_bytes = 888888888888\n"
+        "rotate_pbgui_backup_count = 888888\n"
+        "managed_jobs_max_bytes = 777777777777\n"
+        "managed_jobs_backup_count = 777777\n"
+    )
+    ini_path.write_text(original, encoding="utf-8")
+
+    expected = (logging_helpers.MAX_ROTATE_MAX_BYTES, logging_helpers.MAX_ROTATE_BACKUP_COUNT)
+    assert logging_helpers.get_rotate_defaults() == expected
+    assert logging_helpers.get_rotate_settings(logfile=str(log_root / "PBGui.log")) == expected
+    assert logging_helpers.get_managed_scope_settings("jobs") == expected
+    assert ini_path.read_text(encoding="utf-8") == original
+
+
 def test_managed_transcript_append_rotates_sanitizes_and_locks(isolated_paths, monkeypatch):
     """Managed transcript writes share one rotate-and-append lock transaction."""
     _, log_root = isolated_paths
@@ -441,6 +463,19 @@ def test_rotate_logfile_keeps_configured_backup_count(tmp_path):
     assert not (tmp_path / "service.log.4").exists()
 
 
+def test_rotation_use_caps_backup_count_before_generation_loop(tmp_path):
+    """Direct callers cannot make rotation iterate beyond the supported retention cap."""
+    log_path = tmp_path / "service.log"
+    log_path.write_text("current\n", encoding="utf-8")
+    for index in range(1, logging_helpers.MAX_ROTATE_BACKUP_COUNT + 1):
+        Path(f"{log_path}.{index}").write_text(f"old-{index}\n", encoding="utf-8")
+
+    logging_helpers.rotate_logfile_if_oversize(str(log_path), max_bytes=1, backup_count=10_000)
+
+    assert Path(f"{log_path}.{logging_helpers.MAX_ROTATE_BACKUP_COUNT}").exists()
+    assert not Path(f"{log_path}.{logging_helpers.MAX_ROTATE_BACKUP_COUNT + 1}").exists()
+
+
 def test_rotation_prunes_generations_above_reduced_count(tmp_path):
     """Rotation removes stale numeric generations even before the next rollover."""
     log_path = tmp_path / "service.log"
@@ -478,6 +513,49 @@ def test_purge_honors_backup_count_size_and_zero_retention(tmp_path):
     assert log_path.read_bytes() == b""
     assert not Path(f"{log_path}.1").exists()
     assert not Path(f"{log_path}.2").exists()
+
+
+@pytest.mark.parametrize("backup_count", [0, 2])
+def test_purge_preserves_current_inode_mode_and_durability(
+    tmp_path, monkeypatch, backup_count,
+):
+    """Managed purge keeps the active inode and permissions while durably truncating."""
+    log_path = tmp_path / "service.log"
+    log_path.write_text("content\n", encoding="utf-8")
+    log_path.chmod(0o640)
+    old_inode = log_path.stat().st_ino
+    fsync_calls: list[int] = []
+    monkeypatch.setattr(logging_helpers.os, "fsync", fsync_calls.append)
+
+    success, _message = logging_helpers.purge_log_to_rotated(
+        str(log_path), max_bytes=1024, backup_count=backup_count,
+    )
+
+    assert success is True
+    assert log_path.stat().st_ino == old_inode
+    assert log_path.stat().st_mode & 0o777 == 0o640
+    assert log_path.read_bytes() == b""
+    assert len(fsync_calls) >= (2 if backup_count else 1)
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_purge_keeps_already_open_writer_attached_to_current_log(tmp_path):
+    """A process-lifetime writer remains visible through the current path after purge."""
+    log_path = tmp_path / "service.log"
+    log_path.write_text("before\n", encoding="utf-8")
+    old_inode = log_path.stat().st_ino
+
+    with log_path.open("a", encoding="utf-8") as writer:
+        success, _message = logging_helpers.purge_log_to_rotated(
+            str(log_path), max_bytes=1024, backup_count=1,
+        )
+        writer.write("after\n")
+        writer.flush()
+
+    assert success is True
+    assert log_path.stat().st_ino == old_inode
+    assert log_path.read_text(encoding="utf-8") == "after\n"
+    assert Path(f"{log_path}.1").read_text(encoding="utf-8") == "before\n"
 
 
 def test_purge_redacts_internal_failure_text(tmp_path, monkeypatch):

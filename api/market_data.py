@@ -3568,7 +3568,7 @@ def queue_best_1m_job(
     from datetime import date as _date
 
     from market_data import append_exchange_download_log
-    from task_queue import enqueue_job, enqueue_running_job, is_pid_running, move_job_file, read_worker_pid, update_job_file
+    from task_queue import enqueue_job, enqueue_running_job, move_job_file, update_job_file
 
     exchange_clean = _normalize_settings_exchange(exchange)
     meta = _best_1m_exchange_meta(exchange_clean)
@@ -3672,14 +3672,10 @@ def queue_best_1m_job(
             return {"success": False, "error": f"Failed to launch {meta['label']} worker: {exc}"}
 
     try:
-        pid = read_worker_pid()
-        if not run_immediately and not (pid and is_pid_running(int(pid))):
-            subprocess.Popen(
-                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
+        if not run_immediately:
+            from task_worker_ownership import ensure_task_worker_started
+
+            ensure_task_worker_started()
     except Exception:
         pass
 

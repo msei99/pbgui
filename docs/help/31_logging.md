@@ -18,8 +18,11 @@ Streaming starts automatically — new lines are appended in real time.
 ## Lines dropdown
 
 Controls how many lines are loaded when opening or switching a file.  
-Options: 200 / 500 / 1000 / 2000 / 5000 / 10000 / 25000 / All.  
+Options: 200 / 500 / 1000 / 2000 / 5000 / 10000 / 25000 / Max (50,000).
 Changing the value while a file is open reloads with the new count.
+The selected count is also the live browser buffer and rendered-line limit. When
+it is reached, the oldest displayed lines are discarded and the newest lines
+remain available. **Max (50,000)** is a bounded tail, not the complete file.
 
 ## Version dropdown
 
@@ -80,12 +83,15 @@ numeric backup generations and stores at most the configured maximum-size tail
 as `.1`. A backup count of `0` discards the current content and removes existing
 numeric generations. Purge failures are logged, while browser error responses
 remain generic and do not expose filesystem exception details.
+PBGui replaces the current file during managed purge/trim operations so live
+viewers detect the reset. An arbitrary external program that truncates and
+refills the same inode between viewer polls remains outside this guarantee.
 
 ## Troubleshooting
 
 - **No log files listed**: make sure PBGui services have been started at least once
 - **Streaming stops**: PBAPIServer WebSocket connection lost — the viewer reconnects automatically
-- **Lines count "All" is slow**: loading very large files may take a moment; use a line limit for large logs
+- **Max (50,000) is slow**: use a smaller line count for large or fast-moving logs
 
 ---
 

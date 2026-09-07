@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
+import uuid
+from copy import deepcopy
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
+from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR
+from secure_files import atomic_write_private_text, ensure_private_directory, secure_private_file
 
 SERVICE = "ApiKeyState"
 RUNTIME_STATE_KEYS: frozenset[str] = frozenset({
@@ -14,10 +20,25 @@ RUNTIME_STATE_KEYS: frozenset[str] = frozenset({
     "hl_credential_fingerprint",
     "bybit_expires_at",
     "bybit_ips",
+    "bybit_credential_fingerprint",
 })
 _STATE_FILE = Path(PBGDIR) / "data" / "state" / "api_keys" / "api_key_state.json"
 _LEGACY_STATE_FILE = Path(PBGDIR) / "data" / "api_key_state.json"
-_STATE_LOCK = threading.Lock()
+_TRANSACTION_FILE = _STATE_FILE.with_name("user_update_transaction.json")
+_API_KEY_WRITE_TARGET = Path(PBGDIR) / "data" / "api-keys" / ".write"
+_STATE_LOCK = threading.RLock()
+
+
+class ApiKeyStateTransactionConflictError(RuntimeError):
+    """Raised when an API-key state transaction cannot be resolved safely."""
+
+
+@contextmanager
+def _locked_state() -> Iterator[None]:
+    """Serialize state access with API-key mutations across PBGui processes."""
+    with advisory_file_lock(_API_KEY_WRITE_TARGET):
+        with _STATE_LOCK:
+            yield
 
 
 def strip_runtime_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
@@ -58,23 +79,147 @@ def _load_state_unlocked() -> dict[str, Any]:
 
 
 def _write_state_unlocked(state: dict[str, Any]) -> None:
-    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _STATE_FILE.with_suffix(_STATE_FILE.suffix + ".tmp")
+    ensure_private_directory(_STATE_FILE.parent)
+    atomic_write_private_text(
+        _STATE_FILE,
+        json.dumps(_normalize_state(state), indent=4, sort_keys=True) + "\n",
+    )
+
+
+def _sync_parent(path: Path) -> None:
+    """Durably publish a journal create or removal on POSIX filesystems."""
+    if os.name != "posix":
+        return
+    descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
-        tmp_path.write_text(
-            json.dumps(_normalize_state(state), indent=4, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        tmp_path.replace(_STATE_FILE)
+        os.fsync(descriptor)
     finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+        os.close(descriptor)
+
+
+def _load_transaction_unlocked() -> dict[str, Any] | None:
+    if not _TRANSACTION_FILE.exists():
+        return None
+    secure_private_file(_TRANSACTION_FILE)
+    try:
+        transaction = json.loads(_TRANSACTION_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ApiKeyStateTransactionConflictError("API-key update journal is unreadable") from exc
+    required = {"id", "old_name", "new_name", "before_marker", "after_marker", "before", "target"}
+    if not isinstance(transaction, dict) or transaction.get("version") != 1 or not required.issubset(transaction):
+        raise ApiKeyStateTransactionConflictError("API-key update journal has an unsupported format")
+    return transaction
+
+
+def _write_transaction_unlocked(transaction: dict[str, Any]) -> None:
+    ensure_private_directory(_TRANSACTION_FILE.parent)
+    atomic_write_private_text(
+        _TRANSACTION_FILE,
+        json.dumps(transaction, indent=4, sort_keys=True) + "\n",
+    )
+    _sync_parent(_TRANSACTION_FILE)
+
+
+def _remove_transaction_unlocked() -> None:
+    _TRANSACTION_FILE.unlink(missing_ok=True)
+    _sync_parent(_TRANSACTION_FILE)
+
+
+def _selected_entries(users: dict[str, Any], old_name: str, new_name: str) -> dict[str, Any]:
+    names = (old_name,) if old_name == new_name else (old_name, new_name)
+    return {
+        name: {"exists": name in users, "value": deepcopy(users.get(name))}
+        for name in names
+    }
+
+
+def _apply_entries(users: dict[str, Any], entries: dict[str, Any]) -> None:
+    for name, entry in entries.items():
+        if entry.get("exists"):
+            users[name] = deepcopy(entry.get("value"))
+        else:
+            users.pop(name, None)
+
+
+def begin_user_state_transaction(
+    old_name: str,
+    new_name: str,
+    *,
+    before_marker: str,
+    after_marker: str,
+    clear_all: bool = False,
+    clear_keys: tuple[str, ...] = (),
+) -> str:
+    """Persist an exact, secret-free runtime-state transition before credential replacement."""
+    if not old_name or not new_name or not before_marker or not after_marker:
+        raise ValueError("Incomplete API-key state transaction")
+    with _locked_state():
+        if _load_transaction_unlocked() is not None:
+            raise ApiKeyStateTransactionConflictError("Another API-key update requires recovery")
+        state = _load_state_unlocked()
+        users = state.setdefault("users", {})
+        before = _selected_entries(users, old_name, new_name)
+        target_users = deepcopy(users)
+        current = target_users.get(old_name, {})
+        next_state = dict(current) if isinstance(current, dict) else {}
+        if old_name != new_name:
+            target_users.pop(old_name, None)
+        if clear_all:
+            next_state = {}
+        else:
+            for key in clear_keys:
+                next_state.pop(key, None)
+        if next_state:
+            target_users[new_name] = next_state
+        else:
+            target_users.pop(new_name, None)
+        transaction_id = uuid.uuid4().hex
+        _write_transaction_unlocked({
+            "version": 1,
+            "id": transaction_id,
+            "old_name": old_name,
+            "new_name": new_name,
+            "before_marker": before_marker,
+            "after_marker": after_marker,
+            "before": before,
+            "target": _selected_entries(target_users, old_name, new_name),
+        })
+        return transaction_id
+
+
+def get_pending_user_state_transaction() -> dict[str, Any] | None:
+    """Return a detached pending journal for authoritative credential resolution."""
+    with _locked_state():
+        transaction = _load_transaction_unlocked()
+        return deepcopy(transaction) if transaction is not None else None
+
+
+def finish_user_state_transaction(transaction_id: str, *, commit: bool) -> None:
+    """Apply the journal target or exact preimage and durably remove the journal."""
+    with _locked_state():
+        transaction = _load_transaction_unlocked()
+        if transaction is None or transaction.get("id") != transaction_id:
+            raise ApiKeyStateTransactionConflictError("API-key update journal changed")
+        state = _load_state_unlocked()
+        users = state.setdefault("users", {})
+        old_name = str(transaction["old_name"])
+        new_name = str(transaction["new_name"])
+        current = _selected_entries(users, old_name, new_name)
+        before = transaction["before"]
+        target = transaction["target"]
+        if current not in (before, target):
+            raise ApiKeyStateTransactionConflictError("API-key runtime state changed during update")
+        desired = target if commit else before
+        if current != desired:
+            _apply_entries(users, desired)
+            _write_state_unlocked(state)
+        _remove_transaction_unlocked()
 
 
 def get_user_state(user_name: str) -> dict[str, Any]:
     if not user_name:
         return {}
-    with _STATE_LOCK:
+    with _locked_state():
         users = _load_state_unlocked().get("users", {})
         state = users.get(user_name, {})
         return dict(state) if isinstance(state, dict) else {}
@@ -83,7 +228,9 @@ def get_user_state(user_name: str) -> dict[str, Any]:
 def update_user_state(user_name: str, **fields: Any) -> None:
     if not user_name:
         return
-    with _STATE_LOCK:
+    with _locked_state():
+        if _load_transaction_unlocked() is not None:
+            raise ApiKeyStateTransactionConflictError("API-key update requires recovery")
         state = _load_state_unlocked()
         users = state.setdefault("users", {})
         current = dict(users.get(user_name, {})) if isinstance(users.get(user_name, {}), dict) else {}
@@ -120,7 +267,9 @@ def clear_user_state(user_name: str, keys: tuple[str, ...] | list[str] | None = 
 def delete_user_state(user_name: str) -> None:
     if not user_name:
         return
-    with _STATE_LOCK:
+    with _locked_state():
+        if _load_transaction_unlocked() is not None:
+            raise ApiKeyStateTransactionConflictError("API-key update requires recovery")
         state = _load_state_unlocked()
         users = state.setdefault("users", {})
         if user_name in users:
@@ -131,7 +280,9 @@ def delete_user_state(user_name: str) -> None:
 def rename_user_state(old_name: str, new_name: str) -> None:
     if not old_name or not new_name or old_name == new_name:
         return
-    with _STATE_LOCK:
+    with _locked_state():
+        if _load_transaction_unlocked() is not None:
+            raise ApiKeyStateTransactionConflictError("API-key update requires recovery")
         state = _load_state_unlocked()
         users = state.setdefault("users", {})
         old_state = users.get(old_name)

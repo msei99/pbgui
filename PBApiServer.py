@@ -45,6 +45,18 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 
 from secure_files import harden_sensitive_paths
+from api_pid_handoff import (
+    ApiPidOwnershipError,
+    ApiReplacementStartupError,
+    acknowledge_api_handoff_from_environment,
+    cancel_api_replacement,
+    claim_api_pid,
+    release_api_pid,
+    snapshot_api_owner,
+    spawn_api_replacement,
+    wait_for_api_replacement_ack,
+)
+from process_identity import ExactProcessSignalError, exact_process_alive, signal_exact_process, wait_for_exact_process_exit
 
 from api.auth import (
     BrowserOriginMiddleware,
@@ -114,13 +126,16 @@ from api.strategy_explorer_v8 import (
     startup as strategy_explorer_v8_startup,
 )
 from logging_helpers import (
+    canonical_log_lock_target,
     get_rotate_settings,
     human_log as _log,
     logging_context,
     rotate_logfile_if_oversize,
     set_service_min_level,
 )
+from file_lock import advisory_file_lock
 from master_update_lock import MasterUpdateBusyError, acquire_master_update_lock
+from service_lifecycle_lock import ServiceLifecycleBusyError, acquire_service_lifecycle_lock
 from startup_migrations import run_startup_migrations
 from credential_migration import (
     credential_migration_restart_block_reason,
@@ -618,6 +633,45 @@ def _setup_api_logging():
     _setup_ssh_logging()
 
 
+class _LockedConsoleWriter:
+    """Proxy API-owned console writes through the canonical log lock."""
+
+    def __init__(self, path: Path, handle) -> None:
+        self._lock_target = canonical_log_lock_target(path)
+        self._handle = handle
+        buffer = getattr(handle, "buffer", None)
+        self.buffer = _LockedConsoleWriter(path, buffer) if buffer is not None else None
+
+    def write(self, data):
+        with advisory_file_lock(self._lock_target):
+            return self._handle.write(data)
+
+    def writelines(self, lines) -> None:
+        with advisory_file_lock(self._lock_target):
+            self._handle.writelines(lines)
+
+    def flush(self) -> None:
+        with advisory_file_lock(self._lock_target):
+            self._handle.flush()
+
+    def close(self) -> None:
+        with advisory_file_lock(self._lock_target):
+            self._handle.close()
+
+    def fileno(self) -> int:
+        return self._handle.fileno()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+        self.close()
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
+
+
 def _open_api_console_log():
     """Open the raw stdout/stderr fallback log for child process redirection."""
     try:
@@ -625,7 +679,7 @@ def _open_api_console_log():
         log_path.parent.mkdir(parents=True, exist_ok=True)
         max_bytes, backup_count = get_rotate_settings(logfile=str(log_path))
         rotate_logfile_if_oversize(str(log_path), max_bytes, backup_count)
-        return log_path.open("a", encoding="utf-8", buffering=1)
+        return _LockedConsoleWriter(log_path, log_path.open("a", encoding="utf-8", buffering=1))
     except Exception:
         return open(os.devnull, "w", encoding="utf-8")
 
@@ -666,30 +720,26 @@ async def _worker_watchdog_loop() -> None:
     from the former polling panel but runs at the API-server
     level so it fires regardless of which UI is open.
     """
-    from task_queue import list_jobs, read_worker_pid, is_pid_running, clear_worker_pid
+    from task_queue import list_jobs
+    from task_worker_ownership import ensure_task_worker_started, get_task_worker_status
     _log(SERVICE, "[watchdog] task-worker watchdog started", level="INFO")
     while True:
         try:
             await asyncio.sleep(_WATCHDOG_INTERVAL_S)
-            pid = await asyncio.to_thread(read_worker_pid)
-            if pid and await asyncio.to_thread(is_pid_running, int(pid)):
+            worker_status = await asyncio.to_thread(get_task_worker_status)
+            if worker_status.running or worker_status.suppressed:
                 continue
             active = await asyncio.to_thread(list_jobs, states=["pending", "running"], limit=1)
             if not active:
                 continue
             # Worker is dead but jobs are queued — restart it.
             try:
-                await asyncio.to_thread(clear_worker_pid)
-                await asyncio.to_thread(
-                    subprocess.Popen,
-                    [sys.executable, str(Path(__file__).resolve().parent / "task_worker.py")],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    close_fds=True,
-                )
+                result = await asyncio.to_thread(ensure_task_worker_started)
                 _log(
                     SERVICE,
-                    "[watchdog] auto-restarted task_worker (worker dead, active jobs found)",
+                    "[watchdog] auto-restarted task_worker (worker dead, active jobs found)"
+                    if result.spawned
+                    else "[watchdog] task_worker start was already satisfied by another process",
                     level="WARNING",
                 )
             except Exception as e:
@@ -1637,28 +1687,114 @@ async def token_refresh(request: Request, response: Response, session: SessionTo
     return {"ok": True, "expires_at": updated.expires_at}
 
 
+def _acquire_api_restart_leases():
+    """Acquire global, API, then update leases in one deadlock-safe order."""
+    leases = []
+    try:
+        leases.append(acquire_service_lifecycle_lock(Path(PBGDIR), "all-services", "restart", timeout=5.0))
+        leases.append(acquire_service_lifecycle_lock(Path(PBGDIR), "api-server", "restart", timeout=5.0))
+        leases.append(acquire_master_update_lock(Path(PBGDIR)))
+        return tuple(leases)
+    except Exception:
+        for lease in reversed(leases):
+            lease.release()
+        raise
+
+
+def _release_api_restart_leases(leases) -> None:
+    """Release a complete restart reservation in reverse acquisition order."""
+    for lease in reversed(tuple(leases)):
+        lease.release()
+
+
+def _detach_api_restart_lifecycle_leases(leases) -> None:
+    """Prevent request-thread reentry after handing lifecycle leases to shutdown."""
+    for lease in tuple(leases)[:2]:
+        lease.detach()
+
+
+def _direct_api_python(pbgdir: Path) -> Path:
+    """Return the interpreter used for a direct API replacement."""
+    for candidate in (
+        pbgdir.parent / "venv_pbgui" / "bin" / "python",
+        pbgdir.parent / "venv_pbgui312" / "bin" / "python",
+        pbgdir.parent / "venv" / "bin" / "python",
+        Path(sys.executable),
+    ):
+        if candidate.exists():
+            return candidate
+    raise ApiReplacementStartupError("No Python interpreter is available for API restart")
+
+
+def _prepare_direct_api_replacement(*, console: bool):
+    """Spawn and synchronously verify a child before the old API is signalled."""
+    pbgdir = Path(PBGDIR)
+    pid_file = pbgdir / "data" / "pid" / "api_server.pid"
+    if not claim_api_pid(pid_file, pbgdir / "PBApiServer.py", current_pid=os.getpid()):
+        raise ApiPidOwnershipError("Another API process owns the PID file")
+    if console:
+        with _open_api_console_log() as console_log:
+            replacement = spawn_api_replacement(
+                _direct_api_python(pbgdir),
+                pbgdir,
+                os.getpid(),
+                stdin=subprocess.DEVNULL,
+                stdout=console_log,
+                stderr=subprocess.STDOUT,
+            )
+    else:
+        replacement = spawn_api_replacement(
+            _direct_api_python(pbgdir),
+            pbgdir,
+            os.getpid(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    wait_for_api_replacement_ack(replacement)
+    return replacement
+
+
 @app.post("/api/server-restart")
 async def server_restart(session: SessionToken = Depends(require_auth)):
     """Restart stale managed PBGui daemons, then restart the API coordinator."""
     global _api_restart_lease
     try:
-        restart_lease = acquire_master_update_lock(Path(PBGDIR))
+        leases = await asyncio.to_thread(_acquire_api_restart_leases)
+    except ServiceLifecycleBusyError as exc:
+        raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {exc}") from exc
     except MasterUpdateBusyError as exc:
         raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {exc}") from exc
+    except Exception as exc:
+        _log(SERVICE, f"[restart] could not reserve lifecycle: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail=f"Could not reserve PBGui restart: {exc}") from exc
+    restart_lease = leases[-1]
     try:
         restart_blocked, restart_block_reason = await _restart_block_state()
         if restart_blocked:
             detail = restart_block_reason or "An API-owned mutable operation is still running."
             raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {detail}")
     except Exception:
-        restart_lease.release()
+        await asyncio.to_thread(_release_api_restart_leases, leases)
         raise
     _api_restart_lease = restart_lease
-    restart_state = _restart_status_payload()
-    stale_units = [
+    try:
+        restart_state = await asyncio.to_thread(_restart_status_payload)
+    except Exception as exc:
+        if _api_restart_lease is restart_lease:
+            _api_restart_lease = None
+        await asyncio.to_thread(_release_api_restart_leases, leases)
+        _log(SERVICE, f"[restart] could not prepare restart state: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail=f"Could not prepare PBGui restart: {exc}") from exc
+    requested_stale_units = {
         str(item.get("unit") or "")
         for item in restart_state.get("restart_services") or []
         if str(item.get("unit") or "") != _API_SYSTEMD_UNIT
+    }
+    stale_units = [
+        str(item["unit"])
+        for item in _RUNTIME_SYSTEMD_SERVICES
+        if str(item["unit"]) in requested_stale_units
     ]
     restart_labels = [
         str(item.get("label") or item.get("service") or "")
@@ -1672,18 +1808,33 @@ async def server_restart(session: SessionToken = Depends(require_auth)):
     )
 
     try:
-        systemd_restart_scheduled = _restart_current_api_systemd_unit(stale_units)
+        systemd_restart_scheduled = await asyncio.to_thread(_restart_current_api_systemd_unit, stale_units)
     except Exception as exc:
         if _api_restart_lease is restart_lease:
             _api_restart_lease = None
-        restart_lease.release()
+        await asyncio.to_thread(_release_api_restart_leases, leases)
         _log(SERVICE, f"[restart] could not schedule safe systemd restart: {exc}", level="ERROR")
         raise HTTPException(status_code=500, detail=f"Could not schedule safe PBGui restart: {exc}") from exc
     if stale_units and not systemd_restart_scheduled:
         if _api_restart_lease is restart_lease:
             _api_restart_lease = None
-        restart_lease.release()
+        await asyncio.to_thread(_release_api_restart_leases, leases)
         raise HTTPException(status_code=409, detail="Managed daemon restarts require the systemd user service installation")
+    replacement = None
+    if not systemd_restart_scheduled:
+        try:
+            replacement = await asyncio.to_thread(_prepare_direct_api_replacement, console=True)
+        except ApiPidOwnershipError as exc:
+            if _api_restart_lease is restart_lease:
+                _api_restart_lease = None
+            await asyncio.to_thread(_release_api_restart_leases, leases)
+            raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {exc}") from exc
+        except Exception as exc:
+            if _api_restart_lease is restart_lease:
+                _api_restart_lease = None
+            await asyncio.to_thread(_release_api_restart_leases, leases)
+            _log(SERVICE, f"[restart] replacement acknowledgement failed: {exc}", level="ERROR")
+            raise HTTPException(status_code=500, detail=f"Could not start replacement API: {exc}") from exc
 
     async def _do_restart():
         global _api_restart_lease
@@ -1693,47 +1844,38 @@ async def server_restart(session: SessionToken = Depends(require_auth)):
                 await asyncio.sleep(_SYSTEMD_RESTART_WATCHDOG_SECONDS)
                 if _api_restart_lease is restart_lease:
                     _api_restart_lease = None
-                    restart_lease.release()
+                    await asyncio.to_thread(_release_api_restart_leases, leases)
                     _log(SERVICE, "[restart] scheduled systemd handoff did not stop the API; restart reservation released", level="ERROR")
                 return
             _close_server_status_streams()
             await asyncio.sleep(0)
-            pbgdir = Path(__file__).resolve().parent
-            venv_python = None
-            for candidate in [
-                pbgdir.parent / "venv_pbgui" / "bin" / "python",
-                pbgdir.parent / "venv_pbgui312" / "bin" / "python",
-                pbgdir.parent / "venv" / "bin" / "python",
-                Path(sys.executable),
-            ]:
-                if candidate.exists():
-                    venv_python = candidate
-                    break
-            if venv_python:
-                # Delete the PID file BEFORE spawning the new process so the new
-                # process doesn't see "Already running" and exit immediately.
-                pid_file = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
-                pid_file.unlink(missing_ok=True)
-                env = os.environ.copy()
-                env["PBGUI_RESTART_DELAY"] = "3"  # wait for old process to free the port
-                with _open_api_console_log() as console_log:
-                    subprocess.Popen(
-                        [str(venv_python), str(pbgdir / "PBApiServer.py")],
-                        stdin=subprocess.DEVNULL,
-                        stdout=console_log,
-                        stderr=subprocess.STDOUT,
-                        close_fds=True,
-                        cwd=str(pbgdir),
-                        env=env,
-                    )
-            os.kill(os.getpid(), signal.SIGTERM)
+            if replacement is None:
+                raise RuntimeError("Replacement API acknowledgement is missing")
+            await asyncio.to_thread(signal_exact_process, replacement.old_identity, signal.SIGTERM)
         except Exception as exc:
             _log(SERVICE, f"[restart] failed after restart reservation: {exc}", level="ERROR", meta={"traceback": traceback.format_exc()})
             if _api_restart_lease is restart_lease:
                 _api_restart_lease = None
-            restart_lease.release()
+            try:
+                if replacement is not None:
+                    await asyncio.to_thread(cancel_api_replacement, replacement)
+            except Exception as cleanup_exc:
+                _log(SERVICE, f"[restart] replacement cleanup failed: {cleanup_exc}", level="ERROR")
+            finally:
+                await asyncio.to_thread(_release_api_restart_leases, leases)
 
-    asyncio.create_task(_do_restart())
+    try:
+        _detach_api_restart_lifecycle_leases(leases)
+        asyncio.create_task(_do_restart())
+    except Exception:
+        if _api_restart_lease is restart_lease:
+            _api_restart_lease = None
+        try:
+            if replacement is not None:
+                await asyncio.to_thread(cancel_api_replacement, replacement)
+        finally:
+            await asyncio.to_thread(_release_api_restart_leases, leases)
+        raise
     return {
         "ok": True,
         "message": "Restarting PBGui services...",
@@ -1809,24 +1951,38 @@ class PBApiServer:
     def save_pid(self):
         """Write current process PID to pidfile. Called from the daemon process."""
         self.my_pid = os.getpid()
-        tmp_path = self.pidfile.with_suffix(self.pidfile.suffix + '.tmp')
-        with tmp_path.open('w', encoding='utf-8') as f:
-            f.write(str(self.my_pid))
-        tmp_path.replace(self.pidfile)
+        from secure_files import atomic_write_private_text
+
+        atomic_write_private_text(self.pidfile, f"{self.my_pid}\n")
+
+    def claim_pid(
+        self,
+        expected_old_pid: int | None = None,
+        expected_old_create_time: float | None = None,
+    ) -> bool:
+        """Atomically claim PID ownership, optionally waiting for an old API process."""
+        claimed = claim_api_pid(
+            self.pidfile,
+            Path(PBGDIR) / "PBApiServer.py",
+            expected_old_pid=expected_old_pid,
+            expected_old_create_time=expected_old_create_time,
+        )
+        if claimed:
+            self.my_pid = os.getpid()
+        return claimed
 
     # ── Daemon lifecycle ──
 
     def is_running(self) -> bool:
         """Check if the API server daemon is running."""
         self.load_pid()
+        if not self.my_pid:
+            return False
         try:
-            if self.my_pid and psutil.pid_exists(self.my_pid) and any(
-                sub.lower().endswith("pbapiserver.py") for sub in psutil.Process(self.my_pid).cmdline()
-            ):
-                return True
-        except psutil.NoSuchProcess:
-            pass
-        return False
+            snapshot_api_owner(self.pidfile, Path(PBGDIR) / "PBApiServer.py", self.my_pid)
+            return True
+        except ApiPidOwnershipError:
+            return False
 
     def run(self):
         """Start the API server daemon in the background."""
@@ -1867,19 +2023,22 @@ class PBApiServer:
 
     def stop(self):
         """Stop the API server daemon."""
-        if self.is_running():
-            _log(SERVICE, 'Stop: API server', level='INFO')
-            try:
-                psutil.Process(self.my_pid).terminate()
-                psutil.Process(self.my_pid).wait(timeout=5)
-            except psutil.TimeoutExpired:
-                try:
-                    psutil.Process(self.my_pid).kill()
-                except psutil.NoSuchProcess:
-                    pass
-            except psutil.NoSuchProcess:
-                pass
-            self.pidfile.unlink(missing_ok=True)
+        self.load_pid()
+        if not self.my_pid:
+            return
+        try:
+            owner = snapshot_api_owner(self.pidfile, Path(PBGDIR) / "PBApiServer.py", self.my_pid)
+        except ApiPidOwnershipError:
+            return
+        _log(SERVICE, 'Stop: API server', level='INFO')
+        if signal_exact_process(owner, signal.SIGTERM) and not wait_for_exact_process_exit(owner, 5.0):
+            if signal_exact_process(owner, signal.SIGKILL):
+                wait_for_exact_process_exit(owner, 5.0)
+        if exact_process_alive(owner):
+            raise ExactProcessSignalError(
+                f"API PID {owner.pid} remains alive after stop signals"
+            )
+        release_api_pid(self.pidfile, owner)
 
     def restart(self):
         """Restart the API server daemon (stop if running, then start)."""
@@ -1905,17 +2064,20 @@ class PBApiServer:
 if __name__ == "__main__":
     _console_log_handle = _redirect_api_console_output()
     server = PBApiServer()
-    if server.is_running():
-        _log(SERVICE, 'Already running — exit', level='INFO')
-        sys.exit(0)
-
-    # When spawned by the restart handler the old process still holds the port.
-    # Wait for it to release before binding.
-    restart_delay = int(os.getenv("PBGUI_RESTART_DELAY", "0"))
-    if restart_delay:
-        sleep(restart_delay)
-
-    server.save_pid()
+    try:
+        expected_owner = acknowledge_api_handoff_from_environment(
+            server.pidfile,
+            Path(PBGDIR) / "PBApiServer.py",
+        )
+        if not server.claim_pid(
+            expected_owner.pid if expected_owner else None,
+            expected_owner.create_time if expected_owner else None,
+        ):
+            _log(SERVICE, 'Already running - exit', level='INFO')
+            sys.exit(0)
+    except (ApiPidOwnershipError, ValueError) as exc:
+        _log(SERVICE, f"API PID ownership failed: {exc}", level="ERROR")
+        sys.exit(1)
 
     host = os.getenv("PBGUI_API_HOST", server.host)
     port = int(os.getenv("PBGUI_API_PORT", str(server.port)))

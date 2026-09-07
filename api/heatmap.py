@@ -1277,9 +1277,8 @@ def queue_l2book_download(
     Returns ``{"job_id": "...", "start_day": "...", "end_day": "..."}``
     or ``{"error": "..."}`` on failure.
     """
-    import subprocess
-    import sys
-    from task_queue import enqueue_job, read_worker_pid, is_pid_running
+    from task_queue import enqueue_job
+    from task_worker_ownership import ensure_task_worker_started
     from market_data import load_aws_profile_region
     import re as _re
 
@@ -1337,14 +1336,7 @@ def queue_l2book_download(
 
     # Start worker if not running
     try:
-        pid = read_worker_pid()
-        if not (pid and is_pid_running(int(pid))):
-            subprocess.Popen(
-                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
+        ensure_task_worker_started()
     except Exception:
         pass
 
@@ -1451,10 +1443,9 @@ def queue_l2book_download_bulk(
             "only_missing_1m_src_hours": true
         }
     """
-    import subprocess
-    import sys
     import re as _re
-    from task_queue import enqueue_job, read_worker_pid, is_pid_running
+    from task_queue import enqueue_job
+    from task_worker_ownership import ensure_task_worker_started
     from market_data import (
         get_effective_enabled_coins,
         load_market_data_config,
@@ -1610,14 +1601,7 @@ def queue_l2book_download_bulk(
 
     # Start worker if not running
     try:
-        pid = read_worker_pid()
-        if not (pid and is_pid_running(int(pid))):
-            subprocess.Popen(
-                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
+        ensure_task_worker_started()
     except Exception:
         pass
 
@@ -1755,10 +1739,9 @@ def queue_build_ohlcv(
             "refetch": false
         }
     """
-    import subprocess
-    import sys
     import re as _re
-    from task_queue import enqueue_job, read_worker_pid, is_pid_running
+    from task_queue import enqueue_job
+    from task_worker_ownership import ensure_task_worker_started
     from market_data import append_exchange_download_log
 
     # Resolve eligible coins (reuse same logic)
@@ -1825,14 +1808,7 @@ def queue_build_ohlcv(
 
     # Start worker if not running
     try:
-        pid = read_worker_pid()
-        if not (pid and is_pid_running(int(pid))):
-            subprocess.Popen(
-                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
+        ensure_task_worker_started()
     except Exception:
         pass
 

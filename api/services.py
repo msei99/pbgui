@@ -42,6 +42,9 @@ from pbgui_purefunc import PBGDIR, load_ini, load_ini_snapshot, save_ini, save_i
 from ini_settings import APPLY_GROUPS, apply_metadata, apply_metadata_for
 from logging_helpers import human_log as _log
 from operation_store import DurableOperationStore
+from api_pid_handoff import ApiPidOwnershipError
+from process_identity import ExactProcessSignalError, process_identity
+from service_lifecycle_lock import ServiceLifecycleBusyError, acquire_service_lifecycle_lock
 
 SERVICE = "Services"
 
@@ -82,6 +85,9 @@ _MIGRATION_LEGACY_STOP_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata"]
 _fetch_summary_snapshot: Dict[str, Any] = {}
 _poller_metrics_snapshot: Dict[str, Any] = {}
 _TASK_WORKER_STOP_TIMEOUT_S = 35.0
+_SERVICE_LIFECYCLE_LOCK_TIMEOUT_S = 5.0
+_SERVICE_TRANSITION_TIMEOUT_S = 30.0
+_SERVICE_TRANSITION_POLL_S = 0.1
 
 
 def _get_service(name: str):
@@ -301,7 +307,7 @@ def _read_service_pid(name: str) -> int | None:
 
 
 def _pid_matches_service(pid: int, name: str) -> bool:
-    script = _SERVICE_SCRIPT_NAMES.get(name, "").lower()
+    script = _SERVICE_SCRIPT_NAMES.get(name, "")
     if not pid or not script:
         return False
     try:
@@ -309,10 +315,27 @@ def _pid_matches_service(pid: int, name: str) -> bool:
 
         if not psutil.pid_exists(pid):
             return False
-        cmdline = [str(part).lower() for part in psutil.Process(pid).cmdline()]
-        return any(Path(part).name == script or part.endswith(script) for part in cmdline)
+        process = psutil.Process(pid)
+        return _process_matches_service_script(process, process.cmdline(), script)
     except Exception:
         return False
+
+
+def _process_matches_service_script(process: Any, cmdline: list[Any], script: str) -> bool:
+    """Match a daemon only when its script resolves below this PBGui install."""
+    expected = (Path(PBGDIR) / script).resolve(strict=False)
+    try:
+        cwd = Path(process.cwd())
+    except Exception:
+        return False
+    for raw_arg in cmdline:
+        arg = Path(str(raw_arg))
+        if arg.name.lower() != script.lower():
+            continue
+        candidate = arg if arg.is_absolute() else cwd / arg
+        if candidate.resolve(strict=False) == expected:
+            return True
+    return False
 
 
 def _legacy_service_running(name: str) -> bool:
@@ -360,38 +383,153 @@ def _service_status(name: str) -> dict[str, Any]:
     return {"running": False, "manager": "legacy", **_systemd_enable_status(name)}
 
 
+def _service_identities(
+    name: str,
+    status: dict[str, Any] | None = None,
+) -> tuple[tuple[int, float], ...]:
+    """Return process identities for one service from its authoritative manager."""
+    status = status or _service_status(name)
+    if status.get("manager") == "systemd":
+        unit = str(status.get("unit") or _systemd_unit_for_service(name) or "")
+        if unit:
+            try:
+                proc = _run_user_systemctl(["show", unit, "--property=MainPID", "--value"], timeout=5)
+                value = (proc.stdout or "").strip()
+                if proc.returncode == 0 and value.isnumeric() and int(value) > 0:
+                    identity = process_identity(int(value))
+                    return ((identity.pid, identity.create_time),) if identity else ()
+            except Exception:
+                pass
+        return ()
+
+    identities = {
+        (int(item.get("pid") or 0), float(item.get("create_time") or 0.0))
+        for item in _collect_pbgui_daemon_processes()
+        if item.get("service") == name
+        and int(item.get("pid") or 0) > 0
+        and float(item.get("create_time") or 0.0) > 0
+    }
+    pid = _read_service_pid(name)
+    if pid and _pid_matches_service(pid, name):
+        identity = process_identity(pid)
+        if identity is not None:
+            identities.add((identity.pid, identity.create_time))
+    return tuple(sorted(identities))
+
+
+def _wait_for_service_transition(
+    name: str,
+    *,
+    running: bool,
+    previous_identities: tuple[tuple[int, float], ...] = (),
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    """Wait for a bounded service status and process-identity transition."""
+    deadline = time.monotonic() + _SERVICE_TRANSITION_TIMEOUT_S
+    last_status: dict[str, Any] = {}
+    while True:
+        last_status = _service_status(name)
+        identities = _service_identities(name, last_status)
+        state_matches = bool(last_status.get("running")) is running
+        identity_matches = bool(identities) if running else not identities
+        if identity_matches and running and previous_identities:
+            identity_matches = not set(previous_identities).intersection(identities)
+        enabled_matches = enabled is None or bool(last_status.get("enabled")) is enabled
+        if state_matches and identity_matches and enabled_matches:
+            return last_status
+        if time.monotonic() >= deadline:
+            state = "start" if running else "stop"
+            detail = str(last_status.get("systemd_state") or last_status.get("manager") or "unknown")
+            raise RuntimeError(
+                f"Timed out waiting {_SERVICE_TRANSITION_TIMEOUT_S:.1f}s for {name} to {state}; "
+                f"last state was {detail}, identities={list(identities)}"
+            )
+        time.sleep(_SERVICE_TRANSITION_POLL_S)
+
+
 def _service_action(name: str, action: str) -> dict[str, Any]:
     """Start, stop, restart, enable, or disable a PBGui service."""
-    if action in {"start", "restart", "enable"}:
-        blocker = _optional_service_blocker(name)
-        if blocker:
-            result = _service_status(name)
-            result["error"] = blocker
-            return result
-    systemd_status = _systemd_service_action(name, action)
-    if systemd_status is not None:
-        if systemd_status.get("error"):
-            return systemd_status
-        return _service_status(name) if action in {"enable", "disable"} else systemd_status
-
-    if action in {"enable", "disable"}:
-        raise RuntimeError(f"systemd unit is not installed for {name}")
-
-    obj = _get_service(name)
-    if action == "start":
-        if not obj.is_running():
-            obj.run()
-    elif action == "stop":
-        if obj.is_running():
-            obj.stop()
-    elif action == "restart":
-        if obj.is_running():
-            obj.stop()
-            time.sleep(1.5)
-        obj.run()
-    else:
+    if action not in {"start", "stop", "restart", "enable", "disable"}:
         raise ValueError(f"Unsupported service action: {action}")
-    return _service_status(name)
+    global_lease = None
+    lifecycle_lease = None
+    try:
+        global_lease = acquire_service_lifecycle_lock(
+            Path(PBGDIR),
+            "all-services",
+            action,
+            timeout=_SERVICE_LIFECYCLE_LOCK_TIMEOUT_S,
+        )
+        lifecycle_lease = acquire_service_lifecycle_lock(
+            Path(PBGDIR),
+            name,
+            action,
+            timeout=_SERVICE_LIFECYCLE_LOCK_TIMEOUT_S,
+        )
+    except ServiceLifecycleBusyError as exc:
+        if lifecycle_lease is not None:
+            lifecycle_lease.release()
+        if global_lease is not None:
+            global_lease.release()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        if lifecycle_lease is not None:
+            lifecycle_lease.release()
+        if global_lease is not None:
+            global_lease.release()
+        raise
+
+    try:
+        if action in {"start", "restart", "enable"}:
+            blocker = _optional_service_blocker(name)
+            if blocker:
+                result = _service_status(name)
+                result["error"] = blocker
+                return result
+
+        before = _service_status(name)
+        previous_identities = _service_identities(name, before)
+        if action == "start" and before.get("running"):
+            return before
+        if action == "stop" and not before.get("running"):
+            return before
+        use_systemd = action in {"enable", "disable"} or before.get("manager") != "legacy"
+        systemd_status = _systemd_service_action(name, action) if use_systemd else None
+        if systemd_status is not None:
+            if systemd_status.get("error"):
+                return systemd_status
+            if action in {"stop", "disable"}:
+                return _wait_for_service_transition(
+                    name,
+                    running=False,
+                    enabled=False if action == "disable" else None,
+                )
+            return _wait_for_service_transition(
+                name,
+                running=True,
+                previous_identities=previous_identities if action == "restart" else (),
+                enabled=True if action == "enable" else None,
+            )
+
+        if action in {"enable", "disable"}:
+            raise RuntimeError(f"systemd unit is not installed for {name}")
+        obj = _get_service(name)
+        if action in {"stop", "restart"} and before.get("running"):
+            obj.stop()
+            _wait_for_service_transition(name, running=False)
+        if action in {"start", "restart"}:
+            obj.run()
+            return _wait_for_service_transition(
+                name,
+                running=True,
+                previous_identities=previous_identities if action == "restart" else (),
+            )
+        return _service_status(name)
+    except ExactProcessSignalError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        lifecycle_lease.release()
+        global_lease.release()
 
 
 def _current_username() -> str:
@@ -527,11 +665,16 @@ def _collect_pbgui_daemon_processes() -> list[dict[str, Any]]:
         if not cmdline:
             continue
         for service, script in _SERVICE_SCRIPT_NAMES.items():
-            if any(Path(arg).name == script for arg in cmdline):
+            if _process_matches_service_script(proc, cmdline, script):
                 pid = int(proc.info.get("pid") or 0)
+                try:
+                    create_time = float(proc.create_time())
+                except (psutil.Error, OSError, ValueError):
+                    continue
                 processes.append(
                     {
                         "pid": pid,
+                        "create_time": create_time,
                         "service": service,
                         "script": script,
                         "current": pid == current_pid,
@@ -1087,15 +1230,14 @@ def _worker_item(
 
 
 def _get_task_worker_item() -> dict[str, Any]:
-    from task_queue import list_jobs, read_worker_pid, is_pid_running, clear_worker_pid
+    from task_queue import list_jobs
+    from task_worker_ownership import get_task_worker_status
 
     jobs = list_jobs(states=["pending", "running", "done", "failed"], limit=0)
     counts = Counter(str(job.get("status") or "unknown").strip().lower() for job in jobs)
-    pid = read_worker_pid()
-    running = bool(pid and is_pid_running(int(pid)))
-    if pid and not running:
-        clear_worker_pid()
-        pid = None
+    worker_status = get_task_worker_status()
+    pid = worker_status.pid
+    running = worker_status.running
 
     pending = counts.get("pending", 0)
     active = counts.get("running", 0) + counts.get("cancelling", 0)
@@ -1110,7 +1252,7 @@ def _get_task_worker_item() -> dict[str, Any]:
         running=running,
         summary=summary,
         description="Processes queued Market Data and Heatmap jobs from the shared task queue.",
-        note="Stop sends SIGTERM to the worker process. If pending jobs remain, the PBAPIServer watchdog may start it again.",
+        note="Stop sends SIGTERM and durably pauses automatic starts. Use Start to resume pending jobs.",
         stats=[
             _worker_stat("PID", pid or "-"),
             _worker_stat("Pending", pending),
@@ -1333,33 +1475,19 @@ async def _find_worker(worker_id: str) -> dict[str, Any] | None:
 
 
 def _spawn_task_worker() -> None:
-    from task_queue import clear_worker_pid
+    from task_worker_ownership import ensure_task_worker_started
 
-    clear_worker_pid()
-    subprocess.Popen(
-        [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-    )
-
-
-async def _wait_for_task_worker_exit(pid: int, timeout_s: float = _TASK_WORKER_STOP_TIMEOUT_S) -> bool:
-    """Wait until the detached market-data task worker process has exited."""
-
-    from task_queue import is_pid_running
-
-    deadline = time.monotonic() + max(0.1, float(timeout_s))
-    while time.monotonic() < deadline:
-        if not is_pid_running(int(pid)):
-            return True
-        await asyncio.sleep(0.5)
-    return not is_pid_running(int(pid))
+    ensure_task_worker_started(explicit=True)
 
 
 async def _start_worker(worker_id: str) -> None:
     if worker_id == "market-data-task":
-        _spawn_task_worker()
+        from task_worker_ownership import TaskWorkerInspectionError, TaskWorkerStartupError
+
+        try:
+            await asyncio.to_thread(_spawn_task_worker)
+        except (TaskWorkerInspectionError, TaskWorkerStartupError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return
     if worker_id == "backtest-queue":
         import api.backtest_v7 as bt7
@@ -1390,17 +1518,12 @@ async def _start_worker(worker_id: str) -> None:
 
 async def _stop_worker(worker_id: str) -> None:
     if worker_id == "market-data-task":
-        from task_queue import read_worker_pid, is_pid_running, clear_worker_pid
+        from task_worker_ownership import TaskWorkerInspectionError, TaskWorkerStopTimeout, stop_task_worker
 
-        pid = read_worker_pid()
-        if pid and is_pid_running(int(pid)):
-            os.kill(int(pid), signal.SIGTERM)
-            exited = await _wait_for_task_worker_exit(int(pid))
-            if not exited:
-                raise HTTPException(status_code=409, detail=f"Market Data Queue worker PID {pid} did not stop within {int(_TASK_WORKER_STOP_TIMEOUT_S)}s")
-        pid = read_worker_pid()
-        if pid and not is_pid_running(int(pid)):
-            clear_worker_pid()
+        try:
+            await asyncio.to_thread(stop_task_worker, _TASK_WORKER_STOP_TIMEOUT_S)
+        except (TaskWorkerInspectionError, TaskWorkerStopTimeout, ExactProcessSignalError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return
     if worker_id == "backtest-queue":
         import api.backtest_v7 as bt7
@@ -1475,11 +1598,26 @@ def test_migration(session: SessionToken = Depends(require_auth)) -> Dict[str, A
 @router.post("/migration/run")
 def run_migration(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     """Migrate the current master installation to systemd user services."""
+    leases = []
     try:
+        leases.append(acquire_service_lifecycle_lock(
+            Path(PBGDIR),
+            "all-services",
+            "migration",
+            timeout=_SERVICE_LIFECYCLE_LOCK_TIMEOUT_S,
+        ))
+        leases.append(acquire_master_update_lock(Path(PBGDIR)))
         return _run_systemd_migration()
+    except (ServiceLifecycleBusyError, MasterUpdateBusyError) as exc:
+        raise HTTPException(status_code=409, detail=f"Cannot migrate PBGui services: {exc}") from exc
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"migration run failed: {e}", level="ERROR", meta={"operation": "migration_run", "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        for lease in reversed(leases):
+            lease.release()
 
 
 @router.get("/workers/status")
@@ -1507,6 +1645,8 @@ def start_service(service: str, session: SessionToken = Depends(require_auth)) -
         raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
     try:
         return _service_action(service, "start")
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"start {service} failed: {e}", level="ERROR", meta={"operation": "start_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
@@ -1518,6 +1658,8 @@ def stop_service(service: str, session: SessionToken = Depends(require_auth)) ->
         raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
     try:
         return _service_action(service, "stop")
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"stop {service} failed: {e}", level="ERROR", meta={"operation": "stop_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
@@ -1531,6 +1673,8 @@ def restart_service(service: str, session: SessionToken = Depends(require_auth))
         return restart_api_server(session=session)
     try:
         return _service_action(service, "restart")
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"restart {service} failed: {e}", level="ERROR", meta={"operation": "restart_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
@@ -1542,6 +1686,8 @@ def enable_service(service: str, session: SessionToken = Depends(require_auth)) 
         raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
     try:
         return _service_action(service, "enable")
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"enable {service} failed: {e}", level="ERROR", meta={"operation": "enable_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
@@ -1553,6 +1699,8 @@ def disable_service(service: str, session: SessionToken = Depends(require_auth))
         raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
     try:
         return _service_action(service, "disable")
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"disable {service} failed: {e}", level="ERROR", meta={"operation": "disable_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
@@ -1586,31 +1734,26 @@ async def worker_action(worker_id: str, action: str, session: SessionToken = Dep
 
 @router.post("/api-server/restart")
 def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Trigger in-process restart of the API server.
-
-    Returns 200 immediately; the actual stop+restart happens 300 ms later in a
-    daemon thread so the HTTP response has time to reach the browser before the
-    process exits.
-    """
-    import os
-    import signal
-    import subprocess
-    import sys
+    """Prepare an exact replacement, then signal the old API after responding."""
     import threading
-    import time
 
     api_server = None
-    restart_lease = None
+    leases = None
+    replacement = None
+    lifecycle_transferred = False
     try:
         api_server = importlib.import_module("PBApiServer")
         try:
-            restart_lease = acquire_master_update_lock(Path(PBGDIR))
+            leases = api_server._acquire_api_restart_leases()
+        except ServiceLifecycleBusyError as exc:
+            raise HTTPException(status_code=409, detail=f"Cannot restart API server: {exc}") from exc
         except MasterUpdateBusyError as exc:
             raise HTTPException(status_code=409, detail=f"Cannot restart API server: {exc}") from exc
+        restart_lease = leases[-1]
         restart_blocked, restart_block_reason = asyncio.run(api_server._restart_block_state())
         if restart_blocked:
-            restart_lease.release()
-            restart_lease = None
+            api_server._release_api_restart_leases(leases)
+            leases = None
             detail = restart_block_reason or "An API-owned mutable operation is still running."
             raise HTTPException(status_code=409, detail=f"Cannot restart API server: {detail}")
 
@@ -1625,8 +1768,8 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
                 if not api_server._restart_current_api_systemd_unit(monitor_handoff=monitor_handoff):
                     raise RuntimeError("pbgui-api.service does not own the current API process")
             except Exception:
-                restart_lease.release()
-                restart_lease = None
+                api_server._release_api_restart_leases(leases)
+                leases = None
                 raise
             api_server._api_restart_lease = restart_lease
 
@@ -1634,73 +1777,71 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
                 time.sleep(api_server._SYSTEMD_RESTART_WATCHDOG_SECONDS)
                 if api_server._api_restart_lease is restart_lease:
                     api_server._api_restart_lease = None
-                    restart_lease.release()
+                    api_server._release_api_restart_leases(leases)
                     _log(SERVICE, "[restart] scheduled systemd handoff did not stop the API; restart reservation released", level="ERROR")
 
             try:
+                api_server._detach_api_restart_lifecycle_leases(leases)
                 threading.Thread(target=_release_failed_systemd_restart, daemon=True).start()
+                lifecycle_transferred = True
             except Exception:
                 if api_server._api_restart_lease is restart_lease:
                     api_server._api_restart_lease = None
-                restart_lease.release()
-                restart_lease = None
+                api_server._release_api_restart_leases(leases)
+                leases = None
                 raise
             return {"ok": True, "message": "Restarting…"}
 
-        pbgdir = Path(PBGDIR)
-        venv_python: Optional[str] = None
-        for candidate in [
-            pbgdir.parent / "venv_pbgui" / "bin" / "python",
-            pbgdir.parent / "venv_pbgui312" / "bin" / "python",
-            pbgdir.parent / "venv" / "bin" / "python",
-        ]:
-            if candidate.exists():
-                venv_python = str(candidate)
-                break
-        if not venv_python:
-            venv_python = sys.executable
-
-        pid_file = pbgdir / "data" / "pid" / "api_server.pid"
+        replacement = api_server._prepare_direct_api_replacement(console=False)
 
         def _do_restart() -> None:
             try:
                 time.sleep(0.3)  # let HTTP response reach the browser first
-                pid_file.unlink(missing_ok=True)
-                env = os.environ.copy()
-                env["PBGUI_RESTART_DELAY"] = "3"
-                subprocess.Popen(
-                    [venv_python, str(pbgdir / "PBApiServer.py")],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    close_fds=True,
-                    cwd=str(pbgdir),
-                    env=env,
-                )
-                os.kill(os.getpid(), signal.SIGTERM)
+                api_server.signal_exact_process(replacement.old_identity, signal.SIGTERM)
             except Exception as exc:
                 if api_server._api_restart_lease is restart_lease:
                     api_server._api_restart_lease = None
-                    restart_lease.release()
+                try:
+                    api_server.cancel_api_replacement(replacement)
+                except Exception as cleanup_exc:
+                    _log(SERVICE, f"[restart] replacement cleanup failed: {cleanup_exc}", level="ERROR")
+                finally:
+                    api_server._release_api_restart_leases(leases)
                 _log(SERVICE, f"[restart] direct API restart failed: {exc}", level="ERROR")
 
         _log(SERVICE, "[restart] restart requested by user", level="WARNING")
         api_server._api_restart_lease = restart_lease
         try:
+            api_server._detach_api_restart_lifecycle_leases(leases)
             threading.Thread(target=_do_restart, daemon=True).start()
+            lifecycle_transferred = True
         except Exception:
             if api_server._api_restart_lease is restart_lease:
                 api_server._api_restart_lease = None
-            restart_lease.release()
-            restart_lease = None
+            try:
+                api_server.cancel_api_replacement(replacement)
+            finally:
+                replacement = None
+                api_server._release_api_restart_leases(leases)
+            leases = None
             raise
         return {"ok": True, "message": "Restarting\u2026"}
+    except ApiPidOwnershipError as exc:
+        if leases is not None and not lifecycle_transferred:
+            api_server._release_api_restart_leases(leases)
+        raise HTTPException(status_code=409, detail=f"Cannot restart API server: {exc}") from exc
     except HTTPException:
-        if restart_lease is not None and getattr(api_server, "_api_restart_lease", None) is not restart_lease:
-            restart_lease.release()
+        if leases is not None and not lifecycle_transferred:
+            api_server._release_api_restart_leases(leases)
         raise
     except Exception as e:
-        if restart_lease is not None and getattr(api_server, "_api_restart_lease", None) is not restart_lease:
-            restart_lease.release()
+        if replacement is not None and not lifecycle_transferred:
+            try:
+                api_server.cancel_api_replacement(replacement)
+            except Exception as cleanup_exc:
+                _log(SERVICE, f"replacement cleanup failed: {cleanup_exc}", level="ERROR")
+        if leases is not None and not lifecycle_transferred:
+            api_server._release_api_restart_leases(leases)
         _log(SERVICE, f"restart api-server failed: {e}", level="ERROR", meta={"operation": "restart_api_server", "service": "api-server", "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 

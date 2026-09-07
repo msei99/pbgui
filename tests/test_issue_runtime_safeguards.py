@@ -115,7 +115,11 @@ def test_credentials_in_either_runtime_are_protected_outside_cwd(tmp_path, monke
     bundle.mkdir(parents=True)
     # Missing config must not disable protection for a damaged live bundle.
     assert api_keys._get_in_use_names() == {"alice"}
-    user = SimpleNamespace(name="alice")
+    user = SimpleNamespace(
+        name="alice", exchange="binance", key="key", secret="secret",
+        passphrase=None, wallet_address=None, private_key=None, is_vault=False,
+        quote="USDT", options=None, extra=None,
+    )
     users = Mock()
     users.find_user.return_value = user
     monkeypatch.setattr(api_keys, "_get_users", lambda: users)
@@ -123,7 +127,11 @@ def test_credentials_in_either_runtime_are_protected_outside_cwd(tmp_path, monke
         if action == "delete":
             api_keys.delete_user("alice", session=None)
         else:
-            api_keys.rename_user(api_keys.RenameRequest(new_name="bob"), "alice", session=None)
+            api_keys.update_user(
+                api_keys.UserCreateUpdate(exchange="binance", new_name="bob"),
+                "alice",
+                session=None,
+            )
     assert error.value.status_code == 409
     assert user.name == "alice"
     users.save.assert_not_called()

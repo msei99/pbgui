@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,7 @@ _REFRESH_THREADS: dict[str, threading.Thread] = {}
 _REFRESH_ACCEPTING = True
 _REFRESH_JOB_TTL_SECONDS = 900.0
 _REFRESH_JOB_LIMIT = 64
+_REFRESH_ACTIVE_JOB_LIMIT = 4
 
 
 class CoinDataRefreshRequest(BaseModel):
@@ -54,6 +57,47 @@ class CoinDataRefreshRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     only_cpt: bool = False
     hide_notices: bool = False
+    quotes: list[str] | None = None
+
+
+def _validate_nonempty_quote_selection(quotes: list[str] | None) -> None:
+    """Reject an explicitly empty quote selection while preserving omitted defaults."""
+    if quotes is not None and not quotes:
+        raise HTTPException(status_code=422, detail="Select at least one quote")
+
+
+@dataclass(frozen=True)
+class _RefreshJobOutcome:
+    """Terminal refresh state retained for authenticated job polling."""
+
+    status: str
+    message: str
+    state: dict[str, Any] | None
+    exchange_results: list[dict[str, Any]]
+    warnings: list[str]
+
+
+def _refresh_job_key(
+    action: str,
+    coindata: CoinData,
+    payload: CoinDataRefreshRequest,
+) -> str:
+    """Return a stable identity for one exact refresh request."""
+    values = {
+        "action": action,
+        "exchange": coindata.exchange,
+        "market_cap": coindata.market_cap,
+        "vol_mcap": coindata.vol_mcap,
+        "tags": sorted(coindata.tags),
+        "only_cpt": bool(coindata.only_cpt),
+        "hide_notices": bool(coindata.notices_ignore),
+        "quotes": (
+            None
+            if payload.quotes is None
+            else sorted(str(quote).strip().upper() for quote in payload.quotes)
+        ),
+    }
+    return json.dumps(values, sort_keys=True, separators=(",", ":"))
 
 
 def _normalize_tags(tags: list[str] | None) -> list[str]:
@@ -66,6 +110,34 @@ def _normalize_tags(tags: list[str] | None) -> list[str]:
         normalized.append(value)
         seen.add(value)
     return normalized
+
+
+def _select_quotes(
+    exchange: str,
+    available_quotes: list[str],
+    requested_quotes: list[str] | None,
+) -> list[str]:
+    """Validate an explicit quote selection or apply the exchange default."""
+    _validate_nonempty_quote_selection(requested_quotes)
+    if requested_quotes is not None:
+        normalized: list[str] = []
+        for raw_quote in requested_quotes:
+            quote = str(raw_quote or "").strip().upper()
+            if not re.fullmatch(r"[A-Z0-9]{2,16}", quote):
+                raise HTTPException(status_code=422, detail=f"Invalid quote: {raw_quote}")
+            if quote not in normalized:
+                normalized.append(quote)
+        unavailable = [quote for quote in normalized if quote not in available_quotes]
+        if unavailable:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Quote not available for {exchange}: {', '.join(unavailable)}",
+            )
+        return [quote for quote in available_quotes if quote in normalized]
+
+    preferred_quotes = ["USDC", "USDT0"] if exchange == "hyperliquid" else ["USDT"]
+    selected_quotes = [quote for quote in preferred_quotes if quote in available_quotes]
+    return selected_quotes or list(available_quotes)
 
 
 def _coerce_float(value: Any, default: float) -> float:
@@ -99,7 +171,7 @@ def _prune_refresh_jobs_locked(now: float | None = None) -> None:
     stale_ids = [
         job_id
         for job_id, job in _REFRESH_JOBS.items()
-        if str(job.get("status") or "") in {"completed", "error"}
+        if str(job.get("status") or "") in {"completed", "partial", "error"}
         and current - float(job.get("updated_at") or current) > _REFRESH_JOB_TTL_SECONDS
     ]
     for job_id in stale_ids:
@@ -110,7 +182,7 @@ def _prune_refresh_jobs_locked(now: float | None = None) -> None:
         [
             (job_id, float(job.get("updated_at") or current))
             for job_id, job in _REFRESH_JOBS.items()
-            if str(job.get("status") or "") in {"completed", "error"}
+            if str(job.get("status") or "") in {"completed", "partial", "error"}
         ],
         key=lambda item: item[1],
     )
@@ -119,7 +191,13 @@ def _prune_refresh_jobs_locked(now: float | None = None) -> None:
         _REFRESH_JOBS.pop(job_id, None)
 
 
-def _create_refresh_job(title: str, message: str, total_steps: int) -> str:
+def _create_refresh_job(
+    title: str,
+    message: str,
+    total_steps: int,
+    *,
+    coalesce_key: str | None = None,
+) -> str:
     now = time.time()
     job_id = uuid.uuid4().hex
     with _REFRESH_JOBS_LOCK:
@@ -135,6 +213,9 @@ def _create_refresh_job(title: str, message: str, total_steps: int) -> str:
             "result_message": "",
             "error": "",
             "state": None,
+            "exchange_results": [],
+            "warnings": [],
+            "_coalesce_key": coalesce_key,
             "created_at": now,
             "updated_at": now,
         }
@@ -156,22 +237,39 @@ def _set_refresh_job_progress(job_id: str, step: int, total: int, message: str) 
         job["updated_at"] = time.time()
 
 
-def _complete_refresh_job(job_id: str, message: str, state: dict[str, Any]) -> None:
+def _complete_refresh_job(
+    job_id: str,
+    message: str,
+    state: dict[str, Any] | None,
+    *,
+    status: str = "completed",
+    exchange_results: list[dict[str, Any]] | None = None,
+    warnings: list[str] | None = None,
+) -> None:
     with _REFRESH_JOBS_LOCK:
         job = _REFRESH_JOBS.get(job_id)
         if not job:
             return
         total = max(1, int(job.get("total") or 1))
-        job["status"] = "completed"
+        job["status"] = status
         job["step"] = total
         job["percent"] = 100.0
         job["message"] = message
         job["result_message"] = message
         job["state"] = state
+        job["exchange_results"] = list(exchange_results or [])
+        job["warnings"] = list(warnings or [])
         job["updated_at"] = time.time()
 
 
-def _fail_refresh_job(job_id: str, message: str) -> None:
+def _fail_refresh_job(
+    job_id: str,
+    message: str,
+    *,
+    state: dict[str, Any] | None = None,
+    exchange_results: list[dict[str, Any]] | None = None,
+    warnings: list[str] | None = None,
+) -> None:
     with _REFRESH_JOBS_LOCK:
         job = _REFRESH_JOBS.get(job_id)
         if not job:
@@ -179,6 +277,9 @@ def _fail_refresh_job(job_id: str, message: str) -> None:
         job["status"] = "error"
         job["message"] = message
         job["error"] = message
+        job["state"] = state
+        job["exchange_results"] = list(exchange_results or [])
+        job["warnings"] = list(warnings or [])
         job["updated_at"] = time.time()
 
 
@@ -186,19 +287,65 @@ def _get_refresh_job(job_id: str) -> dict[str, Any] | None:
     with _REFRESH_JOBS_LOCK:
         _prune_refresh_jobs_locked()
         job = _REFRESH_JOBS.get(job_id)
-        return dict(job) if job else None
+        if not job:
+            return None
+        result = dict(job)
+        result.pop("_coalesce_key", None)
+        return result
 
 
-def _start_refresh_job(title: str, message: str, total_steps: int, runner: Any) -> str:
+def _start_refresh_job(
+    title: str,
+    message: str,
+    total_steps: int,
+    runner: Any,
+    *,
+    coalesce_key: str,
+) -> str:
     with _REFRESH_JOBS_LOCK:
         if not _REFRESH_ACCEPTING:
             raise HTTPException(status_code=503, detail="Coin Data refresh is shutting down")
-        job_id = _create_refresh_job(title, message, total_steps)
+        _prune_refresh_jobs_locked()
+        for existing_id, job in _REFRESH_JOBS.items():
+            if job.get("status") == "running" and job.get("_coalesce_key") == coalesce_key:
+                return existing_id
+        active_jobs = sum(1 for job in _REFRESH_JOBS.values() if job.get("status") == "running")
+        if active_jobs >= _REFRESH_ACTIVE_JOB_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Coin Data already has {active_jobs} active refresh jobs; "
+                    "wait for one to finish and retry"
+                ),
+                headers={"Retry-After": "2"},
+            )
+        job_id = _create_refresh_job(
+            title,
+            message,
+            total_steps,
+            coalesce_key=coalesce_key,
+        )
 
     def _worker() -> None:
         try:
-            result_message, state = runner(job_id, total_steps)
-            _complete_refresh_job(job_id, result_message, state)
+            outcome = runner(job_id, total_steps)
+            if outcome.status == "error":
+                _fail_refresh_job(
+                    job_id,
+                    outcome.message,
+                    state=outcome.state,
+                    exchange_results=outcome.exchange_results,
+                    warnings=outcome.warnings,
+                )
+            else:
+                _complete_refresh_job(
+                    job_id,
+                    outcome.message,
+                    outcome.state,
+                    status=outcome.status,
+                    exchange_results=outcome.exchange_results,
+                    warnings=outcome.warnings,
+                )
         except Exception as exc:
             _fail_refresh_job(job_id, str(exc))
         finally:
@@ -257,15 +404,15 @@ def _make_refresh_progress_cb(job_id: str) -> Any:
 
 def _refresh_cmc_data(coindata: CoinData, job_id: str, total_steps: int) -> None:
     _set_refresh_job_progress(job_id, 0, total_steps, "Fetching CoinMarketCap listings...")
-    coindata.fetch_data()
-    _set_refresh_job_progress(job_id, 1, total_steps, "Saving CoinMarketCap listings...")
-    coindata.save_data()
+    if coindata.fetch_data() is False:
+        raise RuntimeError("CoinMarketCap listings fetch returned False")
+    _set_refresh_job_progress(job_id, 1, total_steps, "CoinMarketCap listings published.")
     _set_refresh_job_progress(job_id, 2, total_steps, "Loading CoinMarketCap listings...")
     coindata.load_data()
     _set_refresh_job_progress(job_id, 3, total_steps, "Fetching CoinMarketCap metadata...")
-    coindata.fetch_metadata()
-    _set_refresh_job_progress(job_id, 4, total_steps, "Saving CoinMarketCap metadata...")
-    coindata.save_metadata()
+    if coindata.fetch_metadata() is False:
+        raise RuntimeError("CoinMarketCap metadata fetch returned False")
+    _set_refresh_job_progress(job_id, 4, total_steps, "CoinMarketCap metadata published.")
     _set_refresh_job_progress(job_id, 5, total_steps, "Loading CoinMarketCap metadata...")
     coindata.load_metadata()
 
@@ -378,24 +525,99 @@ def _refresh_single_exchange(
     progress_cb: Any | None = None,
     step_offset: int = 0,
     total_steps: int = 5,
-) -> None:
-    if progress_cb:
-        progress_cb(step_offset, total_steps, f"{exchange_id}: fetching markets...")
-    coindata.fetch_ccxt_markets(exchange_id)
-    if progress_cb:
-        progress_cb(step_offset + 1, total_steps, f"{exchange_id}: loading markets...")
-    markets = coindata.load_ccxt_markets(exchange_id)
-    if progress_cb:
-        progress_cb(step_offset + 2, total_steps, f"{exchange_id}: updating copy-trading cache...")
-    coindata.fetch_copy_trading_symbols(exchange_id, markets)
-    if progress_cb:
-        progress_cb(step_offset + 3, total_steps, f"{exchange_id}: rebuilding mapping...")
-    coindata.build_mapping(exchange_id)
-    if progress_cb:
-        progress_cb(step_offset + 4, total_steps, f"{exchange_id}: updating prices...")
-    coindata.update_prices(exchange_id)
-    if progress_cb:
-        progress_cb(step_offset + 5, total_steps, f"{exchange_id}: refreshed.")
+) -> dict[str, Any]:
+    """Return one normalized result, including False returns and exceptions."""
+    try:
+        raw_result = coindata.refresh_exchange_mapping(
+            exchange_id,
+            progress_cb=progress_cb,
+            step_offset=step_offset,
+            total_steps=total_steps,
+        )
+    except Exception as exc:
+        _log(SERVICE, f"Refresh failed for {exchange_id}: {exc}", level="ERROR")
+        return {
+            "exchange": exchange_id,
+            "markets_ok": False,
+            "mapping_ok": False,
+            "prices_ok": False,
+            "ok": False,
+            "error": str(exc),
+        }
+
+    if not isinstance(raw_result, dict):
+        return {
+            "exchange": exchange_id,
+            "markets_ok": False,
+            "mapping_ok": False,
+            "prices_ok": False,
+            "ok": False,
+            "error": f"refresh_exchange_mapping returned {raw_result!r}",
+        }
+
+    result = dict(raw_result)
+    result["exchange"] = exchange_id
+    result["ok"] = bool(result.get("ok"))
+    price_update = result.get("price_update")
+    result["partial"] = bool(
+        result.get("partial")
+        or (isinstance(price_update, dict) and price_update.get("partial"))
+    )
+    if not result["ok"] and not result.get("error"):
+        if result["partial"] and isinstance(price_update, dict):
+            result["error"] = (
+                f"partial price coverage: {int(price_update.get('priced') or 0)}/"
+                f"{int(price_update.get('requested') or 0)} priced, "
+                f"{int(price_update.get('missing') or 0)} missing"
+            )
+        else:
+            result["error"] = (
+                f"stages markets={bool(result.get('markets_ok'))}, "
+                f"mapping={bool(result.get('mapping_ok'))}, prices={bool(result.get('prices_ok'))}"
+            )
+    return result
+
+
+def _exchange_result_warning(result: dict[str, Any]) -> str:
+    exchange = str(result.get("exchange") or "exchange")
+    return f"{exchange}: {result.get('error') or 'refresh failed'}"
+
+
+def _batch_refresh_outcome(
+    exchange_results: list[dict[str, Any]],
+    state: dict[str, Any] | None,
+    success_message: str,
+) -> _RefreshJobOutcome:
+    """Classify all-success, partial, and zero-success exchange batches."""
+    successful = [result for result in exchange_results if bool(result.get("ok"))]
+    partial = [
+        result
+        for result in exchange_results
+        if not bool(result.get("ok")) and bool(result.get("partial"))
+    ]
+    failed = [
+        result
+        for result in exchange_results
+        if not bool(result.get("ok")) and not bool(result.get("partial"))
+    ]
+    incomplete = partial + failed
+    warnings = [_exchange_result_warning(result) for result in incomplete]
+    total = len(exchange_results)
+    if total and len(successful) == total:
+        return _RefreshJobOutcome("completed", success_message, state, exchange_results, [])
+    if successful or partial:
+        usable = len(successful) + len(partial)
+        message = (
+            f"{usable}/{total} exchanges returned usable data with incomplete results: "
+            + ", ".join(str(result.get("exchange") or "exchange") for result in incomplete)
+        )
+        return _RefreshJobOutcome("partial", message, state, exchange_results, warnings)
+    message = "No exchanges refreshed successfully"
+    if failed:
+        message += "; failed: " + ", ".join(
+            str(result.get("exchange") or "exchange") for result in failed
+        )
+    return _RefreshJobOutcome("error", message, state, exchange_results, warnings)
 
 
 def _new_coindata(
@@ -439,14 +661,25 @@ def _require_cmc_pool_ready(coindata: CoinData) -> None:
 
 
 def _serialize_main_row(row: dict[str, Any], cmc_links: dict[str, str]) -> dict[str, Any]:
+    raw_cmc_rank = row.get("cmc_rank")
+    cmc_rank = (
+        int(raw_cmc_rank)
+        if isinstance(raw_cmc_rank, (int, float))
+        and not isinstance(raw_cmc_rank, bool)
+        and math.isfinite(float(raw_cmc_rank))
+        and float(raw_cmc_rank).is_integer()
+        and raw_cmc_rank > 0
+        else None
+    )
     return {
         "coin": str(row.get("coin") or ""),
+        "symbol": str(row.get("symbol") or ""),
         "ccxt_symbol": str(row.get("ccxt_symbol") or ""),
         "base": str(row.get("base") or ""),
         "quote": str(row.get("quote") or ""),
         "copy_trading": bool(row.get("copy_trading", False)),
         "cmc_id": row.get("cmc_id"),
-        "cmc_rank": row.get("cmc_rank"),
+        "cmc_rank": cmc_rank,
         "cmc_link": _cmc_link_for_row(row, cmc_links),
         "price": _as_float(row.get("price")),
         "market_cap": _as_float(row.get("market_cap")),
@@ -467,6 +700,7 @@ def _serialize_hip3_row(row: dict[str, Any], cmc_links: dict[str, str]) -> dict[
     return {
         "dex": str(row.get("dex") or ""),
         "coin": str(row.get("coin") or ""),
+        "symbol": str(row.get("symbol") or ""),
         "ccxt_symbol": str(row.get("ccxt_symbol") or ""),
         "quote": str(row.get("quote") or ""),
         "cmc_link": _cmc_link_for_row(row, cmc_links),
@@ -490,6 +724,8 @@ def _build_state(
     tags: list[str] | None = None,
     only_cpt: bool = False,
     hide_notices: bool = False,
+    quotes: list[str] | None = None,
+    allow_refresh: bool = True,
 ) -> dict[str, Any]:
     coindata = _new_coindata(
         exchange=exchange,
@@ -505,12 +741,10 @@ def _build_state(
         coindata.exchange = supported_exchanges[0]
 
     mapping_rows = coindata.load_exchange_mapping(coindata.exchange)
-    if not mapping_rows:
-        try:
-            coindata.build_mapping(coindata.exchange)
-            coindata.update_prices(coindata.exchange)
-        except Exception as exc:
-            warnings.append(f"Failed to build mapping for {coindata.exchange}: {exc}")
+    if not mapping_rows and allow_refresh:
+        result = _refresh_single_exchange(coindata, coindata.exchange)
+        if not result.get("ok"):
+            warnings.append(f"Failed to build mapping: {_exchange_result_warning(result)}")
         mapping_rows = coindata.load_exchange_mapping(coindata.exchange)
 
     if not mapping_rows:
@@ -518,14 +752,14 @@ def _build_state(
             f"No mapping data available for {coindata.exchange}. Refresh market data and try again."
         )
 
-    if coindata.exchange == "hyperliquid" and mapping_rows and not any(
+    if allow_refresh and coindata.exchange == "hyperliquid" and mapping_rows and not any(
         row.get("is_hip3", False) for row in mapping_rows
     ):
-        try:
-            _refresh_single_exchange(coindata, "hyperliquid")
+        result = _refresh_single_exchange(coindata, "hyperliquid")
+        if result.get("ok"):
             mapping_rows = coindata.load_exchange_mapping("hyperliquid")
-        except Exception as exc:
-            warnings.append(f"Hyperliquid HIP-3 rebuild failed: {exc}")
+        else:
+            warnings.append(f"Hyperliquid HIP-3 rebuild failed: {_exchange_result_warning(result)}")
 
     exchange_dir = COINDATA_DIR / coindata.exchange
     cmc_data_ts = _file_mtime(COINDATA_DIR / "coindata.json")
@@ -544,12 +778,7 @@ def _build_state(
             if row.get("quote")
         }
     )
-    preferred_quotes = ["USDT"]
-    if coindata.exchange == "hyperliquid":
-        preferred_quotes = ["USDC", "USDT0"]
-    quote_filter = [quote for quote in preferred_quotes if quote in available_quotes]
-    if not quote_filter:
-        quote_filter = list(available_quotes)
+    quote_filter = _select_quotes(coindata.exchange, available_quotes, quotes)
 
     mapping_tags = coindata.get_mapping_tags(coindata.exchange, quote_filter=quote_filter)
     selected_tags = [tag for tag in _normalize_tags(tags) if tag in mapping_tags]
@@ -594,6 +823,7 @@ def _build_state(
         if row.get("is_hip3", False)
         and bool(row.get("active", True))
         and bool(row.get("linear", True))
+        and (row.get("quote") or "").upper() in quote_filter
     ]
     if coindata.exchange == "hyperliquid":
         hip3_rows.sort(key=lambda row: (str(row.get("coin") or ""), str(row.get("symbol") or "")))
@@ -623,6 +853,8 @@ def _build_state(
 
     return {
         "cmc_pool": cmc_pool,
+        "available_quotes": available_quotes,
+        "selected_quotes": quote_filter,
         "filters": {
             "exchange": coindata.exchange,
             "market_cap": coindata.market_cap,
@@ -630,11 +862,12 @@ def _build_state(
             "tags": selected_tags,
             "only_cpt": bool(coindata.only_cpt),
             "hide_notices": bool(coindata.notices_ignore),
+            "quotes": quote_filter,
         },
         "options": {
             "exchanges": supported_exchanges,
             "tags": mapping_tags,
-            "quote_filter": quote_filter,
+            "available_quotes": available_quotes,
             "vol_mcap_values": vol_mcap_values,
         },
         "meta": {
@@ -685,6 +918,47 @@ def _build_state(
     }
 
 
+def _build_refresh_state(coindata: CoinData, payload: CoinDataRefreshRequest) -> dict[str, Any]:
+    """Read the post-refresh state without triggering another exchange refresh."""
+    return _build_state(
+        exchange=coindata.exchange,
+        market_cap=coindata.market_cap,
+        vol_mcap=coindata.vol_mcap,
+        tags=coindata.tags,
+        only_cpt=coindata.only_cpt,
+        hide_notices=coindata.notices_ignore,
+        quotes=payload.quotes,
+        allow_refresh=False,
+    )
+
+
+def _attach_optional_refresh_state(
+    outcome: _RefreshJobOutcome,
+    coindata: CoinData,
+    payload: CoinDataRefreshRequest,
+) -> _RefreshJobOutcome:
+    """Attach current page state without replacing primary refresh diagnostics."""
+    try:
+        state = _build_refresh_state(coindata, payload)
+    except Exception as exc:
+        warning = f"Post-refresh state reconstruction failed: {exc}"
+        _log(SERVICE, f"{warning} ({coindata.exchange})", level="ERROR")
+        return _RefreshJobOutcome(
+            "partial" if outcome.status == "completed" else outcome.status,
+            f"{outcome.message}; {warning}",
+            None,
+            outcome.exchange_results,
+            [*outcome.warnings, warning],
+        )
+    return _RefreshJobOutcome(
+        outcome.status,
+        outcome.message,
+        state,
+        outcome.exchange_results,
+        outcome.warnings,
+    )
+
+
 @router.get("/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,
@@ -717,6 +991,7 @@ def get_state(
     tags: list[str] | None = Query(default=None),
     only_cpt: bool = Query(default=False),
     hide_notices: bool = Query(default=False),
+    quotes: list[str] | None = Query(default=None),
     session: SessionToken = Depends(require_auth),
 ) -> dict[str, Any]:
     del session
@@ -727,6 +1002,7 @@ def get_state(
         tags=tags,
         only_cpt=only_cpt,
         hide_notices=hide_notices,
+        quotes=quotes,
     )
 
 
@@ -748,6 +1024,7 @@ def refresh_exchange(
     session: SessionToken = Depends(require_auth),
 ) -> dict[str, Any]:
     del session
+    _validate_nonempty_quote_selection(payload.quotes)
     coindata = _new_coindata(
         exchange=payload.exchange,
         market_cap=payload.market_cap,
@@ -758,34 +1035,32 @@ def refresh_exchange(
     )
     total_steps = 6
 
-    def _runner(job_id: str, _: int) -> tuple[str, dict[str, Any]]:
-        try:
-            _refresh_single_exchange(
-                coindata,
-                coindata.exchange,
-                progress_cb=_make_refresh_progress_cb(job_id),
-                step_offset=0,
-                total_steps=total_steps,
+    def _runner(job_id: str, _: int) -> _RefreshJobOutcome:
+        result = _refresh_single_exchange(
+            coindata,
+            coindata.exchange,
+            progress_cb=_make_refresh_progress_cb(job_id),
+            step_offset=0,
+            total_steps=total_steps,
+        )
+        _set_refresh_job_progress(job_id, total_steps - 1, total_steps, "Refreshing page state...")
+        if result.get("ok"):
+            outcome = _RefreshJobOutcome(
+                "completed", f"Refreshed {coindata.exchange}", None, [result], []
             )
-            _set_refresh_job_progress(job_id, total_steps - 1, total_steps, "Refreshing page state...")
-            state = _build_state(
-                exchange=coindata.exchange,
-                market_cap=coindata.market_cap,
-                vol_mcap=coindata.vol_mcap,
-                tags=coindata.tags,
-                only_cpt=coindata.only_cpt,
-                hide_notices=coindata.notices_ignore,
-            )
-            return f"Refreshed {coindata.exchange}", state
-        except Exception as exc:
-            _log(SERVICE, f"Refresh selected exchange failed for {coindata.exchange}: {exc}", level="ERROR")
-            raise RuntimeError(f"Failed to refresh {coindata.exchange}: {exc}")
+        else:
+            warning = _exchange_result_warning(result)
+            status = "partial" if result.get("partial") else "error"
+            _log(SERVICE, f"Refresh selected exchange {status}: {warning}", level="WARNING" if status == "partial" else "ERROR")
+            outcome = _RefreshJobOutcome(status, warning, None, [result], [warning])
+        return _attach_optional_refresh_state(outcome, coindata, payload)
 
     job_id = _start_refresh_job(
         f"Refreshing {coindata.exchange}...",
         f"{coindata.exchange}: fetching markets...",
         total_steps,
         _runner,
+        coalesce_key=_refresh_job_key("exchange", coindata, payload),
     )
     return {"ok": True, "job_id": job_id}
 
@@ -796,6 +1071,7 @@ def refresh_all(
     session: SessionToken = Depends(require_auth),
 ) -> dict[str, Any]:
     del session
+    _validate_nonempty_quote_selection(payload.quotes)
     coindata = _new_coindata(
         exchange=payload.exchange,
         market_cap=payload.market_cap,
@@ -807,36 +1083,24 @@ def refresh_all(
     exchanges = V7.list()
     total_steps = len(exchanges) * 5 + 1
 
-    def _runner(job_id: str, _: int) -> tuple[str, dict[str, Any]]:
-        errors: list[str] = []
-        try:
-            for index, exchange_id in enumerate(exchanges):
-                step_offset = index * 5
-                try:
-                    _refresh_single_exchange(
-                        coindata,
-                        exchange_id,
-                        progress_cb=_make_refresh_progress_cb(job_id),
-                        step_offset=step_offset,
-                        total_steps=total_steps,
-                    )
-                except Exception as exc:
-                    errors.append(f"{exchange_id}: {exc}")
-            if errors:
-                raise RuntimeError("Some exchanges failed to refresh: " + "; ".join(errors))
-            _set_refresh_job_progress(job_id, total_steps - 1, total_steps, "Refreshing page state...")
-            state = _build_state(
-                exchange=coindata.exchange,
-                market_cap=coindata.market_cap,
-                vol_mcap=coindata.vol_mcap,
-                tags=coindata.tags,
-                only_cpt=coindata.only_cpt,
-                hide_notices=coindata.notices_ignore,
-            )
-            return "All exchanges refreshed", state
-        except Exception as exc:
-            _log(SERVICE, f"Refresh all exchanges failed: {exc}", level="ERROR")
-            raise
+    def _runner(job_id: str, _: int) -> _RefreshJobOutcome:
+        exchange_results = []
+        for index, exchange_id in enumerate(exchanges):
+            exchange_results.append(
+                _refresh_single_exchange(
+                    coindata,
+                    exchange_id,
+                    progress_cb=_make_refresh_progress_cb(job_id),
+                    step_offset=index * 5,
+                    total_steps=total_steps,
+                )
+        )
+        _set_refresh_job_progress(job_id, total_steps - 1, total_steps, "Refreshing page state...")
+        outcome = _batch_refresh_outcome(exchange_results, None, "All exchanges refreshed")
+        outcome = _attach_optional_refresh_state(outcome, coindata, payload)
+        if outcome.status != "completed":
+            _log(SERVICE, f"Refresh all exchanges {outcome.status}: {outcome.message}", level="ERROR")
+        return outcome
 
     first_exchange = exchanges[0] if exchanges else "exchange"
     job_id = _start_refresh_job(
@@ -844,6 +1108,7 @@ def refresh_all(
         f"{first_exchange}: fetching markets...",
         total_steps,
         _runner,
+        coalesce_key=_refresh_job_key("all", coindata, payload),
     )
     return {"ok": True, "job_id": job_id}
 
@@ -854,6 +1119,7 @@ def refresh_cmc(
     session: SessionToken = Depends(require_auth),
 ) -> dict[str, Any]:
     del session
+    _validate_nonempty_quote_selection(payload.quotes)
     coindata = _new_coindata(
         exchange=payload.exchange,
         market_cap=payload.market_cap,
@@ -865,35 +1131,40 @@ def refresh_cmc(
     _require_cmc_pool_ready(coindata)
     total_steps = 12
 
-    def _runner(job_id: str, _: int) -> tuple[str, dict[str, Any]]:
+    def _runner(job_id: str, _: int) -> _RefreshJobOutcome:
         try:
             _refresh_cmc_data(coindata, job_id, total_steps)
-            _refresh_single_exchange(
-                coindata,
-                coindata.exchange,
-                progress_cb=_make_refresh_progress_cb(job_id),
-                step_offset=6,
-                total_steps=total_steps,
-            )
-            _set_refresh_job_progress(job_id, total_steps - 1, total_steps, "Refreshing page state...")
-            state = _build_state(
-                exchange=coindata.exchange,
-                market_cap=coindata.market_cap,
-                vol_mcap=coindata.vol_mcap,
-                tags=coindata.tags,
-                only_cpt=coindata.only_cpt,
-                hide_notices=coindata.notices_ignore,
-            )
-            return "CoinMarketCap data refreshed", state
         except Exception as exc:
             _log(SERVICE, f"Refresh CoinMarketCap data failed for {coindata.exchange}: {exc}", level="ERROR")
-            raise RuntimeError(f"Failed to refresh CoinMarketCap data: {exc}")
+            outcome = _RefreshJobOutcome(
+                "error", f"Failed to refresh CoinMarketCap data: {exc}", None, [], [str(exc)]
+            )
+            return _attach_optional_refresh_state(outcome, coindata, payload)
+
+        result = _refresh_single_exchange(
+            coindata,
+            coindata.exchange,
+            progress_cb=_make_refresh_progress_cb(job_id),
+            step_offset=6,
+            total_steps=total_steps,
+        )
+        _set_refresh_job_progress(job_id, total_steps - 1, total_steps, "Refreshing page state...")
+        if result.get("ok"):
+            outcome = _RefreshJobOutcome(
+                "completed", "CoinMarketCap data refreshed", None, [result], []
+            )
+        else:
+            warning = _exchange_result_warning(result)
+            status = "partial" if result.get("partial") else "error"
+            outcome = _RefreshJobOutcome(status, warning, None, [result], [warning])
+        return _attach_optional_refresh_state(outcome, coindata, payload)
 
     job_id = _start_refresh_job(
         "Refreshing CMC + selected exchange...",
         "Fetching CoinMarketCap listings...",
         total_steps,
         _runner,
+        coalesce_key=_refresh_job_key("cmc", coindata, payload),
     )
     return {"ok": True, "job_id": job_id}
 
@@ -904,6 +1175,7 @@ def refresh_cmc_all(
     session: SessionToken = Depends(require_auth),
 ) -> dict[str, Any]:
     del session
+    _validate_nonempty_quote_selection(payload.quotes)
     coindata = _new_coindata(
         exchange=payload.exchange,
         market_cap=payload.market_cap,
@@ -916,37 +1188,41 @@ def refresh_cmc_all(
     exchanges = V7.list()
     total_steps = 6 + (len(exchanges) * 5) + 1
 
-    def _runner(job_id: str, _: int) -> tuple[str, dict[str, Any]]:
-        errors: list[str] = []
+    def _runner(job_id: str, _: int) -> _RefreshJobOutcome:
         try:
             _refresh_cmc_data(coindata, job_id, total_steps)
-            for index, exchange_id in enumerate(exchanges):
-                step_offset = 6 + (index * 5)
-                try:
-                    _refresh_single_exchange(
-                        coindata,
-                        exchange_id,
-                        progress_cb=_make_refresh_progress_cb(job_id),
-                        step_offset=step_offset,
-                        total_steps=total_steps,
-                    )
-                except Exception as exc:
-                    errors.append(f"{exchange_id}: {exc}")
-            if errors:
-                raise RuntimeError("Some exchanges failed to refresh after CoinMarketCap update: " + "; ".join(errors))
-            _set_refresh_job_progress(job_id, total_steps - 1, total_steps, "Refreshing page state...")
-            state = _build_state(
-                exchange=coindata.exchange,
-                market_cap=coindata.market_cap,
-                vol_mcap=coindata.vol_mcap,
-                tags=coindata.tags,
-                only_cpt=coindata.only_cpt,
-                hide_notices=coindata.notices_ignore,
-            )
-            return "CoinMarketCap data and all exchanges refreshed", state
         except Exception as exc:
             _log(SERVICE, f"Refresh CoinMarketCap data and all exchanges failed: {exc}", level="ERROR")
-            raise RuntimeError(f"Failed to refresh CoinMarketCap data and all exchanges: {exc}")
+            outcome = _RefreshJobOutcome(
+                "error",
+                f"Failed to refresh CoinMarketCap data and all exchanges: {exc}",
+                None,
+                [],
+                [str(exc)],
+            )
+            return _attach_optional_refresh_state(outcome, coindata, payload)
+
+        exchange_results = []
+        for index, exchange_id in enumerate(exchanges):
+            exchange_results.append(
+                _refresh_single_exchange(
+                    coindata,
+                    exchange_id,
+                    progress_cb=_make_refresh_progress_cb(job_id),
+                    step_offset=6 + (index * 5),
+                    total_steps=total_steps,
+                )
+            )
+        _set_refresh_job_progress(job_id, total_steps - 1, total_steps, "Refreshing page state...")
+        outcome = _batch_refresh_outcome(
+            exchange_results,
+            None,
+            "CoinMarketCap data and all exchanges refreshed",
+        )
+        outcome = _attach_optional_refresh_state(outcome, coindata, payload)
+        if outcome.status != "completed":
+            _log(SERVICE, f"CMC-all refresh {outcome.status}: {outcome.message}", level="ERROR")
+        return outcome
 
     first_exchange = exchanges[0] if exchanges else "exchange"
     job_id = _start_refresh_job(
@@ -954,5 +1230,6 @@ def refresh_cmc_all(
         f"Fetching CoinMarketCap listings before {first_exchange}...",
         total_steps,
         _runner,
+        coalesce_key=_refresh_job_key("cmc_all", coindata, payload),
     )
     return {"ok": True, "job_id": job_id}

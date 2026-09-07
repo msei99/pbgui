@@ -28,12 +28,14 @@ Browser-Anfragen verwenden das HttpOnly-PBGui-Session-Cookie; der Session-Token 
   - Holt Markets, aktualisiert den Copy-Trading-Cache, baut das Mapping neu und aktualisiert Preise fuer die aktuelle Exchange
 - `Refresh All Exchanges`
   - Fuehrt denselben Ablauf fuer alle V7-Exchanges aus
+  - Wenn nur einige Exchanges erfolgreich sind, ist deren neuer Stand sofort verfuegbar und die Statuszeile nennt die fehlgeschlagenen Exchanges; schlagen alle Exchanges fehl, wird der Lauf als Fehler gemeldet
 - `Refresh CMC + Selected Exchange`
   - Laedt CMC-Listings und Metadaten neu und aktualisiert danach die gewaehlte Exchange, damit die sichtbare Tabelle die neuen CMC-Daten sofort nutzt
   - Zeigt waehrend des laufenden bestehenden Refresh-Workflows ein zentriertes Busy-Overlay mit echten Prozentwerten auf Basis der bereits abgeschlossenen Refresh-Schritte
 - `Refresh CMC + All Exchanges`
   - Laedt CMC-Listings und Metadaten neu und baut danach alle Exchanges neu auf, damit alle Exchange-Mappings in einem Lauf auf den neuen CMC-Datenstand gebracht werden
   - Nutzt dasselbe Busy-Overlay mit echten Prozentwerten fuer den laengeren Komplettlauf
+  - Nutzt dieselbe Partial-/Fehler-Zusammenfassung wie `Refresh All Exchanges` und behaelt Exchange-spezifische Diagnosen fuer das Polling
 - `Matched Symbols`
   - Zeigt nur die gematchte Haupttabelle an
 - `CMC Unmatched`
@@ -61,6 +63,7 @@ Auf VPS-Zielen besteht Readiness aus secret-freien Capability-Metadaten: Protoko
 Hauptfilter:
 
 - Exchange
+- Quotes ueber einen kompakten Multiselect. Coin Data verwendet standardmaessig `USDT`, wenn diese Quote vorhanden ist; bei Hyperliquid sind `USDC` und `USDT0` gemeinsam vorausgewaehlt. Jede Quote-Familie aus dem Mapping der gewaehlten Exchange kann explizit ausgewaehlt werden.
 - Minimum `market_cap` wird bereits waehrend der Eingabe angewendet, behaelt stabile Dezimaleingaben waehrend des Tippens und nutzt `250` als Editor-typischen `+/-`-Schritt
 - Maximum `vol/mcap` wird bereits waehrend der Eingabe angewendet, behaelt direkte Dezimaleingaben wie `0.` und `0,` waehrend des Tippens und laesst `+/-` ueber lesbare gerundete Schwellen aus den aktuellen Exchange-Daten springen statt ueber winzige Rohwert-Schritte
 - Tags ueber denselben suchbaren Chip-Multiselect wie in PBv7 Run/Backtest, ohne Checkboxen im Dropdown
@@ -74,6 +77,7 @@ FastAPI-UI-Verbesserungen:
 - Vollbreiten-Tabellen mit ausgewogener Spaltenverteilung, damit die verfuegbare Breite genutzt wird ohne uebergrosse Luecken zwischen den Werten
 - die aktive Desktop-Tabelle nutzt die verbleibende Fensterhoehe, statt unten Leerraum unter der Tabelle zu lassen
 - sortierbare Tabellen-Header fuer Matched-, Unmatched- und HIP-3-Ansicht
+- nicht verfuegbare CMC-Werte fuer Market Cap, 24-Stunden-Volumen und `vol/mcap` werden als `N/A` angezeigt und nach bekannten Werten sortiert
 - Hover-Tooltips fuer Tags, Notices und lange Werte
 - Row-Selection mit zentrierter schwebender Detailkarte, die sich beim Oeffnen soweit moeglich automatisch an den Inhalt anpasst, sich an jeder Seite und Ecke in der Groesse aendern und verschieben laesst, alle Tags ohne Abschneiden zeigt, einen direkten `Open CMC`-Link bei vorhandener CoinMarketCap-Zuordnung bietet und per `X` statt nur ueber Notice-Text geschlossen wird
 - genau eine aktive Haupttabelle, umschaltbar ueber die Sidebar, statt mehrere Bereiche gleichzeitig anzuzeigen
@@ -90,6 +94,7 @@ Die Seite enthaelt:
 ## Hyperliquid Hinweise
 
 - Quote-Prioritaet ist standardmaessig `USDC`, danach `USDT0`
+- Sind beide Quote-Familien verfuegbar, umfasst die Voreinstellung beide; eine explizite Auswahl filtert Matched-, Unmatched- und HIP-3-Zeilen. Diese Auswahl in Coin Data aendert nicht die USDT-Linear-Regeln fuer PB7-/PB8-Konfigurationen.
 - Wenn keine HIP-3-Symbole gefunden werden, kann Coin Data das Hyperliquid-Mapping einmal automatisch neu bauen
 - HIP-3-Zeilen werden separat angezeigt und nutzen den eigenen `DEX`-Filter; CMC-basierte Filter wie `market_cap`, `vol/mcap` und Tags gelten fuer gematchte Nicht-HIP-3-Zeilen
 

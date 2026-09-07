@@ -15,7 +15,7 @@ import numpy as np
 from logging_helpers import human_log
 from file_lock import advisory_file_lock
 from market_data_sources import get_source_minutes_for_range
-from PBCoinData import CoinData, compute_coin_name, get_symbol_for_coin
+from PBCoinData import CoinData, compute_coin_name, get_symbol_for_coin, normalize_symbol
 import pbgui_purefunc
 from pbgui_purefunc import load_symbols_from_ini
 from secure_files import atomic_write_private_text, ensure_private_directory, secure_private_file
@@ -460,7 +460,7 @@ def get_market_data_coin_options(exchange: str) -> list[str]:
                     symbol = str(row.get("ccxt_symbol") or row.get("symbol") or "").strip()
                     if not symbol:
                         continue
-                    coin = compute_coin_name(symbol, quote)
+                    coin = normalize_symbol(symbol) if ex == "hyperliquid" else compute_coin_name(symbol, quote)
                 coin = _canonical_enabled_coin(ex, coin)
                 if coin:
                     mapped_coins.add(coin)

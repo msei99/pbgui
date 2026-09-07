@@ -25,6 +25,29 @@ def test_local_services_registry_includes_pbcluster() -> None:
     assert "pbcluster" in services._MIGRATION_LEGACY_STOP_SERVICES
 
 
+def test_vps_local_restart_runs_blocking_lifecycle_in_thread(monkeypatch) -> None:
+    """The VPS WebSocket helper never polls service transitions on its event loop."""
+    import api.vps as vps
+
+    calls: list[tuple[str, str]] = []
+
+    def service_action(service: str, action: str) -> dict[str, object]:
+        calls.append((service, action))
+        return {"running": True}
+
+    async def to_thread(function, *args):
+        calls.append(("thread", function.__name__))
+        return function(*args)
+
+    monkeypatch.setattr(services, "_service_action", service_action)
+    monkeypatch.setattr(vps.asyncio, "to_thread", to_thread)
+
+    result = asyncio.run(vps._local_restart_service("PBData"))
+
+    assert result["success"] is True
+    assert calls == [("thread", "service_action"), ("pbdata", "restart")]
+
+
 def test_local_services_registry_includes_monitor_agent() -> None:
     """Local Services API exposes PBMonitorAgent as a systemd-only service."""
 
@@ -379,6 +402,9 @@ def test_services_restart_reuses_root_systemd_handoff(monkeypatch) -> None:
         def release(self) -> None:
             return None
 
+        def detach(self) -> None:
+            return None
+
     async def unblocked() -> tuple[bool, str]:
         return False, ""
 
@@ -386,7 +412,7 @@ def test_services_restart_reuses_root_systemd_handoff(monkeypatch) -> None:
     monkeypatch.setattr(PBApiServer, "_api_restart_lease", None)
     monkeypatch.setattr(services, "_systemd_unit_for_service", lambda name: "pbgui-api.service")
     monkeypatch.setattr(services, "get_monitor", lambda: VPSMonitor())
-    monkeypatch.setattr(services, "acquire_master_update_lock", lambda _root: Lease())
+    monkeypatch.setattr(PBApiServer, "_acquire_api_restart_leases", lambda: (Lease(), Lease(), Lease()))
     monkeypatch.setattr(threading, "Thread", lambda *args, **kwargs: type("Thread", (), {"start": lambda self: None})())
     monkeypatch.setattr(
         PBApiServer,
@@ -410,6 +436,9 @@ def test_services_restart_thread_failure_releases_lease(monkeypatch) -> None:
         def release(self) -> None:
             self.releases += 1
 
+        def detach(self) -> None:
+            return None
+
     class BrokenThread:
         """Fail exactly where the watchdog thread would be started."""
 
@@ -422,20 +451,20 @@ def test_services_restart_thread_failure_releases_lease(monkeypatch) -> None:
     async def unblocked() -> tuple[bool, str]:
         return False, ""
 
-    lease = Lease()
+    leases = (Lease(), Lease(), Lease())
     monkeypatch.setattr(PBApiServer, "_restart_block_state", unblocked)
     monkeypatch.setattr(PBApiServer, "_api_restart_lease", None)
     monkeypatch.setattr(PBApiServer, "_restart_current_api_systemd_unit", lambda **kwargs: True)
     monkeypatch.setattr(services, "_systemd_unit_for_service", lambda name: "pbgui-api.service")
     monkeypatch.setattr(services, "get_monitor", lambda: None)
-    monkeypatch.setattr(services, "acquire_master_update_lock", lambda _root: lease)
+    monkeypatch.setattr(PBApiServer, "_acquire_api_restart_leases", lambda: leases)
     monkeypatch.setattr(threading, "Thread", BrokenThread)
 
     with pytest.raises(services.HTTPException) as exc_info:
         services.restart_api_server(session=None)
 
     assert exc_info.value.status_code == 500
-    assert lease.releases == 1
+    assert [lease.releases for lease in leases] == [1, 1, 1]
     assert PBApiServer._api_restart_lease is None
 
 
@@ -732,38 +761,47 @@ def test_pb8_backtest_controller_is_visible_and_controllable(monkeypatch) -> Non
 def test_market_data_worker_stop_waits_for_process_exit(monkeypatch) -> None:
     """Stopping Market Data Queue waits until the old worker process exits."""
 
-    running_checks = iter([True, False])
-    cleared: list[bool] = []
-    killed: list[tuple[int, int]] = []
+    calls: list[float] = []
 
     monkeypatch.setattr(services, "_TASK_WORKER_STOP_TIMEOUT_S", 2.0)
-    monkeypatch.setattr(services, "_wait_for_task_worker_exit", lambda pid: asyncio.sleep(0, result=True))
-    monkeypatch.setattr(services.os, "kill", lambda pid, sig: killed.append((pid, sig)))
-    monkeypatch.setattr(services, "asyncio", services.asyncio)
-
-    import task_queue
-
-    monkeypatch.setattr(task_queue, "read_worker_pid", lambda: 1234)
-    monkeypatch.setattr(task_queue, "is_pid_running", lambda _pid: next(running_checks))
-    monkeypatch.setattr(task_queue, "clear_worker_pid", lambda: cleared.append(True))
+    import task_worker_ownership
+    monkeypatch.setattr(task_worker_ownership, "stop_task_worker", lambda timeout: calls.append(timeout))
 
     asyncio.run(services._stop_worker("market-data-task"))
 
-    assert killed == [(1234, services.signal.SIGTERM)]
-    assert cleared == [True]
+    assert calls == [2.0]
+
+
+def test_market_data_worker_note_describes_durable_pause(monkeypatch) -> None:
+    """Services help explains that manual stop suppresses watchdog restarts until Start."""
+    import task_queue
+    import task_worker_ownership
+
+    monkeypatch.setattr(task_queue, "list_jobs", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        task_worker_ownership,
+        "get_task_worker_status",
+        lambda: SimpleNamespace(pid=None, running=False),
+    )
+
+    item = services._get_task_worker_item()
+
+    assert item["note"] == (
+        "Stop sends SIGTERM and durably pauses automatic starts. "
+        "Use Start to resume pending jobs."
+    )
 
 
 def test_market_data_worker_stop_timeout_reports_error(monkeypatch) -> None:
     """Stopping Market Data Queue reports a timeout instead of starting over an old PID."""
 
     monkeypatch.setattr(services, "_TASK_WORKER_STOP_TIMEOUT_S", 1.0)
-    monkeypatch.setattr(services, "_wait_for_task_worker_exit", lambda pid: asyncio.sleep(0, result=False))
-    monkeypatch.setattr(services.os, "kill", lambda _pid, _sig: None)
+    import task_worker_ownership
 
-    import task_queue
+    def timeout(_timeout: float) -> None:
+        raise task_worker_ownership.TaskWorkerStopTimeout("Market Data Queue worker PID 1234 did not stop")
 
-    monkeypatch.setattr(task_queue, "read_worker_pid", lambda: 1234)
-    monkeypatch.setattr(task_queue, "is_pid_running", lambda _pid: True)
+    monkeypatch.setattr(task_worker_ownership, "stop_task_worker", timeout)
 
     try:
         asyncio.run(services._stop_worker("market-data-task"))
@@ -772,6 +810,23 @@ def test_market_data_worker_stop_timeout_reports_error(monkeypatch) -> None:
         assert "did not stop" in str(exc.detail)
     else:
         raise AssertionError("Expected HTTPException")
+
+
+def test_worker_action_preserves_start_conflict_status(monkeypatch) -> None:
+    """Worker startup conflicts remain HTTP 409 instead of being wrapped as 500."""
+    import task_worker_ownership
+
+    monkeypatch.setattr(
+        services,
+        "_spawn_task_worker",
+        lambda: (_ for _ in ()).throw(task_worker_ownership.TaskWorkerStartupError("still starting")),
+    )
+
+    with pytest.raises(services.HTTPException) as exc_info:
+        asyncio.run(services.worker_action("market-data-task", "start"))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "still starting"
 
 
 def test_live_unsubscribe_awaits_watcher_cleanup() -> None:

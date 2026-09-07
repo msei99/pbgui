@@ -96,7 +96,6 @@ from market_data_integrity import (
 from github_archive import publish_release_asset, release_asset_url
 import pbgui_purefunc
 from task_queue import (
-    clear_worker_pid,
     ensure_task_dirs,
     get_task_state_dir,
     get_job_log_path,
@@ -104,9 +103,9 @@ from task_queue import (
     list_jobs,
     move_job_file,
     update_job_file,
-    write_worker_pid,
     enqueue_job,
 )
+from task_worker_ownership import acquire_task_worker_lifetime, claim_task_worker
 from inventory_cache import refresh_coin as _refresh_inventory_coin, sweep_cache_mtimes as _sweep_cache_mtimes
 
 
@@ -3829,75 +3828,89 @@ def _run_cache_sweep_thread(interval_s: float = 600.0) -> None:
 def main() -> int:
     from credential_process_registry import ProcessCapabilityHeartbeat
 
+    global _STOP
+
     ensure_task_dirs()
-    capability = ProcessCapabilityHeartbeat(Path(__file__).resolve().parent, "Market Data worker")
-    capability.__enter__()
-
-    signal.signal(signal.SIGTERM, _handle_stop)
-    signal.signal(signal.SIGINT, _handle_stop)
-
-    pid = os.getpid()
-    write_worker_pid(pid)
-    _job_log(f"worker started pid={pid}")
-
-    # Start background cache sweep thread (checks external file changes every 10 min)
-    _sweep_t = threading.Thread(
-        target=_run_cache_sweep_thread,
-        kwargs={"interval_s": 600.0},
-        daemon=True,
-        name="cache-sweep",
-    )
-    _sweep_t.start()
-
-    # Keep one regular FIFO slot per job type. A manual run request may open one
-    # additional same-type slot so one extra pending job can run in parallel.
-    active_threads: dict[str, dict[str, Any]] = {}
-    threads_lock = threading.Lock()
-
-    def _run_job_thread(job_run: Path, job_id: str) -> None:
-        """Thread target: run one job, handle requeue/fail, then unregister."""
-        try:
-            _run_job(job_run)
-        except Exception as e:
-            # Graceful worker stop: requeue so the job resumes after restart.
-            if _STOP and job_run.exists() and not _is_cancel_requested(job_run):
-                try:
-                    update_job_file(
-                        job_run,
-                        mutate=lambda o: o.update(
-                            {"status": "pending", "error": "worker stopped; requeued"}
-                        ),
-                    )
-                    move_job_file(job_run, "pending")
-                    _job_log(f"worker stopping; requeued job {job_run.name}", level="WARNING")
-                    return
-                except Exception:
-                    pass
-            _job_log(f"fatal in job runner: {e}")
-            try:
-                if job_run.exists():
-                    update_job_file(job_run, mutate=lambda o: o.update({"status": "failed", "error": str(e)}))
-                    move_job_file(job_run, "failed")
-            except Exception:
-                pass
-        finally:
-            with threads_lock:
-                active_threads.pop(job_id, None)
+    ownership_manager, lifetime_lease = acquire_task_worker_lifetime()
+    if lifetime_lease is None:
+        return 0
+    owner = None
+    capability = None
+    ownership_lost = False
 
     try:
+        owner = claim_task_worker(ownership_manager)
+        if owner is None:
+            return 0
+        capability = ProcessCapabilityHeartbeat(Path(__file__).resolve().parent, "Market Data worker")
+        capability.__enter__()
+
+        signal.signal(signal.SIGTERM, _handle_stop)
+        signal.signal(signal.SIGINT, _handle_stop)
+
+        pid = os.getpid()
+        _job_log(f"worker started pid={pid}")
+
+        # Start background cache sweep thread (checks external file changes every 10 min)
+        _sweep_t = threading.Thread(
+            target=_run_cache_sweep_thread,
+            kwargs={"interval_s": 600.0},
+            daemon=True,
+            name="cache-sweep",
+        )
+        _sweep_t.start()
+
+        # Keep one regular FIFO slot per job type. A manual run request may open one
+        # additional same-type slot so one extra pending job can run in parallel.
+        active_threads: dict[str, dict[str, Any]] = {}
+        threads_lock = threading.Lock()
+
+        def _run_job_thread(job_run: Path, job_id: str) -> None:
+            """Thread target: run one job, handle requeue/fail, then unregister."""
+            try:
+                _run_job(job_run)
+            except Exception as e:
+                # Graceful worker stop: requeue so the job resumes after restart.
+                if _STOP and job_run.exists() and not _is_cancel_requested(job_run):
+                    try:
+                        update_job_file(
+                            job_run,
+                            mutate=lambda o: o.update(
+                                {"status": "pending", "error": "worker stopped; requeued"}
+                            ),
+                        )
+                        move_job_file(job_run, "pending")
+                        _job_log(f"worker stopping; requeued job {job_run.name}", level="WARNING")
+                        return
+                    except Exception:
+                        pass
+                _job_log(f"fatal in job runner: {e}")
+                try:
+                    if job_run.exists():
+                        update_job_file(job_run, mutate=lambda o: o.update({"status": "failed", "error": str(e)}))
+                        move_job_file(job_run, "failed")
+                except Exception:
+                    pass
+            finally:
+                with threads_lock:
+                    active_threads.pop(job_id, None)
+
         # On startup ALL running/ files are stale (worker was killed or crashed).
         # max_age_s=0 requeues every file regardless of mtime — even jobs that were
         # actively updating their progress file seconds before the crash.
         _requeue_stale_running_jobs(max_age_s=0)
 
         consecutive_errors = 0
+        fatal_loop_error = False
         while not _STOP:
             try:
-                # Refresh PID file periodically.
-                try:
-                    write_worker_pid(os.getpid())
-                except Exception:
-                    pass
+                refreshed_owner = ownership_manager.heartbeat(owner)
+                if refreshed_owner is None:
+                    _job_log("worker ownership was lost; exiting", level="ERROR")
+                    ownership_lost = True
+                    _STOP = True
+                    break
+                owner = refreshed_owner
 
                 running_dir = get_task_state_dir("running")
                 running_counts: dict[str, dict[str, int]] = {}
@@ -3985,7 +3998,9 @@ def main() -> int:
                 _job_log(f"unexpected error in main loop (#{consecutive_errors}): {loop_err}")
                 if consecutive_errors >= 10:
                     _job_log("too many consecutive errors, worker exiting")
-                    return 1
+                    fatal_loop_error = True
+                    _STOP = True
+                    break
                 time.sleep(min(5.0 * consecutive_errors, 30.0))
 
         # Wait for running threads to finish (each will requeue its job on _STOP).
@@ -3993,12 +4008,15 @@ def main() -> int:
         for meta in list(active_threads.values()):
             thread = meta.get("thread") if isinstance(meta, dict) else meta
             if isinstance(thread, threading.Thread):
-                thread.join(timeout=30.0)
+                thread.join()
         _job_log("worker stopping")
-        return 0
+        return 1 if ownership_lost or fatal_loop_error else 0
     finally:
-        clear_worker_pid()
-        capability.close()
+        if owner is not None:
+            ownership_manager.release(owner)
+        if capability is not None:
+            capability.close()
+        lifetime_lease.release()
 
 
 if __name__ == "__main__":

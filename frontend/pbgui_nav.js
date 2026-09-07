@@ -984,7 +984,7 @@
   function _ensureLogViewer(cb) {
     if (typeof window.LogViewerPanel === 'function') { cb(); return; }
     var s = document.createElement('script');
-    s.src = _appPath('/app/js/log_viewer_panel.js?v=29');
+    s.src = _appPath('/app/js/log_viewer_panel.js?v=30');
     s.onload = cb;
     s.onerror = function() { console.warn('Failed to load log_viewer_panel.js'); };
     document.head.appendChild(s);

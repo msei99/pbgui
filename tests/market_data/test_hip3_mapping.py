@@ -236,8 +236,10 @@ class TestHyperliquidHIP3:
 
                 # Verify HIP-3 specific defaults
                 assert record["cmc_id"] is None, f"HIP-3 {record['symbol']} should have null cmc_id"
-                assert record["cmc_rank"] == 0, f"HIP-3 {record['symbol']} should have 0 cmc_rank"
-                assert record["market_cap"] == 0, f"HIP-3 {record['symbol']} should have 0 market_cap"
+                assert record["cmc_rank"] is None, f"HIP-3 {record['symbol']} should have null cmc_rank"
+                assert record["market_cap"] is None, f"HIP-3 {record['symbol']} should have null market_cap"
+                assert record["volume_24h"] is None, f"HIP-3 {record['symbol']} should have null volume_24h"
+                assert record["vol_mcap"] is None, f"HIP-3 {record['symbol']} should have null vol_mcap"
                 assert record["tags"] == [], f"HIP-3 {record['symbol']} should have empty tags"
         else:
             print(f"\n  ⚠ No HIP-3 markets detected (might still be loading)")

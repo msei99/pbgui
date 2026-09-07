@@ -1068,13 +1068,58 @@ def test_run_strategy_switch_replaces_key_caches_edits_and_marks_runtime_default
     _run_node(script)
 
 
-def test_pb8_backups_offer_guarded_direct_rollback() -> None:
-    """PB8 backup rows retain editor loading and add an explicit shared-modal rollback."""
+def test_backup_renderer_shows_rollback_only_for_existing_pb8_instances() -> None:
+    """Backup rows render for both runtimes while rollback stays limited to active PB8 configs."""
 
-    source = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
-    assert "data-restore-name" in source
-    assert "runEditorAdapter.isV8 && b.currently_exists" in source
-    assert "data-rollback-name" in source
-    assert "async function rollbackBackup(name, ts)" in source
-    assert "window.PBGuiDialogs.confirm" in source
-    assert "'/restore/' + encodeURIComponent(name)" in source
+    page = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+    fetch_backups = _page_function(page, "fetchBackups")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const nodes = {{
+          'backup-content': {{className: '', innerHTML: '', textContent: '', onclick: null}},
+          'backup-filter': {{value: ''}}
+        }};
+        const document = {{getElementById: (id) => nodes[id] || null}};
+        const esc = (value) => String(value == null ? '' : value);
+        let responseData;
+        let runListAdapter;
+        function apiFetch(path) {{
+          assert.equal(path, '/backups');
+          return Promise.resolve({{ok: true, json: async () => responseData}});
+        }}
+        {fetch_backups}
+
+        async function renderBackup(isV8, currentlyExists, name) {{
+          nodes['backup-content'].className = '';
+          nodes['backup-content'].innerHTML = '';
+          nodes['backup-content'].textContent = '';
+          runListAdapter = {{isV8}};
+          responseData = {{backups: [{{
+            name,
+            currently_exists: currentlyExists,
+            can_restore: true,
+            backup_items: [{{id: '2026-09-06T12-00-00', created_at: '2026-09-06 12:00:00'}}]
+          }}]}};
+          fetchBackups();
+          await new Promise((resolve) => setImmediate(resolve));
+          assert.equal(nodes['backup-content'].textContent, '');
+          return nodes['backup-content'].innerHTML;
+        }}
+
+        (async () => {{
+          const existingPb8 = await renderBackup(true, true, 'pb8-active');
+          assert.match(existingPb8, /data-restore-name="pb8-active"/);
+          assert.match(existingPb8, /data-rollback-name="pb8-active"/);
+
+          const archivedPb8 = await renderBackup(true, false, 'pb8-archived');
+          assert.match(archivedPb8, /data-restore-name="pb8-archived"/);
+          assert.doesNotMatch(archivedPb8, /data-rollback-name/);
+
+          const pb7 = await renderBackup(false, true, 'pb7-active');
+          assert.match(pb7, /data-restore-name="pb7-active"/);
+          assert.doesNotMatch(pb7, /data-rollback-name/);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    _run_node(script)

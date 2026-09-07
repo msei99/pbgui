@@ -56,6 +56,7 @@ APPEND_ALLOWLIST = {
     "logging_helpers.py": "Central logging fallback and lock implementation.",
     "hyperliquid_best_1m.py": "Pipeline advisory lock file, not a log sink.",
     "market_data_sources.py": "Pipeline advisory lock file, not a log sink.",
+    "task_worker_ownership.py": "Resident worker lifetime lock file, not a log sink.",
     "PBRun.py": "Dedicated bot stderr transcript.",
     "vps_manager_core.py": "User-visible VPS task transcripts.",
     "task_worker.py": "Dedicated worker protocol/task transcript.",

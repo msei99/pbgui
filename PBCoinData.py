@@ -4,6 +4,7 @@ from time import sleep, time_ns
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import json
+import math
 import pbgui_purefunc
 from pathlib import Path, PurePath
 from datetime import datetime
@@ -13,6 +14,8 @@ import os
 import re
 import traceback
 from dataclasses import dataclass
+from functools import wraps
+import tempfile
 from urllib.parse import urlparse
 from Exchange import Exchange, Exchanges, V7
 from cmc_pool import CmcPoolClient, CmcPoolExhaustedError
@@ -24,6 +27,68 @@ from pbgui_purefunc import IniSnapshot, load_ini_snapshot, save_ini, update_ini
 from ini_watcher import IniWatcher
 
 SERVICE = "PBCoinData"
+
+_PRICE_BATCH_MAX_ATTEMPTS = 3
+_PRICE_BATCH_BACKOFF_SECONDS = (0.25, 0.5)
+_PRICE_INDIVIDUAL_FALLBACK_LIMIT = 20
+
+
+class CoinDataPersistenceError(RuntimeError):
+    """Report a CoinData publication failure to the refresh caller."""
+
+
+def _exchange_lock_target(exchange: str) -> Path:
+    """Return the shared transaction lock target for one exchange."""
+    exchange_key = str(exchange or "").strip().lower()
+    if (
+        not exchange_key
+        or exchange_key in {".", ".."}
+        or "/" in exchange_key
+        or "\\" in exchange_key
+        or "\x00" in exchange_key
+    ):
+        raise ValueError("Invalid exchange identifier")
+    return Path.cwd() / "data" / "coindata" / ".locks" / f"exchange-{exchange_key}"
+
+
+def _exchange_transaction(method):
+    """Serialize an exchange mutation across threads and processes."""
+    @wraps(method)
+    def locked(self, exchange, *args, **kwargs):
+        with advisory_file_lock(_exchange_lock_target(exchange)):
+            return method(self, exchange, *args, **kwargs)
+
+    return locked
+
+
+def _atomic_json_write(path: Path, payload) -> None:
+    """Durably replace one JSON file using a unique same-directory temporary."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            json.dump(payload, handle, indent=4)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        if os.name == "posix":
+            descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -478,6 +543,7 @@ class CoinData:
         self._copy_trading_cache = {}  # {exchange: [symbol_ids]}
         self._mapping_self_heal_state = {}  # {exchange: {fails:int, next_retry_ts:float}}
         self._last_build_mapping_stats = {}  # {exchange: {unmatched_* counters}}
+        self._last_price_update_results = {}  # {exchange: {requested/priced/recovered/missing/failed}}
         self._tradfi_symbol_map: list = []
         self._tradfi_symbol_map_ts: tuple | None = None
         self._cmc_metrics = {
@@ -519,9 +585,9 @@ class CoinData:
             exchange_dir.mkdir(parents=True, exist_ok=True)
         return exchange_dir
     
-    def load_ccxt_markets(self, exchange: str) -> dict:
+    def load_ccxt_markets(self, exchange: str, use_cache: bool = True) -> dict:
         """Load CCXT markets from cache for a specific exchange."""
-        if exchange in self._ccxt_markets:
+        if use_cache and exchange in self._ccxt_markets:
             return self._ccxt_markets[exchange]
         
         markets_file = self._get_exchange_dir(exchange) / "ccxt_markets.json"
@@ -539,6 +605,7 @@ class CoinData:
             return {}
         return {}
     
+    @_exchange_transaction
     def save_ccxt_markets(self, exchange: str, markets: dict):
         """Save CCXT markets to cache. Only writes on success."""
         if not markets:
@@ -549,17 +616,12 @@ class CoinData:
         markets_file = exchange_dir / "ccxt_markets.json"
         
         try:
-            # Atomic write: temp file + rename
-            temp_file = markets_file.with_suffix('.json.tmp')
-            with temp_file.open('w') as f:
-                json.dump(markets, f, indent=4)
-            temp_file.replace(markets_file)
+            _atomic_json_write(markets_file, markets)
             self._ccxt_markets[exchange] = markets
             _log(SERVICE, f'Saved CCXT markets for {exchange}', level='DEBUG')
         except Exception as e:
             _log(SERVICE, f'Error saving CCXT markets for {exchange}: {e}', level='ERROR')
-            if temp_file.exists():
-                temp_file.unlink()
+            raise CoinDataPersistenceError(f'Failed to save CCXT markets for {exchange}') from e
     
     def load_mapping(self, exchange: str, use_cache: bool = True) -> list:
         """Load mapping.json for an exchange with optional mtime-aware caching."""
@@ -593,6 +655,7 @@ class CoinData:
         """Backward-compatible wrapper for load_mapping()."""
         return self.load_mapping(exchange=exchange, use_cache=True)
     
+    @_exchange_transaction
     def save_exchange_mapping(self, exchange: str, mapping: list):
         """Save exchange mapping to cache. Only writes on success."""
         if not mapping:
@@ -603,19 +666,14 @@ class CoinData:
         mapping_file = exchange_dir / "mapping.json"
         
         try:
-            # Atomic write: temp file + rename
-            temp_file = mapping_file.with_suffix('.json.tmp')
-            with temp_file.open('w') as f:
-                json.dump(mapping, f, indent=4)
-            temp_file.replace(mapping_file)
+            _atomic_json_write(mapping_file, mapping)
             self._exchange_mappings[exchange] = mapping
             stat = mapping_file.stat()
             self._exchange_mapping_ts[exchange] = (stat.st_mtime_ns, stat.st_size)
             _log(SERVICE, f'Saved mapping for {exchange}', level='DEBUG')
         except Exception as e:
             _log(SERVICE, f'Error saving mapping for {exchange}: {e}', level='ERROR')
-            if temp_file.exists():
-                temp_file.unlink()
+            raise CoinDataPersistenceError(f'Failed to save mapping for {exchange}') from e
 
     # ------------------------------------------------------------------
     # TradFi symbol map (Hyperliquid XYZ stock-perps)
@@ -657,23 +715,16 @@ class CoinData:
             return
 
         path = self._tradfi_symbol_map_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix('.json.tmp')
-        try:
-            with temp_path.open('w') as f:
-                json.dump(records, f, indent=4)
-            temp_path.replace(path)
-            self._tradfi_symbol_map = records
-            stat = path.stat()
-            self._tradfi_symbol_map_ts = (stat.st_mtime_ns, stat.st_size)
-            _log(SERVICE, f'Saved tradfi_symbol_map.json ({len(records)} entries)', level='DEBUG')
-        except Exception as e:
-            _log(SERVICE, f'Error saving tradfi_symbol_map.json: {e}', level='ERROR')
-            if temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except Exception:
-                    pass
+        with advisory_file_lock(_exchange_lock_target("hyperliquid")):
+            try:
+                _atomic_json_write(path, records)
+                self._tradfi_symbol_map = records
+                stat = path.stat()
+                self._tradfi_symbol_map_ts = (stat.st_mtime_ns, stat.st_size)
+                _log(SERVICE, f'Saved tradfi_symbol_map.json ({len(records)} entries)', level='DEBUG')
+            except Exception as e:
+                _log(SERVICE, f'Error saving tradfi_symbol_map.json: {e}', level='ERROR')
+                raise CoinDataPersistenceError('Failed to save tradfi_symbol_map.json') from e
 
     def get_tradfi_map_entry(self, xyz_coin: str) -> dict | None:
         """Return the tradfi_symbol_map entry for an xyz_coin (case-insensitive), or None."""
@@ -741,6 +792,24 @@ class CoinData:
         except (TypeError, ValueError):
             return None
 
+    def _mapping_cmc_metrics(self, record: dict) -> tuple[float | None, float | None, float | None]:
+        """Return nullable CMC metrics, including compatibility for old unmatched caches."""
+        market_cap = self._to_float(record.get("market_cap"))
+        volume_24h = self._to_float(record.get("volume_24h"))
+        if market_cap is not None and not math.isfinite(market_cap):
+            market_cap = None
+        if volume_24h is not None and not math.isfinite(volume_24h):
+            volume_24h = None
+        if "cmc_id" in record and record.get("cmc_id") is None:
+            market_cap = None
+            volume_24h = None
+        vol_mcap = (
+            volume_24h / market_cap
+            if market_cap is not None and market_cap > 0 and volume_24h is not None
+            else None
+        )
+        return market_cap, volume_24h, vol_mcap
+
     def _passes_active_filter(self, exchange: str, record: dict) -> bool:
         if not bool(record.get("active", True)):
             return False
@@ -795,6 +864,10 @@ class CoinData:
         tags = self.tags if tags is None else tags
         active_only = False if active_only is None else active_only
         quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
+        market_cap_min = float(market_cap_min_m) * 1_000_000
+        vol_mcap_limit = float(vol_mcap_max)
+        market_cap_filter_active = market_cap_min > 0
+        vol_mcap_filter_active = math.isfinite(vol_mcap_limit) and vol_mcap_limit < 10.0
 
         approved = set()
         ignored = set()
@@ -812,9 +885,7 @@ class CoinData:
                 continue
             coin = coin.upper()
 
-            market_cap = float(record.get("market_cap") or 0)
-            volume_24h = float(record.get("volume_24h") or 0)
-            vol_mcap = volume_24h / market_cap if market_cap > 0 else 0.0
+            market_cap, _volume_24h, vol_mcap = self._mapping_cmc_metrics(record)
             has_notice = bool(record.get("notice"))
             is_cpt = bool(record.get("copy_trading", False))
             record_tags = record.get("tags") or []
@@ -824,8 +895,14 @@ class CoinData:
 
             passes = (
                 (not active_only or is_eligible)
-                and market_cap >= float(market_cap_min_m) * 1_000_000
-                and vol_mcap < float(vol_mcap_max)
+                and (
+                    not market_cap_filter_active
+                    or (market_cap is not None and market_cap >= market_cap_min)
+                )
+                and (
+                    not vol_mcap_filter_active
+                    or (vol_mcap is not None and vol_mcap < vol_mcap_limit)
+                )
                 and (not only_cpt or is_cpt)
                 and (not notices_ignore or not has_notice)
                 and (not tags or any(tag in record_tags for tag in tags))
@@ -886,6 +963,10 @@ class CoinData:
         tags = self.tags if tags is None else tags
         active_only = False if active_only is None else active_only
         quote_whitelist = {q.upper() for q in quote_filter} if quote_filter else None
+        market_cap_min = float(market_cap_min_m) * 1_000_000
+        vol_mcap_limit = float(vol_mcap_max)
+        market_cap_filter_active = market_cap_min > 0
+        vol_mcap_filter_active = math.isfinite(vol_mcap_limit) and vol_mcap_limit < 10.0
 
         filtered_rows = []
         for record in mapping:
@@ -900,9 +981,7 @@ class CoinData:
             if not coin:
                 continue
 
-            market_cap = float(record.get("market_cap") or 0)
-            volume_24h = float(record.get("volume_24h") or 0)
-            vol_mcap = volume_24h / market_cap if market_cap > 0 else 0.0
+            market_cap, volume_24h, vol_mcap = self._mapping_cmc_metrics(record)
             has_notice = bool(record.get("notice"))
             is_cpt = bool(record.get("copy_trading", False))
             record_tags = record.get("tags") or []
@@ -910,8 +989,14 @@ class CoinData:
 
             passes = (
                 (not active_only or is_eligible)
-                and market_cap >= float(market_cap_min_m) * 1_000_000
-                and vol_mcap < float(vol_mcap_max)
+                and (
+                    not market_cap_filter_active
+                    or (market_cap is not None and market_cap >= market_cap_min)
+                )
+                and (
+                    not vol_mcap_filter_active
+                    or (vol_mcap is not None and vol_mcap < vol_mcap_limit)
+                )
                 and (not only_cpt or is_cpt)
                 and (not notices_ignore or not has_notice)
                 and (not tags or any(tag in record_tags for tag in tags))
@@ -923,10 +1008,21 @@ class CoinData:
             row = dict(record)
             row["coin"] = coin.upper()
             row["vol/mcap"] = vol_mcap
+            row["vol_mcap"] = vol_mcap
+            row["market_cap"] = market_cap
+            row["volume_24h"] = volume_24h
             row["price"] = row.get("price_last")
             filtered_rows.append(row)
 
-        filtered_rows.sort(key=lambda x: float(x.get("market_cap") or 0), reverse=True)
+        filtered_rows.sort(
+            key=lambda row: (
+                row.get("market_cap") is None,
+                -float(row.get("market_cap") or 0),
+                str(row.get("coin") or "").strip().upper(),
+                str(row.get("symbol") or "").strip().upper(),
+                str(row.get("ccxt_symbol") or "").strip().upper(),
+            )
+        )
         return filtered_rows
 
     def filter_by_market_cap_mapping(
@@ -957,8 +1053,9 @@ class CoinData:
             if not coin:
                 continue
             coin = coin.upper()
-            market_cap = float(record.get("market_cap") or 0)
-            if market_cap > float(mc):
+            market_cap, _volume_24h, _vol_mcap = self._mapping_cmc_metrics(record)
+            threshold = float(mc)
+            if threshold <= 0 or (market_cap is not None and market_cap > threshold):
                 approved.add(coin)
             else:
                 ignored.add(coin)
@@ -966,43 +1063,51 @@ class CoinData:
         ignored -= approved
         return sorted(approved), sorted(ignored)
     
-    def load_copy_trading_symbols(self, exchange: str) -> list:
-        """Load cached copy trading symbols for an exchange."""
-        if exchange in self._copy_trading_cache:
-            return self._copy_trading_cache[exchange]
+    def _load_copy_trading_symbols_result(
+        self,
+        exchange: str,
+        use_cache: bool = True,
+    ) -> tuple[list, bool]:
+        """Load copy-trading symbols and report whether an authoritative cache exists."""
+        if use_cache and exchange in self._copy_trading_cache:
+            return self._copy_trading_cache[exchange], True
         
         cpt_file = self._get_exchange_dir(exchange) / "copy_trading.json"
         if not cpt_file.exists():
-            return []
+            return [], False
         
         try:
             symbols = _read_json_with_retry(cpt_file, retries=1, delay_s=0.2)
             if isinstance(symbols, list):
                 self._copy_trading_cache[exchange] = symbols
-                return symbols
+                return symbols, True
             _log(SERVICE, f'Copy trading cache for {exchange} is not a list, ignoring cache file', level='WARNING')
-            return []
+            return [], False
         except Exception as e:
             _log(SERVICE, f'Error loading copy trading symbols for {exchange}: {e}', level='ERROR')
-            return []
+            return [], False
+
+    def load_copy_trading_symbols(self, exchange: str, use_cache: bool = True) -> list:
+        """Load cached copy trading symbols for an exchange."""
+        symbols, _available = self._load_copy_trading_symbols_result(exchange, use_cache=use_cache)
+        return symbols
     
+    @_exchange_transaction
     def save_copy_trading_symbols(self, exchange: str, symbols: list):
         """Save copy trading symbols to cache."""
         exchange_dir = self._ensure_exchange_dir(exchange)
         cpt_file = exchange_dir / "copy_trading.json"
         
+        sorted_symbols = sorted(symbols)
         try:
-            temp_file = cpt_file.with_suffix('.json.tmp')
-            with temp_file.open('w') as f:
-                json.dump(sorted(symbols), f, indent=4)
-            temp_file.replace(cpt_file)
-            self._copy_trading_cache[exchange] = sorted(symbols)
+            _atomic_json_write(cpt_file, sorted_symbols)
+            self._copy_trading_cache[exchange] = sorted_symbols
             _log(SERVICE, f'Saved {len(symbols)} copy trading symbols for {exchange}', level='DEBUG')
         except Exception as e:
             _log(SERVICE, f'Error saving copy trading symbols for {exchange}: {e}', level='ERROR')
-            if temp_file.exists():
-                temp_file.unlink()
+            raise CoinDataPersistenceError(f'Failed to save copy trading symbols for {exchange}') from e
     
+    @_exchange_transaction
     def fetch_copy_trading_symbols(self, exchange_id: str, markets: dict = None) -> list:
         """Fetch copy trading symbols for an exchange.
         
@@ -1023,18 +1128,20 @@ class CoinData:
         Returns:
             List of market IDs (exchange format, e.g. "BTCUSDT")
         """
-        cpt_symbols = []
+        cpt_symbols = None
         
         try:
             if exchange_id == 'bybit':
                 # bybit: copy trading info is in CCXT market data
-                if not markets:
-                    markets = self.load_ccxt_markets(exchange_id)
+                if markets is None:
+                    markets = self.load_ccxt_markets(exchange_id, use_cache=False)
                 if not markets:
                     _log(SERVICE, f'No markets available for bybit copy trading detection', level='WARNING')
-                    return []
+                    cpt_symbols = None
+                else:
+                    cpt_symbols = []
                 
-                for symbol, market in markets.items():
+                for symbol, market in (markets or {}).items():
                     if not market.get("swap", False) or not market.get("active", True):
                         continue
                     if not market.get("linear", False):
@@ -1045,7 +1152,8 @@ class CoinData:
                         if market_id:
                             cpt_symbols.append(market_id)
                 
-                _log(SERVICE, f'Found {len(cpt_symbols)} copy trading symbols for bybit (from market data)', level='INFO')
+                if cpt_symbols is not None:
+                    _log(SERVICE, f'Found {len(cpt_symbols)} copy trading symbols for bybit (from market data)', level='INFO')
             
             elif exchange_id in ('binance', 'bitget'):
                 cpt_symbols = self._fetch_cpt_with_user_discovery(exchange_id)
@@ -1053,21 +1161,25 @@ class CoinData:
             else:
                 # No copy trading API known for this exchange
                 _log(SERVICE, f'No copy trading API for {exchange_id}', level='DEBUG')
-            
-            # Cache the result
-            if cpt_symbols:
-                self.save_copy_trading_symbols(exchange_id, cpt_symbols)
+                return []
             
         except Exception as e:
             _log(SERVICE, f'Error fetching copy trading symbols for {exchange_id}: {e}', level='ERROR')
-            # Fall back to cached data
-            cpt_symbols = self.load_copy_trading_symbols(exchange_id)
-            if cpt_symbols:
-                _log(SERVICE, f'Using {len(cpt_symbols)} cached copy trading symbols for {exchange_id}', level='INFO')
-        
-        return cpt_symbols
+            cpt_symbols = None
+
+        if cpt_symbols is not None:
+            self.save_copy_trading_symbols(exchange_id, cpt_symbols)
+            return cpt_symbols
+
+        cached_symbols, cache_available = self._load_copy_trading_symbols_result(
+            exchange_id,
+            use_cache=False,
+        )
+        if cache_available:
+            _log(SERVICE, f'Using {len(cached_symbols)} cached copy trading symbols for {exchange_id}', level='INFO')
+        return cached_symbols
     
-    def _fetch_cpt_with_user_discovery(self, exchange_id: str) -> list:
+    def _fetch_cpt_with_user_discovery(self, exchange_id: str) -> list | None:
         """Fetch copy trading symbols for binance/bitget with smart user caching.
         
         1. Try remembered user from pbgui.ini first
@@ -1089,7 +1201,7 @@ class CoinData:
         
         if not candidate_users:
             _log(SERVICE, f'No eligible users found for {exchange_id} copy trading', level='WARNING')
-            return []
+            return None
         
         # Build ordered list: remembered user first, then others
         ordered_users = []
@@ -1116,7 +1228,7 @@ class CoinData:
                 return result
         
         _log(SERVICE, f'No user could fetch copy trading symbols for {exchange_id}', level='WARNING')
-        return []
+        return None
     
     def _get_cpt_candidate_users(self, users_obj, exchange_id: str) -> list:
         """Get users with valid credentials for an exchange."""
@@ -1142,13 +1254,15 @@ class CoinData:
             
             if exchange_id == 'binance':
                 symbols = exchange.instance.sapiGetCopytradingFuturesLeadsymbol()
-                return [s["symbol"] for s in symbols.get("data", [])]
+                if symbols and isinstance(symbols.get("data"), list):
+                    return [s["symbol"] for s in symbols["data"]]
+                return None
             
             elif exchange_id == 'bitget':
                 symbols = exchange.instance.privateCopyGetV2CopyMixTraderConfigQuerySymbols(
                     {"productType": "USDT-FUTURES"}
                 )
-                if symbols and symbols.get("data"):
+                if symbols and isinstance(symbols.get("data"), list):
                     return [s["symbol"] for s in symbols["data"]]
                 return None
             
@@ -1490,6 +1604,7 @@ class CoinData:
 
         update_ini(mutate)
     
+    @_exchange_transaction
     def fetch_ccxt_markets(self, exchange_id: str):
         """Fetch CCXT markets for a specific exchange and save to coindata/{exchange}/ccxt_markets.json"""
         from Exchange import Exchange
@@ -1497,27 +1612,22 @@ class CoinData:
         _log(SERVICE, f'Fetching CCXT markets for {exchange_id}', level='INFO')
         
         try:
-            # Create exchange instance without user (public API)
             exchange = Exchange(exchange_id)
             exchange.connect()
-            
-            # Load markets from CCXT
             markets = exchange.instance.load_markets()
-            
-            if not markets:
-                _log(SERVICE, f'No markets returned for {exchange_id}', level='WARNING')
-                return False
-            
-            # Save raw CCXT markets (all types)
-            self.save_ccxt_markets(exchange_id, markets)
-            
-            _log(SERVICE, f'Successfully fetched {len(markets)} markets for {exchange_id}', level='INFO')
-            return True
-            
         except Exception as e:
             _log(SERVICE, f'Error fetching CCXT markets for {exchange_id}: {e}', level='ERROR')
             return False
+
+        if not markets:
+            _log(SERVICE, f'No markets returned for {exchange_id}', level='WARNING')
+            return False
+
+        self.save_ccxt_markets(exchange_id, markets)
+        _log(SERVICE, f'Successfully fetched {len(markets)} markets for {exchange_id}', level='INFO')
+        return True
     
+    @_exchange_transaction
     def build_mapping(self, exchange_id: str, force_fetch: bool = False):
         """Build mapping.json for an exchange by merging CCXT markets + CMC data"""
         _log(SERVICE, f'Building mapping for {exchange_id}', level='INFO')
@@ -1532,13 +1642,13 @@ class CoinData:
                 self.load_metadata()
             
             # Load or fetch CCXT markets
-            markets = self.load_ccxt_markets(exchange_id)
+            markets = self.load_ccxt_markets(exchange_id, use_cache=False)
             if not markets or force_fetch:
                 success = self.fetch_ccxt_markets(exchange_id)
                 if not success:
                     _log(SERVICE, f'Failed to fetch markets for {exchange_id}', level='ERROR')
                     return False
-                markets = self.load_ccxt_markets(exchange_id)
+                markets = self.load_ccxt_markets(exchange_id, use_cache=False)
             
             if not markets:
                 _log(SERVICE, f'No markets available for {exchange_id}', level='ERROR')
@@ -1591,7 +1701,7 @@ class CoinData:
             # When multiple CMC entries share the same symbol (e.g. HOT, ACT, BABY),
             # we use the exchange price from the previous mapping to pick the correct one
             prev_prices = {}
-            prev_mapping = self.load_exchange_mapping(exchange_id)
+            prev_mapping = self.load_mapping(exchange=exchange_id, use_cache=False)
             if prev_mapping:
                 for rec in prev_mapping:
                     if rec.get("price_last") and rec["price_last"] > 0:
@@ -1631,14 +1741,17 @@ class CoinData:
                     _log(SERVICE, f'Could not fetch live prices for {exchange_id}: {e}', level='WARNING')
             
             # Load copy trading symbols (from cache, populated by update_mappings)
-            cpt_symbols = self.load_copy_trading_symbols(exchange_id)
+            cpt_symbols, cpt_cache_available = self._load_copy_trading_symbols_result(
+                exchange_id,
+                use_cache=False,
+            )
             cpt_symbols_set = set(cpt_symbols)
 
             # Resilience for authenticated CPT sources (binance/bitget):
             # if CPT symbols are unavailable, preserve previous mapping flags
             # to avoid wiping all copy_trading=True records on rebuild.
             previous_cpt_symbols = set()
-            if exchange_id in ("binance", "bitget") and not cpt_symbols_set and prev_mapping:
+            if exchange_id in ("binance", "bitget") and not cpt_cache_available and prev_mapping:
                 previous_cpt_symbols = {
                     rec.get("symbol")
                     for rec in prev_mapping
@@ -1681,7 +1794,9 @@ class CoinData:
                 cmc_record = {}
                 match_method = ""
                 coin_from_market_id = compute_coin_name(market_id, market.get("quote", ""))
-                if re.search(r"[A-Z]", coin_from_market_id):
+                if exchange_id == "hyperliquid" and is_hip3:
+                    coin_name = normalize_symbol(base or symbol, self._symbol_mappings)
+                elif re.search(r"[A-Z]", coin_from_market_id):
                     coin_name = coin_from_market_id
                 else:
                     coin_name = normalize_symbol(base, self._symbol_mappings)
@@ -1722,6 +1837,20 @@ class CoinData:
                     if isinstance(md, dict):
                         notice = md.get("notice") or ""
 
+                quote_payload = cmc_record.get("quote") if cmc_record else None
+                usd_quote = quote_payload.get("USD", {}) if isinstance(quote_payload, dict) else {}
+                if not isinstance(usd_quote, dict):
+                    usd_quote = {}
+                market_cap = self._to_float(usd_quote.get("market_cap"))
+                if market_cap is None and cmc_record:
+                    market_cap = self._to_float(cmc_record.get("self_reported_market_cap"))
+                volume_24h = self._to_float(usd_quote.get("volume_24h"))
+                vol_mcap = (
+                    volume_24h / market_cap
+                    if market_cap is not None and market_cap > 0 and volume_24h is not None
+                    else None
+                )
+
                 record = {
                     # Exchange identity
                     "exchange": exchange_id,
@@ -1736,11 +1865,12 @@ class CoinData:
                     # Copy trading
                     "copy_trading": market_id in cpt_symbols_set or market_id in previous_cpt_symbols,
                     
-                    # CMC data (0/null/[] defaults for HIP-3)
+                    # CMC data
                     "cmc_id": cmc_id,
-                    "cmc_rank": cmc_record.get("cmc_rank", 0) if cmc_record else 0,
-                    "market_cap": (cmc_record.get("quote", {}).get("USD", {}).get("market_cap", 0) or cmc_record.get("self_reported_market_cap", 0) or 0) if cmc_record else 0,
-                    "volume_24h": cmc_record.get("quote", {}).get("USD", {}).get("volume_24h", 0) if cmc_record else 0,
+                    "cmc_rank": cmc_record.get("cmc_rank") if cmc_record else None,
+                    "market_cap": market_cap,
+                    "volume_24h": volume_24h,
+                    "vol_mcap": vol_mcap,
                     "tags": cmc_record.get("tags", []) if cmc_record else [],
                     "notice": notice,
                     
@@ -1802,6 +1932,8 @@ class CoinData:
                 _log(SERVICE, f'Successfully built mapping with {len(mapping)} records for {exchange_id}', level='INFO')
             return True
             
+        except CoinDataPersistenceError:
+            raise
         except Exception as e:
             self._last_build_mapping_stats[exchange_id] = {
                 "unmatched_all": 0,
@@ -2035,18 +2167,65 @@ class CoinData:
 
         return best_rank_entry
     
+    @_exchange_transaction
     def update_prices(self, exchange_id: str):
-        """Update price fields in mapping.json for an exchange"""
-        from Exchange import Exchange
+        """Update mapping prices and retain a structured result for callers."""
+        from Exchange import Exchange, _ccxt_should_retry
+
+        def finish(*, requested=0, priced=0, recovered=0, missing=0, failed=0, ok=False):
+            result = {
+                "ok": bool(ok),
+                "partial": bool(priced and missing),
+                "requested": int(requested),
+                "priced": int(priced),
+                "recovered": int(recovered),
+                "missing": int(missing),
+                "failed": int(failed),
+            }
+            if not hasattr(self, "_last_price_update_results"):
+                self._last_price_update_results = {}
+            self._last_price_update_results[exchange_id] = result
+            level = "INFO" if result["ok"] else "ERROR"
+            _log(
+                SERVICE,
+                f'Price update summary for {exchange_id}: requested={result["requested"]} '
+                f'priced={result["priced"]} recovered={result["recovered"]} '
+                f'missing={result["missing"]} failed={result["failed"]}',
+                level=level,
+            )
+            return result["ok"]
+
+        def product_type(row, market):
+            settle = str(market.get("settle") or row.get("quote") or "").upper()
+            if settle == "USDT":
+                return "USDT-FUTURES"
+            if settle == "USDC":
+                return "USDC-FUTURES"
+            if settle == "SUSDT":
+                return "SUSDT-FUTURES"
+            if settle == "SUSDC":
+                return "SUSDC-FUTURES"
+            if settle in {"SBTC", "SETH", "SEOS"}:
+                return "SCOIN-FUTURES"
+            return "COIN-FUTURES"
+
+        def request_dimension(row, market):
+            if exchange_id == "bitget":
+                return ("product_type", product_type(row, market))
+            if exchange_id == "gateio":
+                return ("settle", str(market.get("settle") or row.get("quote") or "").upper())
+            if exchange_id in {"binance", "bybit"}:
+                return ("sub_type", "linear" if row.get("linear", True) else "inverse")
+            return ("category", "all")
         
         _log(SERVICE, f'Updating prices for {exchange_id}', level='INFO')
         
         try:
             # Load existing mapping
-            mapping = self.load_exchange_mapping(exchange_id)
+            mapping = self.load_mapping(exchange=exchange_id, use_cache=False)
             if not mapping:
                 _log(SERVICE, f'No mapping found for {exchange_id}', level='ERROR')
-                return False
+                return finish()
             
             # Create exchange instance
             exchange = Exchange(exchange_id)
@@ -2060,60 +2239,97 @@ class CoinData:
                 except Exception:
                     return float(default)
             
-            # Get all active symbol IDs for batch price fetch
+            # Each group maps to one actual category-wide CCXT request dimension.
             active_rows = [r for r in mapping if r.get("active", True) and r.get("ccxt_symbol")]
-            symbols = [r["ccxt_symbol"] for r in active_rows]
-            
-            # Fetch prices in batch
-            try:
-                prices = {}
-                linear_symbols = [r["ccxt_symbol"] for r in active_rows if r.get("linear", True)]
-                inverse_symbols = [r["ccxt_symbol"] for r in active_rows if not r.get("linear", True)]
-                if linear_symbols and inverse_symbols:
-                    if linear_symbols:
-                        prices.update(exchange.fetch_prices(linear_symbols, "swap"))
-                    if inverse_symbols:
-                        prices.update(exchange.fetch_prices(inverse_symbols, "swap"))
-                else:
-                    prices = exchange.fetch_prices(symbols, "swap")
-            except Exception as e:
-                _log(SERVICE, f'Error fetching prices for {exchange_id}: {e}', level='ERROR')
-                return False
+            symbols = list(dict.fromkeys(r["ccxt_symbol"] for r in active_rows))
+            if not symbols:
+                return finish()
+
+            markets = self.load_ccxt_markets(exchange_id, use_cache=False)
+            request_groups = {}
+            for row in active_rows:
+                symbol = row["ccxt_symbol"]
+                market = markets.get(symbol, {}) if isinstance(markets, dict) else {}
+                request_groups.setdefault(request_dimension(row, market), []).append(symbol)
+
+            prices = {}
+            failed_symbols = set()
+            for dimension, group_symbols in request_groups.items():
+                group_symbols = list(dict.fromkeys(group_symbols))
+                for attempt in range(1, _PRICE_BATCH_MAX_ATTEMPTS + 1):
+                    try:
+                        fetched = exchange.fetch_prices(group_symbols, "swap")
+                        if isinstance(fetched, dict):
+                            prices.update(fetched)
+                        break
+                    except Exception as exc:
+                        retry = (
+                            attempt < _PRICE_BATCH_MAX_ATTEMPTS
+                            and _ccxt_should_retry(getattr(exchange, "instance", None), exc)
+                        )
+                        if not retry:
+                            failed_symbols.update(group_symbols)
+                            _log(
+                                SERVICE,
+                                f'Batch price request failed for {exchange_id} {dimension}: {exc}',
+                                level='ERROR',
+                            )
+                            break
+                        delay = _PRICE_BATCH_BACKOFF_SECONDS[attempt - 1]
+                        _log(
+                            SERVICE,
+                            f'Batch price request retry {attempt}/{_PRICE_BATCH_MAX_ATTEMPTS} '
+                            f'for {exchange_id} {dimension} in {delay}s: {exc}',
+                            level='WARNING',
+                        )
+                        sleep(delay)
+
+            valid_prices = {}
+            for symbol in symbols:
+                ticker = prices.get(symbol)
+                if isinstance(ticker, dict) and _to_float(ticker.get("last"), 0.0) > 0:
+                    valid_prices[symbol] = ticker
 
             # Fallback: some exchanges do not include all symbols in batch ticker
-            # responses (notably some USDC/stock-perp markets). Fetch missing
-            # symbols individually to maximize price coverage.
-            missing_symbols = [s for s in symbols if s not in prices]
-            if missing_symbols:
-                if exchange_id == "hyperliquid":
-                    _log(SERVICE,
-                        f'Missing {len(missing_symbols)} prices after batch fetch on hyperliquid; skipping slow per-symbol fallback',
-                        level='WARNING'
-                    )
-                    missing_symbols = []
-                recovered = 0
-                for sym in missing_symbols:
+            # responses. Keep recovery bounded; Hyperliquid is allMids-only.
+            missing_symbols = [symbol for symbol in symbols if symbol not in valid_prices]
+            recovered = 0
+            if missing_symbols and exchange_id == "hyperliquid":
+                _log(
+                    SERVICE,
+                    f'Missing {len(missing_symbols)} prices after allMids on hyperliquid; '
+                    'individual fallback is disabled',
+                    level='WARNING',
+                )
+            elif missing_symbols:
+                fallback_symbols = missing_symbols[:_PRICE_INDIVIDUAL_FALLBACK_LIMIT]
+                for sym in fallback_symbols:
                     try:
                         ticker = exchange.fetch_price(sym, "swap")
-                        if ticker and ticker.get("last") is not None:
-                            prices[sym] = ticker
+                        if isinstance(ticker, dict) and _to_float(ticker.get("last"), 0.0) > 0:
+                            valid_prices[sym] = ticker
+                            failed_symbols.discard(sym)
                             recovered += 1
+                        else:
+                            failed_symbols.add(sym)
                     except Exception:
-                        continue
+                        failed_symbols.add(sym)
                 if recovered:
-                    _log(SERVICE,
-                        f'Recovered {recovered}/{len(missing_symbols)} missing prices via per-symbol fallback on {exchange_id}',
-                        level='INFO'
+                    _log(
+                        SERVICE,
+                        f'Recovered {recovered}/{len(fallback_symbols)} attempted missing prices '
+                        f'via per-symbol fallback on {exchange_id}',
+                        level='INFO',
                     )
             
             # Update each record
             current_ts = int(datetime.now().timestamp() * 1000)
             for record in mapping:
                 ccxt_symbol = record.get("ccxt_symbol")
-                if not ccxt_symbol or ccxt_symbol not in prices:
+                if not ccxt_symbol or ccxt_symbol not in valid_prices:
                     continue
                 
-                price_data = prices[ccxt_symbol]
+                price_data = valid_prices[ccxt_symbol]
                 price = _to_float(price_data.get("last", 0), 0.0)
                 
                 if price <= 0:
@@ -2135,14 +2351,29 @@ class CoinData:
                 record["min_order_price"] = max(min_cost, min_price_from_qty)
             
             # Save updated mapping
-            self.save_exchange_mapping(exchange_id, mapping)
+            priced = len(valid_prices)
+            missing = len(symbols) - priced
+            if priced:
+                self.save_exchange_mapping(exchange_id, mapping)
+            return finish(
+                requested=len(symbols),
+                priced=priced,
+                recovered=recovered,
+                missing=missing,
+                failed=len(failed_symbols.intersection(missing_symbols)),
+                ok=priced > 0 and missing == 0,
+            )
             
-            _log(SERVICE, f'Successfully updated prices for {len(symbols)} symbols on {exchange_id}', level='INFO')
-            return True
-            
+        except CoinDataPersistenceError:
+            raise
         except Exception as e:
             _log(SERVICE, f'Error updating prices for {exchange_id}: {e}', level='ERROR')
-            return False
+            requested = len(symbols) if "symbols" in locals() else 0
+            return finish(requested=requested, missing=requested, failed=requested)
+
+    def price_update_result(self, exchange_id: str) -> dict:
+        """Return the latest structured price-update result without changing bool callers."""
+        return dict(getattr(self, "_last_price_update_results", {}).get(exchange_id, {}))
 
     def fetch_api_status(self):
         if not self._has_cmc_api_key():
@@ -2543,36 +2774,24 @@ class CoinData:
             return
         pbgdir = Path.cwd()
         coin_path = Path(f'{pbgdir}/data/coindata')
-        coin_path.mkdir(parents=True, exist_ok=True)
-
         metadata_path = coin_path / 'metadata.json'
-        temp_path = metadata_path.with_suffix('.json.tmp')
         try:
-            with temp_path.open('w', encoding='utf-8') as f:
-                json.dump(self.metadata, f)
-            temp_path.replace(metadata_path)
+            _atomic_json_write(metadata_path, self.metadata)
         except Exception as e:
             _log(SERVICE, f'Error saving metadata: {e}', level='ERROR')
-            if temp_path.exists():
-                temp_path.unlink(missing_ok=True)
+            raise CoinDataPersistenceError('Failed to save metadata') from e
 
     def save_data(self):
         if not self.data:
             return
         pbgdir = Path.cwd()
         coin_path = Path(f'{pbgdir}/data/coindata')
-        coin_path.mkdir(parents=True, exist_ok=True)
-
         data_path = coin_path / 'coindata.json'
-        temp_path = data_path.with_suffix('.json.tmp')
         try:
-            with temp_path.open('w', encoding='utf-8') as f:
-                json.dump(self.data, f)
-            temp_path.replace(data_path)
+            _atomic_json_write(data_path, self.data)
         except Exception as e:
             _log(SERVICE, f'Error saving coindata: {e}', level='ERROR')
-            if temp_path.exists():
-                temp_path.unlink(missing_ok=True)
+            raise CoinDataPersistenceError('Failed to save coindata') from e
     
     def load_data(self):
         pbgdir = Path.cwd()
@@ -2584,7 +2803,6 @@ class CoinData:
         now_ts = datetime.now().timestamp()
         if self._has_cmc_api_key() and data_ts < now_ts - 3600*self.fetch_interval:
             self.fetch_data()
-            self.save_data()
             loadfromfile = False
         else:
             loadfromfile = True
@@ -2605,7 +2823,6 @@ class CoinData:
         now_ts = datetime.now().timestamp()
         if self._has_cmc_api_key() and metadata_ts < now_ts - 3600*24*self.metadata_interval:
             self.fetch_metadata()
-            self.save_metadata()
         if not self.metadata and metadata_file.exists():
             metadata = _read_json_with_retry(metadata_file, retries=1, delay_s=0.2)
             if isinstance(metadata, dict):
@@ -2775,10 +2992,20 @@ class CoinData:
             return True, "ccxt_markets.json newer than mapping"
         return False, ""
 
-    def refresh_exchange_mapping(self, exchange: str) -> dict:
+    @_exchange_transaction
+    def refresh_exchange_mapping(
+        self,
+        exchange: str,
+        *,
+        progress_cb=None,
+        step_offset: int = 0,
+        total_steps: int = 5,
+    ) -> dict:
         """Refresh CCXT markets, mapping and prices for one exchange."""
         started_ts = datetime.now().timestamp()
 
+        if progress_cb:
+            progress_cb(step_offset, total_steps, f"{exchange}: fetching markets...")
         markets_ok = bool(self.fetch_ccxt_markets(exchange))
         if not markets_ok:
             elapsed = datetime.now().timestamp() - started_ts
@@ -2792,21 +3019,47 @@ class CoinData:
                 "unmatched_relevant": 0,
                 "unmatched_relevant_unique": 0,
                 "elapsed": elapsed,
+                "price_update": {
+                    "ok": False,
+                    "partial": False,
+                    "requested": 0,
+                    "priced": 0,
+                    "recovered": 0,
+                    "missing": 0,
+                    "failed": 0,
+                },
                 "ok": False,
             }
 
-        markets = self.load_ccxt_markets(exchange)
+        if progress_cb:
+            progress_cb(step_offset + 1, total_steps, f"{exchange}: loading markets...")
+        markets = self.load_ccxt_markets(exchange, use_cache=False)
+        if progress_cb:
+            progress_cb(step_offset + 2, total_steps, f"{exchange}: updating copy-trading cache...")
         self.fetch_copy_trading_symbols(exchange, markets)
+        if progress_cb:
+            progress_cb(step_offset + 3, total_steps, f"{exchange}: rebuilding mapping...")
         mapping_ok = bool(self.build_mapping(exchange))
+        if progress_cb:
+            progress_cb(step_offset + 4, total_steps, f"{exchange}: updating prices...")
         prices_ok = bool(self.update_prices(exchange)) if mapping_ok else False
+        price_update = self.price_update_result(exchange) if mapping_ok else {
+            "ok": False,
+            "partial": False,
+            "requested": 0,
+            "priced": 0,
+            "recovered": 0,
+            "missing": 0,
+            "failed": 0,
+        }
 
-        rows = self.load_exchange_mapping(exchange)
+        rows = self.load_mapping(exchange=exchange, use_cache=False)
         active = sum(1 for r in rows if r.get("active", True))
         priced = sum(1 for r in rows if r.get("active", True) and float(r.get("price_last") or 0) > 0)
         build_stats = self._last_build_mapping_stats.get(exchange, {})
 
         elapsed = datetime.now().timestamp() - started_ts
-        return {
+        result = {
             "exchange": exchange,
             "markets_ok": markets_ok,
             "mapping_ok": mapping_ok,
@@ -2816,8 +3069,13 @@ class CoinData:
             "unmatched_relevant": int(build_stats.get("unmatched_relevant", 0) or 0),
             "unmatched_relevant_unique": int(build_stats.get("unmatched_relevant_unique", 0) or 0),
             "elapsed": elapsed,
+            "price_update": price_update,
+            "partial": bool(price_update.get("partial")),
             "ok": markets_ok and mapping_ok and prices_ok,
         }
+        if progress_cb:
+            progress_cb(step_offset + 5, total_steps, f"{exchange}: refreshed.")
+        return result
 
     @staticmethod
     def _has_dynamic_ignore_bots() -> bool:
@@ -2971,9 +3229,7 @@ class CoinData:
             if coin not in approved_set:
                 continue
 
-            market_cap = float(record.get("market_cap") or 0)
-            volume_24h = float(record.get("volume_24h") or 0)
-            vol_mcap = volume_24h / market_cap if market_cap > 0 else 0.0
+            market_cap, volume_24h, vol_mcap = self._mapping_cmc_metrics(record)
             slug = str(record.get("slug") or "").strip()
 
             symbol_data = {
@@ -2982,8 +3238,8 @@ class CoinData:
                 "name": str(record.get("name") or "not found on CoinMarketCap"),
                 "tags": tags,
                 "price": float(record.get("price_last") or 0),
-                "volume_24h": int(volume_24h),
-                "market_cap": int(market_cap),
+                "volume_24h": int(volume_24h) if volume_24h is not None else None,
+                "market_cap": int(market_cap) if market_cap is not None else None,
                 "vol/mcap": vol_mcap,
                 "copy_trading": bool(record.get("copy_trading", False)),
                 "notice": notice,
@@ -2994,7 +3250,14 @@ class CoinData:
 
         self._symbols_notice = sorted(set(self._symbols_notice))
         self._all_tags = sorted(self._all_tags)
-        self._symbols_data = sorted(self._symbols_data, key=lambda x: x["market_cap"], reverse=True)
+        self._symbols_data = sorted(
+            self._symbols_data,
+            key=lambda row: (
+                row.get("market_cap") is None,
+                -float(row.get("market_cap") or 0),
+                str(row.get("symbol") or "").strip().upper(),
+            ),
+        )
 
     def filter_by_market_cap(self, symbols: list, mc: int):
         symbol_set = {str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()}
@@ -3017,8 +3280,9 @@ class CoinData:
             if not coin:
                 continue
 
-            market_cap = float(record.get("market_cap") or 0)
-            if market_cap > float(mc):
+            market_cap, _volume_24h, _vol_mcap = self._mapping_cmc_metrics(record)
+            threshold = float(mc)
+            if threshold <= 0 or (market_cap is not None and market_cap > threshold):
                 approved_coins.add(coin)
             else:
                 ignored_coins.add(coin)

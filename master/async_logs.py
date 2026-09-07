@@ -9,18 +9,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shlex
 import subprocess
 import time
 from collections import deque
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
+from file_lock import advisory_file_lock
 from master.async_pool import AsyncSSHPool, remote_path_join, remote_shell_path
-from logging_helpers import human_log as _log
+from logging_helpers import canonical_log_lock_target, human_log as _log
 from pbgui_purefunc import pb7dir, pb8dir
 
 SERVICE = "VPSMonitor"
@@ -40,6 +43,7 @@ SERVICE_LOGS: dict[str, str] = {
 }
 
 MAX_REMOTE_LOG_LINES = 50_000
+MAX_LOCAL_LOG_PARTIAL_BYTES = MAX_REMOTE_LOG_LINES
 _REMOTE_LOG_FILE_RE = re.compile(r"^[^/\\\x00]+\.log(?:\.\d+)?$")
 
 
@@ -446,21 +450,76 @@ def resolve_local_log_path(filename: str) -> Optional[Path]:
         return fp
 
 
+def _local_log_read_lock(path: Path):
+    """Use the writer's physical lock for files managed below this PBGui tree."""
+    try:
+        if path.resolve(strict=False).is_relative_to(_project_root().resolve(strict=False)):
+            return advisory_file_lock(canonical_log_lock_target(path))
+    except (OSError, ValueError):
+        pass
+    return nullcontext()
+
+
+def _decode_local_log_line(line: bytes) -> str:
+    """Decode one bounded line while normalizing a CRLF record terminator."""
+    if line.endswith(b"\r"):
+        line = line[:-1]
+    return line[-MAX_LOCAL_LOG_PARTIAL_BYTES:].decode("utf-8", errors="replace")
+
+
+def _tail_open_file(handle, size: int, n: int) -> tuple[list[str], bytes]:
+    """Read a descriptor snapshot and return complete records plus its partial tail."""
+    if size <= 0:
+        return [], b""
+    chunk = min(size, max(n * 200, 65536)) if n > 0 else size
+    start = max(0, size - chunk)
+    if start:
+        handle.seek(start - 1)
+        data = handle.read(size - start + 1)
+        if data.startswith(b"\n"):
+            data = data[1:]
+        else:
+            separator = data.find(b"\n")
+            if separator < 0:
+                return [], data[-MAX_LOCAL_LOG_PARTIAL_BYTES:]
+            data = data[separator + 1:]
+    else:
+        handle.seek(0)
+        data = handle.read(size)
+
+    records = data.split(b"\n")
+    partial = records.pop()[-MAX_LOCAL_LOG_PARTIAL_BYTES:]
+    lines = [_decode_local_log_line(record) for record in records]
+    return (lines[-n:] if n > 0 else lines), partial
+
+
+def _read_local_log_snapshot(
+    path: Path,
+    n: int,
+    *,
+    retain_partial: bool = False,
+) -> tuple[list[str], int, Optional[tuple[int, int]], bytes]:
+    """Read one path through a single opened descriptor and matching ``fstat``."""
+    try:
+        with _local_log_read_lock(path):
+            with path.open("rb") as handle:
+                stat_result = os.fstat(handle.fileno())
+                size = stat_result.st_size
+                lines, partial = _tail_open_file(handle, size, n)
+                if partial and not retain_partial:
+                    lines.append(_decode_local_log_line(partial))
+                    if n > 0:
+                        lines = lines[-n:]
+                    partial = b""
+                return lines, size, (stat_result.st_dev, stat_result.st_ino), partial
+    except Exception:
+        return [], 0, None, b""
+
+
 def tail_file(path: Path, n: int) -> list[str]:
     """Return the last *n* lines of *path* (all lines if n <= 0)."""
-    try:
-        size = path.stat().st_size
-        if size == 0:
-            return []
-        with open(path, "rb") as f:
-            chunk = min(size, max(n * 200, 65536)) if n > 0 else size
-            f.seek(max(0, size - chunk))
-            data = f.read()
-        text = data.decode("utf-8", errors="replace")
-        lines = text.splitlines()
-        return lines[-n:] if n > 0 else lines
-    except Exception:
-        return []
+    lines, _size, _identity, _partial = _read_local_log_snapshot(path, n)
+    return lines
 
 
 # ── Active stream data ────────────────────────────────────────
@@ -485,6 +544,14 @@ class LocalLogSub:
     name: str
     pos: int = 0
     sid: Optional[str] = None
+    identity: Optional[tuple[int, int]] = None
+    partial: bytes = field(default=b"", repr=False)
+
+    def reset_cursor(self) -> None:
+        """Clear all descriptor-derived state when a subscription stops or resets."""
+        self.pos = 0
+        self.identity = None
+        self.partial = b""
 
 
 class AsyncLogStreamer:
@@ -824,9 +891,10 @@ class AsyncLogStreamer:
                     if not stream.active:
                         break
                     line = line.rstrip("\n")
-                    if line:
-                        stream.buffer.append(line)
-                        stream.last_activity = datetime.now()
+                    if line.endswith("\r"):
+                        line = line[:-1]
+                    stream.buffer.append(line)
+                    stream.last_activity = datetime.now()
 
                 # Process ended — check if it was an intentional stop
                 if not stream.active:
@@ -914,37 +982,68 @@ class AsyncLogStreamer:
         fp = resolve_local_log_path(filename)
         if fp is None:
             return [], 0
-        content = tail_file(fp, lines) if fp.exists() else []
-        try:
-            file_size = fp.stat().st_size
-        except Exception:
-            file_size = 0
+        content, file_size, _identity, _partial = _read_local_log_snapshot(fp, lines)
         return content, file_size
+
+    @staticmethod
+    def initialize_local_log_subscription(
+        file: Path,
+        name: str,
+        lines: int = 200,
+        sid: Optional[str] = None,
+        *,
+        start_at_end: bool = False,
+    ) -> tuple[list[str], int, LocalLogSub]:
+        """Create cursor identity and position from the initial snapshot descriptor."""
+        sub = LocalLogSub(file=file, name=name, sid=sid)
+        if start_at_end:
+            try:
+                with _local_log_read_lock(file):
+                    with file.open("rb") as handle:
+                        stat_result = os.fstat(handle.fileno())
+                        sub.pos = stat_result.st_size
+                        sub.identity = (stat_result.st_dev, stat_result.st_ino)
+                        return [], stat_result.st_size, sub
+            except Exception:
+                return [], 0, sub
+
+        content, file_size, identity, partial = _read_local_log_snapshot(
+            file, lines, retain_partial=True,
+        )
+        sub.pos = file_size
+        sub.identity = identity
+        sub.partial = partial
+        return content, file_size, sub
 
     @staticmethod
     def read_local_log_delta(sub: LocalLogSub,
                              max_bytes: int = 65536) -> list[str]:
         """Read new lines since last position (for streaming).
 
-        Updates ``sub.pos`` in-place.  Handles log rotation (truncation).
+        Updates descriptor identity, byte cursor, and partial record in-place.
         """
         try:
-            size = sub.file.stat().st_size
+            read_limit = max(1, int(max_bytes))
+            with _local_log_read_lock(sub.file):
+                with sub.file.open("rb") as handle:
+                    stat_result = os.fstat(handle.fileno())
+                    identity = (stat_result.st_dev, stat_result.st_ino)
+                    if sub.identity != identity:
+                        sub.reset_cursor()
+                        sub.identity = identity
+                    elif stat_result.st_size < sub.pos:
+                        sub.pos = 0
+                        sub.partial = b""
+
+                    available = stat_result.st_size - sub.pos
+                    if available <= 0:
+                        return []
+                    handle.seek(sub.pos)
+                    chunk = handle.read(min(read_limit, available))
+                    sub.pos = handle.tell()
         except Exception:
             return []
 
-        # Log rotation detection
-        if size < sub.pos:
-            sub.pos = 0
-
-        if size <= sub.pos:
-            return []
-
-        try:
-            with open(sub.file, "r", encoding="utf-8", errors="replace") as f:
-                f.seek(sub.pos)
-                new_text = f.read(max_bytes)
-                sub.pos = f.tell()
-            return new_text.splitlines()
-        except Exception:
-            return []
+        records = (sub.partial + chunk).split(b"\n")
+        sub.partial = records.pop()[-MAX_LOCAL_LOG_PARTIAL_BYTES:]
+        return [_decode_local_log_line(record) for record in records]

@@ -25,6 +25,8 @@
  */
 class LogViewerPanel {
 
+    static MAX_LINES = 50000;
+
     /* ── Preset sets ──────────────────────────────────────────── */
     static PRESETS = {
         system: [
@@ -306,11 +308,13 @@ class LogViewerPanel {
         this._closed = false;
         this._authExpired = false;
         this._reconnectTimer = 0;
+        this._wsGeneration = 0;
 
-        this._MAX    = 5000;
+        this._MAX    = 200;
         this._CHUNK  = 500;
         this._SCHUNK = 400;
-        this._MAXLINES = 5000;  /* tracks dropdown; 0 = unlimited */
+        this._MAXLINES = 200;
+        this._fullRenderPending = false;
 
         LogViewerPanel._injectStyles();
         this._build();
@@ -319,12 +323,24 @@ class LogViewerPanel {
 
     _normalizeIncomingLines(lines) {
         var normalized = [];
+        var limit = LogViewerPanel.MAX_LINES;
         for (var i = 0; i < (lines || []).length; i++) {
             var expanded = this._expandIncomingLine(lines[i]);
-            if (expanded.length) normalized.push.apply(normalized, expanded);
+            if (expanded.length >= limit) normalized = expanded.slice(-limit);
+            else if (expanded.length) normalized.push.apply(normalized, expanded);
             else normalized.push('');
+            if (normalized.length > limit * 2)
+                normalized.splice(0, normalized.length - limit);
         }
-        return normalized;
+        return normalized.length > limit ? normalized.slice(-limit) : normalized;
+    }
+
+    _replaceLines(lines) {
+        var normalized = this._normalizeIncomingLines(lines);
+        var limit = Math.max(1, Math.min(this._MAX || LogViewerPanel.MAX_LINES, LogViewerPanel.MAX_LINES));
+        var trim = Math.max(0, normalized.length - limit);
+        this._lines = trim ? normalized.slice(-limit) : normalized;
+        this._lineBase = trim;
     }
 
     _prettyFormatStructuredPayload(text) {
@@ -443,7 +459,9 @@ class LogViewerPanel {
           '<option value="1000">1000</option>' +
           '<option value="2000">2000</option>' +
           '<option value="5000">5000</option>' +
-          '<option value="0">All</option>' +
+          '<option value="10000">10000</option>' +
+          '<option value="25000">25000</option>' +
+          '<option value="50000">Max (50,000)</option>' +
         '</select>' +
       '</label>' +
       '<span class="lvp-file-size" id="' + p + 'file-size"></span>' +
@@ -506,7 +524,7 @@ class LogViewerPanel {
             })(levels[i]);
 
         this._q('host-sel').addEventListener('change',   function() { me._onHostChange(); });
-        this._q('lines-sel').addEventListener('change',  function() { var v = parseInt(me._q('lines-sel').value, 10); me._MAXLINES = v; me._MAX = v > 0 ? v : Infinity; me._subscribe(); });
+        this._q('lines-sel').addEventListener('change',  function() { var v = me._getLines(); me._MAXLINES = v; me._MAX = v; me._subscribe(); });
         this._q('stream-btn').addEventListener('click',  function() { me._toggleStream(); });
         this._q('fetch-btn').addEventListener('click',   function() { me._fetchOnce(); });
         this._q('clear-btn').addEventListener('click',   function() { me._clear(); });
@@ -615,24 +633,29 @@ class LogViewerPanel {
         this._disconnect();
         var url = this._wsBase + '/ws/vps';
         var ws  = new WebSocket(url);
+        var generation = ++this._wsGeneration;
         this._ws  = ws;
         var me  = this;
 
         ws.onopen = function() {
+            if (me._ws !== ws || me._wsGeneration !== generation) return;
             var ce = me._q('conn');
             if (ce) ce.textContent = 'connected';
             ws.send(JSON.stringify({ cmd: 'list_local_logs' }));
             if (!me._flushPendingRestart(ws)) me._subscribe();
         };
         ws.onmessage = function(evt) {
+            if (me._ws !== ws || me._wsGeneration !== generation) return;
             try { me._handleMsg(JSON.parse(evt.data)); } catch(e) { /* ignore parse errors */ }
         };
         ws.onerror = function() {
+            if (me._ws !== ws || me._wsGeneration !== generation) return;
             var ce = me._q('conn');
             if (ce) ce.textContent = 'error';
         };
         ws.onclose = function(event) {
-            if (me._ws !== ws) return;
+            if (me._ws !== ws || me._wsGeneration !== generation) return;
+            ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
             me._ws = null;
             me._streaming = false;
             me._updateStreamBtn();
@@ -658,16 +681,23 @@ class LogViewerPanel {
             if (!me._authExpired && !me._closed && !me._reconnectTimer) {
                 me._reconnectTimer = setTimeout(function() {
                     me._reconnectTimer = 0;
-                    if (!me._authExpired && !me._closed) me._connect();
+                    if (generation === me._wsGeneration && !me._authExpired && !me._closed) me._connect();
                 }, 2000);
             }
         };
     }
 
     _disconnect() {
-        if (this._ws) {
-            try { this._ws.close(); } catch(e) { /* ignore */ }
-            this._ws = null;
+        ++this._wsGeneration;
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = 0;
+        }
+        var ws = this._ws;
+        this._ws = null;
+        if (ws) {
+            ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+            try { ws.close(); } catch(e) { /* ignore */ }
         }
         this._streaming = false;
     }
@@ -708,8 +738,7 @@ class LogViewerPanel {
 
         case 'local_logs':
             if (msg.sid !== undefined && msg.sid !== this._sid) return;
-            this._lines    = this._normalizeIncomingLines(msg.lines || []);
-            this._lineBase = 0;
+            this._replaceLines(msg.lines || []);
             this._streaming = !!msg.streaming;
             if (msg.file_size !== undefined) this._showFileSize(msg.file_size);
             this._updateStreamBtn();
@@ -724,8 +753,7 @@ class LogViewerPanel {
 
         case 'logs':
             if (msg.sid !== undefined && msg.sid !== this._sid) return;
-            this._lines    = this._normalizeIncomingLines(msg.lines || []);
-            this._lineBase = 0;
+            this._replaceLines(msg.lines || []);
             if (msg.streaming) this._streaming = true;
             this._updateStreamBtn();
             this._renderFull();
@@ -738,6 +766,7 @@ class LogViewerPanel {
             break;
 
         case 'log_info':
+            if (msg.sid !== undefined && msg.sid !== this._sid) return;
             if (msg.size !== undefined) this._showFileSize(msg.size);
             break;
 
@@ -791,12 +820,12 @@ class LogViewerPanel {
     _ingestLines(newLines) {
         var normalized = this._normalizeIncomingLines(newLines);
         this._lines.push.apply(this._lines, normalized);
-        if (this._MAX !== Infinity && this._lines.length > this._MAX) {
+        if (this._lines.length > this._MAX) {
             var trim = this._lines.length - this._MAX;
             this._lines = this._lines.slice(-this._MAX);
             this._lineBase += trim;
         }
-        this._appendLines(normalized);
+        this._appendLines(normalized.length > this._MAX ? normalized.slice(-this._MAX) : normalized);
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -1423,7 +1452,9 @@ class LogViewerPanel {
        Subscribe / Unsubscribe / Fetch
        ═══════════════════════════════════════════════════════ */
     _getLines() {
-        return parseInt((this._q('lines-sel') || {}).value || '200', 10);
+        var lines = parseInt((this._q('lines-sel') || {}).value || '200', 10);
+        if (!Number.isFinite(lines) || lines < 1) return 200;
+        return Math.min(lines, LogViewerPanel.MAX_LINES);
     }
 
     _subscribe(options) {
@@ -1444,7 +1475,7 @@ class LogViewerPanel {
             if (!this._host || !this._service) return null;
             var startAtEnd = options.startAtEnd === true;
             this._send({ cmd: 'subscribe_logs', host: this._host, service: this._service, lines: this._getLines(), sid: sid, start_at_end: startAtEnd });
-            this._send({ cmd: 'get_log_info', host: this._host, service: this._service });
+            this._send({ cmd: 'get_log_info', host: this._host, service: this._service, sid: sid });
         }
         this._streaming = true;
         this._updateStreamBtn();
@@ -1504,6 +1535,7 @@ class LogViewerPanel {
         this._lineBase   = 0;
         this._pending    = [];
         this._rafPending = false;
+        this._fullRenderPending = false;
         ++this._renderAbort;
         var term = this._q('terminal');
         if (term) term.innerHTML = '';
@@ -1826,16 +1858,25 @@ class LogViewerPanel {
     _renderFull() {
         var term = this._q('terminal');
         if (!term) return;
+        if (this._lines.length > this._MAX) {
+            var trim = this._lines.length - this._MAX;
+            this._lines = this._lines.slice(-this._MAX);
+            this._lineBase += trim;
+        }
+        var rid = ++this._renderAbort;
+        var renderLines = this._lines.slice();
+        var renderBase = this._lineBase;
         this._pending    = [];
         this._rafPending = false;
+        this._fullRenderPending = false;
         term.innerHTML   = '';
-        var total = this._lines.length;
+        var total = renderLines.length;
         if (!total) { this._updateMatchCount(0); return; }
 
         if (total <= this._CHUNK) {
             var frag = document.createDocumentFragment();
             for (var i = 0; i < total; i++)
-                frag.appendChild(this._buildDiv(this._lines[i], this._lineBase + i + 1));
+                frag.appendChild(this._buildDiv(renderLines[i], renderBase + i + 1));
             term.appendChild(frag);
             term.scrollTop = term.scrollHeight;
             var me = this;
@@ -1845,8 +1886,8 @@ class LogViewerPanel {
         }
 
         var me = this;
-        var rid = ++this._renderAbort;
         var idx = 0;
+        this._fullRenderPending = true;
         var status = document.createElement('div');
         status.style.cssText = 'color:#888;padding:8px;font-size:12px';
         status.textContent = 'Rendering\u2026';
@@ -1857,11 +1898,13 @@ class LogViewerPanel {
             var end  = Math.min(idx + me._CHUNK, total);
             var frag = document.createDocumentFragment();
             for (; idx < end; idx++)
-                frag.appendChild(me._buildDiv(me._lines[idx], me._lineBase + idx + 1));
+                frag.appendChild(me._buildDiv(renderLines[idx], renderBase + idx + 1));
             if (idx >= total) {
                 status.remove();
                 term.appendChild(frag);
                 term.scrollTop = term.scrollHeight;
+                me._fullRenderPending = false;
+                me._appendLines([]);
                 if (me._searchTerm) setTimeout(function() { me._applySearch(); }, 0);
                 else me._updateMatchCount(0);
             } else {
@@ -1874,14 +1917,19 @@ class LogViewerPanel {
     }
 
     _appendLines(newLines) {
-        if (!newLines.length) return;
-        var startNum = this._lineBase + this._lines.length - newLines.length + 1;
-        for (var i = 0; i < newLines.length; i++)
-            this._pending.push({ line: newLines[i], num: startNum + i });
-        if (this._rafPending) return;
+        if (newLines.length) {
+            var startNum = this._lineBase + this._lines.length - newLines.length + 1;
+            for (var i = 0; i < newLines.length; i++)
+                this._pending.push({ line: newLines[i], num: startNum + i });
+        }
+        if (this._pending.length > this._MAX)
+            this._pending = this._pending.slice(-this._MAX);
+        if (!this._pending.length || this._fullRenderPending || this._rafPending) return;
         this._rafPending = true;
         var me = this;
+        var rid = this._renderAbort;
         requestAnimationFrame(function() {
+            if (rid !== me._renderAbort) return;
             var term = me._q('terminal');
             if (!term) { me._pending = []; me._rafPending = false; return; }
             var atBottom = term.scrollTop + term.clientHeight >= term.scrollHeight - 40;
@@ -1893,7 +1941,7 @@ class LogViewerPanel {
             me._pending    = [];
             me._rafPending = false;
             term.appendChild(frag);
-            while (me._MAX !== Infinity && term.childElementCount > me._MAX) term.removeChild(term.firstChild);
+            while (term.childElementCount > me._MAX) term.removeChild(term.firstChild);
             if (atBottom) term.scrollTop = term.scrollHeight;
             me._updateMatchCount(0);
         });
@@ -2169,6 +2217,7 @@ class LogViewerPanel {
 
     _insertSeparators(terminal, children, blocks) {
         for (var b = 0; b < blocks.length - 1; b++) {
+            if (terminal.childElementCount >= this._MAX) break;
             var endDiv = children[blocks[b].end];
             if (endDiv && endDiv.nextSibling) {
                 var sep = document.createElement('div');

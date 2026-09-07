@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from api.auth import require_auth
@@ -18,6 +20,23 @@ def isolated_log_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     log_root.mkdir()
     monkeypatch.setattr(logging_helpers, "LOG_ROOT", log_root)
     return log_root
+
+
+@pytest.fixture
+def logging_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Serve logging routes with authentication replaced by an isolated test identity."""
+    def fail_persistence(*args, **kwargs):
+        """Fail rather than let an invalid test request write settings."""
+        pytest.fail("invalid request reached rotation persistence")
+
+    monkeypatch.setattr(logging_api, "set_rotate_defaults", fail_persistence)
+    monkeypatch.setattr(logging_api, "set_rotate_settings", fail_persistence)
+    monkeypatch.setattr(logging_api, "set_managed_scope_settings", fail_persistence)
+    app = FastAPI()
+    app.include_router(logging_api.router, prefix="/api/logging")
+    app.dependency_overrides[require_auth] = lambda: object()
+    with TestClient(app) as client:
+        yield client
 
 
 def _request() -> Request:
@@ -68,6 +87,20 @@ def test_sparse_rotations_are_listed_in_numeric_order(isolated_log_root, monkeyp
 
     assert result["rotated"] == {"PBGui.log": ["PBGui.log.1", "PBGui.log.3"]}
     assert result["sizes"]["PBGui.log.3"] == 5
+
+
+def test_rotation_listing_caps_untrusted_backup_count(isolated_log_root, monkeypatch):
+    """A stale oversized setting must not expand listing beyond supported generations."""
+    base = isolated_log_root / "PBGui.log"
+    base.write_text("current", encoding="utf-8")
+    Path(f"{base}.20").write_text("kept", encoding="utf-8")
+    Path(f"{base}.21").write_text("outside-limit", encoding="utf-8")
+    monkeypatch.setattr(logging_api, "get_rotate_settings", lambda **kwargs: (1024, 10_000))
+
+    result = logging_api.list_log_files(SimpleNamespace())
+
+    assert result["rotated"] == {"PBGui.log": ["PBGui.log.20"]}
+    assert "PBGui.log.21" not in result["sizes"]
 
 
 @pytest.mark.parametrize(
@@ -177,6 +210,34 @@ def test_managed_rotation_save_validates_scope(monkeypatch):
     monkeypatch.setattr(logging_api, "_log", lambda *args, **kwargs: None)
     with pytest.raises(logging_api.HTTPException) as exc_info:
         logging_api.save_rotation(logging_api.RotationSaveIn(scope="managed:unknown", max_mb=2, backup_count=1), SimpleNamespace())
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"scope": "default", "max_mb": 0, "backup_count": 1},
+        {"scope": "default", "max_mb": 10_241, "backup_count": 1},
+        {"scope": "default", "max_mb": 10, "backup_count": -1},
+        {"scope": "default", "max_mb": 10, "backup_count": 21},
+    ],
+)
+def test_rotation_request_rejects_values_outside_ui_limits(logging_client, payload):
+    """FastAPI should return 422 before oversized rotation values reach persistence."""
+    response = logging_client.post("/api/logging/rotation", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("scope", ["../PBGui", "bad.name", "api-systemd-handoff"])
+def test_rotation_save_rejects_unsafe_or_managed_service_scope(scope, monkeypatch):
+    """Per-log rules must use safe base names and cannot shadow managed scopes."""
+    monkeypatch.setattr(logging_api, "_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(logging_api, "set_rotate_settings", lambda *args, **kwargs: pytest.fail("invalid scope persisted"))
+
+    with pytest.raises(logging_api.HTTPException) as exc_info:
+        logging_api.save_rotation(logging_api.RotationSaveIn(scope=scope, max_mb=2, backup_count=1), SimpleNamespace())
+
     assert exc_info.value.status_code == 400
 
 

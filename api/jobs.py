@@ -14,8 +14,6 @@ from task_queue import (
     delete_job,
     retry_failed_job,
     requeue_done_job,
-    read_worker_pid,
-    is_pid_running,
 )
 from api.auth import require_auth, SessionToken, get_token_from_request
 from task_worker import start_pending_job
@@ -52,13 +50,14 @@ def get_jobs(
     jobs = list_jobs(states=state_list, limit=limit, job_types=job_types)
     
     # Include worker status
-    worker_pid = read_worker_pid()
-    worker_running = bool(worker_pid and is_pid_running(int(worker_pid)))
+    from task_worker_ownership import get_task_worker_status
+
+    worker_status = get_task_worker_status()
     
     return {
         "jobs": jobs,
-        "worker_running": worker_running,
-        "worker_pid": worker_pid
+        "worker_running": worker_status.running,
+        "worker_pid": worker_status.pid
     }
 
 

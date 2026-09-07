@@ -601,7 +601,7 @@
         .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
         .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
     </style>
-    <script src="/app/js/log_viewer_panel.js?v=29"></script>
+    <script src="/app/js/log_viewer_panel.js?v=30"></script>
 </head>
 <body>
 
@@ -1097,7 +1097,11 @@
     let currentUsers = [];
     let editMode = null; // "create" | "edit"
     let editingName = null;
-    let apiKeyRevealGeneration = 0;
+    let editorGeneration = 0;
+    let editorAccountName = null;
+    let editorController = null;
+    let saveInFlight = false;
+    let combinedUserUpdateSupported = false;
     let hlExpiryData = {};
     let bybitExpiryData = {};  // live-only; ips inside are never persisted
     // Sort / filter state
@@ -1170,10 +1174,15 @@
             }
         });
         // Dirty-tracking: any input/change inside the edit panel marks it dirty
-        document.getElementById("editPanel").addEventListener("input", () => { formDirty = true; });
-        document.getElementById("editPanel").addEventListener("change", () => { formDirty = true; });
+        document.getElementById("editPanel").addEventListener("input", () => {
+            formDirty = true;
+            advanceEditorGeneration();
+        });
+        document.getElementById("editPanel").addEventListener("change", () => {
+            formDirty = true;
+            advanceEditorGeneration();
+        });
         document.getElementById("editKey").addEventListener("input", function() {
-            apiKeyRevealGeneration += 1;
             delete this.dataset.revealed;
         });
         // Restore panel from URL hash without showing the user list first.
@@ -1205,7 +1214,61 @@
             setTimeout(() => { const f = document.getElementById("userFilter"); if (f) f.focus(); }, 50);
         }
     });
-    window.addEventListener("pagehide", clearTradfiRevealedApiKey);
+    window.addEventListener("pagehide", function() {
+        invalidateEditorAccount();
+        clearTradfiRevealedApiKey();
+    });
+
+    function beginEditorAccount(name) {
+        const previousAccount = editorAccountName;
+        if (editorController) editorController.abort();
+        editorGeneration += 1;
+        editorAccountName = name;
+        editorController = name === null ? null : new AbortController();
+        if (previousAccount === "__hl_expiry__" && name !== previousAccount) {
+            document.getElementById("btnHLExpiry").disabled = false;
+            document.getElementById("btnHLExpiry").textContent = "HL Expiry Check";
+        }
+        if (previousAccount === "__bybit_expiry__" && name !== previousAccount) {
+            document.getElementById("btnBybitExpiry").disabled = false;
+            document.getElementById("btnBybitExpiry").textContent = "Bybit Expiry Check";
+        }
+        return captureEditorRequest(name);
+    }
+
+    function advanceEditorGeneration() {
+        return beginEditorAccount(editorAccountName);
+    }
+
+    function invalidateEditorAccount() {
+        beginEditorAccount(null);
+    }
+
+    function captureEditorRequest(name) {
+        const accountName = name === undefined ? editorAccountName : name;
+        if (accountName !== editorAccountName) return null;
+        return {
+            generation: editorGeneration,
+            name: accountName,
+            signal: editorController ? editorController.signal : undefined,
+        };
+    }
+
+    function isCurrentEditorRequest(context) {
+        return !!context
+            && context.generation === editorGeneration
+            && context.name === editorAccountName;
+    }
+
+    function handleEditorHashChange() {
+        if (editorAccountName === null) return;
+        const expectedHash = editMode === "edit" || !String(editorAccountName).startsWith("__")
+            ? "#edit/" + encodeURIComponent(editorAccountName)
+            : "";
+        if (location.hash !== expectedHash) invalidateEditorAccount();
+    }
+
+    window.addEventListener("hashchange", handleEditorHashChange);
 
     // ── API helpers ─────────────────────────────────────────
     async function apiFetch(path, options = {}) {
@@ -1261,6 +1324,7 @@
     async function loadApiMeta() {
         try {
             var meta = await apiFetch("/meta");
+            combinedUserUpdateSupported = !!(meta.capabilities && meta.capabilities.combined_user_update === true);
             document.getElementById("metaSerial").textContent = meta.api_serial || "—";
             if (meta.api_ts) {
                 var d = new Date(meta.api_ts);
@@ -1486,20 +1550,29 @@
 
     // ── Edit user ───────────────────────────────────────────
     async function editUser(name) {
+        if (saveInFlight) return;
+        const context = beginEditorAccount(name);
+        const expectedHash = "#edit/" + encodeURIComponent(name);
+        history.replaceState(null, "", location.pathname + location.search + expectedHash);
         try {
-            const user = await apiFetch("/" + encodeURIComponent(name));
+            const user = await apiFetch("/" + encodeURIComponent(name), { signal: context.signal, cache: "no-store" });
+            if (!isCurrentEditorRequest(context) || user.name !== name) return;
             editMode = "edit";
             editingName = name;
-            location.hash = "#edit/" + encodeURIComponent(name);
             showEditPanel(user);
         } catch (e) {
+            if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
+            history.replaceState(null, "", location.pathname + location.search);
             showToast("Failed to load user: " + e.message, "error");
         }
     }
 
     function showCreateForm() {
+        if (saveInFlight) return;
+        beginEditorAccount("__create__");
         editMode = "create";
         editingName = null;
+        history.replaceState(null, "", location.pathname + location.search);
         showEditPanel({
             name: "",
             exchange: EXCHANGES[0] || "binance",
@@ -1532,6 +1605,12 @@
         document.getElementById("editPanel").style.display = "block";
         document.getElementById("userListView").style.display = "none";
         document.getElementById("balanceDisplay").style.display = "none";
+        document.getElementById("btnTest").disabled = false;
+        document.getElementById("btnTest").textContent = "Test Connection";
+        document.getElementById("btnHLExpiryInline").disabled = false;
+        document.getElementById("btnHLExpiryInline").textContent = "↻ Check Expiry";
+        document.getElementById("btnBybitExpiryInline").disabled = false;
+        document.getElementById("btnBybitExpiryInline").textContent = "↻ Check Expiry + IPs";
 
         const isEdit = editMode === "edit";
         document.getElementById("editPanelTitle").textContent = isEdit ? "Edit: " + user.name : "New User";
@@ -1632,31 +1711,39 @@
 
     async function checkSingleHLExpiry() {
         if (!editingName) return;
+        const requestedName = editingName;
+        const context = captureEditorRequest(requestedName);
+        if (!context) return;
         const btn = document.getElementById("btnHLExpiryInline");
         btn.disabled = true;
         btn.textContent = "Checking…";
         try {
             // Send unsaved private keys only in a POST body so they never enter URLs.
             const unsavedKey = getMaskedFieldValue("editPrivateKey");
-            const url = "/" + encodeURIComponent(editingName) + "/hl-expiry";
+            const url = "/" + encodeURIComponent(requestedName) + "/hl-expiry";
             const data = await apiFetch(url, unsavedKey ? {
                 method: "POST",
                 body: JSON.stringify({ private_key: unsavedKey }),
-            } : {});
+                signal: context.signal,
+            } : { signal: context.signal });
+            if (!isCurrentEditorRequest(context) || editingName !== requestedName) return;
             // Only update the persistent cache when checking the saved key.
             // For unsaved overrides we just show the result inline.
             if (!unsavedKey) {
-                hlExpiryData[editingName] = data;
+                hlExpiryData[requestedName] = data;
                 renderUserTable();
             }
             updateHLExpiryInline(data);
         } catch(e) {
+            if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             const badge = document.getElementById("hlExpiryInlineBadge");
             badge.textContent = "Error: " + e.message;
             badge.style.color = "#fc8181";
         } finally {
-            btn.disabled = false;
-            btn.textContent = "↻ Check Expiry";
+            if (isCurrentEditorRequest(context) && editingName === requestedName) {
+                btn.disabled = false;
+                btn.textContent = "↻ Check Expiry";
+            }
         }
     }
 
@@ -1684,31 +1771,41 @@
 
     async function checkSingleBybitExpiry() {
         if (!editingName) return;
+        const requestedName = editingName;
+        const context = captureEditorRequest(requestedName);
+        if (!context) return;
         const btn = document.getElementById("btnBybitExpiryInline");
         btn.disabled = true;
         btn.textContent = "Checking…";
         try {
-            const data = await apiFetch("/" + encodeURIComponent(editingName) + "/bybit-expiry");
-            bybitExpiryData[editingName] = data;
+            const data = await apiFetch("/" + encodeURIComponent(requestedName) + "/bybit-expiry", { signal: context.signal });
+            if (!isCurrentEditorRequest(context) || editingName !== requestedName) return;
+            bybitExpiryData[requestedName] = data;
             updateBybitExpiryInline(data, data.ips);
             renderUserTable();
         } catch(e) {
+            if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             const badge = document.getElementById("bybitExpiryInlineBadge");
             badge.textContent = "Error: " + e.message;
             badge.style.color = "#fc8181";
         } finally {
-            btn.disabled = false;
-            btn.textContent = "↻ Check Expiry + IPs";
+            if (isCurrentEditorRequest(context) && editingName === requestedName) {
+                btn.disabled = false;
+                btn.textContent = "↻ Check Expiry + IPs";
+            }
         }
     }
 
     async function refreshBybitExpiry() {
+        if (saveInFlight) return;
+        const context = beginEditorAccount("__bybit_expiry__");
         const btn = document.getElementById("btnBybitExpiry");
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner"></span> Checking...';
 
         try {
-            const data = await apiFetch("/bybit-expiry?force=true");
+            const data = await apiFetch("/bybit-expiry?force=true", { signal: context.signal });
+            if (!isCurrentEditorRequest(context)) return;
             bybitExpiryData = {};
             for (const item of data) {
                 bybitExpiryData[item.name] = item;
@@ -1729,10 +1826,13 @@
             document.getElementById("bybitExpiryPanel").style.display = "";
             showToast("Bybit expiry data refreshed", "success");
         } catch (e) {
+            if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             showToast("Bybit expiry check failed: " + e.message, "error");
         } finally {
-            btn.disabled = false;
-            btn.textContent = "Bybit Expiry Check";
+            if (isCurrentEditorRequest(context)) {
+                btn.disabled = false;
+                btn.textContent = "Bybit Expiry Check";
+            }
         }
     }
 
@@ -1779,8 +1879,21 @@
         backToList();
     }
 
+    function setEditorSaveBusy(busy) {
+        document.getElementById("editPanel").querySelectorAll("input, select, textarea, button").forEach(function(control) {
+            if (busy) {
+                control.dataset.disabledBeforeSave = control.disabled ? "true" : "false";
+                control.disabled = true;
+            } else if ("disabledBeforeSave" in control.dataset) {
+                control.disabled = control.dataset.disabledBeforeSave === "true";
+                delete control.dataset.disabledBeforeSave;
+            }
+        });
+    }
+
     // ── Panel navigation ────────────────────────────────────
-    async function backToList() {
+    async function backToList(preserveEditorContext = false) {
+        if (saveInFlight && !preserveEditorContext) return;
         if (document.getElementById("editPanel").style.display !== "none" && formDirty) {
             if (!(await window.PBGuiDialogs.confirm({
                 title: "Discard changes",
@@ -1788,6 +1901,7 @@
                 confirmText: "Leave"
             }))) return;
         }
+        if (!preserveEditorContext) invalidateEditorAccount();
         formDirty = false;
         clearTradfiRevealedApiKey();
         clearRevealedApiKey();
@@ -1814,6 +1928,7 @@
 
     // ── Save user ───────────────────────────────────────────
     async function saveUser() {
+        if (saveInFlight) return;
         const name = document.getElementById("editName").value.trim();
         if (!name) {
             showToast("Username is required", "error");
@@ -1823,6 +1938,10 @@
         const exchange = document.getElementById("editExchange").value;
         const isHL = exchange === "hyperliquid";
         const isCreate = editMode === "create";
+        const originalName = editingName;
+        if (!isCreate && !originalName) return;
+        const context = isCreate ? beginEditorAccount(name) : captureEditorRequest(originalName);
+        if (!context) return;
 
         // ── Required field validation ──────────────────────────────────
         if (isHL) {
@@ -1896,53 +2015,69 @@
         };
 
         const btnSave = document.getElementById("btnSave");
-        btnSave.disabled = true;
+        saveInFlight = true;
+        setEditorSaveBusy(true);
         btnSave.innerHTML = '<span class="spinner"></span> Saving...';
 
         try {
+            if (!isCreate && name !== originalName && !combinedUserUpdateSupported) {
+                const meta = await apiFetch("/meta", { cache: "no-store" });
+                if (!isCurrentEditorRequest(context)) return;
+                combinedUserUpdateSupported = !!(meta.capabilities && meta.capabilities.combined_user_update === true);
+                if (!combinedUserUpdateSupported) {
+                    throw new Error("The running API does not support atomic rename updates. Restart the PBGui API and retry; no changes were saved.");
+                }
+            }
+            let savedUser;
             if (editMode === "create") {
-                await apiFetch("/", {
+                savedUser = await apiFetch("/", {
                     method: "POST",
                     body: JSON.stringify({ name: name, data: data }),
                 });
-                showToast("User created: " + name, "success");
             } else {
-                // Rename first if the username was changed
-                let currentName = editingName;
-                if (name !== editingName) {
-                    await apiFetch("/" + encodeURIComponent(editingName) + "/rename", {
-                        method: "PATCH",
-                        body: JSON.stringify({ new_name: name }),
-                    });
-                    currentName = name;
-                }
-                await apiFetch("/" + encodeURIComponent(currentName), {
+                savedUser = await apiFetch("/" + encodeURIComponent(originalName), {
                     method: "PUT",
-                    body: JSON.stringify(data),
+                    body: JSON.stringify({ ...data, new_name: name }),
                 });
-                showToast("User updated: " + name, "success");
             }
+            if (!isCurrentEditorRequest(context)) return;
+            if (!savedUser || savedUser.name !== name) {
+                throw new Error("The API returned a different canonical username. Reload the editor before making further changes.");
+            }
+            editorAccountName = name;
+            const savedContext = captureEditorRequest(name);
+            showToast((isCreate ? "User created: " : "User updated: ") + name, "success");
             // Clear stale expiry cache for this user so re-opening the
-            // edit panel doesn't show an outdated "no expire" result.
-            const savedName = editMode === "create" ? name : editingName;
+            // edit panel does not show an outdated "no expire" result.
+            const savedName = name;
+            if (originalName) {
+                delete hlExpiryData[originalName];
+                delete bybitExpiryData[originalName];
+            }
             delete hlExpiryData[savedName];
             delete bybitExpiryData[savedName];
-            cancelEdit();
+            formDirty = false;
+            await backToList(true);
             await loadUsers();
             // Background HL expiry refresh: when a private key was submitted (new or
             // changed), automatically fetch the real expiry so the table shows it
             // without requiring an extra manual "Check Expiry" click.
             if (exchange === "hyperliquid" && data.private_key) {
-                const _bgUser = savedName;
-                apiFetch("/" + encodeURIComponent(_bgUser) + "/hl-expiry").then(function(d) {
-                    hlExpiryData[_bgUser] = d;
+                const backgroundName = savedName;
+                apiFetch("/" + encodeURIComponent(backgroundName) + "/hl-expiry", {
+                    signal: savedContext ? savedContext.signal : undefined,
+                }).then(function(d) {
+                    if (!isCurrentEditorRequest(savedContext)) return;
+                    hlExpiryData[backgroundName] = d;
                     renderUserTable();
                 }).catch(function() {});
             }
         } catch (e) {
+            if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             showToast("Save failed: " + e.message, "error");
         } finally {
-            btnSave.disabled = false;
+            saveInFlight = false;
+            setEditorSaveBusy(false);
             btnSave.textContent = "Save";
         }
     }
@@ -1992,6 +2127,8 @@
             showToast("Save the user first before testing", "warning");
             return;
         }
+        const context = captureEditorRequest(name);
+        if (!context) return;
 
         const btn = document.getElementById("btnTest");
         btn.disabled = true;
@@ -2020,7 +2157,9 @@
             const result = await apiFetch("/" + encodeURIComponent(name) + "/test", {
                 method: "POST",
                 body: hasOverride ? JSON.stringify(override) : undefined,
+                signal: context.signal,
             });
+            if (!isCurrentEditorRequest(context) || editingName !== name) return;
             const display = document.getElementById("balanceDisplay");
             let html = "";
             if (result.success) {
@@ -2035,21 +2174,27 @@
             display.innerHTML = html;
             display.style.display = "flex";
         } catch (e) {
+            if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             showToast("Test failed: " + e.message, "error");
         } finally {
-            btn.disabled = false;
-            btn.textContent = "Test Connection";
+            if (isCurrentEditorRequest(context) && editingName === name) {
+                btn.disabled = false;
+                btn.textContent = "Test Connection";
+            }
         }
     }
 
     // ── HL Expiry ───────────────────────────────────────────
     async function refreshHLExpiry() {
+        if (saveInFlight) return;
+        const context = beginEditorAccount("__hl_expiry__");
         const btn = document.getElementById("btnHLExpiry");
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner"></span> Checking...';
 
         try {
-            const data = await apiFetch("/hl-expiry?force=true");
+            const data = await apiFetch("/hl-expiry?force=true", { signal: context.signal });
+            if (!isCurrentEditorRequest(context)) return;
             hlExpiryData = {};
             for (const item of data) {
                 hlExpiryData[item.name] = item;
@@ -2071,10 +2216,13 @@
             document.getElementById("hlExpiryPanel").style.display = "";
             showToast("HL expiry data refreshed", "success");
         } catch (e) {
+            if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             showToast("HL expiry check failed: " + e.message, "error");
         } finally {
-            btn.disabled = false;
-            btn.textContent = "HL Expiry Check";
+            if (isCurrentEditorRequest(context)) {
+                btn.disabled = false;
+                btn.textContent = "HL Expiry Check";
+            }
         }
     }
 
@@ -2215,26 +2363,28 @@
             btn.textContent = "\uD83D\uDE48";
             return;
         }
+        const requestedName = editingName;
+        const context = captureEditorRequest(requestedName);
+        if (!context) return;
         try {
-            const requestedName = editingName;
-            const generation = ++apiKeyRevealGeneration;
             const data = await apiFetch("/reveal-key", {
                 method: "POST",
                 cache: "no-store",
-                body: JSON.stringify({name: requestedName})
+                body: JSON.stringify({name: requestedName}),
+                signal: context.signal,
             });
-            if (generation !== apiKeyRevealGeneration || editMode !== "edit" || editingName !== requestedName) return;
+            if (!isCurrentEditorRequest(context) || editMode !== "edit" || editingName !== requestedName) return;
             inp.value = data.value || "";
             inp.dataset.revealed = "true";
             inp.type = "text";
             btn.textContent = "\uD83D\uDE48";
         } catch (e) {
+            if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             showToast("Could not reveal API key: " + e.message, "error");
         }
     }
 
     function clearRevealedApiKey() {
-        apiKeyRevealGeneration += 1;
         const inp = document.getElementById("editKey");
         if (!inp) return;
         if (inp.dataset.revealed === "true") inp.value = "";
@@ -2322,6 +2472,8 @@
 
     async function toggleComments() {
         if (commentsVisible) { backToList(); return; }
+        if (saveInFlight) return;
+        invalidateEditorAccount();
         clearRevealedApiKey();
         commentsVisible = true;
         ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
@@ -2427,6 +2579,8 @@
 
     async function toggleHLConfig() {
         if (hlConfigVisible) { backToList(); return; }
+        if (saveInFlight) return;
+        invalidateEditorAccount();
         clearRevealedApiKey();
         hlConfigVisible = true;
         ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
@@ -2605,6 +2759,8 @@
 
     async function toggleTradfi() {
         if (tradfiVisible) { backToList(); return; }
+        if (saveInFlight) return;
+        invalidateEditorAccount();
         clearRevealedApiKey();
         tradfiVisible = true;
         ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","backupsPanel","logPanel"].forEach(id => {
@@ -3081,6 +3237,8 @@
 
     async function toggleBackups() {
         if (backupsVisible) { backToList(); return; }
+        if (saveInFlight) return;
+        invalidateEditorAccount();
         clearRevealedApiKey();
         backupsVisible = true;
         ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","logPanel"].forEach(id => {
@@ -3423,6 +3581,8 @@
 
     function toggleLogPanel() {
         if (logPanelVisible) { backToList(); return; }
+        if (saveInFlight) return;
+        invalidateEditorAccount();
         clearRevealedApiKey();
         logPanelVisible = true;
         ['editPanel','userListView','hlExpiryPanel','bybitExpiryPanel','commentsPanel','hlConfigPanel','tradfiPanel','backupsPanel'].forEach(id => {
