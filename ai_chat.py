@@ -40,6 +40,7 @@ SERVICE = "AIChat"
 _GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 _ZEN_BASE_URL = "https://opencode.ai/zen/v1"
 _MODELS_DEV_URL = "https://models.opencode.ai/api.json"
+_OPENCODE_USER_AGENT = "pbgui-ai/1.0"
 _OPENCODE_PROVIDERS = {
     "opencode-zen": {"base_url": _ZEN_BASE_URL, "catalog_id": "opencode"},
     "opencode-go": {"base_url": _GO_BASE_URL, "catalog_id": "opencode-go"},
@@ -2717,6 +2718,7 @@ class AIChatService:
             key,
             history,
             selected_protocol,
+            conversation_id,
         )
         self._apply_reasoning_variant(request_body, protocol, model, variant)
         session = await self._http_session()
@@ -2876,7 +2878,9 @@ class AIChatService:
                     async with asyncio.timeout(_OPENCODE_REQUEST_TIMEOUT_SECONDS):
                         async with session.post(
                             f"{base_url}/responses",
-                            headers={"Authorization": f"Bearer {api_key}"},
+                            headers=self._opencode_request_headers(
+                                api_key, conversation_id, "responses"
+                            ),
                             json=request_body,
                             allow_redirects=False,
                         ) as response:
@@ -3042,7 +3046,9 @@ class AIChatService:
             try:
                 async with session.post(
                     f"{base_url}/messages",
-                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                    headers=self._opencode_request_headers(
+                        api_key, conversation_id, "messages"
+                    ),
                     json=request_body,
                     allow_redirects=False,
                 ) as response:
@@ -3197,7 +3203,9 @@ class AIChatService:
             try:
                 async with session.post(
                     f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}"},
+                    headers=self._opencode_request_headers(
+                        api_key, conversation_id, "chat"
+                    ),
                     json=request_body,
                     allow_redirects=False,
                 ) as response:
@@ -3495,11 +3503,27 @@ class AIChatService:
         )
 
     @staticmethod
+    def _opencode_request_headers(
+        api_key: str, session_id: str, protocol: str
+    ) -> dict[str, str]:
+        """Build provider auth plus OpenCode's required client and session identity."""
+        headers = {
+            "User-Agent": _OPENCODE_USER_AGENT,
+            "x-opencode-session": session_id,
+        }
+        if protocol == "messages":
+            headers.update({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
+
+    @staticmethod
     def _go_request_spec(
         model: str,
         api_key: str,
         history: list[dict[str, str]],
         protocol: str | None = None,
+        session_id: str = "",
     ) -> tuple[str, dict[str, str], dict[str, Any], str]:
         """Build one protocol-correct Go request from trusted model metadata."""
         metadata = _GO_FALLBACK_MODELS.get(model)
@@ -3511,14 +3535,14 @@ class AIChatService:
         if selected_protocol == "responses":
             return (
                 "responses",
-                {"Authorization": f"Bearer {api_key}"},
+                AIChatService._opencode_request_headers(api_key, session_id, selected_protocol),
                 {"model": model, "instructions": instructions, "input": history},
                 selected_protocol,
             )
         if selected_protocol == "chat":
             return (
                 "chat/completions",
-                {"Authorization": f"Bearer {api_key}"},
+                AIChatService._opencode_request_headers(api_key, session_id, selected_protocol),
                 {
                     "model": model,
                     "messages": [{"role": "system", "content": instructions}, *history],
@@ -3530,7 +3554,7 @@ class AIChatService:
             raise AIChatError("OpenCode Go model protocol is unsupported")
         return (
             "messages",
-            {"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            AIChatService._opencode_request_headers(api_key, session_id, selected_protocol),
             {"model": model, "system": instructions, "messages": history, "max_tokens": 4096},
             selected_protocol,
         )
@@ -3860,6 +3884,7 @@ class AIChatService:
                                 model_id,
                                 str(model.get("protocol") or ""),
                                 key,
+                                f"health-{owner}-{provider}-{model_id}",
                             )
                             health[health_key] = self._health_payload("available")
                         except AIChatError as exc:
@@ -3878,6 +3903,7 @@ class AIChatService:
         model: str,
         protocol: str,
         api_key: str,
+        session_id: str,
     ) -> None:
         """Send one minimal no-context availability prompt through a documented endpoint."""
         provider_config = _OPENCODE_PROVIDERS.get(provider)
@@ -3888,6 +3914,7 @@ class AIChatService:
             api_key,
             [{"role": "user", "content": "Reply only OK."}],
             protocol,
+            session_id,
         )
         if endpoint == "responses":
             body["max_output_tokens"] = 8

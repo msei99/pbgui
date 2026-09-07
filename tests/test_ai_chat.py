@@ -145,12 +145,14 @@ def test_go_request_spec_matches_documented_protocols(
     history = [{"role": "user", "content": "Hello"}]
     dynamic_protocol = protocol if model == "future-chat-model" else None
     selected_endpoint, headers, body, selected_protocol = AIChatService._go_request_spec(
-        model, "sk-test-key", history, dynamic_protocol
+        model, "sk-test-key", history, dynamic_protocol, "conversation-test"
     )
 
     assert selected_endpoint == endpoint
     assert selected_protocol == protocol
     assert auth_header in headers
+    assert headers["User-Agent"] == "pbgui-ai/1.0"
+    assert headers["x-opencode-session"] == "conversation-test"
     assert body["model"] == model
     instructions = body.get("system") or body.get("instructions") or body["messages"][0]["content"]
     assert "No PBGui capability tools are available" in instructions
@@ -430,9 +432,11 @@ def test_go_tool_loop_forces_a_final_answer_after_capability_rounds(
 
         def __init__(self) -> None:
             self.requests = []
+            self.headers = []
 
         def post(self, url, **kwargs):
             self.requests.append(json.loads(json.dumps(kwargs["json"])))
+            self.headers.append(dict(kwargs["headers"]))
             return ResponseContext()
 
     class FakeCapabilities:
@@ -496,6 +500,8 @@ def test_go_tool_loop_forces_a_final_answer_after_capability_rounds(
 
         assert reply == "Final answer"
         assert len(session.requests) == _MAX_CAPABILITY_ROUNDS + 1
+        assert all(headers["User-Agent"] == "pbgui-ai/1.0" for headers in session.headers)
+        assert all(headers["x-opencode-session"] == conversation.id for headers in session.headers)
         assert all("tools" in request for request in session.requests[:_MAX_CAPABILITY_ROUNDS])
         assert all(request["reasoning_effort"] == "high" for request in session.requests)
         assert session.requests[1]["messages"][-2]["reasoning_content"] == "reason-0"
@@ -527,10 +533,12 @@ def test_responses_agent_executes_native_tools_and_replays_results(
 
         def __init__(self) -> None:
             self.requests = []
+            self.headers = []
 
         def post(self, url, **kwargs):
             assert url.endswith("/responses")
             self.requests.append(json.loads(json.dumps(kwargs["json"])))
+            self.headers.append(dict(kwargs["headers"]))
             return ResponseContext()
 
     class FakeCapabilities:
@@ -591,6 +599,8 @@ def test_responses_agent_executes_native_tools_and_replays_results(
         )
 
         assert reply == "Installed-source answer"
+        assert session.headers[0]["User-Agent"] == "pbgui-ai/1.0"
+        assert session.headers[0]["x-opencode-session"] == conversation.id
         assert session.requests[0]["tools"][0]["name"] == "search_passivbot_docs"
         assert session.requests[0]["reasoning"]["effort"] == "high"
         assert session.requests[0]["prompt_cache_key"] == conversation.id
@@ -769,10 +779,12 @@ def test_messages_agent_executes_native_tools_and_replays_results(
 
         def __init__(self) -> None:
             self.requests = []
+            self.headers = []
 
         def post(self, url, **kwargs):
             assert url.endswith("/messages")
             self.requests.append(json.loads(json.dumps(kwargs["json"])))
+            self.headers.append(dict(kwargs["headers"]))
             return ResponseContext()
 
     class FakeCapabilities:
@@ -826,6 +838,8 @@ def test_messages_agent_executes_native_tools_and_replays_results(
         )
 
         assert reply == "Source-backed answer"
+        assert session.headers[0]["User-Agent"] == "pbgui-ai/1.0"
+        assert session.headers[0]["x-opencode-session"] == conversation.id
         assert session.requests[0]["tools"][0]["name"] == "read_passivbot_source"
         replay = session.requests[1]["messages"]
         assert replay[-2]["content"][0]["type"] == "thinking"
