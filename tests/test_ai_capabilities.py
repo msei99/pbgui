@@ -712,6 +712,113 @@ def test_dashboard_layout_contract_creates_and_edits_semantic_cells(tmp_path: Pa
     assert prepared["dashboard_balance_users_1_2"] == ["ALL"]
 
 
+def test_dashboard_income_layout_accepts_zero_last_n_for_chart_mode(tmp_path: Path, monkeypatch) -> None:
+    """AI dashboard edits should preserve zero as the Income chart-mode value."""
+    from api import dashboards
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    existing = {
+        "name": "portfolio",
+        "rows": 1,
+        "cols": 1,
+        "dashboard_type_1_1": "INCOME",
+        "dashboard_income_users_1_1": ["ALL"],
+        "dashboard_income_period_1_1": "ALL_TIME",
+        "dashboard_income_last_1_1": 10,
+        "dashboard_income_filter_1_1": 0,
+    }
+    monkeypatch.setattr(dashboards, "list_dashboards", lambda session=None: {"dashboards": ["portfolio"]})
+    monkeypatch.setattr(dashboards, "get_dashboard", lambda name, session=None: {"config": copy.deepcopy(existing)})
+    monkeypatch.setattr(dashboards, "list_users", lambda session=None: {"users": []})
+
+    _, _, prepared, _ = service._prepare_dashboard_layout(
+        {
+            "name": "portfolio",
+            "create": False,
+            "cells": [{"row": 1, "column": 1, "last_n": 0}],
+        }
+    )
+    projection = service._dashboard_layout_projection("portfolio", prepared)
+    dashboard_tool = next(
+        tool for tool in service.responses_tools() if tool["name"] == "propose_dashboard_layout"
+    )
+    last_n_schema = dashboard_tool["parameters"]["properties"]["cells"]["items"]["properties"]["last_n"]
+
+    assert prepared["dashboard_income_last_1_1"] == 0
+    assert projection["cells"][0]["last_n"] == 0
+    assert last_n_schema["minimum"] == 0
+    assert "0 shows the cumulative chart" in last_n_schema["description"]
+
+    existing.pop("dashboard_income_last_1_1")
+    _, _, prepared_default, _ = service._prepare_dashboard_layout(
+        {
+            "name": "portfolio",
+            "create": False,
+            "cells": [{"row": 1, "column": 1, "minimum_income": 1}],
+        }
+    )
+    assert prepared_default["dashboard_income_last_1_1"] == 0
+    assert service._dashboard_layout_projection("portfolio", existing)["cells"][0]["last_n"] == 0
+
+
+@pytest.mark.parametrize("last_n", [-1, 101])
+def test_dashboard_income_layout_rejects_last_n_outside_range(
+    tmp_path: Path,
+    monkeypatch,
+    last_n: int,
+) -> None:
+    """AI dashboard edits should enforce the Income Last N runtime bounds."""
+    from api import dashboards
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    existing = {"name": "portfolio", "rows": 1, "cols": 1, "dashboard_type_1_1": "INCOME"}
+    monkeypatch.setattr(dashboards, "list_dashboards", lambda session=None: {"dashboards": ["portfolio"]})
+    monkeypatch.setattr(dashboards, "get_dashboard", lambda name, session=None: {"config": copy.deepcopy(existing)})
+    monkeypatch.setattr(dashboards, "list_users", lambda session=None: {"users": []})
+
+    with pytest.raises(AICapabilityError, match="outside the supported range"):
+        service._prepare_dashboard_layout(
+            {"name": "portfolio", "create": False, "cells": [{"row": 1, "column": 1, "last_n": last_n}]}
+        )
+
+
+@pytest.mark.parametrize("last_n", [-0.5, 100.9, True, "0"])
+def test_dashboard_income_layout_rejects_non_integer_last_n(
+    tmp_path: Path,
+    monkeypatch,
+    last_n: object,
+) -> None:
+    """AI dashboard edits should enforce the integer Last N schema at runtime."""
+    from api import dashboards
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    existing = {"name": "portfolio", "rows": 1, "cols": 1, "dashboard_type_1_1": "INCOME"}
+    monkeypatch.setattr(dashboards, "list_dashboards", lambda session=None: {"dashboards": ["portfolio"]})
+    monkeypatch.setattr(dashboards, "get_dashboard", lambda name, session=None: {"config": copy.deepcopy(existing)})
+    monkeypatch.setattr(dashboards, "list_users", lambda session=None: {"users": []})
+
+    with pytest.raises(AICapabilityError, match="last_n is invalid"):
+        service._prepare_dashboard_layout(
+            {"name": "portfolio", "create": False, "cells": [{"row": 1, "column": 1, "last_n": last_n}]}
+        )
+
+
+def test_dashboard_layout_rejects_last_n_for_non_income_widget(tmp_path: Path, monkeypatch) -> None:
+    """AI dashboard edits should not persist hidden Income settings on other widgets."""
+    from api import dashboards
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    existing = {"name": "portfolio", "rows": 1, "cols": 1, "dashboard_type_1_1": "BALANCE"}
+    monkeypatch.setattr(dashboards, "list_dashboards", lambda session=None: {"dashboards": ["portfolio"]})
+    monkeypatch.setattr(dashboards, "get_dashboard", lambda name, session=None: {"config": copy.deepcopy(existing)})
+    monkeypatch.setattr(dashboards, "list_users", lambda session=None: {"users": []})
+
+    with pytest.raises(AICapabilityError, match="only valid for INCOME"):
+        service._prepare_dashboard_layout(
+            {"name": "portfolio", "create": False, "cells": [{"row": 1, "column": 1, "last_n": 0}]}
+        )
+
+
 def test_optimizer_run_ranking_scans_every_candidate(tmp_path: Path, monkeypatch) -> None:
     """Complete-run ranking must evaluate candidates beyond the old 200-row preview limit."""
     from api import optimize_v8

@@ -135,7 +135,7 @@ Die Restore-Auswahl stellt den gesamten lokalen Snapshot von `pbgui.db` wieder h
 - Income-Loeschungen werden abgelehnt, wenn ihr automatisches Sicherheitsbackup nicht erstellt werden kann.
 
 Zusätzliche Steuerung:
-- **Last N** — nur die Top-N-Symbole nach absolutem Wert anzeigen
+- **Last N** — `0` zeigt den kumulativen Chart pro Symbol; Werte groesser als `0` zeigen die neuesten N Income-Zeilen als Tabelle
 - **Filter** — Symbole unterhalb eines Mindestbetrags ausblenden
 
 ### 🏆 TOP — Top-Symbole

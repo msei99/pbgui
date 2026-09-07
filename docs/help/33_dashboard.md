@@ -135,7 +135,7 @@ The restore picker restores the complete local `pbgui.db` snapshot, not only the
 - Income deletion is refused if its automatic safety backup cannot be created.
 
 Extra controls:
-- **Last N** — show only the top-N symbols by absolute value
+- **Last N** — `0` shows the cumulative per-symbol chart; values above `0` show the latest N income rows as a table
 - **Filter** — hide symbols below a minimum absolute income threshold
 
 ### 🏆 TOP — Top symbols
