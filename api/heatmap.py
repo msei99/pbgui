@@ -1632,13 +1632,22 @@ def build_ohlcv_info(
     from market_data import (
         get_effective_enabled_coins,
         get_exchange_raw_root_dir,
+        get_market_data_coin_options,
         load_market_data_config,
         normalize_market_data_coin_dir,
     )
     from market_data_tradfi import load_tradfi_map
 
     cfg = load_market_data_config()
-    all_coins, _, _ = get_effective_enabled_coins("hyperliquid", cfg=cfg)
+    coin_options = get_market_data_coin_options("hyperliquid")
+    all_coins, _, _ = get_effective_enabled_coins("hyperliquid", cfg=cfg, coin_options=coin_options)
+    configured_coins = list((getattr(cfg, "enabled_coins", {}) or {}).get("hyperliquid", []) or [])
+    auto_enable = bool((getattr(cfg, "auto_enable_new_coins", {}) or {}).get("hyperliquid", False))
+    discovery_pending = not coin_options and (auto_enable or bool(configured_coins))
+    if discovery_pending:
+        # get_effective_enabled_coins intentionally falls back to saved choices when
+        # discovery is empty; building must wait rather than queue stale markets.
+        all_coins = []
 
     tradfi_by_xyz: dict[str, dict] = {}
     for record in load_tradfi_map():
@@ -1666,24 +1675,47 @@ def build_ohlcv_info(
         tail = tail.strip(" _:-")
         return tail or None
 
-    eligible: list[str] = []
-    for coin in all_coins:
-        coin_upper = str(coin or "").strip().upper()
-        if not coin_upper.startswith(("XYZ:", "XYZ-")):
-            eligible.append(coin)
-            continue
-        xyz_name = _extract_xyz_coin_name(coin)
-        if not xyz_name:
-            continue
-        entry = tradfi_by_xyz.get(xyz_name)
-        if isinstance(entry, dict):
+    def _filter_eligible(candidates: list[str]) -> tuple[list[str], bool]:
+        filtered: list[str] = []
+        mapping_pending = False
+        for coin in candidates:
+            coin_upper = str(coin or "").strip().upper()
+            if not coin_upper.startswith(("XYZ:", "XYZ-")):
+                filtered.append(coin)
+                continue
+            xyz_name = _extract_xyz_coin_name(coin)
+            if not xyz_name:
+                continue
+            entry = tradfi_by_xyz.get(xyz_name)
+            if not isinstance(entry, dict):
+                mapping_pending = True
+                continue
             status = str(entry.get("status") or "").strip().lower()
             has_tiingo = bool(
                 str(entry.get("tiingo_ticker") or "").strip()
                 or str(entry.get("tiingo_fx_ticker") or "").strip()
             )
             if status not in {"no_provider", "pending", "delisted"} and has_tiingo:
-                eligible.append(coin)
+                filtered.append(coin)
+            elif status == "pending" or (status not in {"no_provider", "delisted"} and not has_tiingo):
+                mapping_pending = True
+        return filtered, mapping_pending
+
+    eligible, xyz_mapping_pending = _filter_eligible(all_coins)
+
+    retryable = not eligible and (discovery_pending or xyz_mapping_pending)
+    if eligible:
+        empty_reason = ""
+    elif discovery_pending:
+        empty_reason = "Hyperliquid coin discovery is still refreshing."
+    elif not all_coins:
+        empty_reason = "No Hyperliquid coins are enabled in Market Data settings."
+    elif xyz_mapping_pending:
+        empty_reason = "Enabled XYZ symbol mappings are still refreshing."
+    elif all(str(coin).strip().upper().startswith(("XYZ:", "XYZ-")) for coin in all_coins):
+        empty_reason = "No enabled XYZ symbols have a downloadable Tiingo mapping."
+    else:
+        empty_reason = "Coin eligibility is temporarily unavailable while market data refreshes."
 
     from market_data_sources import SOURCE_CODE_OTHER, source_index_contains_code
 
@@ -1718,6 +1750,8 @@ def build_ohlcv_info(
         "eligible_coins": eligible,
         "all_coins": all_coins,
         "coins_with_downloaded_history": coins_with_downloaded_history,
+        "retryable": retryable,
+        "empty_reason": empty_reason,
     }
 
 

@@ -71,7 +71,123 @@ def test_build_coin_filter_controls_and_payload_contract_are_present() -> None:
 
     assert 'data-action="build-tradfi-only"' in source
     assert 'data-action="build-no-local-data"' in source
-    assert "buildCoinsWithDownloadedHistory = new Set(bD.coins_with_downloaded_history||[])" in source
+    assert "buildCoinsWithDownloadedHistory = new Set(data.coins_with_downloaded_history||[])" in source
+
+
+def test_empty_build_info_retries_without_stale_page_updates() -> None:
+    """Transient empty discovery should retry while ignoring detached or superseded pages."""
+    source = PAGE.read_text(encoding="utf-8")
+    retry = _extract_function(source, "scheduleBuildInfoRetry")
+    init = _extract_function(source, "doInit")
+
+    assert "BUILD_INFO_MAX_RETRIES = 12" in source
+    assert "data.retryable === true" in retry
+    assert "generation !== initGeneration || !ROOT.isConnected" in retry
+    assert "bD.retryable === true" in init
+    assert "applyBuildInfo(bD)" in init
+    assert "escHtml(reason)" in source
+    assert "buildRetryExhausted = true" in retry
+    assert "Automatic retries stopped" in source
+
+
+def test_build_info_retry_runtime_handles_stale_success_and_exhaustion() -> None:
+    """The retry timer should stop for stale pages, successful data, and exhaustion."""
+    source = PAGE.read_text(encoding="utf-8")
+    apply_info = _extract_function(source, "applyBuildInfo")
+    show_failure = _extract_function(source, "showBuildInfoFailure")
+    transient_status = _extract_function(source, "isTransientBuildInfoStatus")
+    retry = _extract_function(source, "scheduleBuildInfoRetry")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        var buildInfoRetryTimer = null;
+        var BUILD_INFO_MAX_RETRIES = 12, BUILD_INFO_RETRY_DELAY = 5000;
+        var initGeneration = 1, ROOT = {{isConnected: true}}, API_BASE = '/api';
+        var buildCoins = [], buildCoinsWithDownloadedHistory = new Set(), buildEmptyReason = '';
+        var buildRetryable = true, buildRetryExhausted = false;
+        var timerCallback = null, fetchCalls = 0, populateCalls = 0;
+        var responseStatus = 200, responseData = {{eligible_coins: []}};
+        var jsonError = false, detachOnFetch = false, detachOnJson = false;
+        function setTimeout(callback) {{ timerCallback = callback; return 1; }}
+        function authOptions() {{ return {{}}; }}
+        function populateBuild() {{ populateCalls += 1; }}
+        async function fetch() {{
+            fetchCalls += 1;
+            if (detachOnFetch) {{ ROOT.isConnected = false; throw new Error('network'); }}
+            return {{ok: responseStatus >= 200 && responseStatus < 300, status: responseStatus,
+                json: async function() {{
+                    if (detachOnJson) ROOT.isConnected = false;
+                    if (jsonError) throw new Error('json');
+                    return responseData;
+                }}}};
+        }}
+        {apply_info}
+        {show_failure}
+        {transient_status}
+        {retry}
+        (async function() {{
+            scheduleBuildInfoRetry(0, 0);
+            await timerCallback();
+            assert.equal(fetchCalls, 0);
+            assert.equal(buildInfoRetryTimer, null);
+
+            responseData = {{eligible_coins: ['BTC'], retryable: false}};
+            scheduleBuildInfoRetry(1, 0);
+            await timerCallback();
+            assert.equal(fetchCalls, 1);
+            assert.deepEqual(buildCoins, ['BTC']);
+            assert.equal(buildInfoRetryTimer, null);
+
+            responseData = {{eligible_coins: [], retryable: true}};
+            scheduleBuildInfoRetry(1, 0);
+            for (let attempt = 0; attempt < BUILD_INFO_MAX_RETRIES; attempt += 1) {{
+                var callback = timerCallback;
+                timerCallback = null;
+                await callback();
+            }}
+            assert.equal(fetchCalls, BUILD_INFO_MAX_RETRIES + 1);
+            assert.equal(buildRetryable, false);
+            assert.equal(buildRetryExhausted, true);
+            assert.equal(buildInfoRetryTimer, null);
+
+            responseStatus = 401;
+            buildRetryExhausted = false;
+            scheduleBuildInfoRetry(1, 0);
+            await timerCallback();
+            assert.equal(buildRetryable, false);
+            assert.equal(buildRetryExhausted, false);
+            assert.match(buildEmptyReason, /HTTP 401/);
+            assert.equal(buildInfoRetryTimer, null);
+
+            responseStatus = 200;
+            jsonError = true;
+            scheduleBuildInfoRetry(1, 0);
+            await timerCallback();
+            assert.match(buildEmptyReason, /invalid server response/);
+            assert.equal(buildInfoRetryTimer, null);
+
+            var populateBeforeDetachedJson = populateCalls;
+            var reasonBeforeDetachedJson = buildEmptyReason;
+            detachOnJson = true;
+            ROOT.isConnected = true;
+            scheduleBuildInfoRetry(1, 0);
+            await timerCallback();
+            assert.equal(populateCalls, populateBeforeDetachedJson);
+            assert.equal(buildEmptyReason, reasonBeforeDetachedJson);
+            assert.equal(buildInfoRetryTimer, null);
+
+            jsonError = false;
+            detachOnJson = false;
+            detachOnFetch = true;
+            ROOT.isConnected = true;
+            scheduleBuildInfoRetry(1, 0);
+            await timerCallback();
+            assert.equal(buildInfoRetryTimer, null);
+        }})().catch(function(error) {{ console.error(error); process.exit(1); }});
+        """
+    )
+
+    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_job_history_requests_filter_before_the_api_limit() -> None:

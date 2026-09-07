@@ -527,6 +527,8 @@
     var dlDragStart = null, dlDragSelecting = false, dlDragMode = null;
     var buildCoins = [], buildSelected = new Set(), buildFilter = '', buildTradfiOnly = false, buildNoLocalData = false;
     var buildCoinsWithDownloadedHistory = new Set();
+    var buildEmptyReason = '', buildRetryable = false, buildRetryExhausted = false;
+    var buildInfoRetryTimer = null, initGeneration = 0;
     var buildDragStart = null, buildDragSelecting = false, buildDragMode = null;
     var expandedJobs = { dl: new Set(), build: new Set() };
     var activeJobs = { dl: [], build: [] };
@@ -930,35 +932,121 @@
     //  INIT (with retry on transient fetch failures)
     // ══════════════════════════════════════════════════════════════
     var INIT_MAX_RETRIES = 3, INIT_RETRY_DELAY = 1500;
+    var BUILD_INFO_MAX_RETRIES = 12, BUILD_INFO_RETRY_DELAY = 5000;
 
-    async function doInit(attempt) {
+    function applyBuildInfo(data) {
+        buildCoins = data.eligible_coins||[];
+        buildCoinsWithDownloadedHistory = new Set(data.coins_with_downloaded_history||[]);
+        buildEmptyReason = String(data.empty_reason||'');
+        buildRetryable = data.retryable === true;
+        buildRetryExhausted = false;
+        populateBuild();
+    }
+
+    function showBuildInfoFailure(message) {
+        buildCoins = [];
+        buildEmptyReason = String(message||'Failed to load coin eligibility.');
+        buildRetryable = false;
+        buildRetryExhausted = false;
+        populateBuild();
+    }
+
+    function isTransientBuildInfoStatus(status) {
+        return status === 408 || status === 425 || status === 429 || status >= 500;
+    }
+
+    function scheduleBuildInfoRetry(generation, attempt) {
+        if (buildInfoRetryTimer) return;
+        if (attempt >= BUILD_INFO_MAX_RETRIES) {
+            buildRetryable = false;
+            buildRetryExhausted = true;
+            populateBuild();
+            return;
+        }
+        buildInfoRetryTimer = setTimeout(async function() {
+            buildInfoRetryTimer = null;
+            if (generation !== initGeneration || !ROOT.isConnected) return;
+            var response;
+            try {
+                response = await fetch(API_BASE + '/heatmap/build-ohlcv-info', authOptions());
+            } catch(e) {
+                if (generation !== initGeneration || !ROOT.isConnected) return;
+                scheduleBuildInfoRetry(generation, attempt + 1);
+                return;
+            }
+            if (generation !== initGeneration || !ROOT.isConnected) return;
+            if (!response.ok) {
+                if (isTransientBuildInfoStatus(response.status)) scheduleBuildInfoRetry(generation, attempt + 1);
+                else showBuildInfoFailure('Failed to load coin eligibility (HTTP ' + response.status + ').');
+                return;
+            }
+            var data;
+            try {
+                data = await response.json();
+            } catch(e) {
+                if (generation !== initGeneration || !ROOT.isConnected) return;
+                showBuildInfoFailure('Failed to load coin eligibility: invalid server response.');
+                return;
+            }
+            if (generation !== initGeneration || !ROOT.isConnected) return;
+            if (!data || !Array.isArray(data.eligible_coins)) {
+                showBuildInfoFailure('Failed to load coin eligibility: incomplete server response.');
+                return;
+            }
+            applyBuildInfo(data);
+            if (!buildCoins.length && data.retryable === true) {
+                scheduleBuildInfoRetry(generation, attempt + 1);
+            }
+        }, BUILD_INFO_RETRY_DELAY);
+    }
+
+    async function doInit(attempt, generation) {
         var dl=$('body-download'), bl=$('body-build');
         try {
             var r = await Promise.all([
                 fetch(API_BASE + '/heatmap/l2book-download-info', authOptions()),
                 fetch(API_BASE + '/heatmap/build-ohlcv-info', authOptions()),
             ]);
-            if (!r[0].ok) throw new Error('Download info HTTP ' + r[0].status);
-            if (!r[1].ok) throw new Error('Build info HTTP ' + r[1].status);
-            var dlD = await r[0].json(), bD = await r[1].json();
+            if (!r[0].ok || !r[1].ok) {
+                var failedResponse = !r[0].ok ? r[0] : r[1];
+                var failedLabel = !r[0].ok ? 'Download info' : 'Build info';
+                var httpError = new Error(failedLabel + ' HTTP ' + failedResponse.status);
+                httpError.retryable = isTransientBuildInfoStatus(failedResponse.status);
+                throw httpError;
+            }
+            var dlD, bD;
+            try {
+                dlD = await r[0].json();
+                bD = await r[1].json();
+            } catch(e) {
+                var jsonError = new Error('Invalid server response');
+                jsonError.retryable = false;
+                throw jsonError;
+            }
+            if (!bD || !Array.isArray(bD.eligible_coins)) {
+                var shapeError = new Error('Incomplete build-info response');
+                shapeError.retryable = false;
+                throw shapeError;
+            }
+            if (generation !== initGeneration || !ROOT.isConnected) return;
             dlCoins = dlD.coins||[]; dlHasCreds = dlD.has_aws_creds;
             dlArchive = dlD.archive_range||{oldest_day:'',newest_day:''};
-            buildCoins = bD.eligible_coins||[];
-            buildCoinsWithDownloadedHistory = new Set(bD.coins_with_downloaded_history||[]);
-            populateDownload(); populateBuild();
+            populateDownload(); applyBuildInfo(bD);
+            if (!buildCoins.length && bD.retryable === true) scheduleBuildInfoRetry(generation, 0);
             connectWS();
         } catch(e) {
-            if (attempt < INIT_MAX_RETRIES) {
+            if (generation !== initGeneration || !ROOT.isConnected) return;
+            if (e.retryable !== false && attempt < INIT_MAX_RETRIES) {
                 var msg = '\x3Cdiv class="hlda-empty"\x3EConnection failed, retrying (' + (attempt+1) + '/' + INIT_MAX_RETRIES + ')…\x3C/div\x3E';
                 if(dl) dl.innerHTML=msg; if(bl) bl.innerHTML=msg;
-                setTimeout(function() { doInit(attempt + 1); }, INIT_RETRY_DELAY);
+                setTimeout(function() { doInit(attempt + 1, generation); }, INIT_RETRY_DELAY);
             } else {
                 var err = '\x3Cdiv class="hlda-msg error" style="display:block"\x3EFailed to load: ' + escHtml(e.message) + '\x3C/div\x3E';
                 if(dl) dl.innerHTML=err; if(bl) bl.innerHTML=err;
             }
         }
     }
-    doInit(0);
+    doInit(0, ++initGeneration);
 
     // ══════════════════════════════════════════════════════════════
     //  POPULATE: Download l2Book
@@ -1009,7 +1097,11 @@
         var body = $('body-build');
         if (!body) return;
         if (!buildCoins.length) {
-            body.innerHTML = '\x3Cdiv class="hlda-msg warning" style="display:block"\x3ENo eligible coins found. XYZ symbols require Tiingo mapping with status \'ok\'.\x3C/div\x3E';
+            var reason = buildEmptyReason || 'No eligible coins found. Market-data discovery may still be refreshing.';
+            var retryNotice = buildRetryable
+                ? ' Retrying automatically…'
+                : (buildRetryExhausted ? ' Automatic retries stopped; reload to check again.' : '');
+            body.innerHTML = '\x3Cdiv class="hlda-msg warning" style="display:block"\x3E' + escHtml(reason) + retryNotice + '\x3C/div\x3E';
             return;
         }
         body.innerHTML =
