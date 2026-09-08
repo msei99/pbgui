@@ -13,6 +13,8 @@ Die verfuegbaren Routen werden aus dem frischen Snapshot jedes Accounts abgeleit
 - Bitget Classic: USDT Futures zu Spot und Spot zu USDT Futures.
 - Bitget UTA: UTA zu Spot und Spot zu UTA.
 
+Die Bitget-Classic-/UTA-Erkennung blockiert bei Unsicherheit: Ein unbekannter Account-Modus verhindert modusabhaengige Operationen, statt auf Classic zurueckzufallen. PBGuis neue UTA-Account-/History-Unterstuetzung aktiviert keine neuen Transfer-Schreibzugriffe oder Routen. Bestehende UTA-Transfers bleiben ohne Borrowing und behalten alle Pruefungen fuer Berechtigungen, transferierbaren Bestand, Verbindlichkeiten, Bestaetigung und Reconciliation; der deaktivierte UTA-Market-Close im Dashboard deaktiviert diese separat abgesicherten Transferrouten nicht.
+
 ## Interner Transfer
 
 1. Einen unterstuetzten Exchange-Account in der Sidebar auswaehlen.

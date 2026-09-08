@@ -65,6 +65,12 @@ Press **Escape** to close without saving (confirms if there are unsaved changes)
 | **Options** | Optional JSON object (e.g. `{"defaultType": "swap"}`) |
 | **Extra** | Optional JSON passthrough for exchange-specific fields |
 
+### Bitget Classic and UTA
+
+Use exchange `bitget` with **API Key**, **Secret**, and **Passphrase** for either mode. PBGui verifies the account mode rather than assuming Classic when detection fails; an unknown mode blocks mode-dependent operations. UTA support covers PBGui's native USDT perpetual account reads and history, not multi-asset equity. It does not change bot code, certify PB7 live trading on UTA, or guarantee a safe Classic-to-UTA migration. Full live acceptance remains pending; a successful connection test is not bot or migration certification.
+
+UTA reads require both **Unified account management, read-only** (settings, assets and financial records) and **Unified account trade, read-only** (positions, orders and fills). If trade reads work but settings/balance/history return permission error `40014`, check management-read access on the selected Bitget API key. Write, withdrawal and copy-trading permissions are not required for these reads; bot setup and trading have separate requirements.
+
 ### Stored credentials
 
 Credential details return only fixed masks and presence information. Secret, Passphrase, and Private Key are replacement-only: leave them empty to keep the stored value, or enter a new value and save. They are never revealed by PBGui.
@@ -100,7 +106,7 @@ Open via **🗄 Backups** in the sidebar (URL hash: `#backups`).
 
 | Entry | Description |
 |---|---|
-| **Current (live)** | The active `api-keys.json` for each PB version (pb7/pb6); selectable for diff comparison |
+| **Current (live)** | The active PB7 `api-keys.json`, when available; selectable for diff comparison (PB7 only) |
 | Timestamped entries | Previous saves; **Restore** overwrites the current file (pre-restore snapshot created first) |
 
 ### Diff viewer

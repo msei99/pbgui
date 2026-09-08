@@ -82,6 +82,8 @@ Hinweise wecken nur den Scheduler. Jede commitete Entscheidung liest frische Exc
 
 Der Server ermittelt den aktuellen Bitget-Modus und validiert jede feste Route gegen den ausgewaehlten Exchange-User. Routen fuehren nie zu einer anderen UID oder einem externen Ziel.
 
+Die Bitget-Moduserkennung blockiert jetzt bei Unsicherheit: Ein unbekannter Modus gilt nicht als Classic und verhindert modusabhaengige Operationen. Die neue UTA-Account-/History-Unterstuetzung in PBGui aktiviert keine weiteren Schreibzugriffe; bestehende UTA-Transferrouten behalten ihre separaten Pruefungen fuer Berechtigungen, Borrowing, Verbindlichkeiten, Aktualitaet und Reconciliation. Verfuegbare UTA-Historie ist auf 90 Tage begrenzt und kann Classic-Income vor dem Upgrade nicht rekonstruieren; lokal gespeichertes Classic-Income bleibt erhalten. Erfolgreiche UTA-Abfragen allein belegen keine vollstaendige Lifetime-Baseline.
+
 ## Vaults Und Depositors
 
 Die Vault-Abrechnung verwendet die eigene aktuelle Vault-Equity, den Anteil und die Cashflows des Leaders. Gesamt-PnL des Vaults wird nicht dem Leader zugerechnet. Einzahlungen, Auszahlungen und Gewinn anderer Depositors erzeugen keine Sweep-Berechtigung des Leaders. Zurechenbare Leader-Commission liegt bereits in Main Perps und ist in diesem Release deshalb nur diagnostisch; sie erzeugt niemals einen weiteren Withdrawal aus dem Vault.

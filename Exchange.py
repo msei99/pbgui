@@ -1,17 +1,32 @@
 import ccxt
 import ccxt.pro as ccxt_pro
+import bitget_uta
 from User import User
 from enum import Enum
+from functools import wraps
 import json
 import hashlib
 from pathlib import Path
 import time
+from threading import RLock
 from time import sleep
 from datetime import datetime
 from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _log
 
 SERVICE = "Exchange"
+
+
+def _serialize_bitget_client(method):
+    """Keep mode selection, requests and client replacement in one transaction."""
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        """Serialize only this Bitget instance; nested client operations reenter."""
+        if self.id != 'bitget':
+            return method(self, *args, **kwargs)
+        with self._bitget_lock:
+            return method(self, *args, **kwargs)
+    return locked
 
 
 def credential_fingerprint(user: User | None) -> str:
@@ -329,12 +344,15 @@ class Exchange:
     _private_creation_locks = {}
 
     def __init__(self, id: str, user: User = None):
+        self._bitget_lock = RLock()
         self.name = id
         self.id = "kucoinfutures" if id == "kucoin" else id
         self.instance = None
         self._markets = None
         self._user = user
         self.credential_fingerprint = credential_fingerprint(user)
+        self._bitget_uta = None
+        self._bitget_mode_checked = 0.0
 
 
     # _log removed: Exchange module uses `logging_helpers.human_log` directly
@@ -343,11 +361,17 @@ class Exchange:
     def user(self): return self._user
 
     @user.setter
+    @_serialize_bitget_client
     def user(self, new_user):
         if self._user != new_user:
             self._user = new_user
 
+    @_serialize_bitget_client
     def connect(self):
+        if self.id == 'bitget':
+            self._bitget_uta = None
+            self._bitget_mode_checked = 0.0
+            self.credential_fingerprint = credential_fingerprint(self.user)
         if self.id in {"bitunix", "weex"}:
             from pb8_exchange_bridge import PB8ExchangeInstance
             self.instance = PB8ExchangeInstance(self.id, self.user)
@@ -405,6 +429,39 @@ class Exchange:
         except Exception:
             pass
 
+    @_serialize_bitget_client
+    def ensure_bitget_account_mode(self) -> bool:
+        """Lazily resolve private routing, refreshing after credential/mode changes."""
+        if self.id != 'bitget':
+            return False
+        fingerprint = credential_fingerprint(self.user)
+        if fingerprint != self.credential_fingerprint:
+            self.close()
+            self.instance = None
+            self._markets = None
+            self._bitget_uta = None
+        if not self.instance:
+            self.connect()
+        if self._bitget_uta is None or time.monotonic() - self._bitget_mode_checked >= bitget_uta.MODE_TTL_SECONDS:
+            self._bitget_uta = None
+            settings = bitget_uta.resolve_account_mode(self.instance)
+            self._bitget_uta = settings['accountMode'] in {'unified', 'hybrid'}
+            self.instance.options['uta'] = self._bitget_uta
+            self.instance.options['pbgui_account_settings'] = settings
+            self._bitget_mode_checked = time.monotonic()
+        return self._bitget_uta
+
+    def _read_bitget_uta(self, operation, *args):
+        """Log read/normalization failures without exposing raw CCXT exceptions."""
+        try:
+            return operation(self.instance, *args)
+        except Exception as exc:
+            _log(SERVICE, 'Bitget UTA read or normalization failed; no partial result returned', level='ERROR')
+            if isinstance(exc, bitget_uta.BitgetUTAError):
+                raise
+            raise bitget_uta.BitgetUTAError('Bitget UTA read or normalization failed') from None
+
+    @_serialize_bitget_client
     def close(self):
         """Close the exchange instance and release resources (e.g. aiohttp sessions)."""
         if self.instance and hasattr(self.instance, 'close'):
@@ -573,11 +630,15 @@ class Exchange:
         """Return a per-user authenticated ccxt.pro client for private streams.
 
         Keyed by `<exchange_id>:<user.name>` so each user gets their own client.
+        Bitget uses REST polling for the initial Classic/UTA rollout: consumers
+        retain client objects, so private stream generations cannot rotate safely.
         """
         import asyncio as _asyncio
         if not user:
             return None
         base_key = "kucoinfutures" if id == "kucoin" else id
+        if base_key == 'bitget':
+            return None
         key = f"{base_key}:{user.name}"
         owner = str(caller or "__process__")
 
@@ -902,6 +963,7 @@ class Exchange:
             pass
         return metrics
 
+    @_serialize_bitget_client
     def fetch_ohlcv(self, symbol: str, market_type: str, timeframe: str, limit: int, since : int = None):
         if not self.instance: self.connect()
         if since:
@@ -923,6 +985,7 @@ class Exchange:
             ohlcv = self.instance.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
         return ohlcv
 
+    @_serialize_bitget_client
     def fetch_price(self, symbol: str, market_type: str):
         if not self.instance: self.connect()
         # if symbol == "ADAUSDT_UMCBL":
@@ -930,6 +993,7 @@ class Exchange:
         price = self.instance.fetch_ticker(symbol=symbol)
         return price
 
+    @_serialize_bitget_client
     def fetch_prices(self, symbols: list, market_type: str):
         if not self.instance: self.connect()
         # Fix for Hyperliquid
@@ -996,14 +1060,20 @@ class Exchange:
             prices = self.instance.fetch_tickers(symbols=symbols)
         return prices
 
+    @_serialize_bitget_client
     def fetch_all_open_orders(self, symbol: str):
         if not self.instance: self.connect()
+        if self.id == 'bitget' and self.ensure_bitget_account_mode():
+            return self._read_bitget_uta(bitget_uta.fetch_open_orders, symbol)
         orders = self.instance.fetch_open_orders(symbol=symbol)
         return orders
 
+    @_serialize_bitget_client
     def fetch_positions(self):
         if not self.instance:
             self.connect()
+        if self.id == 'bitget' and self.ensure_bitget_account_mode():
+            return self._read_bitget_uta(bitget_uta.fetch_positions)
 
         # Wrap fetch_positions with a small retry/backoff loop to handle
         # transient network timeouts on resource-constrained VPS instances.
@@ -1036,8 +1106,11 @@ class Exchange:
                     except Exception:
                         pass
 
+    @_serialize_bitget_client
     def fetch_balance(self, market_type: str):
         if not self.instance: self.connect()
+        if self.id == 'bitget' and self.ensure_bitget_account_mode():
+            return self._read_bitget_uta(bitget_uta.fetch_balance)
         params = {"type": market_type}
         if self.id == "hyperliquid" and getattr(self.user, "is_vault", False):
             if getattr(self.user, "wallet_address", None):
@@ -1064,6 +1137,7 @@ class Exchange:
             return float(balance["info"]["totalWalletBalance"])
         return float(balance["total"]["USDT"])
 
+    @_serialize_bitget_client
     def fetch_timestamp(self):
         if not self.instance: self.connect()
         return self.instance.milliseconds()
@@ -1081,6 +1155,7 @@ class Exchange:
             },
         )
 
+    @_serialize_bitget_client
     def fetch_history(self, since: int = None):
         if self.user.key == 'key':
             return []
@@ -1089,6 +1164,9 @@ class Exchange:
         if not self.instance: self.connect()
         if self.id in {"bitunix", "weex"}:
             return self.instance.fetch_income(since=since)
+        if self.id == 'bitget' and self.ensure_bitget_account_mode():
+            scope = 'user:' + self.user.name
+            return self._read_bitget_uta(bitget_uta.fetch_history, since, scope)
         if self.id == "bybit":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
@@ -1597,6 +1675,7 @@ class Exchange:
                     self.save_income_other(history, self.user.name)
         return all
 
+    @_serialize_bitget_client
     def fetch_executions(self, since: int = None, symbols: list[str] | None = None):
         """Fetch execution-level trades/fills.
 
@@ -1610,6 +1689,8 @@ class Exchange:
 
         if self.id in {"bitunix", "weex"}:
             return self.instance.fetch_executions(since=since)
+        if self.id == 'bitget' and self.ensure_bitget_account_mode():
+            return self._read_bitget_uta(bitget_uta.fetch_executions, since)
 
         if self.id == "hyperliquid":
             day = 24 * 60 * 60 * 1000
@@ -2653,6 +2734,7 @@ class Exchange:
 
         return []
     
+    @_serialize_bitget_client
     def load_market(self):
         if not self.instance: self.connect()
         self._markets = self.instance.load_markets()

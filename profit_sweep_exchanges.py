@@ -1565,6 +1565,22 @@ def _bitget_max_transferable(client: Any, asset: str) -> Any:
     )
 
 
+def _bitget_funding_assets(client: Any, asset: str) -> Any:
+    """Read UTA Funding assets even when CCXT has no generated v3 method."""
+
+    params = {"coin": asset}
+    function = getattr(client, "privateUtaGetV3AccountFundingAssets", None)
+    if callable(function):
+        return _client_read(client, "privateUtaGetV3AccountFundingAssets", params)
+    return client.request(
+        "v3/account/funding-assets",
+        ["private", "uta"],
+        "GET",
+        params,
+        {"cost": 1},
+    )
+
+
 def _bitget_history(
     client: Any,
     mode: str,
@@ -1601,6 +1617,9 @@ def _bitget_history(
                 )
                 items = data.get("list") if isinstance(data, dict) else None
                 next_cursor = data.get("cursor") if isinstance(data, dict) else None
+                # Empty UTA ledgers can explicitly return null list/cursor values.
+                if isinstance(data, dict) and "list" in data and items is None and "cursor" in data and next_cursor in (None, ""):
+                    items = []
             else:
                 params = {
                     "productType": "USDT-FUTURES",
@@ -1689,11 +1708,15 @@ def _normalize_bitget_history(
 def _collect_bitget(snapshot: dict[str, Any], client: Any, asset: str, since_ms: int, until_ms: int) -> None:
     """Detect Bitget UTA/Classic mode and collect its fixed account reads."""
 
+    from bitget_uta import is_classic_account_error, parse_account_settings
+
     classic_accounts: Any = None
     destination_read_denied = False
     try:
         settings_response = _client_read(client, "privateUtaGetV3AccountSettings", {})
-    except Exception:
+    except Exception as exc:
+        if not is_classic_account_error(exc):
+            raise ReadOnlyRequestError("Bitget account mode could not be verified") from None
         mode = "classic"
         classic_accounts = _response_data(
             _client_read(
@@ -1704,9 +1727,7 @@ def _collect_bitget(snapshot: dict[str, Any], client: Any, asset: str, since_ms:
             "bitget_classic_accounts",
         )
     else:
-        settings = _response_data(settings_response, "bitget_uta_settings")
-        if not isinstance(settings, dict) or settings.get("accountMode") not in {"unified", "hybrid"}:
-            raise ReadOnlyRequestError("bitget_uta_settings returned an unknown account mode")
+        parse_account_settings(settings_response)
         mode = "uta"
 
     if mode == "uta":
@@ -1728,7 +1749,7 @@ def _collect_bitget(snapshot: dict[str, Any], client: Any, asset: str, since_ms:
         withdrawable = maximum.get("maxTransfer")
         source_balance = balance_value
         try:
-            destination_response = _client_read(client, "privateUtaGetV3AccountFundingAssets", {"coin": asset})
+            destination_response = _bitget_funding_assets(client, asset)
         except Exception as exc:
             destination_read_denied = "permission" in type(exc).__name__.lower()
             destination_response = None

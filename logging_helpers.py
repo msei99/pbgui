@@ -38,6 +38,7 @@ LOG_GROUPS: dict[str, str] = {
     'ApiLogging':      'PBGui',
     'ApiKeys':         'PBGui',
     'BalanceCalc':     'PBGui',
+    'BitgetUTA':       'PBGui',
     'CoinDataUI':      'PBGui',
     'Dashboard':       'PBGui',
     'Services':        'PBGui',

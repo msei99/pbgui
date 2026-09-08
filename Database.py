@@ -376,36 +376,37 @@ class Database():
         with lease:
             _human_log(SERVICE, f"update_history called for user={getattr(user, 'name', user)}", level='INFO', user=getattr(user, 'name', user))
             try:
+                scan_started_ms = int(time.time() * 1000)
                 history = self.fetch_history(user)
             except Exception as e:
                 # Do not write partial history after an exchange fetch failure.
                 _human_log(SERVICE, f"update_history aborting for user={user.name}: {e}", level='WARNING', user=user.name)
                 return
-            try:
-                if history is None:
-                    _human_log(SERVICE, f"fetch_history returned None for user={user.name}", level='INFO', user=user.name)
-                else:
-                    _human_log(SERVICE, f"fetch_history returned {len(history)} items for user={user.name}", level='INFO', user=user.name)
-                    if len(history) > 0:
-                        _human_log(SERVICE, f"fetch_history sample[0] for {user.name}: {history[0]}", level='DEBUG', user=user.name)
-            except Exception:
-                pass
             # The shared maintenance lease spans the network fetch, but ordinary
             # price/position writes remain independent of the short write lock.
             try:
-                if history:
-                    with self._write_lock:
-                        with self._connect() as conn:
-                            for line in history:
-                                income = [
-                                    line['symbol'],
-                                    line['timestamp'],
-                                    line['income'],
-                                    line['uniqueid'],
-                                    user.name
-                                ]
-                                self.add_history(conn, income)
-            except sqlite3.Error as e:
+                if not isinstance(history, list):
+                    raise ValueError("History scan did not return a complete list")
+                rows = [
+                    (line['symbol'], line['timestamp'], line['income'], line['uniqueid'], user.name)
+                    for line in history
+                ]
+                with self._write_lock:
+                    with self._connect() as conn:
+                        # Only duplicate IDs are harmless. All other write failures
+                        # roll back the entire batch together with its checkpoint.
+                        conn.executemany(
+                            '''INSERT INTO history(symbol,timestamp,income,uniqueid,user)
+                               VALUES(?,?,?,?,?) ON CONFLICT(uniqueid) DO NOTHING''',
+                            rows,
+                        )
+                        conn.execute(
+                            '''INSERT INTO history_scan_meta(user,exchange,last_scan_ts)
+                               VALUES(?,?,?) ON CONFLICT(user,exchange)
+                               DO UPDATE SET last_scan_ts = excluded.last_scan_ts''',
+                            (user.name, user.exchange, scan_started_ms),
+                        )
+            except (sqlite3.Error, KeyError, TypeError, ValueError) as e:
                 _human_log(SERVICE, f"DB update_history error for {user.name}: {e}", level='ERROR', user=user.name)
 
     def find_last_execution_timestamp(self, user: User, exchange: str):
@@ -424,11 +425,14 @@ class Database():
     def _repair_bitget_execution_sides(self, user: str):
         """Repair Bitget executions 'side' from raw_json.
 
-        Bitget swap trades often encode position direction in info.side and whether it
+        Classic swap trades often encode position direction in info.side and whether it
         opened/closed in info.tradeSide. For matching we want the *order* side:
         - open: same as info.side
         - close: opposite of info.side
 
+        UTA executions already carry the order side and must not be inverted.
+        Explicit provenance and native execId identify UTA rows, including older
+        imports without provenance. Malformed JSON is left untouched.
         This is safe to run repeatedly.
         """
 
@@ -440,6 +444,10 @@ class Database():
                         """
                         UPDATE executions
                         SET side = CASE
+                            WHEN NOT json_valid(raw_json) THEN side
+                            WHEN lower(json_extract(raw_json, '$.pbgui_account_mode')) = 'uta' THEN side
+                            WHEN json_type(raw_json, '$.info.execId') IN ('text', 'integer')
+                                AND trim(CAST(json_extract(raw_json, '$.info.execId') AS TEXT)) <> '' THEN side
                             WHEN lower(json_extract(raw_json, '$.info.tradeSide')) = 'close' THEN
                                 CASE lower(json_extract(raw_json, '$.info.side'))
                                     WHEN 'buy' THEN 'sell'
@@ -459,8 +467,8 @@ class Database():
                         (user,),
                     )
                     conn.commit()
-        except Exception:
-            pass
+        except sqlite3.Error as e:
+            _human_log(SERVICE, f"DB Bitget execution side repair error: {e}", level='ERROR', user=user)
 
     def update_executions(
         self,
@@ -529,9 +537,8 @@ class Database():
             except Exception:
                 pass
 
-        # Bitget: API enforces max 90-day interval per request, but you can page across
-        # multiple windows to fetch older history.
-        # For initial backfill, use a simple 365-day lookback by default.
+        # Bitget: request a 365-day initial lookback by default. Exchange applies
+        # the account-mode-specific retention limits and pagination windows.
         if exchange.id == 'bitget' and now_ms is not None:
             try:
                 if since is None:
@@ -605,8 +612,8 @@ class Database():
         _human_log(SERVICE, f"fetch_executions: user={user.name} exchange={exchange.id} since={since}", level='INFO', user=user.name)
         start_ts = time.time()
 
-        # For symbol-required exchanges (Binance, Bitget), discover symbols from income (history)
-        # and delegate the actual fetching/normalization to Exchange.
+        # Discover income symbols for Binance and Classic Bitget. Exchange ignores
+        # these hints for account-wide UTA fetching and handles normalization.
         symbols = None
         if exchange.id in ('binance', 'bitget') and now_ms is not None:
             # Use caller-provided symbol window if specified; otherwise, cover the fetch window.
@@ -1204,11 +1211,12 @@ class Database():
             _human_log(SERVICE, f"DB set_last_scan_ts error {e} user={user_name}", level='ERROR', user=user_name)
 
     def fetch_history(self, user: User):
-        """Fetch history from the exchange.
+        """Fetch history without advancing the persisted scan checkpoint.
 
         Uses history_scan_meta to avoid re-scanning months of empty history
         for inactive bots.  On first run (no meta entry) falls back to the
         last DB entry so the initial import is complete.
+        update_history commits the checkpoint only together with all fetched rows.
         """
         exchange = Exchange(user.exchange, user)
         try:
@@ -1238,9 +1246,6 @@ class Database():
             except Exception:
                 length = 0
             _human_log(SERVICE, f"fetch_history DONE: user={user.name} exchange={user.exchange} duration_s={dur:.3f} items={length}", level='INFO', user=user.name)
-            # On success: record that we scanned up to now
-            now_ms = int(time.time() * 1000)
-            self.set_last_scan_ts(user.name, user.exchange, now_ms)
             return history
         except Exception as e:
             # Do not swallow exceptions here — re-raise so callers (and tests)

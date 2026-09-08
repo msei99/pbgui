@@ -64,7 +64,7 @@ Failure to do steps 1–2 is a bug, not an oversight.
 
 ## Repo boundaries (important)
 
-- Do not modify PB7/passivbot code (e.g. workspace folder `pb7/` or the upstream `passivbot` repo) unless the user explicitly asks/approves first.
+- Do not modify PB7/PB8 bot code (e.g. workspace folders `pb7/`, `pb8/`, or upstream Passivbot repositories) unless the user explicitly asks/approves first.
 
 ## Guides & tutorials (pattern)
 
@@ -113,8 +113,8 @@ Failure to do steps 1–2 is a bug, not an oversight.
 
 ## Python versions
 
-- Default: PBGui + PB7 use Python 3.12.
-- PB6 stays on Python 3.10.
+- Default: PBGui uses Python 3.12.
+- PBGui supports PB7/PB8 only, not PB6.
 
 ## Logging
 
@@ -139,12 +139,6 @@ Failure to do steps 1–2 is a bug, not an oversight.
 - `data/`: User data, instances, configs
 - `data/logs/`: All logs (pattern: `{ModuleName}.log`)
 
-## Legacy modules (PB6)
-
-**Do not modify** unless absolutely necessary. Ask user for approval first.
-
-- `Multi.py`, `Backtest.py`, `BacktestMulti.py`, `Optimize.py`, `OptimizeMulti.py`
-- `Instance.py`
 ## Error handling
 
 - Always log exceptions before showing popup

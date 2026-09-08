@@ -6,7 +6,7 @@ PBRun is the local service orchestrator for PBGui. It keeps bot processes in syn
 
 PBRun runs a 5-second daemon loop that:
 
-- Starts/stops local Passivbot processes for configured instances (PB7, PB6 Multi, PB6 Single)
+- Starts/stops local Passivbot processes for configured instances (PB7, PB8)
 - Monitors each running bot's resource usage (CPU, memory) and collects PnL/error/traceback counts from log files
 - Watches dynamic coin filters (via PBCoinData mappings) and writes `ignored_coins.json` / `approved_coins.json`
 - Enforces Cluster Sync desired state before starting or continuing V7 bots when cluster mode is enabled

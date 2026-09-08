@@ -338,7 +338,7 @@ def test_history_scan_excludes_restore_but_allows_backup_until_all_rows_written(
     ]
 
     def pause():
-        """Expose a deterministic overlap window without holding a SQLite transaction."""
+        """Expose an overlap window during fetch or inside the atomic write batch."""
         entered.set()
         assert release.wait(10), "History test did not release worker"
 
@@ -347,21 +347,18 @@ def test_history_scan_excludes_restore_but_allows_backup_until_all_rows_written(
         assert since == scan_ts - database._HISTORY_SCAN_LOOKBACK_MS
         if pause_phase == "fetch":
             pause()
+        else:
+            conn = database._connect()
+            conn.create_function("pause_history_batch", 0, pause)
+            conn.execute("""CREATE TEMP TRIGGER pause_history_batch AFTER INSERT ON history
+                            WHEN NEW.uniqueid = 'new-1'
+                            BEGIN SELECT pause_history_batch(); END""")
         return rows
-
-    add_history = database.add_history
-
-    def write(conn, income):
-        """Pause after the first committed row to check the lease covers the full batch."""
-        add_history(conn, income)
-        if pause_phase == "rows" and income[3] == "new-1":
-            pause()
 
     exchange = Mock(fetch_history=Mock(side_effect=fetch))
     factory = Mock(return_value=exchange)
     backup = Mock(wraps=database_mod.backup_sqlite_database)
     monkeypatch.setattr(database_mod, "Exchange", factory)
-    monkeypatch.setattr(database, "add_history", write)
     monkeypatch.setattr(database_mod, "backup_sqlite_database", backup)
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_update_history_worker, database, user)
@@ -377,17 +374,14 @@ def test_history_scan_excludes_restore_but_allows_backup_until_all_rows_written(
             assert concurrent_backup is not None
             backup.assert_called_once()
             with closing(sqlite3.connect(concurrent_backup)) as snapshot:
-                assert snapshot.execute("SELECT COUNT(*) FROM history").fetchone() == (
-                    1 if pause_phase == "fetch" else 2,
-                )
+                assert snapshot.execute("SELECT COUNT(*) FROM history").fetchone() == (1,)
+                assert snapshot.execute(
+                    "SELECT last_scan_ts FROM history_scan_meta WHERE user = ? AND exchange = ?",
+                    (user.name, user.exchange),
+                ).fetchone() == (scan_ts,)
             conn = database._connect()
-            assert conn.execute("SELECT COUNT(*) FROM history").fetchone() == (
-                1 if pause_phase == "fetch" else 2,
-            )
-            if pause_phase == "fetch":
-                assert database.get_last_scan_ts(user.name, user.exchange) == scan_ts
-            else:
-                assert database.get_last_scan_ts(user.name, user.exchange) > scan_ts
+            assert conn.execute("SELECT COUNT(*) FROM history").fetchone() == (1,)
+            assert database.get_last_scan_ts(user.name, user.exchange) == scan_ts
         finally:
             release.set()
         future.result(timeout=10)

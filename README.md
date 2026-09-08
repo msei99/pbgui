@@ -17,7 +17,7 @@ Just contact me on Telegram for more information.
 Passivbot GUI (pbgui) is a FastAPI-based web interface for Passivbot.
 
 It has the following functions:
-- Running, backtesting, and optimization Passivbot v7 and v6.
+- Running, backtesting, and optimization Passivbot v7 and v8.
 - Installing Passivbot configurations on your VPS.
 - Starting and stopping Passivbot instances on your VPS.
 - Moving instances between your VPS.

@@ -899,7 +899,7 @@ def test_bitget_classic_snapshot_detects_fallback_and_uses_max_transfer_out(
     """Detect Classic mode and normalize account bills without UTA reads."""
 
     client = FakeCcxtClient({
-        "privateUtaGetV3AccountSettings": RuntimeError("not a UTA account"),
+        "privateUtaGetV3AccountSettings": RuntimeError('bitget {"code":"40084","msg":"Classic Account mode"}'),
         "privateMixGetV2MixAccountAccounts": {
             "code": "00000",
             "data": [{
@@ -1071,7 +1071,7 @@ def test_optional_target_balance_failure_does_not_fail_snapshot(monkeypatch: pyt
     """Keep a valid source snapshot usable when Bitget cannot expose Spot."""
 
     client = FakeCcxtClient({
-        "privateUtaGetV3AccountSettings": RuntimeError("not a UTA account"),
+        "privateUtaGetV3AccountSettings": RuntimeError('bitget {"code":"40084","msg":"Classic Account mode"}'),
         "privateMixGetV2MixAccountAccounts": {
             "code": "00000",
             "data": [{

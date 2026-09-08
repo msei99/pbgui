@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Small helper to start/stop/status PBGui background services.
 
-Intended for migration scripts (py3.10 <-> py3.12) so we can:
+Intended for environment maintenance scripts so we can:
 - detect which services are running
 - stop only those
 - restart only those

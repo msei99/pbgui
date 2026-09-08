@@ -82,6 +82,8 @@ Hints only wake the scheduler. Every committed decision obtains fresh exchange d
 
 The server resolves the current Bitget mode and validates every fixed route against the selected exchange user. Routes never cross to another UID or an external destination.
 
+Bitget mode detection now fails closed: an unknown mode is not treated as Classic and blocks mode-dependent operations. The new PBGui UTA account/history support enables no additional writes; existing UTA transfer routes retain their separate permission, borrowing, liability, freshness, and reconciliation safeguards. Available UTA history is limited to 90 days and cannot reconstruct pre-upgrade Classic income; locally stored Classic income is preserved. Do not assume a complete lifetime baseline solely because UTA reads succeed.
+
 ## Vaults And Depositors
 
 Vault accounting uses the leader's own current Vault equity, share, and cashflows instead of assigning total Vault PnL to the leader. Deposits, withdrawals, and profit belonging to other depositors do not become leader sweep entitlement. Attributable leader commission is already held in Main Perps and is therefore diagnostic only in this release; it never causes another withdrawal from the Vault.

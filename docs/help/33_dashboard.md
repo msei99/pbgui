@@ -22,6 +22,12 @@ Dashboard APIs, renderer scripts and WebSockets stay on PBGui's own origin, pres
 
 ---
 
+## Bitget Classic and UTA
+
+PBGui supports native Bitget UTA USDT perpetual wallet balance and full REST snapshots of positions and orders. The balance is the USDT wallet balance, not multi-asset account equity. Private Bitget WebSockets are deliberately disabled for both Classic and UTA in this initial release: Dashboard chart positions/orders refresh through full REST snapshots every 5 seconds; other account views depend on PBData polling, not a global five-second latency guarantee. Public candle WebSockets are unaffected.
+
+Direct **Market close** is disabled for UTA with an explanatory reason because UTA close-order submission is outside this initial rollout. It remains available for verified Classic mode; an unknown account mode blocks the action. See the PBData guide for UTA income and execution-history limits.
+
 ## Sidebar actions
 
 | Button | Action |

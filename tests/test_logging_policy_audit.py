@@ -74,7 +74,7 @@ HUMAN_LOG_SERVICE_MODULES = {
 TIER_3_SERVICES = {
     "AIChat",
     "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI",
-    "BalanceCalc", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
+    "BalanceCalc", "BitgetUTA", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",
     "ParetoDataLoader", "ProfitSweep", "Services", "Status", "User", "V7Instances", "V8Instances", "VPSManager",
     "VPSManagerApi",

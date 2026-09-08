@@ -21,6 +21,12 @@ All account data is fetched via REST — PBData does **not** use private WebSock
 - **Executions poller** (single task)
   - my trades — *opt-in*, only for users in the Executions download list
 
+### Bitget UTA history
+
+UTA income uses native v3 financial records for realized trade PnL, signed fees/rebates, and funding. Opt-in executions use raw fills with the correct buy/sell side and realized PnL. History downloads respect Bitget's 90-day retention, use windows of at most 30 days, and follow cursor pagination. Existing locally stored Classic income is preserved, but v3 cannot reconstruct Classic history from before the account upgrade. Unknown, malformed, or unsupported data fails the fetch rather than committing partial income.
+
+UTA account reads use the native USDT perpetual wallet balance (not multi-asset equity) and full position/order REST snapshots. Private Bitget WebSockets are deliberately disabled for both Classic and UTA in this initial release. Dashboard chart positions/orders use full REST snapshots every 5 seconds; other account views follow PBData polling and have no fixed global refresh latency. Public candle WebSockets are unaffected.
+
 ### Latest 1-minute candles
 
 Separate tasks fetch the latest 1-minute OHLCV candles for Hyperliquid, Binance, and Bybit (used by the market data pipeline).

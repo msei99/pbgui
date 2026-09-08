@@ -12,7 +12,7 @@
 - **Backend**: FastAPI. All new features as FastAPI routes.
 - **Frontend**: Vanilla JS + HTML (no React, Vue, jQuery). Served via FastAPI `/app/` static mount.
 - **CSS**: Custom dark theme, CSS variables per page (`:root`), no Tailwind/Bootstrap.
-- **Python**: 3.12 default, 3.10 for PB6 legacy.
+- **Python**: 3.12 default. PBGui supports PB7/PB8 only, not PB6.
 
 ### Directory Layout
 | Path | Purpose |
@@ -128,8 +128,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 ## Important Constraints
 
 ### Do NOT Modify Without Approval
-- PB7/passivbot code (`pb7/` or upstream repo).
-- PB6 legacy modules: `Multi.py`, `Backtest.py`, `Optimize.py`, `BacktestMulti.py`, `OptimizeMulti.py`, `Instance.py`.
+- PB7/PB8 bot code (`pb7/`, `pb8/`, or upstream Passivbot repositories).
 - Do not deploy/copy files to any bot/VPS host or remote server without explicit permission.
 
 ### General Rules

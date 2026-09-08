@@ -65,6 +65,12 @@ Klick auf eine User-Zeile öffnet das Formular, oder **+ Add User** verwenden. D
 | **Options** | Optionales JSON-Objekt (z. B. `{"defaultType": "swap"}`) |
 | **Extra** | Optionaler JSON-Passthrough für Exchange-spezifische Felder |
 
+### Bitget Classic und UTA
+
+Verwende fuer beide Modi Exchange `bitget` mit **API Key**, **Secret** und **Passphrase**. PBGui verifiziert den Account-Modus, statt bei fehlgeschlagener Erkennung Classic anzunehmen; ein unbekannter Modus blockiert modusabhaengige Operationen. Die UTA-Unterstuetzung umfasst native USDT-Perpetual-Account-Abfragen und Historie in PBGui, nicht Multi-Asset-Equity. Sie aendert keinen Bot-Code, zertifiziert keinen PB7-Live-Handel auf UTA und garantiert keine sichere Classic-zu-UTA-Migration. Die vollstaendige Live-Abnahme steht noch aus; ein erfolgreicher Verbindungstest ist keine Bot- oder Migrationszertifizierung.
+
+UTA-Lesezugriffe benoetigen sowohl **Unified account management, read-only** (Einstellungen, Assets und Financial Records) als auch **Unified account trade, read-only** (Positionen, Orders und Fills). Wenn Trade-Abfragen funktionieren, Einstellungen/Balance/Historie aber Berechtigungsfehler `40014` liefern, pruefe Management-Leserechte am ausgewaehlten Bitget-API-Key. Schreib-, Auszahlungs- und Copy-Trading-Rechte sind fuer diese Abfragen nicht erforderlich; Bot-Setup und Trading haben eigene Anforderungen.
+
 ### Gespeicherte Credentials
 
 Credential-Details liefern nur feste Masken und Presence-Informationen. Secret, Passphrase und Private Key sind replacement-only: leer lassen, um den gespeicherten Wert zu behalten, oder einen neuen Wert eingeben und speichern. PBGui enthuellt diese Werte niemals.
@@ -100,7 +106,7 @@ Vor jedem Speichern wird automatisch ein Backup erstellt. Backups liegen in `dat
 
 | Eintrag | Beschreibung |
 |---|---|
-| **Current (live)** | Die aktive `api-keys.json` für jede installierte PB-Version (pb7/pb6); für Diff-Vergleiche auswählbar |
+| **Current (live)** | Die aktive PB7-`api-keys.json`, sofern vorhanden; für Diff-Vergleiche auswählbar (nur PB7) |
 | Zeitgestempelte Einträge | Frühere Speicherstände; **Restore** überschreibt die aktuelle Datei (Pre-Restore-Snapshot wird vorher erstellt) |
 
 ### Diff-Viewer

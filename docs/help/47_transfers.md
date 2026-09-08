@@ -13,6 +13,8 @@ Supported route pairs are derived from each fresh account snapshot:
 - Bitget Classic: USDT Futures to Spot and Spot to USDT Futures.
 - Bitget UTA: UTA to Spot and Spot to UTA.
 
+Bitget Classic/UTA detection fails closed: an unknown account mode blocks mode-dependent operations rather than falling back to Classic. PBGui's new UTA account/history support enables no new transfer writes or routes. Existing UTA transfers continue with borrowing disabled and all existing permission, transferable-balance, liability, confirmation, and reconciliation safeguards; disabled Dashboard UTA Market Close does not disable these separately guarded transfer routes.
+
 ## Internal Transfer
 
 1. Select a supported exchange account in the sidebar.

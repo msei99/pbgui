@@ -23,6 +23,12 @@ Alle Account-Daten werden via REST abgerufen — PBData verwendet **keine** priv
 - **Executions Poller** (einzelner Task)
   - My Trades — *Opt-in*, nur für User in der Executions-Download-Liste
 
+### Bitget-UTA-Historie
+
+UTA-Income verwendet native v3-Finanzdatensaetze fuer realisiertes Trade-PnL, Fees/Rebates mit ihrem Vorzeichen und Funding. Opt-in-Executions verwenden rohe Fills mit korrekter Buy-/Sell-Seite und realisiertem PnL. History-Downloads beachten Bitgets Aufbewahrungsfrist von 90 Tagen, verwenden Zeitfenster von maximal 30 Tagen und folgen der Cursor-Pagination. Bereits lokal gespeichertes Classic-Income bleibt erhalten; v3 kann jedoch keine Classic-Historie vor dem Account-Upgrade rekonstruieren. Unbekannte, fehlerhafte oder nicht unterstuetzte Daten lassen den Abruf fehlschlagen, statt unvollstaendiges Income zu speichern.
+
+UTA-Account-Abfragen verwenden die native USDT-Perpetual-Wallet-Balance (nicht die Multi-Asset-Equity) und vollstaendige REST-Snapshots von Positionen und Orders. Private Bitget-WebSockets sind in diesem ersten Release fuer Classic und UTA bewusst deaktiviert. Chart-Positionen und -Orders im Dashboard nutzen alle 5 Sekunden vollstaendige REST-Snapshots; andere Account-Ansichten folgen dem PBData-Polling ohne feste globale Aktualisierungslatenz. Oeffentliche Candle-WebSockets bleiben unveraendert.
+
 ### Aktuelle 1-Minuten-Candles
 
 Separate Tasks laden die aktuellen 1-Minuten-OHLCV-Candles für Hyperliquid, Binance und Bybit (genutzt von der Marktdaten-Pipeline).

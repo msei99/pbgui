@@ -125,7 +125,7 @@ def _extract_order_position_side(order: dict) -> str:
         sources.append(info)
 
     for source in sources:
-        for key in ("position_side", "positionSide", "posSide"):
+        for key in ("position_side", "positionSide", "posSide", "holdSide"):
             value = _normalize_position_side(source.get(key))
             if value:
                 return value
@@ -243,7 +243,7 @@ def _dashboard_symbol_from_ccxt(raw_symbol: Any) -> str:
 def _live_position_side(position: dict) -> str:
     """Return a dashboard long/short side from a CCXT position payload."""
     for source in (position, position.get("info", {}) if isinstance(position.get("info"), dict) else {}):
-        for key in ("side", "positionSide", "position_side", "posSide"):
+        for key in ("side", "positionSide", "position_side", "posSide", "holdSide"):
             side = _normalize_position_side(source.get(key))
             if side in {"long", "short"}:
                 return side
@@ -334,7 +334,10 @@ def _live_open_orders_for_symbol(user_obj: Any, symbol: str) -> list[dict[str, A
         return _hyperliquid_open_orders(user_obj, symbol)
     exchange = _get_exchange(user_obj)
     symbol_ccxt = _symbol_to_ccxt(symbol)
-    raw_orders = exchange.instance.fetch_open_orders(symbol=symbol_ccxt)
+    if str(user_obj.exchange).lower() == "bitget":
+        raw_orders = exchange.fetch_all_open_orders(symbol_ccxt)
+    else:
+        raw_orders = exchange.instance.fetch_open_orders(symbol=symbol_ccxt)
     result = []
     for order in raw_orders or []:
         if str(order.get("status") or "open").lower() not in {"open", "new"}:
@@ -381,8 +384,8 @@ def _classify_orders_for_position(user_obj: Any, db: Any, symbol: str, side: str
     if live:
         try:
             live_orders = _live_open_orders_for_symbol(user_obj, symbol)
-            filtered, _unknown = _filter_live_orders_for_side(live_orders, side)
-            if not filtered:
+            filtered, unknown = _filter_live_orders_for_side(live_orders, side)
+            if not filtered and unknown:
                 filtered = [_build_order_line(order) for order in live_orders]
             return _classify_position_orders(_order_rows_from_live_orders(filtered), side)
         except Exception as exc:
@@ -936,7 +939,7 @@ def _market_close_params(exchange_id: str, side: str, hedged_symbol: bool = Fals
     return params
 
 
-def _market_close_capability(exchange_id: str) -> dict[str, Any]:
+def _market_close_capability(exchange_id: str, user_obj: Any = None, *, exchange: Any = None) -> dict[str, Any]:
     """Return the verified direct-close capability for a dashboard exchange."""
     normalized = str(exchange_id or "").strip().lower()
     reasons = {
@@ -944,11 +947,24 @@ def _market_close_capability(exchange_id: str) -> dict[str, Any]:
         "weex": "Direct market close is disabled until WEEX COMBINED-mode position-side parameters are live-tested.",
     }
     reason = reasons.get(normalized, "")
+    if normalized == "bitget":
+        reason = "Direct market close is disabled because the Bitget account mode could not be verified."
+        if user_obj is not None or exchange is not None:
+            try:
+                if exchange is None:
+                    exchange = _get_exchange(user_obj)
+                uta = exchange.ensure_bitget_account_mode()
+                if uta is False:
+                    reason = ""
+                elif uta is True:
+                    reason = "Direct market close is disabled for Bitget UTA during the initial read-only rollout."
+            except Exception as exc:
+                _log(SERVICE, f"Bitget market close account-mode verification failed ({type(exc).__name__})", level="WARNING")
     return {"market_close_supported": not bool(reason), "market_close_reason": reason}
 
 
-def _require_market_close_capability(exchange_id: str) -> None:
-    capability = _market_close_capability(exchange_id)
+def _require_market_close_capability(exchange_id: str, user_obj: Any = None, *, exchange: Any = None) -> None:
+    capability = _market_close_capability(exchange_id, user_obj, exchange=exchange)
     if not capability["market_close_supported"]:
         raise HTTPException(status_code=409, detail=capability["market_close_reason"])
 
@@ -1385,13 +1401,64 @@ async def _watch_ohlcv_stream(user_name: str, symbol: str, tf: str):
         await Exchange.release_shared_ws_client(ex_id, caller=caller)
 
 
+async def _poll_bitget_chart(user_name: str, *, orders: bool) -> None:
+    """Poll full REST snapshots within the registered per-user chart stream task."""
+    subscribers = _order_subscribers if orders else _position_subscribers
+    lock = _order_sub_lock if orders else _position_sub_lock
+
+    def read_snapshot(keys):
+        """Resolve current credentials and finish one complete snapshot off-loop."""
+        user_obj = _get_users().find_user(user_name)
+        if not user_obj or user_obj.exchange != "bitget":
+            return None
+        if orders:
+            return {
+                symbol: _live_open_orders_for_symbol(user_obj, symbol)
+                for symbol in {key[1] for key in keys}
+            }
+        return {
+            (row["symbol"], row["side"]): {
+                "entry": row["entry"], "size": row["size"],
+                "upnl": row["upnl"], "side": row["side"],
+            }
+            for row in _live_positions_for_user(user_obj, _get_db())
+        }
+
+    while True:
+        with lock:
+            keys = [key for key, queues in subscribers.items() if key[0] == user_name and queues]
+        if not keys:
+            return
+        # This child belongs to this stream and is drained before the owner exits.
+        read_task = _asyncio.create_task(_asyncio.to_thread(read_snapshot, keys))
+        try:
+            snapshot = await _asyncio.shield(read_task)
+        except _asyncio.CancelledError:
+            await _asyncio.gather(read_task, return_exceptions=True)
+            raise
+        except Exception as exc:
+            _log(SERVICE, f"Bitget chart {'orders' if orders else 'positions'} poll failed ({type(exc).__name__})", level="WARNING", user=user_name)
+        else:
+            if snapshot is None:
+                return
+            for _, symbol, side in keys:
+                if orders:
+                    lines, unknown = _filter_live_orders_for_side(snapshot[symbol], side)
+                    _notify_order_update(user_name, symbol, side, lines, unknown=unknown)
+                else:
+                    _notify_position_update(user_name, symbol, side, snapshot.get((symbol, side)))
+        await _asyncio.sleep(5)
+
+
 async def _watch_positions_stream(user_name: str):
-    """Async task: watches positions via ccxt.pro private stream."""
+    """Watch positions via private WS, or full REST snapshots for Bitget."""
     from Exchange import Exchange
     from logging_helpers import human_log as _log
     user_obj = _get_users().find_user(user_name)
     if not user_obj:
         return
+    if user_obj.exchange == "bitget":
+        return await _poll_bitget_chart(user_name, orders=False)
     ex_id = "kucoinfutures" if user_obj.exchange == "kucoin" else user_obj.exchange
     caller = "dashboard_positions"
     try:
@@ -1419,12 +1486,12 @@ async def _watch_positions_stream(user_name: str):
                     sym_ccxt = _symbol_to_ccxt(sym)
                     pos_data = None
                     for p in positions:
-                        if p.get("symbol") == sym_ccxt and str(p.get("side", "long")).lower() == wanted_side:
+                        if p.get("symbol") == sym_ccxt and _live_position_side(p) == wanted_side:
                             pos_data = {
                                 "entry": p.get("entryPrice", 0),
-                                "size": p.get("contracts", 0),
+                                "size": _live_position_size(p),
                                 "upnl": p.get("unrealizedPnl", 0),
-                                "side": p.get("side", "long"),
+                                "side": _live_position_side(p),
                             }
                             break
                     _notify_position_update(user_name, sym, wanted_side, pos_data)
@@ -1441,12 +1508,14 @@ async def _watch_positions_stream(user_name: str):
 
 
 async def _watch_orders_stream(user_name: str):
-    """Async task: watches open orders via ccxt.pro private stream."""
+    """Watch orders via private WS, or full REST snapshots for Bitget."""
     from Exchange import Exchange
     from logging_helpers import human_log as _log
     user_obj = _get_users().find_user(user_name)
     if not user_obj:
         return
+    if user_obj.exchange == "bitget":
+        return await _poll_bitget_chart(user_name, orders=True)
     ex_id = "kucoinfutures" if user_obj.exchange == "kucoin" else user_obj.exchange
     caller = "dashboard_orders"
     try:
@@ -2605,8 +2674,12 @@ def get_positions_data(
             })
 
     all_positions.sort(key=lambda x: (x["user"], x["symbol"]))
+    capabilities = {}
     for row in all_positions:
-        row.update(_market_close_capability(row.get("exchange")))
+        user_name = row["user"]
+        if user_name not in capabilities:
+            capabilities[user_name] = _market_close_capability(row.get("exchange"), all_users.find_user(user_name))
+        row.update(capabilities[user_name])
     if used_live and used_db:
         source = "mixed"
     elif used_live:
@@ -2622,7 +2695,7 @@ def _execute_market_close(payload: PositionManagePayload) -> dict[str, Any]:
     user_obj = all_users.find_user(payload.user)
     if not user_obj:
         raise HTTPException(status_code=404, detail=f"User '{payload.user}' not found")
-    _require_market_close_capability(user_obj.exchange)
+    _require_market_close_capability(user_obj.exchange, user_obj)
     db = _get_db()
     positions = []
     live_position_price = 0.0
@@ -2647,6 +2720,7 @@ def _execute_market_close(payload: PositionManagePayload) -> dict[str, Any]:
     exchange = _get_exchange(user_obj)
     if not getattr(exchange, "instance", None):
         raise HTTPException(status_code=500, detail="Exchange is not connected")
+    _require_market_close_capability(user_obj.exchange, exchange=exchange)
     symbol_ccxt = _symbol_to_ccxt(payload.symbol)
     order_amount = _precision_amount(exchange.instance, symbol_ccxt, close_amount)
     if order_amount <= 0.0:
@@ -2725,7 +2799,7 @@ def get_position_close_price(
     user_obj = _get_users().find_user(user)
     if not user_obj:
         raise HTTPException(status_code=404, detail=f"User '{user}' not found")
-    _require_market_close_capability(user_obj.exchange)
+    _require_market_close_capability(user_obj.exchange, user_obj)
     snapshot = _market_close_price_snapshot(user_obj, symbol, side)
     return {"ok": True, "user": user, "symbol": symbol, "side": side, **snapshot}
 
