@@ -383,8 +383,13 @@ def test_restart_arms_stream_before_kill_and_keeps_it_after_success() -> None:
         const restartButton = {{disabled: false, textContent: ''}};
         const panel = Object.create(LogViewerPanel.prototype);
         panel._host = 'remote-a';
-        panel._service = 'Bot:demo:7';
+        panel._service = '/arbitrary/provider/path/live-output';
         panel._file = '';
+        panel._vpState = {{}};
+        panel._restartServiceProvider = (host, item) => (
+          host === 'remote-a' && item === '/arbitrary/provider/path/live-output' ? 'Bot:demo:8' : null
+        );
+        panel._restartHandler = null;
         panel._ws = {{readyState: 1, send: raw => sent.push(JSON.parse(raw))}};
         panel._sid = 4;
         panel._streaming = true;
@@ -432,8 +437,8 @@ def test_every_log_viewer_asset_reference_uses_current_cache_version() -> None:
         references.extend((path, match.group(0)) for match in re.finditer(r"log_viewer_panel\.js\?v=\d+", source))
 
     assert references
-    assert all(reference.endswith("?v=30") for _path, reference in references), references
-    assert "log_viewer_panel.js?v=30" in NAV.read_text(encoding="utf-8")
+    assert all(reference.endswith("?v=35") for _path, reference in references), references
+    assert "log_viewer_panel.js?v=35" in NAV.read_text(encoding="utf-8")
 
 
 def test_remote_default_host_is_rendered_before_vps_state_arrives() -> None:

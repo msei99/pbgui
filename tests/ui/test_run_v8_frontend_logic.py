@@ -588,6 +588,11 @@ def test_pb8_log_panel_uses_smart_history_and_backup_viewer_alias() -> None:
     assert "if (data.backup_file)" in open_log_panel
     assert "_initViewer('local', data.backup_file)" in open_log_panel
     assert "BotBackup:' + INSTANCE_NAME + ':8:" in open_log_panel
+    assert "logsByHost[runtimeNumber + ':' + INSTANCE_NAME]" in open_log_panel
+    assert "serviceListOverride:" in open_log_panel
+    assert "restartServiceProvider:" in open_log_panel
+    assert "restartHandler: runEditorAdapter.isV8" in open_log_panel
+    assert "'/instances/' + encodeURIComponent(INSTANCE_NAME) + '/restart'" in open_log_panel
 
 
 def test_save_waits_for_editor_initialization_before_validating_raw_json() -> None:

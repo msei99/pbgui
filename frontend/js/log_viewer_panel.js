@@ -273,6 +273,8 @@ class LogViewerPanel {
         this._localFileFilter = typeof opts.localFileFilter === 'function' ? opts.localFileFilter : null;
         this._startLocalAtEnd = !!opts.startLocalAtEnd;
         this._serviceListOverride = typeof opts.serviceListOverride === 'function' ? opts.serviceListOverride : null;
+        this._restartServiceProvider = typeof opts.restartServiceProvider === 'function' ? opts.restartServiceProvider : null;
+        this._restartHandler = typeof opts.restartHandler === 'function' ? opts.restartHandler : null;
         this._serviceStatusProvider = typeof opts.serviceStatusProvider === 'function' ? opts.serviceStatusProvider : null;
         this._taskBrowseMode = !!opts.taskBrowseMode;
         this._taskListSortMode = opts.taskListSortMode || 'newest';
@@ -1589,6 +1591,14 @@ class LogViewerPanel {
     };
 
     _restartableService() {
+        if (this._restartServiceProvider) {
+            try {
+                var provided = this._restartServiceProvider(this._host, this._activeItem(), this._vpState);
+                if (provided !== undefined) return provided || null;
+            } catch (_e) {
+                return null;
+            }
+        }
         if (this._isLocal()) {
             /* Derive service from log filename */
             if (!this._file) return null;
@@ -1634,6 +1644,34 @@ class LogViewerPanel {
         var rb = this._q('restart-btn');
         this._finishRestartAttempt();
         var generation = ++this._restartGeneration;
+        var me = this;
+
+        if (this._restartHandler) {
+            if (rb) { rb.disabled = true; rb.textContent = '\u231b Restarting\u2026'; rb.title = ''; }
+            function finishHandledRestart(success, error) {
+                if (generation !== me._restartGeneration) return;
+                me._finishRestartAttempt();
+                if (!rb) return;
+                rb.disabled = false;
+                rb.textContent = success ? '\u2705 Restart requested' : '\u274c Failed';
+                rb.title = error || '';
+                setTimeout(function() { rb.textContent = '\ud83d\udd04 Restart'; }, 3000);
+            }
+            this._restartTimeout = setTimeout(function() {
+                finishHandledRestart(false, 'Restart request timed out');
+            }, 30000);
+            try {
+                Promise.resolve(this._restartHandler(host, svc, this._vpState)).then(function(result) {
+                    finishHandledRestart(!result || result.success !== false, result && result.error ? String(result.error) : '');
+                }).catch(function(error) {
+                    finishHandledRestart(false, error && error.message ? error.message : String(error || 'Restart failed'));
+                });
+            } catch (error) {
+                finishHandledRestart(false, error && error.message ? error.message : String(error || 'Restart failed'));
+            }
+            return;
+        }
+
         if (rb) { rb.disabled = true; rb.textContent = '\u231b Preparing log\u2026'; }
 
         var command;
@@ -1652,7 +1690,6 @@ class LogViewerPanel {
             this._connect();
         }
 
-        var me = this;
         this._restartTimeout = setTimeout(function() {
             if (generation !== me._restartGeneration) return;
             me._finishRestartAttempt();

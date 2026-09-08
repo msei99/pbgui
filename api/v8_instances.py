@@ -1605,6 +1605,37 @@ def get_v8_instance_config(name: str, session: SessionToken = Depends(require_au
         raise _configuration_http_error(f"Loading PB8 instance '{name}'", exc) from exc
 
 
+@router.post("/instances/{name}/restart")
+async def restart_v8_instance(name: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Stop one assigned PB8 instance so its PBRun supervisor relaunches it."""
+
+    name = _validate_name(name)
+    target = _persisted_target(name)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"PB8 instance '{name}' not found")
+    target = _validate_target(target)
+    if target == "disabled":
+        raise HTTPException(status_code=409, detail=f"PB8 instance '{name}' is disabled")
+
+    if target == _master_hostname():
+        from api.vps import _local_kill_instance
+
+        result = await _local_kill_instance(name, "8")
+        host = "local"
+    else:
+        if _monitor is None or not hasattr(_monitor, "kill_instance"):
+            raise HTTPException(status_code=503, detail="VPS monitor is unavailable")
+        result = await _monitor.kill_instance(target, name, "8")
+        host = target
+
+    if not isinstance(result, dict) or result.get("success") is not True:
+        _log(SERVICE, f"PB8 restart could not stop {name} on {target}", level="WARNING")
+        raise HTTPException(status_code=409, detail=f"PB8 instance '{name}' is not running on {target}")
+
+    _log(SERVICE, f"PB8 restart requested for {name} on {target}")
+    return {"success": True, "name": name, "host": host, "pid": result.get("pid")}
+
+
 @router.put("/instances/{name}/config")
 async def save_v8_instance_config(
     name: str,

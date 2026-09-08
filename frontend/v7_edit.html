@@ -1227,7 +1227,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <script src="/app/js/editor_shared.js?v=15"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script src="/app/js/run_editor_adapter.js?v=9"></script>
-<script src="/app/js/log_viewer_panel.js?v=30"></script>
+<script src="/app/js/log_viewer_panel.js?v=35"></script>
 <script src="/app/js/coin_overrides_editor.js?v=25"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
@@ -3514,6 +3514,11 @@ async function openLogPanel() {
   function _initViewer(host, defaultFile) {
     if (_runLogViewer) { _runLogViewer.close(); _runLogViewer = null; }
     var isLocal = (!host || host === 'local');
+    function remoteBotLogServices(viewHost, state) {
+      var logsByHost = ((state || {}).bot_logs || {})[viewHost] || {};
+      var files = logsByHost[runtimeNumber + ':' + INSTANCE_NAME];
+      return [svc].concat(Array.isArray(files) ? files : []);
+    }
     _runLogViewer = new LogViewerPanel({
       containerId: 'log-viewer-target',
       wsBase: WS_BASE,
@@ -3521,6 +3526,21 @@ async function openLogPanel() {
       defaultService: isLocal ? 'PBRun' : svc,
       defaultFile: isLocal ? (defaultFile || svc) : '',
       localFileFilter: isLocal ? isLocalBotLogFile : null,
+      serviceListOverride: function(viewHost, state) {
+        return viewHost === 'local' ? [] : remoteBotLogServices(viewHost, state);
+      },
+      restartServiceProvider: function(viewHost, item, state) {
+        if (viewHost === 'local') return undefined;
+        return remoteBotLogServices(viewHost, state).indexOf(item) >= 0 ? svc : null;
+      },
+      restartHandler: runEditorAdapter.isV8 ? function() {
+        return apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/restart', {method: 'POST'})
+          .then(async function(response) {
+            var data = await response.json().catch(function() { return {}; });
+            if (!response.ok) throw new Error(data.detail || ('HTTP ' + response.status));
+            return data;
+          });
+      } : null,
       presets: 'trading',
       showRestart: true,
       height: '100%'

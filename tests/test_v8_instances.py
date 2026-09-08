@@ -79,6 +79,44 @@ def _payload(*, enabled_on: str = "disabled", note: str = "first") -> dict:
     }
 
 
+def test_restart_uses_persisted_remote_assignment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PB8 restart targets the persisted host and delegates an exact v8 stop."""
+
+    _configure_root(monkeypatch, tmp_path)
+    path = tmp_path / "data" / "run_v8" / "alice" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"pbgui": {"enabled_on": "worker-a"}}), encoding="utf-8")
+    calls = []
+
+    class FakeMonitor:
+        """Record one remote instance stop without touching a host."""
+
+        async def kill_instance(self, host: str, name: str, version: str) -> dict:
+            calls.append((host, name, version))
+            return {"success": True, "pid": "4321"}
+
+    monkeypatch.setattr(v8_instances, "_monitor", FakeMonitor())
+
+    result = asyncio.run(v8_instances.restart_v8_instance("alice", session=None))
+
+    assert result == {"success": True, "name": "alice", "host": "worker-a", "pid": "4321"}
+    assert calls == [("worker-a", "alice", "8")]
+
+
+def test_restart_rejects_disabled_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A disabled PB8 config cannot be presented as a successful restart."""
+
+    _configure_root(monkeypatch, tmp_path)
+    path = tmp_path / "data" / "run_v8" / "alice" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"pbgui": {"enabled_on": "disabled"}}), encoding="utf-8")
+
+    with pytest.raises(v8_instances.HTTPException) as exc_info:
+        asyncio.run(v8_instances.restart_v8_instance("alice", session=None))
+
+    assert exc_info.value.status_code == 409
+
+
 def test_available_users_are_filtered_by_pb8_live_exchange_capabilities(monkeypatch) -> None:
     """PB8 Run must include Bitunix/WEEX users without exposing PB7-only entries."""
     users = SimpleNamespace(
