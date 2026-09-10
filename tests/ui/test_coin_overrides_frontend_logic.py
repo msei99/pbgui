@@ -120,3 +120,52 @@ def test_pb8_context_suppresses_stale_metadata_and_preserves_override_file_conte
         """
     )
     _run_node(script)
+
+
+def test_removing_another_coin_preserves_the_active_edit_draft() -> None:
+    """A list re-render must save the active coin draft or abort the removal."""
+
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        function toast() {}
+        eval(fs.readFileSync('frontend/js/coin_overrides_editor.js', 'utf8'));
+        let renders = 0;
+        let notifications = 0;
+        let inputValue = '0.25';
+        _covRender = function() { renders += 1; };
+        _covNotifyStructuredSync = function() { notifications += 1; };
+        global.document = {getElementById: function(id) {
+          if (id === 'cov-bot-long-entry_initial_qty_pct') {
+            return {value: inputValue, focus: function() {}};
+          }
+          return null;
+        }};
+        _covState.allowedParams = {
+          bot: {long: {entry_initial_qty_pct: {type: 'number'}}, short: {}},
+          live: {}
+        };
+        _covState.overrides = {
+          BTC: {bot: {long: {entry_initial_qty_pct: 0.1}}},
+          ETH: {}
+        };
+        _covState.overrideConfigs = {};
+        _covState.pendingConfigFileWrites = {};
+        _covState.editCoin = 'BTC';
+
+        coinOvRemove('ETH');
+        assert.equal(_covState.overrides.BTC.bot.long.entry_initial_qty_pct, 0.25);
+        assert.equal(_covState.overrides.ETH, undefined);
+        assert.equal(_covState.editCoin, 'BTC');
+        assert.equal(renders, 1);
+        assert.equal(notifications, 2);
+
+        _covState.overrides.ETH = {};
+        inputValue = 'invalid';
+        coinOvRemove('ETH');
+        assert.ok(_covState.overrides.ETH);
+        assert.equal(renders, 1);
+        """
+    )
+    _run_node(script)

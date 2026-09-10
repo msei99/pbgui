@@ -48,6 +48,8 @@ Doppelklick auf eine Zeile öffnet den Editor direkt.
 
 Die Bearbeitung öffnet sich inline im Hauptbereich. Felder:
 
+Ein ungespeicherter Editor-Draft bleibt aktiv, waehrend Queue, Results, Archive oder Legacy geoeffnet werden. Die Rueckkehr zu **Configs** zeigt denselben Editor wieder an, ohne seine Felder neu aufzubauen oder zu verwerfen.
+
 | Feld | Beschreibung |
 |------|-------------|
 | **Name** | Config-Name (wird für Ergebnisse und Queue-Anzeige verwendet) |

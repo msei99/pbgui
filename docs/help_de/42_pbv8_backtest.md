@@ -11,6 +11,7 @@ PBGui hält PB8-Templates und bereits validierte Config-Dateien kurzzeitig in ei
 - **New Config** lädt die Standardwerte der installierten PB8-Version.
 - Die Configs-Tabelle zeigt die aktive PB8-Strategie und kann nach Strategy sortiert werden.
 - Eine Zeile doppelklicken oder mit **Edit** den vollständigen visuellen PBv7-Editor öffnen: Zeitraum, Exchanges, Gebühren, Marktdaten, Coin-Filter, Approved/Ignored Coins, Suites, Coin Overrides, PB8-Resultmetriken und Market-Settings-Overrides, Long/Short JSON und Raw JSON.
+- Ein ungespeicherter Editor-Draft bleibt beim Besuch eines anderen Backtest-Bereichs aktiv; die Rueckkehr zu **Configs** zeigt denselben Editor mit unveraenderten Feldwerten wieder an.
 - **Queue** oder **Save & Queue** speichert einen unveränderlichen Snapshot der Config.
 - Coin-Override-JSON-Dateien und `backtest.json` werden als ein Config-Bundle validiert und veröffentlicht. Bei einem fehlgeschlagenen Speichern bleiben die bisherige Config und ihre Override-Dateien unverändert; beim Entfernen einer Override-Referenz verschwindet die veraltete Datei aus dem Bundle.
 - PBGui verwaltet `backtest.base_dir`; Ergebnisse landen unter `<pb8dir>/backtests/pbgui/<config>`.

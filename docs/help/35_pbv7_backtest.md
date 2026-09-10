@@ -48,6 +48,8 @@ Double-click a row to open it in the editor.
 
 Editing opens inline in the main area. Fields:
 
+An unsaved editor draft remains active when you inspect Queue, Results, Archive, or Legacy. Returning to **Configs** restores that same editor without rebuilding or discarding its fields.
+
 | Field | Description |
 |-------|-------------|
 | **Name** | Config name (used for results and queue display) |

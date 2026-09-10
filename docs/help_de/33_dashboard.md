@@ -15,6 +15,7 @@ Dashboard-APIs, Renderer-Skripte und WebSockets bleiben auf dem eigenen PBGui-Or
 - Bei mehreren Dashboards erscheint eine **Auswahlbox** — das gewünschte Dashboard auswählen.
 - Alle Dashboards sind als Schnellzugriff-Schaltflächen in der Sidebar aufgelistet.
 - Widgets aktualisieren sich automatisch im Hintergrund. Mit ↻ kann sofort neu geladen werden.
+- Wird in der Live-Ansicht ein User-, Period- oder anderes Karten-Control geändert, erscheint 💾 in der Sidebar. Damit werden diese Ansichts- und Layout-Einstellungen gespeichert.
 - Im Edit Mode verschieben Live-Updates den Neuaufbau eines Widgets, solange darin ein Select, Datumsfeld, Zahlenfeld oder Button aktiv ist. Geoeffnete Period-/User-Controls bleiben dadurch offen; die neuesten ausstehenden Daten werden nach dem Fokusverlust einmalig nachgezogen.
 - Bitunix- und WEEX-PB8-User verwenden PB8s eigene read-only Clients fuer Wallet-Balance, Positionen, Orders, Preise/OHLCV und aus Fills abgeleitetes realisiertes Trade-PnL. Die Clients laufen in isolierten kurzlebigen Prozessen und werden nach jedem Request geschlossen; ein begrenzter Snapshot vermeidet doppelte Account-Aufrufe.
 - Funding-Income ist im Bitunix-Connector von PB8 v8.1.0 nicht verfuegbar. Die Performance-Widgets zeigen dort daher fill-basiertes realisiertes PnL und Fees, ohne vollstaendige Funding-Paritaet zu behaupten. Fuer die Produktionsabnahme bleiben reale read-only Credentials zur Pruefung von Responses und Pagination erforderlich.
@@ -37,6 +38,7 @@ Direkter **Market close** ist fuer UTA mit Begruendung deaktiviert, da UTA-Close
 | ✎ | Aktuell angezeigtes Dashboard bearbeiten |
 | 🗑 | Aktuelles Dashboard löschen |
 | 📋 | Templates-Panel öffnen |
+| 💾 | Änderungen an Live-Ansicht, Layout oder Karten-Controls speichern (nur bei Bedarf sichtbar) |
 
 Im **Bearbeitungsmodus** wechselt die Sidebar zu:
 

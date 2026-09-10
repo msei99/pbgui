@@ -91,4 +91,5 @@ systemctl --user restart pbgui-monitor-agent.service
 - **Agent Missing**: update or migrate the VPS installation so `pbgui-monitor-agent.service` and all cache files are installed.
 - **Agent Stale**: inspect the service status and journal. SSH may remain connected while telemetry is stale.
 - **Agent Error**: review the bounded collector errors in the host details, then inspect the service journal for the complete local error.
+- **Connection lost during an action or history request**: the pending control recovers automatically. Wait for the WebSocket banner to reconnect, then retry the action.
 - **Logs do not stream**: check `PBApiServer.log` for connection errors.

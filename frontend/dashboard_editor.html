@@ -612,6 +612,11 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     try { window.parent.postMessage({ type: 'pbgui_view_dirty' }, location.origin); } catch (_) {}
   }
 
+  function persistCardControlChange() {
+    if (VIEW_ONLY) markViewDirty();
+    else scheduleSync();
+  }
+
   function saveViewLayout() {
     var payload = {};
     Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
@@ -1163,9 +1168,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var usersParam = (users && users.length > 0) ? users.join(',') : 'ALL';
     var _gKey = 'bal_' + pos;
     var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    var hadExistingContent = container.children.length > 0 && !container.querySelector('.dashboard-loading');
     if (container.children.length === 0) {
       var loading = document.createElement('div');
-      loading.className = 'db-status';
+      loading.className = 'db-status dashboard-loading';
       loading.textContent = 'Loading\u2026';
       container.innerHTML = '';
       container.appendChild(loading);
@@ -1180,7 +1186,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         _ensureRenderScript(function () {
           /* build the interactive users dropdown to embed directly in the preview header */
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
-            state[uKey] = v; scheduleSync();
+            state[uKey] = v; persistCardControlChange();
             buildBalanceInline(container, r, c);
           });
           var balanceRenderOpts = {
@@ -1202,7 +1208,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         });
       })
       .catch(function (e) {
-        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
+        if (_buildGen[_gKey] !== _gen || hadExistingContent) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'db-status';
@@ -1231,9 +1237,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var apiPeriod = period;
     var _gKey = 'top_' + pos;
     var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    var hadExistingContent = container.children.length > 0 && !container.querySelector('.dashboard-loading');
     if (container.children.length === 0) {
       var loading = document.createElement('div');
-      loading.className = 'dt-status';
+      loading.className = 'dt-status dashboard-loading';
       loading.textContent = 'Loading…';
       container.innerHTML = '';
       container.appendChild(loading);
@@ -1253,7 +1260,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           topNCtrl.value = topN;
           topNCtrl.className = 'dt-ctrl-num';
           topNCtrl.addEventListener('change', function () {
-            state[tKey] = parseFloat(this.value) || 10; scheduleSync();
+            state[tKey] = parseFloat(this.value) || 10; persistCardControlChange();
             buildTopInline(container, r, c);
           });
           /* ── Period select ── */
@@ -1274,7 +1281,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             } else {
               state[pKey] = this.value;
             }
-            scheduleSync();
+            persistCardControlChange();
             buildTopInline(container, r, c);
           });
           /* ── CUSTOM date inputs ── */
@@ -1287,7 +1294,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             fromCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + this.value + ':' + (_parts[2] || customTo);
-              scheduleSync(); buildTopInline(container, r, c);
+              persistCardControlChange(); buildTopInline(container, r, c);
             });
             toCtrl = document.createElement('input');
             toCtrl.type = 'date'; toCtrl.className = 'dt-ctrl-date';
@@ -1296,7 +1303,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             toCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + this.value;
-              scheduleSync(); buildTopInline(container, r, c);
+              persistCardControlChange(); buildTopInline(container, r, c);
             });
             /* Now-checkbox — wrapping label element so clicking text also toggles */
             toNowCtrl = document.createElement('label');
@@ -1313,12 +1320,12 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                 var _td = new Date().toISOString().slice(0,10);
                 state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + _td;
               }
-              scheduleSync(); buildTopInline(container, r, c);
+              persistCardControlChange(); buildTopInline(container, r, c);
             });
           }
           /* ── Users dropdown ── */
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
-            state[uKey] = v; scheduleSync();
+            state[uKey] = v; persistCardControlChange();
             buildTopInline(container, r, c);
           });
           var _storedH = parseInt(state['dashboard_height_' + r + '_' + c], 10);
@@ -1334,7 +1341,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         });
       })
       .catch(function (e) {
-        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
+        if (_buildGen[_gKey] !== _gen || hadExistingContent) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1368,9 +1375,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var displayPeriod = isCustom ? 'CUSTOM' : period;
     var _gKey = 'inc_' + pos;
     var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    var hadExistingContent = container.children.length > 0 && !container.querySelector('.dashboard-loading');
     if (container.children.length === 0) {
       var loading = document.createElement('div');
-      loading.className = 'dt-status';
+      loading.className = 'dt-status dashboard-loading';
       loading.textContent = 'Loading…';
       container.innerHTML = '';
       container.appendChild(loading);
@@ -1403,7 +1411,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             } else {
               state[pKey] = this.value;
             }
-            scheduleSync();
+            persistCardControlChange();
             buildIncomeInline(container, r, c);
           });
           /* ── CUSTOM date inputs ── */
@@ -1416,7 +1424,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             fromCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + this.value + ':' + (_parts[2] || customTo);
-              scheduleSync(); buildIncomeInline(container, r, c);
+              persistCardControlChange(); buildIncomeInline(container, r, c);
             });
             toCtrl = document.createElement('input');
             toCtrl.type = 'date'; toCtrl.className = 'dt-ctrl-date';
@@ -1425,7 +1433,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             toCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + this.value;
-              scheduleSync(); buildIncomeInline(container, r, c);
+              persistCardControlChange(); buildIncomeInline(container, r, c);
             });
             toNowCtrl = document.createElement('label');
             toNowCtrl.className = 'dt-ctrl-now-wrap';
@@ -1441,7 +1449,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                 var _td = new Date().toISOString().slice(0,10);
                 state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + _td;
               }
-              scheduleSync(); buildIncomeInline(container, r, c);
+              persistCardControlChange(); buildIncomeInline(container, r, c);
             });
           }
           /* ── Last N input ── */
@@ -1450,7 +1458,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           lastNCtrl.value = lastN;
           lastNCtrl.className = 'dt-ctrl-num';
           lastNCtrl.addEventListener('change', function () {
-            state[lKey] = parseInt(this.value, 10) || 0; scheduleSync();
+            state[lKey] = parseInt(this.value, 10) || 0; persistCardControlChange();
             buildIncomeInline(container, r, c);
           });
           /* ── Filter input ── */
@@ -1460,12 +1468,12 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           filterCtrl.className = 'dt-ctrl-num';
           filterCtrl.style.width = '68px';
           filterCtrl.addEventListener('change', function () {
-            state[fKey] = parseFloat(this.value) || 0; scheduleSync();
+            state[fKey] = parseFloat(this.value) || 0; persistCardControlChange();
             buildIncomeInline(container, r, c);
           });
           /* ── Users dropdown ── */
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
-            state[uKey] = v; scheduleSync();
+            state[uKey] = v; persistCardControlChange();
             buildIncomeInline(container, r, c);
           });
           var _storedH = parseInt(state['dashboard_height_' + r + '_' + c], 10);
@@ -1501,7 +1509,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         });
       })
       .catch(function (e) {
-        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
+        if (_buildGen[_gKey] !== _gen || hadExistingContent) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1532,9 +1540,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var displayPeriod = isCustom ? 'CUSTOM' : period;
     var _gKey = 'pnl_' + pos;
     var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    var hadExistingContent = container.children.length > 0 && !container.querySelector('.dashboard-loading');
     if (container.children.length === 0) {
       var loading = document.createElement('div');
-      loading.className = 'dt-status';
+      loading.className = 'dt-status dashboard-loading';
       loading.textContent = 'Loading…';
       container.innerHTML = '';
       container.appendChild(loading);
@@ -1558,7 +1567,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             modeCtrl.appendChild(opt);
           });
           modeCtrl.addEventListener('change', function () {
-            state[mKey] = this.value; scheduleSync();
+            state[mKey] = this.value; persistCardControlChange();
             buildPnlInline(container, r, c);
           });
           /* ── Period select ── */
@@ -1579,7 +1588,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             } else {
               state[pKey] = this.value;
             }
-            scheduleSync();
+            persistCardControlChange();
             buildPnlInline(container, r, c);
           });
           /* ── CUSTOM date inputs ── */
@@ -1592,7 +1601,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             fromCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + this.value + ':' + (_parts[2] || customTo);
-              scheduleSync(); buildPnlInline(container, r, c);
+              persistCardControlChange(); buildPnlInline(container, r, c);
             });
             toCtrl = document.createElement('input');
             toCtrl.type = 'date'; toCtrl.className = 'dt-ctrl-date';
@@ -1601,7 +1610,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             toCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + this.value;
-              scheduleSync(); buildPnlInline(container, r, c);
+              persistCardControlChange(); buildPnlInline(container, r, c);
             });
             toNowCtrl = document.createElement('label');
             toNowCtrl.className = 'dt-ctrl-now-wrap';
@@ -1617,12 +1626,12 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                 var _td = new Date().toISOString().slice(0,10);
                 state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + _td;
               }
-              scheduleSync(); buildPnlInline(container, r, c);
+              persistCardControlChange(); buildPnlInline(container, r, c);
             });
           }
           /* ── Users dropdown ── */
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
-            state[uKey] = v; scheduleSync();
+            state[uKey] = v; persistCardControlChange();
             buildPnlInline(container, r, c);
           });
           var _storedH = parseInt(state['dashboard_height_' + r + '_' + c], 10);
@@ -1638,7 +1647,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         });
       })
       .catch(function (e) {
-        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
+        if (_buildGen[_gKey] !== _gen || hadExistingContent) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1667,9 +1676,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var displayPeriod = isCustom ? 'CUSTOM' : period;
     var _gKey = 'adg_' + pos;
     var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    var hadExistingContent = container.children.length > 0 && !container.querySelector('.dashboard-loading');
     if (container.children.length === 0) {
       var loading = document.createElement('div');
-      loading.className = 'dt-status';
+      loading.className = 'dt-status dashboard-loading';
       loading.textContent = 'Loading\u2026';
       container.innerHTML = '';
       container.appendChild(loading);
@@ -1692,7 +1702,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             modeCtrl.appendChild(opt);
           });
           modeCtrl.addEventListener('change', function () {
-            state[mKey] = this.value; scheduleSync();
+            state[mKey] = this.value; persistCardControlChange();
             buildAdgInline(container, r, c);
           });
           var periodCtrl = document.createElement('select');
@@ -1712,7 +1722,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             } else {
               state[pKey] = this.value;
             }
-            scheduleSync();
+            persistCardControlChange();
             buildAdgInline(container, r, c);
           });
           var fromCtrl = null, toCtrl = null, toNowCtrl = null;
@@ -1724,7 +1734,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             fromCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + this.value + ':' + (_parts[2] || customTo);
-              scheduleSync(); buildAdgInline(container, r, c);
+              persistCardControlChange(); buildAdgInline(container, r, c);
             });
             toCtrl = document.createElement('input');
             toCtrl.type = 'date'; toCtrl.className = 'dt-ctrl-date';
@@ -1733,7 +1743,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             toCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + this.value;
-              scheduleSync(); buildAdgInline(container, r, c);
+              persistCardControlChange(); buildAdgInline(container, r, c);
             });
             toNowCtrl = document.createElement('label');
             toNowCtrl.className = 'dt-ctrl-now-wrap';
@@ -1749,11 +1759,11 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                 var _td = new Date().toISOString().slice(0,10);
                 state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + _td;
               }
-              scheduleSync(); buildAdgInline(container, r, c);
+              persistCardControlChange(); buildAdgInline(container, r, c);
             });
           }
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
-            state[uKey] = v; scheduleSync();
+            state[uKey] = v; persistCardControlChange();
             buildAdgInline(container, r, c);
           });
           var _storedH = parseInt(state['dashboard_height_' + r + '_' + c], 10);
@@ -1769,7 +1779,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         });
       })
       .catch(function (e) {
-        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
+        if (_buildGen[_gKey] !== _gen || hadExistingContent) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1800,9 +1810,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var displayPeriod = isCustom ? 'CUSTOM' : period;
     var _gKey = 'ppl_' + pos;
     var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    var hadExistingContent = container.children.length > 0 && !container.querySelector('.dashboard-loading');
     if (container.children.length === 0) {
       var loading = document.createElement('div');
-      loading.className = 'dt-status';
+      loading.className = 'dt-status dashboard-loading';
       loading.textContent = 'Loading\u2026';
       container.innerHTML = '';
       container.appendChild(loading);
@@ -1826,7 +1837,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             sumCtrl.appendChild(opt);
           });
           sumCtrl.addEventListener('change', function () {
-            state[sKey] = this.value; scheduleSync();
+            state[sKey] = this.value; persistCardControlChange();
             buildPplInline(container, r, c);
           });
           /* ── Period select ── */
@@ -1847,7 +1858,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             } else {
               state[pKey] = this.value;
             }
-            scheduleSync();
+            persistCardControlChange();
             buildPplInline(container, r, c);
           });
           /* ── CUSTOM date inputs ── */
@@ -1860,7 +1871,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             fromCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + this.value + ':' + (_parts[2] || customTo);
-              scheduleSync(); buildPplInline(container, r, c);
+              persistCardControlChange(); buildPplInline(container, r, c);
             });
             toCtrl = document.createElement('input');
             toCtrl.type = 'date'; toCtrl.className = 'dt-ctrl-date';
@@ -1869,7 +1880,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             toCtrl.addEventListener('change', function () {
               var _parts = (state[pKey] || '').split(':');
               state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + this.value;
-              scheduleSync(); buildPplInline(container, r, c);
+              persistCardControlChange(); buildPplInline(container, r, c);
             });
             toNowCtrl = document.createElement('label');
             toNowCtrl.className = 'dt-ctrl-now-wrap';
@@ -1885,12 +1896,12 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                 var _td = new Date().toISOString().slice(0,10);
                 state[pKey] = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + _td;
               }
-              scheduleSync(); buildPplInline(container, r, c);
+              persistCardControlChange(); buildPplInline(container, r, c);
             });
           }
           /* ── Users dropdown ── */
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
-            state[uKey] = v; scheduleSync();
+            state[uKey] = v; persistCardControlChange();
             buildPplInline(container, r, c);
           });
           var _storedH = parseInt(state['dashboard_height_' + r + '_' + c], 10);
@@ -1906,7 +1917,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         });
       })
       .catch(function (e) {
-        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
+        if (_buildGen[_gKey] !== _gen || hadExistingContent) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1925,9 +1936,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var usersParam = (users && users.length > 0) ? users.join(',') : 'ALL';
     var _gKey = 'pos_' + pos;
     var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    var hadExistingContent = container.children.length > 0 && !container.querySelector('.dashboard-loading');
     if (container.children.length === 0) {
       var loading = document.createElement('div');
-      loading.className = 'dt-status';
+      loading.className = 'dt-status dashboard-loading';
       loading.textContent = 'Loading\u2026';
       container.innerHTML = '';
       container.appendChild(loading);
@@ -1940,7 +1952,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         if (_buildGen[_gKey] !== _gen) return;
         _ensureRenderScript(function () {
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
-            state[uKey] = v; scheduleSync();
+            state[uKey] = v; persistCardControlChange();
             buildPositionsInline(container, r, c);
           });
           DashRender.buildPositions(container, d, {
@@ -1961,7 +1973,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         });
       })
       .catch(function (e) {
-        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
+        if (_buildGen[_gKey] !== _gen || hadExistingContent) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';

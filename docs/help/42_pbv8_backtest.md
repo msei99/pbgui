@@ -11,6 +11,7 @@ PBGui keeps a short, bounded cache of PB8 templates and already validated config
 - **New Config** loads the defaults from the installed PB8 version.
 - The Configs table shows the active PB8 strategy and supports sorting by Strategy.
 - Double-click a row or use **Edit** to open the full visual editor used by PBv7, including dates, exchanges, fees, market data, coin filters, approved/ignored coins, suites, coin overrides, PB8 result metrics and market-setting overrides, Long/Short JSON, and Raw JSON.
+- An unsaved editor draft stays active while visiting another Backtest panel; returning to **Configs** restores the same editor and field values.
 - **Queue** or **Save & Queue** captures an immutable snapshot of the saved config.
 - Coin-override JSON files and `backtest.json` are validated and published as one config bundle. A failed save leaves the previous config and override files unchanged; removing an override reference removes its obsolete file from the bundle.
 - PBGui controls `backtest.base_dir` and writes results below `<pb8dir>/backtests/pbgui/<config>`.

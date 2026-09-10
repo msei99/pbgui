@@ -1702,7 +1702,13 @@ function selectPanel(id, opts) {
   if (opts.persist !== false) persistBacktestViewState();
   // Lazy-load data when switching panels
   if (id === 'configs') {
-    if (configs.length === 0) loadConfigs(); else renderConfigs();
+    if (editingConfig !== null) {
+      showEditorSidebar();
+    } else if (configs.length === 0) {
+      loadConfigs();
+    } else {
+      renderConfigs();
+    }
   }
   if (id === 'results') {
     if (opts.deferResultsLoad) {
@@ -11048,7 +11054,7 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 }];
 </script>
 <script src="/app/js/suite_editor.js?v=23"></script>
-<script src="/app/js/coin_overrides_editor.js?v=25"></script>
+<script src="/app/js/coin_overrides_editor.js?v=26"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
 (function() {

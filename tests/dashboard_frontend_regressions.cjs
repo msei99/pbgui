@@ -326,6 +326,57 @@ async function charts() {
     }
 }
 
+async function cards() {
+    const html = source('dashboard_editor.html');
+    let dirty = 0, synced = 0;
+    const persistence = vm.createContext({
+        VIEW_ONLY: true,
+        markViewDirty() { dirty++; },
+        scheduleSync() { synced++; }
+    });
+    vm.runInContext(functionCode(html, 'persistCardControlChange'), persistence);
+    persistence.persistCardControlChange();
+    persistence.VIEW_ONLY = false;
+    persistence.persistCardControlChange();
+    assert.equal(dirty, 1);
+    assert.equal(synced, 1);
+
+    const builders = [
+        'buildBalanceInline', 'buildTopInline', 'buildIncomeInline', 'buildPnlInline',
+        'buildAdgInline', 'buildPplInline', 'buildPositionsInline'
+    ];
+    for (const name of builders) {
+        const code = functionCode(html, name);
+        assert.ok(!code.includes('scheduleSync()'), name + ' controls must use mode-aware persistence');
+        const document = new Element();
+        document.createElement = tag => new Element(tag);
+        const ctx = vm.createContext({
+            document, state: {}, _buildGen: {}, API_BASE: '/api', encodeURIComponent,
+            fetch() { return Promise.reject(new Error('offline')); },
+            reportHeight() {}, persistCardControlChange() {}
+        });
+        vm.runInContext(code, ctx);
+
+        const initial = new Element();
+        ctx[name](initial, 1, 1);
+        ctx[name](initial, 1, 1);
+        assert.ok(initial.querySelector('.dashboard-loading'), name);
+        await tick();
+        await tick();
+        assert.equal(initial.children.length, 1, name);
+        assert.match(initial.children[0].textContent, /Data unavailable/, name);
+        assert.equal(initial.querySelector('.dashboard-loading'), null, name);
+
+        const rendered = new Element();
+        const existing = rendered.appendChild(new Element());
+        existing.className = 'rendered-card';
+        ctx[name](rendered, 2, 1);
+        await tick();
+        await tick();
+        assert.equal(rendered.children[0], existing, name + ' must preserve existing data on refresh failure');
+    }
+}
+
 async function messages() {
     const {ctx, requests, send} = mainContext();
     const types = ['editor_saved', 'editor_cancelled', 'view_dirty', 'view_saved',
@@ -541,7 +592,7 @@ async function page() {
     }
 }
 
-({creation, templates, cancel, resize, charts, messages, assets, page})[process.argv[2]]().catch(error => {
+({creation, templates, cancel, resize, charts, cards, messages, assets, page})[process.argv[2]]().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

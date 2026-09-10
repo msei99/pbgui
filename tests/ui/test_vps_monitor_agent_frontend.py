@@ -133,6 +133,128 @@ def test_close_4001_stops_reconnect_and_returns_to_login() -> None:
     assert "!authExpired" in schedule
 
 
+def test_disconnected_actions_and_history_clear_pending_states() -> None:
+    """Dropped, timed-out, and disconnected requests must restore every pending control."""
+    source = HTML_PATH.read_text(encoding="utf-8")
+    names = [
+        "send",
+        "restoreRestartButton",
+        "restoreKillButton",
+        "failMetricHistory",
+        "resetPendingMonitorActions",
+        "handleResult",
+        "restartService",
+        "killInstance",
+        "openMetricHistory",
+    ]
+    functions = "\n\n".join(_extract_function(source, name) for name in names)
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const WebSocket = {{OPEN: 1}};
+        const timers = new Map();
+        let nextTimer = 0;
+        function setTimeout(fn) {{ const id = ++nextTimer; timers.set(id, fn); return id; }}
+        function clearTimeout(id) {{ timers.delete(id); }}
+        function classList() {{
+          const values = new Set();
+          return {{
+            add(value) {{ values.add(value); }},
+            remove(value) {{ values.delete(value); }},
+            contains(value) {{ return values.has(value); }}
+          }};
+        }}
+        function button(action, host, bot) {{
+          const attrs = {{'data-host': host || '', 'data-bot': bot || ''}};
+          return {{disabled: false, textContent: '', title: '', style: {{}}, classList: classList(),
+            getAttribute(name) {{ return name === 'data-monitor-action' ? action : attrs[name]; }} }};
+        }}
+        const body = {{appendChild(element) {{ element.parentElement = body; }}}};
+        const elements = {{
+          'cpu-history-ovl': {{parentElement: body, classList: classList(), style: {{}}}},
+          'cpu-history-title': {{}}, 'cpu-history-sub': {{}},
+          'cpu-history-meta': {{innerHTML: ''}}, 'cpu-history-chart': {{innerHTML: '', textContent: ''}}
+        }};
+        let restartButtons = [];
+        let killButtons = [];
+        const document = {{
+          body,
+          getElementById(id) {{ return elements[id] || null; }},
+          querySelectorAll(selector) {{ return selector.includes('restart-service') ? restartButtons : killButtons; }}
+        }};
+        let banner = '';
+        function setBanner(value) {{ banner = value; }}
+        function prepareCpuHistoryWindow() {{}}
+        function metricHistoryTitle() {{ return 'History'; }}
+        function metricHistoryMeta() {{ return {{}}; }}
+        function metricHistoryLoadingSubtitle() {{ return 'Loading'; }}
+        let ws = null;
+        let cpuHistoryRequestId = 0;
+        let cpuHistoryTimeout = null;
+        {functions}
+
+        assert.equal(send({{cmd: 'noop'}}), false);
+        ws = {{readyState: WebSocket.OPEN, send() {{ throw new Error('closed during send'); }}}};
+        assert.equal(send({{cmd: 'noop'}}), false);
+        assert.equal(banner, 'lost');
+
+        ws = null;
+        const restart = button('restart-service');
+        restartService('host', 'svc', restart);
+        assert.equal(restart.disabled, false);
+        assert.equal(restart.textContent, 'Restart');
+        const kill = button('kill-instance');
+        killInstance('host', 'bot', '8', kill);
+        assert.equal(kill.disabled, false);
+        assert.equal(kill.textContent, '🔄');
+
+        openMetricHistory('host', 'cpu', 'bot');
+        assert.match(elements['cpu-history-chart'].textContent, /Connection lost/);
+        assert.equal(cpuHistoryTimeout, null);
+
+        const sent = [];
+        ws = {{readyState: WebSocket.OPEN, send(payload) {{ sent.push(JSON.parse(payload)); }}}};
+        restartService('host', 'svc', restart);
+        killInstance('host', 'bot', '8', kill);
+        killInstance('host', 'bot', '8', kill);
+        assert.equal(sent.length, 2, 'pending kill cannot be submitted twice');
+        restartButtons = [restart];
+        killButtons = [kill];
+        cpuHistoryRequestId = 10;
+        cpuHistoryTimeout = setTimeout(function () {{}}, 10000);
+        resetPendingMonitorActions('Connection lost. Reconnect and try again.');
+        assert.equal(restart.disabled, false);
+        assert.equal(kill.disabled, false);
+        assert.equal(cpuHistoryTimeout, null);
+        assert.match(elements['cpu-history-chart'].textContent, /Connection lost/);
+
+        restartService('host', 'svc', restart);
+        timers.get(restart._monitorActionTimer)();
+        assert.equal(restart.disabled, false);
+        killInstance('host', 'bot', '8', kill);
+        timers.get(kill._monitorActionTimer)();
+        assert.equal(kill.disabled, false);
+        openMetricHistory('host', 'cpu', 'bot');
+        timers.get(cpuHistoryTimeout)();
+        assert.match(elements['cpu-history-chart'].textContent, /timed out/);
+        assert.equal(cpuHistoryTimeout, null);
+
+        const duplicateOne = button('kill-instance', 'host', 'same-name');
+        const duplicateTwo = button('kill-instance', 'host', 'same-name');
+        duplicateOne.classList.add('killing');
+        duplicateTwo.classList.add('killing');
+        duplicateOne.disabled = duplicateTwo.disabled = true;
+        killButtons = [duplicateOne, duplicateTwo];
+        handleResult({{cmd: 'kill_instance', host: 'host', name: 'same-name', success: true}});
+        assert.equal(duplicateOne.disabled, false);
+        assert.equal(duplicateTwo.disabled, true, 'one response restores only one same-named runtime action');
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "resetPendingMonitorActions('Connection lost. Reconnect and try again.')" in _extract_function(source, "connect")
+
+
 def test_agent_classifier_applies_15_and_30_second_policies_to_all_states() -> None:
     """Classify OK, Stale, Missing, Error, and Unknown deterministically."""
     _run_agent_assertions(

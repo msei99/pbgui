@@ -989,6 +989,7 @@ let instFilterOthers = false;
 // Logs tab state
 let vpsLogViewer = null;
 let cpuHistoryRequestId = 0;
+let cpuHistoryTimeout = null;
 
 // ── WebSocket ──────────────────────────────────────────────
 function connect() {
@@ -1010,6 +1011,7 @@ function connect() {
   };
   
   ws.onclose = (event) => {
+    resetPendingMonitorActions('Connection lost. Reconnect and try again.');
     if (event.code === 4001) {
       authExpired = true;
       ws = null;
@@ -1029,6 +1031,7 @@ function connect() {
   
   ws.onerror = () => {
     setBanner('lost');
+    resetPendingMonitorActions('Connection lost. Reconnect and try again.');
   };
 }
 
@@ -1042,9 +1045,54 @@ function scheduleReconnect() {
 }
 
 function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  try {
     ws.send(JSON.stringify(obj));
+    return true;
+  } catch (_) {
+    setBanner('lost');
+    return false;
   }
+}
+
+function restoreRestartButton(btn) {
+  if (!btn) return;
+  if (btn._monitorActionTimer) clearTimeout(btn._monitorActionTimer);
+  if (btn._monitorResultTimer) clearTimeout(btn._monitorResultTimer);
+  btn._monitorActionTimer = null;
+  btn._monitorResultTimer = null;
+  btn.disabled = false;
+  btn.classList.remove('restarting');
+  btn.textContent = 'Restart';
+}
+
+function restoreKillButton(btn) {
+  if (!btn) return;
+  if (btn._monitorActionTimer) clearTimeout(btn._monitorActionTimer);
+  btn._monitorActionTimer = null;
+  btn.disabled = false;
+  btn.classList.remove('killing');
+  btn.textContent = '🔄';
+  btn.title = 'Restart (kill)';
+}
+
+function failMetricHistory(requestId, message) {
+  if (requestId !== cpuHistoryRequestId) return;
+  if (cpuHistoryTimeout) clearTimeout(cpuHistoryTimeout);
+  cpuHistoryTimeout = null;
+  cpuHistoryRequestId += 1;
+  const sub = document.getElementById('cpu-history-sub');
+  const meta = document.getElementById('cpu-history-meta');
+  const chart = document.getElementById('cpu-history-chart');
+  if (sub) sub.textContent = message;
+  if (meta) meta.innerHTML = '';
+  if (chart) chart.textContent = message;
+}
+
+function resetPendingMonitorActions(message) {
+  document.querySelectorAll('[data-monitor-action="restart-service"].restarting').forEach(restoreRestartButton);
+  document.querySelectorAll('[data-monitor-action="kill-instance"].killing').forEach(restoreKillButton);
+  if (cpuHistoryTimeout) failMetricHistory(cpuHistoryRequestId, message);
 }
 
 function setBanner(status) {
@@ -1208,13 +1256,24 @@ function handleResult(msg) {
         && candidate.getAttribute('data-service') === String(msg.service || '');
     });
     if (btn) {
+      if (btn._monitorActionTimer) clearTimeout(btn._monitorActionTimer);
+      btn._monitorActionTimer = null;
       btn.disabled = false;
       btn.classList.remove('restarting');
       btn.textContent = msg.success ? '✅ Restarted' : '❌ Failed';
-      setTimeout(() => { btn.textContent = 'Restart'; }, 3000);
+      if (btn._monitorResultTimer) clearTimeout(btn._monitorResultTimer);
+      btn._monitorResultTimer = setTimeout(() => {
+        btn._monitorResultTimer = null;
+        if (!btn.classList.contains('restarting')) btn.textContent = 'Restart';
+      }, 3000);
     }
   }
   if (msg.cmd === 'kill_instance') {
+    const btn = Array.from(document.querySelectorAll('[data-monitor-action="kill-instance"].killing')).find(function (candidate) {
+      return candidate.getAttribute('data-host') === String(msg.host || '')
+        && candidate.getAttribute('data-bot') === String(msg.name || '');
+    });
+    restoreKillButton(btn);
     if (!msg.success) {
       console.warn('kill_instance failed for', msg.name, 'on', msg.host);
     }
@@ -2207,7 +2266,14 @@ window.openMetricHistory = function openMetricHistory(host, metricName, botName)
   sub.textContent = metricHistoryLoadingSubtitle(metric, bot);
   meta.innerHTML = '';
   chart.innerHTML = '<div style="color:var(--text-dim);padding:24px;text-align:center">Loading…</div>';
-  send({ cmd: requestMetric === 'cpu' ? 'get_cpu_history' : 'get_metric_history', host: hostName, bot_name: bot, metric: requestMetric, sid: String(rid) });
+  if (!send({ cmd: requestMetric === 'cpu' ? 'get_cpu_history' : 'get_metric_history', host: hostName, bot_name: bot, metric: requestMetric, sid: String(rid) })) {
+    failMetricHistory(rid, 'Connection lost. Reconnect and try again.');
+    return;
+  }
+  if (cpuHistoryTimeout) clearTimeout(cpuHistoryTimeout);
+  cpuHistoryTimeout = setTimeout(function () {
+    failMetricHistory(rid, 'History request timed out. Try again.');
+  }, 10000);
 };
 
 window.openCpuHistory = function openCpuHistory(host, botName) {
@@ -2221,6 +2287,9 @@ window.closeCpuHistory = function closeCpuHistory() {
   overlay.style.display = 'none';
   overlay.style.visibility = 'hidden';
   overlay.style.opacity = '0';
+  cpuHistoryRequestId += 1;
+  if (cpuHistoryTimeout) clearTimeout(cpuHistoryTimeout);
+  cpuHistoryTimeout = null;
   resetCpuHistoryWindow();
 };
 
@@ -2258,6 +2327,8 @@ function handleCpuHistory(payload, host, botName, sid, metricName) {
   const overlay = document.getElementById('cpu-history-ovl');
   if (!overlay || !overlay.classList.contains('visible')) return;
   if (sid && String(sid) !== String(cpuHistoryRequestId)) return;
+  if (cpuHistoryTimeout) clearTimeout(cpuHistoryTimeout);
+  cpuHistoryTimeout = null;
   const title = document.getElementById('cpu-history-title');
   const sub = document.getElementById('cpu-history-sub');
   const meta = document.getElementById('cpu-history-meta');
@@ -2437,11 +2508,18 @@ function viewInstanceLog(host, name, pbVersion) {
 
 function killInstance(host, name, pbVersion, el) {
   if (el) {
+    if (el.classList.contains('killing')) return;
+    el.disabled = true;
+    el.classList.add('killing');
     el.style.opacity = '1';
     el.textContent = '⏳';
     el.title = 'Killing...';
   }
-  send({ cmd: 'kill_instance', host: host, name: name, pb_version: pbVersion });
+  if (!send({ cmd: 'kill_instance', host: host, name: name, pb_version: pbVersion })) {
+    restoreKillButton(el);
+    return;
+  }
+  if (el) el._monitorActionTimer = setTimeout(function () { restoreKillButton(el); }, 10000);
 }
 
 function pnlClass(v) { return v > 0 ? 'pnl-pos' : v < 0 ? 'pnl-neg' : 'pnl-zero'; }
@@ -2543,10 +2621,17 @@ function renderServiceRestartButton(host, service) {
 }
 
 function restartService(host, service, btn) {
+  if (btn.classList.contains('restarting')) return;
+  if (btn._monitorResultTimer) clearTimeout(btn._monitorResultTimer);
+  btn._monitorResultTimer = null;
   btn.disabled = true;
   btn.classList.add('restarting');
   btn.textContent = 'Restarting...';
-  send({ cmd: 'restart_service', host, service });
+  if (!send({ cmd: 'restart_service', host, service })) {
+    restoreRestartButton(btn);
+    return;
+  }
+  btn._monitorActionTimer = setTimeout(function () { restoreRestartButton(btn); }, 10000);
 }
 
 function restartServiceCompact(host, service, el) {

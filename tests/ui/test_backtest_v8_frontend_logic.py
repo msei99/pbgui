@@ -817,20 +817,25 @@ def test_panel_navigation_closes_config_editor_sidebar_outside_configs() -> None
         f"""
         const assert = require('node:assert/strict');
         let hidden = 0;
+        let shown = 0;
+        let rendered = 0;
+        let loaded = 0;
         let selected = [];
         const window = {{PBGuiEditorShared: {{clearFixedValidationStatus() {{}}}}}};
         const document = {{getElementById() {{ return {{style: {{}}}}; }}}};
         const backtestShell = {{selectPanel(id) {{ selected.push(id); }}}};
         let currentPanel = 'configs';
+        let editingConfig = null;
         let _resultsEmptyRetryTimer = null, _resultsEmptyRetryCount = 0;
         let configs = [{{}}], results = [{{}}], archives = [{{}}], legacyResults = [{{}}];
         let selectedArchiveName = '';
         function hideEditorSidebar() {{ hidden += 1; }}
+        function showEditorSidebar() {{ shown += 1; }}
         function persistBacktestViewState() {{}}
-        function renderConfigs() {{}}
+        function renderConfigs() {{ rendered += 1; }}
         function renderResults() {{}}
         function renderLegacyResults() {{}}
-        function loadConfigs() {{}}
+        function loadConfigs() {{ loaded += 1; }}
         function loadResults() {{}}
         function loadArchives() {{}}
         function loadLegacyResults() {{}}
@@ -840,9 +845,17 @@ def test_panel_navigation_closes_config_editor_sidebar_outside_configs() -> None
         assert.equal(hidden, 1);
         assert.equal(currentPanel, 'results');
         assert.deepEqual(selected, ['results']);
+        editingConfig = '__new__';
         selectPanel('configs', {{persist: false}});
         assert.equal(hidden, 1);
         assert.equal(currentPanel, 'configs');
+        assert.equal(shown, 1);
+        assert.equal(rendered, 0);
+        assert.equal(loaded, 0);
+
+        editingConfig = null;
+        selectPanel('configs', {{persist: false}});
+        assert.equal(rendered, 1);
         """
     )
 

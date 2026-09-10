@@ -1107,6 +1107,7 @@ function _covDefaultOverrideFilename(coin) {
 
 /* ── Remove coin ─────────────────────────────────────────────── */
 function coinOvRemove(coin) {
+  if (_covState.editCoin && _covState.editCoin !== coin && _covSaveEdit() === false) return;
   delete _covState.overrides[coin];
   delete _covState.overrideConfigs[coin];
   delete _covState.pendingConfigFileWrites[coin];

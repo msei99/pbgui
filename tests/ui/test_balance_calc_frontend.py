@@ -68,3 +68,21 @@ def test_pb7_run_links_directly_to_shared_calculator() -> None:
     assert "function openBalanceCalculator(name)" in source
     assert "'/api/balance-calc/main_page?'" in source
     assert "instance_version: 'v7'" in source
+
+
+def test_async_config_loading_cannot_overwrite_drafts_or_expose_stale_config() -> None:
+    """Draft and instance loads must be ordered, visible, and safe to calculate."""
+    page = (ROOT / "frontend" / "balance_calc.html").read_text(encoding="utf-8")
+
+    assert '<select id="sel-exchange"><option value="">' in page
+    assert "if (!DRAFT_ID) loadInstanceConfig(d);" in page
+    assert "var configLoadGeneration = 0;" in page
+    assert "generation !== configLoadGeneration" in page
+    assert "draftGeneration !== configLoadGeneration" in page
+    assert "btnCalc.disabled = true;" in page
+    assert "Loading config..." in page
+    assert "selExchange.value = data.exchange || '';" in page
+    assert "if (selExchange.value)" in page
+    assert "Select an exchange to calculate." in page
+    assert "// Failed to load config:" not in page
+    assert "showError('Failed to load instance config:" in page
