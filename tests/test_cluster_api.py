@@ -558,6 +558,7 @@ def test_get_status_includes_pbcluster_sync_status(monkeypatch, tmp_path: Path) 
                         "ok": False,
                         "status": "error",
                         "reason": "mani@192.0.2.10: Permission denied (publickey,password).",
+                        "pb8_capability": True,
                         "retry_delay": 30,
                     }
                 ],
@@ -578,6 +579,7 @@ def test_get_status_includes_pbcluster_sync_status(monkeypatch, tmp_path: Path) 
         "status": "error",
         "reason": "mani@192.0.2.10: Permission denied (publickey,password).",
         "remote_node_id": "",
+        "pb8_capability": True,
         "last_seen": 0,
         "next_retry": 0,
         "retry_delay": 30,
@@ -800,10 +802,13 @@ def test_pb8_cluster_lifecycle_actions_are_generation_and_capability_guarded(mon
                 "node_id": node_id,
                 "role": "master" if node_id == NODE_A else "vps",
                 "pbname": name,
-                "capabilities": ["pb8_instances_v1"],
             },
             created_at=created_at,
         )
+    (root / "sync_status.json").write_text(json.dumps({
+        "finished_at": 103,
+        "peers": [{"node_id": NODE_B, "pb8_capability": True}],
+    }), encoding="utf-8")
     append_operation(
         root,
         "UPSERT_PB8_CONFIG",
@@ -970,6 +975,7 @@ def test_get_nodes_defaults_local_connection_metadata(monkeypatch, tmp_path: Pat
     assert local_node["remote_pbgui_dir"] == "test/pbgui"
     assert local_node["ssh_host"] == "10.9.1.31"
     assert local_node["ssh_user"] == "mani"
+    assert local_node["pb8_capability"] is True
 
 
 def test_credential_status_endpoints_expose_ids_but_no_keys_ciphertext_or_secrets(
@@ -2174,6 +2180,7 @@ def test_remote_status_reports_successful_hello(monkeypatch, tmp_path: Path) -> 
                     "node_id": NODE_B,
                     "protocol_version": 1,
                     "role": "vps",
+                    "capabilities": ["sealed_credentials_v2", "pb8_instances_v1"],
                 }),
                 stderr="",
             )
@@ -2184,6 +2191,7 @@ def test_remote_status_reports_successful_hello(monkeypatch, tmp_path: Path) -> 
 
     assert payload["probes"][0]["status"] == "ok"
     assert payload["probes"][0]["remote_node_id"] == NODE_B
+    assert payload["probes"][0]["capabilities"] == ["sealed_credentials_v2", "pb8_instances_v1"]
     assert calls[0][0] == "vps-a"
     assert calls[0][2] == 10
     assert "cluster_sync_command.py" in calls[0][1]

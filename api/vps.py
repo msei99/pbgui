@@ -15,6 +15,7 @@ import json
 import re
 import time
 import traceback
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from time import mktime
@@ -50,6 +51,10 @@ _clients: set[WebSocket] = set()
 STATE_PUSH_INTERVAL = 1.0    # max rate for full-state push
 LOG_PUSH_INTERVAL = 0.15     # ~150ms for log line push
 LOCAL_LOG_PUSH_INTERVAL = 0.15
+MAX_LOCAL_FILTER_LENGTH = 256
+MAX_LOCAL_FILTER_TERMS = 8
+MAX_LOCAL_FILTER_TERM_LENGTH = 64
+_ANSI_ESCAPE_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 
 def _normalize_log_request_lines(value: object, default: int = 200) -> int:
@@ -93,6 +98,145 @@ class _RemoteLogSubscription:
     def current(self) -> tuple[Optional[str], Optional[str]]:
         """Return the active stream/SID pair as one state read."""
         return (self.stream_id, self.sid) if self.ready else (None, None)
+
+
+@dataclass
+class _LocalLogFilterState:
+    """Bounded search state attached to one local log cursor."""
+
+    mode: str
+    values: tuple[str, ...]
+    context: int
+    limit: int
+    source_matches: deque[bool]
+    pending: deque[tuple[int, str]]
+    source_base: int = 0
+    next_line_no: int = 1
+    match_count: int = 0
+    last_sent_line_no: int = 0
+    trailing: int = 0
+
+
+def _parse_local_log_filter(value: object) -> Optional[tuple[str, tuple[str, ...], int]]:
+    """Validate a literal or bounded OR-term filter supplied by the viewer."""
+    if not isinstance(value, dict):
+        return None
+    try:
+        context = int(value.get("context", 5))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid local log filter context") from exc
+    if context < 0 or context > 20:
+        raise ValueError("Local log filter context must be between 0 and 20")
+    mode = str(value.get("mode") or "literal")
+    if mode == "literal":
+        query = str(value.get("query") or "").strip()
+        if not query:
+            return None
+        if len(query) > MAX_LOCAL_FILTER_LENGTH or any(ord(char) < 32 for char in query):
+            raise ValueError("Invalid local log filter query")
+        return mode, (query.casefold(),), context
+    if mode == "terms":
+        raw_terms = value.get("terms")
+        if not isinstance(raw_terms, list) or not 1 <= len(raw_terms) <= MAX_LOCAL_FILTER_TERMS:
+            raise ValueError("Invalid local log filter terms")
+        terms: list[str] = []
+        for raw_term in raw_terms:
+            term = str(raw_term or "").strip()
+            if not term or len(term) > MAX_LOCAL_FILTER_TERM_LENGTH or any(ord(char) < 32 for char in term):
+                raise ValueError("Invalid local log filter term")
+            terms.append(term.casefold())
+        return mode, tuple(terms), context
+    raise ValueError("Invalid local log filter mode")
+
+
+def _local_filter_matches(state: _LocalLogFilterState, line: str) -> bool:
+    """Match one ANSI-stripped line without evaluating client-provided regex."""
+    text = _ANSI_ESCAPE_RE.sub("", line).casefold()
+    if state.mode == "literal":
+        return state.values[0] in text
+    return any(term in text for term in state.values)
+
+
+def _initialize_local_filter(
+    lines: list[str],
+    limit: int,
+    config: tuple[str, tuple[str, ...], int],
+) -> tuple[_LocalLogFilterState, list[dict[str, object]]]:
+    """Build compact match/context records from the newest source-line window."""
+    mode, values, context = config
+    state = _LocalLogFilterState(
+        mode=mode,
+        values=values,
+        context=context,
+        limit=limit,
+        source_matches=deque(maxlen=limit),
+        pending=deque(maxlen=max(1, context)),
+        next_line_no=len(lines) + 1,
+    )
+    matches = [_local_filter_matches(state, line) for line in lines]
+    state.source_matches.extend(matches)
+    state.match_count = sum(matches)
+    visible = bytearray(len(lines))
+    for index, matched in enumerate(matches):
+        if not matched:
+            continue
+        start = max(0, index - context)
+        end = min(len(lines), index + context + 1)
+        visible[start:end] = b"\x01" * (end - start)
+    records = [
+        {"line": lines[index], "line_no": index + 1, "match": matches[index]}
+        for index in range(len(lines))
+        if visible[index]
+    ]
+    if context:
+        state.pending.extend(
+            (index + 1, lines[index])
+            for index in range(max(0, len(lines) - context), len(lines))
+        )
+        last_match = max((index for index, matched in enumerate(matches) if matched), default=-1)
+        if last_match >= 0:
+            state.trailing = max(0, context - (len(lines) - last_match - 1))
+    if records:
+        state.last_sent_line_no = int(records[-1]["line_no"])
+    return state, records
+
+
+def _filter_local_log_delta(
+    state: _LocalLogFilterState,
+    lines: list[str],
+) -> tuple[list[dict[str, object]], int]:
+    """Filter live records while retaining enough history for leading context."""
+    records: list[dict[str, object]] = []
+    for line in lines:
+        line_no = state.next_line_no
+        state.next_line_no += 1
+        matched = _local_filter_matches(state, line)
+        if len(state.source_matches) == state.limit:
+            if state.source_matches.popleft():
+                state.match_count -= 1
+            state.source_base += 1
+        state.source_matches.append(matched)
+        if matched:
+            state.match_count += 1
+            for pending_no, pending_line in state.pending:
+                if pending_no > state.last_sent_line_no:
+                    records.append({"line": pending_line, "line_no": pending_no, "match": False})
+                    state.last_sent_line_no = pending_no
+            if line_no > state.last_sent_line_no:
+                records.append({"line": line, "line_no": line_no, "match": True})
+                state.last_sent_line_no = line_no
+            state.trailing = state.context
+        else:
+            if state.trailing and line_no > state.last_sent_line_no:
+                records.append({"line": line, "line_no": line_no, "match": False})
+                state.last_sent_line_no = line_no
+                state.trailing -= 1
+        if state.context:
+            state.pending.append((line_no, line))
+    source_start = state.source_base + 1
+    while state.pending and state.pending[0][0] < source_start:
+        state.pending.popleft()
+    return records, source_start
 
 
 def _local_optional_service_blocker(service: str) -> str:
@@ -465,6 +609,7 @@ async def ws_vps(websocket: WebSocket):
     if await authenticate_websocket(websocket) is None:
         return
 
+    state_updates = getattr(websocket, "query_params", {}).get("state", "1") != "0"
     _clients.add(websocket)
     _log(SERVICE, f"[ws] Client connected: {websocket.client}")
 
@@ -473,7 +618,10 @@ async def ws_vps(websocket: WebSocket):
     local_sub: Optional[LocalLogSub] = None
 
     # Background push tasks for this client
-    push_state_task = asyncio.create_task(_push_state_loop(websocket))
+    push_state_task = (
+        asyncio.create_task(_push_state_loop(websocket))
+        if state_updates else None
+    )
     push_log_task = asyncio.create_task(
         _push_log_loop(websocket, remote_sub.current)
     )
@@ -482,8 +630,8 @@ async def ws_vps(websocket: WebSocket):
     )
 
     try:
-        # Send initial full state
-        await _send_full_state(websocket)
+        if state_updates:
+            await _send_full_state(websocket)
 
         # Process incoming commands
         async for raw in websocket.iter_text():
@@ -553,7 +701,7 @@ async def ws_vps(websocket: WebSocket):
 
             # ── get_local_logs (one-shot) ──
             elif cmd == "get_local_logs":
-                result = _cmd_get_local_logs(request)
+                result = await asyncio.to_thread(_cmd_get_local_logs, request)
                 await websocket.send_json(result)
 
             # ── subscribe_local_logs ──
@@ -584,7 +732,9 @@ async def ws_vps(websocket: WebSocket):
              meta={'traceback': traceback.format_exc()})
     finally:
         _clients.discard(websocket)
-        push_tasks = (push_state_task, push_log_task, push_local_log_task)
+        push_tasks = tuple(task for task in (
+            push_state_task, push_log_task, push_local_log_task,
+        ) if task is not None)
         for task in push_tasks:
             task.cancel()
         await asyncio.gather(*push_tasks, return_exceptions=True)
@@ -672,17 +822,35 @@ async def _push_local_log_loop(ws: WebSocket, get_sub):
             sub: Optional[LocalLogSub] = get_sub()
             if not sub or not _streamer:
                 continue
-            new_lines = _streamer.read_local_log_delta(sub)
+            new_lines = await asyncio.to_thread(_streamer.read_local_log_delta, sub)
+            if sub is not get_sub():
+                continue
             if not new_lines:
                 continue
             new_lines = new_lines[-MAX_REMOTE_LOG_LINES:]
-            msg: dict = {
-                "type": "local_log_lines",
-                "file": sub.name,
-                "lines": new_lines,
-            }
+            filter_state = getattr(sub, "_filter_state", None)
+            if isinstance(filter_state, _LocalLogFilterState):
+                records, source_start = await asyncio.to_thread(
+                    _filter_local_log_delta, filter_state, new_lines,
+                )
+                msg: dict = {
+                    "type": "local_log_filtered_lines",
+                    "file": sub.name,
+                    "records": records,
+                    "source_start": source_start,
+                    "source_end": filter_state.next_line_no - 1,
+                    "match_count": filter_state.match_count,
+                }
+            else:
+                msg = {
+                    "type": "local_log_lines",
+                    "file": sub.name,
+                    "lines": new_lines,
+                }
             if sub.sid is not None:
                 msg["sid"] = sub.sid
+            if sub is not get_sub():
+                continue
             await ws.send_json(msg)
     except (asyncio.CancelledError, WebSocketDisconnect):
         pass
@@ -1003,6 +1171,9 @@ def _cmd_get_local_logs(request: dict) -> dict:
     }
     if sid is not None:
         resp["sid"] = sid
+    if request.get("purpose") == "download":
+        resp["purpose"] = "download"
+        resp["request_id"] = request.get("request_id")
     return resp
 
 
@@ -1059,6 +1230,7 @@ async def _cmd_subscribe_local_logs(ws: WebSocket,
     start_at_end = bool(request.get("start_at_end"))
     try:
         lines_n = _normalize_log_request_lines(request.get("lines"), default=200)
+        filter_config = _parse_local_log_filter(request.get("filter"))
     except ValueError as exc:
         await ws.send_json({"type": "error", "error": str(exc)})
         return None
@@ -1070,18 +1242,27 @@ async def _cmd_subscribe_local_logs(ws: WebSocket,
         })
         return None
 
-    content, file_size, sub = AsyncLogStreamer.initialize_local_log_subscription(
-        fp,
-        filename,
-        lines_n,
-        sid,
-        start_at_end=start_at_end,
+    content, file_size, sub = await asyncio.to_thread(
+        AsyncLogStreamer.initialize_local_log_subscription,
+        fp, filename, lines_n, sid, start_at_end=start_at_end,
     )
 
-    resp: dict = {
-        "type": "local_logs", "file": filename,
-        "lines": content, "streaming": True, "file_size": file_size,
-    }
+    if filter_config is not None:
+        filter_state, records = await asyncio.to_thread(
+            _initialize_local_filter, content, lines_n, filter_config,
+        )
+        sub._filter_state = filter_state
+        resp: dict = {
+            "type": "local_logs_filtered", "file": filename,
+            "records": records, "streaming": True, "file_size": file_size,
+            "source_start": 1, "source_end": len(content),
+            "match_count": filter_state.match_count,
+        }
+    else:
+        resp = {
+            "type": "local_logs", "file": filename,
+            "lines": content, "streaming": True, "file_size": file_size,
+        }
     if sid is not None:
         resp["sid"] = sid
     await ws.send_json(resp)

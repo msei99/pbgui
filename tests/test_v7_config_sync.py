@@ -891,3 +891,13 @@ def test_xss_hardening_preserves_job_and_api_key_visual_contract() -> None:
     assert 'class="progress-bar"' in jobs
     assert 'class="hlda-jc"' in hl_jobs
     assert 'class="hlda-pb"' in hl_jobs
+
+
+def test_api_keys_log_viewer_uses_grouped_pbgui_log() -> None:
+    """API Keys opens the physical grouped log instead of a retired empty service log."""
+
+    source = _read("frontend/api_keys_editor.html")
+
+    assert "defaultFile : 'PBGui.log'" in source
+    assert "defaultSearch : '[ApiKeys]'" in source
+    assert "defaultFile : 'ApiKeys.log'" not in source

@@ -123,7 +123,7 @@ async function main() {
     assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=13');
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=39');
     b.nodes['pbgui-notify-btn'].click();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/log_viewer_panel.js?v=35');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/log_viewer_panel.js?v=43');
     let viewerOptions;
     c.LogViewerPanel = class {constructor(options) {viewerOptions = options;} open() {} close() {}};
     b.assets.at(-1).onload();

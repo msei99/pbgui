@@ -1601,14 +1601,12 @@ def test_bitget_uta_forbids_borrow_and_ambiguous_ledger_is_unknown(
         snapshot=_snapshot("bitget", mode="uta"),
     )
     record = {
-        "transferId": "uta-server-id",
-        "businessType": "account_transfer",
+        "id": "uta-ledger-id",
+        "category": "OTHER",
+        "type": "TRANSFER_OUT",
         "coin": "USDT",
-        "amount": "8.1250",
-        "fromType": "uta",
-        "toType": "spot",
-        "cTime": NOW_MS,
-        "status": "success",
+        "amount": "-8.1250",
+        "ts": NOW_MS,
     }
     client = FakeClient({
         "privateUtaPostV3AccountTransfer": {"code": "00000", "data": {"transferId": "uta-server-id"}},
@@ -1637,7 +1635,7 @@ def test_bitget_uta_forbids_borrow_and_ambiguous_ledger_is_unknown(
 def test_bitget_uta_reconciliation_uses_submission_exchange_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ignore otherwise identical UTA records with a different provider transfer ID."""
+    """Keep Bitget's distinct submit and capital-ledger IDs without requiring equality."""
 
     user = _user("bitget")
     descriptor = transfers.prepare_transfer(
@@ -1649,20 +1647,19 @@ def test_bitget_uta_reconciliation_uses_submission_exchange_id(
         snapshot=_snapshot("bitget", mode="uta"),
     )
     record = {
-        "businessType": "account_transfer",
+        "id": "uta-ledger-id",
+        "category": "OTHER",
+        "type": "TRANSFER_OUT",
         "coin": "USDT",
-        "amount": "8.125",
-        "fromType": "uta",
-        "toType": "spot",
-        "cTime": NOW_MS,
-        "status": "success",
+        "amount": "-8.125",
+        "ts": NOW_MS,
     }
     client = FakeClient({
         "privateUtaGetV3AccountFinancialRecords": {
             "data": {
                 "list": [
-                    {**record, "transferId": "wrong"},
-                    {**record, "transferId": "uta-server-id"},
+                    {**record, "id": "other-ledger-id", "amount": "-9"},
+                    record,
                 ],
             },
         },
@@ -1677,7 +1674,17 @@ def test_bitget_uta_reconciliation_uses_submission_exchange_id(
 
     assert result["status"] == "confirmed"
     assert result["matched_records"] == 1
-    assert result["exchange_id"] == "uta-server-id"
+    assert result["exchange_id"] == "uta-ledger-id"
+    assert result["received_amount"] == "8.125"
+    assert client.calls == [(
+        "privateUtaGetV3AccountFinancialRecords",
+        {
+            "category": "OTHER",
+            "coin": "USDT",
+            "startTime": NOW_MS - transfers._HISTORY_WINDOW_MS,
+            "endTime": NOW_MS + transfers._HISTORY_WINDOW_MS,
+        },
+    )]
 
 
 def test_bitget_route_must_match_snapshotted_account_mode() -> None:

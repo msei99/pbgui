@@ -19,7 +19,7 @@ Die Seite läuft als eigenständige FastAPI-Seite mit vollständiger Topnav zur 
 | **HL Warning Config** | Konfiguriert den Schwellenwert für Hyperliquid-Ablaufwarnungen via Telegram |
 | **TradFi** | Öffnet das TradFi-Data-Provider-Panel |
 | **🗄 Backups** | Öffnet den Backup-Browser mit Diff-Viewer |
-| **📋 Logs** | Öffnet den Live-Log-Viewer (streamt `ApiKeys.log` und weitere Logs) |
+| **📋 Logs** | Öffnet den Live-Log-Viewer mit `PBGui.log`, das API-Key-Aktivitaet und weitere UI-Logs enthaelt |
 | **Refresh** | Lädt die User-Liste neu von der Festplatte |
 | **🟠 Restart** | Sichtbar, wenn die API oder ein anderer verwalteter PBGui-Dienst veralteten Code ausführt; Klick zeigt und startet die betroffenen Dienste neu |
 
@@ -145,24 +145,33 @@ TradFi-Profile verwenden stattdessen Sealed Envelopes aus Credential Protocol v2
 
 Streamt Logdateien in Echtzeit via WebSocket.
 
+Sehr lange Zeilen zeigen eine Vorschau mit 4.000 Zeichen, damit Suche, Aufklappen und Scrollen bedienbar bleiben. Gekuerzte Zeilen sind gekennzeichnet; die Suche verwendet weiterhin den vollstaendigen geladenen Text, und **Download** enthaelt ihn ohne diese Anzeigebegrenzung.
+
+Der geladene Dateiausschnitt ist von alt nach neu sortiert. Der Viewer oeffnet mit `[ApiKeys]` im Suchfeld und aktivierter Checkbox **Filter**, sodass nur Aktivitaeten des API-Key-Editors angezeigt werden; `api` findet auch andere UI-Services und Nachrichtentexte. Filtertreffer werden mit Kontext gruppiert und anfangs eingeklappt: Ein Block zeigt seinen ersten Treffer, nicht den neuesten Eintrag. Klappe den letzten Block auf oder nutze **Expand all**, um darin enthaltene neue Aenderungen zu sehen. Ein konkreter Username grenzt die Suche weiter ein.
+
+Bei lokalen Logs durchsuchen aktive Filter den gewaehlten Datei-Tail auf dem Server; zum Browser gelangen nur Treffer und der angeforderte Kontext. Die bisherigen Ergebnisse bleiben waehrend der entprellten Suche sichtbar, und veraltete Antworten koennen keine neuere Suche ueberschreiben. Eingeklappte Ergebnisse behalten nur einen Kopf pro Block im DOM; beim Aufklappen werden Kontext- und Trefferzeilen schrittweise in korrekter Reihenfolge erzeugt. **Download** laedt weiterhin den vollstaendigen gewaehlten Quell-Tail, und das Leeren des Filters stellt die normale ungefilterte Ansicht wieder her. Legacy- und Remote-Streams behalten das begrenzte Browsermodell; Live-Updates durchsuchen dieses Modell nicht mehr bei jeder neuen Zeile komplett.
+
+Die lokale Log-Verbindung dieser Seite abonniert keinen VPS-Monitoring-State. Host-, Service-, Instanz- und Task-Snapshots koennen deshalb den Lines-Selektor oder die Log-Steuerung nicht mehr unterbrechen; die explizite lokale Dateiliste und der gefilterte Log-Stream laufen unabhaengig weiter.
+
+Beim Zurueckkehren mit **Back** wird die lokale Log-Verbindung geschlossen und das geladene Log-Modell samt gerenderten Zeilen freigegeben. Ein erneutes Oeffnen von **Logs** verbindet sich mit der gewaehlten Lines-Einstellung und einem frischen Snapshot.
+
 ### Steuerelemente
 
 | Steuerelement | Beschreibung |
 |---|---|
 | **Files**-Button / Sidebar | Schaltet die einklappbare linke Sidebar mit allen verfügbaren Logdateien um; Klick auf eine Datei wechselt die Ansicht |
 | **DBG / INF / WRN / ERR / CRT** | Sichtbarkeit nach Log-Level steuern |
-| **Lines** | Anzahl initial geladener Zeilen (200 – 5000) |
+| **Lines** | Anzahl initial geladener Zeilen (200 bis 50.000) |
 | **⏸ Pause / ▶ Stream** | Live-Streaming pausieren oder fortsetzen |
 | **🗑 Clear** | Löscht die Terminal-Anzeige |
-| **↓ Download** | Lädt die aktuell geladenen Zeilen als Textdatei herunter |
+| **↓ Download** | Laedt den vollstaendigen gewaehlten Quell-Tail als Textdatei, einschliesslich in der Filteransicht ausgelassener Zeilen |
 | **# Lines** | Zeilennummern ein-/ausblenden |
 | **— Preset —** | Vorgefertigte Suchmuster (Errors, Warnings, Connection, Traceback, …) |
 | **Suchfeld** | Live-Suche / Filter; Checkbox **Filter** blendet nicht passende Zeilen aus; ▲▼ navigiert zwischen Treffern |
 
 Wichtige Logdateien:
-- `ApiKeys.log` — Aktivität des API-Key-Editors
+- `PBGui.log` — mit `[ApiKeys]` markierte Eintraege des API-Key-Editors zusammen mit allgemeiner UI-Aktivitaet
 - `VPSMonitor.log` — VPS-Monitoring
-- `PBGui.log` — allgemeine UI-Aktivität
 
 ---
 

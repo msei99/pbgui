@@ -288,6 +288,7 @@ def test_chunked_full_render_defers_live_lines_until_frozen_snapshot_finishes() 
         panel._rafPending = false;
         panel._fullRenderPending = false;
         panel._renderAbort = 0;
+        panel._searchAbort = 0;
         panel._searchTerm = '';
         panel._normalizeIncomingLines = lines => lines.slice();
         panel._buildDiv = (line, num) => ({{line, num}});
@@ -306,6 +307,158 @@ def test_chunked_full_render_defers_live_lines_until_frozen_snapshot_finishes() 
 
         assert.deepEqual(terminal.children.map(item => item.line), ['line-3', 'line-4', 'line-5', 'line-6', 'line-7']);
         assert.deepEqual(terminal.children.map(item => item.num), [3, 4, 5, 6, 7]);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
+def test_large_log_filter_renders_from_the_model_without_full_dom() -> None:
+    """Large active filters scan the model and retain only collapsed headers in DOM."""
+
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const frames = [];
+        let contentWrites = 0;
+        let displayWrites = 0;
+        globalThis.window = {{}};
+        globalThis.WebSocket = {{OPEN: 1}};
+        globalThis.requestAnimationFrame = callback => {{ frames.push(callback); return frames.length; }};
+
+        function attachClassList(node) {{
+          node.classList = {{
+            add(name) {{
+              const names = new Set(String(node.className || '').split(/\\s+/).filter(Boolean));
+              names.add(name); node.className = Array.from(names).join(' ');
+            }},
+            remove(name) {{
+              node.className = String(node.className || '').split(/\\s+/).filter(value => value && value !== name).join(' ');
+            }},
+            toggle(name, force) {{
+              const has = this.contains(name);
+              const next = force === undefined ? !has : !!force;
+              if (next) this.add(name); else this.remove(name);
+              return next;
+            }},
+            contains(name) {{ return String(node.className || '').split(/\\s+/).includes(name); }}
+          }};
+          return node;
+        }}
+
+        function makeLine(index) {{
+          let text = 'match-' + index;
+          let display = '';
+          const node = attachClassList({{
+            className: 'lvp-log-info',
+            dataset: {{text, level: 'INFO'}},
+            firstChild: null,
+            querySelector(selector) {{ return selector === '.grp-arrow' ? this.arrow || null : null; }},
+            insertBefore(child) {{ this.arrow = child; this.firstChild = child; }},
+            appendChild() {{}}
+          }});
+          Object.defineProperty(node, 'textContent', {{
+            get() {{ return text; }},
+            set(value) {{ text = String(value); contentWrites += 1; }}
+          }});
+          Object.defineProperty(node, 'innerHTML', {{
+            get() {{ return text; }},
+            set(value) {{ text = String(value); contentWrites += 1; }}
+          }});
+          node.style = {{}};
+          Object.defineProperty(node.style, 'display', {{
+            get() {{ return display; }},
+            set(value) {{ display = value; displayWrites += 1; }}
+          }});
+          return node;
+        }}
+
+        const modelLines = Array.from({{length: 10000}}, (_, index) => 'match-' + index);
+        const lines = [];
+        const terminal = attachClassList({{
+            className: 'lvp-terminal',
+            children: lines,
+            scrollTop: 0,
+            scrollHeight: 1,
+            get childElementCount() {{ return this.children.length; }},
+          querySelectorAll(selector) {{
+            if (selector === '.lvp-separator') return [];
+            if (selector === '.lvp-group-first') return lines.filter(line => line.classList.contains('lvp-group-first'));
+            if (selector === '.lvp-group-expanded') return lines.filter(line => line.classList.contains('lvp-group-expanded'));
+            if (selector === '.lvp-highlight') return lines.filter(line => line.classList.contains('lvp-highlight'));
+            return [];
+          }},
+            insertBefore() {{ throw new Error('One contiguous block needs no separator'); }},
+            appendChild(child) {{
+              const added = child.fragmentChildren || [child];
+              for (const item of added) {{
+                item.isConnected = true;
+                item.remove = () => {{
+                  const index = this.children.indexOf(item);
+                  if (index >= 0) this.children.splice(index, 1);
+                  item.isConnected = false;
+                }};
+                this.children.push(item);
+              }}
+            }}
+        }});
+        Object.defineProperty(terminal, 'innerHTML', {{
+          get() {{ return ''; }},
+          set() {{ this.children.splice(0); }}
+        }});
+        const controls = {{
+          'ctx-sel': {{style: {{}}}},
+          'grp-actions': {{style: {{}}}},
+          'nav-btns': {{style: {{}}}},
+          'match-count': {{textContent: ''}}
+        }};
+        globalThis.document = {{
+          createElement: () => makeLine(0),
+          createDocumentFragment: () => ({{
+            fragmentChildren: [],
+            appendChild(child) {{ this.fragmentChildren.push(child); }}
+          }})
+        }};
+        {source}
+
+        const panel = Object.create(LogViewerPanel.prototype);
+        panel._searchTerm = 'match';
+        panel._searchRegex = false;
+        panel._filterMode = true;
+        panel._contextLines = 5;
+        panel._blocksCollapsed = true;
+        panel._searchAbort = 0;
+        panel._searchTimer = null;
+        panel._lines = modelLines;
+        panel._lineBase = 0;
+        panel._renderAbort = 0;
+        panel._renderMode = 'full';
+        panel._filteredSnapshot = [];
+        panel._filteredBlocks = [];
+        panel._filteredMatchCount = 0;
+        panel._expandedBlocks = new Set();
+        panel._fullRenderPending = false;
+        panel._pending = [];
+        panel._rafPending = false;
+        panel._matchEls = [];
+        panel._matchIdx = -1;
+        panel._SCHUNK = 100;
+        panel._MAX = 10000;
+        panel._visLevels = new Set(['INFO']);
+        panel._q = name => name === 'terminal' ? terminal : controls[name];
+
+        panel._applySearch();
+        assert.equal(terminal.childElementCount, 1);
+        assert.equal(displayWrites, 0);
+        assert.equal(frames.length, 1);
+
+        while (frames.length) frames.shift()();
+
+        assert.equal(controls['match-count'].textContent, '10000 matches in 1 blocks');
+        assert.equal(terminal.classList.contains('lvp-groups-collapsed'), true);
+        assert.equal(terminal.childElementCount, 1);
+        assert.equal(displayWrites, 0);
         """
     )
     result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
@@ -343,6 +496,72 @@ def test_remote_log_info_uses_subscription_sid_to_reject_delayed_metadata() -> N
         panel._handleMsg({{type: 'log_info', sid: 4, size: 10}});
         panel._handleMsg({{type: 'log_info', sid: 5, size: 20}});
         assert.deepEqual(sizes, [20]);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
+def test_server_filtered_local_records_remain_compact_and_drop_expired_blocks() -> None:
+    """Compact server records preserve source numbers and remove matchless expired context."""
+
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        globalThis.window = {{}};
+        globalThis.WebSocket = {{OPEN: 1}};
+        {source}
+        const panel = Object.create(LogViewerPanel.prototype);
+        panel._serverRecords = [];
+        panel._lines = [];
+        panel._searchTerm = 'needle';
+        panel._searchRegex = false;
+        panel._filterMode = true;
+        panel._contextLines = 1;
+        panel._searchAbort = 3;
+        panel._renderAbort = 0;
+        panel._expandedBlocks = new Set();
+        panel._blocksCollapsed = true;
+        panel._q = () => null;
+        panel.renderCalls = 0;
+        panel._renderFilteredRows = searchId => {{ panel.renderedSearchId = searchId; panel.renderCalls++; }};
+
+        panel._applyServerFilteredRecords({{
+          source_start: 10, match_count: 1,
+          records: [
+            {{line:'before', line_no:10, match:false}},
+            {{line:'needle', line_no:11, match:true}},
+            {{line:'after', line_no:12, match:false}},
+            {{line:'unrelated', line_no:20, match:false}}
+          ]
+        }}, false);
+        assert.deepEqual(panel._filteredLineNumbers, [10, 11, 12]);
+        assert.deepEqual(panel._lines, ['before', 'needle', 'after']);
+        assert.equal(panel._filteredBlocks.length, 1);
+        assert.equal(panel._filteredBlocks[0].firstMatch, 1);
+        assert.equal(panel.renderCalls, 1);
+
+        panel._applyServerFilteredRecords({{source_start:10, match_count:1, records:[]}}, true);
+        assert.equal(panel.renderCalls, 1);
+
+        panel._applyServerFilteredRecords({{
+          source_start: 11, match_count: 1,
+          records: [{{line:'later context', line_no:13, match:false}}]
+        }}, true);
+        assert.deepEqual(panel._filteredLineNumbers, [11, 12]);
+
+        panel._applyServerFilteredRecords({{source_start:12, match_count:0, records:[]}}, true);
+        assert.deepEqual(panel._filteredLineNumbers, []);
+        assert.equal(panel._filteredBlocks.length, 0);
+        assert.equal(panel._filteredMatchCount, 0);
+
+        panel._applyServerFilteredRecords({{
+          source_start:12, match_count:1,
+          records:[{{line:'new needle', line_no:14, match:true}}]
+        }}, true);
+        assert.deepEqual(panel._filteredLineNumbers, [13, 14]);
+        assert.deepEqual(panel._lines, ['later context', 'new needle']);
         """
     )
     result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
@@ -437,8 +656,36 @@ def test_every_log_viewer_asset_reference_uses_current_cache_version() -> None:
         references.extend((path, match.group(0)) for match in re.finditer(r"log_viewer_panel\.js\?v=\d+", source))
 
     assert references
-    assert all(reference.endswith("?v=35") for _path, reference in references), references
-    assert "log_viewer_panel.js?v=35" in NAV.read_text(encoding="utf-8")
+    assert all(reference.endswith("?v=43") for _path, reference in references), references
+    assert "log_viewer_panel.js?v=43" in NAV.read_text(encoding="utf-8")
+
+
+def test_api_keys_local_viewer_disables_vps_state_transport() -> None:
+    """The API Keys log socket opts out before any full VPS state is sent."""
+    source = (ROOT / "frontend" / "api_keys_editor.html").read_text(encoding="utf-8")
+    assert "needsState  : false" in source
+    viewer = LOG_VIEWER.read_text(encoding="utf-8")
+    assert "this._needsState = opts.needsState !== false" in viewer
+    assert "this._needsState === false ? '?state=0' : ''" in viewer
+
+
+def test_log_viewer_close_releases_hidden_runtime_state() -> None:
+    """Closing a hidden viewer must disconnect and release its retained model and DOM."""
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    close_body = source.split("    close() {", 1)[1].split("\n    }", 1)[0]
+    assert "this._disconnect();" in close_body
+    assert "this._finishRestartAttempt();" in close_body
+    assert "this._vpState = null;" in close_body
+    assert "this._fileList = [];" in close_body
+    assert "this._clear();" in close_body
+
+
+def test_api_keys_back_and_pagehide_close_log_viewer() -> None:
+    """Both in-page Back navigation and page exit must close the API Keys viewer."""
+    source = (ROOT / "frontend" / "api_keys_editor.html").read_text(encoding="utf-8")
+    back_body = source.split("async function backToList", 1)[1].split("// ── Save user", 1)[0]
+    assert "_closeLogWs();" in back_body
+    assert 'window.addEventListener("pagehide", _closeLogWs);' in source
 
 
 def test_remote_default_host_is_rendered_before_vps_state_arrives() -> None:

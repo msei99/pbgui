@@ -1312,7 +1312,7 @@ def _hyperliquid_agent_match(record: dict[str, Any], descriptor: dict[str, Any])
 def _record_time(record: dict[str, Any]) -> int | None:
     """Read one integer millisecond timestamp from a record."""
 
-    value = _field(record, "timestamp", "time", "cTime", "createdTime", "createdAt")
+    value = _field(record, "timestamp", "time", "ts", "cTime", "createdTime", "createdAt")
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -1476,31 +1476,36 @@ def reconcile_transfer(
             ]
             result = _matched_result(matches, amount_field="size")
         else:
-            exchange_id = str(submission.get("exchange_id") or "")
             response = client.privateUtaGetV3AccountFinancialRecords({
+                "category": "OTHER",
                 "coin": validated["asset"],
                 "startTime": start_ms,
                 "endTime": end_ms,
             })
             matches = []
+            expected_type = "transfer_in" if validated["route"] == "spot_to_uta" else "transfer_out"
             for record in _items(response):
                 record_type = str(_field(record, "type", "businessType", "category") or "").lower()
+                record_amount = _field(record, "amount", "size")
                 from_type = _field(record, "fromType", "fromAccountType")
                 to_type = _field(record, "toType", "toAccountType")
                 if (
-                    "transfer" in record_type
+                    record_type == expected_type
                     and str(_field(record, "coin", "asset") or "").upper() == validated["asset"]
-                    and _same_amount(_field(record, "amount", "size"), validated["amount"])
                     and (
-                        not exchange_id
-                        or str(_field(record, "transferId", "id", "tranId") or "") == exchange_id
+                        _same_amount(record_amount, validated["amount"])
+                        or _same_amount(record_amount, f"-{validated['amount']}")
                     )
                     and start_ms <= (_record_time(record) or -1) <= end_ms
                     and (from_type is None or str(from_type).lower() == validated["source"])
                     and (to_type is None or str(to_type).lower() == validated["destination"])
                 ):
                     matches.append(record)
-            result = _matched_result(matches, amount_field="amount")
+            result = _matched_result(matches)
+            if len(matches) == 1 and _field(matches[0], "status", "state", "transferStatus") is None:
+                result["status"] = "confirmed"
+            if result["status"] == "confirmed":
+                result["received_amount"] = validated["amount"]
         result["operation_id"] = validated["operation_id"]
         return result
     except Exception as exc:

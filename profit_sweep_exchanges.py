@@ -1765,12 +1765,16 @@ def _collect_bitget(snapshot: dict[str, Any], client: Any, asset: str, since_ms:
             "bitget_uta_funding_assets",
             "balance",
         )
-        destination_balance = destination_asset.get("balance") if destination_asset is not None else None
-        destination_withdrawable = (
-            destination_asset.get("available")
-            if destination_asset is not None and destination_asset.get("available") is not None
-            else destination_asset.get("maxTransfer") if destination_asset is not None else None
-        )
+        if destination_asset is None and destination_data == []:
+            destination_balance = "0"
+            destination_withdrawable = "0"
+        else:
+            destination_balance = destination_asset.get("balance") if destination_asset is not None else None
+            destination_withdrawable = (
+                destination_asset.get("available")
+                if destination_asset is not None and destination_asset.get("available") is not None
+                else destination_asset.get("maxTransfer") if destination_asset is not None else None
+            )
         source_label = "UTA"
         destination_label = "Funding"
     else:

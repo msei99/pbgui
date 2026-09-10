@@ -1041,6 +1041,43 @@ def test_bitget_uta_snapshot_uses_max_transferable_and_financial_records(
     assert len(owners) == 1 and owners[0].closed is True
 
 
+def test_bitget_uta_empty_funding_wallet_is_zero_not_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat Bitget's successful empty funding-asset list as a zero balance."""
+
+    client = FakeCcxtClient({
+        "privateUtaGetV3AccountSettings": {"code": "00000", "data": {"accountMode": "unified"}},
+        "privateUtaGetV3AccountAssets": {
+            "code": "00000",
+            "data": {"assets": [{"coin": "USDT", "balance": "100", "equity": "100"}]},
+        },
+        "privateUtaGetV3AccountMaxTransferable": {
+            "code": "00000",
+            "data": {"coin": "USDT", "maxTransfer": "85"},
+        },
+        "privateUtaGetV3AccountFundingAssets": {"code": "00000", "data": []},
+        "privateUtaGetV3AccountFinancialRecords": {
+            "code": "00000",
+            "data": {"list": None, "cursor": None},
+        },
+    })
+    owners = _install_ccxt_client(monkeypatch, client)
+    monkeypatch.setattr(exchanges, "_now_ms", lambda: NOW_MS)
+
+    snapshot = exchanges.collect_readonly_snapshot(_user(exchange="bitget"), 1_800_000, NOW_MS)
+
+    assert snapshot["complete"] is True
+    assert snapshot["account_balances"]["destination"] == {
+        "label": "Funding",
+        "balance": "0",
+        "available": True,
+        "withdrawable": "0",
+        "asset": "USDT",
+    }
+    assert len(owners) == 1 and owners[0].closed is True
+
+
 def test_bitget_max_transferable_ccxt_fallback_is_one_fixed_get() -> None:
     """Use a fixed GET request when pinned CCXT lacks the new implicit method."""
 

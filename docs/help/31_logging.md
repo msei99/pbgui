@@ -20,9 +20,11 @@ Streaming starts automatically — new lines are appended in real time.
 Controls how many lines are loaded when opening or switching a file.  
 Options: 200 / 500 / 1000 / 2000 / 5000 / 10000 / 25000 / Max (50,000).
 Changing the value while a file is open reloads with the new count.
-The selected count is also the live browser buffer and rendered-line limit. When
-it is reached, the oldest displayed lines are discarded and the newest lines
-remain available. **Max (50,000)** is a bounded tail, not the complete file.
+The selected count is the source-tail and rendered-line limit. Unfiltered and
+remote views keep that bounded live buffer in the browser. An active local
+filter keeps only matches and context in the browser while the server searches
+the complete selected tail. **Max (50,000)** is a bounded tail, not the complete
+file.
 
 ## Version dropdown
 
@@ -53,6 +55,11 @@ Lines not matching an active level are hidden instantly without refetching.
 - Use the **▲ / ▼** buttons to jump between matches
 - **Preset** dropdown: common search patterns (Errors, Warnings, Traceback, …)
 
+Local filtered searches are debounced and run on the server. Existing results
+remain visible until the current request arrives, and live streaming sends only
+new matches and required context. Clearing the filter restores the unfiltered
+buffer. Download still saves the complete selected source tail.
+
 ## Stream controls
 
 | Button    | Action                                         |
@@ -60,7 +67,7 @@ Lines not matching an active level are hidden instantly without refetching.
 | ⏸ Pause  | Stop receiving new lines (buffer is kept)      |
 | ▶ Stream | Resume live streaming from current position    |
 | 🗑 Clear  | Clear the display buffer (does not delete file) |
-| ⬇ Download | Save current buffer content as a text file   |
+| ⬇ Download | Save the complete selected source tail       |
 | ## Lines | Toggle line number display                      |
 
 ## Settings

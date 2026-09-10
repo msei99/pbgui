@@ -19,7 +19,7 @@ The page runs as a standalone FastAPI page with a full topnav for navigating to 
 | **HL Warning Config** | Configures the Hyperliquid expiry Telegram warning threshold |
 | **TradFi** | Opens the TradFi Data Provider panel |
 | **🗄 Backups** | Opens the backup browser and diff viewer |
-| **📋 Logs** | Opens the live log viewer (streams `ApiKeys.log` and other logs) |
+| **📋 Logs** | Opens the live log viewer on `PBGui.log`, which contains API-key activity and other UI logs |
 | **Refresh** | Reloads the user list from disk |
 | **🟠 Restart** | Visible when the API or another managed PBGui service runs outdated code; click to review and restart affected services |
 
@@ -145,24 +145,33 @@ Open via **📋 Logs** in the sidebar.
 
 Streams log files in real time via WebSocket.
 
+Very long lines show a 4,000-character preview to keep searching, expanding blocks, and scrolling responsive. The viewer labels shortened lines; searches still use the complete loaded text, and **Download** includes it without this display limit.
+
+Logs are ordered oldest to newest within the loaded tail. The viewer opens with `[ApiKeys]` entered and **Filter** enabled so only API-key editor activity is shown; `api` also matches unrelated UI services and message text. Filter results are grouped with context and collapsed by default: a block shows its first match, not its newest entry. Expand the last block or use **Expand all** to see recent edits inside it; searching a specific username narrows the results further.
+
+For local logs, active filters search the selected source tail on the server and send only matching records plus their requested context to the browser. The previous results remain visible while a debounced search is pending, and outdated responses cannot replace a newer search. Collapsed results keep only one header per block in the DOM; expanding one block or all blocks creates ordered context and match rows incrementally. **Download** still retrieves the complete selected source tail, and clearing the filter restores the normal unfiltered view. Legacy and remote streams retain the bounded browser-side model; live updates no longer rescan that complete model for every new line.
+
+This page's local-only log connection does not subscribe to VPS monitoring state. Host, service, instance, and task snapshots therefore cannot interrupt the Lines selector or log controls; the explicit local file list and filtered log stream continue independently.
+
+Returning with **Back** closes the local log connection and releases the loaded log model and rendered rows. Opening **Logs** again reconnects with the selected Lines setting and a fresh snapshot.
+
 ### Controls
 
 | Control | Description |
 |---|---|
 | **Files** button / sidebar | Toggle the collapsible left sidebar listing all available log files; click a file to switch |
 | **DBG / INF / WRN / ERR / CRT** | Toggle visibility by log level |
-| **Lines** | Number of initial lines to load (200 – 5000) |
+| **Lines** | Number of initial lines to load (200 to 50,000) |
 | **⏸ Pause / ▶ Stream** | Pause or resume live streaming |
 | **🗑 Clear** | Clears the terminal view |
-| **↓ Download** | Downloads the currently loaded lines as a text file |
+| **↓ Download** | Downloads the complete selected source tail as a text file, including lines omitted from an active filtered view |
 | **# Lines** | Toggles line-number display |
 | **— Preset —** | Preset search patterns (Errors, Warnings, Connection, Traceback, …) |
 | **Search box** | Live search / filter; **Filter** checkbox hides non-matching lines; ▲▼ navigate matches |
 
 Key log files:
-- `ApiKeys.log` — API-key editor activity
+- `PBGui.log` — API-key editor entries tagged `[ApiKeys]` together with general UI activity
 - `VPSMonitor.log` — VPS monitoring
-- `PBGui.log` — general UI activity
 
 ---
 

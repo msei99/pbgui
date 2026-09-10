@@ -47,7 +47,9 @@ def test_cluster_projects_pb8_state_and_node_capability() -> None:
     assert 'id="pb8-tombstones-table"' in HTML
     assert "renderInstanceTable(payload, 'pb8_instances'" in HTML
     assert "renderTombstoneTable(payload, 'pb8_tombstones'" in HTML
-    assert "node.capabilities.indexOf('pb8_instances_v1')" in HTML
+    assert "function pb8NodeCapability(node)" in HTML
+    assert "typeof peer.pb8_capability === 'boolean'" in HTML
+    assert "label: 'Unknown'" in HTML
     assert "PB8 Instances" in HTML
 
 
@@ -59,4 +61,4 @@ def test_cluster_pb8_lifecycle_controls_use_shared_dialogs_and_generation() -> N
     assert "expected_generation: generation" in HTML
     assert "window.PBGuiDialogs.choose" in HTML
     assert "window.PBGuiDialogs.confirm" in HTML
-    assert "node.capabilities.indexOf('pb8_instances_v1')" in HTML
+    assert "pb8NodeCapability(node).supported === true" in HTML

@@ -601,7 +601,7 @@
         .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
         .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
     </style>
-    <script src="/app/js/log_viewer_panel.js?v=35"></script>
+    <script src="/app/js/log_viewer_panel.js?v=43"></script>
 </head>
 <body>
 
@@ -1218,6 +1218,7 @@
         invalidateEditorAccount();
         clearTradfiRevealedApiKey();
     });
+    window.addEventListener("pagehide", _closeLogWs);
 
     function beginEditorAccount(name) {
         const previousAccount = editorAccountName;
@@ -3599,7 +3600,9 @@
             _logViewer = new LogViewerPanel({
                 containerId : 'logViewerTarget',
                 wsBase      : _getWsBase(),
-                defaultFile : 'ApiKeys.log',
+                defaultFile : 'PBGui.log',
+                defaultSearch : '[ApiKeys]',
+                needsState  : false,
                 height      : 'calc(100vh - 300px)',
             });
         }

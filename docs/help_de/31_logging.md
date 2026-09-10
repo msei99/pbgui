@@ -20,10 +20,11 @@ Das Streaming startet automatisch — neue Zeilen werden live angehängt.
 Legt fest, wie viele Zeilen beim Öffnen oder Wechseln einer Datei geladen werden.  
 Optionen: 200 / 500 / 1000 / 2000 / 5000 / 10000 / 25000 / Max (50,000).
 Beim Ändern des Werts wird die Datei mit der neuen Anzahl neu geladen.
-Die ausgewaehlte Anzahl begrenzt zugleich den Live-Puffer im Browser und die
-gerenderten Zeilen. Beim Erreichen des Limits werden die aeltesten angezeigten
-Zeilen verworfen; die neuesten bleiben erhalten. **Max (50,000)** ist ein
-begrenzter Datei-Tail und nicht die vollstaendige Datei.
+Die ausgewaehlte Anzahl begrenzt den Quell-Tail und die gerenderten Zeilen.
+Ungefilterte und entfernte Ansichten behalten diesen begrenzten Live-Puffer im
+Browser. Bei einem aktiven lokalen Filter speichert der Browser nur Treffer und
+Kontext, waehrend der Server den vollstaendigen gewaehlten Tail durchsucht.
+**Max (50,000)** ist ein begrenzter Datei-Tail und nicht die vollstaendige Datei.
 
 ## Version-Dropdown
 
@@ -54,6 +55,12 @@ Zeilen, die keinem aktiven Level entsprechen, werden sofort ausgeblendet — ohn
 - **▲ / ▼**-Schaltflächen zum Springen zwischen Treffern
 - **Preset**-Dropdown: häufige Suchmuster (Errors, Warnings, Traceback …)
 
+Lokale Filtersuchen werden entprellt auf dem Server ausgefuehrt. Die bisherigen
+Ergebnisse bleiben sichtbar, bis die aktuelle Antwort eintrifft; beim
+Live-Streaming werden nur neue Treffer und erforderlicher Kontext uebertragen.
+Das Leeren des Filters stellt den ungefilterten Puffer wieder her. Download
+speichert weiterhin den vollstaendigen gewaehlten Quell-Tail.
+
 ## Stream-Steuerung
 
 | Schaltfläche | Aktion                                                   |
@@ -61,7 +68,7 @@ Zeilen, die keinem aktiven Level entsprechen, werden sofort ausgeblendet — ohn
 | ⏸ Pause     | Keine neuen Zeilen empfangen (Puffer bleibt erhalten)    |
 | ▶ Stream    | Live-Streaming ab aktueller Position fortsetzen          |
 | 🗑 Clear     | Anzeigepuffer leeren (Datei wird nicht gelöscht)         |
-| ⬇ Download  | Aktuellen Pufferin-halt als Textdatei speichern          |
+| ⬇ Download  | Vollstaendigen gewaehlten Quell-Tail speichern           |
 | ## Lines    | Zeilennummern ein-/ausblenden                            |
 
 ## Einstellungen

@@ -703,6 +703,77 @@ def test_local_log_subscription_snapshot_handoff_has_no_gap(
     assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["during-send"]
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"mode": "literal", "query": "x" * (vps_api.MAX_LOCAL_FILTER_LENGTH + 1)},
+        {"mode": "terms", "terms": ["ok"] * (vps_api.MAX_LOCAL_FILTER_TERMS + 1)},
+        {"mode": "terms", "terms": ["bad\nterm"]},
+        {"mode": "regex", "query": ".*"},
+        {"mode": "literal", "query": "ok", "context": 21},
+    ],
+)
+def test_local_log_filter_rejects_unbounded_or_executable_patterns(value: dict) -> None:
+    """Client filters accept only bounded literals and literal OR-term presets."""
+    with pytest.raises(ValueError):
+        vps_api._parse_local_log_filter(value)
+
+
+def test_local_log_filter_preserves_context_and_sliding_match_count() -> None:
+    """Filtered deltas emit only match context and expire counts with the source window."""
+    config = vps_api._parse_local_log_filter({
+        "mode": "literal", "query": "HIT", "context": 1,
+    })
+    assert config is not None
+    state, records = vps_api._initialize_local_filter(
+        ["old hit", "old context", "quiet", "leading", "new hit"], 5, config,
+    )
+    assert [record["line_no"] for record in records] == [1, 2, 4, 5]
+    assert state.match_count == 2
+
+    delta, source_start = vps_api._filter_local_log_delta(
+        state, ["after", "hidden", "leading two", "\x1b[31mHIT two\x1b[0m", "after two"],
+    )
+
+    assert [record["line_no"] for record in delta] == [6, 8, 9, 10]
+    assert [record["match"] for record in delta] == [False, False, True, False]
+    assert source_start == 6
+    assert state.match_count == 1
+
+
+def test_local_log_subscription_returns_compact_filtered_snapshot(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A filtered subscription returns exact source positions without raw nonmatches."""
+    path = tmp_path / "filtered.log"
+    path.write_text("before\nneedle\nafter\nhidden\n", encoding="utf-8")
+    monkeypatch.setattr(vps_api, "resolve_local_log_path", lambda _filename: path)
+
+    class CaptureWebSocket:
+        """Capture one filtered snapshot response."""
+
+        def __init__(self) -> None:
+            self.messages: list[dict] = []
+
+        async def send_json(self, message: dict) -> None:
+            """Store the response without external I/O."""
+            self.messages.append(message)
+
+    websocket = CaptureWebSocket()
+    sub = asyncio.run(vps_api._cmd_subscribe_local_logs(websocket, {
+        "file": "filtered.log", "lines": 50000, "sid": "filter-1",
+        "filter": {"mode": "literal", "query": "needle", "context": 1},
+    }))
+
+    assert sub is not None
+    response = websocket.messages[0]
+    assert response["type"] == "local_logs_filtered"
+    assert "lines" not in response
+    assert [record["line_no"] for record in response["records"]] == [1, 2, 3]
+    assert response["match_count"] == 1
+    assert getattr(sub, "_filter_state").next_line_no == 5
+
+
 def test_local_log_delta_bounds_unterminated_line(tmp_path) -> None:
     """Retain only the viewer-sized tail of a line that never terminates."""
     path = tmp_path / "long.log"
@@ -769,6 +840,132 @@ def test_local_log_unsubscribe_clears_cursor_state(
     assert sub.pos == 0
     assert sub.identity is None
     assert sub.partial == b""
+
+
+def test_state_opt_out_keeps_explicit_local_log_protocol(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A state-free socket still lists, snapshots, and streams local logs."""
+    sub = async_logs.LocalLogSub(file=tmp_path / "local.log", name="PBGui.log", sid="local-1")
+    messages: list[dict] = []
+
+    class LocalOnlyWebSocket:
+        """Exercise the local protocol with full VPS state disabled."""
+
+        client = "test-client"
+        query_params = {"state": "0"}
+
+        async def iter_text(self):
+            """Request the explicit list and a local subscription."""
+            yield '{"cmd":"list_local_logs"}'
+            yield '{"cmd":"subscribe_local_logs","file":"PBGui.log","sid":"local-1"}'
+            await asyncio.sleep(0.01)
+
+        async def send_json(self, message: dict) -> None:
+            """Capture aggregate message types only."""
+            messages.append(message)
+            await asyncio.sleep(0)
+
+    async def authenticate(_websocket):
+        """Authenticate the isolated fake socket."""
+        return object()
+
+    async def reject_state(_websocket):
+        """Fail if an initial full state crosses the opt-out boundary."""
+        raise AssertionError("state must be suppressed")
+
+    async def reject_state_loop(_websocket):
+        """Fail if the periodic full-state task is created."""
+        raise AssertionError("state loop must be suppressed")
+
+    async def idle_remote_loop(_websocket, _get_subscription):
+        """Remain cancellable without producing remote traffic."""
+        await asyncio.Event().wait()
+
+    async def local_loop(websocket, get_sub):
+        """Emit one filtered-log-style delta after subscription activation."""
+        while get_sub() is None:
+            await asyncio.sleep(0)
+        await websocket.send_json({
+            "type": "local_log_filtered_lines", "sid": "local-1", "records": [],
+            "source_start": 1, "source_end": 1, "match_count": 0,
+        })
+        await asyncio.Event().wait()
+
+    async def subscribe(websocket, _request):
+        """Return one local snapshot through the normal command boundary."""
+        await websocket.send_json({
+            "type": "local_logs_filtered", "sid": "local-1", "records": [],
+            "streaming": True, "source_start": 1, "source_end": 0, "match_count": 0,
+        })
+        return sub
+
+    monkeypatch.setattr(vps_api, "authenticate_websocket", authenticate)
+    monkeypatch.setattr(vps_api, "_send_full_state", reject_state)
+    monkeypatch.setattr(vps_api, "_push_state_loop", reject_state_loop)
+    monkeypatch.setattr(vps_api, "_push_log_loop", idle_remote_loop)
+    monkeypatch.setattr(vps_api, "_push_local_log_loop", local_loop)
+    monkeypatch.setattr(vps_api, "_cmd_subscribe_local_logs", subscribe)
+    monkeypatch.setattr(vps_api, "_streamer", SimpleNamespace(list_local_logs=lambda: ["PBGui.log"]))
+    monkeypatch.setattr(vps_api, "_log", lambda *_args, **_kwargs: None)
+
+    asyncio.run(vps_api.ws_vps(LocalOnlyWebSocket()))
+
+    assert [message["type"] for message in messages] == [
+        "local_logs_list", "local_logs_filtered", "local_log_filtered_lines",
+    ]
+
+
+def test_default_vps_socket_preserves_initial_and_periodic_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sockets without the opt-out retain the existing full-state behavior."""
+    events: list[str] = []
+
+    class DefaultWebSocket:
+        """Open a default socket long enough for its state task to start."""
+
+        client = "test-client"
+        query_params = {}
+
+        async def iter_text(self):
+            """Yield no commands after allowing background tasks to run."""
+            await asyncio.sleep(0.01)
+            if False:
+                yield ""
+
+        async def send_json(self, _message: dict) -> None:
+            """Accept state output without external I/O."""
+            await asyncio.sleep(0)
+
+    async def authenticate(_websocket):
+        """Authenticate the isolated fake socket."""
+        return object()
+
+    async def send_state(_websocket):
+        """Record initial state delivery."""
+        events.append("initial")
+        await asyncio.sleep(0)
+
+    async def state_loop(_websocket):
+        """Record periodic task creation and remain cancellable."""
+        events.append("periodic")
+        await asyncio.Event().wait()
+
+    async def idle_loop(*_args):
+        """Remain cancellable without producing log traffic."""
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(vps_api, "authenticate_websocket", authenticate)
+    monkeypatch.setattr(vps_api, "_send_full_state", send_state)
+    monkeypatch.setattr(vps_api, "_push_state_loop", state_loop)
+    monkeypatch.setattr(vps_api, "_push_log_loop", idle_loop)
+    monkeypatch.setattr(vps_api, "_push_local_log_loop", idle_loop)
+    monkeypatch.setattr(vps_api, "_log", lambda *_args, **_kwargs: None)
+
+    asyncio.run(vps_api.ws_vps(DefaultWebSocket()))
+
+    assert events == ["initial", "periodic"]
 
 
 def test_local_log_reads_use_managed_file_physical_lock(

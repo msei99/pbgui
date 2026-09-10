@@ -51,6 +51,7 @@ from master.cluster_state import (
     generate_node_id,
     load_operations,
     normalize_node_sync_mode,
+    PB8_OPERATION_CAPABILITY,
     read_local_identity,
     rebuild_materialized_state,
     stage_membership_operations,
@@ -298,6 +299,7 @@ def _load_sync_status_summary(root: Path) -> dict[str, Any]:
             "status": str(item.get("status") or ""),
             "reason": str(item.get("reason") or ""),
             "remote_node_id": str(item.get("remote_node_id") or ""),
+            "pb8_capability": item.get("pb8_capability") if isinstance(item.get("pb8_capability"), bool) else None,
             "last_seen": as_int(item.get("last_seen")),
             "next_retry": as_int(item.get("next_retry")),
             "retry_delay": as_int(item.get("retry_delay")),
@@ -447,6 +449,27 @@ def _load_sync_status_summary(root: Path) -> dict[str, Any]:
         "history_retention": history_summary,
         "cluster_retention": cluster_retention,
     }
+
+
+def _node_pb8_capability(
+    node: dict[str, Any],
+    local_node_id: str,
+    sync_status: dict[str, Any],
+) -> bool | None:
+    """Return PB8 Cluster support from the local runtime or latest peer handshake."""
+
+    node_id = str(node.get("node_id") or "")
+    if node_id and node_id == str(local_node_id or ""):
+        return True
+    for peer in sync_status.get("peers") if isinstance(sync_status.get("peers"), list) else []:
+        if isinstance(peer, dict) and str(peer.get("node_id") or "") == node_id:
+            capability = peer.get("pb8_capability")
+            if isinstance(capability, bool):
+                return capability
+    capabilities = node.get("capabilities")
+    if isinstance(capabilities, list):
+        return PB8_OPERATION_CAPABILITY in {str(item) for item in capabilities}
+    return None
 
 
 def _local_pbgui_dir_value() -> str:
@@ -1982,6 +2005,8 @@ async def _probe_cluster_node(node: dict[str, Any], identity: dict[str, Any]) ->
     crypto_bundle = crypto_bundle if isinstance(crypto_bundle, dict) else {}
     capability = payload.get("credential_capability") if isinstance(payload, dict) else {}
     capability = capability if isinstance(capability, dict) else {}
+    capabilities = payload.get("capabilities") if isinstance(payload, dict) else []
+    capabilities = [str(item) for item in capabilities] if isinstance(capabilities, list) else []
     return {
         "node_id": node_id,
         "hostname": hostname,
@@ -1991,6 +2016,7 @@ async def _probe_cluster_node(node: dict[str, Any], identity: dict[str, Any]) ->
         "remote_node_id": remote_node_id,
         "protocol_version": payload.get("protocol_version") if isinstance(payload, dict) else None,
         "credential_protocol_version": capability.get("version"),
+        "capabilities": capabilities,
         "signing_key_id": str(crypto_bundle.get("signing_key_id") or ""),
         "encryption_key_id": str(crypto_bundle.get("encryption_key_id") or ""),
         "crypto_registered": bool(
@@ -5191,11 +5217,13 @@ def get_nodes(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
         local_cluster_ssh = {"ok": False, "error": str(exc)}
     nodes = _node_list(cluster_nodes)
     local_node_id = str(snapshot["identity"].get("node_id") or "")
+    sync_status = _load_sync_status_summary(_cluster_root())
     credential_nodes = _credential_status(snapshot).get("nodes") or {}
     public_nodes = []
     for node in _nodes_with_local_defaults(nodes, local_node_id):
         public = _public_cluster_node(node)
         public.update(credential_nodes.get(str(node.get("node_id") or "")) or {})
+        public["pb8_capability"] = _node_pb8_capability(node, local_node_id, sync_status)
         public_nodes.append(public)
     return {
         "cluster_nodes": _public_cluster_nodes(cluster_nodes),
@@ -6003,13 +6031,14 @@ def mutate_pb8_instance_state(
 
     nodes = snapshot["cluster_nodes"].get("nodes")
     nodes = nodes if isinstance(nodes, dict) else {}
+    local_node_id = str(snapshot["identity"].get("node_id") or "")
+    sync_status = _load_sync_status_summary(_cluster_root())
     assigned_host = str(current.get("assigned_host") or "")
     operation_name = ""
     operation_payload: dict[str, Any] = {"instance": name}
     if body.action == "start":
         target = nodes.get(assigned_host)
-        capabilities = target.get("capabilities") if isinstance(target, dict) else []
-        if "pb8_instances_v1" not in {str(item) for item in capabilities or []}:
+        if not isinstance(target, dict) or _node_pb8_capability(target, local_node_id, sync_status) is not True:
             raise HTTPException(status_code=409, detail="Assigned node does not advertise PB8 Cluster support")
         if current.get("desired_state") == "running":
             return {"ok": True, "changed": False, "action": "start", "instance": name}
@@ -6023,7 +6052,7 @@ def mutate_pb8_instance_state(
         target = nodes.get(target_node_id)
         if not isinstance(target, dict):
             raise HTTPException(status_code=422, detail="A registered target node is required")
-        if "pb8_instances_v1" not in {str(item) for item in target.get("capabilities") or []}:
+        if _node_pb8_capability(target, local_node_id, sync_status) is not True:
             raise HTTPException(status_code=409, detail="Target node does not advertise PB8 Cluster support")
         if current.get("desired_state") != "stopped":
             raise HTTPException(status_code=409, detail="Stop the PB8 instance before moving it")

@@ -3023,6 +3023,38 @@
         return 'bad';
       }
 
+      function pb8NodeCapability(node) {
+        node = node || {};
+        if (node.node_id && node.node_id === localNodeId) {
+          return { supported: true, label: 'Ready', cls: 'good', title: 'The local PBGui runtime supports PB8 Cluster operations.' };
+        }
+        var peer = clusterSyncPeerMap[node.node_id] || {};
+        if (typeof peer.pb8_capability === 'boolean') {
+          return peer.pb8_capability
+            ? { supported: true, label: 'Ready', cls: 'good', title: 'The latest PBCluster handshake advertises PB8 Cluster support.' }
+            : { supported: false, label: 'Unsupported', cls: 'warn', title: 'The latest PBCluster handshake does not advertise PB8 Cluster support.' };
+        }
+        var probe = remoteProbeMap[node.node_id] || {};
+        if (probe.status === 'ok' && Array.isArray(probe.capabilities)) {
+          var probed = probe.capabilities.indexOf('pb8_instances_v1') >= 0;
+          return probed
+            ? { supported: true, label: 'Ready', cls: 'good', title: 'The read-only hello probe advertises PB8 Cluster support.' }
+            : { supported: false, label: 'Unsupported', cls: 'warn', title: 'The read-only hello probe does not advertise PB8 Cluster support.' };
+        }
+        if (typeof node.pb8_capability === 'boolean') {
+          return node.pb8_capability
+            ? { supported: true, label: 'Ready', cls: 'good', title: 'PB8 Cluster support was confirmed by the API.' }
+            : { supported: false, label: 'Unsupported', cls: 'warn', title: 'The API confirmed that PB8 Cluster support is unavailable.' };
+        }
+        if (Array.isArray(node.capabilities)) {
+          var stored = node.capabilities.indexOf('pb8_instances_v1') >= 0;
+          return stored
+            ? { supported: true, label: 'Ready', cls: 'good', title: 'Stored node metadata advertises PB8 Cluster support.' }
+            : { supported: false, label: 'Unsupported', cls: 'warn', title: 'Stored node metadata does not advertise PB8 Cluster support.' };
+        }
+        return { supported: null, label: 'Unknown', cls: '', title: 'No PB8 Cluster capability handshake is available yet.' };
+      }
+
       function syncMode(node) {
         var mode = String((node || {}).sync_mode || '').toLowerCase();
         if (mode === 'disabled' || mode === 'outbound_only' || mode === 'reachable') return mode;
@@ -3325,8 +3357,8 @@
         updateNodeCell(row, 'key', '<span class="pill ' + (keyKnown ? 'good' : 'warn') + '">' + esc(keySummary(node, probe)) + '</span>', node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint || '');
         updateNodeCell(row, 'login_key', '<span class="pill ' + loginKeyPill(loginKey.status) + '">' + esc(loginKey.label) + '</span>', loginKey.title || '');
         updateNodeCell(row, 'probe', '<span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span>', probeTitle);
-        var supportsPb8 = Array.isArray(node.capabilities) && node.capabilities.indexOf('pb8_instances_v1') >= 0;
-        updateNodeCell(row, 'pb8', '<span class="pill ' + (supportsPb8 ? 'good' : 'warn') + '">' + (supportsPb8 ? 'Ready' : 'Unsupported') + '</span>');
+        var pb8Capability = pb8NodeCapability(node);
+        updateNodeCell(row, 'pb8', '<span class="pill ' + pb8Capability.cls + '">' + esc(pb8Capability.label) + '</span>', pb8Capability.title);
         updateNodeCell(row, 'action', nodeActionHtml(node, mode, probeStatus));
         updateNodeCell(row, 'updated', esc(timeText(node.updated_at)));
       }
@@ -3351,7 +3383,10 @@
           key: function (node) { return node.cluster_ssh_fingerprint || ''; },
           login_key: function (node) { return loginKeyStatus(node, syncMode(node)).label || ''; },
           probe: function (node) { return (remoteProbeMap[node.node_id] || {}).status || ''; },
-          pb8: function (node) { return Array.isArray(node.capabilities) && node.capabilities.indexOf('pb8_instances_v1') >= 0; },
+          pb8: function (node) {
+            var capability = pb8NodeCapability(node).supported;
+            return capability === true ? 2 : (capability === false ? 0 : 1);
+          },
           updated: function (node) { return Number(node.updated_at || 0); }
         });
         var tbody = ensureNodesTable();
@@ -3446,7 +3481,7 @@
           var currentHost = button.getAttribute('data-pb8-host') || '';
           var choices = Object.keys(nodeMap).filter(function (nodeId) {
             var node = nodeMap[nodeId] || {};
-            return nodeId !== currentHost && Array.isArray(node.capabilities) && node.capabilities.indexOf('pb8_instances_v1') >= 0;
+            return nodeId !== currentHost && pb8NodeCapability(node).supported === true;
           }).map(function (nodeId) {
             return { label: nodeLabel(nodeId), value: nodeId, primary: true };
           });

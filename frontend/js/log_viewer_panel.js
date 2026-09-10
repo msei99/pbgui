@@ -26,6 +26,7 @@
 class LogViewerPanel {
 
     static MAX_LINES = 50000;
+    static MAX_DISPLAY_CHARS = 4000;
 
     /* ── Preset sets ──────────────────────────────────────────── */
     static PRESETS = {
@@ -177,6 +178,7 @@ class LogViewerPanel {
     text-align:right;color:#555;font-size:11px;user-select:none;pointer-events:none;
 }
 .lvp-terminal.show-line-nums > div.lvp-separator::before{content:''}
+.lvp-terminal > div[data-ln]{content-visibility:auto;contain-intrinsic-size:auto 18px}
 
 /* log line classes */
 .lvp-log-debug   {color:#808080}
@@ -213,6 +215,10 @@ class LogViewerPanel {
     text-align:center;color:#64748b;font-size:11px;padding:2px 0;
     user-select:none;border-top:1px dotted #334155;border-bottom:1px dotted #334155;margin:2px 0;
 }
+.lvp-terminal.lvp-groups-collapsed .lvp-grp-detail,
+.lvp-terminal.lvp-groups-collapsed .lvp-separator{display:none}
+.lvp-terminal.lvp-groups-collapsed .lvp-grp-detail.lvp-group-expanded{display:block}
+.lvp-terminal .lvp-grp-detail.lvp-group-folded{display:none}
 .lvp-group-first{cursor:pointer;padding-left:20px !important;position:relative}
 .lvp-group-first .grp-arrow{
     position:absolute;left:2px;top:0;color:#fff;font-size:11px;
@@ -275,6 +281,7 @@ class LogViewerPanel {
         this._serviceListOverride = typeof opts.serviceListOverride === 'function' ? opts.serviceListOverride : null;
         this._restartServiceProvider = typeof opts.restartServiceProvider === 'function' ? opts.restartServiceProvider : null;
         this._restartHandler = typeof opts.restartHandler === 'function' ? opts.restartHandler : null;
+        this._needsState = opts.needsState !== false;
         this._serviceStatusProvider = typeof opts.serviceStatusProvider === 'function' ? opts.serviceStatusProvider : null;
         this._taskBrowseMode = !!opts.taskBrowseMode;
         this._taskListSortMode = opts.taskListSortMode || 'newest';
@@ -289,7 +296,7 @@ class LogViewerPanel {
         this._rafPending   = false;
         this._renderAbort  = 0;
         this._visLevels    = new Set(['DEBUG','INFO','WARNING','ERROR','CRITICAL']);
-        this._searchTerm   = '';
+        this._searchTerm   = String(opts.defaultSearch || '').trim();
         this._searchRegex  = false;
         this._filterMode   = true;
         this._matchEls     = [];
@@ -302,6 +309,20 @@ class LogViewerPanel {
         this._vpState      = null;
         this._contextLines = 5;
         this._blocksCollapsed = true;
+        this._renderMode = 'full';
+        this._filteredSnapshot = [];
+        this._filteredBase = 0;
+        this._filteredIsMatch = null;
+        this._filteredBlocks = [];
+        this._filteredMatchCount = 0;
+        this._filteredSignature = '';
+        this._filteredLineNumbers = [];
+        this._expandedBlocks = new Set();
+        this._serverFiltered = false;
+        this._serverFilterPending = '';
+        this._serverFilterSupported = null;
+        this._serverRecords = [];
+        this._downloadRequestId = 0;
         this._fileSize     = null;
         this._pendingRestartCommand = null;
         this._restartAttempt = null;
@@ -320,6 +341,7 @@ class LogViewerPanel {
 
         LogViewerPanel._injectStyles();
         this._build();
+        this._q('search').value = this._searchTerm;
         this._bindEvents();
     }
 
@@ -558,13 +580,20 @@ class LogViewerPanel {
             e.preventDefault();
             var blk = first.dataset.blk;
             if (blk === undefined) return;
+            if (me._renderMode === 'filtered') {
+                me._toggleFilteredBlock(parseInt(blk, 10));
+                return;
+            }
             first.classList.toggle('collapsed');
             var show = !first.classList.contains('collapsed');
             var arrow = first.querySelector('.grp-arrow');
             if (arrow) arrow.textContent = show ? '\u25bc ' : '\u25b6 ';
             var details = me._q('terminal').querySelectorAll('.lvp-grp-detail[data-blk="' + blk + '"]');
-            for (var j = 0; j < details.length; j++)
-                details[j].style.display = show ? '' : 'none';
+            for (var j = 0; j < details.length; j++) {
+                details[j].classList.toggle('lvp-group-expanded', show);
+                details[j].classList.toggle('lvp-group-folded', !show);
+            }
+            me._paintGroupDetails(details);
         });
     }
 
@@ -572,7 +601,19 @@ class LogViewerPanel {
        Public API
        ═══════════════════════════════════════════════════════ */
     open()  { this._closed = false; if (!this._authExpired) this._connect(); }
-    close() { this._closed = true; this._disconnect(); }
+    close() {
+        this._closed = true;
+        ++this._restartGeneration;
+        this._disconnect();
+        this._finishRestartAttempt();
+        ++this._downloadRequestId;
+        this._serverFilterSupported = null;
+        this._vpState = null;
+        this._fileList = [];
+        this._clear();
+        this._showFileSize(null);
+        this._updateStreamBtn();
+    }
 
     /** Currently selected file (local mode) */
     get currentFile() { return this._file; }
@@ -628,12 +669,13 @@ class LogViewerPanel {
        ═══════════════════════════════════════════════════════ */
     _connect() {
         if (this._authExpired) return;
+        this._serverFilterSupported = null;
         if (this._reconnectTimer) {
             clearTimeout(this._reconnectTimer);
             this._reconnectTimer = 0;
         }
         this._disconnect();
-        var url = this._wsBase + '/ws/vps';
+        var url = this._wsBase + '/ws/vps' + (this._needsState === false ? '?state=0' : '');
         var ws  = new WebSocket(url);
         var generation = ++this._wsGeneration;
         this._ws  = ws;
@@ -740,6 +782,16 @@ class LogViewerPanel {
 
         case 'local_logs':
             if (msg.sid !== undefined && msg.sid !== this._sid) return;
+            if (msg.purpose === 'download') {
+                if (msg.request_id !== this._downloadRequestId) return;
+                this._downloadLines(msg.lines || []);
+                return;
+            }
+            if (this._serverFilterPending) this._serverFilterSupported = false;
+            this._serverFiltered = false;
+            this._serverFilterPending = '';
+            this._serverRecords = [];
+            this._filteredLineNumbers = [];
             this._replaceLines(msg.lines || []);
             this._streaming = !!msg.streaming;
             if (msg.file_size !== undefined) this._showFileSize(msg.file_size);
@@ -748,9 +800,24 @@ class LogViewerPanel {
             this._sendPreparedRestart(msg.sid);
             break;
 
+        case 'local_logs_filtered':
+            if (msg.sid !== undefined && msg.sid !== this._sid) return;
+            this._applyServerFilteredRecords(msg, false);
+            this._streaming = !!msg.streaming;
+            if (msg.file_size !== undefined) this._showFileSize(msg.file_size);
+            this._updateStreamBtn();
+            this._sendPreparedRestart(msg.sid);
+            break;
+
         case 'local_log_lines':
             if (msg.sid !== undefined && msg.sid !== this._sid) return;
             this._ingestLines(msg.lines || []);
+            break;
+
+        case 'local_log_filtered_lines':
+            if (msg.sid !== undefined && msg.sid !== this._sid) return;
+            if (!this._serverFiltered) return;
+            this._applyServerFilteredRecords(msg, true);
             break;
 
         case 'logs':
@@ -828,6 +895,85 @@ class LogViewerPanel {
             this._lineBase += trim;
         }
         this._appendLines(normalized.length > this._MAX ? normalized.slice(-this._MAX) : normalized);
+    }
+
+    _applyServerFilteredRecords(msg, append) {
+        var incoming = Array.isArray(msg.records) ? msg.records : [];
+        var sourceStart = Math.max(1, Number(msg.source_start) || 1);
+        var merged = append ? this._serverRecords.concat(incoming) : incoming.slice();
+        var byLine = new Map();
+        for (var i = 0; i < merged.length; i++) {
+            var record = merged[i] || {};
+            var lineNo = Number(record.line_no);
+            if (!Number.isInteger(lineNo) || lineNo < sourceStart) continue;
+            byLine.set(lineNo, {line:String(record.line == null ? '' : record.line), line_no:lineNo, match:!!record.match});
+        }
+        var ordered = Array.from(byLine.values()).sort(function(a, b) { return a.line_no - b.line_no; });
+        var visible = new Uint8Array(ordered.length);
+        for (var matchIndex = 0; matchIndex < ordered.length; matchIndex++) {
+            if (!ordered[matchIndex].match) continue;
+            for (var left = matchIndex; left >= 0 && ordered[matchIndex].line_no - ordered[left].line_no <= this._contextLines; left--)
+                visible[left] = 1;
+            for (var right = matchIndex; right < ordered.length && ordered[right].line_no - ordered[matchIndex].line_no <= this._contextLines; right++)
+                visible[right] = 1;
+        }
+        var relevant = ordered.filter(function(_record, index) { return !!visible[index]; });
+        var groups = [];
+        var group = [];
+        for (var j = 0; j < relevant.length; j++) {
+            if (group.length && relevant[j].line_no !== group[group.length - 1].line_no + 1) {
+                groups.push(group); group = [];
+            }
+            group.push(relevant[j]);
+        }
+        if (group.length) groups.push(group);
+        var records = [];
+        var blocks = [];
+        for (var g = 0; g < groups.length; g++) {
+            var firstMatchOffset = groups[g].findIndex(function(record) { return record.match; });
+            if (firstMatchOffset < 0) continue;
+            var start = records.length;
+            var matches = 0;
+            for (var k = 0; k < groups[g].length; k++) {
+                records.push(groups[g][k]);
+                if (groups[g][k].match) matches++;
+            }
+            blocks.push({start:start, end:records.length - 1, firstMatch:start + firstMatchOffset, matchCount:matches});
+        }
+        var unchanged = append && ordered.length === this._serverRecords.length;
+        if (unchanged) {
+            for (var r = 0; r < ordered.length; r++) {
+                var prior = this._serverRecords[r];
+                if (ordered[r].line_no !== prior.line_no || ordered[r].match !== prior.match || ordered[r].line !== prior.line) {
+                    unchanged = false;
+                    break;
+                }
+            }
+        }
+        if (unchanged) {
+            this._filteredMatchCount = Math.max(0, Number(msg.match_count) || 0);
+            this._updateMatchCount(this._filteredBlocks.length, this._filteredMatchCount);
+            return;
+        }
+        this._serverRecords = ordered;
+        this._lines = records.map(function(record) { return record.line; });
+        this._lineBase = 0;
+        this._filteredSnapshot = this._lines.slice();
+        this._filteredLineNumbers = records.map(function(record) { return record.line_no; });
+        this._filteredIsMatch = Uint8Array.from(records, function(record) { return record.match ? 1 : 0; });
+        this._filteredBlocks = blocks;
+        this._filteredMatchCount = Math.max(0, Number(msg.match_count) || 0);
+        this._filteredSignature = this._filterSignature();
+        this._serverFiltered = true;
+        this._serverFilterSupported = true;
+        this._serverFilterPending = '';
+        this._renderMode = 'filtered';
+        this._expandedBlocks.clear();
+        var ctx = this._q('ctx-sel');
+        var actions = this._q('grp-actions');
+        if (ctx) ctx.style.display = '';
+        if (actions) actions.style.display = '';
+        this._renderFilteredRows(++this._searchAbort, true);
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -1471,7 +1617,13 @@ class LogViewerPanel {
         if (this._isLocal()) {
             if (!this._file) return null;
             var startLocalAtEnd = options.startAtEnd === true || !!this._startLocalAtEnd;
-            this._send({ cmd: 'subscribe_local_logs', file: this._file, lines: this._getLines(), sid: sid, start_at_end: startLocalAtEnd });
+            var localRequest = { cmd: 'subscribe_local_logs', file: this._file, lines: this._getLines(), sid: sid, start_at_end: startLocalAtEnd };
+            var filter = this._serverFilterSpec();
+            if (filter) {
+                localRequest.filter = filter;
+                this._serverFilterPending = this._filterSignature();
+            }
+            this._send(localRequest);
             this._startLocalAtEnd = false;
         } else {
             if (!this._host || !this._service) return null;
@@ -1482,6 +1634,27 @@ class LogViewerPanel {
         this._streaming = true;
         this._updateStreamBtn();
         return sid;
+    }
+
+    _serverFilterSpec() {
+        if (!this._isLocal() || !this._filterMode || !this._searchTerm) return null;
+        if (this._searchRegex) {
+            return {mode:'terms', terms:this._searchTerm.split('|').filter(Boolean), context:this._contextLines};
+        }
+        return {mode:'literal', query:this._searchTerm, context:this._contextLines};
+    }
+
+    _requestLocalFilter() {
+        if (!this._ws || this._ws.readyState !== WebSocket.OPEN || !this._streaming || !this._file) return false;
+        var sid = ++this._sid;
+        var request = {cmd:'subscribe_local_logs', file:this._file, lines:this._getLines(), sid:sid};
+        var filter = this._serverFilterSpec();
+        if (filter) request.filter = filter;
+        this._serverFilterPending = this._filterSignature();
+        var count = this._q('match-count');
+        if (count) count.textContent = 'Searching...';
+        this._send(request);
+        return true;
     }
 
     _unsubscribe() {
@@ -1533,11 +1706,25 @@ class LogViewerPanel {
     }
 
     _clear() {
+        ++this._searchAbort;
+        if (this._searchTimer) clearTimeout(this._searchTimer);
+        this._searchTimer = null;
         this._lines      = [];
         this._lineBase   = 0;
         this._pending    = [];
         this._rafPending = false;
         this._fullRenderPending = false;
+        this._renderMode = 'full';
+        this._filteredSnapshot = [];
+        this._filteredIsMatch = null;
+        this._filteredBlocks = [];
+        this._filteredMatchCount = 0;
+        this._filteredSignature = '';
+        this._filteredLineNumbers = [];
+        this._expandedBlocks.clear();
+        this._serverFiltered = false;
+        this._serverFilterPending = '';
+        this._serverRecords = [];
         ++this._renderAbort;
         var term = this._q('terminal');
         if (term) term.innerHTML = '';
@@ -1551,8 +1738,18 @@ class LogViewerPanel {
     }
 
     _download() {
-        if (!this._lines.length) return;
-        var blob = new Blob([this._lines.join('\n')], { type: 'text/plain' });
+        if (this._serverFiltered && this._isLocal()) {
+            var requestId = ++this._downloadRequestId;
+            this._send({cmd:'get_local_logs', file:this._file, lines:this._getLines(), sid:this._sid,
+                purpose:'download', request_id:requestId});
+            return;
+        }
+        this._downloadLines(this._lines);
+    }
+
+    _downloadLines(lines) {
+        if (!lines.length) return;
+        var blob = new Blob([lines.join('\n')], { type: 'text/plain' });
         var url  = URL.createObjectURL(blob);
         var a    = document.createElement('a');
         a.href   = url;
@@ -1864,6 +2061,14 @@ class LogViewerPanel {
         return re ? re.test(text) : false;
     }
 
+    _displayText(text) {
+        // Bound wrapping and mark-node creation, not the searchable/downloadable data.
+        var limit = LogViewerPanel.MAX_DISPLAY_CHARS;
+        return text.length > limit
+            ? text.slice(0, limit) + ' ... [long line shortened; Download for full text]'
+            : text;
+    }
+
     _buildDiv(line, lineNum) {
         var div = document.createElement('div');
         if (lineNum != null) div.dataset.ln = lineNum;
@@ -1873,6 +2078,8 @@ class LogViewerPanel {
         var level = this._extractLevel(cleanLine);
         div.dataset.level = level;
         div.dataset.text  = cleanLine;
+        var displayLine = this._displayText(cleanLine);
+        rawLine = this._displayText(rawLine);
         var cls = hasAnsi ? 'lvp-log-info' : this._levelClass(level);
         if (!this._visLevels.has(level)) cls += ' lvp-level-hidden';
 
@@ -1880,19 +2087,23 @@ class LogViewerPanel {
         if (this._searchTerm && this._testMatch(cleanLine)) {
             cls += ' lvp-highlight';
             if (hasAnsi) div.innerHTML = this._renderAnsiHtml(rawLine, re);
-            else div.innerHTML = re ? this._esc(cleanLine).replace(re, '<mark>$1</mark>') : this._esc(cleanLine);
+            else div.innerHTML = re ? this._esc(displayLine).replace(re, '<mark>$1</mark>') : this._esc(displayLine);
         } else if (this._searchTerm && this._filterMode) {
-            div.textContent = cleanLine;
+            div.textContent = displayLine;
             cls += ' lvp-hidden';
         } else {
             if (hasAnsi) div.innerHTML = this._renderAnsiHtml(rawLine, null);
-            else div.textContent = cleanLine;
+            else div.textContent = displayLine;
         }
         div.className = cls;
         return div;
     }
 
     _renderFull() {
+        if (this._searchTerm && this._filterMode) {
+            this._renderFilteredFromModel();
+            return;
+        }
         var term = this._q('terminal');
         if (!term) return;
         if (this._lines.length > this._MAX) {
@@ -1901,7 +2112,10 @@ class LogViewerPanel {
             this._lineBase += trim;
         }
         var rid = ++this._renderAbort;
+        var renderSearchId = ++this._searchAbort;
+        this._renderMode = 'full';
         var renderLines = this._lines.slice();
+        var renderSearchTerm = this._searchTerm;
         var renderBase = this._lineBase;
         this._pending    = [];
         this._rafPending = false;
@@ -1917,7 +2131,8 @@ class LogViewerPanel {
             term.appendChild(frag);
             term.scrollTop = term.scrollHeight;
             var me = this;
-            if (this._searchTerm) setTimeout(function() { me._applySearch(); }, 0);
+            if (renderSearchTerm || this._searchTerm || renderSearchId !== this._searchAbort)
+                setTimeout(function() { if (rid === me._renderAbort) me._applySearch(); }, 0);
             else this._updateMatchCount(0);
             return;
         }
@@ -1933,16 +2148,20 @@ class LogViewerPanel {
         function rChunk() {
             if (rid !== me._renderAbort) return;
             var end  = Math.min(idx + me._CHUNK, total);
+            var deadline = performance.now() + 8;
             var frag = document.createDocumentFragment();
-            for (; idx < end; idx++)
+            for (; idx < end; idx++) {
                 frag.appendChild(me._buildDiv(renderLines[idx], renderBase + idx + 1));
+                if (performance.now() >= deadline) { idx++; break; }
+            }
             if (idx >= total) {
                 status.remove();
                 term.appendChild(frag);
                 term.scrollTop = term.scrollHeight;
                 me._fullRenderPending = false;
                 me._appendLines([]);
-                if (me._searchTerm) setTimeout(function() { me._applySearch(); }, 0);
+                if (renderSearchTerm || me._searchTerm || renderSearchId !== me._searchAbort)
+                    setTimeout(function() { if (rid === me._renderAbort) me._applySearch(); }, 0);
                 else me._updateMatchCount(0);
             } else {
                 term.insertBefore(frag, status);
@@ -1954,6 +2173,12 @@ class LogViewerPanel {
     }
 
     _appendLines(newLines) {
+        if (this._searchTerm && this._filterMode) {
+            this._pending = [];
+            this._rafPending = false;
+            if (newLines.length) this._appendFilteredLines(newLines);
+            return;
+        }
         if (newLines.length) {
             var startNum = this._lineBase + this._lines.length - newLines.length + 1;
             for (var i = 0; i < newLines.length; i++)
@@ -1984,6 +2209,46 @@ class LogViewerPanel {
         });
     }
 
+    _filterSignature() {
+        return this._searchTerm + '\n' + (this._searchRegex ? '1' : '0') + '\n' + this._contextLines;
+    }
+
+    _appendFilteredLines(newLines) {
+        var signature = this._filterSignature();
+        if (!this._filteredIsMatch || this._filteredSignature !== signature) {
+            this._renderFilteredFromModel();
+            return;
+        }
+        var terminal = this._q('terminal');
+        var atBottom = !terminal || terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 40;
+        var nextLines = this._lines.slice();
+        var nextMatches = new Uint8Array(nextLines.length);
+        var dropped = Math.max(0, this._lineBase - this._filteredBase);
+        var retained = Math.min(
+            Math.max(0, this._filteredSnapshot.length - dropped),
+            Math.max(0, nextLines.length - newLines.length)
+        );
+        if (retained) nextMatches.set(this._filteredIsMatch.subarray(dropped, dropped + retained));
+        var re = this._getSearchRe();
+        var newStart = Math.max(retained, nextLines.length - newLines.length);
+        for (var i = newStart; i < nextLines.length; i++) {
+            if (re) {
+                re.lastIndex = 0;
+                nextMatches[i] = re.test(this._stripAnsi(nextLines[i])) ? 1 : 0;
+            }
+        }
+        var result = this._computeBlocks(nextMatches, nextLines.length, this._contextLines);
+        var matchCount = 0;
+        for (var b = 0; b < result.blocks.length; b++) matchCount += result.blocks[b].matchCount;
+        this._filteredSnapshot = nextLines;
+        this._filteredBase = this._lineBase;
+        this._filteredIsMatch = nextMatches;
+        this._filteredBlocks = result.blocks;
+        this._filteredMatchCount = matchCount;
+        this._expandedBlocks.clear();
+        this._renderFilteredRows(this._searchAbort, atBottom);
+    }
+
     /* ═══════════════════════════════════════════════════════════
        Search UI
        ═══════════════════════════════════════════════════════ */
@@ -1999,28 +2264,32 @@ class LogViewerPanel {
             this._q('search').value = '';
         }
         var me = this;
-        setTimeout(function() { me._applySearch(); }, 0);
+        if (this._searchTimer) clearTimeout(this._searchTimer);
+        this._searchTimer = setTimeout(function() { me._searchTimer = null; me._applySearch(); }, 180);
     }
 
     _onSearchInput() {
         this._searchTerm  = (this._q('search').value || '').trim();
         this._searchRegex = false;
         this._q('preset').value = '';
+        ++this._searchAbort;
         if (this._searchTimer) clearTimeout(this._searchTimer);
         var me = this;
-        this._searchTimer = setTimeout(function() { me._applySearch(); }, 300);
+        this._searchTimer = setTimeout(function() { me._searchTimer = null; me._applySearch(); }, 180);
     }
 
     _onFilterToggle() {
         this._filterMode = this._q('filter-chk').checked;
         var me = this;
-        setTimeout(function() { me._applySearch(); }, 0);
+        if (this._searchTimer) clearTimeout(this._searchTimer);
+        this._searchTimer = setTimeout(function() { me._searchTimer = null; me._applySearch(); }, 180);
     }
 
     _onContextChange() {
         this._contextLines = parseInt(this._q('ctx-sel').value || '5', 10);
         var me = this;
-        setTimeout(function() { me._applySearch(); }, 0);
+        if (this._searchTimer) clearTimeout(this._searchTimer);
+        this._searchTimer = setTimeout(function() { me._searchTimer = null; me._applySearch(); }, 180);
     }
 
     _onSearchKeydown(e) {
@@ -2039,91 +2308,298 @@ class LogViewerPanel {
         var navBtns    = this._q('nav-btns');
         var countEl    = this._q('match-count');
         if (!terminal) return;
+        if (this._isLocal() && this._streaming && this._serverFilterSupported !== false
+                && ((this._searchTerm && this._filterMode) || this._serverFiltered)) {
+            if (this._requestLocalFilter()) return;
+        }
+        if (this._searchTerm && this._filterMode) {
+            this._renderFilteredFromModel();
+            return;
+        }
+        if (this._fullRenderPending) {
+            if (this._renderMode === 'full') return;
+            ++this._renderAbort;
+            this._fullRenderPending = false;
+        }
+        if (this._renderMode !== 'full') {
+            this._renderFull();
+            return;
+        }
 
+        var searchId = ++this._searchAbort;
         this._cleanupGroups(terminal);
+        terminal.classList.toggle('lvp-groups-collapsed', !!this._searchTerm && this._filterMode && this._blocksCollapsed);
         var children = Array.from(terminal.children);
         var total = children.length;
+        var me = this;
 
         this._matchEls = [];
         this._matchIdx = -1;
 
         if (!this._searchTerm) {
-            for (var i = 0; i < children.length; i++) {
-                var div = children[i];
-                var text = div.dataset.text || div.textContent;
-                div.textContent = text;
-                var cls = div.className
-                    .replace(/ lvp-highlight| lvp-hidden| lvp-level-hidden| lvp-current-match/g, '');
-                var lv = div.dataset.level || 'INFO';
-                if (!this._visLevels.has(lv)) cls += ' lvp-level-hidden';
-                div.className = cls;
-            }
             if (ctxSel) ctxSel.style.display = 'none';
             if (grpActions) grpActions.style.display = 'none';
             if (navBtns) navBtns.style.display = 'none';
-            if (countEl) countEl.textContent = '';
+            var resetIdx = 0;
+            function resetChunk() {
+                if (searchId !== me._searchAbort) return;
+                var end = Math.min(resetIdx + me._SCHUNK, total);
+                for (; resetIdx < end; resetIdx++) me._applyPlainDiv(children[resetIdx]);
+                if (resetIdx < total) requestAnimationFrame(resetChunk);
+                else if (countEl) countEl.textContent = '';
+            }
+            if (total <= this._SCHUNK) resetChunk();
+            else requestAnimationFrame(resetChunk);
             return;
         }
-
-        /* build isMatch bitmap */
-        var isMatch = new Uint8Array(total);
-        for (var i = 0; i < total; i++)
-            isMatch[i] = this._testMatch(children[i].dataset.text || children[i].textContent || '') ? 1 : 0;
 
         var re = this._getSearchRe();
-
-        /* non-filter mode: highlight only */
-        if (!this._filterMode) {
-            if (ctxSel) ctxSel.style.display = 'none';
-            if (grpActions) grpActions.style.display = 'none';
-            this._applyHighlightsOnly(children, isMatch, total, re);
-            return;
-        }
-
-        /* filter + context mode */
-        if (ctxSel) ctxSel.style.display = '';
-        if (grpActions) grpActions.style.display = '';
-
-        var result   = this._computeBlocks(isMatch, total, this._contextLines);
-        var blocks   = result.blocks;
-        var blockOf  = result.blockOf;
-        var isVisible = result.isVisible;
-        var me = this;
-        var searchId = ++this._searchAbort;
-
-        if (total <= this._SCHUNK) {
-            for (var i = 0; i < total; i++)
-                this._applyBlockDiv(children[i], i, isMatch, isVisible, blockOf, blocks, re);
-            this._insertSeparators(terminal, children, blocks);
-            if (this._blocksCollapsed) this._toggleAllGroups(false);
-            this._updateMatchCount(blocks.length);
-            return;
-        }
-
-        /* chunked processing */
-        for (var i = 0; i < total; i++) children[i].style.display = 'none';
-        var idx = 0;
-
-        function processChunk() {
+        var isMatch = new Uint8Array(total);
+        var scanIdx = 0;
+        function scanChunk() {
             if (searchId !== me._searchAbort) return;
-            var end = Math.min(idx + me._SCHUNK, total);
-            for (; idx < end; idx++)
-                me._applyBlockDiv(children[idx], idx, isMatch, isVisible, blockOf, blocks, re);
-            if (idx < total) {
-                if (countEl) countEl.textContent = 'Filtering\u2026 ' + Math.round(idx / total * 100) + '%';
-                requestAnimationFrame(processChunk);
+            var end = Math.min(scanIdx + me._SCHUNK, total);
+            for (; scanIdx < end; scanIdx++) {
+                if (re) {
+                    re.lastIndex = 0;
+                    isMatch[scanIdx] = re.test(children[scanIdx].dataset.text || children[scanIdx].textContent || '') ? 1 : 0;
+                }
+            }
+            if (scanIdx < total) {
+                if (countEl) countEl.textContent = 'Searching\u2026 ' + Math.round(scanIdx / total * 100) + '%';
+                requestAnimationFrame(scanChunk);
             } else {
-                me._insertSeparators(terminal, children, blocks);
-                if (me._blocksCollapsed) me._toggleAllGroups(false);
-                me._updateMatchCount(blocks.length);
+                applyMatches();
             }
         }
-        requestAnimationFrame(processChunk);
+
+        function applyMatches() {
+            if (searchId !== me._searchAbort) return;
+            if (!me._filterMode) {
+                if (ctxSel) ctxSel.style.display = 'none';
+                if (grpActions) grpActions.style.display = 'none';
+                me._applyHighlightsOnly(children, isMatch, total, re, searchId);
+                return;
+            }
+
+            if (ctxSel) ctxSel.style.display = '';
+            if (grpActions) grpActions.style.display = '';
+
+            var result = me._computeBlocks(isMatch, total, me._contextLines);
+            var blocks = result.blocks;
+            var blockOf = result.blockOf;
+            var isVisible = result.isVisible;
+            var idx = 0;
+
+            function processChunk() {
+                if (searchId !== me._searchAbort) return;
+                var end = Math.min(idx + me._SCHUNK, total);
+                for (; idx < end; idx++)
+                    me._applyBlockDiv(children[idx], idx, isMatch, isVisible, blockOf, blocks, re);
+                if (idx < total) {
+                    if (countEl) countEl.textContent = 'Filtering\u2026 ' + Math.round(idx / total * 100) + '%';
+                    requestAnimationFrame(processChunk);
+                } else {
+                    me._insertSeparators(terminal, children, blocks);
+                    if (me._blocksCollapsed) me._toggleAllGroups(false);
+                    me._updateMatchCount(blocks.length);
+                }
+            }
+
+            if (total <= me._SCHUNK) processChunk();
+            else requestAnimationFrame(processChunk);
+        }
+
+        if (total <= this._SCHUNK) scanChunk();
+        else requestAnimationFrame(scanChunk);
     }
 
-    _applyHighlightsOnly(children, isMatch, total, re) {
-        var me = this;
+    _renderFilteredFromModel() {
+        var terminal = this._q('terminal');
+        if (!terminal) return;
         var searchId = ++this._searchAbort;
+        var rid = ++this._renderAbort;
+        var snapshot = this._lines.slice();
+        var base = this._lineBase;
+        var signature = this._filterSignature();
+        var re = this._getSearchRe();
+        var isMatch = new Uint8Array(snapshot.length);
+        var countEl = this._q('match-count');
+        var me = this;
+        var idx = 0;
+        var matchCount = 0;
+
+        this._renderMode = 'filtered';
+        this._fullRenderPending = true;
+        this._pending = [];
+        this._rafPending = false;
+        this._matchEls = [];
+        this._matchIdx = -1;
+        this._expandedBlocks.clear();
+        terminal.classList.add('lvp-groups-collapsed');
+        terminal.innerHTML = '';
+        var status = document.createElement('div');
+        status.style.cssText = 'color:#888;padding:8px;font-size:12px';
+        status.textContent = 'Searching\u2026';
+        terminal.appendChild(status);
+
+        var ctxSel = this._q('ctx-sel');
+        var grpActions = this._q('grp-actions');
+        var navBtns = this._q('nav-btns');
+        if (ctxSel) ctxSel.style.display = '';
+        if (grpActions) grpActions.style.display = 'none';
+        if (navBtns) navBtns.style.display = 'none';
+
+        function scanChunk() {
+            if (searchId !== me._searchAbort || rid !== me._renderAbort) return;
+            var deadline = performance.now() + 8;
+            var end = Math.min(idx + 4000, snapshot.length);
+            for (; idx < end; idx++) {
+                if (re) {
+                    re.lastIndex = 0;
+                    var matched = re.test(me._stripAnsi(snapshot[idx]));
+                    isMatch[idx] = matched ? 1 : 0;
+                    if (matched) matchCount++;
+                }
+                if (performance.now() >= deadline) { idx++; break; }
+            }
+            if (idx < snapshot.length) {
+                var pct = Math.round(idx / snapshot.length * 100);
+                status.textContent = 'Searching\u2026 ' + pct + '%';
+                if (countEl) countEl.textContent = 'Searching\u2026 ' + pct + '%';
+                requestAnimationFrame(scanChunk);
+                return;
+            }
+            if (status.isConnected) status.remove();
+            var result = me._computeBlocks(isMatch, snapshot.length, me._contextLines);
+            me._filteredSnapshot = snapshot;
+            me._filteredBase = base;
+            me._filteredIsMatch = isMatch;
+            me._filteredBlocks = result.blocks;
+            me._filteredMatchCount = matchCount;
+            me._filteredSignature = signature;
+            me._fullRenderPending = false;
+            if (grpActions) grpActions.style.display = '';
+            me._renderFilteredRows(searchId, true);
+        }
+
+        if (!snapshot.length) {
+            status.remove();
+            this._filteredSnapshot = snapshot;
+            this._filteredBase = base;
+            this._filteredIsMatch = isMatch;
+            this._filteredBlocks = [];
+            this._filteredMatchCount = 0;
+            this._filteredSignature = signature;
+            this._fullRenderPending = false;
+            this._updateMatchCount(0, 0);
+        } else {
+            requestAnimationFrame(scanChunk);
+        }
+    }
+
+    _buildFilteredDiv(index, blockIndex, expanded, re) {
+        var block = this._filteredBlocks[blockIndex];
+        var lineNo = this._filteredLineNumbers ? this._filteredLineNumbers[index] : undefined;
+        var div = this._buildDiv(this._filteredSnapshot[index], lineNo === undefined ? this._filteredBase + index + 1 : lineNo);
+        var match = !!this._filteredIsMatch[index];
+        div.dataset.blk = blockIndex;
+        div.className = div.className.replace(/ lvp-hidden| lvp-context| lvp-group-first| lvp-grp-detail| collapsed/g, '');
+        if (index === block.firstMatch) {
+            div.className += ' lvp-group-first' + (expanded ? '' : ' collapsed');
+            var arrow = document.createElement('span');
+            arrow.className = 'grp-arrow';
+            arrow.textContent = expanded ? '\u25bc ' : '\u25b6 ';
+            div.insertBefore(arrow, div.firstChild);
+            var detailCount = block.end - block.start;
+            if (detailCount > 0) {
+                var span = document.createElement('span');
+                span.className = 'grp-count';
+                span.textContent = ' (+' + detailCount + ' lines)';
+                div.appendChild(span);
+            }
+        } else {
+            div.className += (match ? ' lvp-highlight' : ' lvp-context') + ' lvp-grp-detail';
+            if (expanded) div.className += ' lvp-group-expanded';
+        }
+        return div;
+    }
+
+    _renderFilteredRows(searchId, scrollBottom) {
+        if (searchId !== this._searchAbort || this._renderMode !== 'filtered') return;
+        var terminal = this._q('terminal');
+        if (!terminal) return;
+        var rid = ++this._renderAbort;
+        var blocks = this._filteredBlocks;
+        var re = this._getSearchRe();
+        var oldScrollTop = terminal.scrollTop;
+        var me = this;
+        var blockIndex = 0;
+        var lineIndex = -1;
+        terminal.classList.toggle('lvp-groups-collapsed', this._blocksCollapsed);
+        terminal.innerHTML = '';
+        this._fullRenderPending = true;
+
+        function renderChunk() {
+            if (searchId !== me._searchAbort || rid !== me._renderAbort) return;
+            var deadline = performance.now() + 6;
+            var built = 0;
+            var frag = document.createDocumentFragment();
+            while (blockIndex < blocks.length && built < 50) {
+                var block = blocks[blockIndex];
+                var expanded = me._blocksCollapsed
+                    ? me._expandedBlocks.has(blockIndex)
+                    : !me._expandedBlocks.has(blockIndex);
+                if (!expanded) {
+                    frag.appendChild(me._buildFilteredDiv(block.firstMatch, blockIndex, false, re));
+                    blockIndex++;
+                    built++;
+                } else {
+                    if (lineIndex < block.start) lineIndex = block.start;
+                    frag.appendChild(me._buildFilteredDiv(lineIndex, blockIndex, true, re));
+                    lineIndex++;
+                    built++;
+                    if (lineIndex > block.end) {
+                        blockIndex++;
+                        lineIndex = -1;
+                    }
+                }
+                if (blockIndex > 0 && lineIndex === -1 && blockIndex < blocks.length) {
+                    var sep = document.createElement('div');
+                    sep.className = 'lvp-separator';
+                    sep.textContent = '\u00b7\u00b7\u00b7';
+                    frag.appendChild(sep);
+                }
+                if (performance.now() >= deadline) break;
+            }
+            terminal.appendChild(frag);
+            if (blockIndex < blocks.length) {
+                requestAnimationFrame(renderChunk);
+                return;
+            }
+            me._fullRenderPending = false;
+            terminal.scrollTop = scrollBottom ? terminal.scrollHeight : oldScrollTop;
+            me._updateMatchCount(blocks.length, me._filteredMatchCount);
+        }
+
+        if (!blocks.length) {
+            this._fullRenderPending = false;
+            this._updateMatchCount(0, this._filteredMatchCount);
+        } else {
+            requestAnimationFrame(renderChunk);
+        }
+    }
+
+    _toggleFilteredBlock(blockIndex) {
+        if (!Number.isFinite(blockIndex) || !this._filteredBlocks[blockIndex]) return;
+        if (this._expandedBlocks.has(blockIndex)) this._expandedBlocks.delete(blockIndex);
+        else this._expandedBlocks.add(blockIndex);
+        this._renderFilteredRows(this._searchAbort, false);
+    }
+
+    _applyHighlightsOnly(children, isMatch, total, re, activeSearchId) {
+        var me = this;
+        var searchId = activeSearchId || ++this._searchAbort;
         var countEl = this._q('match-count');
 
         if (total <= this._SCHUNK) {
@@ -2152,8 +2628,11 @@ class LogViewerPanel {
     }
 
     _applyHighlightDiv(div, match, re) {
-        var text = div.dataset.text || div.textContent || '';
-        var cls = div.className.replace(/ lvp-highlight| lvp-hidden| lvp-current-match/g, '');
+        var text = this._displayText(div.dataset.text || div.textContent || '');
+        var cls = div.className
+            .replace(/ lvp-highlight| lvp-hidden| lvp-context| lvp-group-first| lvp-grp-detail| lvp-group-expanded| lvp-group-folded| collapsed| lvp-current-match/g, '');
+        delete div.dataset.blk;
+        div.style.display = '';
         if (match) {
             cls += ' lvp-highlight';
             div.innerHTML = re ? this._esc(text).replace(re, '<mark>$1</mark>') : this._esc(text);
@@ -2163,21 +2642,34 @@ class LogViewerPanel {
         div.className = cls;
     }
 
-    _applyBlockDiv(div, idx, isMatch, isVisible, blockOf, blocks, re) {
-        var text = div.dataset.text || div.textContent || '';
+    _applyPlainDiv(div) {
+        var text = this._displayText(div.dataset.text || div.textContent || '');
         var cls = div.className
-            .replace(/ lvp-highlight| lvp-hidden| lvp-context| lvp-group-first| lvp-grp-detail| lvp-current-match/g, '');
+            .replace(/ lvp-highlight| lvp-hidden| lvp-context| lvp-group-first| lvp-grp-detail| lvp-group-expanded| lvp-group-folded| collapsed| lvp-level-hidden| lvp-current-match/g, '');
+        var level = div.dataset.level || 'INFO';
+        if (!this._visLevels.has(level)) cls += ' lvp-level-hidden';
+        delete div.dataset.blk;
         div.style.display = '';
+        div.textContent = text;
+        div.className = cls;
+    }
+
+    _applyBlockDiv(div, idx, isMatch, isVisible, blockOf, blocks, re) {
+        var text = this._displayText(div.dataset.text || div.textContent || '');
+        var cls = div.className
+            .replace(/ lvp-highlight| lvp-hidden| lvp-context| lvp-group-first| lvp-grp-detail| lvp-group-expanded| lvp-group-folded| collapsed| lvp-current-match/g, '');
+        if (div.style.display) div.style.display = '';
 
         if (!isVisible[idx]) {
+            if (div.dataset.blk !== undefined) delete div.dataset.blk;
             cls += ' lvp-hidden';
-            div.textContent = text;
-            div.className = cls;
+            if (div.firstChild) div.textContent = '';
+            if (div.className !== cls) div.className = cls;
             return;
         }
 
         var b = blockOf[idx];
-        div.dataset.blk = b;
+        if (div.dataset.blk !== String(b)) div.dataset.blk = b;
 
         if (isMatch[idx] && idx === blocks[b].firstMatch) {
             /* first match = collapsible header */
@@ -2196,12 +2688,18 @@ class LogViewerPanel {
             }
         } else if (isMatch[idx]) {
             cls += ' lvp-highlight lvp-grp-detail';
-            div.innerHTML = re ? this._esc(text).replace(re, '<mark>$1</mark>') : this._esc(text);
+            if (this._blocksCollapsed) {
+                if (div.firstChild) div.textContent = '';
+            } else {
+                div.innerHTML = re ? this._esc(text).replace(re, '<mark>$1</mark>') : this._esc(text);
+            }
         } else {
             cls += ' lvp-context lvp-grp-detail';
-            div.textContent = text;
+            if (this._blocksCollapsed) {
+                if (div.firstChild) div.textContent = '';
+            } else div.textContent = text;
         }
-        div.className = cls;
+        if (div.className !== cls) div.className = cls;
     }
 
     /* ── Block computation ────────────────────────────────────── */
@@ -2231,7 +2729,7 @@ class LogViewerPanel {
         }
         if (bs !== -1) blocks.push({ start: bs, end: total - 1, firstMatch: fm, matchCount: mc });
 
-        var blockOf = new Int16Array(total).fill(-1);
+        var blockOf = new Int32Array(total).fill(-1);
         for (var b = 0; b < blocks.length; b++)
             for (var i = blocks[b].start; i <= blocks[b].end; i++) blockOf[i] = b;
 
@@ -2242,14 +2740,6 @@ class LogViewerPanel {
         if (!terminal) return;
         var seps = terminal.querySelectorAll('.lvp-separator');
         for (var i = 0; i < seps.length; i++) seps[i].remove();
-        for (var i = 0; i < terminal.children.length; i++) {
-            var div = terminal.children[i];
-            div.className = div.className
-                .replace(/ lvp-context| lvp-group-first| lvp-grp-detail| collapsed| lvp-current-match/g, '');
-            if (div.dataset.text !== undefined) div.textContent = div.dataset.text;
-            delete div.dataset.blk;
-            div.style.display = '';
-        }
     }
 
     _insertSeparators(terminal, children, blocks) {
@@ -2269,6 +2759,16 @@ class LogViewerPanel {
         this._blocksCollapsed = !expand;
         var terminal = this._q('terminal');
         if (!terminal) return;
+        if (this._renderMode === 'filtered') {
+            this._expandedBlocks.clear();
+            this._renderFilteredRows(this._searchAbort, false);
+            return;
+        }
+        terminal.classList.toggle('lvp-groups-collapsed', !expand);
+        var expanded = terminal.querySelectorAll('.lvp-group-expanded');
+        for (var i = 0; i < expanded.length; i++) expanded[i].classList.remove('lvp-group-expanded');
+        var folded = terminal.querySelectorAll('.lvp-group-folded');
+        for (var i = 0; i < folded.length; i++) folded[i].classList.remove('lvp-group-folded');
         var firsts = terminal.querySelectorAll('.lvp-group-first');
         for (var i = 0; i < firsts.length; i++) {
             if (expand) firsts[i].classList.remove('collapsed');
@@ -2276,12 +2776,37 @@ class LogViewerPanel {
             var arrow = firsts[i].querySelector('.grp-arrow');
             if (arrow) arrow.textContent = expand ? '\u25bc ' : '\u25b6 ';
         }
-        var details = terminal.querySelectorAll('.lvp-grp-detail');
-        for (var i = 0; i < details.length; i++)
-            details[i].style.display = expand ? '' : 'none';
-        var separators = terminal.querySelectorAll('.lvp-separator');
-        for (var i = 0; i < separators.length; i++)
-            separators[i].style.display = expand ? '' : 'none';
+        this._paintGroupDetails(terminal.querySelectorAll(expand ? '.lvp-grp-detail' : '.lvp-grp-detail:not(:empty)'));
+    }
+
+    _paintGroupDetails(details) {
+        var me = this;
+        var terminal = this._q('terminal');
+        var searchId = this._searchAbort;
+        var re = this._getSearchRe();
+        var idx = 0;
+        // Collapsed rows retain dataset.text, not thousands of invisible mark nodes.
+        function paintChunk() {
+            if (searchId !== me._searchAbort || !terminal.isConnected) return;
+            var deadline = performance.now() + 8;
+            var end = Math.min(idx + 100, details.length);
+            for (; idx < end; idx++) {
+                var div = details[idx];
+                if (div.isConnected) {
+                    var show = !div.classList.contains('lvp-group-folded') &&
+                        (!terminal.classList.contains('lvp-groups-collapsed') || div.classList.contains('lvp-group-expanded'));
+                    if (show) {
+                        var text = me._displayText(div.dataset.text || '');
+                        if (re && div.classList.contains('lvp-highlight'))
+                            div.innerHTML = me._esc(text).replace(re, '<mark>$1</mark>');
+                        else div.textContent = text;
+                    } else if (div.firstChild) div.textContent = '';
+                }
+                if (performance.now() >= deadline) { idx++; break; }
+            }
+            if (idx < details.length) requestAnimationFrame(paintChunk);
+        }
+        if (details.length) requestAnimationFrame(paintChunk);
     }
 
     _cacheNavMatches() {
@@ -2309,12 +2834,14 @@ class LogViewerPanel {
         this._updateMatchCount(0);
     }
 
-    _updateMatchCount(blockCount) {
+    _updateMatchCount(blockCount, exactCount) {
         var el = this._q('match-count');
         if (!el) return;
         if (!this._searchTerm) { el.textContent = ''; return; }
         var terminal = this._q('terminal');
-        var count = terminal ? terminal.querySelectorAll('.lvp-highlight').length : 0;
+        var count = exactCount == null
+            ? (this._renderMode === 'filtered' ? this._filteredMatchCount : (terminal ? terminal.querySelectorAll('.lvp-highlight').length : 0))
+            : exactCount;
         if (this._filterMode && blockCount > 0)
             el.textContent = count + ' matches in ' + blockCount + ' blocks';
         else if (!this._filterMode && this._matchIdx >= 0)

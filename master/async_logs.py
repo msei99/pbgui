@@ -471,26 +471,32 @@ def _tail_open_file(handle, size: int, n: int) -> tuple[list[str], bytes]:
     """Read a descriptor snapshot and return complete records plus its partial tail."""
     if size <= 0:
         return [], b""
-    chunk = min(size, max(n * 200, 65536)) if n > 0 else size
-    start = max(0, size - chunk)
-    if start:
-        handle.seek(start - 1)
-        data = handle.read(size - start + 1)
-        if data.startswith(b"\n"):
-            data = data[1:]
-        else:
-            separator = data.find(b"\n")
-            if separator < 0:
-                return [], data[-MAX_LOCAL_LOG_PARTIAL_BYTES:]
-            data = data[separator + 1:]
-    else:
-        handle.seek(0)
-        data = handle.read(size)
-
-    records = data.split(b"\n")
-    partial = records.pop()[-MAX_LOCAL_LOG_PARTIAL_BYTES:]
-    lines = [_decode_local_log_line(record) for record in records]
-    return (lines[-n:] if n > 0 else lines), partial
+    position = size
+    suffix = b""
+    partial = None
+    lines = []
+    # Count records instead of estimating their byte size. Keep only the bounded
+    # end of a record spanning chunks, including an unterminated final record.
+    while position > 0 and (n <= 0 or len(lines) < n):
+        chunk_size = min(position, 65536)
+        position -= chunk_size
+        handle.seek(position)
+        records = (handle.read(chunk_size) + suffix).split(b"\n")
+        suffix = records[0][-(MAX_LOCAL_LOG_PARTIAL_BYTES + 1):]
+        for record in reversed(records[1:]):
+            if partial is None:
+                partial = record[-MAX_LOCAL_LOG_PARTIAL_BYTES:]
+            else:
+                lines.append(_decode_local_log_line(record))
+                if n > 0 and len(lines) >= n:
+                    break
+    if position == 0:
+        if partial is None:
+            partial = suffix[-MAX_LOCAL_LOG_PARTIAL_BYTES:]
+        elif n <= 0 or len(lines) < n:
+            lines.append(_decode_local_log_line(suffix))
+    lines.reverse()
+    return lines, partial if partial is not None else b""
 
 
 def _read_local_log_snapshot(
