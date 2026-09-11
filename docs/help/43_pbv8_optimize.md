@@ -6,6 +6,22 @@ If PB8 is unavailable after an incomplete installation or update, a persistent *
 
 The Configs list starts loading in parallel with slower PB8 settings and metadata. Its table uses a lightweight summary request that skips optimize-result inspection, while the separate Results panel continues to load the complete result metadata.
 
+## Parameter tooltips
+
+Hover a parameter label to read the original explanation from the installed Passivbot documentation. The tooltip names its local source file; long descriptions can be scrolled by moving the pointer into the tooltip. The same parameter uses the same explanation in Run, Backtest, and Optimize, including nested bounds and optimizer overrides. Documentation is loaded locally without an internet request or a working Rust extension. PBGui-specific controls retain their own input hints; generic runtime placeholders are suppressed when upstream has no matching description.
+
+
+## PB8 schema 8.4 settings
+
+The installed PB8 loader migrates older configurations to its current schema. For schema 8.4, Trailing Martingale price EMA spans use `bot.<side>.strategy.trailing_martingale.entry.ema_span_0` and `ema_span_1`. Auto-unstuck has independent `bot.<side>.unstuck.ema_span_0` and `ema_span_1`. Their optimizer bounds appear under the corresponding paths; coin and scenario overrides follow PB8's native migration rules.
+
+Enable `couple_unstuck_ema_spans` in the optimizer overrides to search strategy and unstuck EMA spans together. Independent search remains the default. Start a fresh optimization when changing this option or upgrading older GPU checkpoints with a different parameter layout.
+
+`optimize.pymoo.shared.mutation_prob` controls mutation per individual; `mutation_prob_per_variable` controls mutation per variable. Both controls are available for CPU and GPU, support **auto** or an explicit probability from 0 to 1, and preserve zero. Auto uses `1 / n_params` for individuals and `min(0.5, 1 / n_params)` for variables. PB8 migrates the old `mutation_prob_var` value to `mutation_prob` without changing its meaning.
+
+A Python/Rust schema mismatch can prevent metadata loading even when the PBGui editor supports these fields. Use **VPS Manager → Update PB8** on the affected host to rebuild and verify the matching PB8 runtime.
+
+
 ## Configs
 
 - **New Config** loads optimizer defaults, strategies, bounds, scoring metrics, limits, backend options, and Pymoo choices from the installed PB8 runtime.

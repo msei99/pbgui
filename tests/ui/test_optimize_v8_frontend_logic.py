@@ -8,6 +8,63 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_pb84_mutation_controls_round_trip_auto_explicit_and_legacy_values() -> None:
+    """Both mutation probabilities stay independent, validated, and compatible with PB7."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    names = (
+        "usesOptimizeSplitMutation", "optimizeSplitMutationValue",
+        "buildOptimizeSplitMutationHtml", "populateOptimizeSplitMutation",
+        "collectOptimizeSplitMutation",
+    )
+    functions = "\n".join(_page_function(page, name) for name in names)
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const optimizeEditorAdapter = {{isV8: true}};
+        let defaults = {{mutation_prob: 'auto', mutation_prob_per_variable: 'auto'}};
+        const optimizePymooSharedDefaults = () => defaults;
+        const esc = value => String(value).replaceAll('"', '&quot;');
+        const tipSpan = (label, tip) => label;
+        const fieldSelect = (id, label) => '<select id="' + id + '">' + label + '</select>';
+        const nodes = {{}};
+        const el = id => nodes[id] || null;
+        for (const key of ['mutation_prob', 'mutation_prob_per_variable']) {{
+          nodes['opted-' + key + '-mode'] = {{value: ''}};
+          nodes['opted-' + key + '-value'] = {{value: '', disabled: false}};
+        }}
+        {functions}
+        const shared = {{mutation_prob_var: 0.23, mutation_prob_per_variable: 0, future: 7}};
+        const html = buildOptimizeSplitMutationHtml(shared);
+        assert.match(html, /opted-mutation_prob-mode/);
+        assert.match(html, /opted-mutation_prob_per_variable-mode/);
+        populateOptimizeSplitMutation(shared);
+        assert.equal(el('opted-mutation_prob-value').value, '0.23');
+        assert.equal(el('opted-mutation_prob_per_variable-value').value, '0');
+        collectOptimizeSplitMutation(shared, true);
+        assert.deepEqual(shared, {{mutation_prob: 0.23, mutation_prob_per_variable: 0, future: 7}});
+        el('opted-mutation_prob-mode').value = 'auto';
+        el('opted-mutation_prob-mode').onchange();
+        assert.equal(el('opted-mutation_prob-value').disabled, true);
+        el('opted-mutation_prob_per_variable-value').value = '0.42';
+        collectOptimizeSplitMutation(shared, true);
+        assert.equal(shared.mutation_prob, 'auto');
+        assert.equal(shared.mutation_prob_per_variable, 0.42);
+        for (const bad of ['', 'NaN', '-0.1', '1.1', 'Infinity']) {{
+          el('opted-mutation_prob_per_variable-value').value = bad;
+          assert.throws(() => collectOptimizeSplitMutation(shared, true), /between 0 and 1/);
+        }}
+        assert.equal(optimizeSplitMutationValue({{mutation_prob: 0, mutation_prob_var: 0.4}}, 'mutation_prob'), 0);
+        populateOptimizeSplitMutation({{}});
+        const automatic = {{}};
+        collectOptimizeSplitMutation(automatic, true);
+        assert.deepEqual(automatic, {{mutation_prob: 'auto', mutation_prob_per_variable: 'auto'}});
+        optimizeEditorAdapter.isV8 = false;
+        assert.equal(buildOptimizeSplitMutationHtml(shared), '');
+        optimizeEditorAdapter.isV8 = true;
+        defaults = {{mutation_prob_var: 'auto'}};
+        assert.equal(buildOptimizeSplitMutationHtml({{mutation_prob_var: 0.2}}), '');
+    """))
+
+
 def test_pb8_optimize_enables_the_shared_scenario_generator_only_for_v8() -> None:
     """The shared Optimize page exposes deterministic generation only through its PB8 adapter."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")

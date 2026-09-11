@@ -2,6 +2,18 @@
 
 PBv8 Run manages Passivbot V8 live instances. PB7 and PB8 Run use the same editor template; a version adapter maps the visible controls to the correct config paths and API contracts.
 
+## Parameter tooltips
+
+Hover a parameter label to read the original explanation from the installed Passivbot documentation. The tooltip names its local source file; long descriptions can be scrolled by moving the pointer into the tooltip. The same parameter uses the same explanation in Run, Backtest, and Optimize, including nested bounds and optimizer overrides. Documentation is loaded locally without an internet request or a working Rust extension. PBGui-specific controls retain their own input hints; generic runtime placeholders are suppressed when upstream has no matching description.
+
+
+## PB8 schema 8.4 settings
+
+The Long/Short JSON fields follow the installed PB8 schema. Trailing Martingale price EMA spans now use `strategy.trailing_martingale.entry.ema_span_0` and `ema_span_1` on each side; independent auto-unstuck spans use `unstuck.ema_span_0` and `ema_span_1`. PB8 migrates older configurations and their overrides before saving.
+
+`live.risk_input_max_attempts` is available under **Additional Parameters** when supplied by the installed runtime (default: 10). It limits failed risk-input recovery attempts per recovery episode. Exhaustion stops the bot without entering its full restart loop; successful recovery resumes normal trading. This setting does not change the HSL thresholds.
+
+
 ## Run List
 
 Open **PBv8 -> Run** to view configs stored below `data/run_v8`. PB7 and PB8 use the same responsive Run-list layout with sidebar search and status filters. The table shows the active PB8 strategy, exchange user, target host, config and running versions, exposure summary, confirmed running hosts, note, and PBCluster desired state. Strategy is sortable and included in list search.

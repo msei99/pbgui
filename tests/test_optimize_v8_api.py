@@ -141,6 +141,28 @@ def test_main_page_renders_when_pb8_runtime_metadata_is_unavailable(monkeypatch)
     assert warnings and warnings[0][2]["level"] == "WARNING"
 
 
+def test_metadata_reports_incompatible_pb8_rust_extension(monkeypatch) -> None:
+    """A Python/Rust optimizer schema mismatch should direct users to rebuild PB8."""
+    raw_error = "optimize bound long_entry_ema_span_0 does not map to bot.long.entry_ema_span_0"
+    monkeypatch.setattr(
+        optimize_v8,
+        "get_pb8_optimize_metadata",
+        lambda: (_ for _ in ()).throw(PB8ConfigurationError(raw_error)),
+    )
+    warnings = []
+    monkeypatch.setattr(optimize_v8, "_log", lambda service, message, **kwargs: warnings.append(message))
+
+    with pytest.raises(HTTPException) as exc_info:
+        optimize_v8.get_metadata(session=None)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == (
+        "PB8 optimizer metadata is incompatible with the installed Rust extension. "
+        "Run Update PB8 to rebuild the PB8 runtime."
+    )
+    assert warnings == [f"Loading PB8 optimize metadata failed: {raw_error}"]
+
+
 @pytest.fixture
 def dash_runtime_roots(optimize_v8_roots):
     """Open Dash admission with clean in-memory state below the isolated data root."""

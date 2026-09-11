@@ -427,6 +427,17 @@
         executable: /bin/bash
       when: pb8_install_profile == 'live'
 
+    - name: Install PB8 Rust build helper
+      command:
+        argv:
+          - "{{ pb8venv }}/bin/python"
+          - -m
+          - pip
+          - install
+          - --upgrade
+          - -r
+          - "{{ pb8dir }}/requirements-rust.txt"
+
     - name: Validate PB8 CLI
       command:
         argv:
@@ -434,21 +445,21 @@
           - --help
       changed_when: false
 
+    - name: Rebuild and validate PB8 Rust extension
+      command:
+        argv:
+          - "{{ pb8venv }}/bin/python"
+          - -c
+          - "from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension; check_and_maybe_compile(force=True); import passivbot_rust; verify_loaded_runtime_extension(); from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
+      args:
+        chdir: "{{ pb8dir }}"
+      changed_when: false
+
     - name: Remove PB8 Rust build artifacts on live-only runners
       file:
         path: "{{ pb8dir }}/passivbot-rust/target"
         state: absent
       when: pb8_install_profile == 'live'
-
-    - name: Stamp and validate PB8 Rust source fingerprint
-      command:
-        argv:
-          - "{{ pb8venv }}/bin/python"
-          - -c
-          - "from rust_utils import check_and_maybe_compile, source_fingerprint, stamp_compiled_extensions; stamp_compiled_extensions(source_fingerprint()); check_and_maybe_compile(fail_on_stale=True); import passivbot_rust; from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
-      args:
-        chdir: "{{ pb8dir }}"
-      changed_when: false
 
     - name: Save PB8 runtime paths after validation
       command:

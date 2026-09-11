@@ -1,0 +1,17 @@
+#pb8-parameter-tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(640px, calc(100vw - 32px));
+  max-height: min(70vh, 600px);
+  overflow: auto;
+  padding: 10px 14px;
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 5px;
+  font-size: var(--fs-xs, 12px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .5);
+}

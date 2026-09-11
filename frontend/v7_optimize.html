@@ -2171,6 +2171,8 @@ textarea.json-invalid:focus {
 .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
+<link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
+<script defer src="/app/js/pb8_parameter_help.js?v=1"></script>
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -9074,6 +9076,69 @@ function syncOptimizeExtraFields(config) {
   bindStructuredJsonFieldValidation();
 }
 
+function usesOptimizeSplitMutation(shared) {
+  if (!optimizeEditorAdapter.isV8) return false;
+  var defaults = optimizePymooSharedDefaults();
+  return Object.prototype.hasOwnProperty.call(shared || {}, 'mutation_prob')
+    || Object.prototype.hasOwnProperty.call(defaults, 'mutation_prob');
+}
+
+function optimizeSplitMutationValue(shared, key) {
+  if (shared[key] != null) return shared[key];
+  // The legacy name controlled per-individual mutation, despite its suffix.
+  if (key === 'mutation_prob' && shared.mutation_prob_var != null) return shared.mutation_prob_var;
+  var value = optimizePymooSharedDefaults()[key];
+  return value == null ? 'auto' : value;
+}
+
+function buildOptimizeSplitMutationHtml(shared) {
+  if (!usesOptimizeSplitMutation(shared)) return '';
+  return '<div class="form-row cols-4" id="optimize-split-mutation-section">'
+    + ['mutation_prob', 'mutation_prob_per_variable'].map(function(key) {
+      var value = optimizeSplitMutationValue(shared, key);
+      var automatic = value === 'auto';
+      var tip = key === 'mutation_prob'
+        ? 'Per-individual mutation probability on CPU and GPU. Auto uses 1 / n_params.'
+        : 'Per-variable mutation probability on CPU and GPU. Auto uses min(0.5, 1 / n_params).';
+      return fieldSelect('opted-' + key + '-mode', key + '_mode', [{value: 'auto', label: 'auto'}, {value: 'value', label: 'explicit'}], automatic ? 'auto' : 'value', false, tip)
+        + '<div class="form-group"><label>' + tipSpan(key, tip) + '</label>'
+        + '<input type="number" id="opted-' + key + '-value" min="0" max="1" step="0.01" placeholder="auto"'
+        + ' value="' + esc(automatic ? '' : String(value)) + '"' + (automatic ? ' disabled' : '') + '></div>';
+    }).join('') + '</div>';
+}
+
+function populateOptimizeSplitMutation(shared) {
+  ['mutation_prob', 'mutation_prob_per_variable'].forEach(function(key) {
+    var mode = el('opted-' + key + '-mode');
+    var input = el('opted-' + key + '-value');
+    if (!mode || !input) return;
+    var value = optimizeSplitMutationValue(shared, key);
+    mode.value = value === 'auto' ? 'auto' : 'value';
+    input.value = value === 'auto' ? '' : String(value);
+    input.disabled = mode.value === 'auto';
+    mode.onchange = function() { input.disabled = mode.value === 'auto'; };
+  });
+}
+
+function collectOptimizeSplitMutation(shared, strict) {
+  ['mutation_prob', 'mutation_prob_per_variable'].forEach(function(key) {
+    var mode = el('opted-' + key + '-mode');
+    var input = el('opted-' + key + '-value');
+    if (!mode || !input) return;
+    if (mode.value === 'auto') {
+      shared[key] = 'auto';
+    } else {
+      var value = Number(input.value);
+      if (!String(input.value).trim() || !Number.isFinite(value) || value < 0 || value > 1) {
+        if (strict) throw new Error(key + ' must be a number between 0 and 1, or use auto mode.');
+        return;
+      }
+      shared[key] = value;
+    }
+  });
+  delete shared.mutation_prob_var;
+}
+
 function buildOptimizeEditorHtml(config, name, sourceName) {
   var cfg = deepClone(config || {});
   var backtest = cfg.backtest || {};
@@ -9315,14 +9380,16 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
         + fieldNumber2('opted-pymoo-crossover-eta', 'crossover_eta', pymooShared.crossover_eta == null ? optimizePymooSharedDefaults().crossover_eta : pymooShared.crossover_eta, 0.5, 'SBX crossover eta under optimize.pymoo.shared.crossover_eta.', 1)
         + fieldNumber2('opted-pymoo-crossover-prob-var', 'crossover_prob_var', pymooShared.crossover_prob_var == null ? optimizePymooSharedDefaults().crossover_prob_var : pymooShared.crossover_prob_var, 0.01, 'Per-variable crossover probability under optimize.pymoo.shared.crossover_prob_var.', 1)
         + fieldNumber2('opted-pymoo-mutation-eta', 'mutation_eta', pymooShared.mutation_eta == null ? optimizePymooSharedDefaults().mutation_eta : pymooShared.mutation_eta, 0.5, 'Polynomial mutation eta under optimize.pymoo.shared.mutation_eta.', 1)
-        + fieldSelect('opted-pymoo-mutation-prob-mode', 'mutation_prob_var_mode', [{ value: 'auto', label: 'auto' }, { value: 'value', label: 'explicit' }], pymooMutationProbMode, false, 'Auto keeps ' + optimizeEditorAdapter.label + ' mutation probability scaling at 1 / n_params.')
+        + (usesOptimizeSplitMutation(pymooShared) ? '' : fieldSelect('opted-pymoo-mutation-prob-mode', 'mutation_prob_var_mode', [{ value: 'auto', label: 'auto' }, { value: 'value', label: 'explicit' }], pymooMutationProbMode, false, 'Auto keeps ' + optimizeEditorAdapter.label + ' mutation probability scaling at 1 / n_params.')
         + '<div class="form-group"><label>' + tipSpan('mutation_prob_var', 'Auto mode shows the ' + optimizeEditorAdapter.label + '-derived value 1 / n_params and is read-only. Switch to explicit to override it manually.') + '</label>'
           + '<input type="number" id="opted-pymoo-mutation-prob-value" step="0.01" value="' + esc(String(pymooMutationProbMode === 'value' ? pymooShared.mutation_prob_var : '')) + '"' + (pymooMutationProbMode === 'value' ? '' : ' style="display:none"') + '>'
           + '<input type="text" id="opted-pymoo-mutation-prob-auto" readonly value="' + esc(formatOptimizePymooMutationAutoLabel()) + '"' + (pymooMutationProbMode === 'auto' ? '' : ' style="display:none"') + '>'
-        + '</div>'
+        + '</div>')
         + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-pymoo-eliminate-duplicates"' + ((pymooShared.eliminate_duplicates == null ? optimizePymooSharedDefaults().eliminate_duplicates : pymooShared.eliminate_duplicates) ? ' checked' : '') + '><label for="opted-pymoo-eliminate-duplicates"><span data-tip="Skip duplicate candidates before wasting a backtest.">eliminate_duplicates</span></label></div></div>'
       + '</div>'
     + '</div>'
+
+    + buildOptimizeSplitMutationHtml(pymooShared)
 
     + '<div id="optimize-pymoo-nsga3-section" style="display:' + (backendValue === 'pymoo' && effectiveAlgorithm === 'nsga3' ? '' : 'none') + '">'
       + '<div class="form-row cols-8">'
@@ -9458,8 +9525,12 @@ function populateOptimizeEditor(config, opts) {
   el('opted-pymoo-crossover-eta').value = optimize.pymoo.shared.crossover_eta == null ? '' : String(optimize.pymoo.shared.crossover_eta);
   el('opted-pymoo-crossover-prob-var').value = optimize.pymoo.shared.crossover_prob_var == null ? '' : String(optimize.pymoo.shared.crossover_prob_var);
   el('opted-pymoo-mutation-eta').value = optimize.pymoo.shared.mutation_eta == null ? '' : String(optimize.pymoo.shared.mutation_eta);
-  el('opted-pymoo-mutation-prob-mode').value = normalizeOptimizePymooMutationProbMode(optimize.pymoo.shared.mutation_prob_var === 'auto' ? 'auto' : 'value');
-  el('opted-pymoo-mutation-prob-value').value = optimize.pymoo.shared.mutation_prob_var != null && optimize.pymoo.shared.mutation_prob_var !== 'auto' ? String(optimize.pymoo.shared.mutation_prob_var) : '';
+  if (usesOptimizeSplitMutation(optimize.pymoo.shared)) {
+    populateOptimizeSplitMutation(optimize.pymoo.shared);
+  } else {
+    el('opted-pymoo-mutation-prob-mode').value = normalizeOptimizePymooMutationProbMode(optimize.pymoo.shared.mutation_prob_var === 'auto' ? 'auto' : 'value');
+    el('opted-pymoo-mutation-prob-value').value = optimize.pymoo.shared.mutation_prob_var != null && optimize.pymoo.shared.mutation_prob_var !== 'auto' ? String(optimize.pymoo.shared.mutation_prob_var) : '';
+  }
   el('opted-pymoo-eliminate-duplicates').checked = !!(optimize.pymoo.shared.eliminate_duplicates == null ? optimizePymooSharedDefaults().eliminate_duplicates : optimize.pymoo.shared.eliminate_duplicates);
   el('opted-pymoo-ref-dir-method').value = normalizeOptimizePymooRefDirMethodValue(optimize.pymoo.algorithms.nsga3.ref_dirs.method);
   el('opted-pymoo-ref-dir-npartitions-mode').value = normalizeOptimizePymooRefDirPartitionsMode(optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions === 'auto' ? 'auto' : 'value');
@@ -9783,10 +9854,14 @@ function collectEditorConfig(baseConfig, opts) {
   optimize.pymoo.shared.crossover_prob_var = toNumberOr(el('opted-pymoo-crossover-prob-var').value, optimizePymooSharedDefaults().crossover_prob_var == null ? 0.5 : optimizePymooSharedDefaults().crossover_prob_var);
   optimize.pymoo.shared.mutation_eta = toNumberOr(el('opted-pymoo-mutation-eta').value, optimizePymooSharedDefaults().mutation_eta == null ? 20 : optimizePymooSharedDefaults().mutation_eta);
   optimize.pymoo.shared.eliminate_duplicates = !!el('opted-pymoo-eliminate-duplicates').checked;
-  if (normalizeOptimizePymooMutationProbMode(el('opted-pymoo-mutation-prob-mode').value) === 'auto') {
-    optimize.pymoo.shared.mutation_prob_var = 'auto';
+  if (usesOptimizeSplitMutation(optimize.pymoo.shared)) {
+    collectOptimizeSplitMutation(optimize.pymoo.shared, strict);
   } else {
-    optimize.pymoo.shared.mutation_prob_var = toNumberOr(el('opted-pymoo-mutation-prob-value').value, 0);
+    if (normalizeOptimizePymooMutationProbMode(el('opted-pymoo-mutation-prob-mode').value) === 'auto') {
+      optimize.pymoo.shared.mutation_prob_var = 'auto';
+    } else {
+      optimize.pymoo.shared.mutation_prob_var = toNumberOr(el('opted-pymoo-mutation-prob-value').value, 0);
+    }
   }
   optimize.pymoo.algorithms.nsga3.ref_dirs.method = normalizeOptimizePymooRefDirMethodValue(el('opted-pymoo-ref-dir-method').value);
   if (normalizeOptimizePymooRefDirPartitionsMode(el('opted-pymoo-ref-dir-npartitions-mode').value) === 'auto') {

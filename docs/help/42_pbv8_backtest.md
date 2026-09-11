@@ -6,6 +6,16 @@ The page renders the exact same page template and visual configuration editor as
 
 PBGui keeps a short, bounded cache of PB8 templates and already validated config files. The first PB8 operation after an API restart may still initialize the isolated PB8 Python runtime; subsequent editor, queue, and start steps reuse canonical results while file-signature checks invalidate changed configs.
 
+## Parameter tooltips
+
+Hover a parameter label to read the original explanation from the installed Passivbot documentation. The tooltip names its local source file; long descriptions can be scrolled by moving the pointer into the tooltip. The same parameter uses the same explanation in Run, Backtest, and Optimize, including nested bounds and optimizer overrides. Documentation is loaded locally without an internet request or a working Rust extension. PBGui-specific controls retain their own input hints; generic runtime placeholders are suppressed when upstream has no matching description.
+
+
+## PB8 schema 8.4 EMA settings
+
+PB8's native loader migrates older configs when opening them. Trailing Martingale price EMA spans now appear under `strategy.trailing_martingale.entry.ema_span_0` and `ema_span_1` for each bot side. Independent auto-unstuck spans appear under `unstuck.ema_span_0` and `ema_span_1`. These runtime-provided fields are editable in the Long/Short JSON fields; coin and scenario overrides use the canonical PB8 paths. Review migration warnings before saving, particularly where PB8 cannot preserve an older configuration exactly.
+
+
 ## Configs
 
 - **New Config** loads the defaults from the installed PB8 version.

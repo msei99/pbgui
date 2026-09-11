@@ -2,6 +2,18 @@
 
 PBv8 Run verwaltet Passivbot-V8-Live-Instanzen. PB7 und PB8 Run verwenden dasselbe Editor-Template; ein Versionsadapter bildet die sichtbaren Felder auf die passenden Config-Pfade und API-Vertraege ab.
 
+## Parameter-Tooltips
+
+Beim Überfahren eines Parameterlabels erscheint die Originalbeschreibung aus der Dokumentation des installierten Passivbot. Der Tooltip nennt die lokale Quelldatei; längere Texte lassen sich scrollen, wenn der Mauszeiger in den Tooltip bewegt wird. Derselbe Parameter erhält in Run, Backtest und Optimize dieselbe Erklärung, auch bei verschachtelten Bounds und Optimizer-Overrides. Die Dokumentation wird lokal geladen, ohne Internetanfrage oder funktionsfähige Rust-Erweiterung. PBGui-eigene Bedienelemente behalten ihre Eingabehinweise; generische Laufzeit-Platzhalter werden ausgeblendet, wenn upstream keine passende Beschreibung vorhanden ist.
+
+
+## Einstellungen für PB8-Schema 8.4
+
+Die Long/Short-JSON-Felder folgen dem installierten PB8-Schema. Die Preis-EMA-Spannen von Trailing Martingale liegen je Seite unter `strategy.trailing_martingale.entry.ema_span_0` und `ema_span_1`; die unabhängigen Auto-Unstuck-Spannen unter `unstuck.ema_span_0` und `ema_span_1`. PB8 migriert ältere Konfigurationen und ihre Overrides vor dem Speichern.
+
+`live.risk_input_max_attempts` erscheint unter **Additional Parameters**, wenn die installierte Laufzeit dieses Feld liefert (Standard: 10). Es begrenzt fehlgeschlagene Wiederherstellungsversuche für Risikodaten pro Wiederherstellungsphase. Nach Ausschöpfen stoppt der Bot ohne vollständige Neustartschleife; nach erfolgreicher Wiederherstellung wird der normale Handel fortgesetzt. Die HSL-Schwellenwerte bleiben davon unabhängig.
+
+
 ## Run-Liste
 
 Unter **PBv8 -> Run** werden Configs aus `data/run_v8` angezeigt. PB7 und PB8 verwenden dieselbe responsive Run-Listenansicht mit Sidebar-Suche und Statusfiltern. Die Tabelle zeigt die aktive PB8-Strategie, Exchange-User, Zielhost, Config- und laufende Version, Exposure-Uebersicht, bestaetigte Laufzeit-Hosts, Notiz und PBCluster-Sollzustand. Strategy ist sortierbar und Teil der Listensuche.

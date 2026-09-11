@@ -81,6 +81,18 @@ router = APIRouter()
 _monitor = None
 
 
+@router.get("/parameter-help")
+def get_v8_parameter_help(session: SessionToken = Depends(require_auth)) -> dict:
+    """Serve original local PB8 documentation independently of Rust readiness."""
+    from pb8_parameter_help import get_pb8_parameter_help
+
+    try:
+        return get_pb8_parameter_help()
+    except (OSError, UnicodeError, ValueError) as exc:
+        _log(SERVICE, f"Loading PB8 parameter documentation failed: {type(exc).__name__}", level="WARNING")
+        raise HTTPException(status_code=503, detail="The installed PB8 parameter documentation is unavailable.") from exc
+
+
 def init(monitor) -> None:
     """Inject the shared VPS monitor used for fresh host capability data."""
 

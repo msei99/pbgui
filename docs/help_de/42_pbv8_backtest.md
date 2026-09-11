@@ -6,6 +6,16 @@ Die Seite rendert exakt dieselbe Seitenvorlage und denselben visuellen Konfigura
 
 PBGui hält PB8-Templates und bereits validierte Config-Dateien kurzzeitig in einem begrenzten Cache. Die erste PB8-Aktion nach einem API-Neustart kann weiterhin die isolierte PB8-Python-Runtime initialisieren; nachfolgende Editor-, Queue- und Start-Schritte verwenden kanonische Ergebnisse wieder, während Dateisignaturen geänderte Configs invalidieren.
 
+## Parameter-Tooltips
+
+Beim Überfahren eines Parameterlabels erscheint die Originalbeschreibung aus der Dokumentation des installierten Passivbot. Der Tooltip nennt die lokale Quelldatei; längere Texte lassen sich scrollen, wenn der Mauszeiger in den Tooltip bewegt wird. Derselbe Parameter erhält in Run, Backtest und Optimize dieselbe Erklärung, auch bei verschachtelten Bounds und Optimizer-Overrides. Die Dokumentation wird lokal geladen, ohne Internetanfrage oder funktionsfähige Rust-Erweiterung. PBGui-eigene Bedienelemente behalten ihre Eingabehinweise; generische Laufzeit-Platzhalter werden ausgeblendet, wenn upstream keine passende Beschreibung vorhanden ist.
+
+
+## EMA-Einstellungen für PB8-Schema 8.4
+
+Der native PB8-Loader migriert ältere Konfigurationen beim Öffnen. Die Preis-EMA-Spannen von Trailing Martingale erscheinen je Bot-Seite unter `strategy.trailing_martingale.entry.ema_span_0` und `ema_span_1`. Die unabhängigen Auto-Unstuck-Spannen liegen unter `unstuck.ema_span_0` und `ema_span_1`. Diese von der Laufzeit gelieferten Felder sind in den Long/Short-JSON-Feldern editierbar; Coin- und Szenario-Overrides verwenden die kanonischen PB8-Pfade. Vor dem Speichern die Migrationswarnungen prüfen, insbesondere wenn PB8 die alte Konfiguration nicht exakt erhalten kann.
+
+
 ## Configs
 
 - **New Config** lädt die Standardwerte der installierten PB8-Version.

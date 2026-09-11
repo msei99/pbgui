@@ -372,6 +372,17 @@
       args:
         executable: /bin/bash
 
+    - name: Install PB8 Rust build helper
+      command:
+        argv:
+          - "{{ pb8venv }}/bin/python"
+          - -m
+          - pip
+          - install
+          - --upgrade
+          - -r
+          - "{{ pb8dir }}/requirements-rust.txt"
+
     - name: Validate PB8 CLI
       command:
         argv:
@@ -379,12 +390,12 @@
           - --help
       changed_when: false
 
-    - name: Stamp and validate PB8 Rust source fingerprint
+    - name: Rebuild and validate PB8 Rust extension
       command:
         argv:
           - "{{ pb8venv }}/bin/python"
           - -c
-          - "from rust_utils import check_and_maybe_compile, source_fingerprint, stamp_compiled_extensions; stamp_compiled_extensions(source_fingerprint()); check_and_maybe_compile(fail_on_stale=True); import passivbot_rust"
+          - "from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension; check_and_maybe_compile(force=True); import passivbot_rust; verify_loaded_runtime_extension()"
       args:
         chdir: "{{ pb8dir }}"
       changed_when: false

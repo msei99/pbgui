@@ -6,6 +6,22 @@ Wenn PB8 nach einer unvollstaendigen Installation oder Aktualisierung nicht verf
 
 Die Configs-Liste startet parallel zu den langsameren PB8-Settings und -Metadaten. Ihre Tabelle verwendet eine leichte Summary-Anfrage ohne Optimize-Result-Inspektion; das getrennte Results-Panel laedt weiterhin die vollstaendigen Result-Metadaten.
 
+## Parameter-Tooltips
+
+Beim Überfahren eines Parameterlabels erscheint die Originalbeschreibung aus der Dokumentation des installierten Passivbot. Der Tooltip nennt die lokale Quelldatei; längere Texte lassen sich scrollen, wenn der Mauszeiger in den Tooltip bewegt wird. Derselbe Parameter erhält in Run, Backtest und Optimize dieselbe Erklärung, auch bei verschachtelten Bounds und Optimizer-Overrides. Die Dokumentation wird lokal geladen, ohne Internetanfrage oder funktionsfähige Rust-Erweiterung. PBGui-eigene Bedienelemente behalten ihre Eingabehinweise; generische Laufzeit-Platzhalter werden ausgeblendet, wenn upstream keine passende Beschreibung vorhanden ist.
+
+
+## Einstellungen für PB8-Schema 8.4
+
+Der installierte PB8-Loader migriert ältere Konfigurationen auf sein aktuelles Schema. Ab Schema 8.4 liegen die Preis-EMA-Spannen von Trailing Martingale unter `bot.<side>.strategy.trailing_martingale.entry.ema_span_0` und `ema_span_1`. Auto-Unstuck besitzt eigene `bot.<side>.unstuck.ema_span_0` und `ema_span_1`. Die Optimizer-Bounds erscheinen unter den entsprechenden Pfaden; Coin- und Szenario-Overrides folgen den nativen PB8-Migrationsregeln.
+
+Mit `couple_unstuck_ema_spans` in den Optimizer-Overrides werden Strategie- und Unstuck-EMA-Spannen gemeinsam optimiert. Standardmäßig bleiben sie unabhängig. Bei Änderung dieser Option oder beim Upgrade älterer GPU-Checkpoints mit anderem Parameterlayout ist eine neue Optimierung erforderlich.
+
+`optimize.pymoo.shared.mutation_prob` steuert die Mutation pro Individuum, `mutation_prob_per_variable` pro Variable. Beide Felder stehen für CPU und GPU zur Verfügung und unterstützen **auto** oder eine explizite Wahrscheinlichkeit von 0 bis 1, einschließlich 0. Auto verwendet `1 / n_params` für Individuen und `min(0.5, 1 / n_params)` für Variablen. PB8 migriert den bisherigen Wert `mutation_prob_var` nach `mutation_prob`, ohne seine Bedeutung zu verändern.
+
+Unterschiedliche Python-/Rust-Schemata können das Laden der Metadaten verhindern, obwohl der PBGui-Editor die Felder unterstützt. **VPS Manager → Update PB8** baut und prüft die passende PB8-Laufzeit auf dem betroffenen Host.
+
+
 ## Configs
 
 - **New Config** laedt Optimizer-Defaults, Strategien, Bounds, Scoring-Metriken, Limits, Backend-Optionen und Pymoo-Auswahl aus der installierten PB8-Runtime.

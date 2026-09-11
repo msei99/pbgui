@@ -189,12 +189,14 @@ def test_pb8_playbooks_validate_before_restarting_live_processes(playbook_path: 
     assert "Save PB8 runtime paths after validation" in source
     assert source.index("Mark PB8 runtime unavailable") < checkout_index
     assert "Validate PB8 Rust module and config schema" not in source
-    stamp_task = source.split("- name: Stamp and validate PB8 Rust source fingerprint", 1)[1]
-    stamp_task = stamp_task.split("\n    - name:", 1)[0]
-    assert "stamp_compiled_extensions(source_fingerprint())" in stamp_task
-    assert "check_and_maybe_compile(fail_on_stale=True)" in stamp_task
-    assert "\n      when:" not in stamp_task
-    assert source.index("Stamp and validate PB8 Rust source fingerprint") < source.index("Mark validated PB8 runtime available")
+    rebuild_task = source.split("- name: Rebuild and validate PB8 Rust extension", 1)[1]
+    rebuild_task = rebuild_task.split("\n    - name:", 1)[0]
+    assert "stamp_compiled_extensions" not in rebuild_task
+    assert "check_and_maybe_compile(force=True)" in rebuild_task
+    assert "verify_loaded_runtime_extension()" in rebuild_task
+    assert "\n      when:" not in rebuild_task
+    assert "requirements-rust.txt" in source
+    assert source.index("Rebuild and validate PB8 Rust extension") < source.index("Mark validated PB8 runtime available")
     assert source.index("Mark validated PB8 runtime available") < source.index(
         "Restart managed PB8 live bots after successful update"
     )
@@ -211,6 +213,9 @@ def test_pb8_playbooks_validate_before_restarting_live_processes(playbook_path: 
         assert "Install PB8 live profile" in source
         assert 'pip install --no-cache-dir --upgrade -e "{{ pb8dir }}"' in source
         assert "Remove PB8 Rust build artifacts on live-only runners" in source
+        assert source.index("Rebuild and validate PB8 Rust extension") < source.index(
+            "Remove PB8 Rust build artifacts on live-only runners"
+        )
         assert "Measure PB8 disk state before changes" in source
         assert "Measure PB8 disk state after validation" in source
         assert "pb8_min_free_bytes | default(3221225472)" in source

@@ -3400,6 +3400,14 @@ def get_metadata(session: SessionToken = Depends(require_auth)) -> dict:
     try:
         return get_pb8_optimize_metadata()
     except PB8ConfigurationError as exc:
+        detail = str(exc)
+        if "optimize bound " in detail and " does not map to bot." in detail:
+            detail = (
+                "PB8 optimizer metadata is incompatible with the installed Rust extension. "
+                "Run Update PB8 to rebuild the PB8 runtime."
+            )
+            _log(SERVICE, f"Loading PB8 optimize metadata failed: {exc}", level="WARNING")
+            raise HTTPException(status_code=503, detail=detail) from exc
         raise _configuration_error("Loading PB8 optimize metadata", exc, 503) from exc
 
 
