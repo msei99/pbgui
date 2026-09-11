@@ -423,6 +423,7 @@ def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
         "enabled_hosts": ["vps-1"],
         "alert_settings": {"offline_gui": True},
         "upstream_releases": {"repositories": {"pb7": {"target_commit": "b" * 40}}},
+        "capabilities": ["host.check_package"],
         "pool": {"total": 1, "connected": 1, "connections": {"vps-1": {"status": "connected"}}},
         "store": {
             "system": {"vps-1": {"timestamp": 10.0, "cpu": 22.5, "mem_total": 100}},
@@ -442,6 +443,7 @@ def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
         assert proxy._debug_logging is True
         assert proxy.get_upstream_release_status()["repositories"]["pb7"]["target_commit"] == "b" * 40
         assert proxy.upstream_release_capability is True
+        assert proxy.package_check_capability is True
         proxy.store.changed.clear()
         state["store"]["system"]["vps-1"]["cpu"] = 99.0
         assert await proxy._poll_once() is True
@@ -470,6 +472,7 @@ def test_proxy_marks_legacy_daemon_without_release_snapshot_capability() -> None
     assert asyncio.run(proxy._poll_once()) is True
     assert proxy.available is True
     assert proxy.upstream_release_capability is False
+    assert proxy.package_check_capability is False
 
 
 def test_daemon_exposes_and_refreshes_upstream_release_snapshot() -> None:
@@ -481,6 +484,7 @@ def test_daemon_exposes_and_refreshes_upstream_release_snapshot() -> None:
     refreshed = asyncio.run(daemon.dispatch("releases.refresh", {}))
 
     assert state["upstream_releases"] == monitor.release_status
+    assert state["capabilities"] == ["host.check_package"]
     assert refreshed is True
     assert ("release-refresh", None) in monitor.calls
 

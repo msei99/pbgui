@@ -30,6 +30,7 @@
         purge: yes
         autoremove: yes
         clean: yes
+        lock_timeout: 300
       become: yes
 
     - name: Make sure rustup and gcc is installed
@@ -38,6 +39,7 @@
         - gcc
         - rustup
         clean: yes
+        lock_timeout: 300
       become: yes
 
     - name: update server
@@ -49,6 +51,7 @@
         autoclean: yes
         clean: yes
         force_apt_get: yes
+        lock_timeout: 300
       become: yes
       register: update_result
 
@@ -57,6 +60,7 @@
         autoremove: yes
         autoclean: yes
         clean: yes
+        lock_timeout: 300
       become: yes
 
     - name: print update result

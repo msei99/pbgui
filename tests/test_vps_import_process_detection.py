@@ -2789,6 +2789,13 @@ def test_linux_update_playbooks_refresh_package_cache_before_finishing() -> None
     assert '"{{ pbgdir }}/setup/refresh_package_status.py"' in local_playbook
 
 
+def test_remote_linux_update_waits_for_other_apt_owners() -> None:
+    """Remote apt tasks tolerate unattended-upgrades lock contention."""
+    remote_playbook = Path("vps-update.yml").read_text(encoding="utf-8")
+
+    assert remote_playbook.count("lock_timeout: 300") == 4
+
+
 def test_remote_linux_update_refreshes_package_cache_after_optional_reboot() -> None:
     """The final VPS cache must describe the post-reboot system state."""
 

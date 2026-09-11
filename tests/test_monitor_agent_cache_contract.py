@@ -158,6 +158,104 @@ def test_post_update_package_helper_writes_fresh_atomic_cache(tmp_path: Path) ->
     assert apt_calls[1].endswith(" dist-upgrade -s")
 
 
+def test_package_collectors_serialize_access_to_the_shared_apt_cache(tmp_path: Path) -> None:
+    """Agent startup and post-reboot refreshes do not race on the apt lists lock."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    apt_get = bin_dir / "apt-get"
+    apt_get.write_text(
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        "  *' update')\n"
+        "    mkdir \"$APT_GUARD\" || exit 90\n"
+        "    sleep 0.2\n"
+        "    rmdir \"$APT_GUARD\"\n"
+        "    ;;\n"
+        "  *) printf '%s\\n' '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.' ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    apt_get.chmod(0o700)
+    pbgui_dir = tmp_path / "pbgui"
+    pbgui_dir.mkdir()
+    apt_guard = tmp_path / "apt-in-use"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "APT_GUARD": str(apt_guard),
+        "PBGUI_PBGDIR": str(pbgui_dir),
+    }
+
+    helper = subprocess.Popen(
+        [sys.executable, "setup/refresh_package_status.py", "--pbgdir", str(pbgui_dir)],
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    deadline = time.time() + 2
+    while not apt_guard.exists() and time.time() < deadline:
+        time.sleep(0.01)
+    assert apt_guard.exists(), "first package collector did not enter apt-get update"
+    agent = subprocess.Popen(
+        monitor_mod.PACKAGE_STATUS_SCRIPT,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    helper_stdout, helper_stderr = helper.communicate(timeout=10)
+    agent_stdout, agent_stderr = agent.communicate(timeout=10)
+
+    assert helper.returncode == 0, helper_stdout + helper_stderr
+    assert agent.returncode == 0, agent_stdout + agent_stderr
+
+
+def test_post_update_helper_retries_an_existing_apt_lists_lock(tmp_path: Path) -> None:
+    """A pre-update monitor agent may briefly own the apt lists lock after reboot."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    apt_get = bin_dir / "apt-get"
+    apt_get.write_text(
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        "  *' update')\n"
+        "    if [ ! -f \"$APT_RETRIED\" ]; then\n"
+        "      : > \"$APT_RETRIED\"\n"
+        "      printf '%s\\n' 'E: Could not get lock lists/lock. It is held by process 42' >&2\n"
+        "      exit 100\n"
+        "    fi\n"
+        "    ;;\n"
+        "  *) printf '%s\\n' '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.' ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    apt_get.chmod(0o700)
+    pbgui_dir = tmp_path / "pbgui"
+    pbgui_dir.mkdir()
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "APT_RETRIED": str(tmp_path / "apt-retried"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "setup/refresh_package_status.py", "--pbgdir", str(pbgui_dir)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads((pbgui_dir / "data" / "monitor_agent" / "package_status.json").read_text())
+    assert payload["upgrades"] == "0"
+
+
 def test_post_update_package_helper_counts_deferred_updates(tmp_path: Path) -> None:
     """Packages apt defers still count as pending Linux updates."""
     bin_dir = tmp_path / "bin"
@@ -640,7 +738,8 @@ def test_package_probe_script_fails_closed_on_apt_and_parse_errors() -> None:
     """The embedded apt probe raises instead of publishing an N/A heartbeat."""
 
     script = monitor_mod.PACKAGE_STATUS_SCRIPT
-    assert "if update_res.returncode != 0:" in script
+    assert "if update_res.returncode == 0:" in script
+    assert "raise RuntimeError(f'apt index refresh failed rc={update_res.returncode}')" in script
     assert "if res.returncode != 0:" in script
     assert "if not match:" in script
     assert "'upgrades': 'N/A'" not in script

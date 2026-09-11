@@ -3784,7 +3784,7 @@ print(json.dumps(result))
 PY'''
 
 PACKAGE_STATUS_SCRIPT = r'''python3 -u -c "
-import json, os, re, subprocess
+import fcntl, json, os, re, subprocess, time
 
 env = os.environ.copy()
 env['LANG'] = 'C'
@@ -3811,26 +3811,41 @@ apt_options = [
     '-o', 'Acquire::IndexTargets::deb::CNF::DefaultEnabled=false',
     '-o', 'DPkg::Lock::Timeout=120',
 ]
-update_res = subprocess.run(
-    ['apt-get', *apt_options, 'update'],
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-    timeout=180,
-    env=env,
-)
-if update_res.returncode != 0:
-    raise RuntimeError(f'apt index refresh failed rc={update_res.returncode}')
-res = subprocess.run(
-    ['apt-get', *apt_options, 'dist-upgrade', '-s'],
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-    timeout=60,
-    env=env,
-)
-if res.returncode != 0:
-    raise RuntimeError(f'apt probe failed rc={res.returncode}')
+lock_path = os.path.join(monitor_dir, 'apt', 'package_status.lock')
+lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+with os.fdopen(lock_fd, 'r+', encoding='utf-8') as lock_handle:
+    os.fchmod(lock_handle.fileno(), 0o600)
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    for attempt in range(30):
+        update_res = subprocess.run(
+            ['apt-get', *apt_options, 'update'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=180,
+            env=env,
+        )
+        if update_res.returncode == 0:
+            break
+        error = (update_res.stderr or '').lower()
+        lock_busy = any(marker in error for marker in (
+            'could not get lock',
+            'unable to acquire',
+            'unable to lock',
+        ))
+        if not lock_busy or attempt == 29:
+            raise RuntimeError(f'apt index refresh failed rc={update_res.returncode}')
+        time.sleep(2)
+    res = subprocess.run(
+        ['apt-get', *apt_options, 'dist-upgrade', '-s'],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f'apt probe failed rc={res.returncode}')
 match = re.search(r'(\d+) upgraded', res.stdout or '')
 if not match:
     raise RuntimeError('apt output did not contain an upgrade count')

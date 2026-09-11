@@ -217,6 +217,28 @@ def test_missing_release_capability_marks_only_persistent_monitor_stale(monkeypa
     }]
 
 
+def test_missing_package_check_capability_marks_persistent_monitor_stale(monkeypatch) -> None:
+    """The shared restart includes a daemon too old for explicit package checks."""
+    monkeypatch.setattr(PBApiServer, "_read_serial", lambda: 2052)
+    monkeypatch.setattr(credential_process_registry, "running_relevant_processes", lambda _root: [])
+    monkeypatch.setattr(
+        credential_process_registry,
+        "process_barrier_readiness",
+        lambda _root, processes: {"services": []},
+    )
+    monkeypatch.setattr(
+        PBApiServer,
+        "_vps_monitor",
+        SimpleNamespace(upstream_release_capability=True, package_check_capability=False),
+    )
+
+    stale = PBApiServer._runtime_service_restart_state()["stale_services"]
+
+    assert stale[0]["service"] == "VPSMonitor"
+    assert stale[0]["unit"] == "pbgui-vps-monitor.service"
+    assert stale[0]["reason"] == "package check capability missing"
+
+
 def test_blocked_restart_releases_master_update_reservation(monkeypatch) -> None:
     """Restart reserves against new updates and releases that reservation when another blocker wins."""
     class Lease:

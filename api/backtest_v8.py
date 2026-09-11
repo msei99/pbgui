@@ -1301,9 +1301,20 @@ def _derived_optimize_result_group(config: dict, relative_parts: tuple[str, ...]
 
     identity = copy.deepcopy(config)
     identity.pop("pbgui", None)
+    identity.pop("metrics", None)
+    identity.pop("suite_metrics", None)
     backtest = identity.get("backtest")
     if isinstance(backtest, dict):
-        for key in ("start_date", "end_date", "base_dir", "suite_enabled", "scenarios", "reducer", "aggregate"):
+        for key in (
+            "start_date",
+            "end_date",
+            "base_dir",
+            "exchanges",
+            "suite_enabled",
+            "scenarios",
+            "reducer",
+            "aggregate",
+        ):
             backtest.pop(key, None)
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
     fingerprint = hashlib.sha256(encoded).hexdigest()[:16]

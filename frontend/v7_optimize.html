@@ -11881,7 +11881,7 @@ function updateParetoSelectionUi() {
   el('btn-open-pareto-explorer-paretos').disabled = !state.selectedResultPath;
   el('btn-backtest-selected-paretos').disabled = selectedCount === 0;
   var validationMode = el('holdout-validation-mode').value;
-  var requiresSweepPlan = validationMode === 'holdout_only' || validationMode === 'all_timeranges';
+  var requiresSweepPlan = validationMode === 'holdout_only';
   el('btn-holdout-selected-paretos').disabled = selectedCount === 0 || (requiresSweepPlan && !state.paretoSweepEnabled);
   el('holdout-validation-mode').disabled = selectedCount === 0;
   el('btn-seed-selected-paretos').disabled = selectedCount === 0;
@@ -12653,9 +12653,6 @@ async function backtestSelectedSweepHoldouts() {
   var includeTraining = validationMode === 'all_timeranges';
   var includeHoldouts = validationMode !== 'full_timerange';
   var includeFullTimerange = validationMode !== 'holdout_only';
-  if (includeTraining && !state.paretoSweepEnabled) {
-    throw new Error('The selected result has no Sweep training plan.');
-  }
   if (includeHoldouts && !state.paretoSweepEnabled && !includeFullTimerange) {
     throw new Error('The selected result has no Sweep Holdout plan.');
   }
@@ -12689,7 +12686,7 @@ async function backtestSelectedSweepHoldouts() {
       return config;
     };
     if (includeTraining && !trainingScenarios.length) {
-      throw new Error('Sweep training dates are unavailable for ' + (item.name || 'candidate') + '.');
+      throw new Error('Training dates are unavailable for ' + (item.name || 'candidate') + '.');
     }
     if (includeTraining) {
       for (var trainingIndex = 0; trainingIndex < trainingScenarios.length; trainingIndex++) {
@@ -12745,7 +12742,8 @@ async function backtestSelectedSweepHoldouts() {
   }
   if (!queueItems.length) throw new Error('No validation jobs could be created.');
   if (missingHoldouts && includeFullTimerange) {
-    toast('No Holdout dates were available for ' + missingHoldouts + ' candidate(s); queued Full timerange only.', 'warn');
+    var queuedPeriods = includeTraining ? 'Training and Full timerange' : 'Full timerange';
+    toast('No Holdout dates were available for ' + missingHoldouts + ' candidate(s); queued ' + queuedPeriods + ' only.', 'warn');
   }
   return openBacktestQueueDraft(queueItems);
 }

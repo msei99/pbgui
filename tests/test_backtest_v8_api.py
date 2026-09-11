@@ -1552,13 +1552,29 @@ def test_results_derive_optimize_candidate_groups_without_pbgui_metadata(tmp_pat
         "live": {"strategy_kind": "trailing_martingale", "approved_coins": {}},
     }
 
-    def write_result(relative: Path, *, start: str, end: str, twe: float = 6.55) -> Path:
+    def write_result(
+        relative: Path,
+        *,
+        start: str,
+        end: str,
+        twe: float = 6.55,
+        exchanges: list[str] | None = None,
+        result_metrics: str = "metrics",
+    ) -> Path:
         """Write one minimal PB8 result with period-specific orchestration fields."""
         result_dir = root / relative
         result_dir.mkdir(parents=True)
         config = copy.deepcopy(common)
-        config["backtest"].update({"base_dir": f"backtests/pbgui/{relative.parts[0]}", "start_date": start, "end_date": end})
+        config["backtest"].update(
+            {
+                "base_dir": f"backtests/pbgui/{relative.parts[0]}",
+                "start_date": start,
+                "end_date": end,
+                "exchanges": exchanges or ["hyperliquid"],
+            }
+        )
         config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = twe
+        config[result_metrics] = {"gain_usd": 1.2}
         (result_dir / "analysis.json").write_text(json.dumps({"gain_usd": 1.2}), encoding="utf-8")
         (result_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
         return result_dir / "analysis.json"
@@ -1567,6 +1583,7 @@ def test_results_derive_optimize_candidate_groups_without_pbgui_metadata(tmp_pat
         Path(candidate) / "suite_runs" / "2026-08-31T21_19_57" / "train_05_20260303_90d" / "hyperliquid" / "run-suite",
         start="2026-03-03",
         end="2026-05-31",
+        result_metrics="suite_metrics",
     )
     holdout = write_result(
         Path(f"{candidate}_holdout_01") / "hyperliquid" / "run-holdout",
@@ -1577,6 +1594,7 @@ def test_results_derive_optimize_candidate_groups_without_pbgui_metadata(tmp_pat
         Path(candidate) / "hyperliquid" / "run-full",
         start="2020-03-03",
         end="2026-09-01",
+        exchanges=["binance", "hyperliquid"],
     )
     changed = write_result(
         Path(candidate) / "hyperliquid" / "run-changed",

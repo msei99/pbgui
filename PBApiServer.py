@@ -223,8 +223,10 @@ def _runtime_service_restart_state() -> dict:
             "reason": "code serial not reported" if not running_serial else "outdated code serial",
         })
     monitor = _vps_monitor
+    missing_release_capability = getattr(monitor, "upstream_release_capability", None) is False
+    missing_package_check_capability = getattr(monitor, "package_check_capability", None) is False
     if (
-        getattr(monitor, "upstream_release_capability", None) is False
+        (missing_release_capability or missing_package_check_capability)
         and not any(item.get("service") == "VPSMonitor" for item in stale_services)
     ):
         configured = _RUNTIME_SYSTEMD_SERVICES[0]
@@ -232,7 +234,11 @@ def _runtime_service_restart_state() -> dict:
             **configured,
             "running_serial": "legacy",
             "current_serial": current_serial,
-            "reason": "upstream release capability missing",
+            "reason": (
+                "upstream release capability missing"
+                if missing_release_capability
+                else "package check capability missing"
+            ),
         })
     return {
         "current_serial": current_serial,

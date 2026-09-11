@@ -38,6 +38,7 @@ from master.vps_monitor_rpc import (
 SERVICE = "VPSMonitor"
 REMOTE_STREAM_IDLE_SECONDS = 60.0
 MAX_REMOTE_STREAMS = 128
+RPC_CAPABILITIES = ("host.check_package",)
 
 
 class VPSMonitorRPCDaemon:
@@ -215,6 +216,7 @@ class VPSMonitorRPCDaemon:
                 if hasattr(self.monitor, "get_upstream_release_status")
                 else {}
             ),
+            "capabilities": list(RPC_CAPABILITIES),
             "boot_id": self.boot_id,
         }
         encoded = json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")

@@ -415,7 +415,7 @@ def test_sweep_holdout_button_builds_standalone_backtest_config() -> None:
     assert 'value="full_timerange"' in page
     assert 'value="holdout_and_full_timerange"' in page
     assert 'value="all_timeranges"' in page
-    assert "requiresSweepPlan = validationMode === 'holdout_only' || validationMode === 'all_timeranges'" in page
+    assert "requiresSweepPlan = validationMode === 'holdout_only'" in page
     assert "includeFullTimerange" in page
     assert "backtestSelectedSweepHoldouts().catch(handleError)" in page
 
@@ -588,6 +588,94 @@ def test_all_timeranges_validation_queues_training_holdout_and_full_jobs() -> No
             'train_01', 'train_02', 'holdout_01', 'full_timerange'
           ]);
         }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        """
+    )
+    _run_node(script)
+
+
+def test_all_timeranges_without_sweep_plan_queues_training_and_full_jobs() -> None:
+    """Suite results without Holdout provenance can still validate Training and Full periods."""
+
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in (
+            "buildSweepHoldoutBacktestConfig",
+            "buildSweepFullTimerangeBacktestConfig",
+            "backtestSelectedSweepHoldouts",
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const deepClone = value => JSON.parse(JSON.stringify(value));
+        const state = {{
+          selectedParetos: new Set(['/candidate.json']), paretoSweepEnabled: false,
+          paretos: [{{path: '/candidate.json', name: 'candidate'}}]
+        }};
+        const optimizeEditorAdapter = {{isV8: true, paretoFilePath: path => path}};
+        const el = id => id === 'holdout-validation-mode' ? {{value: 'all_timeranges'}} : null;
+        const normalizeParetoBacktestPayload = data => ({{config: data.config, override_configs: {{}}}});
+        const extractConfigSections = config => config;
+        const apiFetch = async () => ({{
+          config: {{backtest: {{
+            start_date: '2024-01-01', end_date: '2026-08-30', suite_enabled: true,
+            scenarios: [
+              {{label: 'train_01', start_date: '2024-01-01', end_date: '2024-03-31'}},
+              {{label: 'train_02', start_date: '2024-04-08', end_date: '2024-07-07'}}
+            ]
+          }}}}
+        }});
+        let warning = '';
+        const toast = message => {{ warning = message; }};
+        let queued = null;
+        const openBacktestQueueDraft = async items => {{ queued = items; }};
+        {functions}
+
+        backtestSelectedSweepHoldouts().then(() => {{
+          assert.deepEqual(queued.map(item => item.name), [
+            'candidate_train_01', 'candidate_train_02', 'candidate_full_timerange'
+          ]);
+          assert.match(warning, /queued Training and Full timerange only/);
+        }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        """
+    )
+    _run_node(script)
+
+
+def test_all_timeranges_button_stays_enabled_without_sweep_plan() -> None:
+    """All-period validation remains available when a Suite result has selected candidates."""
+
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "updateParetoSelectionUi")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const controls = {{
+          'pareto-selection-summary': {{}},
+          'btn-open-pareto-explorer-paretos': {{}},
+          'btn-backtest-selected-paretos': {{}},
+          'btn-holdout-selected-paretos': {{}},
+          'btn-seed-selected-paretos': {{}},
+          'btn-seed-whole-result': {{}},
+          'holdout-validation-mode': {{value: 'all_timeranges'}}
+        }};
+        const el = id => controls[id];
+        const pruneSelectionSet = () => {{}};
+        const syncSelectedParetoScenarios = () => {{}};
+        const state = {{
+          selectedParetos: new Set(['/candidate.json']),
+          selectedResultPath: '/result',
+          paretoSweepEnabled: false,
+          paretos: [{{path: '/candidate.json'}}]
+        }};
+        {function_source}
+
+        updateParetoSelectionUi();
+        assert.equal(controls['btn-holdout-selected-paretos'].disabled, false);
+        controls['holdout-validation-mode'].value = 'holdout_only';
+        updateParetoSelectionUi();
+        assert.equal(controls['btn-holdout-selected-paretos'].disabled, true);
         """
     )
     _run_node(script)
