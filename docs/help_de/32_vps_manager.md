@@ -1,5 +1,7 @@
 # VPS Manager
 
+Wenn die Verbindung waehrend **Read VPS settings** abbricht, meldet die Fortschrittsanzeige die Unterbrechung. Nach dem erneuten Verbinden kann das Lesen wiederholt werden; es wird nicht automatisch erneut gestartet.
+
 Die **VPS Manager** Seite erlaubt das Hinzufügen, Konfigurieren und Warten von Remote-VPS-Servern, auf denen Passivbot-Instanzen laufen.
 Jeder VPS wird über Ansible-Playbooks verwaltet, die vom Master (lokal) ausgeführt werden.
 
@@ -173,6 +175,7 @@ Die Status-Kacheln oberhalb des Setup-Rasters sind jetzt direkte Operator-Hinwei
 - PB8 **PNL Tdy** verwendet den Exchange-Fill-Zeitpunkt aus jedem einzelnen PB8-Fill-Logeintrag. Undatierte Startup-Batch-Summaries beschreiben die historische Synchronisierung und werden niemals dem aktuellen Tag zugeordnet.
 - Ein Klick auf CPU, Speicher oder Swap eines Bots öffnet dessen runtime-spezifische 24-Stunden-Historie. PB7- und PB8-Instanzen mit gleichem Namen bleiben getrennt, und ein gültiger Swap-Wert von null wird gespeichert.
 - Ein Klick auf **ERR TDY** zeigt die heutigen UTC-Fehlereinträge aus allen vom Monitor gefundenen nativen Bot-Logs, einschließlich der Sitzungen vor einem Neustart. Größere Dateilisten werden paketweise geladen; der Dialog behält höchstens 10.000 passende Zeilen. Gelöschte Logs lassen sich aus dem gecachten Zähler nicht rekonstruieren.
+- Die Fehler- und Traceback-Zähler für heute und gestern öffnen die passenden Log-Einträge des ausgewählten UTC-Kalendertags, einschließlich verfügbarer rotierter Logs.
 - PB8 **ERR 4W** und **TB 4W** stammen aus dem begrenzten UTC-Stunden-Scan des lokalen Monitor-Agents über native und stderr-Logs. **PNL Hist** verwendet die neueste verlässliche PB8-Fill-Batch-Gesamtsumme und bleibt von einer gleichnamigen alten PB7-Historie getrennt. Da PB8 keine verlässliche tägliche Netto-PnL-Aufteilung bereitstellt, zeigt PBGui die verlässliche Gesamtsumme, ohne eine Tageskurve zu erfinden.
 - Die Detailseite enthält außerdem wieder eine einzeilige Zusammenfassungstabelle plus einen Remote-Server-Ressourcenblock ähnlich zur früheren Serveransicht.
 

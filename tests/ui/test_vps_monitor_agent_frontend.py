@@ -138,6 +138,8 @@ def test_disconnected_actions_and_history_clear_pending_states() -> None:
     source = HTML_PATH.read_text(encoding="utf-8")
     names = [
         "send",
+        "monitorActionKey",
+        "finishMonitorAction",
         "restoreRestartButton",
         "restoreKillButton",
         "failMetricHistory",
@@ -188,6 +190,7 @@ def test_disconnected_actions_and_history_clear_pending_states() -> None:
         function metricHistoryTitle() {{ return 'History'; }}
         function metricHistoryMeta() {{ return {{}}; }}
         function metricHistoryLoadingSubtitle() {{ return 'Loading'; }}
+        const pendingMonitorActions = new Map();
         let ws = null;
         let cpuHistoryRequestId = 0;
         let cpuHistoryTimeout = null;
@@ -309,7 +312,7 @@ def test_host_and_bot_action_markup_escapes_xss_payloads() -> None:
     esc_start = source.index("function escAttr(")
     instance_start = source.index("function renderInstanceActions(")
     service_start = source.index("function renderServiceRestartButton(")
-    functions = "\n\n".join([
+    functions = "const pendingMonitorActions = new Map();\n" + _extract_function(source, "monitorActionKey") + "\n" + "\n\n".join([
         source[esc_start:source.index("function toggleCard(", esc_start)],
         source[instance_start:source.index("function instanceCpuCell(", instance_start)],
         source[service_start:source.index("function restartService(", service_start)],

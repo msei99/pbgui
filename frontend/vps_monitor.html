@@ -1055,6 +1055,25 @@ function send(obj) {
   }
 }
 
+const pendingMonitorActions = new Map();
+
+function monitorActionKey(action, host, name) {
+  return JSON.stringify([action, String(host || ''), String(name || '')]);
+}
+
+function finishMonitorAction(key) {
+  const pending = pendingMonitorActions.get(key);
+  if (!pending) return;
+  pendingMonitorActions.delete(key);
+  const restore = pending.action === 'kill-instance' ? restoreKillButton : restoreRestartButton;
+  restore(pending.button);
+  document.querySelectorAll('[data-monitor-action]').forEach(function (button) {
+    const action = button.getAttribute('data-monitor-action');
+    const name = button.getAttribute(action === 'kill-instance' ? 'data-bot' : 'data-service');
+    if (monitorActionKey(action, button.getAttribute('data-host'), name) === key) restore(button);
+  });
+}
+
 function restoreRestartButton(btn) {
   if (!btn) return;
   if (btn._monitorActionTimer) clearTimeout(btn._monitorActionTimer);
@@ -1090,6 +1109,7 @@ function failMetricHistory(requestId, message) {
 }
 
 function resetPendingMonitorActions(message) {
+  Array.from(pendingMonitorActions.keys()).forEach(finishMonitorAction);
   document.querySelectorAll('[data-monitor-action="restart-service"].restarting').forEach(restoreRestartButton);
   document.querySelectorAll('[data-monitor-action="kill-instance"].killing').forEach(restoreKillButton);
   if (cpuHistoryTimeout) failMetricHistory(cpuHistoryRequestId, message);
@@ -1249,6 +1269,8 @@ function initMetricTooltipHandlers() {
 }
 
 function handleResult(msg) {
+  if (msg.cmd === 'restart_service') finishMonitorAction(monitorActionKey('restart-service', msg.host, msg.service));
+  if (msg.cmd === 'kill_instance') finishMonitorAction(monitorActionKey('kill-instance', msg.host, msg.name));
   if (msg.cmd === 'restart_service') {
     // Update service button state
     const btn = Array.from(document.querySelectorAll('[data-monitor-action="restart-service"]')).find(function (candidate) {
@@ -2222,9 +2244,10 @@ function renderInstances() {
 
 function renderInstanceActions(row) {
   const r = row || {};
+  const pending = pendingMonitorActions.has(monitorActionKey('kill-instance', r.host, r.name));
   const attrs = `data-host="${escAttr(r.host)}" data-bot="${escAttr(r.name)}" data-pb-version="${escAttr(r.pbVersion)}"`;
   return `<button class="inst-action" type="button" title="View Log" data-monitor-action="view-instance-log" ${attrs}>📋</button>
-    <button class="inst-action" type="button" title="Restart (kill)" data-monitor-action="kill-instance" ${attrs}>🔄</button>`;
+    <button class="inst-action${pending ? ' killing' : ''}" ${pending ? 'disabled' : ''} type="button" title="${pending ? 'Killing...' : 'Restart (kill)'}" data-monitor-action="kill-instance" ${attrs}>${pending ? '⏳' : '🔄'}</button>`;
 }
 
 function instanceCpuCell(host, name, liveCpu, cpu60s, cpu60sWindow) {
@@ -2507,8 +2530,11 @@ function viewInstanceLog(host, name, pbVersion) {
 }
 
 function killInstance(host, name, pbVersion, el) {
+  const key = monitorActionKey('kill-instance', host, name);
+  if (pendingMonitorActions.has(key)) return;
+  if (el && el.classList.contains('killing')) return;
+  pendingMonitorActions.set(key, { action: 'kill-instance', button: el });
   if (el) {
-    if (el.classList.contains('killing')) return;
     el.disabled = true;
     el.classList.add('killing');
     el.style.opacity = '1';
@@ -2516,10 +2542,10 @@ function killInstance(host, name, pbVersion, el) {
     el.title = 'Killing...';
   }
   if (!send({ cmd: 'kill_instance', host: host, name: name, pb_version: pbVersion })) {
-    restoreKillButton(el);
+    finishMonitorAction(key);
     return;
   }
-  if (el) el._monitorActionTimer = setTimeout(function () { restoreKillButton(el); }, 10000);
+  if (el) el._monitorActionTimer = setTimeout(function () { finishMonitorAction(key); }, 10000);
 }
 
 function pnlClass(v) { return v > 0 ? 'pnl-pos' : v < 0 ? 'pnl-neg' : 'pnl-zero'; }
@@ -2617,21 +2643,25 @@ function renderServices() {
 }
 
 function renderServiceRestartButton(host, service) {
-  return `<button class="svc-btn" type="button" data-monitor-action="restart-service" data-host="${escAttr(host)}" data-service="${escAttr(service)}">Restart</button>`;
+  const pending = pendingMonitorActions.has(monitorActionKey('restart-service', host, service));
+  return `<button class="svc-btn${pending ? ' restarting' : ''}" ${pending ? 'disabled' : ''} type="button" data-monitor-action="restart-service" data-host="${escAttr(host)}" data-service="${escAttr(service)}">${pending ? 'Restarting...' : 'Restart'}</button>`;
 }
 
 function restartService(host, service, btn) {
+  const key = monitorActionKey('restart-service', host, service);
+  if (pendingMonitorActions.has(key)) return;
   if (btn.classList.contains('restarting')) return;
+  pendingMonitorActions.set(key, { action: 'restart-service', button: btn });
   if (btn._monitorResultTimer) clearTimeout(btn._monitorResultTimer);
   btn._monitorResultTimer = null;
   btn.disabled = true;
   btn.classList.add('restarting');
   btn.textContent = 'Restarting...';
   if (!send({ cmd: 'restart_service', host, service })) {
-    restoreRestartButton(btn);
+    finishMonitorAction(key);
     return;
   }
-  btn._monitorActionTimer = setTimeout(function () { restoreRestartButton(btn); }, 10000);
+  btn._monitorActionTimer = setTimeout(function () { finishMonitorAction(key); }, 10000);
 }
 
 function restartServiceCompact(host, service, el) {

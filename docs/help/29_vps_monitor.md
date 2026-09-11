@@ -1,5 +1,7 @@
 # VPS Monitor
 
+Pending restart and kill buttons remain disabled across monitor refreshes. Controls recover when the response arrives, the request times out, or the connection is lost.
+
 VPS Monitor is the real-time operations dashboard for every configured VPS host. PBAPIServer sends state through a cookie-authenticated WebSocket, so the page updates without polling or exposing the browser session in HTML, JavaScript, URLs, or WebSocket parameters.
 
 ## What you can monitor

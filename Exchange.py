@@ -995,6 +995,7 @@ class Exchange:
 
     @_serialize_bitget_client
     def fetch_prices(self, symbols: list, market_type: str):
+        """Fetch ticker prices, normalizing Hyperliquid raw prices to floats."""
         if not self.instance: self.connect()
         # Fix for Hyperliquid
         if self.id == "hyperliquid":
@@ -1036,11 +1037,16 @@ class Exchange:
                         break
 
                 if last is not None:
-                    prices[symbol] = {
-                        "timestamp": int(datetime.now().timestamp() * 1000),
-                        "last": last,
-                    }
-                    continue
+                    try:
+                        last = float(last)
+                    except (TypeError, ValueError):
+                        _log(SERVICE, "Invalid Hyperliquid allMids price; trying market metadata", level="WARNING")
+                    else:
+                        prices[symbol] = {
+                            "timestamp": int(datetime.now().timestamp() * 1000),
+                            "last": last,
+                        }
+                        continue
 
                 # Fallback to market metadata prices (available for HIP-3 and
                 # some builder DEX symbols not keyed in allMids).
@@ -1052,6 +1058,11 @@ class Exchange:
                 info = (market or {}).get('info', {}) if market else {}
                 md_price = info.get('markPx') or info.get('midPx') or info.get('oraclePx')
                 if md_price is not None:
+                    try:
+                        md_price = float(md_price)
+                    except (TypeError, ValueError):
+                        _log(SERVICE, "Invalid Hyperliquid market metadata price; skipping ticker", level="WARNING")
+                        continue
                     prices[symbol] = {
                         "timestamp": int(datetime.now().timestamp() * 1000),
                         "last": md_price,
@@ -1108,6 +1119,7 @@ class Exchange:
 
     @_serialize_bitget_client
     def fetch_balance(self, market_type: str):
+        """Return the account balance, propagating exchange request failures."""
         if not self.instance: self.connect()
         if self.id == 'bitget' and self.ensure_bitget_account_mode():
             return self._read_bitget_uta(bitget_uta.fetch_balance)
@@ -1115,12 +1127,7 @@ class Exchange:
         if self.id == "hyperliquid" and getattr(self.user, "is_vault", False):
             if getattr(self.user, "wallet_address", None):
                 params["vaultAddress"] = self.user.wallet_address
-        try:
-            balance = self.instance.fetch_balance(params=params)
-        except Exception as e:
-            if self.id in {"bitunix", "weex"}:
-                raise
-            return e
+        balance = self.instance.fetch_balance(params=params)
         if self.id == "hyperliquid":
             return float((balance.get("total") or {}).get("USDC") or 0.0)
         if self.id == "bitget":
@@ -1183,24 +1190,18 @@ class Exchange:
             cursor = None
             while True:
                 for i in range(5):
-                            try:
-                                if UTA:
-                                    transactions = self.instance.privateGetV5AccountTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
-                                else:
-                                    transactions = self.instance.privateGetV5AccountContractTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
-                            except Exception as e:
-                                _log(SERVICE,
-                                    f"{e}",
-                                    level='WARNING',
-                                    user=self.user,
-                                )
-                                _log(SERVICE,
-                                    f'Fetching transactions failed. Retry in 5 seconds',
-                                    level='WARNING',
-                                    user=self.user,
-                                )
-                                sleep(5)
-                                continue
+                    try:
+                        if UTA:
+                            transactions = self.instance.privateGetV5AccountTransactionLog(params={"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
+                        else:
+                            transactions = self.instance.privateGetV5AccountContractTransactionLog(params={"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
+                        break
+                    except Exception as e:
+                        _log(SERVICE, f"Fetching Bybit transactions failed: {e}", level='WARNING', user=self.user)
+                        if i == 4 or not _ccxt_should_retry(self.instance, e):
+                            raise
+                        _log(SERVICE, 'Fetching transactions failed. Retry in 5 seconds', level='WARNING', user=self.user)
+                        sleep(5)
                 cursor = transactions["result"]["nextPageCursor"]
                 positions = transactions["result"]["list"]
                 # print(positions)
@@ -1208,7 +1209,7 @@ class Exchange:
                     first_position = positions[0]
                     last_position = positions[-1]
                     all_histories = positions + all_histories
-                if cursor:
+                if cursor and positions:
                     _log(SERVICE,
                         f"Fetched {len(positions)} transactions from "
                         f"{self.instance.iso8601(int(first_position['transactionTime']))} till "
@@ -1223,6 +1224,7 @@ class Exchange:
                         level='INFO',
                         user=self.user,
                     )
+                if not cursor:
                     since = since + week
                     end = since + week
                 if since > now:

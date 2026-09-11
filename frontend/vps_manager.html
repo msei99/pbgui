@@ -6920,11 +6920,13 @@
         renderSummaryBar();
       };
       ws.onclose = function (event) {
+        if (store.ws !== ws) return;
         store.connected = false;
+        clearInterruptedSettingsReads();
         store.packageCheckHosts = [];
         store.packageCheckRequestId = '';
         renderSummaryBar();
-        renderUi({ forceSidebarActions: true });
+        renderUi({ forceSidebarActions: true, forceView: true });
         if (event.code === 4001) {
           store.authExpired = true;
           store.ws = null;
@@ -6948,6 +6950,19 @@
         store.reconnectTimer = 0;
         if (!store.authExpired) connectWs();
       }, 1600);
+    }
+
+    function clearInterruptedSettingsReads() {
+      Object.keys(store.vps).forEach(function (host) {
+        if (!store.vps[host].readSettingsLoading) return;
+        updateReadSettingsProgress(host, {
+          step: 'error', status: 'error',
+          label: 'Connection lost while reading settings. Reconnect and retry Read VPS settings.'
+        }, { render: false });
+      });
+      store.pendingWsMessages = (store.pendingWsMessages || []).filter(function (item) {
+        return item.cmd !== 'read_vps_settings';
+      });
     }
 
     function send(payload) {

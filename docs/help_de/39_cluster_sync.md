@@ -323,6 +323,8 @@ Die Seite zeigt:
 
 Bootstrap schreibt explizite lokale `ADD_NODE`-Operationen für bekannte VPS-Manager-Hosts, `UPSERT_CONFIG`-Operationen für lokale V7-Configs und `UPSERT_PB8_CONFIG`-Operationen für vollständige lokale PB8-Bundles. Apply ist an die in der Preview gezeigte Cluster-Generation gebunden und wird abgelehnt, wenn parallele Cluster-Aktivitaet diese Generation vor der Bestaetigung aendert. Wenn VPS-Monitor-Metadaten verfügbar sind, übernimmt Bootstrap, ob ein bekannter Host Master oder VPS-Runner ist. Fehlende Dateien oder fehlende VPS-Einträge werden nie als Delete interpretiert und die Tombstones beider Runtimes werden dadurch nicht entfernt. Die Probe-Spalte führt, wenn verfügbar, nur ein read-only restricted `hello` aus; sie installiert keine Keys, schreibt keine Remote-Dateien, startet oder stoppt keine Bots und deployed nichts. Die PB8-Spalte bezieht ihre Capability aus der lokalen Runtime oder einem ausdruecklichen PBCluster-/Hello-Handshake; fehlende Evidenz wird als **Unknown** statt **Unsupported** angezeigt.
 
+Wenn Bootstrap fehlschlaegt, wird die Schaltflaeche wieder verfuegbar, sofern der aktuelle Plan ausstehende Operationen enthaelt und Recovery entsperrt ist. Bei einer veralteten Generation muss die Vorschau neu geladen werden.
+
 Der Node-Sync-Modus steuert, welche Nodes PBCluster kontaktieren darf:
 
 - **Disabled** behält den Node in der Cluster-Historie, schließt ihn aber vom Sync aus.

@@ -110,6 +110,8 @@ For contextual help, the agent can read or search the canonical English/German P
 
 While a response is running, the status line shows elapsed time and safe activity labels such as documentation search or source reading. Tool arguments, provider reasoning, prompts, and results are not exposed in that status. Select **Stop** to cancel the active provider request.
 
+If a Stop request fails, AI Chat shows the error and restores the controls so you can retry cancellation.
+
 Activity and retry controls appear at the bottom of the chat beside the composer. When an OpenAI Responses model supplies an explicit reasoning summary, PBGui stores and shows it in a collapsed **Reasoning summary** section. Hidden or encrypted chain-of-thought is never exposed.
 
 Reasoning variants such as `high`, `xhigh`, `max`, or `ultra` can spend several minutes processing a tool result before any answer text appears. After a PBGui capability finishes, the status changes from the tool action to **model is processing results** so a slow reasoning phase is not mistaken for a stuck local search. PBGui stops a turn that does not complete within its bounded deadline and reports a normal timeout error.

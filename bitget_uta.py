@@ -136,9 +136,8 @@ def parse_wallet_balance(response):
         if coin in coins:
             raise BitgetUTAError("Bitget UTA asset is duplicated")
         coins.add(coin)
-        value = number(asset.get("balance"))
         if coin == "USDT":
-            balance = value
+            balance = number(asset.get("balance"))
     return balance
 
 

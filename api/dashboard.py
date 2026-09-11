@@ -1133,6 +1133,8 @@ _ohlcv_poller_stop = threading.Event()
 
 def _symbol_to_ccxt(symbol: str) -> str:
     """Convert exchange symbol (e.g. BTCUSDT) to CCXT format."""
+    if not symbol or "/" in symbol:
+        return str(symbol or "")
     if symbol.endswith("USDT"):
         return f'{symbol[:-4]}/USDT:USDT'
     elif symbol.endswith("USDC"):

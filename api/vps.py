@@ -17,7 +17,7 @@ import time
 import traceback
 from collections import deque
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from time import mktime
 from typing import Any, Optional
 
@@ -338,21 +338,21 @@ def _bot_service_parts(service: str) -> tuple[str, str]:
 async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str | None = None,
                               kind: str = "tracebacks", bucket: str,
                               expected_count: int | None = None, lines: int = 5000) -> list[str]:
-    """Return filtered bot-log lines for popup display.
+    """Return bot-log lines for the selected UTC day (today or yesterday).
 
     Uses existing SSH log-tail reads only. It must not launch the old remote
     instance collector script because periodic monitor data now comes from the
     local monitor-agent cache.
     """
-    if not _streamer or not hostname or not bot_name or bucket != "today":
+    if not _streamer or not hostname or not bot_name or bucket not in {"today", "yesterday"}:
         return []
     expected = max(int(expected_count or 0), 0)
     line_limit = max(int(lines or 0), expected * (100 if kind == "tracebacks" else 20), 500)
     line_limit = min(line_limit, 10_000)
-    today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    def is_today(line: str) -> bool:
-        return str(line or "").startswith(today_prefix)
+    target_date = datetime.now(timezone.utc)
+    if bucket == "yesterday":
+        target_date -= timedelta(days=1)
+    target_prefix = target_date.strftime("%Y-%m-%d")
 
     version = "8" if str(pb_version or "7").strip().lower() in {"8", "v8", "pb8"} else "7"
     discovered = []
@@ -390,7 +390,7 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
             if re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", line):
                 flush_block()
                 block = [line]
-                block_today = is_today(line)
+                block_today = line.startswith(target_prefix)
             elif block:
                 block.append(line)
         flush_block()
@@ -409,7 +409,7 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
         )
         if output is None:
             return []
-        matches.extend(line for line in output.splitlines() if is_today(line) and " ERROR " in line)
+        matches.extend(line for line in output.splitlines() if line.startswith(target_prefix) and " ERROR " in line)
         matches = matches[-line_limit:]
     return matches
 

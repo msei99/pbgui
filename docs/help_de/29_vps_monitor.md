@@ -1,5 +1,7 @@
 # VPS Monitor
 
+Ausstehende Restart- und Kill-Aktionen bleiben auch bei Monitor-Aktualisierungen deaktiviert. Die Bedienelemente werden bei einer Antwort, einem Timeout oder Verbindungsabbruch wieder freigegeben.
+
 Der VPS Monitor ist das Echtzeit-Operations-Dashboard für alle konfigurierten VPS-Hosts. PBAPIServer sendet den Status über einen Cookie-authentifizierten WebSocket. Dadurch aktualisiert sich die Seite ohne Polling und ohne die Browser-Session in HTML, JavaScript, URLs oder WebSocket-Parametern offenzulegen.
 
 ## Was du überwachen kannst

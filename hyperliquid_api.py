@@ -69,6 +69,7 @@ def normalize_hyperliquid_coin(coin: str) -> str:
 
 
 def _load_hyperliquid_meta_names(*, timeout_s: float = 30.0) -> tuple[set[str], dict[str, str]]:
+    """Cache metadata names and DEX-qualified aliases for bare universe names."""
     now = time.time()
     cached = _HYPERLIQUID_META_CACHE.get("names")
     cached_upper = _HYPERLIQUID_META_CACHE.get("names_upper")
@@ -91,6 +92,11 @@ def _load_hyperliquid_meta_names(*, timeout_s: float = 30.0) -> tuple[set[str], 
                     if isinstance(name, str) and name:
                         names.add(name)
                         names_upper[name.upper()] = name
+                        dex = payload.get("dex")
+                        if dex and ":" not in name:
+                            alias = f"{dex}:{name}"
+                            names.add(alias)
+                            names_upper[alias.upper()] = alias
     except Exception:
         names = set()
         names_upper = {}

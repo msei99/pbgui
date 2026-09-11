@@ -315,6 +315,8 @@ The page shows:
 
 Bootstrap writes explicit local `ADD_NODE` operations for known VPS Manager hosts, `UPSERT_CONFIG` operations for local V7 configs, and `UPSERT_PB8_CONFIG` operations for complete local PB8 bundles. Apply is bound to the cluster generation shown in the preview and is rejected if concurrent cluster activity changes that generation before confirmation. When VPS Monitor metadata is available, Bootstrap preserves whether a known host is a master or VPS runner. It never infers deletes from missing files or missing VPS entries and it does not clear either runtime's tombstones. The probe column runs a read-only restricted `hello` command when available; it does not install keys, write remote files, start bots, stop bots, or deploy anything. The PB8 column reports capability from the local runtime or an explicit PBCluster/hello handshake; missing evidence is **Unknown**, not **Unsupported**.
 
+If applying Bootstrap fails, the button becomes available again when the current plan has pending operations and recovery is unlocked. Reload the preview if the error reports a stale generation.
+
 Node sync mode controls which nodes PBCluster may contact:
 
 - **Disabled** keeps the node in cluster history but excludes it from sync.

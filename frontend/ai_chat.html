@@ -905,6 +905,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
   async function stopCurrentTurn() {
     if (!state.busy) return;
     var conversationId = state.conversationId;
+    var generation = state.chatGeneration;
     setNotice('Stopping current response...', false);
     $('stop').disabled = true;
     if (conversationId) {
@@ -912,7 +913,9 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
         await api('/conversations/' + encodeURIComponent(conversationId) + '/cancel', { method: 'POST' });
         await loadConversation(conversationId);
       } catch (error) {
+        if (conversationId !== state.conversationId || generation !== state.chatGeneration) return;
         setNotice(error.message, true);
+        updateComposer();
       }
     }
   }

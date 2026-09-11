@@ -229,7 +229,20 @@ def get_job_log(job_id: str, lines: int = 500, session: SessionToken = Depends(r
     from pathlib import Path
     from pbgui_purefunc import PBGDIR
     
-    log_file = Path(PBGDIR) / "data" / "logs" / "jobs" / f"{job_id}.log"
+    if (
+        not job_id
+        or job_id in {".", ".."}
+        or any(char in "/\\" or ord(char) < 32 or ord(char) == 127 for char in job_id)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid job ID")
+
+    base_dir = (Path(PBGDIR) / "data" / "logs" / "jobs").resolve()
+    try:
+        log_file = (base_dir / f"{job_id}.log").resolve()
+    except (OSError, RuntimeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid job ID") from None
+    if not log_file.is_relative_to(base_dir):
+        raise HTTPException(status_code=400, detail="Invalid job ID")
     
     if not log_file.exists():
         return {"log": [], "exists": False}

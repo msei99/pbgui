@@ -110,6 +110,8 @@ Fuer kontextbezogene Hilfe kann der Agent die kanonischen englischen/deutschen P
 
 Waerend eine Antwort laeuft, zeigt die Statuszeile Laufzeit und sichere Aktivitaetsangaben wie Dokumentationssuche oder Source-Lesen. Tool-Argumente, Provider-Reasoning, Prompts und Resultate werden dort nicht offengelegt. **Stop** bricht den aktiven Provider-Request ab.
 
+Wenn eine Stop-Anfrage fehlschlaegt, zeigt AI Chat den Fehler und aktiviert die Bedienelemente erneut, damit der Abbruch wiederholt werden kann.
+
 Activity und Retry stehen unten im Chat beim Composer. Wenn ein OpenAI-Responses-Modell eine ausdrueckliche Reasoning-Summary liefert, speichert und zeigt PBGui sie eingeklappt unter **Reasoning summary**. Verborgene oder verschluesselte Gedankengaenge werden niemals offengelegt.
 
 Reasoning-Varianten wie `high`, `xhigh`, `max` oder `ultra` koennen nach einem Tool-Resultat mehrere Minuten weiterarbeiten, bevor Antworttext erscheint. Nach Abschluss einer PBGui-Capability wechselt der Status deshalb von der Tool-Aktion zu **model is processing results**, damit eine langsame Reasoning-Phase nicht wie eine haengende lokale Suche wirkt. PBGui beendet einen Turn, der den begrenzten Zeitrahmen ueberschreitet, mit einem normalen Timeout-Fehler.

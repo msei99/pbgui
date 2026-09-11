@@ -1,5 +1,7 @@
 # VPS Manager
 
+If the connection drops while **Read VPS settings** is running, the progress panel reports the interruption. After reconnecting, retry the read; it is not replayed automatically.
+
 The **VPS Manager** page lets you add, configure, and maintain remote VPS servers that run Passivbot instances.
 Each VPS is managed via Ansible playbooks executed from the Master (local) server.
 
@@ -173,6 +175,7 @@ The status cards above the setup grid are live operator hints:
 - PB8 **PNL Tdy** uses the exchange fill timestamp embedded in each individual PB8 fill log entry. Undated startup batch summaries represent historical synchronization and are never assigned to the current day.
 - Click a bot's CPU, memory, or swap value to open its runtime-specific 24-hour history. PB7 and PB8 instances with the same name remain separate, and a valid zero-swap sample is retained.
 - Click **ERR TDY** to inspect today's UTC error entries across all monitor-discovered native bot logs, including sessions before a restart. Larger file lists are fetched in batches; the dialog retains at most 10,000 matching lines. Deleted logs cannot be reconstructed from the cached counter.
+- Today's and Yesterday's error and traceback counts open matching log entries for the selected UTC calendar day, including available rotated logs.
 - PB8 **ERR 4W** and **TB 4W** come from the local monitor agent's bounded UTC-hour scan of native and stderr logs. **PNL Hist** uses the latest authoritative PB8 fill-batch total and stays separate from legacy PB7 history with the same bot name. PB8 does not expose reliable per-day net PNL, so PBGui shows the authoritative total without fabricating a daily curve.
 - The detail page also includes a one-row summary table plus a remote server resource snapshot similar to the previous server view.
 

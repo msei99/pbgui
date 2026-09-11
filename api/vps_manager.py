@@ -708,8 +708,8 @@ async def ws_vps_manager(websocket: WebSocket):
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "fetch_bot_log_matches":
                     bucket = str(msg.get("bucket") or "").strip()
-                    if bucket != "today":
-                        await websocket.send_json({"type": "error", "error": "bucket must be today", "cmd": cmd})
+                    if bucket not in {"today", "yesterday"}:
+                        await websocket.send_json({"type": "error", "error": "bucket must be today or yesterday", "cmd": cmd})
                         continue
                     lines = await get_bot_log_matches(
                         str(msg.get("hostname") or ""),
