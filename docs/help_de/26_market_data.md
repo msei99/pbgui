@@ -107,6 +107,8 @@ Hyperliquid `Best 1m` folgt jetzt auch den neueren FastAPI-Editor-Mustern: Für 
 
 Hyperliquid `Download l2Books` verwendet jetzt ebenfalls genau dieses Coin-Grid-Muster statt des alten kompakten Dropdowns. Du kannst die aktivierten Coins filtern, sichtbare Zeilen direkt anklicken, den aktuell gefilterten Ausschnitt gesammelt auswählen, die explizite Auswahl zurücksetzen oder per Maus-Drag größere Download-Bereiche schnell durchziehen. `XYZ-*`- bzw. TradFi-Symbole werden dort ausgefiltert, weil es für sie keinen Hyperliquid-l2Book-Archivdownload gibt. Wenn keine explizite Auswahl gesetzt ist, werden weiterhin alle verbleibenden downloadbaren Coins eingereiht.
 
+Wird eine Hyperliquid-Download- oder Best-1m-Build-Anfrage abgelehnt, zeigt das Action-Panel den Servergrund als Fehler. Eine abgelehnte Anfrage wird nie als eingereihter Null-Coin-Job gemeldet.
+
 Das fokussierte Hyperliquid-Panel passt beim Wechsel zwischen `Best 1m` und `Download l2Books` jetzt außerdem seine eingebettete Höhe korrekt neu an, sodass die kürzere Download-Ansicht keinen leeren Restbereich und keinen zusätzlichen Scrollbalken der zuvor höheren Build-Ansicht mehr mitzieht.
 
 Die eingebettete Hyperliquid-Ansicht vermeidet jetzt außerdem einen zweiten internen Seiten-Scrollbalken, sodass das Scrollen auf der eigentlichen Market-Data-Seite bleibt und nicht zwischen Seite und fokussiertem Panel aufgeteilt wird.

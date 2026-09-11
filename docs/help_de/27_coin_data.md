@@ -67,7 +67,7 @@ Hauptfilter:
 - Minimum `market_cap` wird bereits waehrend der Eingabe angewendet, behaelt stabile Dezimaleingaben waehrend des Tippens und nutzt `250` als Editor-typischen `+/-`-Schritt
 - Maximum `vol/mcap` wird bereits waehrend der Eingabe angewendet, behaelt direkte Dezimaleingaben wie `0.` und `0,` waehrend des Tippens und laesst `+/-` ueber lesbare gerundete Schwellen aus den aktuellen Exchange-Daten springen statt ueber winzige Rohwert-Schritte
 - Tags ueber denselben suchbaren Chip-Multiselect wie in PBv7 Run/Backtest, ohne Checkboxen im Dropdown
-- `Reset`-Button rechts in der Filterzeile, um den Standard-Filterzustand wiederherzustellen
+- `Reset`-Button rechts in der Filterzeile, um den Standard-Filterzustand sofort wiederherzustellen
 
 FastAPI-UI-Verbesserungen:
 
@@ -77,11 +77,13 @@ FastAPI-UI-Verbesserungen:
 - Vollbreiten-Tabellen mit ausgewogener Spaltenverteilung, damit die verfuegbare Breite genutzt wird ohne uebergrosse Luecken zwischen den Werten
 - die aktive Desktop-Tabelle nutzt die verbleibende Fensterhoehe, statt unten Leerraum unter der Tabelle zu lassen
 - sortierbare Tabellen-Header fuer Matched-, Unmatched- und HIP-3-Ansicht
+- Sortieren und Auswaehlen von Zeilen aktualisiert nur den Tabelleninhalt, sodass offene Filter-Controls ihren DOM und Fokus behalten
 - nicht verfuegbare CMC-Werte fuer Market Cap, 24-Stunden-Volumen und `vol/mcap` werden als `N/A` angezeigt und nach bekannten Werten sortiert
 - Hover-Tooltips fuer Tags, Notices und lange Werte
 - Row-Selection mit zentrierter schwebender Detailkarte, die sich beim Oeffnen soweit moeglich automatisch an den Inhalt anpasst, sich an jeder Seite und Ecke in der Groesse aendern und verschieben laesst, alle Tags ohne Abschneiden zeigt, einen direkten `Open CMC`-Link bei vorhandener CoinMarketCap-Zuordnung bietet und per `X` statt nur ueber Notice-Text geschlossen wird
 - genau eine aktive Haupttabelle, umschaltbar ueber die Sidebar, statt mehrere Bereiche gleichzeitig anzuzeigen
 - eine einzeilige Desktop-Filterleiste ohne separaten `Filters`-Titelblock
+- lang laufende Exchange- und CMC-Refreshes lassen sich per Button oder Escape in den Hintergrund legen; das Polling laeuft weiter und uebernimmt den fertigen Zustand
 
 Die Seite enthaelt:
 

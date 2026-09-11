@@ -795,6 +795,7 @@ function _suiteApplyScenarioPreview() {
 
 /* ── Toggle enabled ─────────────────────────────────────────── */
 function _suiteToggle(on) {
+  _suiteSaveEditingScenario();
   _suiteState.enabled = on;
   if (on) _suiteState.expanded = true;
   if (on && _suiteState.scenarios.length === 0) {
@@ -899,6 +900,7 @@ function _suiteScenarioSummary(sc) {
 
 /* ── Scenario CRUD ──────────────────────────────────────────── */
 function _suiteAddScenario() {
+  _suiteSaveEditingScenario();
   _suiteState.scenarios.push({ label: 'scenario_' + (_suiteState.scenarios.length + 1) });
   _suiteState.editIdx = _suiteState.scenarios.length - 1;
   _suiteRender();
@@ -916,6 +918,7 @@ function _suiteEditScenario(idx) {
 }
 
 function _suiteRemoveScenario(idx) {
+  _suiteSaveEditingScenario();
   _suiteState.scenarios.splice(idx, 1);
   if (_suiteState.editIdx === idx) _suiteState.editIdx = -1;
   else if (_suiteState.editIdx > idx) _suiteState.editIdx--;
@@ -924,6 +927,7 @@ function _suiteRemoveScenario(idx) {
 }
 
 function _suiteMoveScenario(idx, dir) {
+  _suiteSaveEditingScenario();
   var newIdx = idx + dir;
   if (newIdx < 0 || newIdx >= _suiteState.scenarios.length) return;
   var tmp = _suiteState.scenarios[idx];

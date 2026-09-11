@@ -2651,7 +2651,7 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=15"></script>
-<script src="/app/js/suite_editor.js?v=25"></script>
+<script src="/app/js/suite_editor.js?v=26"></script>
 <script src="/app/js/log_viewer_panel.js?v=43"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
@@ -9643,13 +9643,7 @@ function applyOptimizeSweepCoinSymmetry() {
 }
 
 function applyOptimizeSweepPreset(preview) {
-  if (!preview || preview.template !== 'sweep_cycles') return;
-  var parameters = preview.parameters || {};
-  var policy = parameters.sweep_policy || {};
-  var balanceInput = el('opted-starting-balance');
-  if (balanceInput && policy.starting_balance != null) {
-    balanceInput.value = String(policy.starting_balance);
-  }
+  if (!preview) return;
   setScoringEntries(
     [
       {metric: 'gain_strategy_eq', goal: 'max'},
@@ -9665,8 +9659,16 @@ function applyOptimizeSweepPreset(preview) {
     ],
     {suppressSync: true}
   );
-  applyOptimizeSweepCoinSymmetry();
-  applyOptimizeSweepLongBoundsPreset();
+  if (preview.template === 'sweep_cycles') {
+    var parameters = preview.parameters || {};
+    var policy = parameters.sweep_policy || {};
+    var balanceInput = el('opted-starting-balance');
+    if (balanceInput && policy.starting_balance != null) {
+      balanceInput.value = String(policy.starting_balance);
+    }
+    applyOptimizeSweepCoinSymmetry();
+    applyOptimizeSweepLongBoundsPreset();
+  }
   var objectiveMode = el('opted-objective-scenario-mode');
   var objectiveName = el('opted-objective-scenario-name');
   if (objectiveMode) objectiveMode.value = 'aggregate';

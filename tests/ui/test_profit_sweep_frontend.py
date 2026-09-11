@@ -550,3 +550,24 @@ def test_profit_sweep_account_transitions_refresh_sidebar_without_default_flash(
     assert "renderSelectedAccount();" not in select_account.split("await Promise.all([", 1)[0]
     assert enable_live.index("state.record = result.policy || state.record;") < enable_live.index("await refreshPolicyAndIntents")
     assert enable_live.index("syncSelectedUserSummary();") < enable_live.index("await refreshPolicyAndIntents")
+
+
+def test_intent_refresh_preserves_policy_drafts_and_unsaved_policy_actions_are_disabled() -> None:
+    """Intent-only updates must not rebuild forms, and record-only actions require a record."""
+
+    source = _source()
+    selected = source.split("function renderSelectedAccount()", 1)[1].split("function syncDryJournalDisclosure", 1)[0]
+    reconcile = source.split("async function reconcileIntent(operationId)", 1)[1].split("async function refreshTestTransfersAfterAction", 1)[0]
+    reset = source.split("async function resetBaseline()", 1)[1].split("async function deletePolicy", 1)[0]
+    refresh = source.split("async function refreshIntents()", 1)[1].split("function showTab", 1)[0]
+
+    assert "byId('delete-policy').disabled = !user || !state.record" in selected
+    assert "byId('reset-baseline').disabled = !user || !state.record" in selected
+    assert "byId('disable-policy').disabled = !user || !state.record || mode === 'disabled'" in selected
+    assert "if (!userName || !state.record) return;" in reset
+    assert "var expectedPolicyFingerprint = state.record.policy_fingerprint;" in reset
+    assert "expected_policy_fingerprint: expectedPolicyFingerprint" in reset
+    assert "renderSelectedAccount();" not in reconcile
+    assert reconcile.count("renderIntents();") == 2
+    assert "renderSelectedAccount();" not in refresh
+    assert "renderIntents();" in refresh

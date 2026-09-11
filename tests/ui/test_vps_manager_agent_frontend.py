@@ -185,6 +185,7 @@ def test_linux_update_counts_open_escaped_package_details() -> None:
     assert "Kernel updates available" in modal
     assert "Package removals planned" in modal
     assert "Routine updates available" in modal
+    assert "Deferred by apt" in modal
     assert "Stale cache:" in modal
     assert "esc(item.name || '-')" in modal
     assert "esc(item.candidate_version || '-')" in modal

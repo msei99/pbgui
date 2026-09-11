@@ -54,6 +54,8 @@ def test_retention_confirmation_preserves_original_generation() -> None:
     assert function.index("var expectedGeneration = retentionPolicyGeneration;") < function.index("window.PBGuiConfirm")
     assert "expected_generation: expectedGeneration" in function
     assert "expected_generation: retentionPolicyGeneration" not in function
+    assert "confirmText: destructive ? 'Enable Retention' : 'Disable Retention'" in function
+    assert "acceptText:" not in function
 
 
 def test_automatic_retention_status_uses_existing_five_second_feed() -> None:
@@ -85,3 +87,7 @@ def test_remote_preview_exposes_separate_pb8_reconciliation() -> None:
     assert "function confirmAndMaterializeV8()" in HTML
     assert "fetchJson('/remote-materialize-v8/'" in HTML
     assert "v8_materialization_pending" in HTML
+    close_preview = HTML.split("function closePreviewModal()", 1)[1].split("function placePreviewModal", 1)[0]
+    open_preview = HTML.split("function openRemotePreview(node)", 1)[1].split("function sortValue", 1)[0]
+    assert "syncMaterializeV8Button(null);" in close_preview
+    assert "syncMaterializeV8Button(null);" in open_preview

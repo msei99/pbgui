@@ -107,6 +107,8 @@ Hyperliquid `Best 1m` now also matches the newer FastAPI editing patterns more c
 
 Hyperliquid `Download l2Books` now uses that same coin-grid pattern too instead of the old compact dropdown. You can filter the enabled coin list, click visible rows directly, bulk-select the current filtered slice, clear the explicit selection, or drag across the visible grid to paint larger download ranges quickly. `XYZ-*` / TradFi symbols are excluded there because Hyperliquid l2Book archive downloads only apply to native coins. Leaving the selection empty still queues all remaining downloadable coins.
 
+If a Hyperliquid download or Best 1m build request is rejected, the action panel shows the server reason as an error. A rejected request is never reported as a queued zero-coin job.
+
 The focused Hyperliquid panel now also re-fits its embedded height when you switch between `Best 1m` and `Download l2Books`, so the shorter download view no longer keeps the empty tail and extra scrollbar from the previously taller build view.
 
 The embedded Hyperliquid view also avoids a second internal page scrollbar now, so scrolling stays on the main Market Data page instead of splitting between the page and the focused panel.

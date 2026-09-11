@@ -40,6 +40,7 @@ Left sidebar:
 | **Overview / Settings / History** | Switch between the live Overview table, shared deploy settings, and recent deploy history |
 | **Import by Hostname** | Open the manual hostname import dialog from the **Import Host** sidebar section; the hostname must already resolve via local `/etc/hosts` |
 | **Import Cluster Nodes** | Preview and import safe SSH metadata from Cluster Sync nodes into local VPS Manager host entries; secrets are not imported |
+| **Check Linux Updates** | Recheck package status concurrently on the selected VPS rows and immediately publish each successful result |
 
 The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list. The main overview area stays focused on the table, while host import stays available from the sidebar as a manual hostname-based action or as an **Import Cluster Nodes** action after joining an existing Cluster Sync state.
 
@@ -132,6 +133,7 @@ Sidebar actions:
 | **Install PB7 / Update PB7** | Install PB7 on a PB8-only host or update an existing PB7 runtime |
 | **Update PBGui and PB7 / Update PBGui and PB8** | Update PBGui together with the selected runtime; combined PB7+PB8 hosts offer both actions |
 | **Install PB8 / Update PB8** | Installation is available when fresh telemetry reports a supported role and at least 3 GiB free disk; an already validated PB8 runtime can be updated without the first-install reserve |
+| **Check Linux Updates** | Run a current read-only package simulation through VPSMonitor and immediately replace this host's cached count and details |
 | **Update Linux** | Run `apt upgrade` (optional reboot checkbox) |
 | **Reboot VPS** | Restart the VPS |
 | **Cleanup VPS** | Remove old packages and logs |
@@ -162,7 +164,8 @@ The sidebar keeps the detailed log workflows separate from the normal host overv
 
 The status cards above the setup grid are live operator hints:
 - Linux package status is independent of the VPS session password. Normal display refreshes read only from the monitor-agent cache. A successful **Update Linux** performs one final package probe after any requested reboot, atomically updates that cache, and makes the master consume it immediately.
-- Click a non-zero **Updates** value in Overview or the host header to inspect the cached apt package list, including newly installed dependencies and planned removals. Security updates are marked for prompt installation, removals require a dependency/service review, kernel updates recommend a maintenance window and possible reboot, and routine updates can be scheduled with normal maintenance. Incomplete lists remain unclassified instead of understating urgency. Older agent caches remain readable but can show only the count until PBGui refreshes the agent payload.
+- Automatic package probes run hourly on each VPS independently, and VPSMonitor normally consumes those caches on its own hourly schedule. Hosts can therefore briefly show counts generated at different times. Before simulating the upgrade, the collector refreshes an unprivileged apt index stored privately below PBGui's monitor-agent data directory; it does not modify the host's system apt cache or installed packages. **Check Linux Updates** bypasses both hourly waits and immediately consumes the newly generated cache.
+- Click a non-zero **Updates** value in Overview or the host header to inspect the cached apt package list, including newly installed dependencies and planned removals. The pending total includes both packages selected by the simulated transaction and packages reported by apt as `not upgraded`, such as phased or held updates. Deferred packages are shown separately and remain unclassified because apt does not emit transaction details for them. Security updates are marked for prompt installation, removals require a dependency/service review, kernel updates recommend a maintenance window and possible reboot, and routine updates can be scheduled with normal maintenance. Older agent caches remain readable but can show only the count until PBGui refreshes the agent payload.
 - **Credential Capability** and **Credential Protocol** report secret-free CMC pool readiness, active-key count, and catalog/materialized generations when available.
 - **Monitor Agent Cache** always shows **Source: agent cache** and an explicit **OK**, **Stale**, **Missing**, or **Error** state. A non-OK cache does not mean SSH is offline; SSH connection and telemetry/cache health are displayed separately.
 - The panel lists `live_metrics.ndjson`, `instance_snapshot.json`, `host_meta.json`, `service_status.json`, `package_status.json`, and `collector_status.json` with each file's effective age. Live data becomes stale after 15 seconds and collector status after 30 seconds. Collector loops and their last errors are listed separately.

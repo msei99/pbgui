@@ -110,9 +110,10 @@ def test_post_update_package_helper_writes_fresh_atomic_cache(tmp_path: Path) ->
     """Linux update completion can refresh package status without the long-running agent loop."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    apt_call_log = tmp_path / "apt-calls.log"
     apt_get = bin_dir / "apt-get"
     apt_get.write_text(
-        "#!/bin/sh\nprintf '%s\\n' "
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$APT_CALL_LOG\"\nprintf '%s\\n' "
         "'Inst openssl [3.0.2] (3.0.3 Ubuntu:24.04/noble-security [amd64])' "
         "'Inst linux-image-generic [6.8.0.1] (6.8.0.2 Ubuntu:24.04/noble-updates [amd64])' "
         "'Inst curl [8.5.0] (8.5.1 Ubuntu:24.04/noble-updates [amd64]) []' "
@@ -125,6 +126,7 @@ def test_post_update_package_helper_writes_fresh_atomic_cache(tmp_path: Path) ->
     pbgui_dir.mkdir()
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["APT_CALL_LOG"] = str(apt_call_log)
 
     result = subprocess.run(
         [sys.executable, "setup/refresh_package_status.py", "--pbgdir", str(pbgui_dir)],
@@ -148,6 +150,46 @@ def test_post_update_package_helper_writes_fresh_atomic_cache(tmp_path: Path) ->
     assert payload["source"] == "monitor-agent"
     assert payload["schema_version"] == 1
     assert payload["generated_at"] > 0
+    apt_calls = apt_call_log.read_text(encoding="utf-8").splitlines()
+    assert len(apt_calls) == 2
+    assert "Dir::State::Lists=" in apt_calls[0]
+    assert "Dir::Cache=" in apt_calls[0]
+    assert apt_calls[0].endswith(" update")
+    assert apt_calls[1].endswith(" dist-upgrade -s")
+
+
+def test_post_update_package_helper_counts_deferred_updates(tmp_path: Path) -> None:
+    """Packages apt defers still count as pending Linux updates."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    apt_get = bin_dir / "apt-get"
+    apt_get.write_text(
+        "#!/bin/sh\nprintf '%s\\n' "
+        "'0 upgraded, 0 newly installed, 0 to remove and 7 not upgraded.'\n",
+        encoding="utf-8",
+    )
+    apt_get.chmod(0o700)
+    pbgui_dir = tmp_path / "pbgui"
+    pbgui_dir.mkdir()
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
+    result = subprocess.run(
+        [sys.executable, "setup/refresh_package_status.py", "--pbgdir", str(pbgui_dir)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads((pbgui_dir / "data" / "monitor_agent" / "package_status.json").read_text(encoding="utf-8"))
+    assert payload["upgrades"] == "7"
+    assert payload["installable_updates"] == 0
+    assert payload["deferred_updates"] == 7
+    assert payload["urgency"] == "unknown"
+    assert payload["details_complete"] is False
 
 
 def test_monitor_consumes_post_update_package_cache_immediately() -> None:
@@ -168,6 +210,60 @@ def test_monitor_consumes_post_update_package_cache_immediately() -> None:
     assert asyncio.run(monitor.refresh_package_status("vps-1")) is True
     assert monitor._last_package_status_collect == {}
     assert monitor.store.host_meta["vps-1"]["package_status"]["upgrades"] == "0"
+
+
+def test_manual_package_check_runs_quoted_helper_and_ingests_cache() -> None:
+    """An explicit package check uses the detected PBGui path and publishes its result."""
+    calls: list[tuple[str, str, int, bool, bool]] = []
+
+    class FakePool:
+        """Provide one connected host and capture its remote command."""
+
+        @staticmethod
+        def get_connection(hostname: str) -> object | None:
+            """Return one connected host."""
+            return object() if hostname == "vps-1" else None
+
+        @staticmethod
+        def get_remote_pbgui_dir(hostname: str) -> str:
+            """Return a path that requires shell quoting."""
+            assert hostname == "vps-1"
+            return "software/PB Gui"
+
+        @staticmethod
+        async def run(hostname: str, command: str, *, timeout: int, check: bool, retry: bool) -> SimpleNamespace:
+            """Capture the package helper invocation."""
+            calls.append((hostname, command, timeout, check, retry))
+            return SimpleNamespace(exit_status=0)
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.pool = FakePool()
+    monitor.store = VPSStore()
+    monitor._last_package_status_collect = {}
+    monitor._cache_host_snapshot = lambda hostname: None
+    payload = {**_envelope(200.0), "upgrades": "4", "reboot": False}
+
+    async def read_cache(hostname: str, filename: str, *, stale_after: float, timeout: float) -> dict[str, Any]:
+        """Return the cache written by the fake helper."""
+        assert (hostname, filename, stale_after, timeout) == ("vps-1", "package_status.json", 7200.0, 10)
+        return payload
+
+    monitor._read_monitor_agent_json = read_cache
+
+    result = asyncio.run(monitor.check_package_status("vps-1"))
+
+    assert calls == [(
+        "vps-1",
+        "python3 \"$HOME\"/'software/PB Gui/setup/refresh_package_status.py' --pbgdir \"$HOME\"/'software/PB Gui'",
+        250,
+        False,
+        False,
+    )]
+    assert result["upgrades"] == "4"
+    assert result["package_status"] == payload
+    assert monitor.store.host_meta["vps-1"]["package_status"] == payload
+    assert monitor._last_package_status_collect["vps-1"] > 0
+    assert monitor._package_status_checking == set()
 
 
 @pytest.mark.parametrize("filename", tuple(monitor_mod.MONITOR_AGENT_FILE_TTLS))
@@ -544,6 +640,7 @@ def test_package_probe_script_fails_closed_on_apt_and_parse_errors() -> None:
     """The embedded apt probe raises instead of publishing an N/A heartbeat."""
 
     script = monitor_mod.PACKAGE_STATUS_SCRIPT
+    assert "if update_res.returncode != 0:" in script
     assert "if res.returncode != 0:" in script
     assert "if not match:" in script
     assert "'upgrades': 'N/A'" not in script
@@ -555,9 +652,10 @@ def test_embedded_package_probe_parses_real_trailing_markers(tmp_path: Path) -> 
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    apt_call_log = tmp_path / "apt-calls.log"
     apt_get = bin_dir / "apt-get"
     apt_get.write_text(
-        "#!/bin/sh\nprintf '%s\\n' "
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$APT_CALL_LOG\"\nprintf '%s\\n' "
         "'Inst network-manager [1.1] (1.2 Ubuntu:24.04/noble-security [amd64]) []' "
         "'Inst dependency-only (2.0 Ubuntu:24.04/noble-updates [amd64]) []' "
         "'Remv obsolete-agent [0.9]' "
@@ -565,7 +663,12 @@ def test_embedded_package_probe_parses_real_trailing_markers(tmp_path: Path) -> 
         encoding="utf-8",
     )
     apt_get.chmod(0o700)
-    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "APT_CALL_LOG": str(apt_call_log),
+        "PBGUI_PBGDIR": str(tmp_path / "pbgui"),
+    }
 
     result = subprocess.run(
         monitor_mod.PACKAGE_STATUS_SCRIPT,
@@ -587,6 +690,48 @@ def test_embedded_package_probe_parses_real_trailing_markers(tmp_path: Path) -> 
     assert payload["packages"][2]["removed"] is True
     assert payload["security_updates"] == 1
     assert payload["details_complete"] is True
+    apt_calls = apt_call_log.read_text(encoding="utf-8").splitlines()
+    assert len(apt_calls) == 2
+    assert "Dir::State::Lists=" in apt_calls[0]
+    assert "Dir::Cache=" in apt_calls[0]
+    assert apt_calls[0].endswith(" update")
+    assert apt_calls[1].endswith(" dist-upgrade -s")
+
+
+def test_embedded_package_probe_counts_deferred_updates(tmp_path: Path) -> None:
+    """The daemon collector reports apt's not-upgraded count as pending."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    apt_get = bin_dir / "apt-get"
+    apt_get.write_text(
+        "#!/bin/sh\nprintf '%s\\n' "
+        "'0 upgraded, 0 newly installed, 0 to remove and 11 not upgraded.'\n",
+        encoding="utf-8",
+    )
+    apt_get.chmod(0o700)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PBGUI_PBGDIR": str(tmp_path / "pbgui"),
+    }
+
+    result = subprocess.run(
+        monitor_mod.PACKAGE_STATUS_SCRIPT,
+        shell=True,
+        executable="/bin/bash",
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["upgrades"] == "11"
+    assert payload["installable_updates"] == 0
+    assert payload["deferred_updates"] == 11
+    assert payload["urgency"] == "unknown"
+    assert payload["details_complete"] is False
 
 
 def test_package_contract_rejects_oversized_detail_lists() -> None:

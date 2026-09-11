@@ -134,6 +134,11 @@ class FakeMonitor:
         self.calls.append(("package", hostname))
         return True
 
+    async def check_package_status(self, hostname: str) -> dict[str, Any]:
+        """Capture an explicit package check."""
+        self.calls.append(("package-check", hostname))
+        return {"hostname": hostname, "generated_at": 10.0, "upgrades": "2", "reboot": False}
+
     def get_upstream_release_status(self) -> dict[str, Any]:
         """Return fake daemon-owned release state."""
         return self.release_status
@@ -272,6 +277,12 @@ def test_daemon_dispatches_monitor_log_and_history_methods(tmp_path: Path) -> No
         daemon = VPSMonitorRPCDaemon(tmp_path / "rpc" / "sock", monitor=monitor, streamer=streamer)
         assert await daemon.dispatch("alerts.ack", {"id": "alert-1"}) is True
         assert await daemon.dispatch("host.refresh", {"hostname": "vps-1"}) is True
+        assert await daemon.dispatch("host.check_package", {"hostname": "vps-1"}) == {
+            "hostname": "vps-1",
+            "generated_at": 10.0,
+            "upgrades": "2",
+            "reboot": False,
+        }
         assert await daemon.dispatch(
             "service.restart", {"hostname": "vps-1", "service": "PBRun"}
         ) is True

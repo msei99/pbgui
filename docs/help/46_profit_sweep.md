@@ -20,6 +20,8 @@ The Overview reports read capability immediately. Write capability is checked fr
 
 The account sidebar shows each policy's current mode and due amount. Switching accounts displays a dedicated loading state until that account's stored policy, journal, intents, and test transfers have loaded; PBGui does not briefly present schema defaults as if they belonged to the selected account. Successful Live activation updates the selected sidebar badge immediately from the authoritative activation response and then reconciles it with the stored policy.
 
+Refreshing or reconciling Live intents updates the intent list without discarding unsaved Policy, Schedule, or Exchange field changes. **Delete**, **Disable**, and **Reset baseline** remain unavailable until the selected account has a saved policy.
+
 Hyperliquid Vault accounts expose **Fund account** under **Exchange / Vault**. It opens the separate Transfers page with the selected Vault prefilled for a fixed Leader Main Perps to Vault Top Up; manual funding remains outside Profit Sweep accounting.
 
 ## Basic Fields

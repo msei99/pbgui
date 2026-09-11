@@ -96,14 +96,14 @@ def test_vps_package_status_is_monitor_agent_only() -> None:
     assert not hasattr(VPSManagerService, "_refresh_local_package_status")
     for path in ("api/vps.py", "api/vps_manager.py", "vps_manager_core.py", "vps_manager_service.py"):
         assert "fetch_package_status" not in sources[path]
-    package_probe = "['apt-get', 'dist-upgrade', '-s']"
     assert "dist-upgrade" not in sources["vps_manager_core.py"]
     assert "dist-upgrade" not in sources["vps_manager_service.py"]
     assert [path for path, source in sources.items() if "dist-upgrade" in source] == [
         "master/async_monitor.py"
     ]
     package_script = sources["master/async_monitor.py"].split("PACKAGE_STATUS_SCRIPT =", 1)[1]
-    assert package_probe in package_script
+    assert "['apt-get', *apt_options, 'update']" in package_script
+    assert "['apt-get', *apt_options, 'dist-upgrade', '-s']" in package_script
 
 
 class _FakeUfwSshClient:
@@ -2705,6 +2705,56 @@ def test_forced_vps_manager_refresh_wakes_monitor_release_collector(
     service.refresh(force=True)
 
     assert calls == ["inventory", "release-refresh"]
+
+
+def test_manual_package_checks_report_partial_bulk_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Selected-host checks run concurrently and retain successful per-host results."""
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run_loop() -> None:
+        """Own the fake monitor event loop in a background thread."""
+        asyncio.set_event_loop(loop)
+        ready.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=run_loop)
+    thread.start()
+    ready.wait(timeout=2)
+
+    class FakeMonitor:
+        """Return one package result and one host-specific failure."""
+
+        def __init__(self) -> None:
+            self.loop = loop
+
+        @staticmethod
+        async def check_package_status(hostname: str) -> dict[str, object]:
+            """Return deterministic package-check outcomes."""
+            if hostname == "vps-b":
+                raise RuntimeError("monitor disconnected")
+            return {"hostname": hostname, "generated_at": 20.0, "upgrades": "3", "reboot": False}
+
+    service = object.__new__(VPSManagerService)
+    known_hosts = {"vps-a", "vps-b"}
+    service.vpsmanager = SimpleNamespace(
+        find_vps_by_hostname=lambda hostname: SimpleNamespace(hostname=hostname) if hostname in known_hosts else None
+    )
+    monkeypatch.setattr(service_mod, "get_monitor", lambda: FakeMonitor())
+    try:
+        result = service.check_vps_package_status(["vps-a", "vps-b", "vps-a"])
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2)
+        loop.close()
+
+    assert result["hostnames"] == ["vps-a", "vps-b"]
+    assert result["checked_count"] == 1
+    assert result["failed_count"] == 1
+    assert result["results"] == [
+        {"hostname": "vps-a", "success": True, "generated_at": 20.0, "upgrades": "3", "reboot": False},
+        {"hostname": "vps-b", "success": False, "error": "monitor disconnected"},
+    ]
 
 
 def test_completed_linux_update_forces_one_fresh_package_cache_read() -> None:

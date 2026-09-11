@@ -66,6 +66,54 @@ def test_sweep_apply_sets_balanced_high_risk_scoring_preset() -> None:
     _run_node(script)
 
 
+def test_rolling_and_walk_forward_apply_the_sweep_scoring_and_limits_defaults() -> None:
+    """Every generated scenario plan starts with the same scoring and limits recipe."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "applyOptimizeSweepPreset")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const nodes = {{
+          'opted-starting-balance': {{value: '100000'}},
+          'opted-objective-scenario-mode': {{value: 'named'}},
+          'opted-objective-scenario-name': {{value: 'old'}}
+        }};
+        const el = id => nodes[id] || null;
+        let scoring = null;
+        let limits = null;
+        let sweepOnlyCalls = 0;
+        const setScoringEntries = value => {{ scoring = value; }};
+        const setLimitEntries = value => {{ limits = value; }};
+        const applyOptimizeSweepCoinSymmetry = () => {{ sweepOnlyCalls += 1; }};
+        const applyOptimizeSweepLongBoundsPreset = () => {{ sweepOnlyCalls += 1; }};
+        const toggleOptimizeObjectiveScenarioInput = () => {{}};
+        {function_source}
+
+        for (const template of ['rolling_windows', 'walk_forward']) {{
+          scoring = null;
+          limits = null;
+          nodes['opted-objective-scenario-mode'].value = 'named';
+          nodes['opted-objective-scenario-name'].value = 'old';
+          applyOptimizeSweepPreset({{template, parameters: {{}}}});
+          assert.deepEqual(scoring, [
+            {{metric: 'gain_strategy_eq', goal: 'max'}},
+            {{metric: 'sortino_ratio_strategy_eq', goal: 'max'}},
+            {{metric: 'drawdown_worst_strategy_eq', goal: 'min'}}
+          ]);
+          assert.deepEqual(limits, [
+            {{metric: 'drawdown_worst_strategy_eq', penalize_if: 'greater_than', value: 0.8}},
+            {{metric: 'backtest_completion_ratio', penalize_if: 'less_than', value: 0.99}}
+          ]);
+          assert.equal(nodes['opted-objective-scenario-mode'].value, 'aggregate');
+          assert.equal(nodes['opted-objective-scenario-name'].value, '');
+        }}
+        assert.equal(nodes['opted-starting-balance'].value, '100000');
+        assert.equal(sweepOnlyCalls, 0);
+        """
+    )
+    _run_node(script)
+
+
 def test_sweep_apply_sizes_long_positions_to_coins_and_sets_twe_range() -> None:
     """One explicit Long coin becomes one fixed position while TWE searches 6 through 10."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
@@ -731,6 +779,52 @@ def test_suite_generator_applies_training_only_and_invalidates_stale_provenance(
         });
         _suiteApplyScenarioPreview();
         assert.deepEqual(_suiteState.scenarios, [{label: 'keep_current'}]);
+        """
+    )
+    _run_node(script)
+
+
+def test_suite_scenario_actions_preserve_the_active_form_draft() -> None:
+    """Routine Suite actions must commit the active editor before replacing its DOM."""
+
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const fields = {
+          'suite-sc-label': {value: 'edited_base'},
+          'suite-sc-start': {value: '2024-01-01'},
+          'suite-sc-end': {value: '2024-12-31'}
+        };
+        global.document = {getElementById: id => fields[id] || null};
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteRender = () => {};
+        _suiteNotifyStructuredSync = () => {};
+        _suiteGetCoinMsSelected = () => [];
+        _suiteCollectCoinSources = () => ({});
+
+        function reset() {
+          _suiteState.enabled = true;
+          _suiteState.scenarios = [{label: 'base'}, {label: 'other'}];
+          _suiteState.editIdx = 0;
+        }
+
+        reset();
+        _suiteAddScenario();
+        assert.equal(_suiteState.scenarios[0].start_date, '2024-01-01');
+
+        reset();
+        _suiteMoveScenario(1, -1);
+        assert.equal(_suiteState.scenarios[1].start_date, '2024-01-01');
+
+        reset();
+        _suiteRemoveScenario(1);
+        assert.equal(_suiteState.scenarios[0].start_date, '2024-01-01');
+
+        reset();
+        _suiteToggle(false);
+        assert.equal(_suiteState.scenarios[0].start_date, '2024-01-01');
+        assert.equal(_suiteState.enabled, false);
         """
     )
     _run_node(script)

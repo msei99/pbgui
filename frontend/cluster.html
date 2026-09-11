@@ -823,6 +823,8 @@
         bootstrap: { key: 'target', dir: 'asc' },
         nodes: { key: 'pbname', dir: 'asc' },
         instances: { key: 'instance', dir: 'asc' },
+        'pb8-instances': { key: 'instance', dir: 'asc' },
+        'pb8-tombstones': { key: 'instance', dir: 'asc' },
         tombstones: { key: 'instance', dir: 'asc' },
         oplog: { key: 'created_at', dir: 'desc' }
       };
@@ -2081,6 +2083,7 @@
         if (content) content.innerHTML = '';
         syncPushOpsButton(null);
         syncMaterializeButton(null);
+        syncMaterializeV8Button(null);
         syncApiKeyMaterializeButton(null);
         stopPushProgressPolling();
         resetPushProgress();
@@ -2491,6 +2494,7 @@
         if (content) content.innerHTML = '';
         syncPushOpsButton(null);
         syncMaterializeButton(null);
+        syncMaterializeV8Button(null);
         syncApiKeyMaterializeButton(null);
         stopPushProgressPolling();
         resetPushProgress();
@@ -3927,7 +3931,7 @@
           detail: destructive
             ? 'PBGui will retain ' + historyDays + ' days. Automatic cleanup starts when every cluster, checkpoint, and migration safety condition is healthy. Already deleted history cannot be restored.'
             : 'Checkpoint verification continues, but oplog and blob files will no longer be deleted.',
-          acceptText: destructive ? 'Enable Retention' : 'Disable Retention',
+          confirmText: destructive ? 'Enable Retention' : 'Disable Retention',
           tone: destructive ? 'danger' : 'default'
         }).then(function (confirmed) {
           if (!confirmed) return;

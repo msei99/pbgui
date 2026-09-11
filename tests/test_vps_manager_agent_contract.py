@@ -148,6 +148,8 @@ def test_package_status_normalizes_and_age_progresses() -> None:
         "state": "ok",
         "available": True,
         "upgrades": 7,
+        "installable_updates": 7,
+        "deferred_updates": 0,
         "new_installs": 0,
         "removals": 0,
         "reboot_required": False,
@@ -224,6 +226,24 @@ def test_package_status_normalizes_security_and_kernel_details() -> None:
     assert result["packages"][0]["category"] == "security"
     assert result["packages"][1]["category"] == "kernel"
     assert result["packages"][2]["category"] == "routine"
+
+
+def test_package_status_preserves_deferred_update_count() -> None:
+    """Deferred apt candidates remain visible without claiming full classification."""
+    payload = _package_payload(9_990, upgrades="7", reboot=False)
+    payload.update({
+        "installable_updates": 0,
+        "deferred_updates": 7,
+        "details_complete": False,
+    })
+
+    result = _normalize_package_status(payload, now=10_000)
+
+    assert result["upgrades"] == 7
+    assert result["installable_updates"] == 0
+    assert result["deferred_updates"] == 7
+    assert result["urgency"] == "unknown"
+    assert result["classification_complete"] is False
 
 
 def test_package_removals_are_explicit_and_raise_urgency() -> None:

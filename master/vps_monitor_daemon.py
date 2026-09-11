@@ -265,6 +265,8 @@ class VPSMonitorRPCDaemon:
             return True
         if method == "host.refresh_package":
             return await self.monitor.refresh_package_status(require_string(params, "hostname"))
+        if method == "host.check_package":
+            return await self.monitor.check_package_status(require_string(params, "hostname"))
         if method == "releases.refresh":
             if hasattr(self.monitor, "request_upstream_release_refresh"):
                 self.monitor.request_upstream_release_refresh()

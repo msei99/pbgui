@@ -105,6 +105,22 @@ def _run_node_assertions(function_names: list[str], *, bootstrap: str, assertion
 class TestVpsManagerFrontendLogic:
     """Lock down VPS Manager form behavior against live metadata refreshes."""
 
+    def test_linux_update_checks_support_host_and_overview_selection(self) -> None:
+        """Manual package checks expose both scopes and clear their busy state on every response."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        sidebar_source = _extract_function(source, "renderSidebarActions")
+        action_source = _extract_function(source, "handleVpsManagerAction")
+        result_source = _extract_function(source, "handleResult")
+        message_source = _extract_function(source, "handleMessage")
+
+        assert "data-vps-action='check-package'" in sidebar_source
+        assert "checkLinuxUpdates(getSelectedOverviewHosts())" in sidebar_source
+        assert "checkLinuxUpdates([host])" in action_source
+        assert "cmd === 'check_package_status'" in result_source
+        assert "store.packageCheckHosts = []" in result_source
+        assert "msg.cmd === 'check_package_status'" in message_source
+        assert "store.packageCheckHosts = []" in message_source
+
     def test_pb8_install_actions_use_filled_blue_emphasis(self) -> None:
         """Uninstalled PB8 actions stand out while installed and update states retain their colors."""
         source = HTML_PATH.read_text(encoding="utf-8")

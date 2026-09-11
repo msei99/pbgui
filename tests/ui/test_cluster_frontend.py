@@ -53,6 +53,16 @@ def test_cluster_projects_pb8_state_and_node_capability() -> None:
     assert "PB8 Instances" in HTML
 
 
+def test_cluster_keeps_v7_and_pb8_table_sort_state_separate() -> None:
+    """Sorting either runtime table must not mutate the other runtime's ordering."""
+
+    table_sort = HTML.split("var tableSort = {", 1)[1].split("};", 1)[0]
+    assert "'pb8-instances': { key: 'instance', dir: 'asc' }" in table_sort
+    assert "'pb8-tombstones': { key: 'instance', dir: 'asc' }" in table_sort
+    assert "renderInstanceTable(payload, 'pb8_instances', 'pb8-instances-table', 'pb8-instances', 'PB8')" in HTML
+    assert "renderTombstoneTable(payload, 'pb8_tombstones', 'pb8-tombstones-table', 'pb8-tombstones', 'PB8')" in HTML
+
+
 def test_cluster_pb8_lifecycle_controls_use_shared_dialogs_and_generation() -> None:
     """PB8 lifecycle controls remain explicit, current-state bound, and capability filtered."""
 

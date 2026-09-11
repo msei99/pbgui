@@ -109,6 +109,10 @@ def test_ai_chat_uses_persistent_history_and_detached_turn_polling() -> None:
     assert "provider: $('provider-select').value" in HTML
     assert "try { await loadModels(); }" in HTML
     assert "await newChat(true); await loadModels();" not in HTML
+    send_message = HTML.split("async function sendMessage", 1)[1].split("async function loadConversationSummary", 1)[0]
+    assert "renderPendingMessage();" in send_message
+    assert "renderConversationMessages([]);" not in send_message
+    assert "querySelectorAll('.message.pending-message')" in HTML
     pagehide = HTML.split("pagehide", 1)[1]
     assert "/cancel" not in pagehide
 

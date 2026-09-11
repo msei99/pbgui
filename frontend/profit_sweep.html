@@ -1131,6 +1131,9 @@
       renderTestTransfers(user);
       setAccountActionsEnabled(Boolean(user));
       var mode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
+      byId('delete-policy').disabled = !user || !state.record;
+      byId('reset-baseline').disabled = !user || !state.record;
+      byId('disable-policy').disabled = !user || !state.record || mode === 'disabled';
       syncDryJournalDisclosure(mode);
       var liveActive = mode === 'live' || mode === 'paused_unknown';
       var activeBaseline = state.record && state.record.live_state ? state.record.live_state.active_baseline_mode : '';
@@ -1457,7 +1460,7 @@
         await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
         if (!isCurrentAccount(userName, generation)) return;
         syncSelectedUserSummary();
-        renderSelectedAccount();
+        renderIntents();
         setMessage('Intent reconciliation refreshed.', 'ok');
         scheduleAutomaticPreview(0);
       } catch (error) {
@@ -1469,7 +1472,7 @@
         }
         if (!isCurrentAccount(userName, generation)) return;
         syncSelectedUserSummary();
-        renderSelectedAccount();
+        renderIntents();
         setMessage(error.message, 'error');
       }
     }
@@ -1741,7 +1744,8 @@
     async function resetBaseline() {
       var userName = state.selectedUser;
       var generation = state.accountGeneration;
-      if (!userName) return;
+      if (!userName || !state.record) return;
+      var expectedPolicyFingerprint = state.record.policy_fingerprint;
       var cumulative = byId('baseline-value').value.trim();
       if (!/^-?(?:\d+\.?\d*|\.\d+)$/.test(cumulative)) {
         setMessage('Cumulative net PnL must be a decimal number.', 'error');
@@ -1760,7 +1764,7 @@
           signal: state.accountController ? state.accountController.signal : undefined,
           body: JSON.stringify({
             cumulative_net_pnl: cumulative,
-            expected_policy_fingerprint: state.record.policy_fingerprint
+            expected_policy_fingerprint: expectedPolicyFingerprint
           })
         });
         if (!isCurrentAccount(userName, generation)) return;
@@ -1833,7 +1837,7 @@
         await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
         if (!isCurrentAccount(userName, generation)) return;
         syncSelectedUserSummary();
-        renderSelectedAccount();
+        renderIntents();
         setMessage('Policy and Live intents refreshed.', 'ok');
       } catch (error) {
         if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');

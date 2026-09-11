@@ -20,6 +20,8 @@ Die Overview zeigt die Read-Capability sofort. Die Write-Capability wird bei Liv
 
 Die Account-Sidebar zeigt fuer jede Policy den aktuellen Modus und Due-Betrag. Beim Accountwechsel erscheint ein eigener Ladezustand, bis gespeicherte Policy, Journal, Intents und Test-Transfers dieses Accounts geladen sind; PBGui zeigt Schema-Defaults nicht mehr kurz so an, als gehoerten sie zum ausgewaehlten Account. Nach erfolgreicher Live-Aktivierung aktualisiert PBGui das ausgewaehlte Sidebar-Badge sofort aus der verbindlichen Aktivierungsantwort und gleicht es danach mit der gespeicherten Policy ab.
 
+Das Aktualisieren oder Reconciliieren von Live Intents aktualisiert die Intent-Liste, ohne ungespeicherte Aenderungen in Policy-, Schedule- oder Exchange-Feldern zu verwerfen. **Delete**, **Disable** und **Reset baseline** bleiben deaktiviert, bis fuer den ausgewaehlten Account eine Policy gespeichert ist.
+
 Hyperliquid-Vault-Accounts zeigen unter **Exchange / Vault** die Aktion **Fund account**. Sie oeffnet die getrennte Transfers-Seite mit dem ausgewaehlten Vault fuer einen festen Top Up von Leader Main Perps zum Vault; manuelles Funding bleibt ausserhalb der Profit-Sweep-Abrechnung.
 
 ## Basic-Felder

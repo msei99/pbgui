@@ -1053,6 +1053,20 @@
       text-align: center;
     }
 
+    .busy-dismiss {
+      justify-self: center;
+      min-height: var(--btn-h);
+      padding: 0 var(--sp-md);
+      border: 1px solid #4a5568;
+      border-radius: 7px;
+      background: #1a202c;
+      color: #cbd5e0;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .busy-dismiss:hover { border-color: var(--accent); color: var(--text); }
+
     .busy-progress {
       position: relative;
       overflow: hidden;
@@ -1693,6 +1707,7 @@
         <div class="busy-progress-label" id="busy-progress-label">0%</div>
       </div>
       <div class="busy-subtle" id="busy-subtle">Please wait.</div>
+      <button type="button" class="busy-dismiss" id="btn-busy-dismiss">Dismiss to background</button>
     </div>
   </div>
 
@@ -1902,6 +1917,11 @@
     function hideBusy() {
       stopBusyPolling();
       document.getElementById('busy-overlay').classList.remove('visible');
+    }
+
+    function dismissBusy() {
+      document.getElementById('busy-overlay').classList.remove('visible');
+      setActionStatus('Refresh continues in background.', false);
     }
 
     function setActionStatus(message, isError) {
@@ -2758,12 +2778,20 @@
       activeWrap.style.maxHeight = available + 'px';
     }
 
+    function renderTableRows(tableName) {
+      if (tableName === 'main') renderMainRows();
+      else if (tableName === 'unmatched') renderUnmatchedRows();
+      else if (tableName === 'hip3') renderHip3Rows();
+      bindRowSelection();
+    }
+
     function bindRowSelection() {
       Array.prototype.forEach.call(document.querySelectorAll('tr.data-row'), function (row) {
         row.addEventListener('click', function () {
           uiState.selectedTable = row.getAttribute('data-table') || 'main';
           uiState.selectedKey = row.getAttribute('data-key') || '';
-          renderPage();
+          renderTableRows(uiState.selectedTable);
+          renderSelectedRow();
         });
       });
     }
@@ -2798,7 +2826,8 @@
         sortState[tableName].key = key;
         sortState[tableName].dir = key === 'coin' || key === 'ccxt_symbol' ? 'asc' : 'desc';
       }
-      renderPage();
+      renderTableRows(tableName);
+      renderSortPill();
     }
 
     function closeSelectedDetails() {
@@ -2825,12 +2854,23 @@
       filters.tags = [];
       filters.quotes = [];
       filters.only_cpt = false;
+      var marketCapInput = document.getElementById('filter-market-cap');
+      var volMcapInput = document.getElementById('filter-vol-mcap');
+      if (marketCapInput) marketCapInput.value = '';
+      if (volMcapInput) volMcapInput.value = '10';
       syncToggleButtons();
       loadState();
     }
 
     function bindControls() {
       document.addEventListener('click', handleSortClick);
+      document.addEventListener('mousedown', function (event) {
+        var input = document.getElementById('tag-filter-input');
+        var dropdown = document.querySelector('#tag-filter-wrap .ms-dropdown');
+        if (document.activeElement !== input || !dropdown || !dropdown.classList.contains('open')) return;
+        if (!event.target.closest('th.sortable, tr.data-row')) return;
+        event.preventDefault();
+      });
 
       (function () {
         var card = document.getElementById('selected-card');
@@ -2992,6 +3032,12 @@
       });
       document.getElementById('btn-refresh-cmc-all').addEventListener('click', function () {
         runRefresh('/refresh/cmc_all', 'Refreshing CMC + all exchanges...', 'CoinMarketCap data and all exchanges refreshed.');
+      });
+      document.getElementById('btn-busy-dismiss').addEventListener('click', dismissBusy);
+      document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape' || !document.getElementById('busy-overlay').classList.contains('visible')) return;
+        event.preventDefault();
+        dismissBusy();
       });
 
       document.getElementById('btn-only-cpt').addEventListener('click', function () {

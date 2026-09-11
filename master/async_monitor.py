@@ -885,6 +885,10 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
     elif filename == "package_status.json":
         _monitor_agent_require(payload, ("upgrades", "reboot"))
         _monitor_agent_require_type(payload, "upgrades", str)
+        for field in ("installable_updates", "deferred_updates"):
+            value = payload.get(field, 0)
+            if type(value) is not int or value < 0:
+                raise MonitorAgentPayloadError(f"invalid {field}")
         new_installs = payload.get("new_installs", 0)
         if type(new_installs) is not int or new_installs < 0:
             raise MonitorAgentPayloadError("invalid new_installs")
@@ -1927,6 +1931,13 @@ def _monitor_agent_cache_read_command(remote_pbgui_dir: str, filename: str) -> s
     cache_path = remote_path_join(remote_pbgui_dir, "data", "monitor_agent", filename)
     command = "head -c 1048577 --" if filename == "package_status.json" else "cat"
     return f"{command} {remote_shell_path(cache_path)}"
+
+
+def _monitor_agent_package_check_command(remote_pbgui_dir: str) -> str:
+    """Return the quoted command for one explicit monitor-agent package check."""
+    helper_path = remote_shell_path(remote_path_join(remote_pbgui_dir, "setup", "refresh_package_status.py"))
+    pbgui_path = remote_shell_path(remote_pbgui_dir)
+    return f"python3 {helper_path} --pbgdir {pbgui_path}"
 
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
@@ -3778,8 +3789,40 @@ import json, os, re, subprocess
 env = os.environ.copy()
 env['LANG'] = 'C'
 env['LC_ALL'] = 'C'
+pbgui_dir = os.path.abspath(os.path.expanduser(os.environ.get('PBGUI_PBGDIR', '~/software/pbgui')))
+data_dir = os.path.join(pbgui_dir, 'data')
+monitor_dir = os.path.join(data_dir, 'monitor_agent')
+lists_dir = os.path.join(monitor_dir, 'apt', 'lists')
+cache_dir = os.path.join(monitor_dir, 'apt', 'cache')
+for path in (data_dir, monitor_dir, lists_dir, os.path.join(lists_dir, 'partial'), cache_dir, os.path.join(cache_dir, 'archives', 'partial')):
+    if os.path.islink(path):
+        raise RuntimeError('apt list cache path must not contain symlinks')
+    os.makedirs(path, mode=0o700, exist_ok=True)
+for path in (monitor_dir, os.path.dirname(lists_dir), lists_dir, os.path.join(lists_dir, 'partial'), cache_dir, os.path.join(cache_dir, 'archives'), os.path.join(cache_dir, 'archives', 'partial')):
+    os.chmod(path, 0o700)
+apt_options = [
+    '-o', f'Dir::State::Lists={lists_dir}{os.sep}',
+    '-o', f'Dir::Cache={cache_dir}{os.sep}',
+    '-o', 'Acquire::Languages=none',
+    '-o', 'Acquire::IndexTargets::deb::DEP-11::DefaultEnabled=false',
+    '-o', 'Acquire::IndexTargets::deb::DEP-11-icons-small::DefaultEnabled=false',
+    '-o', 'Acquire::IndexTargets::deb::DEP-11-icons::DefaultEnabled=false',
+    '-o', 'Acquire::IndexTargets::deb::DEP-11-icons-hidpi::DefaultEnabled=false',
+    '-o', 'Acquire::IndexTargets::deb::CNF::DefaultEnabled=false',
+    '-o', 'DPkg::Lock::Timeout=120',
+]
+update_res = subprocess.run(
+    ['apt-get', *apt_options, 'update'],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    timeout=180,
+    env=env,
+)
+if update_res.returncode != 0:
+    raise RuntimeError(f'apt index refresh failed rc={update_res.returncode}')
 res = subprocess.run(
-    ['apt-get', 'dist-upgrade', '-s'],
+    ['apt-get', *apt_options, 'dist-upgrade', '-s'],
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     text=True,
@@ -3792,6 +3835,9 @@ match = re.search(r'(\d+) upgraded', res.stdout or '')
 if not match:
     raise RuntimeError('apt output did not contain an upgrade count')
 upgrade_count = int(match.group(1))
+deferred_match = re.search(r'(\d+) not upgraded', res.stdout or '')
+deferred_count = int(deferred_match.group(1)) if deferred_match else 0
+pending_update_count = upgrade_count + deferred_count
 new_install_match = re.search(r'(\d+) newly installed', res.stdout or '')
 new_install_count = int(new_install_match.group(1)) if new_install_match else 0
 removal_match = re.search(r'(\d+) to remove', res.stdout or '')
@@ -3846,9 +3892,11 @@ security_updates = sum(1 for package in packages if package['security'])
 removal_updates = sum(1 for package in packages if package['removed'] and not package['security'])
 kernel_updates = sum(1 for package in packages if package['kernel'] and not package['security'] and not package['removed'])
 categorized_updates = sum(1 for package in packages if package['security'] or package['kernel'] or package['removed'])
-details_complete = len(packages) == expected_package_changes
+details_complete = deferred_count == 0 and len(packages) == expected_package_changes
 result = {
-    'upgrades': str(upgrade_count),
+    'upgrades': str(pending_update_count),
+    'installable_updates': upgrade_count,
+    'deferred_updates': deferred_count,
     'new_installs': new_install_count,
     'removals': removal_count,
     'reboot': os.path.exists('/var/run/reboot-required'),
@@ -3857,7 +3905,7 @@ result = {
     'kernel_updates': kernel_updates,
     'removal_updates': removal_updates,
     'routine_updates': max(len(packages) - categorized_updates, 0),
-    'urgency': 'security' if security_updates else ('unknown' if not details_complete else ('removal' if removal_updates else ('kernel' if kernel_updates else ('routine' if expected_package_changes else 'none')))),
+    'urgency': 'security' if security_updates else ('unknown' if not details_complete else ('removal' if removal_updates else ('kernel' if kernel_updates else ('routine' if pending_update_count or expected_package_changes else 'none')))),
     'details_complete': details_complete,
     'details_truncated': expected_package_changes > len(packages) and len(packages) >= 500,
 }
@@ -6223,6 +6271,59 @@ class VPSMonitor:
         await self.collect_host_meta_now(host, include_package_status=True)
         refreshed = (self.store.host_meta.get(host) or {}).get("package_status") or {}
         return float(refreshed.get("generated_at") or 0.0) > previous_generated_at
+
+    async def check_package_status(self, hostname: str) -> dict[str, Any]:
+        """Run one explicit remote package probe and consume its fresh cache."""
+        host = str(hostname or "").strip()
+        if not host or not self.pool.get_connection(host):
+            raise RuntimeError(f"VPS monitor is not connected to {host or 'the requested host'}")
+        checking = getattr(self, "_package_status_checking", None)
+        if checking is None:
+            checking = set()
+            self._package_status_checking = checking
+        if host in checking:
+            raise RuntimeError(f"Linux update check is already running on {host}")
+        checking.add(host)
+        try:
+            pbgui_dir = self.pool.get_remote_pbgui_dir(host)
+            result = await self.pool.run(
+                host,
+                _monitor_agent_package_check_command(pbgui_dir),
+                timeout=250,
+                check=False,
+                retry=False,
+            )
+            if not result or result.exit_status != 0:
+                raise RuntimeError(
+                    f"Linux update check failed on {host}; update PBGui on the VPS and try again"
+                )
+            package_status = await self._read_monitor_agent_json(
+                host,
+                "package_status.json",
+                stale_after=7200.0,
+                timeout=10,
+            )
+            if package_status:
+                self.store.update_host_meta(host, {
+                    "package_status": package_status,
+                    "upgrades": package_status.get("upgrades", "N/A"),
+                })
+                self._last_package_status_collect[host] = time.time()
+                self._cache_host_snapshot(host)
+            else:
+                package_status = {}
+            generated_at = float(package_status.get("generated_at") or 0.0)
+            if generated_at <= 0:
+                raise RuntimeError(f"Linux update check on {host} produced no valid package status")
+            return {
+                "hostname": host,
+                "generated_at": generated_at,
+                "upgrades": str(package_status.get("upgrades") or "0"),
+                "reboot": bool(package_status.get("reboot")),
+                "package_status": package_status,
+            }
+        finally:
+            checking.discard(host)
 
     async def _collect_host_meta_all(self):
         """Collect host metadata from all connected VPS via the shared SSH pool."""

@@ -45,6 +45,15 @@
     return data;
   }
 
+  async function confirmAction(options) {
+    if (window.PBGuiDialogs && typeof window.PBGuiDialogs.confirm === 'function') {
+      return window.PBGuiDialogs.confirm(options);
+    }
+    if (typeof window.PBGuiConfirm === 'function') return window.PBGuiConfirm(options);
+    setStatus('Confirmation dialog is unavailable. Reload PBGui and try again.', true);
+    return false;
+  }
+
   function build() {
     if (root) return;
     root = el('aside');
@@ -656,9 +665,7 @@
 
   async function rewindMessage(messageIndex) {
     if (!state.current) return;
-    var confirmed = typeof window.PBGuiConfirm === 'function'
-      ? await window.PBGuiConfirm({ title: 'Rewind AI chat', message: 'Remove this message and every response after it?', confirmText: 'Rewind' })
-      : false;
+    var confirmed = await confirmAction({ title: 'Rewind AI chat', message: 'Remove this message and every response after it?', confirmText: 'Rewind' });
     if (!confirmed) return;
     try {
       var result = await api('/conversations/' + encodeURIComponent(state.current) + '/rewind', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_index: messageIndex }) });
@@ -901,7 +908,7 @@
         : preview.action === 'start_optimize_queue'
           ? 'Start ' + String(preview.job_count || 0) + ' exact reviewed PB8 optimizer queue jobs immediately. Proposal integrity and current queued status are verified before execution.'
         : 'Apply ' + String(preview.changed_count || 0) + ' reviewed changes. ' + (preview.may_start_immediately ? 'Queue autostart is enabled; this may start immediately. ' : '') + 'Proposal integrity is verified before execution.';
-      var confirmed = typeof window.PBGuiConfirm === 'function' && await window.PBGuiConfirm({
+      var confirmed = await confirmAction({
         title: 'Approve PBGui action',
         message: proposalActionLabel(preview.action) + ' ' + String(preview.name || ''),
         detail: approvalDetail,
@@ -1056,7 +1063,7 @@
 
   async function deleteConversation() {
     if (!state.current) return;
-    var confirmed = typeof window.PBGuiConfirm === 'function' && await window.PBGuiConfirm({
+    var confirmed = await confirmAction({
       title: 'Delete AI chat',
       message: 'Delete this conversation and its history?',
       confirmText: 'Delete'

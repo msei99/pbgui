@@ -1428,14 +1428,18 @@ def _normalize_package_status(
                 "category": "security" if security else ("removal" if removed else ("kernel" if kernel else "routine")),
             })
 
+    deferred_updates = max(_safe_int(raw.get("deferred_updates"), 0), 0)
+    installable_default = max(upgrades - deferred_updates, 0) if upgrades is not None else 0
+    installable_updates = max(_safe_int(raw.get("installable_updates"), installable_default), 0)
     removals = max(_safe_int(raw.get("removals"), 0), 0)
+    new_installs = max(_safe_int(raw.get("new_installs"), 0), 0)
     details_complete = bool(
         available
         and raw.get("details_complete") is True
         and upgrades is not None
-        and upgrades + max(_safe_int(raw.get("new_installs"), 0), 0) + removals == len(packages)
+        and deferred_updates == 0
+        and installable_updates + new_installs + removals == len(packages)
     )
-    new_installs = max(_safe_int(raw.get("new_installs"), 0), 0)
     security_updates = sum(1 for item in packages if item["security"])
     removal_updates = sum(1 for item in packages if item["removed"] and not item["security"])
     kernel_updates = sum(1 for item in packages if item["kernel"] and not item["security"] and not item["removed"])
@@ -1461,6 +1465,8 @@ def _normalize_package_status(
         "state": state if state in {"ok", "stale", "missing", "error"} else "error",
         "available": available,
         "upgrades": upgrades if available else "N/A",
+        "installable_updates": installable_updates if available else None,
+        "deferred_updates": deferred_updates if available else None,
         "new_installs": new_installs if available else None,
         "removals": removals if available else None,
         "reboot_required": reboot_required if available else None,
@@ -3173,6 +3179,67 @@ class VPSManagerService:
         except Exception as exc:
             _log(SERVICE, f"post-update package refresh failed for {host}: {exc}", level="WARNING")
             return False
+
+    def check_vps_package_status(self, hostnames: list[Any]) -> dict[str, Any]:
+        """Run current package checks through the monitor for known VPS hosts."""
+        if not isinstance(hostnames, list):
+            raise ValueError("VPS hostnames must be a list.")
+        hosts: list[str] = []
+        for value in hostnames or []:
+            host = _validate_vps_hostname(value)
+            self._require_vps(host)
+            if host not in hosts:
+                hosts.append(host)
+        if not hosts:
+            raise ValueError("Select at least one VPS to check.")
+        monitor = get_monitor()
+        if monitor is None or not hasattr(monitor, "check_package_status"):
+            raise ValueError("VPS monitor is unavailable.")
+        loop = getattr(monitor, "loop", None)
+        if loop is None or loop.is_closed():
+            raise ValueError("VPS monitor loop is not ready.")
+
+        async def check_all() -> list[object]:
+            semaphore = asyncio.Semaphore(8)
+
+            async def check_one(host: str) -> dict[str, Any]:
+                async with semaphore:
+                    return await monitor.check_package_status(host)
+
+            return await asyncio.gather(
+                *(check_one(host) for host in hosts),
+                return_exceptions=True,
+            )
+
+        future = asyncio.run_coroutine_threadsafe(check_all(), loop)
+        try:
+            timeout = 280 * max(1, (len(hosts) + 7) // 8)
+            raw_results = future.result(timeout=timeout)
+        except Exception as exc:
+            future.cancel()
+            _log(SERVICE, f"Linux update checks failed to complete: {exc}", level="WARNING")
+            raise ValueError("Linux update checks did not complete.") from exc
+
+        results: list[dict[str, Any]] = []
+        for host, result in zip(hosts, raw_results):
+            if isinstance(result, BaseException):
+                _log(SERVICE, f"Linux update check failed for {host}: {result}", level="WARNING")
+                results.append({"hostname": host, "success": False, "error": str(result)[:240]})
+            else:
+                results.append({
+                    "hostname": host,
+                    "success": True,
+                    "generated_at": float(result.get("generated_at") or 0.0),
+                    "upgrades": str(result.get("upgrades") or "0"),
+                    "reboot": bool(result.get("reboot")),
+                })
+        checked_count = sum(1 for result in results if result["success"])
+        return {
+            "hostnames": hosts,
+            "results": results,
+            "checked_count": checked_count,
+            "failed_count": len(results) - checked_count,
+        }
 
     def _refresh_completed_linux_updates(self) -> None:
         """Refresh each host once when its latest Linux update finishes."""

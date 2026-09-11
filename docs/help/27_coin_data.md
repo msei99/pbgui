@@ -67,7 +67,7 @@ Main filters:
 - Minimum `market_cap` updates while typing, keeps decimal input stable while editing, and uses `250` as the editor-style `+/-` step
 - Maximum `vol/mcap` updates while typing, preserves direct decimal input such as `0.` and `0,`, and makes `+/-` jump across readable rounded thresholds derived from the current exchange data instead of tiny raw-value steps
 - Tags via the same searchable chip-based multiselect used in PBv7 Run/Backtest, without checkboxes inside the dropdown
-- `Reset` button at the right side of the filter row to restore the default filter state
+- `Reset` button at the right side of the filter row to restore the default filter state immediately
 
 FastAPI UI improvements:
 
@@ -77,11 +77,13 @@ FastAPI UI improvements:
 - full-width table layout with balanced column distribution, so the page uses the available width without oversized gaps between values
 - active desktop table view expands to use the remaining window height instead of leaving empty space below the table
 - sortable table headers for matched, unmatched, and HIP-3 views
+- sorting and selecting rows update only table content, so open filter controls keep their DOM and focus
 - unavailable CMC market cap, 24-hour volume, and `vol/mcap` values are shown as `N/A` and sort after known values
 - hover tooltips for tags, notices, and long values
 - row selection with a centered floating detail panel that auto-fits its content on open when the browser window allows it, can be dragged and resized from every side and corner, shows all tags without truncation, offers a direct `Open CMC` link when a mapping exists, and uses an `X` close button instead of only showing the notice below the table
 - a single active main table view, switched from the sidebar, instead of showing matched and auxiliary tables at the same time
 - a single-line desktop filter bar without a separate `Filters` title block
+- long-running exchange and CMC refreshes can be dismissed to the background with the button or Escape; polling continues and applies the completed state
 
 The page contains:
 

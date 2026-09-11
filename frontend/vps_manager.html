@@ -3115,6 +3115,8 @@
       suppressVpsDomSyncHost: '',
       selectedOverviewHosts: [],
       selectedOverviewHostsHydrated: false,
+      packageCheckHosts: [],
+      packageCheckRequestId: '',
       vpsLoggingDeployHosts: [],
       vpsLoggingDeployHistory: [],
       suppressNextVpsLoggingSaveToast: false,
@@ -4206,7 +4208,8 @@
           pending_updates: st.pending_updates == null ? String(((st.summary_row || {}).updates) || '') : String(st.pending_updates),
           reboot_required: !!((st.summary_row || {}).reboot_required),
           host_key_error: !!st.host_key_error,
-          ssh_host_key_status: String(((st.summary_row || {}).ssh_host_key_status) || '')
+          ssh_host_key_status: String(((st.summary_row || {}).ssh_host_key_status) || ''),
+          package_checking: (store.packageCheckHosts || []).indexOf(store.hostname) >= 0
         });
       }
       if (isMasterContextView()) {
@@ -4232,6 +4235,7 @@
         return stableStringify({
           view: store.view,
           selected_hosts: getSelectedOverviewHosts(),
+          package_check_hosts: store.packageCheckHosts || [],
           vps_deploy: (((store.state || {}).config || {}).vps_deploy) || null,
           vps_logging: (((store.state || {}).config || {}).vps_logging) || null,
           deploy_history: getVpsLoggingDeployHistory()
@@ -6916,7 +6920,10 @@
       };
       ws.onclose = function (event) {
         store.connected = false;
+        store.packageCheckHosts = [];
+        store.packageCheckRequestId = '';
         renderSummaryBar();
+        renderUi({ forceSidebarActions: true });
         if (event.code === 4001) {
           store.authExpired = true;
           store.ws = null;
@@ -7339,6 +7346,12 @@
           updateReadSettingsProgress(store.hostname, { step: 'error', label: msg.error || 'Read VPS settings failed.', status: 'error' }, { render: false });
           renderUi({ forceSidebarActions: true, forceView: true });
         }
+        if (msg.cmd === 'check_package_status') {
+          if (String(msg.request_id || '') !== String(store.packageCheckRequestId || '')) return;
+          store.packageCheckHosts = [];
+          store.packageCheckRequestId = '';
+          renderUi({ forceSidebarActions: true });
+        }
         if (msg.cmd === 'read_ufw_rules' || msg.cmd === 'preview_ufw_rules' || msg.cmd === 'apply_ufw_rules') {
           store.ufw.loading = false;
           store.ufw.applying = false;
@@ -7729,6 +7742,25 @@
         } else if (isVpsContextView() && store.hostname) {
           fetchVpsDetail(store.hostname);
         }
+      } else if (cmd === 'check_package_status') {
+        if (String(msg.request_id || '') !== String(store.packageCheckRequestId || '')) return;
+        const data = msg.data || {};
+        const checkedCount = Number(data.checked_count || 0);
+        const failedCount = Number(data.failed_count || 0);
+        store.packageCheckHosts = [];
+        store.packageCheckRequestId = '';
+        if (failedCount && checkedCount) {
+          toast('Linux updates checked on ' + checkedCount + ' host' + (checkedCount === 1 ? '' : 's') + '; ' + failedCount + ' failed.', 'warning');
+        } else if (failedCount) {
+          const errors = (data.results || []).filter(function (item) { return !item.success; }).map(function (item) {
+            return String(item.hostname || '') + ': ' + String(item.error || 'check failed');
+          });
+          toast(errors.join('; ') || 'Linux update check failed.', 'error');
+        } else {
+          toast('Linux updates checked on ' + checkedCount + ' host' + (checkedCount === 1 ? '' : 's') + '.', 'success');
+        }
+        renderUi({ forceSidebarActions: true, forceView: store.view === 'overview' });
+        return;
       } else if (cmd === 'read_vps_settings') {
         if (isVpsContextView() && store.hostname && msg.data) {
           const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
@@ -8039,6 +8071,24 @@
 
     function refreshState() {
       send({ cmd: 'refresh' });
+    }
+
+    function checkLinuxUpdates(hostnames) {
+      const hosts = Array.from(new Set((hostnames || []).map(function (item) {
+        return String(item || '').trim();
+      }).filter(Boolean)));
+      if (!hosts.length) {
+        toast('Select at least one VPS in Overview first.', 'warning');
+        return;
+      }
+      if ((store.packageCheckHosts || []).length) {
+        toast('A Linux update check is already running.', 'info');
+        return;
+      }
+      store.packageCheckHosts = hosts;
+      store.packageCheckRequestId = String(Date.now()) + '-' + Math.random().toString(16).slice(2);
+      renderUi({ forceSidebarActions: true });
+      send({ cmd: 'check_package_status', hostnames: hosts, request_id: store.packageCheckRequestId });
     }
 
     function clusterImportActionLevel(action) {
@@ -10026,6 +10076,10 @@
       const status = getPackageStatusForHost(host);
       const packages = Array.isArray(status.packages) ? status.packages : [];
       const count = status.available === true ? Number.parseInt(String(status.upgrades), 10) : NaN;
+      const installableValue = Number.parseInt(String(status.installable_updates), 10);
+      const installableCount = Number.isFinite(installableValue) ? installableValue : count;
+      const deferredValue = Number.parseInt(String(status.deferred_updates), 10);
+      const deferredCount = Number.isFinite(deferredValue) ? deferredValue : 0;
       const securityCount = Number(status.security_updates || 0);
       const kernelCount = Number(status.kernel_updates || 0);
       const routineCount = Number(status.routine_updates || 0);
@@ -10054,9 +10108,11 @@
       }).join('');
       const completeness = status.details_truncated
         ? '<div class="notice warning">The package list was truncated for safety.</div>'
-        : (Number.isFinite(count) && packages.length !== count + newInstallCount + removalCount
+        : (deferredCount > 0
+          ? `<div class="notice info"><strong>${esc(String(deferredCount))} pending update${deferredCount === 1 ? ' is' : 's are'} deferred by apt.</strong> This can include phased updates or held packages. They remain in the pending total but apt does not provide transaction details for them.</div>`
+          : (Number.isFinite(installableCount) && packages.length !== installableCount + newInstallCount + removalCount
           ? '<div class="notice info">The package count is known, but detailed apt output was incomplete. Refresh or update PBGui on this host to refresh the agent cache.</div>'
-          : '');
+          : ''));
       const staleNotice = String(status.state || '').toLowerCase() === 'stale'
         ? `<div class='notice warning'><strong>Stale cache:</strong> these are last-known package details from ${esc(formatAgentAge(status.age))} ago. Refresh the agent cache before making an urgency decision.</div>`
         : '';
@@ -10070,7 +10126,9 @@
           <div class='notice ${urgencyMeta.tone}'><strong>${esc(urgencyMeta.title)}</strong><div>${esc(urgencyMeta.text)}</div></div>
           ${staleNotice}
           <div class='master-status-grid'>
-            <div class='status-item'><div class='status-label'>Upgrades</div><div class='status-value'>${Number.isFinite(count) ? esc(String(count)) : 'N/A'}</div></div>
+            <div class='status-item'><div class='status-label'>Pending updates</div><div class='status-value'>${Number.isFinite(count) ? esc(String(count)) : 'N/A'}</div></div>
+            <div class='status-item'><div class='status-label'>Selected by apt</div><div class='status-value'>${Number.isFinite(installableCount) ? esc(String(installableCount)) : 'N/A'}</div></div>
+            <div class='status-item'><div class='status-label'>Deferred by apt</div><div class='status-value'>${Number.isFinite(deferredCount) ? esc(String(deferredCount)) : 'N/A'}</div></div>
             <div class='status-item'><div class='status-label'>New installs</div><div class='status-value'>${classificationComplete ? esc(String(newInstallCount)) : 'N/A'}</div></div>
             <div class='status-item'><div class='status-label'>Removals</div><div class='status-value'>${classificationComplete ? esc(String(removalUpdateCount)) : 'N/A'}</div></div>
             <div class='status-item'><div class='status-label'>Security</div><div class='status-value'>${categoryValue(securityCount)}</div></div>
@@ -10798,6 +10856,7 @@
         const showClusterNodeBtn = !!st.setup_ok && clusterNodeAction !== 'skip';
         const clusterNodeBtnText = clusterNodeAction === 'update' ? 'Update Cluster Node' : (clusterNodeAction === 'resume' ? 'Resume Cluster Onboarding' : 'Add to Cluster');
         const clusterNodeBtnClass = clusterNodeAction === 'error' ? 'sb-btn warning' : 'sb-btn info';
+        const packageChecking = (store.packageCheckHosts || []).indexOf(selectedHost) >= 0;
         html = `
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
           <div class='sb-field'>
@@ -10833,6 +10892,7 @@
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' data-update-reboot-toggle='${escAttr(selectedHost)}' data-vps-ui-field='updateReboot' data-host='${escAttr(selectedHost)}' ${ui.updateReboot ? 'checked' : ''}> Reboot after Linux update</label>
           </div>
+          <button class='sb-btn' type='button' ${packageChecking ? 'disabled' : ''} data-vps-action='check-package' data-host='${escAttr(selectedHost)}'>${packageChecking ? 'Checking Linux Updates...' : 'Check Linux Updates'}</button>
           <button class='${linuxUpdateBtnClass}' type='button' data-vps-action='update-linux' data-host='${escAttr(selectedHost)}'>Update Linux</button>
           <button class='${rebootBtnClass}' type='button' data-vps-action='password-command' data-host='${escAttr(selectedHost)}' data-command='vps-reboot' data-command-text='Reboot VPS'>Reboot VPS</button>
           <button class='sb-btn' type='button' data-vps-action='password-command' data-host='${escAttr(selectedHost)}' data-command='vps-cleanup' data-command-text='Cleanup VPS'>Cleanup VPS</button>
@@ -10847,7 +10907,9 @@
         const selectedHosts = getSelectedOverviewHosts();
         const deployConfig = getVpsDeployConfig();
         const hasSelectedHosts = selectedHosts.length > 0;
+        const packageChecking = (store.packageCheckHosts || []).length > 0;
         const disabledAttr = hasSelectedHosts ? '' : 'disabled';
+        const packageCheckDisabledAttr = hasSelectedHosts && !packageChecking ? '' : 'disabled';
         const settingsBtnClass = isOverviewSettingsView() ? 'sb-btn active' : 'sb-btn';
         const deployHistoryBtnClass = isDeploysView() ? 'sb-btn active' : 'sb-btn';
         const parallelBtnClass = String(deployConfig.mode || 'parallel') === 'parallel' ? 'sb-btn active' : 'sb-btn';
@@ -10873,6 +10935,7 @@
             <label class='sb-toggle'><input type='checkbox' ${deployConfig.debug ? 'checked' : ''} onchange='setVpsDeployDebug(this.checked)'> Debug</label>
           </div>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-deploy-logging", "Deploy Settings")'>Deploy Settings</button>
+          <button class='sb-btn' type='button' ${packageCheckDisabledAttr} onclick='checkLinuxUpdates(getSelectedOverviewHosts())'>${packageChecking ? 'Checking Linux Updates...' : 'Check Linux Updates'}</button>
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${deployConfig.reboot_requested ? 'checked' : ''} onchange='setVpsDeployRebootRequested(this.checked)'> Reboot after Linux update</label>
           </div>
@@ -13209,6 +13272,8 @@
         runVpsWithLog(host, String(trigger.getAttribute('data-command') || ''), String(trigger.getAttribute('data-command-text') || ''));
       } else if (action === 'update-linux') {
         updateLinuxVpsAction(host);
+      } else if (action === 'check-package') {
+        checkLinuxUpdates([host]);
       } else if (action === 'package-updates') {
         openPackageUpdatesModal(host);
       } else if (action === 'password-command') {

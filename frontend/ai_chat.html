@@ -488,6 +488,15 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     $('empty-state').hidden = rows.length > 0 || !!state.pendingMessage;
   }
 
+  function renderPendingMessage() {
+    var messages = $('messages');
+    Array.from(messages.querySelectorAll('.message.pending-message')).forEach(function (node) { node.remove(); });
+    addMessage('user', state.pendingMessage);
+    var rows = messages.querySelectorAll('.message');
+    if (rows.length) rows[rows.length - 1].classList.add('pending-message');
+    $('empty-state').hidden = true;
+  }
+
   async function copyChatMessage(text) {
     try { await navigator.clipboard.writeText(String(text || '')); setNotice('Message copied.', false); }
     catch (_) { setNotice('Clipboard access was denied by the browser.', true); }
@@ -836,7 +845,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       }
       state.retryMessages[state.conversationId] = message;
       if (generation !== state.chatGeneration) return;
-      renderConversationMessages([]);
+      renderPendingMessage();
       var providerLabel = $('provider-select').selectedOptions[0].textContent;
       setNotice('Waiting for ' + providerLabel + '...', false, true);
       await api('/conversations/' + encodeURIComponent(state.conversationId) + '/turns', {

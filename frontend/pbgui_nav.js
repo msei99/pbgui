@@ -1842,11 +1842,22 @@
       link.rel = 'stylesheet';
       link.href = _appPath('/app/css/ai_drawer.css?v=13');
       document.head.appendChild(link);
-      var script = document.createElement('script');
-      script.src = _appPath('/app/js/ai_drawer.js?v=39');
-      script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
-      script.onerror = function () { _aiDrawerLoading = false; };
-      document.head.appendChild(script);
+      function loadDrawerScript() {
+        var script = document.createElement('script');
+        script.src = _appPath('/app/js/ai_drawer.js?v=40');
+        script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
+        script.onerror = function () { _aiDrawerLoading = false; };
+        document.head.appendChild(script);
+      }
+      if (window.PBGuiDialogs && typeof window.PBGuiDialogs.confirm === 'function') {
+        loadDrawerScript();
+        return;
+      }
+      var dialogs = document.createElement('script');
+      dialogs.src = _appPath('/app/js/pbgui_dialogs.js?v=9');
+      dialogs.onload = loadDrawerScript;
+      dialogs.onerror = loadDrawerScript;
+      document.head.appendChild(dialogs);
     });
     var pendingAIAction = new URL(window.location.href).searchParams.get('pbgui_ai_action') === '1';
     if (aiBtn && pendingAIAction) {

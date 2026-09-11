@@ -37,7 +37,13 @@ class VPSMonitorRPCClient:
         self.socket_path = Path(socket_path) if socket_path is not None else default_socket_path()
         self.timeout = float(timeout)
 
-    def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    def call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
         """Send one request and return its result or raise a safe RuntimeError."""
         verify_socket_permissions(self.socket_path)
         request_id = uuid.uuid4().hex
@@ -49,7 +55,7 @@ class VPSMonitorRPCClient:
         }, maximum=MAX_FRAME_BYTES)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            sock.settimeout(self.timeout)
+            sock.settimeout(self.timeout if timeout is None else float(timeout))
             sock.connect(str(self.socket_path))
             sock.sendall(frame)
             raw = self._read_response(sock)
@@ -88,9 +94,15 @@ class VPSMonitorRPCClient:
                     raise RuntimeError("VPS monitor daemon returned multiple frames")
                 return line
 
-    async def call_async(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    async def call_async(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
         """Run one blocking Unix request without blocking the event loop."""
-        return await asyncio.to_thread(self.call, method, params)
+        return await asyncio.to_thread(self.call, method, params, timeout=timeout)
 
 
 class VPSStoreProxy:
@@ -515,6 +527,29 @@ class VPSMonitorProxy:
             return bool(await self._rpc_async("host.refresh_package", {"hostname": hostname}))
         except RuntimeError:
             return False
+
+    async def check_package_status(self, hostname: str) -> dict[str, Any]:
+        """Run an explicit package probe through the monitor daemon."""
+        if isinstance(self.client, VPSMonitorRPCClient):
+            result = await self.client.call_async(
+                "host.check_package",
+                {"hostname": hostname},
+                timeout=270,
+            )
+        else:
+            result = await self._rpc_async("host.check_package", {"hostname": hostname})
+        if not isinstance(result, dict):
+            raise RuntimeError("VPS monitor returned an invalid package check result")
+        package_status = result.get("package_status")
+        if isinstance(package_status, dict):
+            host_meta = dict(self.store.host_meta.get(hostname) or {})
+            host_meta.update({
+                "package_status": package_status,
+                "upgrades": package_status.get("upgrades", "N/A"),
+            })
+            self.store.host_meta[hostname] = host_meta
+            self.store.changed.set()
+        return result
 
     def get_upstream_release_status(self) -> dict[str, Any]:
         """Return the latest daemon-owned upstream snapshot."""

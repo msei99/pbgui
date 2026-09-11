@@ -12,10 +12,23 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=39" in NAV
+    assert "/app/js/ai_drawer.js?v=40" in NAV
     assert "/app/css/ai_drawer.css?v=13" in NAV
+    assert "/app/js/pbgui_dialogs.js?v=9" in NAV
+    loader = NAV.split("function loadDrawerScript", 1)[1].split("var pendingAIAction", 1)[0]
+    assert loader.index("pbgui_dialogs.js?v=9") < loader.index("dialogs.onload = loadDrawerScript")
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
+
+
+def test_drawer_confirmation_actions_use_the_shared_dialog() -> None:
+    """Rewind, approval, and deletion must not silently stop when a page lacks a dialog global."""
+    helper = DRAWER.split("async function confirmAction", 1)[1].split("function build", 1)[0]
+    assert "window.PBGuiDialogs.confirm(options)" in helper
+    assert "window.PBGuiConfirm(options)" in helper
+    for function_name in ("rewindMessage", "resolveProposal", "deleteConversation"):
+        function_body = DRAWER.split("async function " + function_name, 1)[1].split("\n  }", 1)[0]
+        assert "await confirmAction(" in function_body
 
 
 def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None:

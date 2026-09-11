@@ -121,7 +121,9 @@ async function main() {
     assert.equal(c.location.href, app + '/app/help.html?v=1766');
     b.nodes['pbgui-ai-btn'].click();
     assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=13');
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=39');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/pbgui_dialogs.js?v=9');
+    b.assets.at(-1).onload();
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=40');
     b.nodes['pbgui-notify-btn'].click();
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/log_viewer_panel.js?v=43');
     let viewerOptions;

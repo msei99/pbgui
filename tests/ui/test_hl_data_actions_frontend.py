@@ -197,3 +197,60 @@ def test_job_history_requests_filter_before_the_api_limit() -> None:
 
     assert "&limit=20&job_type=' + encodeURIComponent(jt)" in function
     assert function.index("var jt = JOB_TYPES[ns]") < function.index("await fetch")
+
+
+def test_queue_submissions_render_http_errors_instead_of_false_success() -> None:
+    """Rejected download and build requests must never display queued-job success."""
+    source = PAGE.read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name).replace(f"function {name}(", f"async function {name}(", 1)
+        for name in ("submitDL", "submitBuild")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        function loading() {{ return {{classList: {{add() {{}}, remove() {{}}}}}}; }}
+        const elements = {{
+            'dl-btn': {{disabled: false}}, 'dl-lo': loading(),
+            'dl-sd': {{value: '2026-09-01'}}, 'dl-ed': {{value: '2026-09-10'}},
+            'dl-only': {{checked: true}},
+            'build-btn': {{disabled: false}}, 'build-lo': loading(),
+            'build-sd': {{value: ''}}, 'build-ed': {{value: ''}},
+            'build-refetch': {{checked: false}}
+        }};
+        function $(id) {{ return elements[id] || null; }}
+        function inputToDay(value) {{ return value; }}
+        function authOptions(options) {{ return options; }}
+        function hideMsg() {{}}
+        const messages = [], queued = [];
+        function showMsg(ns, type, text) {{ messages.push({{ns, type, text}}); }}
+        function showQueuedMsg(ns, data) {{ queued.push({{ns, data}}); }}
+        var API_BASE = '/api';
+        var dlSelected = new Set(), dlCoins = ['BTC'];
+        var buildSelected = new Set(), buildCoins = ['BTC'];
+        let response;
+        async function fetch() {{ return response; }}
+        {functions}
+
+        (async function() {{
+            response = {{ok: false, status: 409, json: async function() {{ return {{detail: 'A job is already queued'}}; }}}};
+            await submitDL();
+            assert.deepEqual(messages.pop(), {{ns: 'dl', type: 'error', text: 'A job is already queued'}});
+            assert.equal(queued.length, 0);
+            assert.equal(elements['dl-btn'].disabled, false);
+
+            response = {{ok: false, status: 500, json: async function() {{ throw new Error('not json'); }}}};
+            await submitBuild();
+            assert.deepEqual(messages.pop(), {{ns: 'build', type: 'error', text: 'HTTP 500'}});
+            assert.equal(queued.length, 0);
+            assert.equal(elements['build-btn'].disabled, false);
+
+            response = {{ok: true, status: 200, json: async function() {{ return {{job_id: 'job-1', coins_count: 1}}; }}}};
+            await submitBuild();
+            assert.equal(queued.length, 1);
+            assert.equal(queued[0].ns, 'build');
+        }})().catch(function(error) {{ console.error(error); process.exit(1); }});
+        """
+    )
+
+    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)

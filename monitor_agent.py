@@ -417,7 +417,7 @@ def _run_host_meta() -> None:
 def _run_package_status() -> None:
     """Write package status cache."""
 
-    payload = _run_shell_script(_embedded_monitor_script("PACKAGE_STATUS_SCRIPT"), env=_script_env(), timeout=75)
+    payload = _run_shell_script(_embedded_monitor_script("PACKAGE_STATUS_SCRIPT"), env=_script_env(), timeout=250)
     if not isinstance(payload, dict):
         raise RuntimeError("package collector returned no payload")
     upgrades = payload.get("upgrades")
