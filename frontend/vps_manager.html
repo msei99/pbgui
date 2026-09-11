@@ -3511,6 +3511,7 @@
       }
       renderUi({ forceSidebarActions: true, forceView: isOverviewSettingsView() || store.view === 'overview' });
       refreshLocalInteractiveState();
+      saveVpsDeploySettings({ silent: true });
     }
 
     function setVpsDeployMode(value) {
@@ -6490,10 +6491,10 @@
     }
 
     function openConfirmModal(title, message, onConfirm) {
-      document.getElementById('alertModalTitle').textContent = esc(title);
+      document.getElementById('alertModalTitle').textContent = String(title || '');
       const box = document.getElementById('alertModalBody');
       box.className = 'notice';
-      box.innerHTML = '<div style="margin-bottom:10px">' + esc(message) + '</div>';
+      box.innerHTML = '<div style="margin-bottom:10px;white-space:pre-line">' + esc(message) + '</div>';
       document.getElementById('alertModalBtnRow').innerHTML = '<button class=\'btn ghost\' type=\'button\' onclick=\'closeAlertModal()\'>Cancel</button> <button class=\'btn primary\' type=\'button\' id=\'confirm-modal-ok\'>Confirm</button>';
       document.getElementById('alertModalOverlay').classList.add('visible');
       document.getElementById('confirm-modal-ok').onclick = null;
@@ -7388,7 +7389,7 @@
         setPasswordPromptBusy(false, 'Validate and Start');
         openConfirmModal(
           'Unknown SSH Host Key',
-          'Trust ' + String(msg.key_type || 'SSH key') + ' ' + String(msg.fingerprint || '') + ' for ' + String(msg.ssh_host || msg.hostname || '') + (String(msg.ip || '').trim() ? ' (' + String(msg.ip || '') + ')' : '') + ' and continue with Update Linux?',
+          'Trust ' + String(msg.key_type || 'SSH key') + ' ' + String(msg.fingerprint || '') + ' for ' + String(msg.ssh_host || msg.hostname || '') + (String(msg.ip || '').trim() ? ' (' + String(msg.ip || '') + ')' : '') + ' and continue with ' + String(flow.command_text || 'the operation') + '?',
           function () {
             flow.accept_unknown_host = true;
             flow.validating = true;
@@ -8226,6 +8227,7 @@
           const flow = store.clusterNodesImport || defaultClusterNodesImportState();
           if (String(flow.jobId || '') !== cleanJobId) return;
           flow.applying = false;
+          flow.progress = null;
           flow.progressTimer = 0;
           flow.error = String(err && err.message ? err.message : err || 'Import progress failed.');
           store.clusterNodesImport = flow;
@@ -8324,6 +8326,7 @@
     function loadClusterNodesImportPreview() {
       stopClusterNodesImportProgressPolling();
       const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      const currentPasswords = Object.assign({}, flow.passwords || {});
       flow.loading = true;
       flow.applying = false;
       flow.error = '';
@@ -8332,13 +8335,19 @@
       flow.result = null;
       store.clusterNodesImport = flow;
       renderClusterNodesImportModal();
-      vpsManagerGet('/cluster-import/preview', {})
+      return vpsManagerGet('/cluster-import/preview', {})
         .then(function (data) {
-          store.clusterNodesImport = { loading: false, applying: false, error: '', preview: data || null };
+          store.clusterNodesImport = Object.assign(defaultClusterNodesImportState(), {
+            passwords: currentPasswords,
+            preview: data || null
+          });
           renderClusterNodesImportModal();
         })
         .catch(function (err) {
-          store.clusterNodesImport = { loading: false, applying: false, error: String(err && err.message ? err.message : err || 'Preview failed.'), preview: null };
+          store.clusterNodesImport = Object.assign(defaultClusterNodesImportState(), {
+            error: String(err && err.message ? err.message : err || 'Preview failed.'),
+            passwords: currentPasswords
+          });
           renderClusterNodesImportModal();
         });
     }
@@ -8383,7 +8392,7 @@
       flow.result = null;
       store.clusterNodesImport = flow;
       renderClusterNodesImportModal();
-      vpsManagerPost('/cluster-import/apply', { local_sudo_pw: flow.localSudoPw || '', passwords: flow.passwords || {} })
+      return vpsManagerPost('/cluster-import/apply', { local_sudo_pw: flow.localSudoPw || '', passwords: flow.passwords || {} })
         .then(function (data) {
           const next = store.clusterNodesImport || defaultClusterNodesImportState();
           next.jobId = String((data || {}).job_id || '');
@@ -8396,6 +8405,7 @@
             pollClusterNodesImportProgress(next.jobId);
           } else {
             next.applying = false;
+            next.progress = null;
             next.error = 'Import did not return a progress job id.';
             store.clusterNodesImport = next;
             renderClusterNodesImportModal();
@@ -8404,6 +8414,7 @@
         .catch(function (err) {
           const next = store.clusterNodesImport || defaultClusterNodesImportState();
           next.applying = false;
+          next.progress = null;
           next.error = String(err && err.message ? err.message : err || 'Import failed.');
           store.clusterNodesImport = next;
           renderClusterNodesImportModal();

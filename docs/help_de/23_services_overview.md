@@ -26,6 +26,8 @@ Die Übersicht enthält jetzt auch eine eigene **Workers**-Kachel. Sie öffnet d
 
 Die **Start**-, **Stop**- oder **Restart**-Buttons auf den Kacheln oder im Control-Strip oben im Detail-Panel verwenden. Änderungen wirken sofort.
 
+Der angeklickte API-Server-Restart-Button zeigt bis zum Abschluss des Requests den Fortschritt an, auch in der kompakten Kartenansicht. Ein temporaerer Fehler beim Laden der **Settings** eines Dienstes sperrt den Tab nicht; erneutes Oeffnen startet einen neuen Versuch.
+
 ## Service-Detail-Panels
 
 Klicke auf eine Service-Kachel (oder den Sidebar-Eintrag), um ein dediziertes Detail-Panel zu öffnen mit:
@@ -58,7 +60,7 @@ Pro Worker lassen sich ansehen:
 
 Stop- und Restart-Aktionen im Workers-Panel fragen vor dem Senden des Befehls zusätzlich nach einer Bestätigung.
 
-Einige Worker nutzen statt eines dedizierten lokalen Logs einen passenden Monitor. Der gemeinsame Market-Data-Queue-Worker verwendet zum Beispiel den Job Monitor, weil die Logs dort pro Queue-Job geführt werden. In diesen Fällen wird der Monitor beim Auswählen des Workers direkt im rechten Log-Bereich eingebettet, bleibt auch bei Worker-Refreshes stabil offen und man bleibt innerhalb der Services-Seite. Der eingebettete Job Monitor bietet jetzt außerdem `View` für die vollständigen Job-Details und `Run` auf Pending-Zeilen; `Run` fordert einen zusätzlichen manuellen Parallel-Slot für denselben Job-Typ an, sodass genau ein ausgewählter Pending-Job neben dem bereits laufenden Job dieses Typs starten kann. Aktive Zeilen bleiben jetzt außerdem in einer stabilen Queue-/Start-Reihenfolge, sodass zwei laufende Jobs bei jedem Progress-Update nicht mehr ihre Plätze tauschen. `View`- und `Log`-Dialoge werden jetzt außerdem auf den sichtbaren Browser-Viewport begrenzt und berücksichtigen zusätzlich sowohl den Scroll-Offset der äußeren Seite als auch clippende Eltern-Panels, sodass ihr Close-Button auch dann erreichbar bleibt, wenn der Monitor in einem höheren eingebetteten Bereich sitzt und dessen Kopf bereits über den sichtbaren Browserbereich hinaus gescrollt wurde.
+Einige Worker nutzen statt eines dedizierten lokalen Logs einen passenden Monitor. Der gemeinsame Market-Data-Queue-Worker verwendet zum Beispiel den Job Monitor, weil die Logs dort pro Queue-Job geführt werden. In diesen Fällen wird der Monitor beim Auswählen des Workers direkt im rechten Log-Bereich eingebettet, bleibt auch bei Worker-Refreshes stabil offen und man bleibt innerhalb der Services-Seite. Der eingebettete Job Monitor bietet jetzt außerdem `View` für die vollständigen Job-Details und `Run` auf Pending-Zeilen; `Run` fordert einen zusätzlichen manuellen Parallel-Slot für denselben Job-Typ an, sodass genau ein ausgewählter Pending-Job neben dem bereits laufenden Job dieses Typs starten kann. Run- und Cancel-Aktionen zeigen ihren laufenden Zustand an und verwerfen wiederholte Klicks, bis ein frischer Jobstatus eintrifft. Aktive Zeilen bleiben jetzt außerdem in einer stabilen Queue-/Start-Reihenfolge, sodass zwei laufende Jobs bei jedem Progress-Update nicht mehr ihre Plätze tauschen. `View`- und `Log`-Dialoge werden jetzt außerdem auf den sichtbaren Browser-Viewport begrenzt und berücksichtigen zusätzlich sowohl den Scroll-Offset der äußeren Seite als auch clippende Eltern-Panels, sodass ihr Close-Button auch dann erreichbar bleibt, wenn der Monitor in einem höheren eingebetteten Bereich sitzt und dessen Kopf bereits über den sichtbaren Browserbereich hinaus gescrollt wurde.
 
 ## Typische Startreihenfolge
 

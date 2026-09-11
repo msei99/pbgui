@@ -562,6 +562,12 @@ def test_api_key_account_generation_guards_test_and_expiry_results() -> None:
           assert.deepEqual(bybitExpiryData, {});
           assert.deepEqual(effects, []);
           assert.equal(fields.balanceDisplay.style.display, 'none');
+          assert.equal(fields.btnHLExpiryInline.disabled, false);
+          assert.equal(fields.btnHLExpiryInline.textContent, '↻ Check Expiry');
+          assert.equal(fields.btnBybitExpiryInline.disabled, false);
+          assert.equal(fields.btnBybitExpiryInline.textContent, '↻ Check Expiry + IPs');
+          assert.equal(fields.btnTest.disabled, false);
+          assert.equal(fields.btnTest.textContent, 'Test Connection');
         }()).catch(function(error) { console.error(error); process.exitCode = 1; });
     """
     _run_frontend_node(
@@ -569,6 +575,65 @@ def test_api_key_account_generation_guards_test_and_expiry_results() -> None:
         [
             "beginEditorAccount", "advanceEditorGeneration", "captureEditorRequest",
             "isCurrentEditorRequest", "checkSingleHLExpiry", "checkSingleBybitExpiry", "testConnection",
+        ],
+        bootstrap,
+        assertions,
+    )
+
+
+def test_api_key_stale_global_expiry_requests_restore_only_their_button() -> None:
+    """Generation changes unlock completed actions without letting old requests unlock newer ones."""
+    bootstrap = r"""
+        let editorGeneration = 1;
+        let editorAccountName = null;
+        let editorController = null;
+        let saveInFlight = false;
+        let hlExpiryData = {};
+        let bybitExpiryData = {};
+        const pending = {};
+        const fields = {
+          btnHLExpiry: { disabled: false, innerHTML: '', textContent: '' },
+          btnBybitExpiry: { disabled: false, innerHTML: '', textContent: '' }
+        };
+        global.document = { getElementById: function(id) { return fields[id]; } };
+        function apiFetch(path) {
+          return new Promise(function(resolve) {
+            if (!pending[path]) pending[path] = [];
+            pending[path].push(resolve);
+          });
+        }
+        function renderUserTable() { throw new Error('stale result rendered'); }
+        function renderHLExpiryPanel() { throw new Error('stale result rendered'); }
+        function renderBybitExpiryPanel() { throw new Error('stale result rendered'); }
+        function showToast() { throw new Error('stale result rendered'); }
+    """
+    assertions = r"""
+        (async function() {
+          const oldHL = refreshHLExpiry();
+          const newHL = refreshHLExpiry();
+          pending['/hl-expiry?force=true'][0]([]);
+          await oldHL;
+          assert.equal(fields.btnHLExpiry.disabled, true);
+
+          advanceEditorGeneration();
+          pending['/hl-expiry?force=true'][1]([]);
+          await newHL;
+          assert.equal(fields.btnHLExpiry.disabled, false);
+          assert.equal(fields.btnHLExpiry.textContent, 'HL Expiry Check');
+
+          const bybit = refreshBybitExpiry();
+          advanceEditorGeneration();
+          pending['/bybit-expiry?force=true'][0]([]);
+          await bybit;
+          assert.equal(fields.btnBybitExpiry.disabled, false);
+          assert.equal(fields.btnBybitExpiry.textContent, 'Bybit Expiry Check');
+        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+    """
+    _run_frontend_node(
+        "frontend/api_keys_editor.html",
+        [
+            "beginEditorAccount", "advanceEditorGeneration", "captureEditorRequest",
+            "isCurrentEditorRequest", "refreshHLExpiry", "refreshBybitExpiry",
         ],
         bootstrap,
         assertions,
@@ -739,6 +804,8 @@ def test_jobs_monitor_escapes_job_data_and_uses_delegated_actions() -> None:
         };
         const expandedJobs = new Set();
         const expandedDownloaderJobs = new Set();
+        const startingJobIds = new Set();
+        const cancellingJobIds = new Set();
         const downloaderLogCache = new Map();
         function calculateProgress() { return 42; }
         function formatJobDuration() { return '1m 02s'; }
@@ -772,6 +839,15 @@ def test_jobs_monitor_escapes_job_data_and_uses_delegated_actions() -> None:
           assert.match(html, /&lt;img/);
           assert.match(html, /&amp;apos;/);
         });
+
+        job.id = 'pending-job';
+        job.status = 'pending';
+        startingJobIds.add(job.id);
+        cancellingJobIds.add(job.id);
+        const pending = renderActiveJob(job);
+        assert.match(pending, />Starting\.\.\.<\/button>/);
+        assert.match(pending, />Cancelling\.\.\.<\/button>/);
+        assert.match(pending, />cancelling<\/span>/);
     """
     _run_frontend_node(
         "frontend/jobs_monitor.html",
@@ -807,6 +883,87 @@ def test_jobs_monitor_delegation_preserves_all_job_actions() -> None:
     _run_frontend_node(
         "frontend/jobs_monitor.html",
         ["handleJobActionClick"],
+        bootstrap,
+        assertions,
+    )
+
+
+def test_jobs_monitor_filter_does_not_measure_modal_viewport() -> None:
+    """Filtering jobs must remain a data-only operation without forced layout reads."""
+    source = _extract_js_function(_read("frontend/jobs_monitor.html"), "matchesExchangeFilter")
+
+    assert "updateModalViewportHeight" not in source
+    assert "getBoundingClientRect" not in source
+
+
+def test_jobs_monitor_run_and_cancel_actions_reject_duplicate_requests() -> None:
+    """Pending run and cancel state blocks repeat requests and remains visible on success."""
+    bootstrap = r"""
+        const startingJobIds = new Set();
+        const cancellingJobIds = new Set();
+        const API_BASE = '/api';
+        const requests = [];
+        let refreshCount = 0;
+        function refreshActiveJobsSnapshot() { refreshCount += 1; }
+        function authOptions(options) { return options || {}; }
+        async function showActionDialog() { return true; }
+        async function showActionNotice() {}
+        async function fetch(url) {
+          requests.push(url);
+          return { ok: true, json: async function() { return {}; } };
+        }
+    """
+    assertions = r"""
+        (async function() {
+          await Promise.all([runJob('pending/job'), runJob('pending/job')]);
+          assert.equal(requests.filter(url => url.endsWith('/pending/job/run')).length, 1);
+          assert.equal(startingJobIds.has('pending/job'), true);
+
+          await Promise.all([cancelJob('running/job'), cancelJob('running/job')]);
+          assert.equal(requests.filter(url => url.endsWith('/jobs/cancel')).length, 1);
+          assert.equal(cancellingJobIds.has('running/job'), true);
+          assert.equal(refreshCount, 2);
+        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+    """
+    _run_frontend_node(
+        "frontend/jobs_monitor.html",
+        ["cancelJob", "runJob"],
+        bootstrap,
+        assertions,
+    )
+
+
+def test_jobs_monitor_bulk_delete_locks_and_refreshes_before_notice() -> None:
+    """Bulk deletion is single-flight and replaces stale rows before its result notice."""
+    bootstrap = r"""
+        const bulkDeleteStates = new Set();
+        const EXCHANGE_FILTER = '';
+        const API_BASE = '/api';
+        const currentTab = 'done';
+        const events = [];
+        const button = { disabled: false, textContent: 'Delete All Done Jobs' };
+        const document = { getElementById: function() { return button; } };
+        function authOptions(options) { return options || {}; }
+        async function showActionDialog() { return true; }
+        async function showActionNotice() { events.push('notice'); }
+        async function loadTab() { events.push('refresh'); }
+        async function fetch() {
+          events.push('fetch');
+          return { ok: true, json: async function() { return { deleted: 2, total: 2 }; } };
+        }
+    """
+    assertions = r"""
+        (async function() {
+          await Promise.all([deleteAllJobs('done'), deleteAllJobs('done')]);
+          assert.deepEqual(events, ['fetch', 'refresh', 'notice']);
+          assert.equal(button.disabled, false);
+          assert.equal(button.textContent, 'Delete All Done Jobs');
+          assert.equal(bulkDeleteStates.size, 0);
+        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+    """
+    _run_frontend_node(
+        "frontend/jobs_monitor.html",
+        ["deleteAllJobs"],
         bootstrap,
         assertions,
     )
@@ -885,7 +1042,7 @@ def test_xss_hardening_preserves_job_and_api_key_visual_contract() -> None:
 
     assert 'class="btn btn-sm btn-info" data-user-action="edit">Edit</button>' in api_keys
     assert 'class="btn btn-sm btn-danger" data-user-action="delete">Delete</button>' in api_keys
-    assert jobs.index('>Run</button>') < jobs.index('>View</button>') < jobs.index('>Log</button>') < jobs.index('>Cancel</button>')
+    assert jobs.index('data-job-action="run"') < jobs.index('data-job-action="view"') < jobs.index('data-job-action="log"') < jobs.index('data-job-action="cancel"')
     assert history.index('>View</button>') < history.index('>Log</button>') < history.index('>Retry</button>') < history.index('>Requeue</button>') < history.index('>Delete</button>')
     assert 'class="job-card"' in jobs
     assert 'class="progress-bar"' in jobs

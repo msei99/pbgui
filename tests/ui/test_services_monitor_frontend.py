@@ -235,3 +235,79 @@ window.fetchWorkers = function () { refreshes++; return Promise.resolve(); };
 """.replace("EXPECTED_DETAIL", json.dumps(expected_detail))
 
     _run_node(script)
+
+
+def test_settings_load_retries_after_http_failure_and_blocks_duplicate_requests() -> None:
+    """Only a successfully applied settings response should satisfy the loaded guard."""
+
+    source = PAGE.read_text(encoding="utf-8")
+    code = _extract_function(source, "loadSettings")
+    script = """
+const assert = require('node:assert/strict');
+const API_BASE = '/api/services';
+var _settingsLoaded = {};
+var _settingsLoading = {};
+const requests = [];
+const applied = [];
+function fetch(url) { return new Promise(resolve => requests.push({url, resolve})); }
+function authOptions(options) { return options || {}; }
+function applySettings(service, data) { applied.push([service, data]); }
+""" + code + """
+(async () => {
+  const failed = loadSettings('api-server');
+  const duplicate = loadSettings('api-server');
+  assert.equal(requests.length, 1);
+  await duplicate;
+  requests[0].resolve({ok:false,status:502,json:() => Promise.resolve({})});
+  await failed;
+  assert.equal(_settingsLoaded['api-server'], undefined);
+  assert.equal(_settingsLoading['api-server'], undefined);
+  assert.deepEqual(applied, []);
+
+  const retry = loadSettings('api-server');
+  assert.equal(requests.length, 2);
+  requests[1].resolve({ok:true,status:200,json:() => Promise.resolve({host:'127.0.0.1'})});
+  await retry;
+  assert.equal(_settingsLoaded['api-server'], true);
+  assert.equal(_settingsLoading['api-server'], undefined);
+  assert.deepEqual(applied, [['api-server', {host:'127.0.0.1'}]]);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+
+    _run_node(script)
+
+
+def test_api_restart_updates_the_clicked_compact_button() -> None:
+    """Compact API restart feedback must target the button that initiated the request."""
+
+    source = PAGE.read_text(encoding="utf-8")
+    render_code = _extract_function(source, "renderServiceButtons")
+    restart_code = _extract_window_function(source, "restartApiServer")
+    script = """
+const assert = require('node:assert/strict');
+const window = {};
+const API_BASE = '/api/services';
+var _serviceActionPending = {};
+let resolveRestart;
+function serviceSkipped() { return false; }
+function serviceActionProgressText() { return 'Restarting...'; }
+function authOptions(options) { return options || {}; }
+function fetch() { return new Promise(resolve => { resolveRestart = resolve; }); }
+function _resultPopup() { throw new Error('restart should not fail'); }
+""" + render_code + "\n" + restart_code + r"""
+(async () => {
+  const html = renderServiceButtons({id:'api-server',isApiServer:true}, {running:true}, true);
+  assert.match(html, /restartApiServer\(this\);event\.stopPropagation\(\)/);
+
+  const button = {disabled:false,textContent:'Restart',innerHTML:''};
+  const restart = window.restartApiServer(button);
+  assert.equal(button.disabled, true);
+  assert.equal(button.textContent, 'Restarting…');
+  resolveRestart({ok:true,status:200,json:() => Promise.resolve({})});
+  await restart;
+  assert.equal(button.disabled, false);
+  assert.equal(button.innerHTML, '&#8635; Restart');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+
+    _run_node(script)

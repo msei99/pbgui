@@ -1716,6 +1716,8 @@
         const context = captureEditorRequest(requestedName);
         if (!context) return;
         const btn = document.getElementById("btnHLExpiryInline");
+        const buttonOwner = {};
+        btn._requestOwner = buttonOwner;
         btn.disabled = true;
         btn.textContent = "Checking…";
         try {
@@ -1741,7 +1743,8 @@
             badge.textContent = "Error: " + e.message;
             badge.style.color = "#fc8181";
         } finally {
-            if (isCurrentEditorRequest(context) && editingName === requestedName) {
+            if (btn._requestOwner === buttonOwner) {
+                delete btn._requestOwner;
                 btn.disabled = false;
                 btn.textContent = "↻ Check Expiry";
             }
@@ -1776,6 +1779,8 @@
         const context = captureEditorRequest(requestedName);
         if (!context) return;
         const btn = document.getElementById("btnBybitExpiryInline");
+        const buttonOwner = {};
+        btn._requestOwner = buttonOwner;
         btn.disabled = true;
         btn.textContent = "Checking…";
         try {
@@ -1790,7 +1795,8 @@
             badge.textContent = "Error: " + e.message;
             badge.style.color = "#fc8181";
         } finally {
-            if (isCurrentEditorRequest(context) && editingName === requestedName) {
+            if (btn._requestOwner === buttonOwner) {
+                delete btn._requestOwner;
                 btn.disabled = false;
                 btn.textContent = "↻ Check Expiry + IPs";
             }
@@ -1801,6 +1807,8 @@
         if (saveInFlight) return;
         const context = beginEditorAccount("__bybit_expiry__");
         const btn = document.getElementById("btnBybitExpiry");
+        const buttonOwner = {};
+        btn._requestOwner = buttonOwner;
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner"></span> Checking...';
 
@@ -1830,7 +1838,8 @@
             if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             showToast("Bybit expiry check failed: " + e.message, "error");
         } finally {
-            if (isCurrentEditorRequest(context)) {
+            if (btn._requestOwner === buttonOwner) {
+                delete btn._requestOwner;
                 btn.disabled = false;
                 btn.textContent = "Bybit Expiry Check";
             }
@@ -2132,6 +2141,8 @@
         if (!context) return;
 
         const btn = document.getElementById("btnTest");
+        const buttonOwner = {};
+        btn._requestOwner = buttonOwner;
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner"></span> Testing...';
 
@@ -2178,7 +2189,8 @@
             if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             showToast("Test failed: " + e.message, "error");
         } finally {
-            if (isCurrentEditorRequest(context) && editingName === name) {
+            if (btn._requestOwner === buttonOwner) {
+                delete btn._requestOwner;
                 btn.disabled = false;
                 btn.textContent = "Test Connection";
             }
@@ -2190,6 +2202,8 @@
         if (saveInFlight) return;
         const context = beginEditorAccount("__hl_expiry__");
         const btn = document.getElementById("btnHLExpiry");
+        const buttonOwner = {};
+        btn._requestOwner = buttonOwner;
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner"></span> Checking...';
 
@@ -2220,7 +2234,8 @@
             if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             showToast("HL expiry check failed: " + e.message, "error");
         } finally {
-            if (isCurrentEditorRequest(context)) {
+            if (btn._requestOwner === buttonOwner) {
+                delete btn._requestOwner;
                 btn.disabled = false;
                 btn.textContent = "HL Expiry Check";
             }

@@ -1144,6 +1144,7 @@ window.PBGUI_NAV_CONFIG = {
   var _fetchSummaryTimer = null;
   var _pollerMetricsTimer = null;
   var _settingsLoaded = {};
+  var _settingsLoading = {};
   var _workers = { counts: { total: 0, running: 0 }, groups: [] };
   var _workerIndex = {};
   var _workersGeneration = 0;
@@ -1254,7 +1255,7 @@ window.PBGUI_NAV_CONFIG = {
     if (!skipped) {
       if (svc.isApiServer) {
         html += running
-          ? '<button class="' + cls + ' restart" onclick="restartApiServer()' + stopProp + '"' + disabledAttr + '>&#8635; ' + (pending === 'restart' ? pendingText : 'Restart') + '</button>'
+          ? '<button class="' + cls + ' restart" onclick="restartApiServer(this)' + stopProp + '"' + disabledAttr + '>&#8635; ' + (pending === 'restart' ? pendingText : 'Restart') + '</button>'
           : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '"' + disabledAttr + '>&#9654; ' + (pending === 'start' ? pendingText : 'Start') + '</button>';
       } else {
         html += running
@@ -2054,11 +2055,10 @@ window.PBGUI_NAV_CONFIG = {
       });
   };
 
-  window.restartApiServer = function () {
-    var btn = document.querySelector('[onclick="restartApiServer()"]');
+  window.restartApiServer = function (btn) {
     if (btn) { btn.disabled = true; btn.textContent = 'Restarting\u2026'; }
     var origin = API_BASE.replace(/\/api\/services$/, '');
-    fetch(API_BASE + '/api-server/restart', authOptions({ method: 'POST' }))
+    return fetch(API_BASE + '/api-server/restart', authOptions({ method: 'POST' }))
       .then(function (resp) {
         if (!resp.ok) {
           return resp.json().catch(function () { return {}; }).then(function (data) {
@@ -2084,13 +2084,20 @@ window.PBGUI_NAV_CONFIG = {
 
   /* ── Settings loaders ──────────────────────────────────── */
   function loadSettings(svcId) {
-    _settingsLoaded[svcId] = true;
     var ep = { pbcoindata: '/settings/pbcoindata', pbdata: '/settings/pbdata', 'api-server': '/settings/api-server' }[svcId];
-    if (!ep) return;
-    fetch(API_BASE + ep, authOptions())
-      .then(function (r) { return r.json(); })
-      .then(function (data) { applySettings(svcId, data); })
-      .catch(function () {});
+    if (!ep || _settingsLoaded[svcId] || _settingsLoading[svcId]) return Promise.resolve();
+    _settingsLoading[svcId] = true;
+    return fetch(API_BASE + ep, authOptions())
+      .then(function (r) {
+        if (!r.ok) throw new Error('Settings request failed.');
+        return r.json();
+      })
+      .then(function (data) {
+        applySettings(svcId, data);
+        _settingsLoaded[svcId] = true;
+      })
+      .catch(function () {})
+      .finally(function () { delete _settingsLoading[svcId]; });
   }
 
   function applySettings(svcId, data) {

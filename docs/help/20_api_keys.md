@@ -96,6 +96,8 @@ Both buttons use the **currently typed credentials** from the form — not just 
 
 Unsaved Hyperliquid private keys used by **Check Expiry** are sent only in an authenticated POST request body. They are never added to the request URL; checks without an unsaved override continue to use the stored key.
 
+Editing the account while a connection or inline expiry check is running discards the stale result but always restores the action button. A completed older request cannot unlock a newer check using the same button.
+
 ---
 
 ## Backups

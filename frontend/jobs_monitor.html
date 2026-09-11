@@ -617,6 +617,9 @@
         let expandedJobs = new Set();
         let expandedDownloaderJobs = new Set();
         let activeJobsSnapshot = [];
+        const cancellingJobIds = new Set();
+        const startingJobIds = new Set();
+        const bulkDeleteStates = new Set();
         const downloaderLogCache = new Map();
         const downloaderLogFetches = new Set();
         let actionDialogResolve = null;
@@ -720,7 +723,6 @@
                 if (!allowedTypes.some(t => jt === t)) return false;
             }
             
-                        updateModalViewportHeight();
             // Try explicit exchange field first
             let jobExchange = (job.exchange || '').trim().toLowerCase();
             
@@ -817,10 +819,19 @@
         // ── Update Jobs Display ──
         function updateJobs(jobs) {
             const runningContainer = document.getElementById('jobs-running');
+
+            const activeStatuses = new Map((jobs || []).map(job => [String(job && job.id || ''), String(job && job.status || '')]));
+            startingJobIds.forEach(jobId => {
+                if (activeStatuses.get(jobId) !== 'pending') startingJobIds.delete(jobId);
+            });
+            cancellingJobIds.forEach(jobId => {
+                if (!['pending', 'running'].includes(activeStatuses.get(jobId))) cancellingJobIds.delete(jobId);
+            });
             
             // Apply exchange filter
             const filteredJobs = jobs.filter(matchesExchangeFilter);
             const activeJobs = filteredJobs.filter(j => ['pending', 'running'].includes(j.status));
+            activeJobsSnapshot = activeJobs;
 
             if (!activeJobs || activeJobs.length === 0) {
                 runningContainer.innerHTML = '<p class="no-jobs">No active jobs.</p>';
@@ -829,7 +840,6 @@
 
             // Keep active jobs stable: running first, then queue/start order.
             activeJobs.sort(compareActiveJobs);
-            activeJobsSnapshot = activeJobs;
 
             runningContainer.innerHTML = activeJobs.map(renderActiveJob).join('');
             ensureDownloaderLogFallbacks(activeJobs);
@@ -844,9 +854,12 @@
             const jobId = String(job.id || '');
             const jobIdAttr = escapeAttr(jobId);
             const isExpanded = expandedJobs.has(job.id);
+            const isCancelling = cancellingJobIds.has(jobId);
+            const isStarting = startingJobIds.has(jobId);
             const durationStr = formatJobDuration(job);
             
             const statusClass = job.status === 'running' ? 'status-running' : 'status-pending';
+            const statusText = isCancelling ? 'cancelling' : (job.status || '');
             
             // Progress details
             const downloaded = progress.downloaded_total || 0;
@@ -869,15 +882,15 @@
                     <div class="job-header">
                         <div class="job-info">
                             <strong class="job-id">${escapeHtml(jobId)}</strong>
-                            <span class="badge ${statusClass}">${escapeHtml(job.status || '')}</span>
+                            <span class="badge ${statusClass}">${escapeHtml(statusText)}</span>
                             <span class="job-type">${escapeHtml(job.type || '')}</span>
                             ${durationStr ? `<span class="detail" style="color:#8899aa;">${escapeHtml(durationStr)}</span>` : ''}
                         </div>
                         <div class="job-actions">
-                            ${job.status === 'pending' ? `<button class="btn btn-run" data-job-action="run" data-job-id="${jobIdAttr}">Run</button>` : ''}
+                            ${job.status === 'pending' ? `<button class="btn btn-run" data-job-action="run" data-job-id="${jobIdAttr}" ${isStarting ? 'disabled' : ''}>${isStarting ? 'Starting...' : 'Run'}</button>` : ''}
                             <button class="btn btn-view" data-job-action="view" data-job-id="${jobIdAttr}">View</button>
                             <button class="btn btn-info" data-job-action="log" data-job-id="${jobIdAttr}">Log</button>
-                            <button class="btn btn-danger" data-job-action="cancel" data-job-id="${jobIdAttr}">Cancel</button>
+                            <button class="btn btn-danger" data-job-action="cancel" data-job-id="${jobIdAttr}" ${isCancelling ? 'disabled' : ''}>${isCancelling ? 'Cancelling...' : 'Cancel'}</button>
                         </div>
                     </div>
                     <div class="job-details">
@@ -1321,6 +1334,13 @@
         }
 
         // ── API Actions ──
+        function refreshActiveJobsSnapshot() {
+            const runningContainer = document.getElementById('jobs-running');
+            if (runningContainer && activeJobsSnapshot.length) {
+                runningContainer.innerHTML = activeJobsSnapshot.map(renderActiveJob).join('');
+            }
+        }
+
         async function cancelJob(jobId) {
             if (!(await showActionDialog({
                 title: 'Cancel job',
@@ -1328,6 +1348,11 @@
                 confirmText: 'Cancel job',
                 confirmClass: 'btn-danger'
             }))) return;
+
+            const normalizedJobId = String(jobId || '');
+            if (cancellingJobIds.has(normalizedJobId)) return;
+            cancellingJobIds.add(normalizedJobId);
+            refreshActiveJobsSnapshot();
             
             try {
                 const resp = await fetch(`${API_BASE}/jobs/cancel`, authOptions({
@@ -1340,10 +1365,14 @@
                     console.log(`Job ${jobId} cancelled`);
                 } else {
                     const err = await resp.json();
+                    cancellingJobIds.delete(normalizedJobId);
+                    refreshActiveJobsSnapshot();
                     await showActionNotice({ title: 'Cancel failed', message: `Failed to cancel: ${err.detail}` });
                 }
             } catch (e) {
                 console.error('Cancel error:', e);
+                cancellingJobIds.delete(normalizedJobId);
+                refreshActiveJobsSnapshot();
                 await showActionNotice({ title: 'Cancel failed', message: 'Failed to cancel job' });
             }
         }
@@ -1428,6 +1457,7 @@
         }
 
         async function deleteAllJobs(state) {
+            if (bulkDeleteStates.has(state)) return;
             const stateLabel = state === 'done' ? 'done' : 'failed';
             const exchangeLabel = EXCHANGE_FILTER ? ` for ${EXCHANGE_FILTER}` : '';
             
@@ -1439,6 +1469,15 @@
                 confirmClass: 'btn-danger'
             }))) {
                 return;
+            }
+
+            if (bulkDeleteStates.has(state)) return;
+            const button = document.getElementById(`delete-all-${state}-btn`);
+            const buttonText = button ? button.textContent : '';
+            bulkDeleteStates.add(state);
+            if (button) {
+                button.disabled = true;
+                button.textContent = 'Deleting...';
             }
             
             try {
@@ -1460,13 +1499,13 @@
                 
                 if (resp.ok) {
                     const data = await resp.json();
+                    await loadTab(currentTab);
                     await showActionNotice({
                         title: 'Jobs deleted',
                         message: `Successfully deleted ${data.deleted} of ${data.total} jobs.`,
                         confirmText: 'OK',
                         confirmClass: 'btn-info'
                     });
-                    loadTab(currentTab); // Refresh current tab
                 } else {
                     const err = await resp.json();
                     await showActionNotice({ title: 'Delete failed', message: `Failed to delete jobs: ${err.detail}` });
@@ -1474,6 +1513,12 @@
             } catch (e) {
                 console.error('Delete all error:', e);
                 await showActionNotice({ title: 'Delete failed', message: 'Failed to delete jobs' });
+            } finally {
+                bulkDeleteStates.delete(state);
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = buttonText;
+                }
             }
         }
 
@@ -1610,6 +1655,10 @@
         }
 
             async function runJob(jobId) {
+                const normalizedJobId = String(jobId || '');
+                if (startingJobIds.has(normalizedJobId)) return;
+                startingJobIds.add(normalizedJobId);
+                refreshActiveJobsSnapshot();
                 try {
                     const resp = await fetch(`${API_BASE}/jobs/${jobId}/run`, authOptions({
                         method: 'POST'
@@ -1620,6 +1669,8 @@
                     }
                 } catch (e) {
                     console.error('Run job error:', e);
+                    startingJobIds.delete(normalizedJobId);
+                    refreshActiveJobsSnapshot();
                     await showActionNotice({
                         title: 'Run failed',
                         message: `Failed to start job ${jobId}.`,

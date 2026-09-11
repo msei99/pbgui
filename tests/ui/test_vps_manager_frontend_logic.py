@@ -21,6 +21,8 @@ def test_unknown_ssh_host_confirmation_uses_exact_fingerprint() -> None:
     assert "accepted_host_key_fingerprint: String(msg.fingerprint || '')" in source
     assert "replace_existing_host_key = changed" in source
     assert "Review changed key" in source
+    assert "String(flow.command_text || 'the operation')" in source
+    assert "and continue with Update Linux?" not in source
 
 
 def test_add_vps_offers_pb8_live_only_profile() -> None:
@@ -104,6 +106,109 @@ def _run_node_assertions(function_names: list[str], *, bootstrap: str, assertion
 
 class TestVpsManagerFrontendLogic:
     """Lock down VPS Manager form behavior against live metadata refreshes."""
+
+    def test_confirm_modal_uses_plain_title_text_and_preserves_message_lines(self) -> None:
+        """Text titles must not double escape and multiline messages remain readable."""
+        bootstrap = """
+        const elements = {
+          alertModalTitle: { textContent: '' },
+          alertModalBody: { className: '', innerHTML: '' },
+          alertModalBtnRow: { innerHTML: '' },
+          alertModalOverlay: { classList: { add: function() {} } },
+          'confirm-modal-ok': { onclick: null, addEventListener: function() {} }
+        };
+        const document = { getElementById: function(id) { return elements[id]; } };
+        function esc(value) {
+          return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        function closeAlertModal() {}
+        """
+        assertions = r"""
+        openConfirmModal('PBGui & Linux', 'Replace A & B\nContinue?', function() {});
+        assert.equal(elements.alertModalTitle.textContent, 'PBGui & Linux');
+        assert.match(elements.alertModalBody.innerHTML, /white-space:pre-line/);
+        assert.match(elements.alertModalBody.innerHTML, /Replace A &amp; B\nContinue\?/);
+        """
+        _run_node_assertions(
+            ["openConfirmModal"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_rollout_action_change_persists_silently(self) -> None:
+        """Changing the rollout task should save it like the other deploy settings."""
+        bootstrap = """
+        const saves = [];
+        const store = {
+          view: 'overview',
+          state: { config: { vps_deploy: {
+            action: 'vps-deploy-logging', action_text: 'Deploy Settings',
+            actions: [{command:'vps-update',command_text:'Update Linux'}]
+          } } }
+        };
+        function defaultVpsDeployConfig() {
+          return {action:'vps-deploy-logging',action_text:'Deploy Settings',mode:'parallel',debug:false,reboot_requested:false,selected_hosts:[],actions:[],modes:[]};
+        }
+        function renderUi() {}
+        function refreshLocalInteractiveState() {}
+        function isOverviewSettingsView() { return false; }
+        function saveVpsDeploySettings(options) { saves.push(options); }
+        """
+        assertions = """
+        setVpsDeployAction('vps-update');
+        assert.equal(store.state.config.vps_deploy.action, 'vps-update');
+        assert.equal(store.state.config.vps_deploy.action_text, 'Update Linux');
+        assert.deepEqual(saves, [{silent:true}]);
+        """
+        _run_node_assertions(
+            ["getVpsDeployConfig", "setVpsDeployAction"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_cluster_import_reload_preserves_passwords_and_apply_failure_unlocks(self) -> None:
+        """Preview reloads retain password drafts and failed starts return to an actionable preview."""
+        bootstrap = """
+        const renders = [];
+        const preview = {can_apply:true,items:[{hostname:'node-a',action:'add',hosts_action:'none'}]};
+        const store = {
+          clusterNodesImport: {
+            loading:false, applying:false, error:'', localSudoPw:'',
+            passwords:{'node-a':'secret'}, preview:preview, jobId:'', progress:null,
+            progressTimer:0, result:null
+          },
+          master: {sudoPw:''}
+        };
+        function stopClusterNodesImportProgressPolling() {}
+        function renderClusterNodesImportModal() {
+          renders.push({
+            applying:store.clusterNodesImport.applying,
+            progress:store.clusterNodesImport.progress,
+            error:store.clusterNodesImport.error
+          });
+        }
+        function vpsManagerGet() { return Promise.resolve(preview); }
+        function vpsManagerPost() { return Promise.reject(new Error('network offline')); }
+        function openMasterPasswordPrompt() { throw new Error('sudo prompt not expected'); }
+        """
+        assertions = """
+        (async function() {
+          await loadClusterNodesImportPreview();
+          assert.deepEqual(store.clusterNodesImport.passwords, {'node-a':'secret'});
+          assert.equal(store.clusterNodesImport.preview, preview);
+
+          await applyClusterNodesImport();
+          assert.equal(store.clusterNodesImport.applying, false);
+          assert.equal(store.clusterNodesImport.progress, null);
+          assert.equal(store.clusterNodesImport.error, 'network offline');
+          assert.equal(store.clusterNodesImport.preview, preview);
+        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        """
+        _run_node_assertions(
+            ["defaultClusterNodesImportState", "loadClusterNodesImportPreview", "applyClusterNodesImport"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
 
     def test_linux_update_checks_support_host_and_overview_selection(self) -> None:
         """Manual package checks expose both scopes and clear their busy state on every response."""
