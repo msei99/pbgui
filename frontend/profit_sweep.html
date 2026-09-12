@@ -1178,11 +1178,17 @@
     async function loadPolicyForAccount(userName, generation, signal) {
       try {
         var data = await requestJson('/policies/' + encodeURIComponent(userName), { signal: signal });
-        if (isCurrentAccount(userName, generation)) state.record = data;
+        if (isCurrentAccount(userName, generation)) {
+          state.record = data;
+          syncSelectedUserSummary();
+        }
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         if (error.status === 404) {
-          if (isCurrentAccount(userName, generation)) state.record = null;
+          if (isCurrentAccount(userName, generation)) {
+            state.record = null;
+            syncSelectedUserSummary();
+          }
           return;
         }
         throw error;
@@ -1221,13 +1227,12 @@
       ]);
     }
     function syncSelectedUserSummary() {
-      if (!state.record) return;
       var user = state.users.find(function (item) { return item.name === state.selectedUser; });
       if (!user) return;
       var current = statusState();
-      user.has_policy = true;
-      user.operating_mode = state.record.policy.operating_mode;
-      user.due = current.sweep_due;
+      user.has_policy = !!state.record;
+      user.operating_mode = state.record ? state.record.policy.operating_mode : 'disabled';
+      user.due = state.record ? current.sweep_due : '0';
       renderAccounts();
     }
     async function selectAccount(userName) {
@@ -1753,7 +1758,7 @@
       state.previewError = '';
       renderPreview();
       try {
-        var policy = state.record && state.record.policy ? state.record.policy : state.schema.defaults;
+        var policy = state.record && state.record.policy ? state.record.policy : Object.assign({}, state.schema.defaults, { asset: byId('policy-asset').value });
         var result = await requestPreview(userName, policy, state.accountController ? state.accountController.signal : undefined);
         if (!isCurrentAccount(userName, generation)) return;
         state.preview = result;

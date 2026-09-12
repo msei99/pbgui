@@ -369,7 +369,7 @@ def test_profit_sweep_live_actions_and_dry_labels_are_explicit() -> None:
     assert "state.previewRefreshPendingVisibility = true" in source
     assert "if (state.previewRefreshPendingVisibility)" in source
     assert "state.previewRefreshPendingVisibility = false" in source
-    assert "var policy = state.record && state.record.policy ? state.record.policy : state.schema.defaults" in source
+    assert "var policy = state.record && state.record.policy ? state.record.policy : Object.assign({}, state.schema.defaults, { asset: byId('policy-asset').value })" in source
     assert "Account Preview" not in source
     assert 'id="evaluation-preview"' not in source
     assert 'id="account-freshness"' in source

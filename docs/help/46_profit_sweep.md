@@ -1,5 +1,9 @@
 # Profit Sweep
 
+Selecting an account refreshes its sidebar status from the same saved policy used by the detail view.
+
+For accounts without a saved policy, the automatic preview uses the selected settlement asset (USDC for Hyperliquid). Saved policies retain their configured asset.
+
 Exchange snapshot requests stop waiting after 60 seconds and retry automatically after 15 seconds. The Exchange / Vault tab shows read errors instead of leaving empty balance cards loading indefinitely. Rapid account switches briefly defer the next snapshot request.
 
 Switching accounts asks for confirmation before discarding unsaved policy changes. Cancel keeps the current account and its edits.

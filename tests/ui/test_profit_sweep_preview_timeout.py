@@ -83,9 +83,69 @@ def test_failed_preview_releases_loading_and_renders_exchange_error():
 const assert=require('assert');
 const state={selectedUser:'a',accountGeneration:1,previewLoading:false,users:[{name:'a'}],schema:{defaults:{}}};
 const isCurrentAccount=(user,generation)=>user===state.selectedUser&&generation===state.accountGeneration;
+function byId(){return {value:'USDC'};}
 function renderPreview(){}let rendered=0,retry;
 function renderAccountBalances(){rendered++;assert.equal(state.previewLoading,false);assert.equal(state.previewError,'failed');}
 function scheduleAutomaticPreview(delay){retry=delay;}
 async function requestPreview(){throw new Error('failed');}
 (async()=>{await evaluateNow();assert.equal(rendered,1);assert.equal(retry,15000);assert.equal(state.previewLoading,false);})().catch(e=>{console.error(e);process.exit(1);});
 """)
+
+
+@pytest.mark.parametrize('selected_asset,saved_asset', [
+    ('USDC', None), ('USDT', None), ('USDC', 'USDT'), ('USDT', 'USDC'),
+])
+def test_preview_uses_account_asset_without_mutating_defaults(selected_asset, saved_asset):
+    """Unsaved accounts use the displayed asset; saved policies retain their own asset."""
+    execute(function('evaluateNow') + 'const selectedAsset=' + json.dumps(selected_asset)
+            + ',savedAsset=' + json.dumps(saved_asset) + r'''
+const assert=require('assert');
+const defaults=Object.freeze({asset:'USDT',operating_mode:'disabled'});
+const record=savedAsset?{policy:Object.freeze({asset:savedAsset,operating_mode:'dry'})}:null;
+const state={selectedUser:'hyperliquid',accountGeneration:1,users:[{name:'hyperliquid'}],schema:{defaults},record};
+const byId=()=>({value:selectedAsset});
+const isCurrentAccount=()=>true;
+function renderPreview(){}function renderAccountBalances(){}
+function renderPositions(){}function renderTestTransfers(){}function renderStatusCards(){}
+function scheduleAutomaticPreview(){throw new Error('Unexpected failed preview');}
+let requested;
+async function requestPreview(user,policy){requested=policy;return {snapshot:{}};}
+(async()=>{
+ await evaluateNow();
+ assert.equal(requested.asset,savedAsset||selectedAsset);
+ assert.equal(defaults.asset,'USDT');
+ assert.equal(state.previewError,'');
+ assert.equal(state.previewLoading,false);
+ if(record)assert.equal(record.policy.asset,savedAsset);
+})().catch(e=>{console.error(e);process.exit(1);});
+''')
+
+
+@pytest.mark.parametrize('outcome', ['live', 'disabled', 'missing', 'stale', 'failure'])
+def test_loaded_policy_refreshes_only_current_sidebar_account(outcome):
+    """Account detail loads repair stale sidebar badges without accepting stale/error state."""
+    execute(function('loadPolicyForAccount') + function('syncSelectedUserSummary')
+            + 'const outcome=' + json.dumps(outcome) + r'''
+const assert=require('assert');
+const original={policy:{operating_mode:'dry'}};
+const user={name:'mani10',has_policy:true,operating_mode:'dry',due:'7'};
+const state={selectedUser:'mani10',accountGeneration:2,record:original,users:[user]};
+const isCurrentAccount=(name,generation)=>name===state.selectedUser&&generation===state.accountGeneration;
+const statusState=()=>({sweep_due:'0'});
+let renders=0;function renderAccounts(){renders++;}
+async function requestJson(){
+ if(outcome==='missing')throw Object.assign(new Error('missing'),{status:404});
+ if(outcome==='failure')throw Object.assign(new Error('failed'),{status:503});
+ return {policy:{operating_mode:outcome==='disabled'?'disabled':'live'}};
+}
+(async()=>{
+ const result=loadPolicyForAccount('mani10',outcome==='stale'?1:2);
+ if(outcome==='failure')await assert.rejects(result);else await result;
+ if(['failure','stale'].includes(outcome)){
+  assert.equal(user.operating_mode,'dry');assert.equal(state.record,original);assert.equal(renders,0);
+ }else{
+  assert.equal(user.operating_mode,outcome==='live'?'live':'disabled');
+  assert.equal(user.has_policy,outcome!=='missing');assert.equal(renders,1);
+ }
+})().catch(e=>{console.error(e);process.exit(1);});
+''')
