@@ -548,8 +548,9 @@ def test_profit_sweep_account_transitions_refresh_sidebar_without_default_flash(
     assert "renderAccountLoading(userName);" in select_account
     assert select_account.index("renderAccountLoading(userName);") < select_account.index("await Promise.all([")
     assert "renderSelectedAccount();" not in select_account.split("await Promise.all([", 1)[0]
-    assert enable_live.index("state.record = result.policy || state.record;") < enable_live.index("await refreshPolicyAndIntents")
-    assert enable_live.index("syncSelectedUserSummary();") < enable_live.index("await refreshPolicyAndIntents")
+    assert enable_live.index("user.operating_mode = result.policy.policy.operating_mode;") < enable_live.index("if (state.selectedUser !== userName) return;")
+    assert "signal: job.controller.signal" in enable_live
+    assert "signal: state.accountController" not in enable_live
 
 
 def test_intent_refresh_preserves_policy_drafts_and_unsaved_policy_actions_are_disabled() -> None:

@@ -6,6 +6,7 @@
   <title>Profit Sweep - PBGui</title>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
   <script src="/app/js/sidebar_resize.js?v=1"></script>
+  <script src="/app/js/profit_sweep_overview.js?v=6"></script>
   <style>
     :root {
       --bg: #0e1117; --bg2: #131b2b; --bg3: #182234; --field: #0b1320;
@@ -135,6 +136,35 @@
       .action-buttons { display: grid; grid-template-columns: repeat(3, 1fr); }
       .action-buttons .btn { padding: 0 7px; }
     }
+    #sweep-overview { display: none; }
+    .overview-active #sweep-overview { display: block; }
+    .overview-active #account-detail { display: none; }
+    .sweep-table-scroll { overflow-x: auto; }
+    #sweep-overview table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); white-space: nowrap; }
+    #sweep-overview th { position: sticky; top: 0; background: var(--bg2); border-bottom: 2px solid var(--border); text-align: left; }
+    #sweep-overview th, #sweep-overview td { padding: 10px 9px; }
+    #sweep-overview td { border-bottom: 1px solid var(--border); }
+    #sweep-overview tbody td { padding-top: 6px; padding-bottom: 6px; }
+    #sweep-overview tr { cursor: pointer; }
+    #sweep-overview tfoot tr { cursor: default; }
+    #sweep-overview tfoot td { background: var(--bg2); border-top: 2px solid var(--border); font-weight: 700; vertical-align: top; }
+    #sweep-overview tfoot .sweep-number { font-size: var(--fs-xs); }
+    #sweep-overview tbody tr:hover td, #sweep-overview tbody tr:focus td { background: rgba(77,166,255,.12); }
+    #sweep-overview tbody tr:focus td:first-child { border-left: 3px solid var(--accent); }
+    #sweep-overview .sweep-number { text-align: right; font-variant-numeric: tabular-nums; }
+    #sweep-overview .sweep-account { width: 350px; max-width: 350px; }
+    .sweep-account-identity { display: grid; grid-template-columns: minmax(160px, 1fr) 62px 42px; gap: 10px; align-items: center; }
+    .sweep-account-name { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+    .sweep-account-identity .mode-badge { justify-self: center; }
+    .sweep-account-asset { color: var(--muted); font-size: var(--fs-xs); }
+    .sweep-status.ok { color: var(--ok); }
+    .sweep-status.waiting { color: var(--warn); }
+    .sweep-status.error { color: var(--danger); }
+    #sweep-overview-message { margin-top: 12px; color: var(--muted); font-size: var(--fs-sm); }
+    #sweep-overview-message:empty { display: none; }
+    .overview-refresh-control { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--fs-sm); }
+    #main-content:not(.overview-active) .overview-refresh-control { display: none; }
+    #overview-refresh-minutes { width: auto; min-width: 100px; height: var(--btn-h); padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--field); color: var(--text); }
   </style>
 </head>
 <body class="profit-sweep-page">
@@ -142,6 +172,7 @@
   <div id="page-body">
     <aside id="sidebar" aria-label="Profit Sweep accounts">
       <div id="sidebar-sticky">
+        <button type="button" class="sb-btn active" id="show-overview" aria-pressed="true">Overview</button>
         <div id="sidebar-header">
           <span class="sb-title">Exchange Accounts</span>
           <span class="sb-count" id="account-count">0</span>
@@ -155,18 +186,44 @@
       <div id="sidebar-resize"></div>
     </aside>
 
-    <main id="main-content">
+    <main id="main-content" class="overview-active">
       <div class="page-head">
         <div>
           <div class="eyebrow">System / Profit Sweep</div>
-          <h1 id="account-heading">Profit Sweep</h1>
-          <div id="account-subtitle" class="subtitle">Select an exchange account to configure a read-only simulation.</div>
+          <h1 id="account-heading">Profit Sweep Overview</h1>
+          <div id="account-subtitle" class="subtitle">Active accounts · balances refresh in the background</div>
         </div>
         <div class="head-actions">
+          <label class="overview-refresh-control"><input type="checkbox" id="overview-anonymize"> Anonymize accounts</label>
+          <label class="overview-refresh-control" for="overview-refresh-minutes">Balance refresh
+            <select id="overview-refresh-minutes" aria-label="Balance refresh interval">
+              <option value="5">5 min</option><option value="15" selected>15 min</option>
+              <option value="30">30 min</option><option value="60">60 min</option>
+            </select>
+          </label>
+          <button type="button" class="btn overview-refresh-control" id="overview-refresh-now">Refresh now</button>
           <button type="button" class="btn" id="open-logs">Logs</button>
         </div>
       </div>
 
+      <section id="sweep-overview" aria-label="Active Profit Sweep accounts">
+        <div class="sweep-table-scroll">
+          <table>
+            <thead><tr>
+              <th>Account / Mode / Asset</th><th>Status ⓘ</th>
+              <th class="sweep-number">Balance</th>
+              <th class="sweep-number" title="Net PnL relative to the current Dry or Live baseline.">Net PnL</th>
+              <th class="sweep-number" title="Confirmed transfers in the current Live state; simulated total for Dry. Resets may change the accounting period.">Swept</th>
+              <th class="sweep-number" title="Accrued sweep entitlement; not a transfer already submitted.">Sweep Due</th>
+              <th>Target</th><th class="sweep-number">Target Balance</th>
+            </tr></thead>
+            <tbody id="sweep-overview-rows"></tbody>
+            <tfoot id="sweep-overview-summary"></tfoot>
+          </table>
+        </div>
+        <div id="sweep-overview-message" role="status">Loading saved overview values…</div>
+      </section>
+      <div id="account-detail">
       <div id="account-loading" role="status" aria-live="polite" hidden>Loading account data...</div>
 
       <section id="status-cards" aria-label="Always visible account status">
@@ -320,6 +377,7 @@
         </div>
       </div>
 
+      </div>
     </main>
   </div>
 
@@ -580,7 +638,8 @@
       var list = byId('account-list');
       var query = byId('account-search').value.trim().toLowerCase();
       var visible = state.users.filter(function (user) {
-        return !query || String(user.name || '').toLowerCase().includes(query) || String(user.exchange || '').toLowerCase().includes(query);
+        var label = typeof overview !== 'undefined' && overview && overview.active ? overview.accountLabel(user.name) : user.name;
+        return !query || String(label || '').toLowerCase().includes(query) || String(user.exchange || '').toLowerCase().includes(query);
       });
       list.replaceChildren();
       visible.forEach(function (user) {
@@ -590,14 +649,19 @@
         button.dataset.user = String(user.name || '');
         button.setAttribute('role', 'option');
         button.setAttribute('aria-selected', user.name === state.selectedUser ? 'true' : 'false');
-        appendText(button, 'span', user.name, 'account-name');
+        var label = typeof overview !== 'undefined' && overview && overview.active ? overview.accountLabel(user.name) : user.name;
+        appendText(button, 'span', label, 'account-name');
         var detailRow = document.createElement('span');
         detailRow.className = 'account-detail-row';
         appendText(detailRow, 'span', text(user.exchange, 'Unknown') + (user.is_vault ? ' / Vault' : ' / Standard'), 'account-meta');
         var badge = appendText(detailRow, 'span', user.operating_mode || 'disabled', 'mode-badge ' + modeClass(user.operating_mode));
         badge.setAttribute('aria-label', 'Mode ' + text(user.operating_mode, 'disabled'));
         button.appendChild(detailRow);
-        appendText(button, 'span', user.has_policy ? 'Due ' + text(user.due, '0') : 'No policy', 'account-policy');
+        var activation = liveActivations.get(user.name);
+        var summary = activation && activation.pending ? 'Enabling Live…'
+          : activation && activation.error ? 'Live activation failed: ' + activation.error
+          : user.has_policy ? 'Due ' + text(user.due, '0') : 'No policy';
+        appendText(button, 'span', summary, 'account-policy');
         button.addEventListener('click', function () { selectAccount(String(user.name || '')); });
         list.appendChild(button);
       });
@@ -1149,6 +1213,7 @@
         : 'Choose the baseline and optional first-transfer catch-up cap before the one-time confirmation.';
       byId('enable-live').disabled = !user || !state.schema || state.schema.live_available !== true || !['disabled', 'dry'].includes(mode);
       byId('fund-account').hidden = !user || String(user.exchange || '').toLowerCase() !== 'hyperliquid' || user.is_vault !== true;
+      if (liveActivations.get(state.selectedUser)?.pending) setAccountActionsEnabled(false);
       capturePolicyBaseline();
     }
     function syncDryJournalDisclosure(mode) {
@@ -1176,16 +1241,17 @@
       }
     }
     async function loadPolicyForAccount(userName, generation, signal) {
+      var revision = livePolicyRevisions.get(userName);
       try {
         var data = await requestJson('/policies/' + encodeURIComponent(userName), { signal: signal });
-        if (isCurrentAccount(userName, generation)) {
+        if (isCurrentAccount(userName, generation) && revision === livePolicyRevisions.get(userName)) {
           state.record = data;
           syncSelectedUserSummary();
         }
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         if (error.status === 404) {
-          if (isCurrentAccount(userName, generation)) {
+          if (isCurrentAccount(userName, generation) && revision === livePolicyRevisions.get(userName)) {
             state.record = null;
             syncSelectedUserSummary();
           }
@@ -1236,7 +1302,7 @@
       renderAccounts();
     }
     async function selectAccount(userName) {
-      if (!state.users.some(function (user) { return user.name === userName; })) return;
+      if (userName && !state.users.some(function (user) { return user.name === userName; })) return;
       var selectionId = state.accountSelectionId = (state.accountSelectionId || 0) + 1;
       var policyDirty = false;
       if (state.selectedUser && state.policyBaseline) {
@@ -1271,6 +1337,13 @@
       state.previewError = '';
       state.previewLoadedAt = 0;
       state.writeCapability = null;
+      if (!userName) {
+        state.policyBaseline = '';
+        renderAccounts();
+        overview.show();
+        return;
+      }
+      overview.hide();
       renderAccountLoading(userName);
       setMessage('Loading ' + userName + '...');
       try {
@@ -1303,7 +1376,7 @@
         if (generation !== state.usersGeneration) return;
         state.users = Array.isArray(data.users) ? data.users : [];
         renderAccounts();
-        var nextUser = preferredUser && state.users.some(function (user) { return user.name === preferredUser; }) ? preferredUser : state.users.length ? String(state.users[0].name || '') : '';
+        var nextUser = preferredUser && state.users.some(function (user) { return user.name === preferredUser; }) ? preferredUser : '';
         if (nextUser) await selectAccount(nextUser);
         else {
           state.selectedUser = '';
@@ -1312,8 +1385,7 @@
           state.intents = [];
           state.testOperations = [];
           state.snapshot = null;
-          renderSelectedAccount();
-          setMessage('No exchange accounts available.');
+          overview.show();
         }
       } catch (error) {
         if (error.name === 'AbortError' || generation !== state.usersGeneration) return;
@@ -1404,10 +1476,13 @@
       }
     }
 
+    var liveActivations = new Map();
+    var livePolicyRevisions = new Map();
+
     async function enableLive() {
       var userName = state.selectedUser;
       var generation = state.accountGeneration;
-      if (!userName) return;
+      if (!userName || liveActivations.get(userName)?.pending) return;
       var policy;
       try {
         policy = collectPolicy();
@@ -1427,47 +1502,80 @@
         confirmText: 'Enable Live'
       });
       if (!accepted || !isCurrentAccount(userName, generation)) return;
+      if (liveActivations.get(userName)?.pending) return;
+      var expectedGeneration = state.record ? state.record.generation : null;
+      var expectedFingerprint = state.record ? state.record.policy_fingerprint : null;
+      var job = { pending: true, error: '', controller: new AbortController() };
+      liveActivations.set(userName, job);
+      var abortJob = function () { job.controller.abort(); };
+      window.addEventListener('beforeunload', abortJob, { once: true });
+      setAccountActionsEnabled(false);
+      renderAccounts();
       setMessage('Saving Live settings and running server preflight...');
       try {
         var saved = await requestJson('/policies/' + encodeURIComponent(userName), {
           method: 'PUT',
-          signal: state.accountController ? state.accountController.signal : undefined,
+          signal: job.controller.signal,
           body: JSON.stringify({
             policy: policy,
-            expected_generation: state.record ? state.record.generation : null,
-            expected_policy_fingerprint: state.record ? state.record.policy_fingerprint : null,
+            expected_generation: expectedGeneration,
+            expected_policy_fingerprint: expectedFingerprint,
             confirmed_live_update: false
           })
         });
-        if (!isCurrentAccount(userName, generation)) return;
+        if (job.controller.signal.aborted) return;
         var result = await requestJson('/live/' + encodeURIComponent(userName), {
           method: 'POST',
-          signal: state.accountController ? state.accountController.signal : undefined,
+          signal: job.controller.signal,
           body: JSON.stringify({ expected_policy_fingerprint: saved.policy_fingerprint })
         });
-        if (!isCurrentAccount(userName, generation)) return;
+        livePolicyRevisions.set(userName, (livePolicyRevisions.get(userName) || 0) + 1);
+        var user = state.users.find(function (item) { return item.name === userName; });
+        if (user && result.policy) {
+          user.has_policy = true;
+          user.operating_mode = result.policy.policy.operating_mode;
+          user.due = (result.policy.live_state || {}).sweep_due || '0';
+        }
+        job.pending = false;
+        renderAccounts();
+        if (state.selectedUser !== userName) return;
+        generation = state.accountGeneration;
         state.writeCapability = result.capability || null;
         state.snapshot = result.snapshot || null;
         state.record = result.policy || state.record;
-        syncSelectedUserSummary();
-        await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
-        if (!isCurrentAccount(userName, generation)) return;
-        syncSelectedUserSummary();
         renderSelectedAccount();
         setMessage('Live enabled. Future due sweeps may submit real internal transfers.', 'ok');
         scheduleAutomaticPreview(0);
       } catch (error) {
-        if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
-        state.writeCapability = { writes_available: false, routes: [], reason: error.message };
-        try {
-          await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
-        } catch (refreshError) {
-          if (refreshError.name === 'AbortError') return;
+        if (error.name === 'AbortError') return;
+        job.error = error.message;
+        // Read back state: a failed response does not prove the server rejected activation.
+        if (error.status !== 401 && error.status !== 403) {
+          try {
+            var actual = await requestJson('/policies/' + encodeURIComponent(userName), { signal: job.controller.signal });
+            livePolicyRevisions.set(userName, (livePolicyRevisions.get(userName) || 0) + 1);
+            var user = state.users.find(function (item) { return item.name === userName; });
+            if (user) {
+              user.has_policy = true;
+              user.operating_mode = actual.policy.operating_mode;
+              user.due = (actual.live_state || {}).sweep_due || '0';
+            }
+            if (actual.policy.operating_mode === 'live') job.error = '';
+            if (state.selectedUser === userName) state.record = actual;
+          } catch (refreshError) {
+            if (refreshError.name !== 'AbortError') job.error += ' Status could not be verified: ' + refreshError.message;
+          }
         }
-        if (!isCurrentAccount(userName, generation)) return;
-        syncSelectedUserSummary();
-        renderSelectedAccount();
-        setMessage(error.message, 'error');
+        job.pending = false;
+        if (state.selectedUser === userName) {
+          renderSelectedAccount();
+          setMessage(job.error || 'Live enabled.', job.error ? 'error' : 'ok');
+        }
+      } finally {
+        job.pending = false;
+        window.removeEventListener('beforeunload', abortJob);
+        if (!job.error) liveActivations.delete(userName);
+        renderAccounts();
       }
     }
 
@@ -1940,6 +2048,7 @@
 
     async function initialize() {
       setAccountActionsEnabled(false);
+      overview.show();
       try {
         var results = await Promise.all([requestJson('/schema'), requestJson('/health')]);
         state.schema = results[0];
@@ -1951,7 +2060,13 @@
       }
     }
 
-    byId('account-search').addEventListener('input', renderAccounts);
+    var overview = new window.ProfitSweepOverview(requestJson, selectAccount);
+    overview.onAnonymize = renderAccounts;
+    byId('overview-anonymize').addEventListener('change', function () { overview.setAnonymized(this.checked); });
+    byId('overview-refresh-minutes').addEventListener('change', function () { overview.setRefreshMinutes(this.value); });
+    byId('overview-refresh-now').addEventListener('click', function () { overview.refreshNow(); });
+    byId('show-overview').addEventListener('click', function () { selectAccount(''); });
+    byId('account-search').addEventListener('input', function () { renderAccounts(); overview.render(); });
     byId('account-list').addEventListener('keydown', function (event) {
       if (!event.target.classList.contains('account-button')) return;
       if (event.key === 'ArrowDown') { event.preventDefault(); moveAccountFocus(event.target, 1); }
@@ -2011,6 +2126,7 @@
       if (!state.previewLoading && state.selectedUser && Date.now() - state.previewLoadedAt >= 60_000) scheduleAutomaticPreview(0);
     });
     window.addEventListener('beforeunload', function () {
+      overview.destroy();
       stopAutomaticPreview();
       if (state.automaticRefreshTimer) window.clearInterval(state.automaticRefreshTimer);
       if (state.usersRetryTimer) window.clearTimeout(state.usersRetryTimer);

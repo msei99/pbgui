@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from contextvars import ContextVar
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -16,6 +17,7 @@ from hyperliquid_api import hyperliquid_info_post
 
 
 SERVICE = "ProfitSweepExchanges"
+OVERVIEW_TARGET_CACHE: ContextVar[Any] = ContextVar("profit_sweep_overview_target_cache", default=None)
 
 # Imported lazily because lightweight read-only tooling does not always install
 # CCXT. Tests replace this with an offline owner factory.
@@ -614,7 +616,14 @@ def _optional_hyperliquid_read(
     """Run an optional fixed Hyperliquid target-balance read."""
 
     try:
-        result = hyperliquid_readonly_info(request_type, user=user, timeout_s=timeout_s)
+        cache = OVERVIEW_TARGET_CACHE.get()
+        if cache is None:
+            result = hyperliquid_readonly_info(request_type, user=user, timeout_s=timeout_s)
+        else:
+            result = cache.read(
+                (request_type, user.lower()),
+                lambda: hyperliquid_readonly_info(request_type, user=user, timeout_s=timeout_s),
+            )
     except Exception:
         return None
     return result if isinstance(result, expected_type) else None

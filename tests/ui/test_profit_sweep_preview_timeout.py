@@ -127,6 +127,7 @@ def test_loaded_policy_refreshes_only_current_sidebar_account(outcome):
     execute(function('loadPolicyForAccount') + function('syncSelectedUserSummary')
             + 'const outcome=' + json.dumps(outcome) + r'''
 const assert=require('assert');
+const livePolicyRevisions = new Map();
 const original={policy:{operating_mode:'dry'}};
 const user={name:'mani10',has_policy:true,operating_mode:'dry',due:'7'};
 const state={selectedUser:'mani10',accountGeneration:2,record:original,users:[user]};

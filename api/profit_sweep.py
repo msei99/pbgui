@@ -10,11 +10,11 @@ import json
 from pathlib import Path
 import time
 import traceback
-from typing import Any
+from typing import Any, Literal
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, StrictStr
 
 from api.auth import SessionToken, require_auth
@@ -22,7 +22,9 @@ from api.page_templates import render_page_urls
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION
 from profit_sweep import ProfitSweepStore, calculate_sweep, default_policy, round_transfer_amount
-from profit_sweep_exchanges import collect_readonly_snapshot, readonly_capability
+from profit_sweep_exchanges import OVERVIEW_TARGET_CACHE, collect_readonly_snapshot, readonly_capability
+from profit_sweep_overview import OverviewService, overview_row, load_refresh_minutes, save_refresh_minutes
+from profit_sweep_overview_balances import collect_hyperliquid_balances
 from profit_sweep_transfers import (
     BITGET_TRANSFER_PERMISSION_REASON,
     BINANCE_TRANSFER_PERMISSION_REASON,
@@ -52,6 +54,7 @@ _SCHEDULER_WAKE: asyncio.Event | None = None
 _STOPPING = False
 _EVALUATION_LOCKS: dict[str, asyncio.Lock] = {}
 _ACTIVE_OPERATION_TASKS: set[asyncio.Task[Any]] = set()
+_OVERVIEW: OverviewService | None = None
 
 
 class PolicyRequest(BaseModel):
@@ -2178,27 +2181,38 @@ async def _scheduler_loop() -> None:
 def startup() -> None:
     """Initialize the private store and start the single API-owned scheduler."""
 
-    global _SCHEDULER_TASK, _SCHEDULER_WAKE, _STOPPING
+    global _SCHEDULER_TASK, _SCHEDULER_WAKE, _STOPPING, _OVERVIEW
     _store()
     _STOPPING = False
     if _SCHEDULER_WAKE is None:
         _SCHEDULER_WAKE = asyncio.Event()
     if _SCHEDULER_TASK is None or _SCHEDULER_TASK.done():
         _SCHEDULER_TASK = asyncio.create_task(_scheduler_loop(), name="profit-sweep-scheduler")
+    try:
+        if _OVERVIEW is None:
+            _OVERVIEW = OverviewService(_store(), _overview_snapshot, _run_owned_thread)
+        _OVERVIEW.start()
+    except Exception:
+        _SCHEDULER_TASK.cancel()
+        _log(SERVICE, "Overview startup failed", level="ERROR", meta={"traceback": traceback.format_exc()})
+        raise
 
 
 async def shutdown() -> None:
     """Cancel the scheduler and await every API-owned Profit Sweep worker."""
 
-    global _SCHEDULER_TASK, _SCHEDULER_WAKE, _STOPPING
+    global _SCHEDULER_TASK, _SCHEDULER_WAKE, _STOPPING, _OVERVIEW
     _STOPPING = True
     if _SCHEDULER_WAKE is not None:
         _SCHEDULER_WAKE.set()
     task = _SCHEDULER_TASK
     if task is not None and not task.done():
         task.cancel()
-    if task is not None:
-        await asyncio.gather(task, return_exceptions=True)
+    cleanup = [task] if task is not None else []
+    if _OVERVIEW is not None:
+        cleanup.append(_OVERVIEW.stop())
+    await asyncio.gather(*cleanup, return_exceptions=True)
+    _OVERVIEW = None
     active = list(_ACTIVE_OPERATION_TASKS)
     if active:
         await asyncio.gather(*active, return_exceptions=True)
@@ -2421,6 +2435,73 @@ def list_policies(session: SessionToken = Depends(require_auth)) -> dict[str, An
     """Return all persisted Profit Sweep policies."""
 
     return {"policies": [_public_policy_record(item) for item in _store().list_policies()]}
+
+
+def _overview_snapshot(record: dict[str, Any]) -> dict[str, Any]:
+    """Collect display balances only; never evaluate or modify financial sweep state."""
+    user = _user_or_404(record["user_name"])
+    if str(user.exchange) != record["exchange"]:
+        raise ValueError("Policy exchange no longer matches the exchange user")
+    if str(user.exchange) == "hyperliquid" and _OVERVIEW is not None:
+        return collect_hyperliquid_balances(user, record["policy"], _OVERVIEW.balance_reader, _OVERVIEW.target_cache)
+    now_ms = int(time.time() * 1000)
+    token = OVERVIEW_TARGET_CACHE.set(_OVERVIEW.target_cache if _OVERVIEW is not None else None)
+    try:
+        return collect_readonly_snapshot(user, now_ms - 60_000, now_ms, 10.0, record["policy"]["asset"])
+    finally:
+        OVERVIEW_TARGET_CACHE.reset(token)
+
+
+@router.get("/overview")
+async def get_overview(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Serve local state immediately without waiting for an exchange refresh."""
+    records = await _run_owned_thread(_store().list_policies)
+    minutes = await _run_owned_thread(load_refresh_minutes, _store().db_path.with_name("overview_settings.json"))
+    cache = _OVERVIEW.cache if _OVERVIEW is not None else {}
+    rows = []
+    for record in records:
+        if record["policy"]["operating_mode"] == "disabled":
+            continue
+        try:
+            intents = await _run_owned_thread(_store().list_live_intents, record["user_name"])
+        except KeyError:
+            # A concurrent policy deletion must not fail the other account rows.
+            continue
+        last_sweep = max((item.get("resolved_at") or 0 for item in intents if item["state"] == "confirmed"), default=0)
+        row = overview_row(record, cache.get(record["user_name"], {}), last_sweep or None, refresh_seconds=minutes * 60)
+        if row["mode"] == "live" and intents:
+            latest = intents[-1]
+            if latest["state"] == "failed" and (latest.get("resolved_at") or 0) >= (row["evaluated_at"] or 0):
+                row.update(status="Transfer error", level="error", reason="last_transfer_failed")
+        rows.append(row)
+    return JSONResponse({"accounts": sorted(rows, key=lambda row: row["name"].lower()), "refresh_minutes": minutes}, headers={"Cache-Control": "no-store"})
+
+
+class OverviewSettingsRequest(BaseModel):
+    """Allow only supported background refresh intervals."""
+
+    refresh_minutes: Literal[5, 15, 30, 60]
+
+
+@router.put("/overview/settings")
+async def update_overview_settings(body: OverviewSettingsRequest, session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Save the background interval without triggering a balance read."""
+    try:
+        await _run_owned_thread(save_refresh_minutes, _store().db_path.with_name("overview_settings.json"), body.refresh_minutes)
+    except Exception as exc:
+        raise _logged_http_error(500, "Overview refresh setting could not be saved", operation="overview_settings", exc=exc) from exc
+    if _OVERVIEW is not None:
+        _OVERVIEW.refresh_seconds = body.refresh_minutes * 60
+    return JSONResponse({"refresh_minutes": body.refresh_minutes}, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/overview/refresh")
+async def refresh_overview_now(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Request balance reads in the existing background scheduler without evaluating sweeps."""
+    if _OVERVIEW is None:
+        raise HTTPException(status_code=503, detail="Overview background service is unavailable")
+    _OVERVIEW.request_refresh()
+    return JSONResponse({"status": "queued"}, status_code=202, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/policies/{user_name}")

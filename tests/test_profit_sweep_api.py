@@ -388,6 +388,91 @@ def test_every_profit_sweep_route_requires_shared_auth() -> None:
         assert require_auth in dependency_calls, f"Missing require_auth on {route.path}"
 
 
+def test_overview_returns_local_active_rows_without_exchange_calls(isolated_api, monkeypatch):
+    """Overview serves stored financial state while all exchange transports remain forbidden."""
+    store = isolated_api.store
+    store.create_policy("alice", "hyperliquid", {"operating_mode": "dry", "asset": "USDC"})
+    store.create_policy("binance", "binance", {"operating_mode": "disabled"})
+    before = store.get_policy("alice")
+    monkeypatch.setattr(profit_sweep_api, "_OVERVIEW", SimpleNamespace(cache={}))
+    response = asyncio.run(profit_sweep_api.get_overview(object()))
+    assert response.headers["cache-control"] == "no-store"
+    result = json.loads(response.body)
+    assert [row["name"] for row in result["accounts"]] == ["alice"]
+    assert result["accounts"][0]["mode"] == "dry"
+    assert result["accounts"][0]["balance"] is None
+    assert result["accounts"][0]["stale"] is True
+    assert store.get_policy("alice") == before
+    _assert_secret_free(result)
+
+
+def test_overview_refresh_settings_persist_without_exchange_reads(isolated_api, monkeypatch):
+    """Changing the overview interval persists independently of account policy and exchange reads."""
+    monkeypatch.setattr(profit_sweep_api, "_OVERVIEW", None)
+    before = isolated_api.store.list_policies()
+    response = asyncio.run(profit_sweep_api.update_overview_settings(
+        profit_sweep_api.OverviewSettingsRequest(refresh_minutes=30), object()))
+    assert json.loads(response.body) == {"refresh_minutes": 30}
+    overview = asyncio.run(profit_sweep_api.get_overview(object()))
+    assert json.loads(overview.body)["refresh_minutes"] == 30
+    assert isolated_api.store.list_policies() == before
+
+
+def test_overview_policy_deletion_does_not_drop_other_accounts(isolated_api, monkeypatch):
+    """A policy disappearing during a read must not fail every overview row."""
+    store = isolated_api.store
+    for name in ("alice", "vault"):
+        store.create_policy(name, "hyperliquid", {"operating_mode": "dry", "asset": "USDC"})
+    original = store.list_live_intents
+
+    def read_intents(name, **kwargs):
+        """Simulate deletion after the initial policy list snapshot."""
+        if name == "alice":
+            raise KeyError(name)
+        return original(name, **kwargs)
+
+    monkeypatch.setattr(store, "list_live_intents", read_intents)
+    monkeypatch.setattr(profit_sweep_api, "_OVERVIEW", None)
+    response = asyncio.run(profit_sweep_api.get_overview(object()))
+    assert [row["name"] for row in json.loads(response.body)["accounts"]] == ["vault"]
+
+
+def test_overview_shutdown_waits_for_owned_thread(isolated_api):
+    """Stopping the overview joins a blocking read before releasing its task registry."""
+    import threading
+
+    async def exercise():
+        """Coordinate a synthetic blocking exchange read without real network access."""
+        store = isolated_api.store
+        record = store.create_policy("alice", "hyperliquid", {"operating_mode": "dry", "asset": "USDC"})
+        started = asyncio.Event()
+        release = threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def collect(_record):
+            """Hold a thread until shutdown has started, then return an empty snapshot."""
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(5), "test failed to release the synthetic read"
+            return {}
+
+        service = profit_sweep_api.OverviewService(store, collect, profit_sweep_api._run_owned_thread)
+        worker = asyncio.create_task(service._refresh(record))
+        service.workers["alice"] = worker
+        await asyncio.wait_for(started.wait(), 2)
+        stopping = asyncio.create_task(service.stop())
+        try:
+            await asyncio.sleep(0.02)
+            assert not stopping.done()
+        finally:
+            release.set()
+            await asyncio.wait_for(stopping, 2)
+        assert worker.done()
+        assert not service.workers
+        assert not profit_sweep_api._ACTIVE_OPERATION_TASKS
+
+    asyncio.run(exercise())
+
+
 def test_main_page_is_cookie_only_secret_free_and_non_cacheable() -> None:
     """The page must use cookie auth and emit strict cache/referrer headers."""
 
@@ -2465,3 +2550,20 @@ def test_all_route_response_projections_are_secret_free(
 
     assert vault_preview["snapshot"]["account_kind"] == "vault"
     assert vault_preview["decision"]["effective_cap"] == "200"
+
+
+def test_overview_manual_refresh_only_queues_background_work(isolated_api, monkeypatch):
+    """The authenticated route returns immediately without policy writes or exchange reads."""
+    calls = []
+    monkeypatch.setattr(profit_sweep_api, '_OVERVIEW', SimpleNamespace(request_refresh=lambda: calls.append(1)))
+    before = isolated_api.store.list_policies()
+    response = asyncio.run(profit_sweep_api.refresh_overview_now(object()))
+    assert response.status_code == 202
+    assert calls == [1]
+    assert isolated_api.store.list_policies() == before
+    route = next(route for route in profit_sweep_api.router.routes if route.path.endswith('/overview/refresh'))
+    assert any(dependency.call is profit_sweep_api.require_auth for dependency in route.dependant.dependencies)
+    monkeypatch.setattr(profit_sweep_api, '_OVERVIEW', None)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(profit_sweep_api.refresh_overview_now(object()))
+    assert error.value.status_code == 503
