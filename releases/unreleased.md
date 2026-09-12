@@ -1,1 +1,11 @@
 # Unreleased
+
+## Maintenance
+
+- Remove the unused, tracked temporary development patch `.tmp_step_all_fragments.patch` as a narrowly scoped cleanup for #294.
+- Remove the orphaned PBMaster WebSocket server (`master/ws_server.py`): its owning daemon was removed in v1.65, and current VPS WebSockets use the FastAPI implementation. Focused reference checks found no remaining runtime or deployment consumer (#294).
+- Remove the unused legacy dashboard grid header template (`frontend/dashboard_grid_editor.html`); current dashboard navigation and FastAPI rendering use `dashboard_editor.html` (#294).
+- Remove the unused legacy `ParetoVisualizations.py` module after checking class, plotting-method, and launch references; the active Pareto API and frontend retain their existing data loader and rendering implementation (#294).
+- Remove the unused `Status.py` classes and their stale logging-audit file entry after checking PBRun, PBCluster, imports, and launch references. Retain the historical Status log-group mapping (#294).
+- Remove the unused legacy `service_ctl.py` CLI: its Python migration-script consumers were removed, and focused checks found no current PBGui import, launch, installer, or deployment reference. Current service-control implementations are unchanged (#294).
+- Remove the unused `api_server.py` compatibility adapter after checking PBGui imports, launch paths, installer/systemd definitions, and documentation. Legacy external `uvicorn api_server:app` commands must switch to `uvicorn PBApiServer:app`; the documented `python PBApiServer.py` entrypoint is unchanged (#294).
