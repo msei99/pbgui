@@ -289,3 +289,5 @@ Wenn mehrere Pareto-Zeilen markiert sind, erstellt **Seed Selected** ein kleines
 2. **Continue Optimize** klicken, um das ganze `pareto/`-Verzeichnis zu verwenden, oder im **Paretos**-Bereich **Seed Whole Result** bzw. **Seed Selected** für feinere Auswahl nutzen.
 3. Den Draft bei Bedarf anpassen und danach **Save** oder **Save and Queue** verwenden.
 4. Der neue Lauf startet mit den gespeicherten Pareto-Seeds, ist aber trotzdem ein frischer Optimize-Run und kein exaktes Checkpoint-Resume.
+
+Wenn ein Suite-Szenarioeditor geoeffnet ist, erfordern Templates, Reset to Base und Apply Training Scenarios eine Bestaetigung, bevor ungespeicherte Aenderungen verworfen werden. Abbrechen behaelt den Entwurf bei.

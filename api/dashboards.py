@@ -201,6 +201,9 @@ def dashboards_from_template(
     free_name: str = payload.get("name", "").strip()
     users: list[str] = payload.get("users", [])
     prefix: str = payload.get("prefix", "").strip()
+    target_user = payload.get("user", "")
+    if not isinstance(target_user, str) or (target_user and not _valid_name(target_user)):
+        raise HTTPException(status_code=400, detail="Invalid target user")
 
     if not _valid_name(template_name):
         raise HTTPException(status_code=400, detail="Invalid template name")
@@ -218,6 +221,10 @@ def dashboards_from_template(
         if not _valid_name(free_name):
             raise HTTPException(status_code=400, detail="Invalid dashboard name")
         config = json.loads(json.dumps(template_config))
+        if target_user:
+            for key in config:
+                if _USER_KEY_RE.match(key):
+                    config[key] = [target_user]
         f = _dashboard_file(free_name)
         tmp = f.with_suffix(".tmp")
         try:

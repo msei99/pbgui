@@ -16,6 +16,7 @@ import sqlite3
 import stat
 import subprocess
 import threading
+import time
 from contextlib import ExitStack, closing
 from pathlib import Path
 
@@ -202,8 +203,18 @@ class PBDataControl:
             return
         if marker == "systemd":
             result = self._service_command("start")
-            if result.returncode or self._service_state() != "active":
-                raise DatabaseBusyError("Databases are consistent but PBData restart failed; retry recovery")
+            if result.returncode:
+                raise DatabaseBusyError("Databases are consistent but PBData start command failed; retry recovery")
+            for attempt in range(15):
+                try:
+                    if self._service_state() == "active":
+                        return
+                except DatabaseBusyError:
+                    # Transitional or temporarily unavailable status is not proof of failure.
+                    pass
+                if attempt < 14:
+                    time.sleep(1.0)
+            raise DatabaseBusyError("Databases are consistent but PBData restart failed; retry recovery")
         elif marker == "legacy":
             # The existing launcher owns detached legacy daemons and validates its PID.
             from PBData import PBData

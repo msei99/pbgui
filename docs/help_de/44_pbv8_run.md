@@ -1,5 +1,7 @@
 # PBv8 Run
 
+Kann die Konfiguration einer bestehenden Instanz nicht geladen werden, zeigt der Editor einen Fehler und sperrt Save. Nach Behebung des Ladefehlers muss der Editor neu geladen werden.
+
 PBv8 Run verwaltet Passivbot-V8-Live-Instanzen. PB7 und PB8 Run verwenden dasselbe Editor-Template; ein Versionsadapter bildet die sichtbaren Felder auf die passenden Config-Pfade und API-Vertraege ab.
 
 ## Parameter-Tooltips
@@ -86,3 +88,5 @@ PB8-Live-Operationen verwenden einen getrennten Cluster-Protokoll-Namespace, dam
 Die Instanz vor dem Loeschen stoppen. PBGui prueft ihren exakten lokalen Prozess auch bei deaktiviertem, verschobenem oder momentan nicht startfaehigem Setup. Relevante Remote-Hosts muessen einen explizit gestoppten Zustand aus derselben Snapshot-Generation melden, der hoechstens 90 Sekunden alt ist. Fehlende, veraltete, ungestempelte oder widerspruechliche Beobachtungen fuehren vor Backup, Tombstone oder Verzeichnisentfernung zu HTTP 409. Frische Monitor-Diagnosen machen eine alte Instanzliste nicht aktuell; den naechsten vollstaendigen Instanz-Snapshot abwarten. Nach dem Update muss der Monitor-Dienst den neuen Collector-Code laden, bevor Remote-Loeschungen diese Beobachtungen nutzen koennen.
 
 Loeschen veroeffentlicht `DELETE_PB8_INSTANCE`, bevor das lokale Bundle entfernt wird. PB8-Tombstones sind von PB7-Tombstones getrennt, sodass gleichnamige PB7- und PB8-Instanzen einander nicht beeinflussen. Cluster Sync und PBRun verwenden den Tombstone, um das PB8-Deployment zu stoppen und zu entfernen.
+
+JSON Import fragt vor dem Ersetzen der aktuellen Editorwerte einschliesslich ungespeicherter Aenderungen nach einer Bestaetigung. Abbrechen behaelt den Entwurf und den Importtext bei.

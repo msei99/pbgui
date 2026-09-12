@@ -9,7 +9,7 @@ const tick = () => new Promise(setImmediate);
 const location = {origin: 'https://pbgui.test:8443', protocol: 'https:', host: 'pbgui.test:8443'};
 
 function functionCode(html, name) {
-    const match = html.match(new RegExp('^([ \\t]*)function ' + name + '\\(', 'm'));
+    const match = html.match(new RegExp('^([ \\t]*)(?:async )?function ' + name + '\\(', 'm'));
     assert.ok(match, name);
     const end = html.indexOf('\n' + match[1] + '}', match.index);
     assert.ok(end > match.index, name);
@@ -436,7 +436,7 @@ async function messages() {
             replies.push(message.type);
         };
         const editor = vm.createContext({window, location, state: {name: 'saved'}, ORIG_NAME: 'old',
-            VIEW_ONLY: true, closeAllUsersDropdowns() {}, setStatus() {},
+            VIEW_ONLY: true, cancelling: false, syncInFlight: Promise.resolve(), syncTimer: null, clearTimeout, closeAllUsersDropdowns() {}, setStatus() {},
             apiFetch(url, opts) { saves.push({url, opts}); return Promise.resolve({ok: true}); }
         });
         for (const name of ['doSave', 'doCancel', 'saveViewLayout', 'markViewDirty']) {
@@ -460,8 +460,8 @@ async function messages() {
         }
         editor.markViewDirty();
         await tick();
-        assert.deepEqual(saves.map(s => s.url), ['/dashboards/saved', '/dashboards/old']);
-        assert.ok(saves.every(s => s.opts.method === 'POST'));
+        assert.deepEqual(saves.map(s => s.url), ['/dashboards/saved', '/dashboards/old', '/dashboard/pending_full?name=old']);
+        assert.deepEqual(saves.map(s => s.opts.method), ['POST', 'POST', 'DELETE']);
         assert.deepEqual(replies.sort(), ['pbgui_editor_cancelled', 'pbgui_editor_saved', 'pbgui_view_dirty', 'pbgui_view_saved']);
     }
 

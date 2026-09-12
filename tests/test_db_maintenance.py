@@ -86,7 +86,7 @@ def tools(tmp_path, monkeypatch):
             body.append(node)
     module = ModuleType("api.db_tools")
     module.__dict__.update(asyncio=asyncio, threading=threading, Path=Path, sqlite3=sqlite3, uuid=uuid,
-                           json=json, dataclass=dataclass, ExitStack=ExitStack, HTTPException=HTTPException,
+                           json=json, dataclass=dataclass, ExitStack=ExitStack, closing=closing, HTTPException=HTTPException,
                            PBGDIR=tmp_path, _log=Mock(), SERVICE="DbTools", _operations={},
                            shutil=shutil, shlex=shlex, tempfile=tempfile, traceback=traceback,
                            router=SimpleNamespace(post=lambda *args, **kwargs: lambda fn: fn),

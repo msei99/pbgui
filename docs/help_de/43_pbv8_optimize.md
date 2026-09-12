@@ -209,3 +209,5 @@ Loeschen akzeptiert nur vollstaendige Run-Verzeichnisse direkt unter dem verwalt
 ## Archive
 
 PB8-Optimize-Configs und PB8-Backtest-Ergebnisse verwenden den bestehenden Archive-Workflow. Dateien werden unter ihrer `config_version` gespeichert, damit PB7- und PB8-Inhalte einander nicht ueberschreiben. Import, Export, Ansicht, Loeschen, Restore und Handoffs verwenden immer den Parser der archivierten Config-Version.
+
+Wenn eine OHLCV-Startdatumssuche Stop nicht innerhalb von 10 Sekunden bestaetigt, gibt Optimize die Bedienelemente frei und meldet einen Timeout. Das Backend kann noch stoppen; ein verspaetetes Ergebnis wird nicht angewendet.

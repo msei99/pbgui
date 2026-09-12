@@ -1,5 +1,7 @@
 # PBv8 Run
 
+If an existing instance configuration cannot be loaded, the editor reports the error and disables Save. Reload the editor after resolving the load error.
+
 PBv8 Run manages Passivbot V8 live instances. PB7 and PB8 Run use the same editor template; a version adapter maps the visible controls to the correct config paths and API contracts.
 
 ## Parameter tooltips
@@ -86,3 +88,5 @@ PB8 live operations use a separate Cluster protocol namespace so older nodes can
 Stop the instance before deleting. PBGui checks its exact local process even when it is disabled, reassigned, or cannot currently start. Relevant remote hosts must provide an explicit stopped observation from one snapshot generation no older than 90 seconds. Missing, stale, unstamped or inconsistent observations return HTTP 409 before backup, tombstone or directory removal. Fresh monitor diagnostics cannot make an older instance list current; wait for the next complete instance snapshot. After upgrading, the monitor service must load the new collector code before remote deletion can use these observations.
 
 Delete publishes `DELETE_PB8_INSTANCE` before removing the local bundle. PB8 tombstones are separate from PB7 tombstones, so equal PB7 and PB8 instance names do not affect each other. Cluster Sync and PBRun consume the tombstone to stop and remove the PB8 deployment.
+
+JSON Import asks for confirmation before replacing the current editor values, including unsaved changes. Cancel keeps the editor draft and import text intact.

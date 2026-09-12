@@ -1,5 +1,7 @@
 # PBv7 Run
 
+Kann die Konfiguration einer bestehenden Instanz nicht geladen werden, zeigt der Editor einen Fehler und sperrt Save. Nach Behebung des Ladefehlers muss der Editor neu geladen werden.
+
 Die **PBv7 Run** Seite verwaltet deine live handelnden Passivbot v7 Instanzen.
 Jede Instanz verbindet einen API-Key-Benutzer, eine Bot-Konfiguration und einen Ziel-VPS.
 
@@ -117,3 +119,5 @@ Dynamic Ignore ist eine Capability des Ziel-Hosts und keine Key-Einstellung pro 
 ### Bot deaktivieren
 1. Instanz mit **Edit** öffnen → **Enabled On** auf `disabled` setzen → **💾 Save**
 2. Der Bot wird automatisch auf dem VPS gestoppt
+
+JSON Import fragt vor dem Ersetzen der aktuellen Editorwerte einschliesslich ungespeicherter Aenderungen nach einer Bestaetigung. Abbrechen behaelt den Entwurf und den Importtext bei.

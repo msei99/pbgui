@@ -49,11 +49,8 @@ def test_sqlite_helpers_use_sync_lock_timeout(tmp_path, monkeypatch, operation):
                 restored.close()
         assert len(opened) == (2 if operation == "backup" else 1)
         for conn in opened:
-            if operation == "schema":
-                assert conn.execute("PRAGMA busy_timeout").fetchone() == (30000,)
-            else:
-                with pytest.raises(sqlite3.ProgrammingError, match="closed"):
-                    conn.execute("SELECT 1")
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                conn.execute("SELECT 1")
     finally:
         for conn in opened:
             conn.close()

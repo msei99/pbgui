@@ -629,6 +629,8 @@
       var helpSel = 0;
       var helpLoaded = false;
       var topicCache = {};
+      var topicLoadGeneration = 0;
+      var helpIndexGeneration = 0;
 
       var helpSearch = document.getElementById('help-search');
       var helpSearchUp = document.getElementById('help-search-up');
@@ -751,6 +753,8 @@
       }
 
       function ensureTopicCached(index, callback) {
+        var generation = helpIndexGeneration;
+        var language = helpLang;
         if (topicCache[index] !== undefined) {
           callback(topicCache[index]);
           return;
@@ -760,16 +764,18 @@
           callback('');
           return;
         }
-        fetch(appPath('/api/help/content?file=') + encodeURIComponent(topic.file) + '&lang=' + helpLang, { credentials: 'same-origin' })
+        fetch(appPath('/api/help/content?file=') + encodeURIComponent(topic.file) + '&lang=' + language, { credentials: 'same-origin' })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
           })
           .then(function (data) {
+            if (generation !== helpIndexGeneration || language !== helpLang) return;
             topicCache[index] = renderMarkdown(data.content || '');
             callback(topicCache[index]);
           })
           .catch(function () {
+            if (generation !== helpIndexGeneration || language !== helpLang) return;
             topicCache[index] = '';
             callback('');
           });
@@ -817,6 +823,8 @@
       }
 
       function showGlobalResults(term) {
+        var generation = ++topicLoadGeneration;
+        var language = helpLang;
         if (!term) {
           helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">Type a search term to find across all topics.</p>';
           helpSearchCount.textContent = '';
@@ -837,6 +845,7 @@
         }
         helpTopics.forEach(function (topic, index) {
           ensureTopicCached(index, function (html) {
+            if (generation !== topicLoadGeneration || language !== helpLang) return;
             var text = stripHtml(html);
             var matches = [];
             var match;
@@ -876,6 +885,8 @@
       }
 
       function loadTopic(index) {
+        var generation = ++topicLoadGeneration;
+        var language = helpLang;
         helpSel = index;
         renderToc();
         var topic = helpTopics[index];
@@ -885,12 +896,13 @@
         searchIndex = -1;
         helpSearchCount.textContent = '';
         helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch(appPath('/api/help/content?file=') + encodeURIComponent(topic.file) + '&lang=' + helpLang, { credentials: 'same-origin' })
+        fetch(appPath('/api/help/content?file=') + encodeURIComponent(topic.file) + '&lang=' + language, { credentials: 'same-origin' })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
           })
           .then(function (data) {
+            if (generation !== topicLoadGeneration || language !== helpLang) return;
             rawHtml = renderMarkdown(data.content || '');
             topicCache[index] = rawHtml;
             helpContent.innerHTML = rawHtml;
@@ -898,18 +910,27 @@
             if (helpSearch.value.trim() && !globalMode) applySearch(helpSearch.value.trim());
           })
           .catch(function () {
+            if (generation !== topicLoadGeneration || language !== helpLang) return;
             helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>';
           });
       }
 
       function loadHelpIndex(keyword) {
+        var generation = ++helpIndexGeneration;
+        var language = helpLang;
+        ++topicLoadGeneration;
+        topicCache = {};
+        rawHtml = null;
+        helpTopics = [];
+        helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
         helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch(appPath('/api/help/index?lang=') + helpLang, { credentials: 'same-origin' })
+        fetch(appPath('/api/help/index?lang=') + language, { credentials: 'same-origin' })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
           })
           .then(function (data) {
+            if (generation !== helpIndexGeneration || language !== helpLang) return;
             helpTopics = data || [];
             renderToc();
             if (!helpTopics.length) {
@@ -932,6 +953,7 @@
             helpLoaded = true;
           })
           .catch(function () {
+            if (generation !== helpIndexGeneration || language !== helpLang) return;
             helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>';
             helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>';
           });

@@ -96,6 +96,7 @@ from market_data_integrity import (
 from github_archive import publish_release_asset, release_asset_url
 import pbgui_purefunc
 from task_queue import (
+    _task_queue_lock,
     ensure_task_dirs,
     get_task_state_dir,
     get_job_log_path,
@@ -208,31 +209,42 @@ def _iter_days(start_day: str, end_day: str) -> list[str]:
 
 
 def _requeue_stale_running_jobs(max_age_s: int = 3600) -> None:
+    """Recover abandoned jobs under the queue lock, preserving live or launching jobs."""
     running_dir = get_task_state_dir("running")
-    pending_dir = get_task_state_dir("pending")
     now = int(time.time())
     if not running_dir.is_dir():
         return
-    for p in sorted(running_dir.glob("*.json")):
-        try:
-            # Skip jobs whose owning worker process is still alive — requeueing
-            # a job that another worker is actively running causes two workers to
-            # process the same job concurrently (doubled log entries, data races).
+    with _task_queue_lock():
+        for p in sorted(running_dir.glob("*.json")):
             try:
-                wpid = int(json.loads(p.read_text(encoding="utf-8")).get("worker_pid") or 0)
+                data = json.loads(p.read_text(encoding="utf-8"))
+                wpid = int(data.get("worker_pid") or 0)
                 if wpid > 0 and is_pid_running(wpid):
-                    _job_log(f"skipping running job {p.name} — worker PID {wpid} still alive")
                     continue
-            except Exception:
-                pass
-            st = p.stat()
-            age = now - int(st.st_mtime)
-            if age > int(max_age_s):
-                update_job_file(p, mutate=lambda o: o.update({"status": "pending", "error": "requeued after worker restart"}))
-                os.replace(p, pending_dir / p.name)
-                _job_log(f"requeued interrupted job {p.name} (age={age}s)", level="WARNING")
-        except Exception:
-            continue
+                age = now - int(p.stat().st_mtime)
+                # Moving to running and publishing a worker PID are separate
+                # steps. Never reclaim a newly claimed job during that handoff.
+                threshold = 60 if wpid > 0 else max(60, int(max_age_s))
+                if age < threshold:
+                    continue
+                cancelled = bool(data.get("cancel_requested"))
+                state = "failed" if cancelled else "pending"
+                update_job_file(p, mutate=lambda obj: obj.update({
+                    "status": state,
+                    "error": "cancelled" if cancelled else "requeued after worker exit",
+                    "worker_pid": 0,
+                    "run_started_ts": 0,
+                    "finished_ts": now if cancelled else 0,
+                    "manual_parallel": False,
+                    "run_requested": False,
+                    "run_requested_ts": 0,
+                }))
+                move_job_file(p, state)
+                _job_log(f"recovered abandoned job {p.name} to {state} (age={age}s)", level="WARNING")
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                _job_log(f"could not recover running job {p.name}: {exc}", level="WARNING")
 
 
 @dataclass
@@ -1224,6 +1236,7 @@ def start_pending_job(job_id: str) -> tuple[bool, str]:
     if not jid:
         return False, "Job ID is empty"
 
+    _requeue_stale_running_jobs(max_age_s=60)
     pending_path = get_task_state_dir("pending") / f"{jid}.json"
     obj = _load_job(pending_path)
     if not obj:
@@ -3895,9 +3908,8 @@ def main() -> int:
                 with threads_lock:
                     active_threads.pop(job_id, None)
 
-        # On startup ALL running/ files are stale (worker was killed or crashed).
-        # max_age_s=0 requeues every file regardless of mtime — even jobs that were
-        # actively updating their progress file seconds before the crash.
+        # Recover abandoned jobs at startup, retaining live workers and the
+        # short grace period for jobs whose launch is still in progress.
         _requeue_stale_running_jobs(max_age_s=0)
 
         consecutive_errors = 0
@@ -3912,6 +3924,7 @@ def main() -> int:
                     break
                 owner = refreshed_owner
 
+                _requeue_stale_running_jobs(max_age_s=60)
                 running_dir = get_task_state_dir("running")
                 running_counts: dict[str, dict[str, int]] = {}
                 for running_path in running_dir.glob("*.json"):

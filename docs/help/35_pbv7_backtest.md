@@ -335,3 +335,7 @@ The AI assistant can also open exact managed PB7 backtest resources in this Resu
 2. Enable **HLCVS Cache Cleanup**, set **Retention** and **Check interval**
 3. Click **🧹 Clean Now** for an immediate cleanup — the toast message reports freed MB
 4. **Save** to persist the automatic schedule
+
+When a Suite scenario editor is open, applying a template, resetting to Base, or applying generated training scenarios asks for confirmation before discarding unsaved edits. Cancel keeps the draft intact.
+
+If Add to Run cannot create an editor draft, Backtest shows the server error and keeps the current page open. Navigation occurs only after a valid draft ID is returned.

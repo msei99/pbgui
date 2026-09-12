@@ -7296,8 +7296,23 @@
         best1mState.dragMode = null;
       }
 
-      function setContextExchange(exchange) {
+      var contextExchangeRequestId = 0;
+      async function setContextExchange(exchange) {
+        var requestId = ++contextExchangeRequestId;
         var meta = getExchangeMeta(exchange);
+        var previousExchange = uiState.contextExchange;
+        var selector = document.getElementById('page-exchange');
+        if (settingsState.isDirty) {
+          if (selector) selector.value = previousExchange;
+          if (meta.key === previousExchange) return;
+          var confirmed = await showConfirmDialog({
+            title: 'Discard unsaved settings?',
+            message: 'Switching exchanges will discard your unsaved Market Data settings.',
+            confirmText: 'Discard and switch',
+            cancelText: 'Keep editing'
+          });
+          if (!confirmed || requestId !== contextExchangeRequestId) return;
+        }
         uiState.contextExchange = meta.key;
         var pageExchange = document.getElementById('page-exchange');
         if (pageExchange) pageExchange.value = meta.key;
@@ -8872,11 +8887,14 @@
         else viewer.close();
       }
 
+      var settingsLoadRequestId = 0;
       async function loadSettings(exchange, options) {
+        var requestId = ++settingsLoadRequestId;
         var opts = options || {};
         var exchangeKey = String(exchange || 'hyperliquid');
         try {
           var payload = await fetchJson('/settings/' + encodeURIComponent(exchangeKey));
+          if (requestId !== settingsLoadRequestId || exchangeKey !== uiState.contextExchange) return;
           settingsState.exchange = payload.exchange || exchangeKey;
           settingsState.payload = payload;
           settingsState.autoEnableNewCoins = Boolean(payload.auto_enable_new_coins);
@@ -8887,6 +8905,7 @@
           setSettingsBaseline();
           void opts;
         } catch (error) {
+          if (requestId !== settingsLoadRequestId || exchangeKey !== uiState.contextExchange) return;
           showToast(error && error.message ? error.message : 'Failed to load settings.', 'error');
         }
       }

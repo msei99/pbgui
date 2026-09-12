@@ -1,5 +1,7 @@
 # Hilfe Übersicht
 
+Die Hilfe behält das zuletzt gewählte Thema und die Sprache bei, auch wenn Anfragen in anderer Reihenfolge enden; ältere Inhalte und Suchergebnisse werden ignoriert.
+
 Dies ist die zentrale Hilfeseite für PBGui. Sie enthält allgemeine Dokumentation und Tutorials, die auf mehreren Seiten verwendet werden, z. B. Strategy Explorer (inkl. Movie Builder) und Pareto Explorer.
 
 - Wähle ein Thema aus der **Contents**-Liste.

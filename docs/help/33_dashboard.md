@@ -1,5 +1,9 @@
 # Dashboards
 
+Cancel discards the editor’s pending layout after outstanding autosaves finish. If discarding fails, the editor stays open so you can retry.
+
+Creating dashboards with selected users assigns each dashboard’s widget user filters to its target user. With several users and a custom name, names use `name_username`; with one user, the custom name is kept. Without selected users, template filters are retained.
+
 After an approved PBGui AI dashboard creation or layout change, the open Dashboard page refreshes its list and reloads the affected dashboard immediately. The reload is generation-safe: a manual dashboard switch made while the refresh is in flight is never overwritten by the delayed AI completion.
 
 The **Dashboards** page provides a fully customisable portfolio overview for your live Passivbot instances.

@@ -885,6 +885,7 @@ def test_suite_generator_applies_training_only_and_invalidates_stale_provenance(
     """Applying a preview excludes holdout windows and later manual edits clear provenance."""
     script = textwrap.dedent(
         """
+        (async () => {
         const assert = require('node:assert/strict');
         const fs = require('node:fs');
         eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
@@ -903,7 +904,7 @@ def test_suite_generator_applies_training_only_and_invalidates_stale_provenance(
           provenance: {template: 'walk_forward', holdout_scenarios: [{label: 'holdout_01'}]}
         };
 
-        _suiteApplyScenarioPreview();
+        await _suiteApplyScenarioPreview();
         let collected = suiteCollect();
         assert.deepEqual(collected.scenarios.map(item => item.label), ['train_01', 'train_02']);
         assert.equal(collected.scenario_template.template, 'walk_forward');
@@ -922,8 +923,9 @@ def test_suite_generator_applies_training_only_and_invalidates_stale_provenance(
         _suiteState.getScenarioContext = () => ({
           start_date: '2023-02-01', end_date: '2024-01-31', exchanges: ['binance']
         });
-        _suiteApplyScenarioPreview();
+        await _suiteApplyScenarioPreview();
         assert.deepEqual(_suiteState.scenarios, [{label: 'keep_current'}]);
+        })().catch(error => { console.error(error); process.exitCode = 1; });
         """
     )
     _run_node(script)

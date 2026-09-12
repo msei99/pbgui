@@ -510,6 +510,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
   var state    = { name: ORIG_NAME, rows: 1, cols: 1 };
   var allUsers = [];
   var syncTimer = null;
+  var syncInFlight = Promise.resolve();
+  var cancelling = false;
 
   /* ── DOM refs ── */
   var hdrName      = document.getElementById('hdr-name');
@@ -591,20 +593,26 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
   }
 
   function scheduleSync() {
+    if (cancelling) return;
     clearTimeout(syncTimer);
     syncTimer = setTimeout(doSync, 400);
   }
 
   function doSync() {
+    if (cancelling) return syncInFlight;
     setStatus('saving…', '');
     var payload = {};
     Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
-    apiFetch('/dashboard/pending_full?name=' + encodeURIComponent(ORIG_NAME), {
+    syncInFlight = syncInFlight.then(function () {
+      if (cancelling) return;
+      return apiFetch('/dashboard/pending_full?name=' + encodeURIComponent(ORIG_NAME), {
       method: 'POST',
       body: JSON.stringify(payload)
     }).then(function (r) {
       if (r.ok) setStatus('saved', 'saved'); else setStatus('error', 'error');
     }).catch(function () { setStatus('offline', 'error'); });
+    });
+    return syncInFlight;
   }
 
   function markViewDirty() {
@@ -2757,8 +2765,19 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     }).catch(function () { setStatus('offline', 'error'); });
   }
 
-  function doCancel() {
-    window.parent.postMessage({ type: 'pbgui_editor_cancelled', original_name: ORIG_NAME }, location.origin);
+  async function doCancel() {
+    if (cancelling) return;
+    cancelling = true;
+    clearTimeout(syncTimer);
+    try {
+      await syncInFlight;
+      var response = await apiFetch('/dashboard/pending_full?name=' + encodeURIComponent(ORIG_NAME), {method: 'DELETE'});
+      if (!response.ok) throw new Error('Could not discard dashboard draft. Please retry Cancel.');
+      window.parent.postMessage({ type: 'pbgui_editor_cancelled', original_name: ORIG_NAME }, location.origin);
+    } catch (error) {
+      cancelling = false;
+      setStatus(error.message || 'Could not discard dashboard draft.', 'error');
+    }
   }
 
   /* ── Listen for messages from parent (sidebar buttons) ── */

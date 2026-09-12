@@ -11,6 +11,8 @@ import Database as database_module
 def test_order_fetch_failure_aborts_before_database_mutation(monkeypatch, tmp_path) -> None:
     """A partial open-order snapshot must not delete previously persisted rows."""
     monkeypatch.setattr(database_module, "PBGDIR", tmp_path)
+    monkeypatch.setattr(database_module, "_resolve_ccxt_symbol_from_mapping",
+                        lambda _exchange, symbol: {"BTCUSDT": "BTC/USDT:USDT", "ETHUSDT": "ETH/USDT:USDT"}[symbol])
     db = object.__new__(database_module.Database)
     db._write_lock = threading.Lock()
     user = SimpleNamespace(name="alice", exchange="weex")

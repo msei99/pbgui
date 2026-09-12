@@ -289,3 +289,5 @@ When you multi-select several pareto rows, **Seed Selected** creates a small see
 2. Click **Continue Optimize** to seed from the full `pareto/` directory, or open **Paretos** and use **Seed Whole Result** / **Seed Selected** for more control.
 3. Adjust the draft if needed, then **Save** or **Save and Queue**.
 4. The new run starts from the saved pareto seeds, but it is still a fresh optimize run, not an exact checkpoint resume.
+
+When a Suite scenario editor is open, applying a template, resetting to Base, or applying generated training scenarios asks for confirmation before discarding unsaved edits. Cancel keeps the draft intact.

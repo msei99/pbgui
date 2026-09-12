@@ -335,3 +335,7 @@ Der AI-Assistent kann exakte verwaltete PB7-Backtest-Ressourcen ebenfalls in die
 2. **HLCVS Cache Cleanup** aktivieren, **Retention** und **Check interval** einstellen
 3. **🧹 Clean Now** für sofortige Bereinigung klicken — die Toast-Meldung zeigt die freigegebenen MB
 4. **Save** klicken, um den automatischen Zeitplan zu speichern
+
+Wenn ein Suite-Szenarioeditor geoeffnet ist, erfordern Templates, Reset to Base und Apply Training Scenarios eine Bestaetigung, bevor ungespeicherte Aenderungen verworfen werden. Abbrechen behaelt den Entwurf bei.
+
+Wenn Add to Run keinen Editorentwurf erstellen kann, zeigt Backtest den Serverfehler und behaelt die aktuelle Seite bei. Der Editor wird erst nach Erhalt einer gueltigen Entwurfs-ID geoeffnet.

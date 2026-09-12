@@ -1268,6 +1268,7 @@ var _symbolsAndTagsLoadSeq = 0;
 var _symbolsAndTagsLoadPromise = Promise.resolve();
 var _hostCapabilityGeneration = 0;
 var _hostCapabilityController = null;
+var _configLoadFailed = false;  // existing-instance config failed to load; saving is blocked
 var _editorInitPromise = null;
 var _runStrategyBotCache = { long: {}, short: {} };
 var _activeRunStrategyKind = '';
@@ -1984,8 +1985,22 @@ async function init() {
       populateForm();
       queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
     } else {
-      var cfgResp = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/config').then(function(r) { return r.json(); });
-      cfg = cfgResp.config || {};
+      var cfgResponse = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/config');
+      var cfgResp = {};
+      try {
+        cfgResp = await cfgResponse.json();
+      } catch (parseError) {
+        cfgResp = {};
+      }
+      if (!cfgResponse.ok) {
+        throw new Error((cfgResp && cfgResp.detail) || ('Could not load config: HTTP ' + cfgResponse.status));
+      }
+      if (!cfgResp || typeof cfgResp !== 'object' || Array.isArray(cfgResp)
+          || !cfgResp.config || typeof cfgResp.config !== 'object'
+          || Array.isArray(cfgResp.config) || Object.keys(cfgResp.config).length === 0) {
+        throw new Error('Could not load config: invalid or empty configuration response.');
+      }
+      cfg = cfgResp.config;
       paramStatus = cfgResp.param_status || {};
       draftOverrideConfigs = cfgResp.override_configs || {};
       var configuredHost = String(((cfg.pbgui || {}).enabled_on) || '').trim();
@@ -2012,6 +2027,11 @@ async function init() {
     document.getElementById('f-enabled-on').addEventListener('focus', refreshHostCapabilities);
 
   } catch (e) {
+    if (IS_NEW !== 'true') {
+      _configLoadFailed = true;
+      var btnSaveInit = document.getElementById('btn-save');
+      if (btnSaveInit) btnSaveInit.disabled = true;
+    }
     toast('Failed to initialize: ' + e.message, 'err');
     console.error(e);
   }
@@ -3102,11 +3122,19 @@ async function resolveRunSaveTarget(name, wasNew, expectedVersion, config) {
 
 async function saveConfig() {
   var btnSave = document.getElementById('btn-save');
+  if (_configLoadFailed) {
+    toast('Config was not loaded. Saving is disabled to prevent overwriting the instance with an empty configuration.', 'err');
+    return;
+  }
   btnSave.disabled = true;
   btnSave.innerHTML = '<span class="spinner"></span> Saving...';
   try {
     if (_editorInitPromise) await _editorInitPromise;
     await _symbolsAndTagsLoadPromise;
+    if (_configLoadFailed) {
+      toast('Config was not loaded. Reload the editor before saving.', 'err');
+      return;
+    }
     if (!ensureRawJsonValidForSave()) return;
     if (!ensureStructuredJsonFieldsValidForSave()) return;
     if (!validateExecutionSyncFieldsForSave()) return;
@@ -3174,7 +3202,7 @@ async function saveConfig() {
     toast('Save error: ' + e.message, 'err');
     console.error(e);
   } finally {
-    btnSave.disabled = false;
+    btnSave.disabled = _configLoadFailed;
     btnSave.innerHTML = '💾 Save';
   }
 }
@@ -3460,6 +3488,14 @@ async function doImport() {
         ? currentEditorVersion
         : await fetchNextInstanceVersion(INSTANCE_NAME);
     }
+    if (!window.PBGuiDialogs || typeof window.PBGuiDialogs.confirm !== 'function') {
+      throw new Error('Confirmation dialog unavailable. Reload the page and try again.');
+    }
+    if (!(await window.PBGuiDialogs.confirm({
+      title: 'Replace current editor config?',
+      message: 'Importing replaces all current editor values, including unsaved changes.',
+      confirmText: 'Replace and Import'
+    }))) return;
   } catch (e) {
     window.PBGuiEditorShared.setInlineStatusError(errEl, {
       baseClassName: 'field-status field-status-inline',

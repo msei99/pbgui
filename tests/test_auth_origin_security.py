@@ -503,7 +503,9 @@ def test_server_installs_guard_outside_cors_and_all_browser_sockets_use_auth():
                 and decorator.func.attr == "websocket" for decorator in node.decorator_list
             ):
                 sockets.append(node.name)
-                assert "authenticate_websocket(websocket)" in ast.unparse(node), (path.name, node.name)
+                push_guard = any(isinstance(decorator, ast.Name) and decorator.id == "authenticated_push_websocket"
+                                 for decorator in node.decorator_list)
+                assert push_guard or "authenticate_websocket(websocket)" in ast.unparse(node), (path.name, node.name)
     assert len(sockets) >= 13
 
 

@@ -15,7 +15,7 @@ import traceback
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, closing, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -1517,22 +1517,31 @@ def _start_db_sync_worker(job_path: str) -> None:
 
 def _recover_db_sync_task(task: dict[str, Any]) -> None:
     """Restart a persisted DB Sync whose one-shot worker died unexpectedly."""
-    if str(task.get("status") or "") != "running":
-        return
-    worker_pid = int(task.get("worker_pid") or 0)
-    if worker_pid > 0 and is_pid_running(worker_pid):
-        return
-    started = int(task.get("run_started_ts") or task.get("created_ts") or 0)
-    if int(datetime.now(timezone.utc).timestamp()) - started < 10:
-        return
-    job_id = str(task.get("id") or "")
-    if not force_fail_job(job_id, error="DB Sync worker interrupted") or not retry_failed_job(job_id):
-        return
-    from task_worker import start_pending_job
+    from task_queue import _task_queue_lock
 
-    started_ok, message = start_pending_job(job_id)
-    if not started_ok:
-        _log(SERVICE, f"failed to recover DB Sync worker {job_id}: {message}", level="WARNING")
+    with _task_queue_lock():
+        task = _task_jobs_by_id().get(str(task.get("id") or ""), {})
+        if str(task.get("status") or "") not in {"running", "pending"}:
+            return
+        worker_pid = int(task.get("worker_pid") or 0)
+        if worker_pid > 0 and is_pid_running(worker_pid):
+            return
+        started = int(task.get("run_started_ts") or task.get("created_ts") or 0)
+        if int(datetime.now(timezone.utc).timestamp()) - started < 10:
+            return
+        job_id = str(task.get("id") or "")
+        if task.get("status") == "running":
+            if not force_fail_job(job_id, error="DB Sync worker interrupted") or not retry_failed_job(job_id):
+                return
+        from task_worker import start_pending_job
+
+        try:
+            started_ok, message = start_pending_job(job_id)
+        except Exception as exc:
+            started_ok, message = False, str(exc)
+        if not started_ok:
+            force_fail_job(job_id, error=f"Failed to restart DB Sync: {message}")
+            _log(SERVICE, f"failed to recover DB Sync worker {job_id}: {message}", level="WARNING")
 
 
 def _task_job_operation(item: dict[str, Any]) -> dict[str, Any]:
@@ -1682,8 +1691,10 @@ def _ensure_schema(db_path: Path, db_name: str) -> None:
     """Initialize sync schemas with the same lock wait as subsequent writes."""
     schema = MAIN_SCHEMA if db_name == MAIN_DB_NAME else TRADES_SCHEMA
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path), timeout=30) as conn:
+    with closing(sqlite3.connect(str(db_path), timeout=30)) as conn:
         conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         for statement in schema:
             conn.execute(statement)
         conn.commit()

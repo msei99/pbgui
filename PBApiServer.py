@@ -63,6 +63,7 @@ from api.auth import (
     SessionToken,
     auth_runtime_status,
     authenticate_websocket,
+    authenticated_push_websocket,
     build_root_entry_response,
     optional_auth,
     require_auth,
@@ -1113,10 +1114,9 @@ dashboard_ws_clients: set[WebSocket] = set()
 
 
 @app.websocket("/ws/jobs")
+@authenticated_push_websocket
 async def websocket_jobs(websocket: WebSocket):
     """WebSocket endpoint for real-time job updates."""
-    if await authenticate_websocket(websocket) is None:
-        return
     active_connections.append(websocket)
     try:
         while True:
@@ -1136,12 +1136,15 @@ async def websocket_jobs(websocket: WebSocket):
         if websocket in active_connections:
             active_connections.remove(websocket)
 
+    finally:
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+
 
 @app.websocket("/ws/market-data")
+@authenticated_push_websocket
 async def websocket_market_data(websocket: WebSocket):
     """WebSocket endpoint for real-time market data status updates."""
-    if await authenticate_websocket(websocket) is None:
-        return
     exchange = websocket.query_params.get("exchange", "").lower().strip()
     if not exchange:
         await websocket.send_json({"error": "Missing exchange parameter"})
@@ -1212,13 +1215,16 @@ async def websocket_market_data(websocket: WebSocket):
         if websocket in active_connections:
             active_connections.remove(websocket)
 
+    finally:
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+
 
 @app.websocket("/ws/heatmap-watch")
+@authenticated_push_websocket
 async def websocket_heatmap_watch(websocket: WebSocket):
     """WebSocket endpoint: sends {type: 'updated', mtime: float} when data files change."""
     from api.heatmap import _latest_mtime
-    if await authenticate_websocket(websocket) is None:
-        return
     exchange = websocket.query_params.get("exchange", "")
     dataset = websocket.query_params.get("dataset", "")
     coin = websocket.query_params.get("coin", "")
@@ -1237,14 +1243,13 @@ async def websocket_heatmap_watch(websocket: WebSocket):
 
 
 @app.websocket("/ws/dashboard")
+@authenticated_push_websocket
 async def websocket_dashboard(websocket: WebSocket):
     """WebSocket endpoint for dashboard live updates.
 
     Clients receive {"type": "balance_updated"} whenever PBData writes
     fresh balance/position data to the database.
     """
-    if await authenticate_websocket(websocket) is None:
-        return
     dashboard_ws_clients.add(websocket)
     try:
         while True:
@@ -1395,7 +1400,7 @@ async def internal_notify_positions(request: Request):
 
 
 @app.post("/api/nav/request")
-async def nav_request(request: Request):
+async def nav_request(request: Request, session: SessionToken = Depends(require_auth)):
     """Universal navigation bridge.
 
     Widget iframes POST ``{page: "...", params: {...}}`` here.
@@ -1403,20 +1408,13 @@ async def nav_request(request: Request):
     ``/ws/dashboard`` WebSocket clients so the browser-side dashboard shell can
     navigate without polling.
     """
-    from api.auth import validate_token as _vt
-
-    # Accept token from header or body
-    auth = request.headers.get("Authorization", "")
-    token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
     body: dict = {}
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
-    if not token:
-        token = body.get("token", "")
-    if not _vt(token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
 
     page = body.get("page", "")
     action = body.get("action", "")

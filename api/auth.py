@@ -1,6 +1,7 @@
 """Authentication, welcome page, and setup helpers for FastAPI endpoints."""
 
 import asyncio
+from functools import wraps
 from collections import deque
 from dataclasses import dataclass, field
 import hashlib
@@ -818,6 +819,41 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[SessionToken]
     )
     return session
 
+
+
+def authenticated_push_websocket(endpoint):
+    """Own push-only endpoint, disconnect receiver and auth watchdog as one lifetime."""
+    @wraps(endpoint)
+    async def wrapped(websocket: WebSocket):
+        """Stop and drain all socket tasks on disconnect, logout, error or shutdown."""
+        session = await authenticate_websocket(websocket)
+        if session is None:
+            return
+        tasks = []
+        watchdog = _websocket_watchdogs.get(websocket)
+
+        async def receive_disconnect():
+            """Consume transport events even when the endpoint only sends updates."""
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    return
+
+        try:
+            tasks.append(asyncio.create_task(endpoint(websocket), name="websocket-push"))
+            tasks.append(asyncio.create_task(receive_disconnect(), name="websocket-disconnect"))
+            if watchdog is not None:
+                tasks.append(watchdog)
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                if not task.cancelled():
+                    task.result()
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            _unregister_websocket(websocket, session.token)
+    return wrapped
 
 async def close_websocket_sessions(token: str) -> None:
     """Immediately close every active WebSocket authenticated by *token*."""

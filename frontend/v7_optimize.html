@@ -2653,7 +2653,7 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=15"></script>
-<script src="/app/js/suite_editor.js?v=26"></script>
+<script src="/app/js/suite_editor.js?v=27"></script>
 <script src="/app/js/log_viewer_panel.js?v=43"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
@@ -10540,6 +10540,10 @@ function renderOptimizeStartDateProgress(payload) {
 }
 
 function clearOptimizeStartDateProgress() {
+  if (_optOhlcvStartDateRun && _optOhlcvStartDateRun.stopTimer) {
+    window.clearTimeout(_optOhlcvStartDateRun.stopTimer);
+    _optOhlcvStartDateRun.stopTimer = null;
+  }
   if (_optOhlcvStartDatePollTimer) {
     window.clearTimeout(_optOhlcvStartDatePollTimer);
     _optOhlcvStartDatePollTimer = null;
@@ -10677,9 +10681,14 @@ async function setOptimizeStartDateFromOhlcv(mode, triggerButton) {
 
 async function stopOptimizeStartDateLookup(silent) {
   var run = _optOhlcvStartDateRun;
-  if (!run) return;
+  if (!run || run.stopping) return;
   run.silentStop = !!silent;
   run.stopping = true;
+  run.stopTimer = window.setTimeout(function () {
+    if (_optOhlcvStartDateRun !== run) return;
+    if (!run.silentStop) toast('Timed out waiting for OHLCV lookup to stop. The backend may still be stopping.', 'err');
+    clearOptimizeStartDateProgress();
+  }, 10000);
   if (_optOhlcvStartDatePollTimer) {
     window.clearTimeout(_optOhlcvStartDatePollTimer);
     _optOhlcvStartDatePollTimer = null;

@@ -9154,12 +9154,15 @@ function addConfigToRunByName(name) {
     cfgToSend.pbgui = cfgToSend.pbgui || {};
     cfgToSend.pbgui.from_backtest_config = name;
     cfgToSend.pbgui.enabled_on = 'disabled';
-    return fetch(v7Base + '/draft', {
+    return apiFetchFrom(v7Base, '/draft', {
       method: 'POST',
       credentials: 'same-origin',
       headers: requestHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ config: cfgToSend })
-    }).then(function(r) { return r.json(); }).then(function(d) {
+    }).then(function(d) {
+      if (!d || typeof d.draft_id !== 'string' || !d.draft_id.trim()) {
+        throw new Error('Draft creation returned no draft ID');
+      }
       var editUrl = v7Base + '/edit_page?new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
@@ -9216,12 +9219,15 @@ function addToRun() {
     var cfgToSend = JSON.parse(JSON.stringify(cfg));
     cfgToSend.live = cfgToSend.live || {};
     cfgToSend.live.user = finalUser;
-    return fetch(v7Base + '/draft', {
+    return apiFetchFrom(v7Base, '/draft', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfgToSend })
-    }).then(function(r) { return r.json(); }).then(function(d) {
+    }).then(function(d) {
+      if (!d || typeof d.draft_id !== 'string' || !d.draft_id.trim()) {
+        throw new Error('Draft creation returned no draft ID');
+      }
       var editUrl = v7Base + '/edit_page?new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
@@ -9286,12 +9292,15 @@ function addToRunFromArchive() {
     var cfgToSend = JSON.parse(JSON.stringify(cfg));
     cfgToSend.live = cfgToSend.live || {};
     cfgToSend.live.user = finalUser;
-    return fetch(v7Base + '/draft', {
+    return apiFetchFrom(v7Base, '/draft', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfgToSend })
-    }).then(function(r) { return r.json(); }).then(function(d) {
+    }).then(function(d) {
+      if (!d || typeof d.draft_id !== 'string' || !d.draft_id.trim()) {
+        throw new Error('Draft creation returned no draft ID');
+      }
       var editUrl = v7Base + '/edit_page?new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
@@ -9340,12 +9349,15 @@ function addToRunFromLegacy() {
     var cfgToSend = JSON.parse(JSON.stringify(cfg));
     cfgToSend.live = cfgToSend.live || {};
     cfgToSend.live.user = finalUser;
-    return fetch(v7Base + '/draft', {
+    return apiFetchFrom(v7Base, '/draft', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfgToSend })
-    }).then(function(r) { return r.json(); }).then(function(d) {
+    }).then(function(d) {
+      if (!d || typeof d.draft_id !== 'string' || !d.draft_id.trim()) {
+        throw new Error('Draft creation returned no draft ID');
+      }
       var editUrl = v7Base + '/edit_page?new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
@@ -11055,7 +11067,7 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
   }
 }];
 </script>
-<script src="/app/js/suite_editor.js?v=24"></script>
+<script src="/app/js/suite_editor.js?v=25"></script>
 <script src="/app/js/coin_overrides_editor.js?v=26"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

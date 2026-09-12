@@ -1,7 +1,8 @@
 from pathlib import Path
 from datetime import datetime
 from User import Users, User
-from Exchange import Exchange
+from Exchange import Exchange, _resolve_ccxt_symbol_from_mapping
+from ccxt.base.errors import BadSymbol
 from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _human_log
 
@@ -804,26 +805,39 @@ class Database():
         exchange = _exchange or Exchange(user.exchange, user)
         all_orders = []
         fetch_failed = False
+        skipped_symbols = set()
+        successful_symbols = set()
         try:
             for position in positions_db:
                 try:
-                    stable_coin = position[1][-4:]
-                    orders = exchange.fetch_all_open_orders(position[1][0:-4] + f"/{stable_coin}:{stable_coin}")
+                    symbol = position[1]
+                    ccxt_symbol = _resolve_ccxt_symbol_from_mapping(user.exchange, symbol)
+                    if not ccxt_symbol:
+                        skipped_symbols.add(symbol)
+                        _human_log(SERVICE, f"DB update_orders missing symbol mapping for {user.name} pos={symbol}", level='WARNING', user=user.name)
+                        continue
+                    orders = exchange.fetch_all_open_orders(ccxt_symbol)
                     # If fetch returns None or an exception-like value, skip
                     if orders is None:
                         fetch_failed = True
-                        break
+                        continue
                     all_orders.extend(orders)
+                    successful_symbols.add(symbol)
+                except BadSymbol as e:
+                    skipped_symbols.add(position[1])
+                    _human_log(SERVICE, f"DB update_orders unsupported symbol for {user.name} pos={position[1]}: {e}", level='WARNING', user=user.name)
                 except Exception as e:
                     # Fetch failed (possibly rate limit) — log and skip this position
                     _human_log(SERVICE, f"DB update_orders fetch_all_open_orders failed for {user.name} pos={position[1]}: {e}", level='WARNING', user=user.name)
                     fetch_failed = True
-                    break
+                    continue
         finally:
             if _owns_exchange:
                 exchange.close()  # Release aiohttp resources
         if fetch_failed:
             _human_log(SERVICE, f"DB update_orders aborting without mutation for {user.name}: incomplete exchange snapshot", level='WARNING', user=user.name)
+            return
+        if skipped_symbols and not successful_symbols:
             return
         # Existing order IDs in DB (uniqueid column); use a set to avoid
         # inserting duplicates even if the DB uniqueness constraint is
@@ -835,7 +849,7 @@ class Database():
                 with self._connect() as conn:
                     # Remove orders that are not in the exchange
                     for order in orders_db:
-                        if order[6] not in ids:
+                        if order[6] not in ids and order[7] not in skipped_symbols:
                             _human_log(SERVICE, f"Removing order {order[6]} for user {user.name}", level='INFO', user=user.name)
                             self.remove_order(conn, order[0])
                     # Update orders
@@ -847,7 +861,7 @@ class Database():
                             order['price'],
                             order['side'],
                             uniqueid,
-                            order['symbol'][0:-5].replace("/", "").replace("-", ""),
+                            order['symbol'].split(":", 1)[0].replace("/", "").replace("-", ""),
                             user.name
                         ]
                         if uniqueid in ids_db:
@@ -1306,6 +1320,9 @@ class Database():
             _human_log(SERVICE, f"DB fetch_prices error {e} user={user.name}", level='ERROR', user=user.name)
 
     def fetch_balances(self, user: list):
+        """Return matching rows, or an empty result when no users are selected."""
+        if not user:
+            return []
         sql = '''SELECT * FROM "balances"
                 WHERE "balances"."user" IN ({}) '''.format(','.join('?'*len(user)))
         try:
@@ -1318,6 +1335,9 @@ class Database():
             _human_log(SERVICE, f"DB fetch_balances error {e} users={user}", level='ERROR')
 
     def select_top(self, user: list, start: str, end: str, top: int):
+        """Return matching rows, or an empty result when no users are selected."""
+        if not user:
+            return []
         if 'ALL' in user:
             sql = '''SELECT strftime('%Y-%m-%d',"timestamp" / 1000, 'unixepoch') as date, "history"."symbol" AS symbol, SUM("history"."income") AS sum FROM "history"
                     WHERE "history"."timestamp" >= ?
@@ -1854,31 +1874,38 @@ class Database():
             exchange.close()
     
     def import_from_save_income_other(self, user: User):
-        # Load data from file
-        data = []
-        src = Path(f'{PBGDIR}/data/logs')
-        with open(f'{src}/income_other_{user.name}.json', 'r') as file:
-            data = file.read()
-            data = '[' + data.replace('}{', '},{') + ']'
-            for item in json.loads(data):
-                if item['incomeType'] in ['COMMISSION', 'FUNDING_FEE']:
-                    try:
-                        with self._connect() as conn:
-                            income = [
-                                item['symbol'],
-                                item['time'],
-                                item['income'],
-                                item['tranId'],
-                                user.name
-                            ]
-                            self.add_history(conn, income)
-                    except sqlite3.Error as e:
-                        _human_log(SERVICE, f"DB import_from_save_income_other error {e}", level='ERROR')
-                else:
-                        try:
-                            _human_log(SERVICE, f"import skipped (not import) item={item}", level='DEBUG')
-                        except Exception:
-                            pass
+        """Import legacy income records in one transaction under the write lease."""
+        name = user.name
+        if not isinstance(name, str) or not name or name in {".", ".."} or any(
+            char in name for char in ("/", "\\")
+        ) or any(ord(char) < 32 or ord(char) == 127 for char in name):
+            raise ValueError("Invalid user name")
+        root = (Path(PBGDIR) / "data" / "logs").resolve()
+        source = root / f"income_other_{name}.json"
+        if source.is_symlink() or source.resolve().parent != root:
+            raise ValueError("Invalid income import path")
+        if not source.exists():
+            _human_log(SERVICE, "Income import file not found", level='WARNING', user=name)
+            return
+        try:
+            data = '[' + source.read_text().replace('}{', '},{') + ']'
+            rows = [(item['symbol'], item['time'], item['income'], item['tranId'], name)
+                    for item in json.loads(data)
+                    if item.get('incomeType') in {'COMMISSION', 'FUNDING_FEE'}]
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            _human_log(SERVICE, f"Invalid income import: {type(exc).__name__}", level='ERROR', user=name)
+            return
+        if not rows:
+            return
+        try:
+            with self._write_lock:
+                with self._connect() as conn:
+                    conn.executemany(
+                        "INSERT INTO history(symbol,timestamp,income,uniqueid,user) "
+                        "VALUES(?,?,?,?,?) ON CONFLICT(uniqueid) DO NOTHING", rows)
+        except sqlite3.Error as exc:
+            _human_log(SERVICE, f"DB import_from_save_income_other error {exc}", level='ERROR', user=name)
+
 
 def main():
     try:

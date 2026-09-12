@@ -895,7 +895,7 @@ body {
               return;
             }
             var user = pending.shift();
-            var dashName = nameInput || user;
+            var dashName = nameInput ? (users.length > 1 ? nameInput + '_' + user : nameInput) : user;
             apiGet('/dashboards/' + encodeURIComponent(dashName), function(existing) {
               if (existing && existing.config !== undefined) {
                 confirmDialog({
@@ -909,14 +909,14 @@ body {
                     createNext();
                     return;
                   }
-                  apiPost('/dashboards/from_template', {template: template, name: dashName}, function(res) {
+                  apiPost('/dashboards/from_template', {template: template, name: dashName, user: user}, function(res) {
                     if (res && res.status === 'ok') { nCreated++; lastCreatedName = dashName; } else nSkipped++;
                     createNext();
                   });
                 });
                 return;
               }
-              apiPost('/dashboards/from_template', {template: template, name: dashName}, function(res) {
+              apiPost('/dashboards/from_template', {template: template, name: dashName, user: user}, function(res) {
                 if (res && res.status === 'ok') { nCreated++; lastCreatedName = dashName; } else nSkipped++;
                 createNext();
               });

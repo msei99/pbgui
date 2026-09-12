@@ -773,11 +773,33 @@ function _suitePreviewScenarioTemplate() {
   });
 }
 
-function _suiteApplyScenarioPreview() {
+async function _suiteConfirmScenarioReplacement(action, confirmText) {
+  if (_suiteState.editIdx < 0 || !document.getElementById('suite-sc-label')) return true;
+  if (!window.PBGuiDialogs || typeof window.PBGuiDialogs.confirm !== 'function') {
+    toast('Confirmation dialog unavailable. Reload the page and try again.', 'err');
+    return false;
+  }
+  var scenarios = _suiteState.scenarios;
+  var editIdx = _suiteState.editIdx;
+  var accepted = await window.PBGuiDialogs.confirm({
+    title: 'Replace Suite scenarios?',
+    message: action + ' replaces all Suite scenarios, including the scenario currently being edited.',
+    detail: 'Unsaved changes in the open scenario editor will be discarded.',
+    confirmText: confirmText
+  });
+  return accepted && scenarios === _suiteState.scenarios && editIdx === _suiteState.editIdx;
+}
+
+async function _suiteApplyScenarioPreview() {
   var preview = _suiteState.scenarioPreview;
   if (!preview || !Array.isArray(preview.training_scenarios)) return;
   if (_suiteScenarioContextSignature(_suiteScenarioContext()) !== _suiteState.scenarioPreviewContext) {
     toast('Base dates or exchanges changed. Preview the scenario template again before applying.', 'err');
+    return;
+  }
+  if (!(await _suiteConfirmScenarioReplacement('Applying generated training scenarios', 'Apply scenarios'))) return;
+  if (preview !== _suiteState.scenarioPreview || _suiteScenarioContextSignature(_suiteScenarioContext()) !== _suiteState.scenarioPreviewContext) {
+    toast('Scenario preview changed. Preview the scenario template again before applying.', 'err');
     return;
   }
   _suiteState.enabled = true;
@@ -806,9 +828,10 @@ function _suiteToggle(on) {
 }
 
 /* ── Apply built-in template ────────────────────────────────── */
-function _suiteApplyTemplate(name) {
+async function _suiteApplyTemplate(name) {
   var t = _suiteTemplates[name];
   if (!t) return;
+  if (!(await _suiteConfirmScenarioReplacement('Applying this template', 'Apply template'))) return;
   _suiteState.scenarios = JSON.parse(JSON.stringify(t.scenarios));
   _suiteState.aggregate = JSON.parse(JSON.stringify(t.aggregate));
   _suiteState.editIdx = -1;
@@ -836,7 +859,8 @@ function _suiteApplyTemplate(name) {
 }
 
 /* ── Reset to single base scenario ──────────────────────────── */
-function _suiteResetToBase() {
+async function _suiteResetToBase() {
+  if (!(await _suiteConfirmScenarioReplacement('Resetting to the base scenario', 'Reset Suite'))) return;
   _suiteState.scenarios = [{ label: 'base' }];
   _suiteState.aggregate = { default: 'mean' };
   _suiteState.editIdx = -1;

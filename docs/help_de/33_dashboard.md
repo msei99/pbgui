@@ -1,5 +1,9 @@
 # Dashboards
 
+Cancel verwirft den Layout-Entwurf nach Abschluss laufender automatischer Speicherungen. Schlägt das Verwerfen fehl, bleibt der Editor für einen erneuten Versuch geöffnet.
+
+Beim Erstellen mit ausgewählten Benutzern werden die Benutzerfilter der Widgets auf den jeweiligen Zielbenutzer gesetzt. Bei mehreren Benutzern und einem eigenen Namen entstehen Namen nach `Name_Benutzername`; bei einem Benutzer bleibt der eigene Name erhalten. Ohne Benutzerauswahl bleiben die Vorlagenfilter erhalten.
+
 Nach einer freigegebenen PBGui-AI-Erstellung oder Layout-Aenderung aktualisiert die offene Dashboard-Seite ihre Liste und laedt das betroffene Dashboard sofort neu. Der Reload ist generation-sicher: Ein manueller Dashboard-Wechsel waehrend des laufenden Refreshs wird niemals durch den verspaeteten AI-Abschluss ueberschrieben.
 
 Die **Dashboards**-Seite bietet eine vollständig anpassbare Portfolio-Übersicht für deine aktiven Passivbot-Instanzen.

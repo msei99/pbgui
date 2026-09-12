@@ -2958,6 +2958,8 @@ def get_fetch_summary(session: SessionToken = Depends(require_auth)) -> Dict[str
 def get_prices_snapshot(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     """Return latest price per (symbol, exchange) from the prices DB table, filtered to active symbols."""
     import sqlite3 as _sqlite3
+    from contextlib import closing
+    from database_lock import acquire_database_lock, DatabaseBusyError
     try:
         # Build user→exchange map from api-keys
         user_exchange: Dict[str, str] = {}
@@ -3004,28 +3006,29 @@ def get_prices_snapshot(session: SessionToken = Depends(require_auth)) -> Dict[s
         else:
             return {"rows": []}
 
-        db_path = Path(f"{PBGDIR}/data/pbgui.db")
-        if not db_path.exists():
-            return {"rows": []}
-        with _sqlite3.connect(str(db_path), timeout=5) as conn:
-            conn.row_factory = _sqlite3.Row
-            cur = conn.cursor()
-            if active_symbols:
-                placeholders = ",".join("?" * len(active_symbols))
-                cur.execute(
-                    f"SELECT symbol, user, price, MAX(timestamp) AS ts FROM prices WHERE symbol IN ({placeholders}) GROUP BY symbol, user ORDER BY symbol, user",
-                    active_symbols,
-                )
-            elif top_n:
-                cur.execute(
-                    "SELECT symbol, user, price, MAX(timestamp) AS ts FROM prices GROUP BY symbol, user ORDER BY ts DESC LIMIT ?",
-                    (top_n,),
-                )
-            else:
-                cur.execute(
-                    "SELECT symbol, user, price, MAX(timestamp) AS ts FROM prices GROUP BY symbol, user ORDER BY symbol, user"
-                )
-            raw = [{"symbol": r["symbol"], "user": r["user"], "price": r["price"], "ts": r["ts"]} for r in cur.fetchall()]
+        with acquire_database_lock(Path(PBGDIR)):
+            db_path = (Path(PBGDIR) / "data" / "pbgui.db").resolve()
+            if not db_path.exists():
+                return {"rows": []}
+            with closing(_sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
+                conn.row_factory = _sqlite3.Row
+                cur = conn.cursor()
+                if active_symbols:
+                    placeholders = ",".join("?" * len(active_symbols))
+                    cur.execute(
+                        f"SELECT symbol, user, price, MAX(timestamp) AS ts FROM prices WHERE symbol IN ({placeholders}) GROUP BY symbol, user ORDER BY symbol, user",
+                        active_symbols,
+                    )
+                elif top_n:
+                    cur.execute(
+                        "SELECT symbol, user, price, MAX(timestamp) AS ts FROM prices GROUP BY symbol, user ORDER BY ts DESC LIMIT ?",
+                        (top_n,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT symbol, user, price, MAX(timestamp) AS ts FROM prices GROUP BY symbol, user ORDER BY symbol, user"
+                    )
+                raw = [{"symbol": r["symbol"], "user": r["user"], "price": r["price"], "ts": r["ts"]} for r in cur.fetchall()]
 
         # Collapse to best price per (symbol, exchange) — keep MAX(ts)
         best: Dict[str, Dict] = {}
@@ -3041,6 +3044,9 @@ def get_prices_snapshot(session: SessionToken = Depends(require_auth)) -> Dict[s
 
         rows = sorted(best.values(), key=lambda x: (x["symbol"], x["exchange"]))
         return {"rows": rows}
+    except DatabaseBusyError as e:
+        _log(SERVICE, f"prices-snapshot blocked: {e}", level="WARNING")
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as e:
         _log(SERVICE, f"prices-snapshot failed: {e}", level="WARNING")
         raise HTTPException(status_code=500, detail=str(e))

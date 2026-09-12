@@ -1,5 +1,7 @@
 # Market Data
 
+Switching exchanges with unsaved Settings changes asks for confirmation. Choose **Keep editing** to preserve the current exchange and edits, or **Discard and switch** to load the other exchange.
+
 This page manages PBGui market-data workflows for Hyperliquid, Binance USDM, Bybit, OKX, and Bitget, including l2Book archive downloads, TradFi symbol mapping, 1m auto-refresh loops, and Build best 1m OHLCV jobs.
 
 ## Recommended Workflow — Best Practice
