@@ -8,6 +8,35 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_gpu_runtime_labels_and_native_alias_choices() -> None:
+    """CUDA identity and accepted aliases work without changing CPU metric choices."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(_page_function(page, name) for name in (
+        "optimizeGpuRuntimeLabel", "optimizeGpuMetricSet", "metricAvailableForCurrentBackend",
+    ))
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        let backend = 'gpu';
+        const el = () => ({{value: backend}});
+        const normalizeOptimizeBackendValue = x => x;
+        const state = {{settings: {{optimize_backend_contract: {{metric_sets: {{
+          gpu_proxy: ['pnl_ratio_long_short', 'long_short_profit_ratio']
+        }}}}}}}};
+        {functions}
+        assert.equal(metricAvailableForCurrentBackend('long_short_profit_ratio'), true);
+        assert.equal(metricAvailableForCurrentBackend('pnl_ratio_long_short'), true);
+        assert.equal(metricAvailableForCurrentBackend('exact_only'), false);
+        backend = 'pymoo';
+        assert.equal(metricAvailableForCurrentBackend('exact_only'), true);
+        assert.equal(optimizeGpuRuntimeLabel({{available:true, runtime:{{accelerator:'nvidia_cuda', device_name:'Test GPU'}}}}),
+          'Host runtime: NVIDIA CUDA — Test GPU (available)');
+        assert.match(optimizeGpuRuntimeLabel({{available:true, runtime:{{accelerator:'apple_mps'}}}}), /Apple MPS/);
+        assert.match(optimizeGpuRuntimeLabel(null), /unavailable/);
+    """))
+    assert "escapeHtml(optimizeGpuRuntimeLabel(gpuCapability))" in page
+    assert "<b>Apple MPS GPU</b>" not in page
+
+
 def test_pb84_mutation_controls_round_trip_auto_explicit_and_legacy_values() -> None:
     """Both mutation probabilities stay independent, validated, and compatible with PB7."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")

@@ -34,6 +34,7 @@ from master_update_lock import (
     wait_for_master_update_barrier,
 )
 from secure_files import atomic_write_private_text, ensure_private_directory
+from pb8_gpu_install import pb8_gpu_extras
 
 from .ssh import SSHConnection
 
@@ -1263,7 +1264,8 @@ def _run_local_master_install_impl(config: LocalMasterConfig, log: LogCallback, 
         ],
         log,
     )
-    log("Installing Passivbot v8 full profile...")
+    pb8_extras = pb8_gpu_extras(pb8_dir)
+    log(f"Installing Passivbot v8 profile: {pb8_extras}...")
     _run_command(
         [
             "bash",
@@ -1273,7 +1275,7 @@ def _run_local_master_install_impl(config: LocalMasterConfig, log: LogCallback, 
             + " && "
             + shlex.quote(str(pb8_venv / "bin" / "python"))
             + " -m pip install --upgrade -e "
-            + shlex.quote(f"{pb8_dir}[full,gpu-mps]"),
+            + shlex.quote(f"{pb8_dir}[{pb8_extras}]"),
         ],
         log,
         timeout=1800,

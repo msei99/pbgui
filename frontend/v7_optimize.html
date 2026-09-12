@@ -7568,6 +7568,14 @@ function optimizeBackendUnavailableMessage(capability) {
   return reason + ' Editor preview and Save remain available; Queue and Start are blocked on this host.';
 }
 
+function optimizeGpuRuntimeLabel(capability) {
+  var runtime = capability && capability.runtime || {};
+  var accelerator = runtime.accelerator === 'nvidia_cuda' ? 'NVIDIA CUDA'
+    : runtime.accelerator === 'apple_mps' ? 'Apple MPS' : 'GPU';
+  var name = runtime.device_name ? ' — ' + String(runtime.device_name) : '';
+  return 'Host runtime: ' + accelerator + name + (capability && capability.available ? ' (available)' : ' (unavailable)');
+}
+
 function optimizeGpuDefaults() {
   var defaults = state.settings && state.settings.optimize_defaults;
   return deepClone(defaults && defaults.gpu && typeof defaults.gpu === 'object' ? defaults.gpu : {});
@@ -9337,11 +9345,12 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 
     + '<div id="optimize-gpu-section" style="display:' + (backendValue === 'gpu' ? '' : 'none') + '">'
       + '<div id="opted-gpu-runtime-warning" class="notice warning" style="display:' + (gpuCapability && gpuCapability.available === false ? '' : 'none') + ';margin-bottom:var(--sp-sm)">' + escapeHtml(optimizeBackendUnavailableMessage(gpuCapability)) + '</div>'
-      + '<div style="display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-sm)"><b>Apple MPS GPU</b><button type="button" class="tiny-btn" onclick="resetOptimizeGpuSettings()">Reset GPU defaults</button></div>'
+      + '<div style="display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-sm)"><b>GPU optimization</b><button type="button" class="tiny-btn" onclick="resetOptimizeGpuSettings()">Reset GPU defaults</button></div>'
+      + '<div class="muted-line" style="margin-bottom:var(--sp-sm)">' + escapeHtml(optimizeGpuRuntimeLabel(gpuCapability)) + '</div>'
       + '<div class="form-row cols-8 gpu-desktop-headings" style="margin-bottom:var(--sp-xs)"><div class="muted-line" style="grid-column:span 4;font-weight:600">Automatic sizing</div><div class="muted-line" style="grid-column:span 4;font-weight:600">Exact validation &amp; checkpointing</div></div>'
       + '<div class="form-row cols-8">'
         + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Automatic sizing</div>'
-        + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-auto-lean"' + (gpu.auto_lean_parallelism === false ? '' : ' checked') + '><label for="opted-gpu-auto-lean"><span data-tip="Allow PB8 to select the proven M3 lean-kernel population and dispatch envelope when all sizing fields remain automatic.">auto_lean_parallelism</span></label></div></div>'
+        + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-auto-lean"' + (gpu.auto_lean_parallelism === false ? '' : ' checked') + '><label for="opted-gpu-auto-lean"><span data-tip="Apple M3 only: allow PB8 to select its lean-kernel population and dispatch envelope when sizing fields remain automatic. This option does not tune NVIDIA CUDA.">auto_lean_parallelism</span></label></div></div>'
         + fieldNumber2('opted-gpu-population-size', 'population_size', gpu.population_size == null ? '' : gpu.population_size, 1, 'Blank keeps PB8 automatic sizing.', 1, optimizeGpuAutoPlaceholder('population_size'))
         + fieldNumber2('opted-gpu-batch-size', 'batch_size', gpu.batch_size == null ? '' : gpu.batch_size, 1, 'Blank keeps PB8 automatic dispatch sizing.', 1, optimizeGpuAutoPlaceholder('batch_size'))
         + fieldNumber2('opted-gpu-max-dispatch-bars', 'max_dispatch_candidate_bars', gpu.max_dispatch_candidate_bars == null ? '' : gpu.max_dispatch_candidate_bars, 1000000, 'Blank keeps PB8 automatic candidate-bar dispatch limits.', 1, optimizeGpuAutoPlaceholder('max_dispatch_candidate_bars'))

@@ -505,6 +505,7 @@
     </div>
 </div>
 
+<script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
 
 (function() {
@@ -533,6 +534,7 @@
     var expandedJobs = { dl: new Set(), build: new Set() };
     var activeJobs = { dl: [], build: [] };
     var currentTab = { dl: 'running', build: 'running' };
+    var deletingJobIds = new Set();
     var ws = null, wsRetryCount = 0;
 
     function authOptions(options) {
@@ -2112,8 +2114,48 @@
         }
     }
     async function deleteJob(id) {
-        if (!(await historyJobAction(id, 'Delete', '', 'DELETE'))) return;
-        ['dl','build'].forEach(function(ns) { if(currentTab[ns]!=='running') loadHistoryTab(ns, currentTab[ns]); });
+        id = String(id);
+        if (deletingJobIds.has(id)) return;
+        deletingJobIds.add(id);
+        setHistoryDeleteBusy(id, true);
+        try {
+            var dialogs = window.PBGuiDialogs;
+            if (window.parent && window.parent !== window) {
+                try { dialogs = window.parent.PBGuiDialogs || dialogs; }
+                catch (error) { console.warn('Parent dialog unavailable; using local dialog', error); }
+            }
+            if (!dialogs || typeof dialogs.confirm !== 'function') {
+                throw new Error('Confirmation dialog is unavailable. Reload the page and try again.');
+            }
+            var confirmed = await dialogs.confirm({
+                title: 'Delete job',
+                message: 'Delete job ' + id + '?',
+                detail: 'The job history and its logs will be removed. This action cannot be undone.',
+                confirmText: 'Delete'
+            });
+            if (!confirmed || !ROOT.isConnected) return;
+            if (!(await historyJobAction(id, 'Delete', '', 'DELETE'))) return;
+            if (!ROOT.isConnected) return;
+            ['dl','build'].forEach(function(ns) { if(currentTab[ns]!=='running') loadHistoryTab(ns, currentTab[ns]); });
+        } catch (error) {
+            console.error('Delete failed', error);
+            var modal = $('modal'), title = $('modal-title'), body = $('modal-body');
+            if (modal && title && body) {
+                title.textContent = 'Delete failed';
+                body.textContent = 'Job ' + id + ': ' + error.message;
+                updateModalViewportHeight();
+                modal.classList.add('active');
+            }
+        } finally {
+            deletingJobIds.delete(id);
+            setHistoryDeleteBusy(id, false);
+        }
+    }
+
+    function setHistoryDeleteBusy(id, busy) {
+        ROOT.querySelectorAll('[data-action="delete-job"]').forEach(function(button) {
+            if (button.getAttribute('data-job') === id) button.disabled = busy;
+        });
     }
     async function retryJob(id) {
         if (!(await historyJobAction(id, 'Retry', '/retry', 'POST'))) return;

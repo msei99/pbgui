@@ -140,6 +140,8 @@ Sidebar-Aktionen:
 | **Reboot VPS** | VPS neu starten |
 | **Cleanup VPS** | Alte Pakete und Logs entfernen |
 
+PB8-Updates mit Vollprofil waehlen optionale GPU-Abhaengigkeiten auf dem Zielhost: `gpu-mps` auf Apple Silicon und `gpu-cuda` unter Linux/WSL2 mit funktionierendem NVIDIA-Treiber und kompatibler PB8-Version. CPU-Hosts behalten das CPU-Vollprofil, und reine VPS-Live-Profile installieren keine GPU-Pakete. Den NVIDIA-Treiber vor dem PB8-Update installieren. Runtime-Pruefungen und GPU-Einstellungen beschreibt **PBv8 Optimize**.
+
 Der **VPS**-Inhaltsbereich enthält zusätzlich:
 - ein Setup-/Konfigurationsraster für Passwort, Swap und Firewall-Felder; **Apply VPS Changes** speichert Änderungen lokal und wendet geänderte Swap- und Firewall-Einstellungen auf der VPS an
 - **Apply VPS Changes** bleibt bei gültigen Einstellungen auch für bereits gespeicherte Zielwerte verfügbar, damit ein abgebrochener Swap-Resize erneut gestartet werden kann. PBGui fragt bei Bedarf das VPS-Benutzerpasswort ab und vergleicht vor dem Resize den Zielwert mit dem aktiven Swap. **Read VPS settings** lädt die tatsächliche entfernte Swap-Größe; bei Lesefehlern bleibt die gespeicherte Größe erhalten.

@@ -396,7 +396,15 @@ window.PBGuiAI.registerPageContext({
 
 /* ── HTTP helpers ────────────────────────────────────────── */
 function apiGet(path) {
-  return fetch(API_BASE + path).then(function(r) { return r.json(); });
+  return fetch(API_BASE + path).then(function(r) {
+    return r.json().catch(function(error) {
+      if (r.ok) throw error;
+      return {};
+    }).then(function(data) {
+      if (!r.ok) throw new Error(data && typeof data.detail === 'string' ? data.detail : ('HTTP ' + r.status));
+      return data;
+    });
+  });
 }
 function apiPost(path, body) {
   return fetch(API_BASE + path, {
@@ -624,7 +632,8 @@ function loadRotationSettings() {
     if (loading) loading.style.display = 'none';
   }).catch(function(err) {
     console.error('Failed to load rotation settings', err);
-    if (loading) loading.textContent = 'Failed to load settings.';
+    rotationSettingsLoaded = false;
+    if (loading) loading.textContent = 'Failed to load settings: ' + err.message;
   }).finally(function() { rotationSettingsLoading = false; });
 }
 

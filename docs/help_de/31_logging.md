@@ -1,5 +1,7 @@
 # Logging
 
+Wenn die Rotationseinstellungen nicht geladen werden koennen, zeigt Settings den Serverfehler beziehungsweise bei einer Antwort ohne JSON den HTTP-Status. Vorhandene Eingabewerte bleiben erhalten; der Fehler erscheint nicht als leere Logliste. Erneutes Wechseln zu Settings startet einen weiteren Ladeversuch.
+
 Der Wechsel zwischen Log Viewer und Settings erhält bearbeitete Rotationswerte. Fehlgeschlagene Speicherungen zeigen einen Fehler neben den betroffenen Einstellungen.
 
 Die Logging-Seite bietet einen Echtzeit-Log-Viewer für alle PBGui-Dienste.  

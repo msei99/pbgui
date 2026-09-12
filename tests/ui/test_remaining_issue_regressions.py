@@ -33,12 +33,81 @@ def execute(code):
 def test_history_action_errors_visible(action, failure):
     """A failed history mutation reports its error and never pretends to refresh success."""
     code = function('hl_data_actions.html','historyJobAction') + function('hl_data_actions.html',action)
+    code += function('hl_data_actions.html', 'setHistoryDeleteBusy')
     execute(code + f'const action={json.dumps(action)}, failure={json.dumps(failure)};' + r'''
 const assert=require('node:assert/strict'); const nodes={modal:{classList:{add:value=>nodes.shown=value}},'modal-title':{},'modal-body':{}};
 const $=id=>nodes[id],API_BASE='/api';const authOptions=x=>x;
+const deletingJobIds=new Set(),ROOT={isConnected:true,querySelectorAll:()=>[]};
+const window={PBGuiDialogs:{confirm:async()=>true}};
 function updateModalViewportHeight(){};console.error=()=>{};
 const fetch=async()=>{if(failure==='network')throw new Error('offline');return {ok:false,status:500,json:async()=>({detail:'denied'})};};
 (async()=>{await eval(action)('job');assert.equal(nodes.shown,'active');assert.match(nodes['modal-title'].textContent,/failed/);assert.match(nodes['modal-body'].textContent,/denied|offline/);})().catch(e=>{console.error=e=>process.stderr.write(String(e));console.error(e);process.exitCode=1;});
+''')
+
+
+@pytest.mark.parametrize('failure', ['401', '403', '500', '502', 'network'])
+def test_logging_get_failure_does_not_apply_fake_rotation_defaults(failure):
+    """HTTP and proxy failures reach the error banner without replacing form values."""
+    code = function('logging_monitor.html', 'apiGet') + function('logging_monitor.html', 'loadRotationSettings')
+    execute(code + 'const failure=' + json.dumps(failure) + ';' + r'''
+const assert=require('node:assert/strict');
+const nodes={'per-svc-loading':{style:{}},'per-svc-body':{},'def-max-mb':{value:'77'},'def-backup-count':{value:'4'}};
+const document={getElementById:id=>nodes[id],createElement:()=>{throw new Error('Should not render success');}};
+const API_BASE='/api/logging';let rotationSettingsLoaded=false,rotationSettingsLoading=false;
+console.error=()=>{};
+const fetch=async()=>{
+ if(failure==='network')throw new Error('offline');
+ return {ok:false,status:Number(failure),json:async()=>{if(failure==='502')throw new SyntaxError('HTML proxy body');return {detail:'Access failed '+failure};}};
+};
+(async()=>{loadRotationSettings();await new Promise(setImmediate);
+ assert.equal(rotationSettingsLoaded,false);assert.equal(rotationSettingsLoading,false);
+ assert.equal(nodes['def-max-mb'].value,'77');assert.equal(nodes['def-backup-count'].value,'4');
+ assert.match(nodes['per-svc-loading'].textContent,/Failed to load settings: (Access failed|HTTP 502|offline)/);
+ assert.equal(nodes['per-svc-loading'].style.display,'block');
+})().catch(e=>{process.stderr.write(String(e));process.exitCode=1;});
+''')
+
+
+def test_logging_get_preserves_success_and_rejects_malformed_success():
+    """Valid responses pass through; invalid JSON must not become an empty success."""
+    execute(function('logging_monitor.html', 'apiGet') + r'''
+const assert=require('node:assert/strict');const API_BASE='/api/logging';let malformed=false;
+const payload={default:{max_mb:15,backup_count:2},per_service:{}};
+const fetch=async()=>({ok:true,status:200,json:async()=>{if(malformed)throw new SyntaxError('bad JSON');return payload;}});
+(async()=>{assert.equal(await apiGet('/rotation'),payload);malformed=true;await assert.rejects(apiGet('/rotation'),/bad JSON/);})()
+.catch(e=>{console.error(e);process.exitCode=1;});
+''')
+
+
+@pytest.mark.parametrize('mode', ['accept', 'cancel', 'missing', 'detached', 'parent'])
+def test_hl_delete_requires_confirmation_and_blocks_duplicate_actions(mode):
+    """Only one confirmed deletion can run; cancellation and unavailable dialogs are safe."""
+    code = function('hl_data_actions.html', 'deleteJob') + function('hl_data_actions.html', 'setHistoryDeleteBusy')
+    execute(code + 'const mode=' + json.dumps(mode) + ';' + r'''
+const assert=require('node:assert/strict');let resolveDialog,resolveDelete,requests=0,prompts=0,refreshes=0;
+const button={disabled:false,getAttribute:()=> 'job'},ROOT={isConnected:true,querySelectorAll:()=>[button]};
+const deletingJobIds=new Set(),currentTab={dl:'done',build:'failed'};
+const nodes={modal:{classList:{add(){}}},'modal-title':{},'modal-body':{}},$=id=>nodes[id];
+function updateModalViewportHeight(){};console.error=()=>{};
+function loadHistoryTab(){refreshes++;}
+const dialogs={confirm:options=>{prompts++;assert.equal(options.confirmText,'Delete');return new Promise(resolve=>resolveDialog=resolve);}};
+const window=mode==='missing'?{}:{PBGuiDialogs:dialogs};
+if(mode==='parent'){window.parent={PBGuiDialogs:dialogs};window.PBGuiDialogs={confirm:()=>{throw new Error('Must use visible parent dialog');}};}
+async function historyJobAction(){requests++;return new Promise(resolve=>resolveDelete=resolve);}
+(async()=>{
+ const first=deleteJob('job');await deleteJob('job');assert.equal(requests,0);
+ if(mode==='missing'){await first;assert.match(nodes['modal-body'].textContent,/Confirmation dialog is unavailable/);}
+ else{
+  assert.equal(prompts,1);assert.equal(button.disabled,true);
+  if(mode==='detached')ROOT.isConnected=false;
+  resolveDialog(mode!=='cancel');await new Promise(setImmediate);
+  if(mode==='accept'||mode==='parent'){
+   assert.equal(requests,1);await deleteJob('job');assert.equal(requests,1);
+   resolveDelete(true);await first;assert.equal(refreshes,2);
+  }else{await first;assert.equal(requests,0);assert.equal(refreshes,0);}
+ }
+ assert.equal(button.disabled,false);assert.equal(deletingJobIds.size,0);
+})().catch(e=>{process.stderr.write(String(e));process.exitCode=1;});
 ''')
 
 

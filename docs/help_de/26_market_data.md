@@ -2,6 +2,8 @@
 
 Die Aktionen Delete, Retry und Requeue im Hyperliquid-Auftragsverlauf zeigen HTTP- und Verbindungsfehler sichtbar an.
 
+Das Loeschen eines Hyperliquid-Verlaufsjobs erfordert eine Bestaetigung, bevor der Job und seine Logs entfernt werden. Cancel behaelt den Job; wiederholte Klicks koennen waehrend der Bestaetigung oder Anfrage keine doppelten Loeschungen ausloesen.
+
 Beim Wechsel der Börse mit ungespeicherten Einstellungen erscheint eine Bestätigung. **Keep editing** behält die aktuelle Börse und Änderungen bei; **Discard and switch** verwirft sie und lädt die andere Börse.
 
 Diese Seite steuert die PBGui-Market-Data-Workflows für Hyperliquid, Binance USDM, Bybit, OKX und Bitget: l2Book-Archiv-Downloads, TradFi-Symbol-Mapping, 1m Auto-Refresh-Loops und Build best 1m OHLCV Jobs.

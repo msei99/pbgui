@@ -407,12 +407,26 @@
           - --upgrade
           - pip
 
+    - name: Select PB8 GPU dependencies on target host
+      script:
+        cmd: "pb8_gpu_install.py {{ pb8dir | quote }} --gpu {{ pb8_gpu_profile | default('auto') | quote }}"
+        executable: "{{ pb8venv }}/bin/python"
+      register: pb8_gpu_dependencies
+      changed_when: false
+      when: pb8_install_profile == 'full'
+
+    - name: Validate PB8 GPU dependency profile
+      assert:
+        that:
+          - pb8_gpu_dependencies.stdout | trim in ['full', 'full,gpu-mps', 'full,gpu-cuda']
+      when: pb8_install_profile == 'full'
+
     - name: Install PB8 full profile
       shell: |
         if [ -f "$HOME/.cargo/env" ]; then
           source "$HOME/.cargo/env"
         fi
-        "{{ pb8venv }}/bin/python" -m pip install --no-cache-dir --upgrade -e "{{ pb8dir }}[full,gpu-mps]"
+        "{{ pb8venv }}/bin/python" -m pip install --no-cache-dir --upgrade -e {{ (pb8dir ~ '[' ~ (pb8_gpu_dependencies.stdout | trim) ~ ']') | quote }}
       args:
         executable: /bin/bash
       when: pb8_install_profile == 'full'

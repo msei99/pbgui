@@ -2,6 +2,8 @@
 
 Switching between Log Viewer and Settings preserves edited rotation values. Failed rotation saves show an error next to the affected settings.
 
+If rotation settings cannot be loaded, Settings shows the server error (or HTTP status for a non-JSON response). Existing input values are preserved; the failure is not shown as an empty log list. Switch back to Settings to retry loading.
+
 The Logging page provides a real-time log viewer for all PBGui services.  
 Logs stream live via WebSocket — no page reload required.
 

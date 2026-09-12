@@ -279,7 +279,12 @@ run_as_user "source '$TARGET_HOME/.cargo/env' && source '$INSTALL_DIR/venv_pb7/b
 run_as_user "source '$INSTALL_DIR/venv_pb7/bin/activate' && cd '$INSTALL_DIR/pb7' && python -c \"import sys; sys.path.insert(0, 'src'); from rust_utils import stamp_compiled_extensions, source_fingerprint; stamp_compiled_extensions(source_fingerprint()); print('Rust source stamp updated.')\""
 
 info "Installing Passivbot v8 full profile..."
-run_as_user "source '$TARGET_HOME/.cargo/env' && '$INSTALL_DIR/venv_pb8/bin/python' -m pip install --upgrade -e '$INSTALL_DIR/pb8[full,gpu-mps]'"
+PB8_GPU_EXTRAS=$(run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' '$INSTALL_DIR/pbgui/pb8_gpu_install.py' '$INSTALL_DIR/pb8'")
+case "$PB8_GPU_EXTRAS" in
+  full|full,gpu-mps|full,gpu-cuda) ;;
+  *) err "Invalid PB8 GPU dependency profile"; exit 1 ;;
+esac
+run_as_user "source '$TARGET_HOME/.cargo/env' && '$INSTALL_DIR/venv_pb8/bin/python' -m pip install --upgrade -e '$INSTALL_DIR/pb8[$PB8_GPU_EXTRAS]'"
 run_as_user "'$INSTALL_DIR/venv_pb8/bin/passivbot' --help"
 run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' -c \"import passivbot_rust; from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)\""
 

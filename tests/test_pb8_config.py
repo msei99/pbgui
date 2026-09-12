@@ -174,9 +174,10 @@ def test_result_metrics_use_bounded_helper_cache(monkeypatch) -> None:
 
 
 def test_gpu_backend_contract_separates_registration_from_host_availability(monkeypatch) -> None:
-    """A registered Apple MPS backend must remain unavailable on Linux without importing Torch."""
+    """A registered GPU backend stays unavailable when optional Torch is missing."""
     monkeypatch.setattr(pb8_config_helper.platform, "system", lambda: "Linux")
     monkeypatch.setattr(pb8_config_helper.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(pb8_config_helper.importlib.util, "find_spec", lambda _name: None)
     monkeypatch.setattr(
         pb8_config_helper,
         "_gpu_effective_defaults",
@@ -189,7 +190,7 @@ def test_gpu_backend_contract_separates_registration_from_host_availability(monk
     assert contract["items"]["pymoo"]["available"] is True
     assert contract["items"]["gpu"]["recognized"] is True
     assert contract["items"]["gpu"]["available"] is False
-    assert contract["items"]["gpu"]["reason_code"] == "unsupported_platform"
+    assert contract["items"]["gpu"]["reason_code"] == "torch_not_installed"
     assert contract["items"]["gpu"]["effective_defaults"] == {"population_size": 1024, "batch_size": 4096}
     assert contract["metric_sets"] == {"cpu": ["adg"], "gpu_proxy": None}
 
