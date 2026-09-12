@@ -240,6 +240,7 @@
               <div class="balance-card"><div class="balance-label">Available to transfer</div><div class="balance-value" id="transferable-balance-value">-</div><div class="balance-detail">Fresh exchange snapshot</div></div>
             </div>
             <div style="height:12px"></div>
+            <div id="exchange-read-error" class="notice" role="status" hidden></div>
             <div class="field-grid">
               <div class="field" id="asset-field"><label for="policy-asset" data-tip="Settlement currency used for PnL, limits, reserves, and Live internal transfers. Available assets are constrained by the selected exchange adapter.">Settlement asset</label><select id="policy-asset" data-policy-field="asset"></select></div>
             </div>
@@ -880,6 +881,10 @@
     function renderAccountBalances(user) {
       var container = byId('exchange-balances');
       var balances = state.snapshot && state.snapshot.account_balances;
+      var readError = byId('exchange-read-error');
+      readError.hidden = !state.previewError;
+      readError.textContent = state.previewError ? state.previewError + ' Retrying automatically in 15 seconds.' : '';
+      var missingBalance = state.previewError ? 'Unavailable' : 'Loading fresh data';
       var transferPermissions = state.snapshot && state.snapshot.transfer_permissions;
       var permissionReason = transferPermissions && (transferPermissions.internal_transfer === false || transferPermissions.destination_read === false) ? text(transferPermissions.reason, 'Destination account read permission is unavailable.') : '';
       container.hidden = !user;
@@ -891,18 +896,18 @@
         destination = destination[selectedDestination];
       }
       byId('source-balance-label').textContent = user.is_vault ? 'Your Vault Equity' : source && source.label ? source.label : 'Source balance';
-      byId('source-balance-value').textContent = balances ? balanceText(source) : 'Loading fresh data';
+      byId('source-balance-value').textContent = balances ? balanceText(source) : missingBalance;
       byId('source-balance-detail').textContent = source && source.withdrawable !== null && source.withdrawable !== undefined ? 'Exchange withdrawable: ' + source.withdrawable + (source.asset ? ' ' + source.asset : '') : '';
       byId('destination-balance-label').textContent = destination && destination.label ? destination.label : 'Destination balance';
-      byId('destination-balance-value').textContent = balances ? balanceText(destination) : 'Loading fresh data';
+      byId('destination-balance-value').textContent = balances ? balanceText(destination) : missingBalance;
       byId('destination-balance-detail').textContent = permissionReason || (user.is_vault ? 'Configured Vault destination' : 'Internal transfer destination');
-      byId('transferable-balance-value').textContent = balances && balances.max_transferable !== null && balances.max_transferable !== undefined ? text(balances.max_transferable) + (source && source.asset ? ' ' + source.asset : '') : balances ? 'Unavailable' : 'Loading fresh data';
+      byId('transferable-balance-value').textContent = balances && balances.max_transferable !== null && balances.max_transferable !== undefined ? text(balances.max_transferable) + (source && source.asset ? ' ' + source.asset : '') : balances ? 'Unavailable' : missingBalance;
       if (user.is_vault) {
         var vault = state.snapshot && state.snapshot.vault;
         var vaultBalances = vault && vault.balances;
         var tvl = vaultBalances && vaultBalances.account_value;
-        byId('vault-tvl-value').textContent = tvl !== null && tvl !== undefined ? text(tvl) + ' USDC' : state.snapshot ? 'Unavailable' : 'Loading fresh data';
-        byId('vault-share-value').textContent = vault && vault.leader_fraction !== null && vault.leader_fraction !== undefined ? vaultShareText(vault.leader_fraction) : state.snapshot ? 'Unavailable' : 'Loading fresh data';
+        byId('vault-tvl-value').textContent = tvl !== null && tvl !== undefined ? text(tvl) + ' USDC' : state.snapshot ? 'Unavailable' : missingBalance;
+        byId('vault-share-value').textContent = vault && vault.leader_fraction !== null && vault.leader_fraction !== undefined ? vaultShareText(vault.leader_fraction) : state.snapshot ? 'Unavailable' : missingBalance;
       }
     }
     function testTransferEndpoints(user) {
@@ -1273,7 +1278,7 @@
         if (!isCurrentAccount(userName, generation)) return;
         renderSelectedAccount();
         setMessage(state.record ? 'Policy loaded.' : 'No saved policy. Schema defaults are ready.', 'ok');
-        scheduleAutomaticPreview(0);
+        scheduleAutomaticPreview(300);
       } catch (error) {
         if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
         renderAccountLoadError(error.message);
@@ -1710,6 +1715,32 @@
       state.previewRefreshQueued = false;
       state.previewRefreshPendingVisibility = false;
     }
+    async function requestPreview(userName, policy, accountSignal) {
+      var controller = new AbortController();
+      var timedOut = false;
+      var abort = function () { controller.abort(); };
+      if (accountSignal) {
+        accountSignal.addEventListener('abort', abort, { once: true });
+        if (accountSignal.aborted) abort();
+      }
+      var timer = window.setTimeout(function () {
+        timedOut = true;
+        controller.abort();
+      }, 60_000);
+      try {
+        return await requestJson('/evaluate/' + encodeURIComponent(userName), {
+          method: 'POST', signal: controller.signal, body: JSON.stringify({ policy: policy })
+        });
+      } catch (error) {
+        if (timedOut && !(accountSignal && accountSignal.aborted)) {
+          throw new Error('Exchange data request timed out after 60 seconds.');
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timer);
+        if (accountSignal) accountSignal.removeEventListener('abort', abort);
+      }
+    }
     async function evaluateNow() {
       var userName = state.selectedUser;
       var generation = state.accountGeneration;
@@ -1723,11 +1754,7 @@
       renderPreview();
       try {
         var policy = state.record && state.record.policy ? state.record.policy : state.schema.defaults;
-        var result = await requestJson('/evaluate/' + encodeURIComponent(userName), {
-          method: 'POST',
-          signal: state.accountController ? state.accountController.signal : undefined,
-          body: JSON.stringify({ policy: policy })
-        });
+        var result = await requestPreview(userName, policy, state.accountController ? state.accountController.signal : undefined);
         if (!isCurrentAccount(userName, generation)) return;
         state.preview = result;
         state.snapshot = result.snapshot || null;
@@ -1741,12 +1768,14 @@
         renderStatusCards();
       } catch (error) {
         if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) {
+          console.error('Profit Sweep preview failed', error);
           state.previewError = error.message;
           scheduleAutomaticPreview(15_000);
         }
       } finally {
         if (!isCurrentAccount(userName, generation)) return;
         state.previewLoading = false;
+        renderAccountBalances(state.users.find(function (item) { return item.name === userName; }) || null);
         renderPreview();
         if (state.previewRefreshQueued) {
           state.previewRefreshQueued = false;

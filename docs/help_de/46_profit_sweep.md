@@ -1,5 +1,7 @@
 # Profit Sweep
 
+Das Warten auf Exchange-Snapshots endet nach 60 Sekunden; nach 15 Sekunden wird automatisch erneut versucht. Der Tab Exchange / Vault zeigt Lesefehler an, statt leere Balance-Felder dauerhaft als ladend darzustellen. Schnelle Accountwechsel verzögern die nächste Snapshot-Anfrage kurz.
+
 Vor dem Kontowechsel wird das Verwerfen ungespeicherter Richtlinienänderungen bestätigt. Abbrechen behält das aktuelle Konto und die Änderungen bei.
 
 ## Zweck
