@@ -2075,7 +2075,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var available = filterCustomMetrics((payload && payload.available_metrics) || []);
     state.playground.customXMetric = setSelectOptions(xNode, available, state.playground.customXMetric, (payload && payload.metrics && payload.metrics.x_metric) || '');
     state.playground.customYMetric = setSelectOptions(yNode, available, state.playground.customYMetric, (payload && payload.metrics && payload.metrics.y_metric) || '');
-    state.playground.customZMetric = is3d ? setSelectOptions(zNode, available, state.playground.customZMetric, (payload && payload.metrics && payload.metrics.z_metric) || '') : '';
+    if (is3d) state.playground.customZMetric = setSelectOptions(zNode, available, state.playground.customZMetric, (payload && payload.metrics && payload.metrics.z_metric) || '');
   }
 
   function updateProjectionLayoutUi() {
@@ -2124,8 +2124,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     if (metrics.y_metric) state.playground.customYMetric = String(metrics.y_metric);
     if (state.playground.vizType === '3D Scatter' || state.playground.vizType === '3D Projections') {
       state.playground.customZMetric = metrics.z_metric ? String(metrics.z_metric) : '';
-    } else {
-      state.playground.customZMetric = '';
     }
   }
 

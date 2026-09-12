@@ -1,5 +1,7 @@
 # Balance Calculator
 
+Vor dem Ersetzen eines nicht leeren Editors durch eine Instanzkonfiguration wird nachgefragt. Abbrechen, Ladefehler und Eingaben während des Ladens erhalten die aktuelle Konfiguration.
+
 Der gemeinsame Balance Calculator schätzt das erforderliche Wallet-Guthaben für eine PBv7- oder PBv8-Konfiguration anhand genehmigter Coins, Positionszahl, Wallet-Exposure-Limit, initialer Entry-Größe und Exchange-Mindestordergrößen.
 
 ## Wie öffnet man ihn

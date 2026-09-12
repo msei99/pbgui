@@ -2089,16 +2089,38 @@
             }
         }
     }
+    async function historyJobAction(id, action, suffix, method) {
+        try {
+            var response = await fetch(API_BASE + '/jobs/' + encodeURIComponent(id) + suffix, authOptions({method:method}));
+            if (!response.ok) {
+                var payload = await response.json().catch(function() { return {}; });
+                throw new Error(payload.detail || ('HTTP ' + response.status));
+            }
+            return true;
+        } catch (error) {
+            console.error(action + ' failed', error);
+            var modal = $('modal');
+            var title = $('modal-title');
+            var body = $('modal-body');
+            if (modal && title && body) {
+                title.textContent = action + ' failed';
+                body.textContent = 'Job ' + id + ': ' + error.message;
+                updateModalViewportHeight();
+                modal.classList.add('active');
+            }
+            return false;
+        }
+    }
     async function deleteJob(id) {
-        try { await fetch(API_BASE + '/jobs/' + id, authOptions({method:'DELETE'})); } catch(e) {}
+        if (!(await historyJobAction(id, 'Delete', '', 'DELETE'))) return;
         ['dl','build'].forEach(function(ns) { if(currentTab[ns]!=='running') loadHistoryTab(ns, currentTab[ns]); });
     }
     async function retryJob(id) {
-        try { await fetch(API_BASE + '/jobs/' + id + '/retry', authOptions({method:'POST'})); } catch(e) {}
+        if (!(await historyJobAction(id, 'Retry', '/retry', 'POST'))) return;
         ['dl','build'].forEach(function(ns) { if(currentTab[ns]==='failed') loadHistoryTab(ns,'failed'); });
     }
     async function requeueJob(id) {
-        try { await fetch(API_BASE + '/jobs/' + id + '/requeue', authOptions({method:'POST'})); } catch(e) {}
+        if (!(await historyJobAction(id, 'Requeue', '/requeue', 'POST'))) return;
         ['dl','build'].forEach(function(ns) { if(currentTab[ns]==='done') loadHistoryTab(ns,'done'); });
     }
 

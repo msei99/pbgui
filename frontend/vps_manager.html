@@ -4362,7 +4362,7 @@
         return stableStringify({
           view: store.view,
           hostname: store.hostname || '',
-          ready: !!detail,
+          ready: !!detail && !detail.provisional,
           hasServerMetrics: store.view === 'vps' ? !!monitor.server : false,
           serverStale: store.view === 'vps' ? !!(monitor.server && (monitor.server.telemetry_stale || monitor.server.telemetry_fresh === false)) : false,
           hasV7Rows: store.view === 'vps' ? (Array.isArray(monitor.v7) && monitor.v7.length > 0) : false,
@@ -5124,7 +5124,7 @@
           setHtmlIfChanged('vps-status-flags', renderStatusFlags(store.detail.status || {}));
         }
         const saveBtn = document.getElementById('vps-save-btn');
-        if (saveBtn) saveBtn.disabled = !canSaveForm(ui.form || {}, ui.savedForm);
+        if (saveBtn) saveBtn.disabled = !canApplyVpsConfig(ui.form || {});
         const setupBtn = document.getElementById('vps-setup-btn');
         if (setupBtn) setupBtn.disabled = !canSetupForm(Object.assign({ hostname: store.hostname }, ui.form || {}));
       }
@@ -7622,7 +7622,7 @@
           const applyCommand = String(remoteApply.command || 'vps-apply-config');
           const applyText = String(remoteApply.command_text || 'Apply VPS Config');
           scheduleVpsDetailFetch(store.hostname);
-          switchToVpsTaskLog(store.hostname, applyCommand, applyText);
+          switchToVpsTaskLog(store.hostname, applyCommand, applyText, remoteApply);
           return;
         }
       } else if (cmd === 'save_vps_logging_config') {
@@ -9032,7 +9032,7 @@
 
     function saveVpsConfig(hostname) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
-      if ((vpsFirewallSettingsChanged(ui.form, ui.savedForm) || vpsSwapSettingsChanged(ui.form, ui.savedForm)) && !String(getEffectiveVpsUserPw(hostname) || '').trim() && !hasSessionSecret(hostname, 'user_pw')) {
+      if (!String(getEffectiveVpsUserPw(hostname) || '').trim() && !hasSessionSecret(hostname, 'user_pw')) {
         openPasswordPrompt(hostname, function () {
           saveVpsConfig(hostname);
         }, {
@@ -9042,7 +9042,7 @@
         });
         return;
       }
-      send({ cmd: 'save_vps_config', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form) });
+      send({ cmd: 'save_vps_config', hostname: hostname, form: Object.assign(buildSecretAwareForm(hostname, ui.form), { check_remote_swap: true }) });
     }
 
     function runMaster(command, commandText, extraVars) {
@@ -9328,7 +9328,7 @@
     function runVps(hostname, command, commandText, extraVars, saveConfigFirst) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
       if (saveConfigFirst !== false) {
-        send({ cmd: 'save_vps_config', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form) });
+        send({ cmd: 'save_vps_config', hostname: hostname, form: Object.assign(buildSecretAwareForm(hostname, ui.form), { check_remote_swap: true }) });
       }
       send({
         cmd: 'run_vps_command',
@@ -9673,16 +9673,16 @@
       layer.dataset.bound = '1';
     }
 
-    function switchToVpsTaskLog(hostname, command, commandText) {
+    function switchToVpsTaskLog(hostname, command, commandText, startedRun) {
       store.taskLog = {
         scope: 'vps',
         hostname: hostname || '',
         command: command || '',
         title: commandText || 'VPS command log',
-        file: getVpsTaskLogFile(hostname || '', command || ''),
+        file: getVpsTaskLogFile(hostname || '', (startedRun && startedRun.filename) || command || ''),
         browse: false,
         runKey: String(Date.now()),
-        startEmpty: true
+        startEmpty: !startedRun
       };
       store.hostname = hostname || store.hostname;
       store.view = 'vps-task-log';
@@ -10070,6 +10070,12 @@
       const hasInstallDir = !!String(form.install_dir || '').trim();
       const fwCheck = validateFirewallIps(form.firewall_ssh_ips);
       return hasUserPw && hasSwap && hasInstallDir && fwCheck.ok;
+    }
+
+    function canApplyVpsConfig(form) {
+      return !!form && !!String(form.swap || '').trim()
+        && !!String(form.install_dir || '').trim()
+        && validateFirewallIps(form.firewall_ssh_ips).ok;
     }
 
     function canSaveForm(form, savedForm) {
@@ -12646,7 +12652,8 @@
 
     function renderVpsSetupView() {
       const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
-      if (!detail) {
+      const swapOptions = (((store.state || {}).config || {}).swap_options);
+      if (!detail || detail.provisional || !detail.config || !Array.isArray(swapOptions) || !swapOptions.length) {
         sendContext();
         return `<div class='empty-state'>Waiting for VPS detail for ${esc(store.hostname || 'selected host')}...</div>`;
       }
@@ -12673,7 +12680,7 @@
           </div>`;
       }
       const canSetup = canSetupForm(Object.assign({ hostname: detail.hostname }, ui.form || {}));
-      const canSave = canSaveForm(ui.form || {}, ui.savedForm);
+      const canSave = canApplyVpsConfig(ui.form || {});
       const readSettingsLoading = !!ui.readSettingsLoading;
       const setupPending = !status.setup_ok && !(summary || {}).pbgui;
       const formHostAttr = `data-vps-host='${escAttr(detail.hostname)}'`;

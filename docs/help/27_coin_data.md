@@ -1,5 +1,7 @@
 # Coin Data
 
+Failed Coin Data loads display an error while cached data remains available; filters can be retried without reloading the page.
+
 The Coin Data page is now available in the FastAPI UI shell and focuses on symbol mapping quality, CoinMarketCap coverage, and exchange trading constraints without changing the underlying CoinData service logic.
 
 ## What this page does

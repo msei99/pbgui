@@ -1,5 +1,7 @@
 # Strategy Explorer - Hilfe
 
+Abgeschlossene Simulationsplots und Ausführungen bleiben beim Zurückkehren zur Simulation sichtbar. Simulation und Compare können nicht gleichzeitig laufen.
+
 Strategy Explorer ist die gemeinsame visuelle Debugging- und Analyse-GUI fuer PB7- und PB8-Strategien. Beide Versionen verwenden denselben Seitenrahmen und Workflow; versionsspezifische Engines, Felder, Labels und nicht verfuegbare Controls passen sich automatisch an.
 
 - Ein **Snapshot** zu einer gewaehlten **Analysis Time**.

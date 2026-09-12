@@ -1,5 +1,7 @@
 # Transfers
 
+Beim Aktualisieren der Kontovorschau bleibt die gewählte Transferroute erhalten, sofern sie verfügbar ist. Ein ungeklärter Transfer behält für einen sicheren erneuten Versuch seine ursprüngliche Route.
+
 ## Zweck
 
 **System > Transfers** bietet ausdrueckliche manuelle Transfers zwischen festen internen Accounts. Die Seite akzeptiert keine externe Adresse und veraendert weder Profit-Sweep-Due noch Baselines, High-Water Marks oder bestaetigte Sweep-Summen.

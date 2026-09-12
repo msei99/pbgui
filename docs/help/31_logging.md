@@ -1,5 +1,7 @@
 # Logging
 
+Switching between Log Viewer and Settings preserves edited rotation values. Failed rotation saves show an error next to the affected settings.
+
 The Logging page provides a real-time log viewer for all PBGui services.  
 Logs stream live via WebSocket — no page reload required.
 

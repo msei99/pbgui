@@ -642,6 +642,21 @@
         setStatus('sync-status', err.message, 'err');
       });
     }
+    var syncBaseline = '';
+    var syncEditorGeneration = 0;
+    var syncDiscardRequest = 0;
+    function syncFingerprint(payload) {
+      var value = Object.assign({}, payload || syncPayload());
+      value.users = (value.users || []).slice().sort();
+      value.targets = (value.targets || []).slice().sort();
+      return JSON.stringify(value);
+    }
+    async function confirmSyncDiscard() {
+      var request = ++syncDiscardRequest;
+      if (!el('sync-editor').classList.contains('visible') || !syncBaseline || syncFingerprint() === syncBaseline) return true;
+      var accepted = await confirmModal('Discard changes', 'Discard unsaved sync job changes?', 'The saved schedule is unchanged.', false);
+      return accepted && request === syncDiscardRequest;
+    }
     function resetSyncForm() {
       state.syncJobId = '';
       el('sync-name').value = '';
@@ -651,20 +666,26 @@
       restoreSelection('sync-users', []);
       renderSyncJobList();
       resetProgress('sync-progress');
+      syncBaseline = syncFingerprint();
       setStatus('sync-status', 'Create a new sync job or select an existing one.');
     }
     function openSyncEditor(title) {
       el('sync-editor').classList.add('visible');
       el('sync-editor-title').textContent = title || 'Sync Job Editor';
     }
-    function closeSyncEditor() {
+    async function closeSyncEditor(force) {
+      if (force !== true && !(await confirmSyncDiscard())) return;
+      ++syncEditorGeneration;
+      syncBaseline = '';
       state.syncJobId = '';
       el('sync-editor').classList.remove('visible');
       renderSyncJobList();
       resetProgress('sync-progress');
       setStatus('sync-status', 'Select a sync job to edit it, or click New Job to create one.');
     }
-    function newSyncJob() {
+    async function newSyncJob() {
+      if (!(await confirmSyncDiscard())) return;
+      ++syncEditorGeneration;
       resetSyncForm();
       openSyncEditor('New Sync Job');
       loadUsers(el('sync-source').value, 'sync-users', 'sync-status');
@@ -713,7 +734,9 @@
         row.classList.toggle('selected', row.dataset.jobId === state.syncJobId);
       });
     }
-    function selectSyncJob(jobId) {
+    async function selectSyncJob(jobId) {
+      if (!(await confirmSyncDiscard())) return;
+      var generation = ++syncEditorGeneration;
       const job = (state.syncJobs || []).find(function (item) { return item.id === jobId; });
       if (!job) { resetSyncForm(); return; }
       state.syncJobId = job.id;
@@ -725,7 +748,9 @@
       el('sync-interval').value = String(job.interval_seconds || 300);
       el('sync-enabled').checked = !!job.enabled;
       renderSyncTargets(job.targets || []);
+      syncBaseline = syncFingerprint(Object.assign({}, syncPayload(), {users: (job.users || []).slice()}));
       loadUsers(el('sync-source').value, 'sync-users', 'sync-status').then(function () {
+        if (generation !== syncEditorGeneration) return;
         restoreSelection('sync-users', job.users || []);
         setStatus('sync-status', syncJobStatusText(job), job.last_error ? 'err' : 'ok');
       });
@@ -735,7 +760,7 @@
         state.syncJobs = data.jobs || [];
         renderSyncJobList();
         if (quiet) return;
-        if (state.syncJobId) selectSyncJob(state.syncJobId);
+        if (state.syncJobId) return;
         else setStatus('sync-status', 'Loaded ' + state.syncJobs.length + ' sync job(s).', 'ok');
       }).catch(function (err) { setStatus('sync-status', err.message, 'err'); });
     }
@@ -913,35 +938,51 @@
       node.className = 'progress-card';
       node.innerHTML = '';
     }
-    function pollOperation(operationId, statusId, progressId, doneCallback) {
+    const activeOperations = Object.create(null);
+    const operationButtons = {'cleanup-status':'cleanup-run','users-status':'users-run','db-status':'db-run','dash-status':'dash-run','sync-status':'sync-run','backup-status':'backup-restore'};
+    function pollOperation(operationId, statusId, progressId) {
       return apiFetch('/operations/' + encodeURIComponent(operationId)).then(function (data) {
         const operation = data.operation || {};
         renderProgress(progressId, operation);
-        if (operation.status === 'done') {
-          setStatus(statusId, operation.result || {}, 'ok');
-          if (typeof doneCallback === 'function') doneCallback(operation.result || {});
-          return;
+        if (operation.status === 'done' || operation.status === 'error') {
+          delete activeOperations[statusId];
+          if (operation.status === 'error') throw new Error(operation.error || 'Operation failed.');
+          return operation.result || {};
         }
-        if (operation.status === 'error') {
-          setStatus(statusId, operation.error || 'Operation failed.', 'err');
-          return;
-        }
-        setTimeout(function () { pollOperation(operationId, statusId, progressId, doneCallback); }, 700);
-      }).catch(function (err) { setStatus(statusId, err.message, 'err'); });
+        return new Promise(function(resolve) { setTimeout(resolve, 700); }).then(function() {
+          return pollOperation(operationId, statusId, progressId);
+        });
+      });
     }
     function startOperation(path, payload, statusId, progressId, doneCallback) {
-      setStatus(statusId, 'Starting operation...');
-      resetProgress(progressId);
-      return postJson(path, payload).then(function (data) {
-        const operation = data.operation;
-        if (!operation || !operation.id) {
-          setStatus(statusId, data, 'ok');
-          if (typeof doneCallback === 'function') doneCallback(data);
-          return;
-        }
-        renderProgress(progressId, operation);
-        pollOperation(operation.id, statusId, progressId, doneCallback);
-      }).catch(function (err) { setStatus(statusId, err.message, 'err'); });
+      var active = activeOperations[statusId];
+      if (active && active.promise) return active.promise;
+      var button = el(operationButtons[statusId]);
+      if (button) button.disabled = true;
+      active = active || {id: null};
+      activeOperations[statusId] = active;
+      setStatus(statusId, active.id ? 'Resuming operation status...' : 'Starting operation...');
+      var request;
+      if (active.id) request = pollOperation(active.id, statusId, progressId);
+      else {
+        resetProgress(progressId);
+        request = postJson(path, payload).then(function(data) {
+          if (!data.operation || !data.operation.id) { delete activeOperations[statusId]; return data; }
+          active.id = data.operation.id;
+          return pollOperation(active.id, statusId, progressId);
+        });
+      }
+      active.promise = request.then(function(result) {
+        setStatus(statusId, result, 'ok');
+        if (typeof doneCallback === 'function') return doneCallback(result);
+      }).catch(function(error) {
+        setStatus(statusId, error.message + (active.id && activeOperations[statusId] ? ' Click Run to resume status checking.' : ''), 'err');
+        if (!active.id) delete activeOperations[statusId];
+      }).finally(function() {
+        active.promise = null;
+        if (button) button.disabled = false;
+      });
+      return active.promise;
     }
 
     document.querySelectorAll('.sb-btn[data-panel]').forEach(function (btn) {
@@ -1117,10 +1158,15 @@
     };
     el('sync-save').onclick = function () {
       resetProgress('sync-progress');
-      postJson('/sync/jobs', syncPayload()).then(function (data) {
+      var generation = syncEditorGeneration;
+      var payload = syncPayload();
+      postJson('/sync/jobs', payload).then(function (data) {
+        if (generation !== syncEditorGeneration) return;
         state.syncJobId = data.job && data.job.id ? data.job.id : '';
+        payload.id = state.syncJobId;
+        syncBaseline = syncFingerprint(payload);
         setStatus('sync-status', data.job || data, 'ok');
-        loadSyncJobs();
+        loadSyncJobs(true);
       }).catch(function (err) { setStatus('sync-status', err.message, 'err'); });
     };
     el('sync-run').onclick = function () {
@@ -1138,7 +1184,7 @@
         if (!ok) return;
         apiFetch('/sync/jobs/' + encodeURIComponent(state.syncJobId), { method: 'DELETE' }).then(function (data) {
           state.syncJobId = '';
-          closeSyncEditor();
+          closeSyncEditor(true);
           loadSyncJobs().then(function () { setStatus('sync-status', data, 'ok'); });
         }).catch(function (err) { setStatus('sync-status', err.message, 'err'); });
       });

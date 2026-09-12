@@ -1,5 +1,7 @@
 # Pareto Explorer (PBv7 / PBv8)
 
+Benutzerdefinierte Z-Achsen-Metriken bleiben in 2D-Ansichten erhalten und werden beim Wechsel zurück zu 3D wieder verwendet.
+
 Der Pareto Explorer hilft dir, PBv7- und PBv8-Optimierungsergebnisse zu analysieren, Trade-offs zu vergleichen, Configs zu selektieren und Folge-Optimize-Presets zu erstellen. Er ist fuer Multi-Objective-Ergebnisse gedacht, bei denen keine einzelne Metrik die ganze Antwort liefert.
 
 ## Wo du ihn öffnest

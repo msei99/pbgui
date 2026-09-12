@@ -1,5 +1,7 @@
 # PBv8 Run
 
+Backup-retention responses preserve values typed while loading. Pending Delete and forced-mode actions cannot close a later dialog. Dynamic Ignore previews refresh when tags change.
+
 If an existing instance configuration cannot be loaded, the editor reports the error and disables Save. Reload the editor after resolving the load error.
 
 PBv8 Run manages Passivbot V8 live instances. PB7 and PB8 Run use the same editor template; a version adapter maps the visible controls to the correct config paths and API contracts.

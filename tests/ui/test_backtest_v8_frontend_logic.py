@@ -443,6 +443,7 @@ def test_v7_run_manual_review_conversion_opens_unsaved_pb8_editor_draft() -> Non
         f"""
         const assert = require('node:assert/strict');
         let requestBody = null;
+        let conversionBusy = false;
         const BASE_PREFIX = '/mounted';
         const window = {{
           location: {{origin: 'https://example.test', href: ''}},

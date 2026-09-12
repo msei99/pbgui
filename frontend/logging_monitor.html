@@ -403,7 +403,12 @@ function apiPost(path, body) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
-  }).then(function(r) { return r.json(); });
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+      return data;
+    });
+  });
 }
 
 function htmlEscape(value) {
@@ -518,6 +523,8 @@ async function purgeCurrentFile() {
 }
 
 /* ── Settings panel ──────────────────────────────────────── */
+var rotationSettingsLoaded = false;
+var rotationSettingsLoading = false;
 function showView(view) {
   var panel = document.getElementById('settings-panel');
   var logView = document.getElementById('log-view');
@@ -529,7 +536,7 @@ function showView(view) {
     logView.style.display = 'none';
     btnLogs.classList.remove('active');
     btnSettings.classList.add('active');
-    loadRotationSettings();
+    if (!rotationSettingsLoaded && !rotationSettingsLoading) loadRotationSettings();
   } else {
     settingsVisible = false;
     panel.classList.remove('visible');
@@ -540,6 +547,7 @@ function showView(view) {
 }
 
 function loadRotationSettings() {
+  rotationSettingsLoading = true;
   var loading = document.getElementById('per-svc-loading');
   var tbody = document.getElementById('per-svc-body');
   if (loading) loading.style.display = 'block';
@@ -612,22 +620,29 @@ function loadRotationSettings() {
         tbody.appendChild(tr);
       });
     }
+    rotationSettingsLoaded = true;
     if (loading) loading.style.display = 'none';
   }).catch(function(err) {
     console.error('Failed to load rotation settings', err);
     if (loading) loading.textContent = 'Failed to load settings.';
-  });
+  }).finally(function() { rotationSettingsLoading = false; });
 }
 
 function saveManagedScope(scopeId) {
   var maxMb = numberOrDefault(document.getElementById('managed-mb-' + scopeId).value, 10, 1);
   var copies = numberOrDefault(document.getElementById('managed-bc-' + scopeId).value, 0, 0);
   apiPost('/rotation', { scope: 'managed:' + scopeId, max_mb: maxMb, backup_count: copies }).then(function(data) {
-    if (!data.success) return;
+    if (!data.success) throw new Error(data.error || data.detail || 'Save failed');
     var message = document.getElementById('managed-msg-' + scopeId);
+    message.style.color = '';
     message.textContent = data.apply && data.apply.message ? data.apply.message : 'Saved';
     message.classList.add('visible');
     setTimeout(function() { message.classList.remove('visible'); }, 2000);
+  }).catch(function(error) {
+    var message = document.getElementById('managed-msg-' + scopeId);
+    message.textContent = 'Save failed: ' + error.message;
+    message.style.color = '#fca5a5';
+    message.classList.add('visible');
   });
 }
 
@@ -652,11 +667,17 @@ function saveService(svc, maxInput, copiesInput, msgEl) {
   var bc    = numberOrDefault(copiesInput.value, 0, 0);
   apiPost('/rotation', { scope: svc, max_mb: maxMb, backup_count: bc })
     .then(function(data) {
+      if (!data.success) throw new Error(data.error || data.detail || 'Save failed');
       if (data.success) {
+        msgEl.style.color = '';
         msgEl.textContent = data.apply && data.apply.message ? data.apply.message : 'Saved';
         msgEl.classList.add('visible');
         setTimeout(function() { msgEl.classList.remove('visible'); }, 2000);
       }
+    }).catch(function(error) {
+      msgEl.textContent = 'Save failed: ' + error.message;
+      msgEl.style.color = '#fca5a5';
+      msgEl.classList.add('visible');
     });
 }
 

@@ -1,5 +1,7 @@
 # Pareto Explorer (PBv7 / PBv8)
 
+Custom Z-axis metrics are retained while viewing 2D plots and restored when returning to 3D.
+
 Pareto Explorer helps you analyze PBv7 and PBv8 optimize results, compare tradeoffs, shortlist configs, and create follow-up Optimize presets. It is designed for multi-objective results where no single metric is the whole answer.
 
 ## Where to Open It

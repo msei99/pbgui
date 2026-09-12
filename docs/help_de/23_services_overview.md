@@ -1,5 +1,7 @@
 # PBGUI Services Übersicht
 
+Schlägt das Laden der PBData-Einstellungen fehl, zeigt das Panel einen Fehler und einen Retry-Button.
+
 Die Services-Seite zeigt und steuert alle PBGui-Hintergrunddienste an einem Ort.
 
 ## Service-Übersicht

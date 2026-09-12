@@ -1,5 +1,7 @@
 # PBv8 Run
 
+Antworten zu Backup-Aufbewahrungswerten erhalten während des Ladens eingegebene Werte. Laufende Delete- und Forced-Mode-Aktionen können keinen späteren Dialog schließen. Dynamic-Ignore-Vorschauen aktualisieren sich bei Tag-Änderungen.
+
 Kann die Konfiguration einer bestehenden Instanz nicht geladen werden, zeigt der Editor einen Fehler und sperrt Save. Nach Behebung des Ladefehlers muss der Editor neu geladen werden.
 
 PBv8 Run verwaltet Passivbot-V8-Live-Instanzen. PB7 und PB8 Run verwenden dasselbe Editor-Template; ein Versionsadapter bildet die sichtbaren Felder auf die passenden Config-Pfade und API-Vertraege ab.

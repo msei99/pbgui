@@ -245,6 +245,7 @@ body {
 </div>
 
 <!-- Globals injected server-side -->
+<script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
   var API_BASE     = "%%API_BASE%%";
   window.PBGUI_BASE_PREFIX = "%%BASE_PREFIX%%";
@@ -327,13 +328,24 @@ body {
   }
 
   // ── Load instance config ────────────────────────────────
-  function loadInstanceConfig(inst) {
+  var lastInstanceSelection = '';
+  async function loadInstanceConfig(inst) {
     if (!inst || !inst.name || !inst.version) return;
     var generation = ++configLoadGeneration;
-    configEditor.value = '';
+    var previousText = configEditor.value;
+    if (previousText.trim()) {
+      var accepted = window.PBGuiDialogs && await window.PBGuiDialogs.confirm({
+        title: 'Replace editor config?',
+        message: 'Loading this instance will replace the config currently in the editor.',
+        confirmText: 'Replace and load'
+      });
+      if (generation !== configLoadGeneration) return;
+      if (!accepted) { selInstance.value = lastInstanceSelection; btnCalc.disabled = false; calcStatus.textContent = ''; return; }
+    }
+    var requestedSelection = selInstance.value;
     btnCalc.disabled = true;
     calcStatus.innerHTML = '<span class="spinner"></span> Loading config...';
-    fetch(API_BASE + '/load-config', {
+    return fetch(API_BASE + '/load-config', {
       method: 'POST',
       credentials: 'same-origin',
       headers: authHeaders(),
@@ -347,6 +359,8 @@ body {
     })
     .then(function(data) {
       if (generation !== configLoadGeneration) return;
+      if (configEditor.value !== previousText) { selInstance.value = lastInstanceSelection; btnCalc.disabled = false; calcStatus.textContent = 'Editor changed; instance config was not applied.'; return; }
+      lastInstanceSelection = requestedSelection;
       configEditor.value = JSON.stringify(data.config, null, 4);
       selExchange.value = data.exchange || '';
       btnCalc.disabled = false;
@@ -356,6 +370,7 @@ body {
       if (generation !== configLoadGeneration) return;
       btnCalc.disabled = false;
       calcStatus.textContent = '';
+      selInstance.value = lastInstanceSelection;
       showError('Failed to load instance config: ' + (e.message || e));
     });
   }

@@ -1,5 +1,7 @@
 # Transfers
 
+Refreshing an account preview preserves its selected transfer route when that route remains available. An unresolved transfer retains its original route for a safe retry.
+
 ## Purpose
 
 **System > Transfers** provides explicit manual transfers between fixed internal accounts. It never accepts an external address and does not change Profit Sweep due amounts, baselines, high-water marks, or confirmed sweep totals.

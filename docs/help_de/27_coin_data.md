@@ -1,5 +1,7 @@
 # Coin Data
 
+Fehlgeschlagene Coin-Data-Abfragen zeigen einen Fehler, während zwischengespeicherte Daten verfügbar bleiben; Filter können ohne Neuladen erneut angewendet werden.
+
 Die Coin-Data-Seite ist jetzt in der FastAPI-UI verfuegbar und konzentriert sich auf Mapping-Qualitaet, CoinMarketCap-Abdeckung und Exchange-Limits, ohne die eigentliche CoinData-Service-Logik zu veraendern.
 
 ## Was diese Seite macht

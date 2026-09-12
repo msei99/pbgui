@@ -1,5 +1,7 @@
 # Balance Calculator
 
+Loading an instance asks before replacing non-empty editor content. Cancel, load failures, and edits made while loading preserve the current configuration.
+
 The shared Balance Calculator estimates the wallet balance required to run a PBv7 or PBv8 configuration from its approved coins, position count, wallet exposure limit, initial entry size, and exchange minimum order sizes.
 
 ## How to open it

@@ -1269,7 +1269,8 @@ html, body {
             editBanner.classList.remove('visible');
             contentLoading.style.display = 'flex';
             contentFrame.classList.remove('visible');
-            contentFrame.src = '';
+            contentFrame.onload = null;
+            contentFrame.src = 'about:blank';
             renderToolbar();
           }
         });

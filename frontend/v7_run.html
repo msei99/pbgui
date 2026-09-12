@@ -899,10 +899,24 @@ function render() {
     if (Array.isArray(vb)) vb = vb.join(',');
     if (va == null) va = '';
     if (vb == null) vb = '';
-    if (typeof va === 'string') { va = va.toLowerCase(); vb = ('' + vb).toLowerCase(); }
-    var cmp = va < vb ? -1 : (va > vb ? 1 : 0);
+    var cmp;
+    if (['version', 'running_version', 'twe'].indexOf(sort.col) >= 0) {
+      var numbers = function(value) {
+        var matches = String(value).match(/-?\d+(?:\.\d+)?/g);
+        return matches ? matches.map(Number) : [];
+      };
+      var na = numbers(va), nb = numbers(vb);
+      cmp = 0;
+      for (var n = 0; n < Math.max(na.length, nb.length); n++) {
+        if (n >= na.length) { cmp = -1; break; }
+        if (n >= nb.length) { cmp = 1; break; }
+        if (na[n] !== nb[n]) { cmp = na[n] < nb[n] ? -1 : 1; break; }
+      }
+    } else {
+      cmp = String(va).localeCompare(String(vb), undefined, {numeric: true, sensitivity: 'base'});
+    }
     if (cmp !== 0) return sort.asc ? cmp : -cmp;
-    return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, {numeric: true, sensitivity: 'base'});
   });
 
   document.getElementById('instance-count').textContent =
@@ -1035,7 +1049,10 @@ function setV8RunConversionStatus(message) {
   status.textContent = message;
 }
 
+var conversionBusy = false;
 async function convertInstanceToV8(name) {
+  if (conversionBusy) return;
+  conversionBusy = true;
   var targetName = String(name || '').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 120) + '_v8';
   setV8RunConversionStatus('Converting V7 Run config with PB8...');
   try {
@@ -1080,6 +1097,8 @@ async function convertInstanceToV8(name) {
       detail: v8RunMigrationDetail(error),
       confirmText: 'OK'
     });
+  } finally {
+    conversionBusy = false;
   }
 }
 
@@ -1111,6 +1130,10 @@ function confirmDelete(name) {
 
 function executeDelete(name) {
   var confirmBtn = document.getElementById('modal-confirm');
+  if (confirmBtn && confirmBtn.disabled) return;
+  var cancelBtn = document.getElementById('modal-cancel');
+  if (cancelBtn) cancelBtn.disabled = true;
+  var ownedModal = document.getElementById('modal-root').firstElementChild;
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Deleting\u2026'; }
   apiFetch('/instances/' + encodeURIComponent(name), { method: 'DELETE' }).then(function(res) {
     if (res.status === 409) {
@@ -1121,7 +1144,7 @@ function executeDelete(name) {
     }
     return res.json();
   }).then(function(data) {
-    closeModal();
+    if (document.getElementById('modal-root').firstElementChild === ownedModal) closeModal();
     var hostInfo = '';
     if (data.hosts) {
       var ok = 0, fail = 0;
@@ -1138,7 +1161,7 @@ function executeDelete(name) {
     if (rowMap[name]) { rowMap[name].tr.remove(); delete rowMap[name]; }
     render();
   }).catch(function(e) {
-    closeModal();
+    if (document.getElementById('modal-root').firstElementChild === ownedModal) closeModal();
     toast('Delete failed: ' + e.message, 'err');
   });
 }
@@ -1205,6 +1228,10 @@ function confirmForcedMode(name, mode, expectedVersion) {
 
 function executeForcedMode(name, mode, actionText, expectedVersion) {
   var confirmBtn = document.getElementById('modal-confirm');
+  if (confirmBtn && confirmBtn.disabled) return;
+  var cancelBtn = document.getElementById('modal-cancel');
+  if (cancelBtn) cancelBtn.disabled = true;
+  var ownedModal = document.getElementById('modal-root').firstElementChild;
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Syncing...'; }
   apiFetch('/instances/' + encodeURIComponent(name) + '/forced-mode', {
     method: 'POST',
@@ -1216,11 +1243,11 @@ function executeForcedMode(name, mode, actionText, expectedVersion) {
     }
     return res.json();
   }).then(function(data) {
-    closeModal();
+    if (document.getElementById('modal-root').firstElementChild === ownedModal) closeModal();
     toast(actionText + ' published for ' + name + ' (v' + data.version + ')', 'ok');
     loadInstances();
   }).catch(function(e) {
-    closeModal();
+    if (document.getElementById('modal-root').firstElementChild === ownedModal) closeModal();
     toast(actionText + ' failed: ' + e.message, 'err');
   });
 }
@@ -1362,20 +1389,26 @@ function openBackups() {
 }
 
 var _retSavedVal = 50;
+var _retentionGeneration = 0;
+var _retentionEditGeneration = 0;
 
 function fetchRetention() {
+  var generation = ++_retentionGeneration;
+  var editGeneration = _retentionEditGeneration;
   apiFetch('/backup-settings').then(function(res) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(data) {
+    if (generation !== _retentionGeneration) return;
     var inp = document.getElementById('backup-retention');
     var v = data.max_versions || 50;
     _retSavedVal = v;
-    if (inp) { inp.value = v; inp.style.color = '#4caf50'; }
+    if (inp && editGeneration === _retentionEditGeneration) { inp.value = v; inp.style.color = '#4caf50'; }
   }).catch(function() {
+    if (generation !== _retentionGeneration) return;
     var inp = document.getElementById('backup-retention');
     _retSavedVal = 50;
-    if (inp) { inp.value = 50; inp.style.color = '#4caf50'; }
+    if (inp && editGeneration === _retentionEditGeneration) { inp.value = 50; inp.style.color = '#4caf50'; }
   });
 }
 
@@ -1389,6 +1422,7 @@ function stepRetention(dir) {
 }
 
 function markRetentionDirty() {
+  ++_retentionEditGeneration;
   var inp = document.getElementById('backup-retention');
   if (!inp) return;
   var cur = parseInt(inp.value, 10);
@@ -1396,6 +1430,8 @@ function markRetentionDirty() {
 }
 
 function saveRetention() {
+  var generation = ++_retentionGeneration;
+  var editGeneration = _retentionEditGeneration;
   var inp = document.getElementById('backup-retention');
   var msg = document.getElementById('backup-retention-msg');
   if (!inp) return;
@@ -1409,12 +1445,16 @@ function saveRetention() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(data) {
+    if (generation !== _retentionGeneration) return;
     _retSavedVal = data.max_versions;
-    inp.value = data.max_versions;
-    inp.style.color = '#4caf50';
+    if (editGeneration === _retentionEditGeneration) {
+      inp.value = data.max_versions;
+      inp.style.color = '#4caf50';
+    }
     if (msg) { msg.textContent = 'Saved'; msg.style.color = '#4caf50'; }
     setTimeout(function() { if (msg) msg.textContent = ''; }, 2000);
   }).catch(function(e) {
+    if (generation !== _retentionGeneration) return;
     if (msg) { msg.textContent = 'Error: ' + e.message; msg.style.color = '#f44336'; }
   });
 }

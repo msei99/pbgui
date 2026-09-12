@@ -1227,6 +1227,20 @@
     }
     async function selectAccount(userName) {
       if (!state.users.some(function (user) { return user.name === userName; })) return;
+      var selectionId = state.accountSelectionId = (state.accountSelectionId || 0) + 1;
+      var policyDirty = false;
+      if (state.selectedUser && state.policyBaseline) {
+        try { policyDirty = policyFingerprint() !== state.policyBaseline; }
+        catch (error) { policyDirty = true; }
+      }
+      if (policyDirty) {
+        if (!window.PBGuiDialogs || !(await window.PBGuiDialogs.confirm({
+          title: 'Discard unsaved policy changes?',
+          message: 'Switching accounts will discard unsaved Profit Sweep changes for ' + state.selectedUser + '.',
+          confirmText: 'Discard and switch'
+        }))) return;
+        if (selectionId !== state.accountSelectionId) return;
+      }
       stopAutomaticPreview();
       state.accountGeneration += 1;
       var generation = state.accountGeneration;

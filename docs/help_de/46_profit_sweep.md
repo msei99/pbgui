@@ -1,5 +1,7 @@
 # Profit Sweep
 
+Vor dem Kontowechsel wird das Verwerfen ungespeicherter Richtlinienänderungen bestätigt. Abbrechen behält das aktuelle Konto und die Änderungen bei.
+
 ## Zweck
 
 Profit Sweep verschiebt einen konfigurierbaren Anteil des realisierten Trading-Gewinns vom Trading-Account zum festen internen Ziel der Exchange. Die Berechnung verwendet kumulierten realisierten Netto-PnL, Funding, Fees, Exchange-Korrekturen und eine High-Water Mark. Auszahlungen und interne Transfers gelten nicht als Trading-Verlust. Ein Verlust muss aufgeholt werden, bevor neuer Gewinn berechtigt ist.

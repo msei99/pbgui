@@ -1,5 +1,7 @@
 # Profit Sweep
 
+Switching accounts asks for confirmation before discarding unsaved policy changes. Cancel keeps the current account and its edits.
+
 ## Purpose
 
 Profit Sweep moves a configurable share of realized trading profit from a trading account to that exchange's fixed internal destination. It uses cumulative net realized PnL, funding, fees, exchange corrections, and a high-water mark. Withdrawals and internal transfers are not counted as trading losses, and a loss must be recovered before new profit becomes eligible.

@@ -1,5 +1,7 @@
 # Logging
 
+Der Wechsel zwischen Log Viewer und Settings erhält bearbeitete Rotationswerte. Fehlgeschlagene Speicherungen zeigen einen Fehler neben den betroffenen Einstellungen.
+
 Die Logging-Seite bietet einen Echtzeit-Log-Viewer für alle PBGui-Dienste.  
 Logs werden live per WebSocket gestreamt — kein Neuladen der Seite erforderlich.
 

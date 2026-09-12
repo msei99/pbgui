@@ -1631,3 +1631,143 @@ class TestVpsManagerFrontendLogic:
             bootstrap=bootstrap,
             assertions=assertions,
         )
+
+
+def test_config_apply_log_opens_exact_run_from_start() -> None:
+    """A completed apply response retains early output and selects its own run."""
+    _run_node_assertions(
+        ["handleResult", "switchToVpsTaskLog", "getVpsTaskLogFile"],
+        bootstrap="""
+            const store = {hostname: 'manibot52', vps: {}};
+            function toast() {}
+            function scheduleVpsDetailFetch() {}
+            function sendContext() {}
+            function renderUi() {}
+        """,
+        assertions="""
+            handleResult({cmd: 'save_vps_config', data: {remote_apply: {
+                started: true, command: 'vps-apply-config',
+                filename: 'vps-apply-config--run-123.log'
+            }}});
+            assert.equal(store.taskLog.file, 'VPSAction:manibot52:vps-apply-config--run-123.log');
+            assert.equal(store.taskLog.startEmpty, false);
+            assert.equal(store.view, 'vps-task-log');
+            switchToVpsTaskLog('manibot52', 'vps-setup', 'Setup VPS');
+            assert.equal(store.taskLog.file, 'VPSAction:manibot52:vps-setup');
+            assert.equal(store.taskLog.startEmpty, true);
+        """,
+    )
+
+
+def test_setup_reload_waits_for_saved_config_before_rendering_fields() -> None:
+    """Provisional defaults must never become edits over the saved swap size."""
+    _run_node_assertions(
+        ["renderVpsSetupView", "ensureVpsUi", "defaultVpsUi",
+         "syncCurrentVpsFormFromDom", "markVpsFieldDirtyState"],
+        bootstrap="""
+            const store = {view: 'vps-setup', hostname: 'manibot52', vps: {},
+                state: {config: {swap_options: ['0', '2G', '4G']}},
+                detail: {kind: 'vps', hostname: 'manibot52', provisional: true, config: {}}};
+            let domFields = [];
+            const document = {querySelectorAll: () => domFields};
+            function sendContext() {}
+            function esc(value) { return String(value); }
+            const escAttr = esc;
+            function canSetupForm() { return false; }
+            function canSaveForm() { return false; }
+            function canApplyVpsConfig() { return true; }
+            function renderVpsStatusFields() { return ''; }
+            function renderStatusFlags() { return ''; }
+            function renderVpsRemoteServices() { return ''; }
+            function renderVisibilityInput() { return ''; }
+            function renderSecretHint() { return ''; }
+            function renderReadSettingsProgress() { return ''; }
+            function mount(html) {
+                domFields = [];
+                if (html.includes("data-vps-field='swap'")) {
+                    const selected = html.match(/<option value='([^']+)' selected>/);
+                    domFields.push({type: 'select-one', value: selected ? selected[1] : '0',
+                        getAttribute: name => name === 'data-vps-field' ? 'swap' : 'manibot52'});
+                }
+            }
+        """,
+        assertions="""
+            mount(renderVpsSetupView());
+            assert.equal(domFields.length, 0);
+            store.detail = {kind: 'vps', hostname: 'manibot52',
+                config: {swap: '2G', install_dir: '/home/mani/software'}};
+            ensureVpsUi('manibot52', store.detail);
+            const html = renderVpsSetupView();
+            assert.ok(html.includes("value='2G' selected"));
+            assert.ok(html.includes("value='/home/mani/software'"));
+            mount(html);
+            const ui = ensureVpsUi('manibot52', store.detail);
+            assert.equal(ui.form.swap, '2G');
+            assert.equal(ui.dirtyFields.swap, undefined);
+            domFields[0].value = '4G';
+            ensureVpsUi('manibot52', store.detail);
+            assert.equal(ui.form.swap, '4G');
+            assert.equal(ui.dirtyFields.swap, true);
+            store.state = null;
+            assert.ok(!renderVpsSetupView().includes("data-vps-field='swap'"));
+        """,
+    )
+
+
+def test_apply_button_allows_swap_change_without_password() -> None:
+    """A swap edit enables Apply before the password prompt is confirmed."""
+    _run_node_assertions(
+        ["canApplyVpsConfig", "refreshLocalInteractiveState", "saveVpsConfig",
+         "vpsFirewallSettingsChanged", "vpsSwapSettingsChanged"],
+        bootstrap="""
+            const ui = {
+                form: {swap: '4G', user_pw: '', install_dir: '/home/mani/software'},
+                savedForm: {swap: '2G', user_pw: ''}
+            };
+            const store = {view: 'vps-setup', hostname: 'manibot52', detail: null};
+            const button = {disabled: true};
+            const document = {getElementById: id => id === 'vps-save-btn' ? button : null};
+            let confirmPassword;
+            const sent = [];
+            function ensureVpsUi() { return ui; }
+            function validateFirewallIps() { return {ok: true}; }
+            function syncCurrentVpsSecretsFromDom() { return false; }
+            function getEffectiveVpsUserPw() { return ui.form.user_pw; }
+            function hasSessionSecret() { return false; }
+            function openPasswordPrompt(host, callback) {
+                assert.equal(host, 'manibot52');
+                confirmPassword = callback;
+            }
+            function buildSecretAwareForm(host, form) { return {...form}; }
+            function send(message) { sent.push(message); }
+        """,
+        assertions="""
+            refreshLocalInteractiveState();
+            assert.equal(button.disabled, false);
+            saveVpsConfig('manibot52');
+            assert.equal(typeof confirmPassword, 'function');
+            assert.equal(sent.length, 0);
+            refreshLocalInteractiveState();
+            assert.equal(button.disabled, false);
+            ui.form.user_pw = 'test-password';
+            confirmPassword();
+            assert.equal(sent.length, 1);
+            assert.equal(sent[0].cmd, 'save_vps_config');
+            assert.equal(sent[0].form.swap, '4G');
+            assert.equal(sent[0].form.user_pw, 'test-password');
+            assert.equal(sent[0].form.check_remote_swap, true);
+            ui.form.user_pw = '';
+            ui.savedForm = {...ui.form};
+            sent.length = 0;
+            confirmPassword = null;
+            refreshLocalInteractiveState();
+            assert.equal(button.disabled, false);
+            saveVpsConfig('manibot52');
+            assert.equal(typeof confirmPassword, 'function');
+            assert.equal(sent.length, 0);
+            ui.form.user_pw = 'test-password';
+            confirmPassword();
+            assert.equal(sent.length, 1);
+            assert.equal(sent[0].form.check_remote_swap, true);
+        """,
+    )

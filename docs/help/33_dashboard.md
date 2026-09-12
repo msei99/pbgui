@@ -1,5 +1,7 @@
 # Dashboards
 
+Deleting the active dashboard clears its content frame before showing the empty state.
+
 Cancel discards the editor’s pending layout after outstanding autosaves finish. If discarding fails, the editor stays open so you can retry.
 
 Creating dashboards with selected users assigns each dashboard’s widget user filters to its target user. With several users and a custom name, names use `name_username`; with one user, the custom name is kept. Without selected users, template filters are retained.

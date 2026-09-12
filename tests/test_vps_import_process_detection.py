@@ -195,10 +195,12 @@ class _FakeSshClient:
         """No-op SSH connection."""
         del args, kwargs
 
-    def exec_command(self, command: str):
+    def exec_command(self, command: str, **kwargs):
         """Return a fake swap command result."""
-        del command
-        return None, _FakeStdout(b"2G\n"), _FakeStdout(b"")
+        del command, kwargs
+        stdout = _FakeStdout(b"/swapfile file 2G 0B -2\n")
+        stdout.channel = SimpleNamespace(recv_exit_status=lambda: 0)
+        return None, stdout, _FakeStdout(b"")
 
     def open_sftp(self) -> _FakeSftp:
         """Return fake SFTP access."""
@@ -2371,9 +2373,12 @@ def test_save_vps_config_starts_remote_firewall_apply_without_optional_pending(
     monkeypatch.setattr(service_mod, "PBGDIR", str(tmp_path))
     captured: dict[str, object] = {}
 
-    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
+    def fake_update_vps(vps, debug=False, extra_vars=None, command=None, command_text=None) -> None:
         """Capture the targeted firewall apply instead of running Ansible."""
         del debug
+        assert service._host_task_start_lock(vps.hostname).locked()
+        vps.command = command
+        vps.command_text = command_text
         captured["command"] = vps.command
         captured["command_text"] = vps.command_text
         captured["extra_vars"] = extra_vars or {}
@@ -2436,9 +2441,12 @@ def test_save_vps_config_starts_remote_swap_apply(
     monkeypatch.setattr(service_mod, "PBGDIR", str(tmp_path))
     captured: dict[str, object] = {}
 
-    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
+    def fake_update_vps(vps, debug=False, extra_vars=None, command=None, command_text=None) -> None:
         """Capture the targeted swap apply instead of running Ansible."""
         del debug
+        assert service._host_task_start_lock(vps.hostname).locked()
+        vps.command = command
+        vps.command_text = command_text
         captured["command"] = vps.command
         captured["command_text"] = vps.command_text
         captured["extra_vars"] = extra_vars or {}

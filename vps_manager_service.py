@@ -6070,8 +6070,6 @@ class VPSManagerService:
 
     def _start_vps_config_apply(self, token: str, vps: VPS, *, apply_firewall: bool, apply_swap: bool = False) -> dict[str, Any]:
         self._apply_session_secrets_to_vps(token, vps)
-        vps.command = COMMAND_VPS_APPLY_CONFIG
-        vps.command_text = "Apply VPS Config"
         extra_vars = {
             "apply_firewall": bool(apply_firewall),
             "apply_swap": bool(apply_swap),
@@ -6080,7 +6078,10 @@ class VPSManagerService:
         host_state = self._get_host_telemetry(monitor_state, str(vps.hostname or ""))
         extra_vars.update(self._credential_playbook_vars(str(vps.hostname or ""), host_state))
         try:
-            self.vpsmanager.update_vps(vps, debug=False, extra_vars=extra_vars)
+            self.vpsmanager.update_vps(
+                vps, debug=False, extra_vars=extra_vars,
+                command=COMMAND_VPS_APPLY_CONFIG, command_text="Apply VPS Config",
+            )
         except Exception as exc:
             _log(SERVICE, f"failed to start VPS config apply for {vps.hostname}: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
             return {
@@ -6114,26 +6115,30 @@ class VPSManagerService:
             if progress:
                 progress(step, label, status)
 
-        emit("start", "Preparing settings refresh")
-        vps = self._require_vps(hostname)
-        form = form or {}
-        emit("password", "Checking VPS password")
-        self._store_session_secrets(token, hostname, form)
-        vps.user_pw = self._require_user_password(token, hostname)
-        emit("ssh", "Connecting to VPS")
-        if not vps.can_login_ssh():
-            raise ValueError("Cannot login via SSH. Please check username and password.")
-        emit("remote_config", "Reading remote VPS settings")
-        info = vps.fetch_vps_info()
-        vps.swap = info.get("swap", "0") if info.get("swap") in SWAP_OPTIONS else "0"
-        emit("firewall", "Reading UFW firewall settings")
-        vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
-        emit("save", "Saving refreshed VPS settings")
-        vps.save()
-        vps.write_vps_firewall_info()
-        self._clear_vps_optional_config_pending(vps)
-        emit("done", "VPS settings refreshed", "done")
-        return self._build_vps_config(token, vps)
+        with self._host_task_start_lock(hostname):
+            emit("start", "Preparing settings refresh")
+            vps = self._require_vps(hostname)
+            form = form or {}
+            emit("password", "Checking VPS password")
+            self._store_session_secrets(token, hostname, form)
+            vps.user_pw = self._require_user_password(token, hostname)
+            emit("ssh", "Connecting to VPS")
+            if not vps.can_login_ssh():
+                raise ValueError("Cannot login via SSH. Please check username and password.")
+            emit("remote_config", "Reading remote VPS settings")
+            info = vps.fetch_vps_info()
+            if info.get("swap") not in SWAP_OPTIONS:
+                raise ValueError("The detected swap size is not supported by VPS Manager.")
+            remote_swap = info["swap"]
+            emit("firewall", "Reading UFW firewall settings")
+            vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
+            vps.swap = remote_swap
+            emit("save", "Saving refreshed VPS settings")
+            vps.save()
+            vps.write_vps_firewall_info()
+            self._clear_vps_optional_config_pending(vps)
+            emit("done", "VPS settings refreshed", "done")
+            return self._build_vps_config(token, vps)
 
     def preview_vps_systemd_migration(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
         import paramiko
@@ -7196,37 +7201,47 @@ done"""
         }
 
     def save_vps_config(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
-        vps = self._require_vps(hostname)
-        previous_firewall = {
-            "firewall": bool(getattr(vps, "firewall", False)),
-            "firewall_ssh_port": _safe_int(getattr(vps, "firewall_ssh_port", 22), 22),
-            "firewall_ssh_ips": str(getattr(vps, "firewall_ssh_ips", "") or "").strip(),
-        }
-        previous_swap = str(getattr(vps, "swap", "0") or "0")
-        self._apply_vps_setup_form(token, vps, form)
-        vps.save()
-        current_firewall = {
-            "firewall": bool(getattr(vps, "firewall", False)),
-            "firewall_ssh_port": _safe_int(getattr(vps, "firewall_ssh_port", 22), 22),
-            "firewall_ssh_ips": str(getattr(vps, "firewall_ssh_ips", "") or "").strip(),
-        }
-        current_swap = str(getattr(vps, "swap", "0") or "0")
-        firewall_changed = current_firewall != previous_firewall
-        swap_changed = current_swap != previous_swap
-        remote_apply = {"started": False, "command": COMMAND_VPS_APPLY_CONFIG, "command_text": "Apply VPS Config"}
-        if firewall_changed or swap_changed:
-            remote_apply = self._start_vps_config_apply(
-                token,
-                vps,
-                apply_firewall=firewall_changed,
-                apply_swap=swap_changed,
-            )
-        return {
-            "config": self._build_vps_config(token, vps),
-            "remote_apply": remote_apply,
-            "firewall_changed": firewall_changed,
-            "swap_changed": swap_changed,
-        }
+        with self._host_task_start_lock(hostname):
+            vps = self._require_vps(hostname)
+            previous_firewall = {
+                "firewall": bool(getattr(vps, "firewall", False)),
+                "firewall_ssh_port": _safe_int(getattr(vps, "firewall_ssh_port", 22), 22),
+                "firewall_ssh_ips": str(getattr(vps, "firewall_ssh_ips", "") or "").strip(),
+            }
+            previous_swap = str(getattr(vps, "swap", "0") or "0")
+            if _truthy(form.get("check_remote_swap")):
+                if any(_status_running(getattr(vps, name, None)) for name in ("init_status", "setup_status", "update_status")):
+                    raise ValueError("A VPS task is still running. Wait for it to finish before applying changes.")
+                self._store_session_secrets(token, hostname, form)
+                vps.user_pw = self._require_user_password(token, hostname)
+                info = vps.fetch_vps_info()
+                if info.get("swap") not in SWAP_OPTIONS:
+                    raise ValueError("The detected swap size is not supported by VPS Manager.")
+                previous_swap = info["swap"]
+            self._apply_vps_setup_form(token, vps, form)
+            vps.save()
+            current_firewall = {
+                "firewall": bool(getattr(vps, "firewall", False)),
+                "firewall_ssh_port": _safe_int(getattr(vps, "firewall_ssh_port", 22), 22),
+                "firewall_ssh_ips": str(getattr(vps, "firewall_ssh_ips", "") or "").strip(),
+            }
+            current_swap = str(getattr(vps, "swap", "0") or "0")
+            firewall_changed = current_firewall != previous_firewall
+            swap_changed = current_swap != previous_swap
+            remote_apply = {"started": False, "command": COMMAND_VPS_APPLY_CONFIG, "command_text": "Apply VPS Config"}
+            if firewall_changed or swap_changed:
+                remote_apply = self._start_vps_config_apply(
+                    token,
+                    vps,
+                    apply_firewall=firewall_changed,
+                    apply_swap=swap_changed,
+                )
+            return {
+                "config": self._build_vps_config(token, vps),
+                "remote_apply": remote_apply,
+                "firewall_changed": firewall_changed,
+                "swap_changed": swap_changed,
+            }
 
     def init_vps(self, token: str, form: dict[str, Any], *, debug: bool = False) -> dict[str, Any]:
         vps, is_new = self._hydrate_vps_from_form(token, form, allow_create=True)

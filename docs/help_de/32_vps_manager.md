@@ -142,6 +142,9 @@ Sidebar-Aktionen:
 
 Der **VPS**-Inhaltsbereich enthält zusätzlich:
 - ein Setup-/Konfigurationsraster für Passwort, Swap und Firewall-Felder; **Apply VPS Changes** speichert Änderungen lokal und wendet geänderte Swap- und Firewall-Einstellungen auf der VPS an
+- **Apply VPS Changes** bleibt bei gültigen Einstellungen auch für bereits gespeicherte Zielwerte verfügbar, damit ein abgebrochener Swap-Resize erneut gestartet werden kann. PBGui fragt bei Bedarf das VPS-Benutzerpasswort ab und vergleicht vor dem Resize den Zielwert mit dem aktiven Swap. **Read VPS settings** lädt die tatsächliche entfernte Swap-Größe; bei Lesefehlern bleibt die gespeicherte Größe erhalten.
+- Nach einem Browser-Neuladen wartet Change VPS auf die gespeicherte Konfiguration, bevor die bearbeitbaren Felder einschließlich der gespeicherten Swap-Größe erscheinen.
+- Nach dem Anwenden von Swap- oder Firewall-Änderungen öffnet die Task-Ansicht das Log des konkreten Laufs, einschließlich bereits geschriebener Ausgabe.
 - **PBGui Branch Management**, **PB7 Branch Management** und bei installierter Runtime **PB8 Branch Management** mit demselben Switch-/Update-Workflow wie beim Master
 - einen **Remote Monitor** mit Server-Metriken plus runtime-gekennzeichneter PB7-/PB8-Aktivitaet aus detaillierten Prozessmetriken und Cluster-Sync-Fallbacks
 - einen **Progress**-Bereich mit getrennten Status-Buckets für Init-, Setup- und Update-Läufe; für die vollständige Ansible-Ausgabe werden die Sidebar-Aktionsknöpfe auf den gemeinsamen **Command Log Viewer** umgeschaltet

@@ -568,32 +568,34 @@ class VPS:
         return False
 
     def fetch_vps_info(self):
-        result = {"swap": "0"}
-        if not self.ip or not self.user:
-            _log(SERVICE, "Missing VPS IP or username.", level="WARNING")
-            return result
-
+        """Read active swap without turning SSH or command failures into zero swap."""
+        ssh = None
         try:
-            _log(SERVICE, f"Connecting to VPS {self.hostname} ({self.ip})...", level="INFO")
+            if not self.ip or not self.user:
+                raise ValueError("Missing VPS IP or username.")
             ssh = _strict_ssh_client()
             ssh.connect(self.ip, username=self.user, password=self.user_pw, timeout=5)
-
-            try:
-                stdin, stdout, stderr = ssh.exec_command(
-                    "swapon --show --noheadings --raw | awk '$1==\"/swapfile\" {print $3}'"
-                )
-                del stdin, stderr
-                swap_size = stdout.read().decode().strip()
-                result["swap"] = swap_size if swap_size else "0"
-                _log(SERVICE, f"Swap size on VPS {self.hostname}: {result['swap']}", level="DEBUG")
-            except Exception as exc:
-                _log(SERVICE, f"Failed to get swap size on VPS {self.hostname}: {exc}", level="WARNING")
-
-            ssh.close()
+            stdin, stdout, stderr = ssh.exec_command("LC_ALL=C swapon --show --noheadings --raw", timeout=10)
+            del stdin
+            output = stdout.read().decode().strip()
+            if stdout.channel.recv_exit_status() != 0:
+                raise ValueError("Could not read active swap on the VPS.")
+            del stderr
+            swap_size = "0"
+            for line in output.splitlines():
+                fields = line.split()
+                if fields and fields[0] == "/swapfile":
+                    if len(fields) < 3:
+                        raise ValueError("Invalid swap information returned by VPS.")
+                    swap_size = fields[2]
+                    break
+            return {"swap": swap_size}
         except Exception as exc:
-            _log(SERVICE, f"Error connecting to VPS {self.hostname} ({self.ip}): {exc}", level="ERROR")
-
-        return result
+            _log(SERVICE, f"Failed to read swap on VPS {self.hostname}: {exc}", level="WARNING")
+            raise
+        finally:
+            if ssh is not None:
+                ssh.close()
 
     def write_vps_firewall_info(self) -> bool:
         if not self.ip or not self.user:

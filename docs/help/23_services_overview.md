@@ -1,5 +1,7 @@
 # PBGUI Services Overview
 
+If PBData settings fail to load, the settings panel shows an error and a Retry button.
+
 The Services page shows and controls all PBGui background services in one place.
 
 ## Service overview

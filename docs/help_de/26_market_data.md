@@ -1,5 +1,7 @@
 # Market Data
 
+Die Aktionen Delete, Retry und Requeue im Hyperliquid-Auftragsverlauf zeigen HTTP- und Verbindungsfehler sichtbar an.
+
 Beim Wechsel der Börse mit ungespeicherten Einstellungen erscheint eine Bestätigung. **Keep editing** behält die aktuelle Börse und Änderungen bei; **Discard and switch** verwirft sie und lädt die andere Börse.
 
 Diese Seite steuert die PBGui-Market-Data-Workflows für Hyperliquid, Binance USDM, Bybit, OKX und Bitget: l2Book-Archiv-Downloads, TradFi-Symbol-Mapping, 1m Auto-Refresh-Loops und Build best 1m OHLCV Jobs.

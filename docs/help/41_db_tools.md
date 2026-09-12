@@ -1,5 +1,7 @@
 # DB Tools
 
+Sync Job drafts require confirmation before Close, New Job or another row replaces unsaved changes. Operation buttons become available again on completion or error. After a status connection failure, Run resumes checking the existing operation instead of starting another one.
+
 DB Tools provides controlled maintenance and one-way migration workflows for PBGui databases, dashboard definitions, and templates across the local master and known remote masters. Open it from **System -> DB Tools**.
 
 Every manual database maintenance write creates a backup first. Destructive actions require an explicit preview or confirmation, and remote operations use the hosts already configured in VPS Manager.

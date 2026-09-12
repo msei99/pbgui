@@ -1,5 +1,7 @@
 # Dashboards
 
+Beim Löschen des aktiven Dashboards wird dessen Inhaltsrahmen geleert, bevor der leere Zustand angezeigt wird.
+
 Cancel verwirft den Layout-Entwurf nach Abschluss laufender automatischer Speicherungen. Schlägt das Verwerfen fehl, bleibt der Editor für einen erneuten Versuch geöffnet.
 
 Beim Erstellen mit ausgewählten Benutzern werden die Benutzerfilter der Widgets auf den jeweiligen Zielbenutzer gesetzt. Bei mehreren Benutzern und einem eigenen Namen entstehen Namen nach `Name_Benutzername`; bei einem Benutzer bleibt der eigene Name erhalten. Ohne Benutzerauswahl bleiben die Vorlagenfilter erhalten.

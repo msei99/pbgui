@@ -3711,12 +3711,7 @@ function _scheduleIgnoreRefresh() {
 ['f-only-cpt', 'f-notices-ignore'].forEach(function(id) {
   document.getElementById(id).addEventListener('change', _scheduleIgnoreRefresh);
 });
-// Hook into tag multiselect: wrap renderMultiselectTags to fire refresh for ms-tags
-var _origRenderTags = renderMultiselectTags;
-renderMultiselectTags = function(wrapId) {
-  _origRenderTags(wrapId);
-  if (wrapId === 'ms-tags') _scheduleIgnoreRefresh();
-};
+
 
 /* ─── Apply Filters ────────────────────────────────────────── */
 async function applyRunFilters() {
@@ -3967,8 +3962,9 @@ var _runMsController = window.PBGuiEditorShared.createMultiselectController({
       display: 'block'
     };
   },
-  onAfterRender: function() {
+  onAfterRender: function(id) {
     scheduleStructuredEditorSync();
+    if (id === 'ms-tags') _scheduleIgnoreRefresh();
   }
 });
 var msState = _runMsController.state;

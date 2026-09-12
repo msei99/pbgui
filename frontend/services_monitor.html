@@ -2096,7 +2096,19 @@ window.PBGUI_NAV_CONFIG = {
         applySettings(svcId, data);
         _settingsLoaded[svcId] = true;
       })
-      .catch(function () {})
+      .catch(function (error) {
+        console.error('Failed to load service settings', error);
+        if (svcId !== 'pbdata') return;
+        var wrap = document.getElementById('pbdata-settings-wrap');
+        if (!wrap) return;
+        wrap.replaceChildren();
+        var message = document.createElement('div');
+        message.textContent = 'Failed to load settings.';
+        var retry = document.createElement('button');
+        retry.type = 'button'; retry.className = 'form-btn'; retry.textContent = 'Retry';
+        retry.addEventListener('click', function () { loadSettings(svcId); });
+        wrap.append(message, retry);
+      })
       .finally(function () { delete _settingsLoading[svcId]; });
   }
 

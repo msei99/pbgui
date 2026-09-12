@@ -2056,7 +2056,7 @@
         .catch(function (error) {
           if (requestSeq !== loadStateRequestSeq || error.name === 'AbortError') return;
           setActionStatus('Failed to load Coin Data: ' + error.message, true);
-          throw error;
+          return null;
         });
     }
 

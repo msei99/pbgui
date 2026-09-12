@@ -388,6 +388,7 @@ var snapshotRequestGeneration = 0;
 var marketRequestGeneration = 0;
 var compareRequestGeneration = 0;
 var simulationRequestGeneration = 0;
+var simulationActionBusy = false;
 var movieRequestGeneration = 0;
 var configRevision = 0;
 var movieAbortController = null;
@@ -1911,8 +1912,10 @@ function renderSimulationWorkspace(snapshot) {
   updateActiveChip('sim-long-active-chip', deepGet(snapshot, ['sides', 'long', 'active'], false));
   updateActiveChip('sim-short-active-chip', deepGet(snapshot, ['sides', 'short', 'active'], false));
   if (document.getElementById('stage-simulation').classList.contains('active')) {
-    renderPlot('long', snapshot, 'sim-');
-    renderPlot('short', snapshot, 'sim-');
+    var active = state.simulations && state.simulations[state.activeSimulationMode];
+    var plotSnapshot = active ? simulationSnapshotForPlot(active) : snapshot;
+    renderPlot('long', plotSnapshot, 'sim-');
+    renderPlot('short', plotSnapshot, 'sim-');
   }
 }
 function renderNumberStepper(id, label, value, step, sourceText) {
@@ -2103,8 +2106,10 @@ function updateSimulationButtons() {
   if (pb7Btn) pb7Btn.classList.toggle('active-sim', state.activeSimulationMode === (pb7Btn.dataset.simulationMode || 'pb7_engine'));
 }
 function runSimulation(mode) {
+  if (simulationActionBusy) return;
   stopSimulationProgressPolling();
   var opts = simulationOptions();
+  simulationActionBusy = true;
   var generation = ++simulationRequestGeneration;
   state.activeSimulationMode = mode;
   updateSimulationButtons();
@@ -2112,12 +2117,16 @@ function runSimulation(mode) {
   opts.progress_id = simulationProgressId;
   var localBtn = document.getElementById('btn-run-local-sim');
   var pb7Btn = document.getElementById('btn-run-pb7-engine');
+  var compareBtn = document.getElementById('btn-run-compare');
+  if (compareBtn) compareBtn.disabled = true;
   if (localBtn) localBtn.disabled = true;
   if (pb7Btn) pb7Btn.disabled = true;
   setMessages([]);
   setSimulationProgress(0, 'Starting Simulation...');
   startSimulationProgressPolling(simulationProgressId);
   function finishSimulationButtons() {
+    simulationActionBusy = false;
+    if (compareBtn) compareBtn.disabled = false;
     if (localBtn) localBtn.disabled = false;
     if (pb7Btn) pb7Btn.disabled = false;
   }
@@ -2172,8 +2181,14 @@ function startSimulationProgressPolling(progressId) {
   }, 700);
 }
 function runCompare() {
+  if (simulationActionBusy) return;
   stopCompareProgressPolling();
   var opts = compareOptions();
+  simulationActionBusy = true;
+  var localBtn = document.getElementById('btn-run-local-sim');
+  var engineBtn = document.getElementById('btn-run-pb7-engine');
+  if (localBtn) localBtn.disabled = true;
+  if (engineBtn) engineBtn.disabled = true;
   var btn = document.getElementById('btn-run-compare');
   var oldText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = 'Compare running...'; }
@@ -2186,6 +2201,9 @@ function runCompare() {
   setCompareProgress(0, 'Starting Compare...');
   startCompareProgressPolling(compareProgressId);
   function finishCompareButton() {
+    simulationActionBusy = false;
+    if (localBtn) localBtn.disabled = false;
+    if (engineBtn) engineBtn.disabled = false;
     if (btn) { btn.disabled = false; btn.textContent = oldText || 'Start Compare'; }
   }
   apiFetch('/compare', { method: 'POST', body: JSON.stringify({ config: state.config, options: opts, progress_id: compareProgressId }) }).then(function(data) {
@@ -2443,7 +2461,7 @@ function saveMovieExportSettings() {
   try { window.localStorage.setItem('pbgui_strategy_explorer_movie_export', JSON.stringify(selectedMovieExportOptions(null))); } catch (err) {}
 }
 function applyMovieExportPreset() {
-  var preset = document.getElementById('movie-export-preset').value || 'Balanced';
+  var preset = (document.getElementById('movie-export-preset') && document.getElementById('movie-export-preset').value) || 'Balanced';
   if (preset !== 'Custom') setMovieExportInputs(movieExportPresetValues(preset));
   saveMovieExportSettings();
 }
@@ -2454,20 +2472,21 @@ function markMovieExportCustom() {
 }
 function selectedMovieExportOptions(spec) {
   function intValue(id, fallback) {
-    var value = Number(document.getElementById(id).value || fallback);
+    var input = document.getElementById(id);
+    var value = Number((input && input.value) || fallback);
     return isFinite(value) ? Math.floor(value) : fallback;
   }
   var duration = spec ? deepGet(spec, ['layout', 'updatemenus', 0, 'buttons', 0, 'args', 1, 'frame', 'duration'], 120) : 120;
   var fps = 15;
   if (Number(duration) > 0) fps = Math.max(1, Math.round(1000 / Number(duration)));
   return {
-    preset: document.getElementById('movie-export-preset').value || 'Balanced',
+    preset: (document.getElementById('movie-export-preset') && document.getElementById('movie-export-preset').value) || 'Balanced',
     width: intValue('movie-export-width', 1600),
     height: intValue('movie-export-height', 800),
     scale: intValue('movie-export-scale', 1),
     crf: intValue('movie-export-crf', 18),
-    ffmpeg_preset: document.getElementById('movie-export-ffmpeg-preset').value || 'veryfast',
-    codec: document.getElementById('movie-export-codec').value || 'auto',
+    ffmpeg_preset: (document.getElementById('movie-export-ffmpeg-preset') && document.getElementById('movie-export-ffmpeg-preset').value) || 'veryfast',
+    codec: (document.getElementById('movie-export-codec') && document.getElementById('movie-export-codec').value) || 'auto',
     fps: fps,
     filename: movieExportFilename()
   };
