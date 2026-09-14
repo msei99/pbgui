@@ -546,9 +546,20 @@ class LogViewerPanel {
         terminal.addEventListener('wheel', function(event) {
             if (event.deltaY < 0) me._tailPinned = false;
         }, {passive:true});
-        terminal.addEventListener('pointerdown', function() { me._tailPointerActive = true; });
-        terminal.addEventListener('pointerup', function() { me._tailPointerActive = false; });
-        terminal.addEventListener('pointercancel', function() { me._tailPointerActive = false; });
+        terminal.addEventListener('pointerdown', function() {
+            me._tailPointerActive = true;
+            if (me._tailPointerAbort) me._tailPointerAbort.abort();
+            var controller = new AbortController();
+            me._tailPointerAbort = controller;
+            function release() {
+                me._tailPointerActive = false;
+                controller.abort();
+                if (me._tailPointerAbort === controller) me._tailPointerAbort = null;
+            }
+            document.addEventListener('pointerup', release, {capture:true, signal:controller.signal});
+            document.addEventListener('pointercancel', release, {capture:true, signal:controller.signal});
+            window.addEventListener('blur', release, {signal:controller.signal});
+        });
         terminal.addEventListener('touchmove', function() { me._tailPinned = false; }, {passive:true});
         terminal.addEventListener('keydown', function(event) {
             if (['ArrowUp','PageUp','Home'].includes(event.key)) me._tailPinned = false;
@@ -636,6 +647,15 @@ class LogViewerPanel {
     }
 
     _watchTailLayout() {
+        // Scroll height may change without resizing the terminal (wrapped or
+        // content-visibility rows). Keep a bounded, viewer-owned follow check.
+        var owner = this;
+        if (!this._tailTimer && !this._closed) this._tailTimer = setInterval(function() {
+            var term = owner._q('terminal');
+            if (!owner._closed && owner._tailPinned && !owner._tailPointerActive &&
+                !owner._fullRenderPending && !document.hidden && term && term.isConnected && term.clientHeight &&
+                term.scrollHeight - term.clientHeight - term.scrollTop > 2) owner._settleTail();
+        }, 250);
         if (typeof ResizeObserver === 'undefined' || this._tailObserver) return;
         var me = this, terminal = this._q('terminal');
         if (!terminal) return;
@@ -650,6 +670,11 @@ class LogViewerPanel {
     open()  { this._closed = false; this._watchTailLayout(); if (!this._authExpired) this._connect(); }
     close() {
         this._closed = true;
+        if (this._tailTimer) clearInterval(this._tailTimer);
+        this._tailTimer = null;
+        if (this._tailPointerAbort) this._tailPointerAbort.abort();
+        this._tailPointerAbort = null;
+        this._tailPointerActive = false;
         if (this._tailFrame) cancelAnimationFrame(this._tailFrame);
         this._tailFrame = 0;
         if (this._tailObserver) this._tailObserver.disconnect();

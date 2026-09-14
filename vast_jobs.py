@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import os
+import psutil
 import hashlib
 import json
 import re
@@ -22,7 +24,9 @@ from vast_provider import VastClient, VastError, number, positive_id
 
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
-IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88"
+IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743"
+# Existing immutable rental intents must remain recoverable after a wrapper update.
+SUPPORTED_RENTAL_IMAGES = (IMAGE, "ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88")
 REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 from vast_config_validation import METRICS, validate_cloud_config
 
@@ -197,6 +201,25 @@ class JobStore:
             self.update(identifier, status="cancelled")
         return self.read(identifier)
 
+    def recover_interrupted_preparation(self, identifier: str) -> dict:
+        """Expose retry when the process owning an unfinished snapshot has exited."""
+        with advisory_file_lock(self.directory(identifier) / ".state-lock"):
+            state = self.read(identifier)
+            owner = state.get("preparation_owner")
+            if state.get("status") != "preparing" or not isinstance(owner, dict):
+                return state
+            try:
+                process = psutil.Process(owner["pid"])
+                if process.create_time() == owner["created_at"] and process.is_running():
+                    return state
+            except psutil.NoSuchProcess:
+                pass
+            except (psutil.AccessDenied, KeyError, TypeError, ValueError):
+                return state
+            _log(SERVICE, "Input preparation interrupted; job can be requeued", level="WARNING")
+            return self.update(identifier, status="failed",
+                               error="Input preparation interrupted by process shutdown. Requeue to prepare again.")
+
     def prepare(self, name: str, source: dict, source_sha256: str, market_root: Path,
                 mapping_root: Path, results_root: Path, iterations: int, workers: int, use_adg: bool,
                 *, requeue_from: str | None = None) -> dict:
@@ -219,6 +242,7 @@ class JobStore:
         directory = ensure_private_directory(self.root / "jobs" / identifier)
         state = {"id": identifier, "config_name": config_name(name), "status": "preparing", "rental_state": "none",
                  "iterations": iterations, "workers": workers, "auto_cpu_workers": True, "created_at": time.time(), "generation": 0,
+                 "preparation_owner": {"pid": os.getpid(), "created_at": psutil.Process().create_time()},
                  "exact_completed": 0, "gpu_candidates": 0, "error": None,
                  "exchanges": list(config["backtest"].get("exchanges", []))}
         if requeue_from is not None:

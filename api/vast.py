@@ -205,13 +205,20 @@ def _rental_details(store, identifier):
         return None
     identifier = job_id(identifier)
     intent = store.read(identifier, 'intent.json')
+    state_path = store.directory(identifier) / 'state.json'
+    state = store.read(identifier) if state_path.is_file() else {}
+    if state.get('deadline_confirmed'):
+        from vast_deadline import effective_intent
+        intent = effective_intent(store, identifier, intent)
     fields = ('gpu_name', 'vram_gb', 'ram_gb', 'cpu_cores', 'cpu_name',
               'gpu_mem_bw_gbps', 'pci_gen', 'gpu_lanes', 'pcie_bw_gbps',
               'disk_name', 'disk_bw_mbps', 'disk_gb', 'price_hour_usd',
               'download_gb_usd', 'upload_gb_usd', 'inet_down_mbps', 'inet_up_mbps',
               'location', 'verified', 'reliability')
     offer = intent.get('offer') or {}
-    return {'offer': {key: offer.get(key) for key in fields},
+    return {'id': identifier, 'deadline_protocol': state.get('deadline_protocol', 0),
+            'deadline_pending': bool(state.get('deadline_request')), 'deadline_error': state.get('deadline_error'),
+            'offer': {key: offer.get(key) for key in fields},
             'deadline': intent.get('deadline'), 'budget_usd': intent.get('budget_usd')}
 
 
@@ -237,18 +244,28 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
     try:
         queue = CloudQueue()
         worker = queue.worker()
+        if worker:
+            provider_log = CLOUD_LOG_ROOT / ('vast_' + job_id(worker['id']) + '_provider.log')
+            worker = dict(worker, has_provider_log=provider_log.is_file() and not provider_log.is_symlink())
         rows = []
         rentals = {}
         stored = queue.store.list()
-        replacements = {row['requeue_from']: row for row in stored
-                        if row.get('requeue_from') and not row.get('deleted_at')}
+        replacements = {}
+        for candidate in stored:  # Store order is newest first; keep the latest attempt.
+            if candidate.get('requeue_from') and not candidate.get('deleted_at'):
+                replacements.setdefault(candidate['requeue_from'], candidate)
         for row in stored:
             if row.get('kind') == 'worker' or row.get('deleted_at'):
                 continue
+            if row.get('status') == 'preparing' and row.get('preparation_owner'):
+                row = queue.store.recover_interrupted_preparation(row['id'])
             replacement = replacements.get(row['id'])
             if replacement and replacement.get('status') != 'failed':
                 continue
             if row.get('requeue_from') and row.get('status') == 'failed':
+                latest = replacements.get(row['requeue_from'])
+                if latest and latest['id'] != row['id'] and latest.get('status') != 'failed':
+                    continue
                 original = next((item for item in stored if item['id'] == row['requeue_from']), None)
                 if original and not original.get('deleted_at'):
                     continue
@@ -415,6 +432,25 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
         return queue.start(selected, body.hours, body.budget, body.idle_seconds)
     except VastError as exc:
         raise _error(exc) from None
+
+
+class DeadlineRequest(BaseModel):
+    """Require explicit lease identity and compare-and-set deadline from the UI."""
+    model_config = ConfigDict(extra='forbid')
+    worker_id: str
+    expected_deadline: float = Field(allow_inf_nan=False)
+    minutes: Literal[-30, 30]
+
+
+@router.post('/queue/deadline', status_code=202)
+def adjust_deadline(body: DeadlineRequest, session: SessionToken = Depends(require_auth)) -> dict:
+    """Queue a deadline change for acknowledgement by the independent worker guard."""
+    from vast_deadline import request_deadline
+    try:
+        return request_deadline(CloudQueue(), body.worker_id, body.expected_deadline, body.minutes)
+    except VastError as exc:
+        raise _error(exc) from None
+
 
 
 @router.post("/queue/{action}")

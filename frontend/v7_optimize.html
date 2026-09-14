@@ -2418,7 +2418,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
         <button class="act-btn" onclick="selectAllQueue()" title="Select all visible rows">Select All</button>
         <button class="act-btn" onclick="deselectAllQueue()" title="Deselect all">Deselect</button>
       </div>
-      <div id="queue-rental" class="panel-toolbar" hidden><span id="queue-rental-status"></span><span style="flex:1"></span><button id="queue-end-rental" class="btn" type="button">End rental</button></div>
+      <div id="queue-rental" class="panel-toolbar" hidden><span id="queue-rental-status"></span><span style="flex:1"></span><button id="queue-start-rental" class="btn" type="button">Start queue</button><button id="queue-end-rental" class="btn" type="button">End rental</button></div>
       <div id="queue-list-wrap">
         <table class="tbl">
           <thead id="queue-thead">
@@ -2711,7 +2711,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
 <script src="/app/js/scenario_visual_editor.js?v=20"></script>
 <script src="/app/js/suite_editor.js?v=33"></script>
-<script src="/app/js/log_viewer_panel.js?v=46"></script>
+<script src="/app/js/log_viewer_panel.js?v=47"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
 var API_BASE = "%%API_BASE%%";
@@ -15163,6 +15163,6 @@ window.PBGUI_NAV_CONFIG = {
 
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
-<script src="/app/js/vast.js?v=54"></script>
+<script src="/app/js/vast.js?v=58"></script>
 </body>
 </html>

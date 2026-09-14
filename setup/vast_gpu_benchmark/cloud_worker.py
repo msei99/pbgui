@@ -56,16 +56,60 @@ def safe_path(root: Path, value: str) -> Path:
     return path
 
 
+def apply_deadline_request(state: dict, request: dict, now: float) -> dict:
+    """Validate a compare-and-set request inside the independent guard process."""
+    import math
+    target = request.get('deadline')
+    valid = (isinstance(request.get('id'), str) and re.fullmatch(r'[0-9a-f]{32}', request['id'])
+             and request.get('job_id') == state['job_id'] and request.get('expected') == state['deadline']
+             and type(target) in (int, float) and math.isfinite(target)
+             and now + 300 < min(state['deadline'], target) and target <= state['max_deadline']
+             and abs(target - state['deadline']) == 1800)
+    if request.get('id') == state.get('request_id'):
+        return state
+    if not valid:
+        return dict(state, rejected_request_id=str(request.get('id', ''))[:32])
+    return dict(state, deadline=target, request_id=request['id'], rejected_request_id=None)
+
+
 def guard() -> None:
-    """Independently destroy this container at the immutable authorized deadline."""
+    """Independently enforce a bounded deadline, acknowledging explicit adjustments."""
     deadline = float(os.environ["PBGUI_DEADLINE"])
     instance = int(os.environ["CONTAINER_ID"])
     key = os.environ["CONTAINER_API_KEY"]
-    if not 0 < deadline - time.time() <= 86400 or instance <= 0:
+    if not 0 < deadline <= time.time() + 86400 or instance <= 0:
         raise ValueError("Invalid guard authorization")
-    write_record(ROOT / "guard.json", {"instance_id": instance, "deadline": deadline, "job_id": os.environ["PBGUI_JOB_ID"]})
+    maximum = float(os.environ.get("PBGUI_MAX_DEADLINE", str(deadline)))
+    if not deadline <= maximum <= time.time() + 86400:
+        raise ValueError("Invalid maximum deadline")
+    state = {"instance_id": instance, "deadline": deadline, "job_id": os.environ["PBGUI_JOB_ID"],
+             "max_deadline": maximum, "deadline_protocol": 1}
+    saved_path = ROOT / 'guard.json'
+    if saved_path.is_file() and not saved_path.is_symlink():
+        saved = json.loads(saved_path.read_text())
+        if (saved.get('instance_id') == instance and saved.get('job_id') == state['job_id']
+                and saved.get('max_deadline') == maximum and saved.get('deadline_protocol') == 1
+                and type(saved.get('deadline')) in (int, float) and 0 < saved['deadline'] <= maximum):
+            state = saved
+            deadline = state['deadline']
     monotonic_deadline = time.monotonic() + max(0, deadline - time.time())
-    while time.time() < deadline and time.monotonic() < monotonic_deadline:
+    write_record(ROOT / "guard.json", state)
+    while time.time() < state['deadline'] and time.monotonic() < monotonic_deadline:
+        request_path = ROOT / 'deadline-request.json'
+        if request_path.is_file() and not request_path.is_symlink():
+            try:
+                if request_path.stat().st_size > 4096:
+                    raise ValueError('Oversized deadline request')
+                request = json.loads(request_path.read_text())
+                if not isinstance(request, dict):
+                    raise ValueError('Invalid deadline request')
+                updated = apply_deadline_request(state, request, time.time())
+                if updated != state:
+                    monotonic_deadline += updated['deadline'] - state['deadline']
+                    state = updated
+                    write_record(ROOT / "guard.json", state)
+            except (OSError, ValueError, TypeError):
+                write_record(ROOT / 'guard-error.json', {'error': 'Invalid deadline request', 'at': time.time()})
         time.sleep(2)
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         """Never forward a container credential to another endpoint."""
@@ -223,7 +267,7 @@ def run() -> None:
             try:
                 while process.poll() is None:
                     cancelled = (ROOT / "stop").exists()
-                    if cancelled or time.time() >= hardware["guard"]["deadline"] - 180:
+                    if cancelled or time.time() >= json.loads((GUARD_ROOT / "guard.json").read_text())["deadline"] - 180:
                         cancelled = True
                         break
                     time.sleep(2)

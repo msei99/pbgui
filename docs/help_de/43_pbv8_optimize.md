@@ -285,7 +285,7 @@ Der Chart ist die Szenariovorschau. **Generate windows** erzeugt den grafischen 
 
 Die kompakte Referenzzeile zeigt Exchange, Coin, Tage und Complete. Fehlende oder unvollstaendige Tage erscheinen nur, wenn vorhanden. Der Tooltip erklaert Quellaufloesung und Pruefumfang; dies betrifft nur den Referenzchart.
 
-Vast-Uploads verwenden wiederaufnehmbare 2-MiB-Bloecke und stabile komprimierte Archive. Der Fortschrittsbalken zaehlt per Pruefsumme bestaetigte Bloecke; empfangene Bytes des laufenden Blocks werden separat angezeigt. Nach Verbindungsabbruch werden nur unbestaetigte Bloecke erneut gesendet. Die Geschwindigkeit misst bestaetigte Bytes im aktuellen Versuch. Solange der Empfaenger Fortschritt meldet, darf ein Upload laenger als zehn Minuten dauern. 120 Sekunden ohne Empfaengerfortschritt loesen einen Retry aus; die Mietfrist begrenzt weiterhin den Transfer.
+Vast-Uploads verwenden wiederaufnehmbare 2-MiB-Bloecke und stabile komprimierte Archive. Der Fortschrittsbalken zaehlt per Pruefsumme bestaetigte Bloecke; empfangene Bytes der laufenden Bloecke werden separat angezeigt. Nach Verbindungsabbruch werden nur unbestaetigte Bloecke erneut gesendet. Die Geschwindigkeit misst bestaetigte Bytes im aktuellen Versuch. Solange der Empfaenger Fortschritt meldet, darf ein Upload laenger als zehn Minuten dauern. 120 Sekunden ohne Empfaengerfortschritt loesen einen Retry aus; die Mietfrist begrenzt weiterhin den Transfer.
 
 In den Optimizer Settings ein kompatibles Angebot auswaehlen und **Rent** klicken: Genau diese GPU wird sofort gemietet. Abrechnung und Mietfrist beginnen sofort; Queue-Jobs bleiben pausiert. Ist das Angebot nicht mehr verfuegbar oder teurer geworden, muss neu ausgewaehlt werden; es wird kein Ersatz automatisch gemietet. Die Reservierung bleibt bis zum ersten Job, **End rental** oder der Mietfrist bestehen. **Start queue** verwendet diese GPU; nach dem ersten Job gilt wieder die normale Leerlauf-Regel. Queue und Settings zeigen die aktive Miete und **End rental**. Bei einem laufenden Job verwendet das Beenden den bestehenden Stop-and-collect-Ablauf.
 
@@ -298,3 +298,24 @@ Neue und kopierte Optimize-Entwuerfe werden nach Refresh im selben Browser-Tab w
 Rent prueft das ausgewaehlte Angebot direkt anhand seiner Vertrags-ID; die allgemeine Marktsuche kann ein anderes repraesentatives Angebot anzeigen. Fehler stehen direkt bei Rent. Es wird keine Ersatz-GPU automatisch gemietet.
 
 GPU-Zeile und Details zeigen die von Vast gemeldeten TFLOPS. Der Wert vergleicht Rechenleistung, nicht den gemessenen Optimizer-Durchsatz; CPU-Pruefungen und Speicher beeinflussen die Laufzeit ebenfalls. Fehlende Werte erscheinen als „TFLOPS unknown“.
+
+Der Cache wird in Seiten mit jeweils 1.024 Dateien geprueft; auch grosse Multi-Coin-Datensaetze benoetigen keine uebergrosse SSH-Antwort. Bis zu zwei 2-MiB-Bloecke werden gleichzeitig hochgeladen. Der Fortschritt fasst beide Verbindungen zusammen; nur per Pruefsumme bestaetigte Bloecke gelten als abgeschlossen. Bei endgueltigem Fehler wird die andere Verbindung beendet und abgewartet; bestaetigte Bloecke bleiben wiederverwendbar. Das bestehende Worker-Image unterstuetzt dieses Verfahren.
+
+Die automatische CPU-Auswahl verwendet den kleineren Wert aus gemessener Container-Kapazitaet und gemieteter Zuteilung, abgerundet auf ganze Worker (mindestens einen). Meldet der Host 256 CPUs bei einer Miete von 21,3 Kernen, werden 21 Exact-Worker verwendet. Ungueltige Zuteilungsdaten verhindern den Start.
+
+Bei manuell reservierten GPUs wird das Provider-Startlog alle 60 Sekunden abgerufen, auch vor dem Queue-Start. Vorbereitete/wartende Cloud-Jobs zeigen dieses Miet-Log, bis ihr eigenes Provider- oder Optimizer-Log vorliegt. Das Provider-Log beschreibt den Container-Start, nicht den Optimizer-Fortschritt.
+
+Die Mietanzeige in der Queue bietet ebenfalls **Start queue**. Nach dem Start wartet eine reservierte GPU, bis ein Eingabepaket fertig vorbereitet ist; der Queue-Start überspringt die Vorbereitung nicht.
+
+Wird die Eingabevorbereitung durch das Beenden des Prozesses unterbrochen, wird der Job bei der Erkennung als fehlgeschlagen markiert. Mit **Requeue** wird er erneut vorbereitet; eine vorhandene Miete kann weiterverwendet werden.
+
+Der Uploadstatus unterscheidet Cache-Prüfung, Archivvorbereitung, Übertragung, Verifikation und Installation. Byte-Prozentwerte gelten für bestätigte übertragene Blöcke, nicht für Cache-Prüfung oder Archivbau. Erneutes Öffnen zeigt die gespeicherte Phase und das verfügbare Start-/Optimizer-Log; solange noch kein Log existiert, erscheint ein zur Phase passender Wartegrund.
+
+
+Uploadrate und Host-Netzwerkangabe werden beide in **Mbps** angezeigt; Datenmengen bleiben in **MB** (1 Byte = 8 Bit). Während der Übertragung erscheinen gemessene Rate, angegebene Downloadrate des Hosts, erreichter Prozentanteil und beide Restzeitschätzungen gleichzeitig. Die Restzeit laut Hostrate ist theoretisch: Auch eigener Upload, Netzwerkstrecke, SSH-Overhead und Wiederholungen begrenzen den Durchsatz. Ein niedriger Anteil beweist daher keine falsche Hostangabe. Bei Archivbau, Wiederverbindungen und Verifikation erscheinen keine Übertragungsschätzungen.
+
+Die Knöpfe **− / +** neben **Budget / deadline** fordern Änderungen um jeweils 30 Minuten für die aktive Miete an. Das bisherige Budget bleibt erhalten; maximal sind 24 Stunden seit Mietannahme erlaubt. Für Einsammeln und Beenden müssen mindestens zehn Minuten verbleiben. Während **Awaiting worker confirmation** bleibt die bestätigte Deadline sichtbar. Wiederholungen verwenden dieselbe Anfrage und verlängern nicht nochmals um 30 Minuten. Bei alten Worker-Images mit unveränderlicher Abschaltzeit sind die Knöpfe deaktiviert. Neue Mieten ab PBGui v2.04.6 verwenden den veröffentlichten queue-v2-Worker mit diesem Protokoll. Bestehende Mieten behalten ihren ursprünglichen Worker und bleiben bedienbar; für die Deadline-Anpassung ist eine neue Miete nötig.
+
+Im GPU-Log kann `chunks=2/2 candidates=1024/1024` mehrfach erscheinen: Im Suite-Modus wird derselbe Kandidatenblock für jedes Szenario separat geprüft. `eta=0` gilt nur für diesen Dispatch, nicht für die gesamte Optimierung. Exact-/Pareto-Ergebnisse erscheinen erst nach den CPU-Prüfungen der ausgewählten Kandidaten. Daher kann die erste Suite-Runde bereits GPU-Aktivität zeigen, obwohl noch keine exakten Ergebnisse vorliegen.
+
+Die GPU-Laufzeit mit mehreren Coins muss nicht linear mit der Coin-Anzahl steigen. Für einen Hostvergleich sollten aufgewärmte Proxy-Profile mit denselben Coins, Szenarien und Kandidatenzahlen verwendet werden: `kernel_execution` trennt die GPU-Berechnung von Kompilierung und Datentransfer. Eine ausgelastete GPU allein belegt keine normale Hostleistung.

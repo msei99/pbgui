@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+import threading
 import gzip
 import ipaddress
 import json
@@ -131,7 +133,7 @@ class WorkerConnection:
             public_key = fetch_host_key_result(url, lease_id=self.lease_id)
             atomic_write_private_text(known_hosts, f"pbgui-{self.lease_id} {public_key}\n")
 
-    def command(self, command: str, *, stdin=None, stdout=None, timeout: int = 30, max_output: int = 1024 * 1024, progress=None, idle_timeout: int | None = None) -> bytes:
+    def command(self, command: str, *, stdin=None, stdout=None, timeout: int = 30, max_output: int = 1024 * 1024, progress=None, idle_timeout: int | None = None, cancel_event=None) -> bytes:
         """Execute only fixed internal operations with strict host-key verification."""
         args = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=10",
                 "-o", "ServerAliveCountMax=2", "-o", "StrictHostKeyChecking=yes", "-o", "IdentitiesOnly=yes",
@@ -151,6 +153,8 @@ class WorkerConnection:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 selector.register(process.stderr, selectors.EVENT_READ)
                 while True:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise VastError("SSH upload cancelled after another chunk failed", 422)
                     if progress is not None and time.monotonic() - last_progress >= 2:
                         progress()
                         last_progress = time.monotonic()
@@ -236,15 +240,9 @@ class WorkerConnection:
             return seconds
         config_root = execution_input(self.store, self.identifier)
         manifest = json.loads((config_root / 'manifest.json').read_text())
-        with (config_root / 'manifest.json').open('rb') as source:
-            self.command('mkdir -p ' + self.remote_root + ' && cat > ' + self.remote_root + '/cache-request.json',
-                         stdin=source, stdout=subprocess.DEVNULL, timeout=remaining())
-        response = self.operation('cache-missing', timeout=remaining())
-        missing = response.get('missing')
-        expected = {item['sha256'] for item in manifest['files']}
-        if not isinstance(missing, list) or any(not isinstance(key, str) or key not in expected for key in missing):
-            raise VastError('Invalid remote cache response', 422)
-        missing = set(missing)
+        self.store.update(self.identifier, upload_progress={'stage': 'checking_cache'})
+        missing = self.missing_cache_files(manifest['files'], remaining)
+        self.store.update(self.identifier, upload_progress={'stage': 'packing'})
         delta = self.directory / 'upload.tar.gz'
         # A stable gzip header preserves chunk hashes across retries.
         fd, temporary_name = tempfile.mkstemp(prefix='upload-', suffix='.tmp', dir=self.directory)
@@ -267,7 +265,29 @@ class WorkerConnection:
         self.store.update(self.identifier, transfer_input_bytes=delta.stat().st_size,
                           cached_files=sum(item['sha256'] not in missing for item in manifest['files']))
         self.upload_archive(delta, timeout=remaining())
+        self.store.update(self.identifier, upload_progress={'stage': 'installing',
+                          'bytes': delta.stat().st_size, 'total': delta.stat().st_size})
         self.operation('install', timeout=remaining())
+
+    def missing_cache_files(self, files: list[dict], remaining) -> set[str]:
+        """Check bounded manifest pages using the existing worker protocol."""
+        missing = set()
+        for offset in range(0, len(files), 1024):
+            page = files[offset:offset + 1024]
+            # Send only cache identity and size; paths are not needed by the worker.
+            request = {'files': [{'sha256': item['sha256'], 'bytes': item['bytes']} for item in page]}
+            with tempfile.TemporaryFile() as source:
+                source.write(json.dumps(request).encode()); source.seek(0)
+                self.command('mkdir -p ' + self.remote_root + ' && cat > ' + self.remote_root + '/cache-request.json',
+                             stdin=source, stdout=subprocess.DEVNULL, timeout=remaining())
+            response = self.operation('cache-missing', timeout=remaining())
+            keys = response.get('missing')
+            expected = {item['sha256'] for item in page}
+            if (not isinstance(keys, list) or len(keys) > len(page)
+                    or any(not isinstance(key, str) or key not in expected for key in keys)):
+                raise VastError('Invalid remote cache response', 422)
+            missing.update(keys)
+        return missing
 
     def upload_archive(self, archive: Path, *, timeout: int, chunk_bytes: int = 2 * 1024**2) -> None:
         """Resume verified content-addressed chunks after interrupted SSH transfers."""
@@ -295,68 +315,120 @@ class WorkerConnection:
             raise VastError('Invalid upload chunk inventory', 422)
         present = set(present)
         confirmed = sum(size for checksum, size in chunks if checksum in present)
-        initial_confirmed = confirmed
-        received_current = 0
+        uploaded_bytes = 0
         retry_bytes = 0
-        def report(sent, stage='sending'):
-            """Report verified progress, including chunks retained from earlier attempts."""
-            self.store.update(self.identifier, upload_progress={'bytes': sent, 'total': total,
-                'bytes_per_second': max(0, confirmed-initial_confirmed) / max(.001, time.monotonic()-started),
-                'in_flight_bytes': received_current, 'stage': stage})
-        report(confirmed)
-        with archive.open('rb') as source:
-            for checksum, size in chunks:
+        in_flight = {}
+        lock = threading.RLock()
+        cancelled = threading.Event()
+        def report(stage='sending'):
+            """Publish one consistent aggregate across the two upload connections."""
+            with lock:
+                self.store.update(self.identifier, upload_progress={'bytes': confirmed, 'total': total,
+                    'bytes_per_second': uploaded_bytes / max(.001, time.monotonic()-started),
+                    'in_flight_bytes': sum(in_flight.values()), 'stage': stage})
+        report()
+        # Equal content is uploaded once even when it occurs at multiple offsets.
+        pending_chunks = {}
+        offset = 0
+        for checksum, size in chunks:
+            if checksum not in present:
+                if checksum in pending_chunks:
+                    pending_chunks[checksum][2] += size
+                else:
+                    pending_chunks[checksum] = [offset, size, size]
+            offset += size
+
+        def send_chunk(item):
+            """Own one file handle and SSH subprocess; verify before counting bytes."""
+            nonlocal confirmed, retry_bytes, uploaded_bytes
+            checksum, (offset, size, logical_size) = item
+            if cancelled.is_set():
+                return
+            with archive.open('rb') as source:
+                source.seek(offset)
                 data = source.read(size)
-                if hashlib.sha256(data).hexdigest() != checksum:
-                    raise VastError('Local upload archive changed', 422)
-                if checksum not in present:
-                    destination = root + '/' + checksum
-                    verify = ('import pathlib,hashlib,os; p=pathlib.Path(' + repr(destination + '.tmp') + '); '
-                              'assert p.stat().st_size==' + str(size) + '; '
-                              'assert hashlib.sha256(p.read_bytes()).hexdigest()==' + repr(checksum) + '; '
-                              'os.replace(p,' + repr(destination) + ')')
-                    for attempt in range(3):
-                        try:
-                            received_current = 0
-                            class ReceiverProgress:
-                                """Parse bounded byte acknowledgements emitted by our receiver."""
-                                pending = b''
-                                last_report = 0.0
-                                def write(self, value):
-                                    nonlocal received_current
-                                    self.pending += value
-                                    lines = self.pending.split(b'\n')
-                                    self.pending = lines.pop()
-                                    for line in lines:
-                                        if not line.isdigit() or not received_current <= int(line) <= size:
-                                            raise VastError('Invalid upload progress acknowledgement', 422)
-                                        received_current = int(line)
-                                    if time.monotonic()-self.last_report >= 2:
-                                        report(confirmed)
-                                        self.last_report = time.monotonic()
-                            receiver = ('import sys,os; p=' + repr(destination + '.tmp') + '; n=0\n'
-                                        'with open(p,"wb") as out:\n'
-                                        ' while True:\n'
-                                        '  data=sys.stdin.buffer.read1(65536)\n'
-                                        '  if not data: break\n'
-                                        '  out.write(data); out.flush(); n+=len(data); print(n,flush=True)\n')
-                            with tempfile.TemporaryFile() as chunk:
-                                chunk.write(data); chunk.seek(0)
-                                self.command('python3 -c ' + shlex.quote(receiver) + ' && python3 -c ' + shlex.quote(verify),
-                                             stdin=chunk, stdout=ReceiverProgress(), timeout=remaining(),
-                                             idle_timeout=120, max_output=max(1024*1024, size*8))
-                            break
-                        except VastError as exc:
-                            retry_bytes += size
-                            if exc.status != 502 or attempt == 2 or retry_bytes > total:
-                                raise
-                            received_current = 0
-                            report(confirmed, 'reconnecting')
-                            time.sleep(min(2 * (attempt + 1), remaining()))
-                    confirmed += size
-                received_current = 0
-                report(confirmed)
-        report(total, 'verifying')
+            if hashlib.sha256(data).hexdigest() != checksum:
+                raise VastError('Local upload archive changed', 422)
+            destination = root + '/' + checksum
+            verify = ('import pathlib,hashlib,os; p=pathlib.Path(' + repr(destination + '.tmp') + '); '
+                      'assert p.stat().st_size==' + str(size) + '; '
+                      'assert hashlib.sha256(p.read_bytes()).hexdigest()==' + repr(checksum) + '; '
+                      'os.replace(p,' + repr(destination) + ')')
+            for attempt in range(3):
+                if cancelled.is_set():
+                    return
+                try:
+                    with lock:
+                        in_flight[checksum] = 0
+                    class ReceiverProgress:
+                        """Validate per-connection acknowledgements before aggregation."""
+                        pending = b''
+                        received = 0
+                        last_report = 0.0
+                        def write(self, value):
+                            self.pending += value
+                            lines = self.pending.split(b'\n')
+                            self.pending = lines.pop()
+                            if len(self.pending) > 32:
+                                raise VastError('Invalid upload progress acknowledgement', 422)
+                            for line in lines:
+                                if not line.isdigit() or not self.received <= int(line) <= size:
+                                    raise VastError('Invalid upload progress acknowledgement', 422)
+                                self.received = int(line)
+                            with lock:
+                                in_flight[checksum] = self.received
+                                if time.monotonic()-self.last_report >= 2:
+                                    report()
+                                    self.last_report = time.monotonic()
+                    receiver = ('import sys,os; p=' + repr(destination + '.tmp') + '; n=0\n'
+                                'with open(p,"wb") as out:\n'
+                                ' while True:\n'
+                                '  data=sys.stdin.buffer.read1(65536)\n'
+                                '  if not data: break\n'
+                                '  out.write(data); out.flush(); n+=len(data); print(n,flush=True)\n')
+                    with tempfile.TemporaryFile() as chunk:
+                        chunk.write(data); chunk.seek(0)
+                        self.command('python3 -c ' + shlex.quote(receiver) + ' && python3 -c ' + shlex.quote(verify),
+                                     stdin=chunk, stdout=ReceiverProgress(), timeout=remaining(),
+                                     idle_timeout=120, max_output=max(1024*1024, size*8), cancel_event=cancelled)
+                    with lock:
+                        confirmed += logical_size
+                        uploaded_bytes += size
+                        in_flight.pop(checksum, None)
+                        report()
+                    return
+                except VastError as exc:
+                    with lock:
+                        retry_bytes += size
+                        in_flight.pop(checksum, None)
+                        if exc.status != 502 or attempt == 2 or retry_bytes > total:
+                            raise
+                        report('reconnecting')
+                    if cancelled.wait(min(2 * (attempt + 1), remaining())):
+                        return
+
+        items = iter(pending_chunks.items())
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix='vast-upload') as pool:
+            futures = set()
+            try:
+                for _ in range(2):
+                    item = next(items, None)
+                    if item is not None:
+                        futures.add(pool.submit(send_chunk, item))
+                while futures:
+                    done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        future.result()
+                    for _ in done:
+                        item = next(items, None)
+                        if item is not None:
+                            futures.add(pool.submit(send_chunk, item))
+            finally:
+                cancelled.set()
+                for future in futures:
+                    future.cancel()
+                # Pool exit joins both owners; command() terminates cancelled SSH children.
+        report('verifying')
         script = ('import pathlib,hashlib,os; root=pathlib.Path(' + repr(root) + '); '
                   'target=pathlib.Path(' + repr(self.remote_root + '/input.tar.gz') + '); '
                   'tmp=target.with_suffix(".tmp"); h=hashlib.sha256(); chunks=' + repr(chunks) + '\n'
@@ -476,12 +548,13 @@ def extract_results(archive_path: Path, directory: Path, name: str) -> Path:
     return destination
 
 
-def allocated_cpu_workers(quota) -> int:
-    """Choose whole CPU workers from a positive finite container allocation."""
+def allocated_cpu_workers(quota, rented_quota) -> int:
+    """Respect both measured container capacity and the rented CPU allocation."""
     import math
-    if type(quota) not in (int, float) or not math.isfinite(quota) or quota <= 0:
-        raise VastError('Invalid measured CPU allocation', 422)
-    return max(1, math.floor(quota))
+    for label, value in (('measured', quota), ('rented', rented_quota)):
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise VastError('Invalid ' + label + ' CPU allocation', 422)
+    return max(1, math.floor(min(quota, rented_quota)))
 
 
 def execution_input(store: JobStore, identifier: str) -> Path:

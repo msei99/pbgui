@@ -658,8 +658,8 @@ def test_every_log_viewer_asset_reference_uses_current_cache_version() -> None:
         references.extend((path, match.group(0)) for match in re.finditer(r"log_viewer_panel\.js\?v=\d+", source))
 
     assert references
-    assert all(reference.endswith("?v=46") for _path, reference in references), references
-    assert "log_viewer_panel.js?v=46" in NAV.read_text(encoding="utf-8")
+    assert all(reference.endswith("?v=47") for _path, reference in references), references
+    assert "log_viewer_panel.js?v=47" in NAV.read_text(encoding="utf-8")
 
 
 def test_api_keys_local_viewer_disables_vps_state_transport() -> None:

@@ -194,14 +194,16 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 details.click()
                 assert page.locator('.offer-details').is_hidden()
                 page.locator('#offers-body tr[data-offer]').click()
-                assert page.locator('#gpu-model').input_value() == 'RTX 3090'
+                assert page.locator('#gpu-model').input_value() == '3090'
+                assert page.locator('#offers-body tr[data-offer]').get_attribute('aria-selected') == 'true'
+                assert 'RTX 3090' in page.locator('#selection').inner_text()
                 page.locator('#convergence-enabled').select_option('true')
                 page.locator('#convergence-patience').fill('768')
                 page.locator('#save-gpu-preferences').click()
-                page.wait_for_function("document.getElementById('saved-requirements').textContent.includes('RTX 3090')")
+                page.wait_for_function("document.getElementById('saved-requirements').textContent.includes('3090')")
                 assert preferences['convergence_enabled'] is True
                 assert preferences['convergence_patience'] == 768
-                assert preferences['gpu_name'] == 'RTX 3090'
+                assert preferences['gpu_name'] == '3090'
                 assert 'offer_id' not in preferences
                 page.evaluate("PBGuiVast.queue('queued-config',{optimize:{iters:512,n_cpus:4}})")
                 assert page.locator('#settings #vast-jobs').count() == 0

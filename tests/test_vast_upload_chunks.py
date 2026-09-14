@@ -34,9 +34,14 @@ def test_chunk_upload_resumes_and_repairs_corrupt_chunks(tmp_path):
     # Corruption is detected even when the stored piece has the expected length.
     next((remote / 'upload-chunks').iterdir()).write_bytes(b'xxxx')
     fail[0] = False
+    import hashlib
+    expected = {block for block in (b'aaaa', b'bbbb', b'cccc', b'dddd')
+                if not (remote / 'upload-chunks' / hashlib.sha256(block).hexdigest()).exists()
+                or (remote / 'upload-chunks' / hashlib.sha256(block).hexdigest()).read_bytes() != block}
     sends.clear()
     connection.upload_archive(archive, timeout=30, chunk_bytes=4)
-    assert len(sends) == 3
+    assert set(sends) == expected
+    assert len(sends) == len(expected)
     assert (remote / 'input.tar.gz').read_bytes() == archive.read_bytes()
     assert reports[-1]['upload_progress']['stage'] == 'verifying'
     sends.clear()
@@ -139,3 +144,148 @@ def test_ssh_hard_deadline_and_sanitized_error(tmp_path, monkeypatch):
     with pytest.raises(VastError, match='connection reset by peer') as error:
         connection.command('unused', timeout=3)
     assert 'secret-test-value' not in str(error.value)
+
+
+@pytest.mark.parametrize('count', [21845, 110000])
+def test_large_cache_inventory_is_paged(tmp_path, count):
+    """Large multi-coin manifests never require an oversized worker response."""
+    import json
+    connection = object.__new__(WorkerConnection)
+    connection.remote_root = '/unused'
+    files = [{'sha256': f'{i:064x}', 'bytes': 10} for i in range(count)]
+    pages = []
+    def command(cmd, *, stdin, **kwargs):
+        """Capture bounded page requests without contacting a remote server."""
+        page = json.load(stdin)
+        assert len(page['files']) <= 1024
+        pages.append(page)
+    def operation(action, **kwargs):
+        """Model a cold cache with every blob missing."""
+        assert action == 'cache-missing'
+        response = {'missing': [item['sha256'] for item in pages[-1]['files']]}
+        assert len(json.dumps(response)) < 70000
+        return response
+    connection.command = command
+    connection.operation = operation
+    assert connection.missing_cache_files(files, lambda: 30) == {item['sha256'] for item in files}
+    assert len(pages) == (count + 1023) // 1024
+
+
+def test_cache_pages_use_existing_worker_and_reject_foreign_hashes(tmp_path, monkeypatch):
+    """The deployed worker protocol handles pages and results cannot cross pages."""
+    import json
+    from setup.vast_gpu_benchmark import cloud_worker
+    monkeypatch.setattr(cloud_worker, 'ROOT', tmp_path)
+    monkeypatch.setattr(cloud_worker, 'GUARD_ROOT', tmp_path)
+    cache = tmp_path / 'cache'; cache.mkdir()
+    blob = cache / 'blob'; blob.write_bytes(b'data')
+    checksum = cloud_worker.file_hash(blob); blob.rename(cache / checksum)
+    files = [{'sha256': checksum, 'bytes': 4}] + [{'sha256': f'{i:064x}', 'bytes': 4} for i in range(1024)]
+    connection = object.__new__(WorkerConnection)
+    connection.remote_root = '/unused'
+    def command(cmd, *, stdin, **kwargs):
+        """Persist the same per-page request read by the current image worker."""
+        (tmp_path / 'cache-request.json').write_bytes(stdin.read())
+    connection.command = command
+    connection.operation = lambda *a, **kw: cloud_worker.cache_missing()
+    missing = connection.missing_cache_files(files, lambda: 30)
+    assert checksum not in missing
+    assert len(missing) == 1024
+    connection.operation = lambda *a, **kw: {'missing': ['f' * 64]}
+    with pytest.raises(VastError, match='Invalid remote cache'):
+        connection.missing_cache_files(files, lambda: 30)
+
+
+def test_parallel_chunks_are_bounded_deduplicated_and_joined(tmp_path):
+    """Two transfers overlap, equal chunks share one transfer, and output stays exact."""
+    import threading
+    archive = tmp_path / 'archive'; archive.write_bytes(b'aaaabbbbccccaaaa')
+    connection = object.__new__(WorkerConnection)
+    connection.remote_root = str(tmp_path / 'remote')
+    connection.identifier = 'a' * 32
+    reports = []
+    connection.store = SimpleNamespace(update=lambda *a, **kw: reports.append(kw['upload_progress']))
+    barrier = threading.Barrier(2)
+    lock = threading.Lock()
+    active = peak = 0
+    sends = []
+    def command(cmd, *, stdin=None, stdout=None, **kwargs):
+        """Use actual receiver/checksum scripts with synchronized first transfers."""
+        nonlocal active, peak
+        if stdin is not None:
+            data = stdin.read(); stdin.seek(0)
+            with lock:
+                sends.append(data); active += 1; peak = max(peak, active)
+                first_pair = len(sends) <= 2
+            if first_pair:
+                barrier.wait(timeout=5)
+        try:
+            result = subprocess.run(['bash', '-c', cmd], stdin=stdin, capture_output=True, timeout=5, check=True)
+            if hasattr(stdout, 'write'):
+                stdout.write(result.stdout)
+            return result.stdout
+        finally:
+            if stdin is not None:
+                with lock:
+                    active -= 1
+    connection.command = command
+    connection.upload_archive(archive, timeout=30, chunk_bytes=4)
+    assert peak == 2 and active == 0
+    assert sorted(sends) == [b'aaaa', b'bbbb', b'cccc']
+    assert (tmp_path / 'remote/input.tar.gz').read_bytes() == archive.read_bytes()
+    assert [r['bytes'] for r in reports] == sorted(r['bytes'] for r in reports)
+    assert reports[-1]['bytes'] == 16 and reports[-1]['in_flight_bytes'] == 0
+    assert not any(t.name.startswith('vast-upload') for t in threading.enumerate())
+
+
+def test_parallel_failure_cancels_other_owner(tmp_path):
+    """A permanent failure cancels the sibling and never publishes partial input."""
+    import threading
+    archive = tmp_path / 'archive'; archive.write_bytes(b'aaaabbbbcccc')
+    connection = object.__new__(WorkerConnection)
+    connection.remote_root = '/unused'; connection.identifier = 'a' * 32
+    connection.store = SimpleNamespace(update=lambda *a, **kw: None)
+    barrier = threading.Barrier(2)
+    stopped = threading.Event()
+    def command(cmd, *, stdin=None, cancel_event=None, **kwargs):
+        """Fail one transfer while the sibling waits for cancellation."""
+        if stdin is None:
+            return b'[]'
+        data = stdin.read()
+        barrier.wait(timeout=5)
+        if data == b'aaaa':
+            raise VastError('permanent test failure', 422)
+        assert cancel_event.wait(5)
+        stopped.set()
+        raise VastError('cancelled', 422)
+    connection.command = command
+    with pytest.raises(VastError, match='permanent test failure'):
+        connection.upload_archive(archive, timeout=30, chunk_bytes=4)
+    assert stopped.is_set()
+    assert not any(t.name.startswith('vast-upload') for t in threading.enumerate())
+
+
+def test_cancelled_ssh_command_kills_and_joins_child(tmp_path, monkeypatch):
+    """Cancellation releases the real owned subprocess and both output pipes."""
+    import sys
+    import threading
+    import vast_transfer
+    connection = object.__new__(WorkerConnection)
+    connection.lease_id = 'a' * 32
+    connection.identity_directory = tmp_path
+    connection.port = 22
+    connection.host = '127.0.0.1'
+    real_popen = subprocess.Popen
+    children = []
+    def spawn(args, **kwargs):
+        """Substitute a local sleeper for SSH; production paths are never accessed."""
+        child = real_popen([sys.executable, '-c', 'import time; time.sleep(30)'], **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(vast_transfer.subprocess, 'Popen', spawn)
+    cancelled = threading.Event(); cancelled.set()
+    with pytest.raises(VastError, match='cancelled'):
+        connection.command('unused', timeout=10, cancel_event=cancelled)
+    assert len(children) == 1
+    assert children[0].poll() is not None
+    assert children[0].stdout.closed and children[0].stderr.closed

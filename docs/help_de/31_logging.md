@@ -222,3 +222,5 @@ Enthält Meldungen gruppierter API- und GUI-Hilfskomponenten:
 Weitere Exchange-Downloader, Queues und detached Pipelines können eigene Logs
 oder Job-Transkripte besitzen. `OptimizeQueueAPI` bleibt absichtlich separat
 und wird nicht in `PBGui.log` gruppiert.
+
+Die Live-Anzeige folgt der neuesten Zeile, auch bei nachträglichen Zeilenumbrüchen und geänderter Fenstergröße. Nach oben scrollen hält die Position zum Lesen älterer Zeilen; am unteren Ende wird das Mitscrollen wieder aktiviert. Das Loslassen einer gezogenen Maus außerhalb des Logbereichs lässt den Lesemodus nicht hängen.

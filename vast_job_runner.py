@@ -12,7 +12,7 @@ import time
 
 from logging_helpers import human_log as _log
 from vast_credentials import VastCredentialStore
-from vast_jobs import IMAGE, REVISION, PROJECT, JobStore, digest, job_id, write_json
+from vast_jobs import SUPPORTED_RENTAL_IMAGES, REVISION, PROJECT, JobStore, digest, job_id, write_json
 from vast_provider import VastRateLimit, VastClient, VastError, positive_id
 from vast_transfer import WorkerConnection, import_results
 
@@ -21,7 +21,7 @@ SERVICE = "VastRunner"
 
 def validate_intent(intent: dict, identifier: str) -> dict:
     """Validate persisted authorization before provider or process operations."""
-    if intent.get("id") != job_id(identifier) or intent.get("image") != IMAGE or intent.get("pb8_revision") != REVISION:
+    if intent.get("id") != job_id(identifier) or intent.get("image") not in SUPPORTED_RENTAL_IMAGES or intent.get("pb8_revision") != REVISION:
         raise VastError("Invalid cloud rental intent")
     if intent.get("label") != "pbgui-vast-" + identifier:
         raise VastError("Invalid cloud rental ownership")
@@ -34,15 +34,18 @@ def validate_intent(intent: dict, identifier: str) -> dict:
 
 def rental_payload(intent: dict, registry_token: str = "") -> dict:
     """Use the pinned image worker without embedding code in provider arguments."""
+    from vast_deadline import maximum_deadline
+    if intent.get("image") not in SUPPORTED_RENTAL_IMAGES:
+        raise VastError("Invalid cloud rental image")
     startup = ("set -e\numask 077\nmkdir -p /work/pbgui\ntouch /root/.no_auto_tmux\n"
                "cp /opt/pbgui/worker.py /work/pbgui/worker.py\n"
                "ssh-keygen -A\n"
                f"printf 'PBGUI_HOST_KEY {job_id(intent['id'])} %s\\n' "
                "\"$(cat /etc/ssh/ssh_host_ed25519_key.pub)\" > /proc/1/fd/1\n"
                "nohup /usr/local/bin/python /work/pbgui/worker.py guard > /work/pbgui/guard.log 2>&1 < /dev/null &\n")
-    return {"client_id": "me", "image": IMAGE, "disk": intent["offer"]["disk_gb"],
+    return {"client_id": "me", "image": intent["image"], "disk": intent["offer"]["disk_gb"],
             "label": intent["label"], "runtype": "ssh_direct", "target_state": "running", "cancel_unavail": True,
-            "onstart": startup, "env": {"PBGUI_DEADLINE": str(intent["deadline"]), "PBGUI_JOB_ID": intent["id"]}}
+            "onstart": startup, "env": {"PBGUI_DEADLINE": str(intent["deadline"]), "PBGUI_JOB_ID": intent["id"], "PBGUI_MAX_DEADLINE": str(maximum_deadline(intent))}}
 
 
 def owned_instance(client: VastClient, intent: dict, *, fresh: bool = False) -> dict | None:
@@ -111,11 +114,22 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
 
 def guard_loop(store: JobStore, identifier: str) -> None:
     """Run independently of SSH/downloads until provider absence is confirmed."""
-    intent = validate_intent(store.read(identifier, "intent.json"), identifier)
+    from vast_deadline import effective_intent, reconcile_deadline
+    original = validate_intent(store.read(identifier, "intent.json"), identifier)
     while True:
         try:
+            intent = effective_intent(store, identifier, original)
             secrets = VastCredentialStore(store.root).secrets()
             client = VastClient(secrets["api_key"])
+            state = store.read(identifier)
+            if state.get('rental_state') == 'active' and time.time() < intent['deadline'] - 300:
+                try:
+                    row = owned_instance(client, original)
+                    if row is not None:
+                        reconcile_deadline(store, identifier, client, row, intent)
+                except Exception as exc:
+                    _log(SERVICE, 'Deadline synchronization unavailable: ' + type(exc).__name__, level='WARNING')
+                intent = effective_intent(store, identifier, original)
             if guard_step(store, identifier, client, intent, ""):
                 return
         except Exception as exc:
@@ -172,7 +186,10 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
     last_log = 0.0
     last_metrics = 0.0
     connection = None
+    original_intent = intent
+    from vast_deadline import effective_intent
     while True:
+        intent = effective_intent(store, lease_id or identifier, original_intent)
         state = store.read(identifier)
         if state.get("final_collected"):
             try:
@@ -214,7 +231,7 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
             if row is not None and row.get("actual_status") == "running" and state.get("setup_started_at") is None:
                 state = store.update(identifier, setup_started_at=time.time())
                 _log(SERVICE, f"{identifier}: instance running; verifying SSH identity and preparing worker", level="INFO")
-            if row is not None and row.get('actual_status') != 'running' and not state.get('worker_ready'):
+            if row is not None and not state.get('worker_ready'):
                 from vast_provisioning_log import collect_provisioning_log
                 collect_provisioning_log(store, identifier, client, row['id'])
             if row is None or row.get("actual_status") != "running":
@@ -232,7 +249,8 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                     raise VastError("Worker identity or independent deadline guard mismatch", 422)
                 if state.get('auto_cpu_workers'):
                     from vast_transfer import allocated_cpu_workers
-                    state = store.update(identifier, workers=allocated_cpu_workers(hardware.get('cpu_cores')), cpu_allocation_resolved=True)
+                    state = store.update(identifier, workers=allocated_cpu_workers(
+                        hardware.get('cpu_cores'), intent.get('offer', {}).get('cpu_cores')), cpu_allocation_resolved=True)
                 if not state.get('auto_cpu_workers') and (hardware.get("cpu_cores") or 0) < state["workers"]:
                     raise VastError("Actual CPU quota is below the requested worker count", 422)
                 store.update(identifier, worker_ready=True, hardware=hardware, status="uploading", error=None)

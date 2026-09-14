@@ -260,7 +260,7 @@
     const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
     el('rent-offer').disabled = !selectedOffer || active || renting || startingQueue || !!workerAction || !supervision;
     el('rent-offer').textContent = renting ? 'Renting…' : 'Rent';
-    el('settings-rental-status').textContent = workerActivity() + (active && worker.awaiting_queue_start ? ' · Reserved for queue start' : '');
+    el('settings-rental-status').textContent = workerActivity() + (active && worker.awaiting_queue_start ? (queueState.paused ? ' · Reserved for queue start' : ' · Queue started — waiting for input preparation') : '');
     el('settings-end-rental').hidden = !active;
     el('settings-end-rental').disabled = !!workerAction || renting || startingQueue;
     el('settings-end-rental').textContent = workerAction === 'end' ? 'Ending rental…' : 'End rental';
@@ -289,7 +289,13 @@
     if (banner) {
       banner.hidden = false;
       const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
-      el('queue-rental-status').textContent = workerActivity() + (active && worker.awaiting_queue_start ? ' · Reserved for queue start' : '');
+      el('queue-rental-status').textContent = workerActivity() + (active && worker.awaiting_queue_start ? (queueState.paused ? ' · Reserved for queue start' : ' · Queue started — waiting for input preparation') : '');
+      const start = el('queue-start-rental');
+      if (start) {
+        start.hidden = !active;
+        start.disabled = !queueState.paused || !!workerAction || renting || startingQueue;
+        start.textContent = startingQueue || workerAction === 'resume' ? 'Starting…' : 'Start queue';
+      }
       const end = el('queue-end-rental');
       end.hidden = !active; end.disabled = !!workerAction || renting || startingQueue;
       end.textContent = workerAction === 'end' ? 'Ending rental…' : 'End rental';
@@ -496,6 +502,23 @@
     }, 350);
   }
 
+  let deadlineChanging = false;
+  async function adjustRentalDeadline(rental, minutes) {
+    if (deadlineChanging || disposed) return;
+    deadlineChanging = true;
+    renderRentalDetails(rental, billingSnapshot);
+    try {
+      await request('/queue/deadline', {method:'POST', body:JSON.stringify({worker_id:rental.id, expected_deadline:rental.deadline, minutes})});
+      await refreshJobs();
+    } catch (error) {
+      if (!disposed) { message(error.message, true); if (typeof toast === 'function') toast(error.message, 'err'); }
+    } finally {
+      deadlineChanging = false;
+      const job = jobRows.find(row => window.state && row.id === window.state.cloudLogId);
+      if (job && !disposed) renderRentalDetails(job.rental, billingSnapshot);
+    }
+  }
+
   function renderRentalDetails(rental, billing) {
     const panel = el('optlog-rental');
     if (!panel) return;
@@ -513,7 +536,7 @@
       ['Disk', fmt(o.disk_gb, 0) + ' GB · ' + fmt(o.disk_bw_mbps, 0) + ' MB/s', o.disk_name || 'Allocated disk and provider-reported disk bandwidth.'],
       ['Host', (o.location || '—') + ' · ' + (o.reliability == null ? '—' : fmt(o.reliability * 100, 1) + '%'), 'Location and provider reliability. ' + (o.verified ? 'Verified host.' : 'Host not marked verified.')],
       ['PCIe', fmt(o.pci_gen, 0) + ' ×' + fmt(o.gpu_lanes, 0) + ' · ' + fmt(o.pcie_bw_gbps, 1) + ' GB/s', 'Provider-reported PCIe generation, lanes and bandwidth.'],
-      ['Budget / deadline', '$' + fmt(rental.budget_usd, 2) + ' · ' + (rental.deadline ? new Date(rental.deadline * 1000).toLocaleString() : '—'), 'Shared rental budget target and original deletion deadline. The budget target is not a provider spending cap.']
+      ['Budget / deadline', '$' + fmt(rental.budget_usd, 2) + ' · ' + (rental.deadline ? new Date(rental.deadline * 1000).toLocaleString() : '—'), 'Shared rental budget target and confirmed deletion deadline. −/+ adjusts by 30 minutes, within the existing budget and 24-hour maximum. Changes require worker acknowledgement. The budget target is not a provider spending cap.']
     ];
     const parts = billing && billing.breakdown || {};
     fields.push(['Vast instance charges', billing && billing.amount_usd != null ? '$' + fmt(billing.amount_usd, 4) + (billing.error ? ' (last retrieved)' : '') : billing && billing.error ? 'Unavailable' : 'Pending',
@@ -528,6 +551,20 @@
       const caption = document.createElement('span'); caption.textContent = label; caption.dataset.tip = help;
       heading.appendChild(caption);
       const content = document.createElement('div'); content.className = 'optlog-detail-text'; content.textContent = value;
+      if (label === 'Budget / deadline') {
+        const active = worker && worker.id === rental.id && worker.rental_state === 'active';
+        for (const minutes of [-30, 30]) {
+          const button = document.createElement('button'); button.type = 'button'; button.className = 'btn';
+          button.textContent = minutes < 0 ? '−' : '+';
+          button.title = rental.deadline_protocol !== 1 ? 'Requires an updated worker deadline guard' : (minutes < 0 ? 'Shorten' : 'Extend') + ' deadline by 30 minutes';
+          button.setAttribute('aria-label', button.title);
+          button.disabled = !active || rental.deadline_protocol !== 1 || rental.deadline_pending || deadlineChanging;
+          button.addEventListener('click', () => adjustRentalDeadline(rental, minutes));
+          content.append(' ', button);
+        }
+        if (rental.deadline_pending || deadlineChanging) content.append(' Awaiting worker confirmation…');
+        if (rental.deadline_error) content.append(' ' + rental.deadline_error);
+      }
       card.append(heading, content); panel.appendChild(card);
     });
   }
@@ -633,18 +670,52 @@
       const upload = job.upload_progress || {}, total = upload.total || job.transfer_input_bytes || job.input_bytes || 0;
       const sent = upload.bytes;
       const percent = total && sent != null ? Math.min(100, 100 * sent / total) : 0;
+      const stageLabel = {checking_cache:'Checking cached input data', packing:'Preparing transfer archive', installing:'Installing input data'}[upload.stage];
       const label = upload.stage === 'verifying' ? 'Verifying input data' : upload.stage === 'reconnecting' ? 'Reconnecting upload (verified chunks retained)' : 'Uploading input';
-      const detail = label + ' · ' + (sent != null ? fmt(sent / 1e6, 1) + ' / ' : '') + fmt(total / 1e6, 1) + ' MB'
+      let eta = '', speed = '';
+      const measured = Number(upload.bytes_per_second), network = Number(job.rental?.offer?.inet_down_mbps);
+      const transferring = !stageLabel && upload.stage !== 'verifying' && upload.stage !== 'reconnecting';
+      if (transferring) {
+        if (Number.isFinite(measured) && measured > 0) speed = ' · Upload: ' + fmt(measured * 8 / 1e6, 1) + ' Mbps';
+        if (Number.isFinite(network) && network > 0) {
+          speed += ' · Host: ' + fmt(network, 0) + ' Mbps';
+          if (Number.isFinite(measured) && measured > 0) speed += ' · ' + fmt(measured * 8 / 1e6 / network * 100, 1) + '% reached';
+        }
+        if (total > 0 && (sent == null || sent < total)) {
+          const duration = rate => {
+            const seconds = Math.max(1, Math.ceil((total - (sent || 0)) / rate));
+            const minutes = Math.ceil(seconds / 60);
+            return seconds < 60 ? seconds + ' s' : minutes < 60 ? minutes + ' min' : Math.floor(minutes / 60) + ' h ' + minutes % 60 + ' min';
+          };
+          if (Number.isFinite(measured) && measured > 0) eta += ' · Measured remaining: ~' + duration(measured);
+          if (Number.isFinite(network) && network > 0) eta += ' · Host-rate remaining (theoretical): ~' + duration(network * 1e6 / 8);
+        }
+      }
+      const detail = stageLabel || label + ' · ' + (sent != null ? fmt(sent / 1e6, 1) + ' / ' : '') + fmt(total / 1e6, 1) + ' MB'
         + (sent != null ? ' verified (' + fmt(percent, 1) + '%)' : '')
         + (upload.in_flight_bytes > 0 ? ' · current block: ' + fmt(upload.in_flight_bytes / 1e6, 2) + ' MB received' : '')
-        + (upload.bytes_per_second > 0 && upload.stage !== 'verifying' ? ' · ' + fmt(upload.bytes_per_second / 1e6, 2) + ' MB/s' : '');
+        + speed + eta;
       el('optlog-progress-fill').style.width = percent + '%';
       el('optlog-progress-label').textContent = detail;
-      el('optlog-progress-label').dataset.tip = 'Progress counts checksum-verified blocks. Current block bytes are acknowledged by the receiver and may be retried. Speed is verified data per second during this attempt.';
+      el('optlog-progress-label').dataset.tip = 'Progress counts checksum-verified blocks. Current block bytes are acknowledged by the receiver and may be retried. Speed is verified data per second during this attempt. Remaining time uses remaining verified bytes divided by measured speed and excludes final verification/install. The theoretical remaining time uses the rented host download Mbps and is shown alongside the measured estimate. 1 byte = 8 bits. Local uplink, network route, SSH overhead and retries can limit throughput; the reached percentage alone does not prove an inaccurate host claim.';
       el('optlog-activity').textContent = detail;
     }
-    const optimizerLog = 'optimizes_v8/vast_' + job.id + (job.has_log ? '.log' : '_provider.log');
-    if ((job.has_log || job.has_provider_log) && window.state.logFile !== optimizerLog && typeof ensureLogViewer === 'function') {
+    const rentalLog = worker && worker.has_provider_log && !['none','deletion_verified'].includes(worker.rental_state)
+      && (job.lease_id === worker.id || (!job.lease_id && ['preparing','ready'].includes(job.status)));
+    const optimizerLog = job.has_log ? 'optimizes_v8/vast_' + job.id + '.log'
+      : job.has_provider_log ? 'optimizes_v8/vast_' + job.id + '_provider.log'
+      : rentalLog ? 'optimizes_v8/vast_' + worker.id + '_provider.log' : '';
+    if (!optimizerLog) {
+      el('log-waiting').textContent = ({
+        preparing:'Preparing local input data. No worker log exists yet.',
+        ready:'Input ready. Waiting for the queue to dispatch this job.',
+        provisioning:'Preparing the GPU worker. Waiting for its startup log.',
+        uploading:'Transferring input data. The optimizer log becomes available after startup.',
+        failed:'No log file is available. See Last error for the failure reason.',
+        cancelled:'No log file was collected for this cancelled job.'
+      })[job.status] || 'Waiting for this run’s log output.';
+    }
+    if (optimizerLog && window.state.logFile !== optimizerLog && typeof ensureLogViewer === 'function') {
       el('log-waiting').hidden = true;
       el('log-viewer-target').hidden = false;
       const viewer = ensureLogViewer(); viewer.open(); viewer.setHost('local');
@@ -838,6 +909,7 @@
     finally { renting=false; if (!disposed) { renderJob(); renderQueueOverview(); } }
   });
   el('settings-end-rental').addEventListener('click', () => el('end-worker').click());
+  if (el('queue-start-rental')) el('queue-start-rental').addEventListener('click', () => el('resume-worker').click());
   if (el('queue-end-rental')) el('queue-end-rental').addEventListener('click', () => el('end-worker').click());
   el('start-job').addEventListener('click', () => startCloudQueue(selectedJob()));
   ['stop', 'recover'].forEach(action => el(action + '-job').addEventListener('click', async () => {

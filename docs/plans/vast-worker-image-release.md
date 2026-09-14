@@ -66,3 +66,29 @@ and compare the contracts. Regenerate the checked-in contract from the worker
 matching the desired PB8 metric support; run the cloud validator tests. Do not
 restore a manually selected subset or assume local CUDA availability determines
 remote metric support.
+
+## Published deadline wrapper update (2026-09-15)
+
+- Public tag: `ghcr.io/msei99/pbgui-pb8-worker:ee2b7d4-queue-v2`.
+- Manifest: `sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743`.
+- Local image ID: `sha256:688b43b7b625e274efaa9bd8d3826d4f74aad9e49b249c1fc63cb09e8a5668d0`.
+- Worker source SHA256: `53e06990e15785f246c93a3826160cc0b9614381554d207ba949859bc1bdd07a`.
+
+Published with explicit user authorization. Anonymous manifest access and its
+SHA256 were verified after push. Publication used password stdin and a temporary
+private Docker configuration that was removed afterwards.
+
+The build uses queue-v1 as its immutable foundation and a fresh temporary
+context containing only `Dockerfile.worker` and `cloud_worker.py`. Only the PBGui
+wrapper is replaced; PB8 and dependencies remain unchanged. No runtime data or
+credentials were included in the build context.
+
+A network-disabled container passed deadline adjustment and retry idempotence
+checks. Its exported GPU metric contract exactly matches the checked-in contract.
+The focused deadline, worker and upload suite passed all 50 tests.
+
+PBGui v2.04.6 pins queue-v2 for new rentals. The previous exact digest remains
+allowlisted for validating and managing existing immutable rental intents;
+creation payloads retain the image authorized in their intent. Existing rented
+containers are not upgraded by changing the local pin. No paid GPU performance
+test or deployment to an existing rental was performed for this wrapper update.

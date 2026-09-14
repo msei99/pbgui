@@ -277,3 +277,30 @@ def test_live_tail_after_long_wrapped_snapshot_and_append(log_page):
     page.evaluate("panel._q('terminal').style.width='350px'")
     page.wait_for_timeout(500)
     assert at_tail()
+
+
+def test_live_tail_recovers_late_content_growth(log_page):
+    """Late row-height changes after initial layout still keep the live tail visible."""
+    page, _ = log_page
+    page.evaluate('''() => {
+        const t = panel._q('terminal');
+        t.style.flex = 'none'; t.style.height = '200px';
+        panel._lines = Array.from({length:200}, (_, i) => '[INFO] row ' + i);
+        panel._renderFull();
+    }''')
+    page.wait_for_timeout(500)
+    page.evaluate("panel._q('terminal').lastElementChild.style.paddingBottom = '300px'")
+    page.wait_for_timeout(700)
+    assert page.evaluate("(() => {const t=panel._q('terminal');return t.scrollHeight-t.clientHeight-t.scrollTop < 3;})()")
+    page.evaluate('panel.close()')
+    assert page.evaluate('panel._tailTimer == null')
+
+
+def test_pointer_release_outside_terminal_does_not_disable_follow(log_page):
+    """Releasing a drag outside the terminal must clear the user-scroll flag."""
+    page, _ = log_page
+    page.evaluate('''() => {
+        panel._q('terminal').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}));
+        document.body.dispatchEvent(new PointerEvent('pointerup', {bubbles:true}));
+    }''')
+    assert page.evaluate('panel._tailPointerActive') is False

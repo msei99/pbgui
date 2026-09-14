@@ -602,3 +602,31 @@ def test_native_import_retains_distributed_validation_windows(job):
     write_json(directory / 'input/manifest.json', {'validation_plan': plan})
     result = import_results(store, identifier)
     assert validation_holdouts(Path(result['result_path'])) == plan['holdout_scenarios']
+
+
+@pytest.mark.parametrize('owner_state', ['alive', 'dead', 'reused', 'unknown'])
+def test_interrupted_preparation_recovery(job, monkeypatch, owner_state):
+    """Only exited owners or reused PIDs unlock retry; live preparation stays intact."""
+    import vast_jobs
+    store, identifier, _ = job
+    store.update(identifier, status='preparing', preparation_owner={'pid': 123, 'created_at': 10})
+
+    class Process:
+        """Isolated process identity without inspecting host processes."""
+        def __init__(self, pid):
+            if owner_state == 'dead':
+                raise vast_jobs.psutil.NoSuchProcess(pid)
+            if owner_state == 'unknown':
+                raise vast_jobs.psutil.AccessDenied(pid)
+
+        def create_time(self):
+            """Simulate PID reuse."""
+            return 11 if owner_state == 'reused' else 10
+
+        def is_running(self):
+            """Report the current mock process as running."""
+            return True
+
+    monkeypatch.setattr(vast_jobs.psutil, 'Process', Process)
+    state = store.recover_interrupted_preparation(identifier)
+    assert state['status'] == ('failed' if owner_state in {'dead', 'reused'} else 'preparing')

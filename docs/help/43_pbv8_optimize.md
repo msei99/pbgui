@@ -285,7 +285,7 @@ The chart is the scenario preview. **Generate windows** builds the graphical dra
 
 The compact reference line shows exchange, coin, days and Complete. Missing or incomplete days appear only when present. Hover for source resolution and coverage scope; this describes the reference chart only.
 
-Vast uploads use resumable 2 MiB blocks and stable compressed archives. The progress bar counts checksum-verified blocks; current-block bytes are separately acknowledged by the host. Reconnects retry only unverified blocks. Speed measures verified bytes during the current attempt. Uploads may exceed ten minutes while the receiver keeps progressing; 120 seconds without receiver progress triggers a retry, and the rental deadline still bounds the transfer.
+Vast uploads use resumable 2 MiB blocks and stable compressed archives. The progress bar counts checksum-verified blocks; in-flight bytes are separately acknowledged by the host. Reconnects retry only unverified blocks. Speed measures verified bytes during the current attempt. Uploads may exceed ten minutes while the receiver keeps progressing; 120 seconds without receiver progress triggers a retry, and the rental deadline still bounds the transfer.
 
 Select a compatible offer in Optimizer Settings and click **Rent** to rent that exact GPU immediately. Billing and the rental deadline start immediately; queued jobs stay paused. An unavailable or more expensive offer requires a new selection, never an automatic substitute. The reservation stays available until the first job, explicit **End rental**, or the deadline. **Start queue** reuses the reserved GPU; after its first job, the normal idle cleanup setting applies. The Queue and Settings show the active rental and an **End rental** button. Ending a rental with an active job uses the existing stop-and-collect cleanup flow.
 
@@ -298,3 +298,24 @@ New and copied Optimize drafts are restored in the same browser tab after refres
 Rent rechecks the selected offer directly by its contract ID; a general marketplace search may show a different representative offer. Rental failures appear beside Rent. No replacement GPU is rented automatically.
 
 The GPU row and Details show Vast-reported TFLOPS. This compares compute capacity, not measured optimizer throughput; CPU validation and memory also affect run speed. Missing values show “TFLOPS unknown”.
+
+Cache availability is checked in pages of 1,024 files, so large multi-coin datasets do not need a single oversized SSH response. Up to two 2 MiB blocks upload concurrently. Progress combines both connections; only checksum-verified blocks count as completed. A permanent transfer failure cancels and joins the other connection; verified blocks remain reusable. This works with the existing worker image.
+
+Automatic CPU selection uses the smaller of measured container capacity and the rented offer allocation, rounded down to whole workers (minimum one). For example, a host reporting 256 CPUs with a 21.3-core rental uses 21 exact workers. Invalid allocation data blocks startup.
+
+A manually reserved GPU has its provider startup log collected every 60 seconds, even before queue start. A preparing/queued cloud job can display this rental log until its own provider or optimizer log becomes available. The provider log describes container startup, not optimizer progress.
+
+The queue rental bar also provides **Start queue**. After starting, a reserved GPU waits until an input bundle is ready; starting the queue does not bypass preparation.
+
+If input preparation is interrupted by process shutdown, the job is marked failed when detected. Use **Requeue** to prepare it again; an existing rental can be reused.
+
+Upload status distinguishes cache checking, archive preparation, byte transfer, verification and installation. Byte percentages apply to verified transferred blocks, not cache checking or packaging. Opening the log again shows the persisted phase and available startup/optimizer log; before a log exists, a phase-specific waiting message is shown.
+
+
+Upload speed and host network bandwidth both use **Mbps**; payload sizes remain **MB** (1 byte = 8 bits). During transfer, PBGui shows measured speed, advertised host download speed, the percentage reached, and both remaining-time estimates simultaneously. The host-rate estimate is theoretical: local uplink, route, SSH overhead and retries also limit throughput, so a low reached percentage does not prove inaccurate host specifications. Packaging, reconnects and verification do not show transfer estimates.
+
+The **− / +** buttons beside **Budget / deadline** request 30-minute changes for the active rental. They preserve the existing budget, allow at most 24 hours from rental acceptance, and require at least ten minutes remaining for collection and cleanup. The confirmed date stays visible while **Awaiting worker confirmation** is displayed; retries use the same request and cannot add another 30 minutes. Old worker images with immutable guards show disabled controls. New rentals created with PBGui v2.04.6 use the published queue-v2 worker with this protocol. Existing rentals retain their original worker and remain manageable, but require a new rental to gain deadline adjustment.
+
+GPU logs may repeat `chunks=2/2 candidates=1024/1024`: in Suite mode a candidate batch is screened separately for each scenario. `eta=0` refers to that dispatch, not the whole optimization. Exact/Pareto results arrive after the selected candidates complete their CPU evaluations; the first suite pass can therefore show GPU activity before any exact results.
+
+Multicoin GPU runtime need not scale linearly with coin count. Compare warm proxy profiles with the same coin set, scenarios and candidate count: `kernel_execution` isolates GPU computation from compilation and data transfer. A busy GPU alone does not establish normal host performance.

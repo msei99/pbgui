@@ -213,3 +213,5 @@ Contains messages from grouped API and GUI helper components:
 Additional exchange downloaders, queues, and detached pipelines may expose
 their own dedicated log or job transcript. `OptimizeQueueAPI` intentionally
 remains dedicated rather than being grouped into `PBGui.log`.
+
+Live output follows the newest line, including delayed wrapping and panel resizing. Scroll upward to read history without being pulled back; scroll to the bottom to resume following. Releasing a drag outside the log area does not leave history mode stuck.

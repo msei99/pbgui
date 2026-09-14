@@ -327,3 +327,125 @@ def test_offer_tflops_in_list_and_details(cloud_page):
     assert '35.6 TFLOPS' in row.inner_text()
     row.get_by_role('button', name='Details').click()
     assert '35.58 TFLOPS' in page.locator('.offer-details').inner_text()
+
+
+@pytest.mark.parametrize('phase', ['preparing', 'ready', 'provisioning', 'uploading', 'running', 'collecting', 'completed', 'failed'])
+def test_cloud_log_reopen_and_reload_phase_matrix(cloud_page, phase):
+    """Opening/reopening after reload keeps log source and durable progress for every phase."""
+    page, data, _, _, _ = cloud_page
+    job = data['jobs'][0]
+    job.update(status=phase, has_log=phase in {'running', 'collecting', 'completed', 'failed'},
+               has_provider_log=phase in {'provisioning', 'uploading'}, lease_id='c'*32,
+               upload_progress=dict(stage='sending', bytes=50_000_000, total=100_000_000))
+    data['worker'].update(id='c'*32, has_provider_log=True)
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    for _ in range(2):
+        page.locator('[title="Open log"]').click()
+        expected = ('vast_' + job['id'] + '.log' if job['has_log'] else
+                    'vast_' + (job['id'] if job['has_provider_log'] else 'c'*32) + '_provider.log')
+        assert expected in page.locator('#log-viewer-target').inner_text()
+        if phase == 'uploading':
+            assert '50.0 / 100.0 MB verified (50.0%)' in page.locator('#optlog-progress-label').inner_text()
+        page.evaluate('PBGuiVast.closeLog()')
+
+
+def test_cloud_provider_log_switches_to_optimizer_without_reopening(cloud_page):
+    """Polling replaces the startup log once the optimizer log becomes available."""
+    page, data, _, _, _ = cloud_page
+    job = data['jobs'][0]
+    job.update(status='uploading', has_log=False, has_provider_log=True,
+               upload_progress=dict(stage='checking_cache'))
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    assert '_provider.log' in page.locator('#log-viewer-target').inner_text()
+    assert page.locator('#optlog-progress-label').inner_text() == 'Checking cached input data'
+    job.update(status='running', has_log=True)
+    page.clock.install()
+    page.clock.run_for(10001)
+    page.wait_for_function("state.logFile === 'optimizes_v8/vast_' + 'a'.repeat(32) + '.log'")
+
+
+def test_old_job_does_not_borrow_unrelated_rental_log(cloud_page):
+    """A terminal job without logs must not display the currently rented GPU's log."""
+    page, data, _, _, _ = cloud_page
+    data['jobs'][0].update(status='failed', has_log=False, has_provider_log=False, lease_id='old-lease')
+    data['worker'].update(id='c'*32, has_provider_log=True)
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    assert page.locator('#log-viewer-target').inner_text() == ''
+    assert 'See Last error' in page.locator('#log-waiting').inner_text()
+
+
+@pytest.mark.parametrize('stage,speed,expected', [
+    ('sending', 1_000_000, 'Measured remaining: ~50 s'),
+    ('sending', 0, 'Host-rate remaining (theoretical): ~2 s'),
+    ('reconnecting', 1_000_000, None),
+    ('verifying', 1_000_000, None),
+    ('packing', 1_000_000, None),
+])
+def test_upload_remaining_time(cloud_page, stage, speed, expected):
+    """Estimate actual transfer from throughput and label network fallback honestly."""
+    page, data, _, _, _ = cloud_page
+    job = data['jobs'][0]
+    job.update(status='uploading', upload_progress=dict(stage=stage, bytes=50_000_000,
+               total=100_000_000, bytes_per_second=speed))
+    job['rental']['offer']['inet_down_mbps'] = 275
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    text = page.locator('#optlog-progress-label').inner_text()
+    if expected:
+        assert expected in text
+        assert 'Host: 275 Mbps' in text
+        assert 'Host-rate remaining (theoretical): ~2 s' in text
+        if speed:
+            assert 'Upload: 8.0 Mbps' in text
+            assert '2.9% reached' in text
+        assert 'MB/s' not in text
+    else:
+        assert 'Measured remaining' not in text
+        assert 'Host-rate remaining' not in text
+
+
+def test_deadline_controls_wait_for_worker_confirmation(cloud_page):
+    """Deadline buttons stay locked until the durable worker acknowledgement arrives."""
+    page, data, calls, overrides, held = cloud_page
+    lease = 'c'*32
+    data['worker'].update(id=lease, deadline_protocol=1)
+    data['jobs'][0].update(lease_id=lease)
+    data['jobs'][0]['rental'].update(id=lease, deadline_protocol=1, deadline=2_000_000_000)
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    button = page.get_by_role('button', name='Extend deadline by 30 minutes', exact=True)
+    assert button.is_enabled()
+    overrides['/api/vast/queue/deadline'] = 'hold'
+    button.click()
+    assert button.is_disabled()
+    page.wait_for_timeout(50)
+    assert sum('/queue/deadline' in url for _, url in calls) == 1
+    data['jobs'][0]['rental']['deadline_pending'] = True
+    held.pop().fulfill(json={'pending':True})
+    page.wait_for_timeout(100)
+    assert button.is_disabled()
+    assert 'Awaiting worker confirmation' in page.locator('#optlog-rental').inner_text()
+    data['jobs'][0]['rental'].update(deadline_pending=False, deadline=2_000_001_800)
+    page.clock.install()
+    page.clock.run_for(10001)
+    page.wait_for_function("!document.querySelector('[title=\"Extend deadline by 30 minutes\"]').disabled")
+
+
+def test_old_worker_deadline_controls_are_disabled(cloud_page):
+    """An immutable old guard must never offer an ineffective deadline change."""
+    page, data, _, _, _ = cloud_page
+    data['worker'].update(id='c'*32)
+    data['jobs'][0]['rental'].update(id='c'*32, deadline_protocol=0)
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    controls = page.get_by_role('button', name='Requires an updated worker deadline guard', exact=True)
+    assert controls.count() == 2
+    assert controls.nth(0).is_disabled() and controls.nth(1).is_disabled()

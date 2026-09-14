@@ -150,9 +150,10 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
             store.control(identifier, 'cleanup')
             return None
         state = queue.read()
-        candidates = [] if state.get('paused') else queue.waiting()
+        candidates = [] if state.get('paused') or worker.get('deadline_request') else queue.waiting()
         if candidates:
-            intent = store.read(identifier, 'intent.json')
+            from vast_deadline import effective_intent
+            intent = effective_intent(store, identifier, store.read(identifier, 'intent.json'))
             for candidate in candidates:
                 if not candidate.get('auto_cpu_workers') and candidate['workers'] > worker.get('allocated_cpus', worker['workers']):
                     store.update(candidate['id'], error='Waiting for a worker with enough allocated CPU cores')
@@ -171,6 +172,8 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
                 store.update(identifier, active_job=candidate['id'], idle_since=None,
                              transfer_reserved_used=used + expected, status='provisioning', awaiting_queue_start=False)
                 return candidate['id']
+        if worker.get('deadline_request'):
+            return None
         if worker.get('awaiting_queue_start'):
             store.update(identifier, status='reserved', idle_since=None)
             return None
@@ -198,4 +201,14 @@ def worker_loop(store: JobStore, identifier: str) -> None:
             if result['status'] == 'failed' and not result.get('final_collected'):
                 queue.update(paused=True)
         else:
+            if worker.get('instance_id') and worker.get('awaiting_queue_start'):
+                from vast_credentials import VastCredentialStore
+                from vast_provider import VastClient
+                from vast_provisioning_log import collect_provisioning_log
+                from logging_helpers import human_log
+                try:
+                    client = VastClient(VastCredentialStore(store.root).secrets()['api_key'])
+                    collect_provisioning_log(store, identifier, client, worker['instance_id'])
+                except Exception:
+                    human_log(SERVICE, 'Reserved GPU provisioning log temporarily unavailable', level='WARNING')
             time.sleep(5)
