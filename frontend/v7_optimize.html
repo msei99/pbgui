@@ -2200,7 +2200,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script defer src="/app/js/pb8_parameter_help.js?v=1"></script>
-<link rel="stylesheet" href="/app/css/vast.css?v=6">
+<link rel="stylesheet" href="/app/css/vast.css?v=7">
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -12149,6 +12149,13 @@ async function openNewConfig() {
   var data = await apiFetch('/configs/new-config');
   state.editorMigrationReport = null;
   openEditorWithConfig(data, '', '');
+  var iterations = el('opted-iters');
+  if (optimizeEditorAdapter.isV8 && iterations) {
+    iterations.dataset.vastDefaultFrom = iterations.value;
+    iterations.addEventListener('input', function () {
+      delete iterations.dataset.vastDefaultFrom;
+    });
+  }
 }
 
 async function openConfigEditor(name) {
@@ -14955,6 +14962,10 @@ init().catch(handleError);
   window._openOptimizeHelp = function(anchor) {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
     var topic = optimizeEditorAdapter.isV8 ? '43_pbv8_optimize' : '36_pbv7_optimize';
+    if (!anchor && state.panel === 'settings') {
+      topic = optimizeEditorAdapter.isV8 ? '48_vast_gpu' : '36_pbv7_optimize';
+      anchor = 'optimizer-settings';
+    }
     window.PBGuiSharedHelp.open(topic, { anchor: anchor || '' });
   };
   window.PBGUI_SCENARIO_GENERATOR_HELP = function() {
@@ -15045,6 +15056,6 @@ window.PBGUI_NAV_CONFIG = {
 
 
 <script src="/app/js/backtest_queue_actions.js?v=1"></script>
-<script src="/app/js/vast.js?v=47"></script>
+<script src="/app/js/vast.js?v=50"></script>
 </body>
 </html>

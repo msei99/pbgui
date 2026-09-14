@@ -57,9 +57,8 @@
     </div>
     <p id="convergence-sample" class="muted" hidden></p>
     <div id="queue-message" role="status" aria-live="polite"></div>
-    <p id="worker-state" hidden></p>
     <p id="supervision-status" class="muted" hidden></p>
-    <div class="fields"><label hidden>Job<select id="job-select"></select></label>
+    <div class="fields">
       <button id="requeue-job" type="button" hidden>Requeue</button>
       <button id="start-job" type="button" hidden disabled>Start</button>
       <button id="pause-worker" type="button">Pause queue</button>
@@ -72,13 +71,10 @@
 
     </div>
 
-    <pre id="job-state" aria-live="polite" hidden>No jobs prepared.</pre>
-    <button id="job-log" type="button" hidden disabled>Open last downloaded log</button>
-    <button id="close-job-log" type="button" hidden>Close</button>
-    <div id="vast-log" hidden></div>
     <a id="job-results" href="/api/optimize-v8/main_page" hidden>Open PB8 optimizer results</a>
     </div>
   </section>
+  <p id="settings-supervision-status" role="status" hidden></p>
   <div id="message" role="status" aria-live="polite"></div>
 
 </div>

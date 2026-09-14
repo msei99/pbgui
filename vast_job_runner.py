@@ -138,6 +138,26 @@ def optimizer_started_at(connection) -> float:
     return float(value)
 
 
+def finalize_collected_results(store: JobStore, identifier: str) -> dict:
+    """Publish final results and assess their front without rewriting the stop cause."""
+    from vast_convergence import observe
+    imported = import_results(store, identifier)
+    finished = json.loads((store.directory(identifier) / 'final-results/finished.json').read_text())
+    state = store.read(identifier)
+    reason = state.get('stop_reason')
+    historical_convergence = reason == 'convergence' or (
+        reason is None and bool(state.get('convergence', {}).get('stop_requested')))
+    converged = historical_convergence and finished.get('cancelled') and finished.get('exit_code') in (0, -2, 130)
+    status = 'cancelled' if finished.get('cancelled') else 'completed' if finished.get('exit_code') == 0 else 'failed'
+    if converged:
+        status = 'completed'
+    store.update(identifier, **imported, exact_completed=imported.get('evaluations', state.get('exact_completed', 0)))
+    observe(store, identifier, final=True)
+    return store.update(identifier, status=status, error=None, exit_code=finished.get('exit_code'),
+                        completion_reason='convergence' if converged else reason if reason != 'convergence' else None,
+                        elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
+
+
 def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> None:
     """Reattach to a running worker and collect before the independent deadline."""
     from vast_convergence import DEFAULTS, observe
@@ -156,15 +176,7 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
         state = store.read(identifier)
         if state.get("final_collected"):
             try:
-                imported = import_results(store, identifier)
-                finished = json.loads((directory / "final-results/finished.json").read_text())
-                status = "cancelled" if finished.get("cancelled") else "completed" if finished.get("exit_code") == 0 else "failed"
-                converged = bool(state.get('convergence', {}).get('stop_requested')) and finished.get('cancelled') and finished.get('exit_code') in (0, -2, 130)
-                if converged:
-                    status = 'completed'
-                store.update(identifier, **imported, status=status, error=None, exit_code=finished.get("exit_code"),
-                             completion_reason='convergence' if converged else None,
-                             elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
+                finalize_collected_results(store, identifier)
             except Exception:
                 store.update(identifier, status="failed", error="Raw results saved locally; result import needs retry")
             if not lease_id:
@@ -261,6 +273,9 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                     atomic_write_private_text(log_root / ('vast_' + identifier + '.log'), raw_log.decode('utf-8', errors='replace'))
                 last_log = time.time()
             if control["stop"] or remaining < 240:
+                if not state.get('stop_reason') and not progress.get('finished'):
+                    reason = ('convergence' if state.get('convergence', {}).get('stop_requested') else 'requested') if control['stop'] else 'rental_deadline'
+                    store.update(identifier, stop_reason=reason)
                 connection.operation("stop")
                 store.update(identifier, status="collecting")
             else:

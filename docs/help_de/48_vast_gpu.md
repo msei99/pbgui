@@ -4,15 +4,36 @@ Die Cloud-Optimierung ist direkt in **PB8 Optimize** integriert. Eine separate
 Vast-Seite unter System gibt es nicht mehr. Jeder Nutzer verwendet sein eigenes
 Vast-Konto und Mietguthaben.
 
-## Cloud Setup in den Optimizer Settings
+## Optimizer Settings
 
-Der vorhandene **Settings**-Button in der Sidebar öffnet die Einstellungen im gesamten Hauptbereich neben der Sidebar: lokale Ausführung, Cloud-Konto und GPU-Anforderungen. **Back to Queue** führt zur Jobliste zurück.
+**Settings** öffnet lokale Ausführung, Cloud-Konto und GPU-Anforderungen. **Guide** springt hier direkt zu diesem Abschnitt. **Back to Queue** führt zur Jobliste zurück.
 
-Unter **Queue → Settings → Cloud setup** den Vast-API-Key speichern und mit **Test connection
-& refresh balance** Verbindung und verfügbares Mietguthaben prüfen. Der Key bleibt
-lokal mit Besitzerrechten gespeichert und wird nicht an Bot-Server verteilt.
-Die Kontoabfrage benötigt User Read; Miete, SSH-Einrichtung und Löschung benötigen
-die entsprechenden Instanzrechte. PBGui lädt kein Guthaben automatisch auf.
+### Lokale Ausführung
+
+CPU und **Override config CPU** steuern lokale Optimizer-Worker. **Use PBGui Market Data** verwendet vorbereitete PBGui-Daten; **Autostart** steuert die lokale Queue. Diese Optionen sind unabhängig von den Cloud-GPU-Anforderungen darunter. Lokale Änderungen mit **Save**, Cloud-Anforderungen mit **Save settings** speichern.
+
+### Vast API key
+
+1. Auf der [Keys-Seite der Vast-Konsole](https://console.vast.ai/manage-keys/) anmelden und unter **API Keys** auf **+New** klicken.
+2. Den Key `PBGui` nennen. Benutzerdefinierte/eingeschränkte Rechte wählen und die folgenden Kategorien aktivieren.
+3. **Create** klicken und den einmalig angezeigten Key kopieren.
+4. In PBGui **PB8 Optimize → Settings → Cloud setup** öffnen. Unter **Vast API key** einfügen, **Save key** und danach **Test connection & refresh balance** klicken.
+
+| Berechtigung | Verwendung in PBGui |
+| --- | --- |
+| `user_read` | Konto und verfügbares Guthaben |
+| `misc` | GPU-Angebote suchen |
+| `instance_read` | Instanzstatus und Logs |
+| `instance_write` | Mieten, starten, stoppen, löschen und Worker-SSH-Key zuordnen |
+| `billing_read` | Tatsächliche Instanzkosten abfragen |
+
+`billing_write`, `user_write`, Machine- und Team-Rechte werden hierfür nicht benötigt. Ein reiner Read-only-Key kann weder mieten noch Instanzen aufräumen. Billing **Read** erlaubt keine Guthabenüberweisungen.
+
+Der Key bleibt mit Besitzerrechten im lokalen PBGui-Credential-Store; er wird nicht auf GPU-Worker oder Bot-Server kopiert. Weder ein manuell hinterlegter SSH-Key noch GitHub-Zugangsdaten sind nötig. PBGui verwaltet die Worker-SSH-Identität selbst. Guthaben separat bei Vast aufladen; PBGui lädt nichts nach.
+
+Ein erfolgreicher Guthabentest bestätigt den Kontozugriff, nicht sämtliche Mietrechte. Bei Berechtigungsfehlern in Angebotssuche, Logs oder Start die passende Kategorie prüfen. Ohne `billing_read` schlägt die Kostenabfrage fehl; mit Berechtigung kann bis zur Buchung durch Vast weiterhin **Pending** stehen. Einen Ersatz-Key zuerst speichern und testen, danach den alten Key bei Vast widerrufen.
+
+Quellen: [Vast-Key-Einrichtung](https://docs.vast.ai/guides/reference/api-keys) und [Berechtigungsreferenz](https://docs.vast.ai/api-reference/permissions).
 
 **Create Vast.ai account** verwendet deinen PBGui-Empfehlungslink. Erst ein Klick
 öffnet die externe Seite. Das öffentliche, versionierte Image
@@ -214,6 +235,8 @@ Während der Optimierung werden geprüfte Ergebnissnapshots nach der ersten exak
 
 ### Stopp bei ausbleibender Verbesserung
 
+Neue PB8-Konfigurationen verwenden beim ersten Wechsel auf Vast **20.000 exakte Auswertungen**, sofern das Iterationsfeld noch nicht bearbeitet wurde. Gespeicherte Konfigurationen und ausdrücklich eingestellte Werte bleiben erhalten. Dies ist eine Obergrenze; die aktivierte Sättigungserkennung kann früher stoppen, garantiert dies aber nicht.
+
 Setup bietet einen optionalen vorzeitigen Stopp (standardmäßig aus). Vorgaben: mindestens 512 exakte Auswertungen, danach 512 weitere Auswertungen Geduld und 0,1 % Verbesserungstoleranz. Jeder Job übernimmt die Einstellungen beim Start; Änderungen beeinflussen laufende Jobs nicht.
 
 Nach dem Minimum bewertet PBGui die zulässige exakte Pareto-Front anhand des normalisierten Hypervolumens. Skala und Referenz werden mit der ersten Front festgelegt und bleiben unverändert. Unterstützt werden ein bis drei bereits zur Minimierung vorzeichenkorrigierte Ziele, einschließlich PB8-Suite-Auswertungen. Relative Verbesserungen über der Toleranz setzen das Geduldsfenster zurück; kleinere Verbesserungen summieren sich gegenüber dem zuletzt akzeptierten Stand. Proxy-Zahlen und verstrichene Minuten verbrauchen keine Geduld. Fehlende, ungültige, nicht unterstützte oder ausschließlich unzulässige Snapshots unterbrechen die Erkennung und starten das Beobachtungsfenster neu.
@@ -234,6 +257,8 @@ Das Live-Log folgt der neuesten Zeile auch nach dem Umbruch langer GPU-Meldungen
 
 CPU checks outstanding zählt eingereichte exakte Prüfungen, die PB8 noch nicht übernommen hat: wartende, laufende und bereits fertige Ergebnisse, die hinter früher eingereichten Prüfungen warten. PB8 meldet diese Gruppen nicht getrennt. Der Wert stammt aus Generationsprofilen; sein Alter wird angezeigt, ältere Werte sind als letzte Messung markiert. Der obere Exact-Zähler zählt übernommene Ergebnisse.
 
+Beim abschließenden Einsammeln wird auch der finale Pareto-Snapshot geprüft, mit dem verifizierten Auswertungszähler des Imports. Die Anzeige kennzeichnet dies als finale Snapshot-Prüfung, nicht als Wiederholung jeder einzelnen Auswertung. Der ursprüngliche Stoppgrund (Sättigung, angeforderter Stopp oder Mietzeitlimit) bleibt erhalten; ein erst nachträglich erkanntes Erreichen der Schwelle ändert ihn nicht. Auch ein erneuter Ergebnisimport führt diese Prüfung aus. Ist die finale Front nicht auswertbar, bleiben die gesicherten Ergebnisse verfügbar und die Prüfung wird als nicht verfügbar angezeigt.
+
 Die gepunkteten Info-Beschriftungen im Job-Log zeigen beim Darüberfahren Hilfetexte. Stagnation 0 / 512 bedeutet, dass der letzte geprüfte Snapshot eine Ausgangsbasis oder ausreichende Verbesserung festgehalten hat. Nach 512 weiteren exakten Prüfungen ohne ausreichende Verbesserung wird gestoppt und gesammelt. Since last improvement verwendet den aktuellen Exact-Zähler; der Stagnationsbalken den letzten geprüften Snapshot und kann deshalb zurückliegen. Der Tooltip zeigt Mindestanzahl, Geduld und Prozentschwelle des Jobs.
 
 Zusätzlich zeigt das Log den zuletzt geprüften Exact-Stand, die letzte ausreichende Verbesserung und noch ungeprüfte neue Ergebnisse. Wiederholt null kann laufende Verbesserungen bedeuten, nicht eine stehengebliebene Prüfung.
@@ -241,3 +266,12 @@ Zusätzlich zeigt das Log den zuletzt geprüften Exact-Stand, die letzte ausreic
 Vast verwendet für Scoring und Limits den vollständigen PB8-GPU-Metrikvertrag einschließlich gültiger Aliasnamen. Aktueller Worker und lokales PB8 besitzen identische Quell-Hashes für Metrikschema, Registry und Berechnung: 157 unterstützte Metriknamen und 460 gültige Schreibweisen einschließlich Aliasnamen. Das sind nicht 460 verschiedene Kennzahlen. CPU-exklusive Metriken bleiben ausgeschlossen; andere GPU-Strategie- und Ausführungsgrenzen bleiben bestehen.
 
 Ein neuer Run zeigt einen Wartehinweis, bis sein eigenes Provider- oder Optimizer-Log verfügbar ist. Frühere Starts aus dem globalen Runner-Log werden nicht als Ausgabe des neuen Runs angezeigt.
+
+### Fehlgeschlagene UI-Anfragen wiederholen
+
+- Worker-Aktionen zeigen einen Wartezustand und bleiben bis zum Ende der Anfrage gesperrt. Requeue zeigt **Preparing…** in der Queue; das Löschen eines Queue-Eintrags fragt nach einer Bestätigung.
+- Kann die GPU-Validierung nicht abgeschlossen werden, hilft **Retry validation**. Normales **Save** bleibt verfügbar; **Save and Queue** benötigt eine erfolgreiche Validierung.
+- Ein abgelehnter Vast-Key oder fehlende Provider-Rechte erscheinen als Provider-Fehler. Key/Rechte korrigieren und erneut versuchen. **PBGui session expired** bedeutet dagegen: erneut anmelden und die Seite neu laden.
+- **Vast instance charges** zeigt nach einer fehlgeschlagenen Abrechnungsabfrage **Unavailable**. Ein bereits geladener Betrag bleibt als **last retrieved** sichtbar; der Hinweis am Feldtitel nennt Fehler und Abrufdetails.
+- Fehlt die lokale Mietüberwachung, erklären Settings und Job-Log die systemd/OpenSSH-Voraussetzung. Jobs werden über **Open log** in der gemeinsamen Queue ausgewählt; dieses Fenster enthält Fortschritt, Fehler, Mietdetails und das zuletzt heruntergeladene Log.
+- **Show incompatible hosts** aktualisiert die Angebotsvorschau. Die Auswahl eines Angebots übernimmt dessen GPU-Typ in die Anforderungen; diese vor dem Start speichern. Das Angebot wird dadurch nicht reserviert.

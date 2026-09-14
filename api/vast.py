@@ -113,7 +113,8 @@ def save_gpu_preferences(body: RentalPreferences, session: SessionToken = Depend
 def _error(exc: VastError) -> HTTPException:
     """Log only safe domain errors before displaying them in the UI."""
     _log(SERVICE, str(exc), level="WARNING")
-    return HTTPException(status_code=exc.status, detail=str(exc))
+    return HTTPException(status_code=exc.status, detail=str(exc),
+                         headers={"X-PBGui-Error-Source": "vast"})
 
 
 @router.get("/main_page")
@@ -430,11 +431,8 @@ def recover_job(identifier: str, session: SessionToken = Depends(require_auth)) 
         store = JobStore()
         state = store.read(identifier)
         if state.get("final_collected"):
-            from vast_transfer import import_results
-            imported = import_results(store, identifier)
-            finished = json.loads((store.directory(identifier) / 'final-results/finished.json').read_text())
-            status = 'cancelled' if finished.get('cancelled') else 'completed' if finished.get('exit_code') == 0 else 'failed'
-            return store.update(identifier, **imported, status=status, error=None)
+            from vast_job_runner import finalize_collected_results
+            return finalize_collected_results(store, identifier)
         if state.get("lease_id"):
             return CloudQueue(store).action("recover")
         if state["rental_state"] == "none":

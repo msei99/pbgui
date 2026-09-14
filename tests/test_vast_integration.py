@@ -406,3 +406,37 @@ def test_stop_request_survives_job_polling(tmp_path, monkeypatch):
     row = vast.jobs(Response(), None)['jobs'][0]
     assert row['status'] == 'running'
     assert row['stop_requested'] is True
+
+
+@pytest.mark.parametrize('status', [401, 403, 429, 503])
+def test_vast_domain_errors_are_distinct_from_browser_auth(client, monkeypatch, status):
+    """Preserve provider status while explicitly identifying authenticated domain errors."""
+    http, store, _ = client
+    store.save(api_key='test-only')
+    monkeypatch.setattr(vast, '_log', lambda *args, **kwargs: None)
+
+    def provider_failure(self):
+        """Simulate only a redacted provider failure."""
+        raise VastError('Vast request rejected', status)
+
+    monkeypatch.setattr(VastClient, 'account', provider_failure)
+    response = http.post('/api/vast/account')
+    assert response.status_code == status
+    assert response.headers['x-pbgui-error-source'] == 'vast'
+    assert response.json()['detail'] == 'Vast request rejected'
+
+
+@pytest.mark.parametrize('status', [401, 403])
+def test_browser_auth_error_has_no_vast_marker(client, status):
+    """Auth failures are raised before the Vast route and cannot look like provider errors."""
+    from fastapi import HTTPException
+    http, _, app = client
+
+    def expired_session():
+        """Reject the browser without reading production authentication state."""
+        raise HTTPException(status_code=status, detail='Authentication required')
+
+    app.dependency_overrides[require_auth] = expired_session
+    response = http.post('/api/vast/account')
+    assert response.status_code == status
+    assert 'x-pbgui-error-source' not in response.headers

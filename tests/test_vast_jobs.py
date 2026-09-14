@@ -15,6 +15,61 @@ from vast_transfer import extract_results, import_results, fetch_host_key_result
 from setup.vast_gpu_benchmark.cloud_worker import safe_path
 
 
+@pytest.mark.parametrize('reason,improved', [('rental_deadline', False), ('requested', True), ('convergence', True)])
+def test_final_snapshot_checked_without_rewriting_stop_reason(job, monkeypatch, reason, improved):
+    """Final import uses its count, preserves stop history, and is retry-idempotent."""
+    from vast_convergence import DEFAULTS, advance
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    config = {**DEFAULTS, 'convergence_enabled': True}
+    history = advance({}, [[1, 1]], 512, config)
+    if reason == 'convergence':
+        history = advance(history, [[1, 1]], 1024, config)
+    final = store.directory(identifier) / 'final-results'
+    front = final / 'optimize_results/run/pareto'
+    front.mkdir(parents=True)
+    write_json(front / 'point.json', {'metrics': {
+        'constraint_violation': 0, 'unpenalized_objectives': [0.9, 0.9] if improved else [1, 1]}})
+    write_json(final / 'finished.json', {'cancelled': True, 'exit_code': 130, 'wall_seconds': 120})
+    store.update(identifier, final_collected=True, exact_completed=1098,
+                 convergence=history, convergence_config=config, stop_reason=reason)
+    monkeypatch.setattr(runner, 'import_results', lambda *args: {'evaluations': 1100, 'result_path': 'mock'})
+    row = runner.finalize_collected_results(store, identifier)
+    assert row['exact_completed'] == 1100
+    assert row['completion_reason'] == reason
+    assert row['status'] == ('completed' if reason == 'convergence' else 'cancelled')
+    assessment = row['convergence'].pop('final')
+    assert row['convergence'] == history
+    assert assessment['checked_exact'] == 1100
+    assert assessment['threshold_reached'] is (not improved)
+    assert assessment['last_improvement_exact'] == (1100 if improved else 512)
+    assert not store.read(identifier, 'control.json')['stop']
+    again = runner.finalize_collected_results(store, identifier)
+    assert again['convergence']['final'] == assessment
+    assert again['completion_reason'] == reason
+
+
+def test_invalid_final_convergence_keeps_results_and_reports_unavailable(job, monkeypatch):
+    """A damaged quality snapshot cannot turn a successful import into a stop."""
+    from vast_convergence import DEFAULTS
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final = store.directory(identifier) / 'final-results'
+    front = final / 'optimize_results/run/pareto'
+    front.mkdir(parents=True)
+    (front / 'point.json').write_text('{broken')
+    write_json(final / 'finished.json', {'exit_code': 0})
+    store.update(identifier, convergence_config={**DEFAULTS, 'convergence_enabled': True})
+    monkeypatch.setattr('vast_convergence._log', lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, 'import_results', lambda *args: {'evaluations': 1100, 'result_path': 'mock'})
+    row = runner.finalize_collected_results(store, identifier)
+    assert row['status'] == 'completed'
+    assert row['result_path'] == 'mock'
+    assert row['convergence']['final']['phase'] == 'waiting'
+    assert 'checked_exact' not in row['convergence']['final']
+    assert not store.read(identifier, 'control.json')['stop']
+
+
 @pytest.fixture
 def job(tmp_path):
     """Create an authorized fake job without touching real account state."""

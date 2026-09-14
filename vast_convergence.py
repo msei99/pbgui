@@ -67,7 +67,7 @@ def advance(previous, points, exact, config):
     return state
 
 
-def observe(store, identifier):
+def observe(store, identifier, *, final=False):
     """Evaluate the newly verified snapshot and persist a recoverable stop request."""
     row = store.read(identifier)
     config = row.get('convergence_config', DEFAULTS)
@@ -75,7 +75,8 @@ def observe(store, identifier):
         return False
     points = []
     try:
-        files = list((store.directory(identifier) / 'partial-results/optimize_results').glob('*/pareto/*.json'))
+        source = 'final-results' if final else 'partial-results'
+        files = list((store.directory(identifier) / source / 'optimize_results').glob('*/pareto/*.json'))
         if len(files) > 1000:
             raise ValueError('Pareto snapshot exceeds convergence limit')
         for path in files:
@@ -89,10 +90,24 @@ def observe(store, identifier):
                 continue
             # PB8 stores these as signed minimization objectives, including suite reducers.
             points.append([float(x) for x in metrics['unpenalized_objectives']])
-        state = advance(row.get('convergence'), points, int(row.get('exact_completed', 0)), config)
+        previous = dict(row.get('convergence') or {})
+        previous.pop('final', None)
+        exact = int(row.get('evaluations', 0) if final else row.get('exact_completed', 0))
+        if final:
+            # Inspect the final front even after a stop was already requested.
+            # Keep that historical decision separate from this retrospective check.
+            previous.pop('stop_requested', None)
+            previous.pop('checked_exact', None)
+        state = advance(previous, points, exact, config)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         _log(SERVICE, 'Convergence check unavailable; automatic stop suspended', level='WARNING')
         state = {'phase': 'waiting', 'reason': 'Waiting for a valid exact result snapshot'}
+    if final:
+        state['threshold_reached'] = bool(state.pop('stop_requested', False))
+        if state.get('phase') == 'stopping':
+            state['phase'] = 'tracking'
+        store.update(identifier, convergence={**(row.get('convergence') or {}), 'final': state})
+        return False
     store.update(identifier, convergence=state)
     if state.get('stop_requested'):
         _log(SERVICE, f'{identifier}: no significant exact Pareto improvement; collecting final results', level='INFO')

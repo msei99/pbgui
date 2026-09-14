@@ -240,7 +240,8 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 }""")
                 row.locator('button[title="Open log"]').click()
                 assert page.locator('#cloud-job-details').is_visible()
-                assert 'Rental failed (HTTP 400)' in page.locator('#job-state').text_content()
+                assert page.locator('#requeue-job').is_visible()
+                assert page.locator('#job-state').count() == 0
                 page.locator('#mock-log-close').click()
                 page.evaluate("""() => {
                     const item = PBGuiVast.queueItems()[0];
@@ -252,7 +253,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 }""")
                 row.locator('button[title="Open log"]').click()
                 assert page.locator('#cloud-job-details').is_visible()
-                assert 'queued-config' in page.locator('#job-state').text_content()
+                assert page.locator('#start-job').is_visible()
                 page.locator('#mock-log-close').click()
                 assert page.locator('#cloud-job-details').is_hidden()
                 assert page.locator('#settings #job-hours').is_visible()
@@ -302,7 +303,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert page.locator('#stop-job').is_disabled()
                 page.evaluate("""() => {
                     PBGuiVast.queueItems()[0].cloudJob.status = 'running';
-                    document.getElementById('job-select').dispatchEvent(new Event('change'));
+                    PBGuiVast.openEditor({});
                 }""")
                 assert page.locator('#stop-job').is_enabled()
                 page.evaluate('renderQueue()')
@@ -315,6 +316,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 page.wait_for_function("document.getElementById('stop-job').textContent === 'Stop requested'")
                 assert page.locator('#stop-job').is_disabled()
                 assert row.locator('td').nth(3).inner_text() == 'Stop requested'
+                page.evaluate('window.PBGuiDialogs.confirm = async () => true')
                 row.locator('button[title="Delete queue item"]').click()
                 page.wait_for_function('state.cloudQueueCount === 0')
                 assert '/api/vast/jobs/' + 'a'*32 + '/requeue' in calls
@@ -431,7 +433,7 @@ def test_convergence_dashboard_progress_and_completion():
                 const jobRows = [], worker = null, billingLease = null, billingSnapshot = null;
                 const fmt = (value, digits) => Number(value).toFixed(digits);
                 const renderOptimizeLogDashboard = () => {}, renderRentalDetails = () => {};
-            ''' + 'const stoppingJobs = new Map();' + source[source.index('  function stopPhase(job)'):source.index('  let startingQueue')] + function)
+            ''' + 'const stoppingJobs = new Map();' + source[source.index('  function stopPhase(job)'):source.index('  let startingQueue')] + source[source.index('  function workerActivity()'):source.index('  function renderJob()')] + function)
             page.evaluate('''() => {
                 window.job = {id:'test',status:'running',exact_completed:700,
                     convergence_config:{convergence_enabled:true,convergence_patience:512},
@@ -456,6 +458,11 @@ def test_convergence_dashboard_progress_and_completion():
             assert page.locator('#convergence-bar').evaluate('node => node.value') == pytest.approx(188/512*100)
             page.evaluate("job.completion_reason='convergence'; renderCloudDashboard(job)")
             assert 'Completed' in page.locator('#convergence-phase').inner_text()
+            page.evaluate("job.status='cancelled'; job.completion_reason='rental_deadline'; job.convergence.final={phase:'tracking',checked_exact:700,last_improvement_exact:700,stalled_exact:0}; renderCloudDashboard(job)")
+            assert 'rental time limit' in page.locator('#convergence-phase').inner_text()
+            assert 'Final snapshot checked' in page.locator('#convergence-sample').inner_text()
+            assert 'awaiting' not in page.locator('#convergence-sample').inner_text()
+            assert page.locator('#convergence-progress').inner_text() == '0 / 512 exact evaluations'
             page.evaluate('job.convergence_config.convergence_enabled=false; renderCloudDashboard(job)')
             assert page.locator('#cloud-convergence').evaluate('node => node.hidden')
         finally:
@@ -471,10 +478,10 @@ def test_vast_result_snapshots_trigger_refresh_without_local_runs():
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()
-            page.set_content('<select id="job-select"></select><div id="supervision-status"></div>')
+            page.set_content('<div id="supervision-status"></div>')
             page.add_script_tag(content='''
                 const el = id => document.getElementById(id);
-                let jobGeneration=0, disposed=false, jobRows=[], worker=null, queueState={}, supervision=false;
+                let jobGeneration=0, disposed=false, jobRows=[], worker=null, queueState={}, supervision=false, selectedJobId=null;
                 const stoppingJobs = new Map();
                 let data={jobs:[{id:'test'}]};
                 const request=async () => structuredClone(data);

@@ -27,11 +27,13 @@
   let offerGeneration = 0;
   let accountGeneration = 0;
   let disposed = false;
-  let logViewer = null;
+  let selectedJobId = null;
   let savedPreferences = null, jobRows = [], supervision = false, jobGeneration = 0, jobTimer = null;
   const controllers = new Set();
   const requeuingJobs = new Set();
   const stoppingJobs = new Map();
+  const deletingJobs = new Set();
+  let workerAction = null;
   function stopPhase(job) {
     if (!job || ['completed','cancelled','failed'].includes(job.status)) return null;
     if (job.status === 'collecting') return 'Collecting results…';
@@ -54,6 +56,7 @@
   }
 
   async function request(path, options) {
+    if (disposed) throw new Error('Cloud controls are disconnected. Sign in and reload this page.');
     const controller = new AbortController();
     controllers.add(controller);
     const timer = setTimeout(() => controller.abort(), (["/jobs/prepare", "/queue/start"].includes(path) || path.endsWith('/requeue')) ? 600000 : 30000);
@@ -62,15 +65,22 @@
         credentials: 'same-origin', cache: 'no-store', ...options,
         headers: {'Content-Type': 'application/json'}, signal: controller.signal
       });
-      if (response.status === 401 || response.status === 403) {
+      if ([401, 403].includes(response.status) && response.headers.get('X-PBGui-Error-Source') !== 'vast') {
         clearSecrets(); disposed = true; clearTimeout(jobTimer); jobGeneration++; closeLog();
         controllers.forEach(item => { if (item !== controller) item.abort(); });
         generation++; accountGeneration++; offerGeneration++;
         el('balance').textContent = 'Authentication required';
+        message('PBGui session expired. Sign in again and reload this page.', true);
+        if (typeof toast === 'function') toast('PBGui session expired. Sign in again and reload this page.', 'err');
         throw new Error('Please sign in to PBGui again.');
       }
-      const data = await response.json();
-      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Request failed. Check the entered values.');
+      let data;
+      try { data = await response.json(); }
+      catch (error) {
+        if (controller.signal.aborted) throw error;
+        throw new Error(response.ok ? 'Invalid response from PBGui. Reload or retry.' : 'Request failed (HTTP ' + response.status + '). Retry when the service is available.');
+      }
+      if (!response.ok) throw new Error(data && typeof data.detail === 'string' ? data.detail : 'Request failed (HTTP ' + response.status + '). Check the entered values.');
       return data;
     } finally {
       clearTimeout(timer);
@@ -94,10 +104,10 @@
     try {
       const data = await request('/credentials', {method:'POST', body:JSON.stringify({[field]:value})});
       if (disposed || current !== generation) return;
-      clearSecrets(); renderSettings(data);
+      clearSecrets(); renderSettings(data); el('refresh-balance').disabled = false;
       el('balance').textContent = 'Not checked'; el('balance-time').textContent = '';
       el('selection').textContent = 'Save GPU requirements for future queue starts.';
-      el('offers-body').replaceChildren(); renderJob();
+      el('offers-body').replaceChildren(); el('find-offers').disabled = false; renderJob();
       message('Credentials saved. Use the balance button to test the connection.', false);
     } catch (error) { if (!disposed) message(error.message, true); }
     finally { if (!disposed) buttons.forEach(button => button.disabled = false); }
@@ -114,7 +124,7 @@
       message('Connected to Vast.ai' + (data.account_id == null ? '.' : ' account ' + data.account_id + '.'), false);
     } catch (error) {
       if (!disposed && current === accountGeneration) { el('balance-time').textContent = 'Refresh failed — previous value may be outdated'; message(error.message, true); }
-    } finally { if (!disposed) el('refresh-balance').disabled = false; }
+    } finally { if (!disposed && current === accountGeneration) el('refresh-balance').disabled = false; }
   }
 
   function fmt(value, digits) { return value == null ? 'Unknown' : Number(value).toFixed(digits == null ? 2 : digits); }
@@ -171,6 +181,7 @@
         body.querySelectorAll('tr').forEach(other => { other.classList.remove('selected'); other.setAttribute('aria-selected', 'false'); });
         el('gpu-model').value = offer.gpu_name;
         row.classList.add('selected'); row.setAttribute('aria-selected', 'true');
+        el('selection').hidden = false;
         el('selection').textContent = 'GPU type: ' + offer.gpu_name + '. Save requirements to use this type; this offer is not reserved.';
       };
       row.addEventListener('click', select);
@@ -193,7 +204,7 @@
       renderOffers(data.offers); el('offer-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
       message(data.offers.length + ' offers found (up to 100 shown).', false);
     } catch (error) { if (!disposed && current === offerGeneration) message(error.message, true); }
-    finally { if (!disposed) el('find-offers').disabled = false; }
+    finally { if (!disposed && current === offerGeneration) el('find-offers').disabled = false; }
   }
 
   const preferenceFields = {gpu_name:'gpu-model', max_price:'max-price', min_vram:'min-vram',
@@ -201,7 +212,7 @@
   function applyPreferences(data) {
     data = {convergence_enabled:false, convergence_min_exact:512, convergence_patience:512, convergence_tolerance_pct:0.1, ...data};
     savedPreferences = {...data};
-    Object.entries(preferenceFields).forEach(([key, id]) => { el(id).value = String(data[key]); });
+    Object.entries(preferenceFields).forEach(([key, id]) => { el(id).value = data[key] == null ? '' : String(data[key]); });
     el('saved-requirements').textContent = 'Saved: ' + (data.gpu_name || 'any GPU type') + ' · max $' + fmt(data.max_price, 4) + '/hour · ' + data.min_vram + ' GB VRAM / ' + data.min_ram + ' GB RAM / ' + data.min_cpu + ' CPU cores. Current matching offers are selected only at start.';
     renderJob();
   }
@@ -223,43 +234,43 @@
     .catch(error => { if (!disposed) message(error.message, true); })
     .finally(() => { if (!disposed) el('save-gpu-preferences').disabled = false; });
 
-  function selectedJob() { return jobRows.find(row => row.id === el('job-select').value); }
+  function selectedJob() { return jobRows.find(row => row.id === selectedJobId); }
 
-  function renderJob() {
-    const job = selectedJob(), terminal = job && ['completed', 'failed', 'cancelled'].includes(job.status);
+  function workerActivity() {
     const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
-    el('start-job').hidden = !job || job.status !== 'ready';
-    el('start-job').disabled = startingQueue || active || !job || job.status !== 'ready' || !savedPreferences || !supervision;
-    el('requeue-job').hidden = !job || !['failed','cancelled'].includes(job.status) || !job.can_delete;
-    el('requeue-job').disabled = !!job && requeuingJobs.has(job.id);
-    el('requeue-job').textContent = job && requeuingJobs.has(job.id) ? 'Preparing…' : 'Requeue';
-    el('worker-state').textContent = active ? worker.gpu_name + ' · ' + (worker.rental_state === 'creation_pending' ? 'provisioning (instance not confirmed)' : worker.status) + ' · $' + fmt(worker.price_hour_usd, 4) + '/hour · rental: ' + worker.rental_state + ' · deadline: ' + new Date(worker.deadline * 1000).toLocaleString() + (worker.idle_since ? ' · idle deletion: ' + new Date((worker.idle_since + worker.idle_seconds) * 1000).toLocaleTimeString() : '') : 'No active GPU rental.' + (worker ? ' Last rental: ' + worker.rental_state + '.' : '') + ' GPU requirements are configured in Settings; a matching offer is selected at queue start.';
+    let text = active ? worker.gpu_name + ' · ' + (worker.rental_state === 'creation_pending' ? 'provisioning (instance not confirmed)' : worker.status) + ' · $' + fmt(worker.price_hour_usd, 4) + '/hour · rental: ' + worker.rental_state + ' · deadline: ' + new Date(worker.deadline * 1000).toLocaleString() + (worker.idle_since ? ' · idle deletion: ' + new Date((worker.idle_since + worker.idle_seconds) * 1000).toLocaleTimeString() : '') : 'No active GPU rental.' + (worker ? ' Last rental: ' + worker.rental_state + '.' : '') + ' GPU requirements are configured in Settings; a matching offer is selected at queue start.';
     if (active && worker.cleanup_wait_until) {
-      el('worker-state').textContent = 'Cleanup: no instance found · waiting until ' + new Date(worker.cleanup_wait_until * 1000).toLocaleTimeString()
+      text = 'Cleanup: no instance found · waiting until ' + new Date(worker.cleanup_wait_until * 1000).toLocaleTimeString()
         + ' · last checked ' + new Date(worker.provider_checked_at * 1000).toLocaleTimeString();
     }
     else if (active && worker.instance_id) {
-      el('worker-state').textContent = worker.gpu_name + ' · instance ' + worker.instance_id + ' · '
+      text = worker.gpu_name + ' · instance ' + worker.instance_id + ' · '
         + (worker.provider_status || worker.status) + ' · $' + fmt(worker.price_hour_usd, 4) + '/hour';
     }
-    ['pause', 'resume', 'end', 'recover'].forEach(action => el(action + '-worker').disabled = !active);
-    el('pause-worker').disabled = !active || queueState.paused;
-    el('resume-worker').disabled = !active || !queueState.paused;
+    return text;
+  }
+
+  function renderJob() {
+    const job = selectedJob();
+    const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
+    el('start-job').hidden = !job || job.status !== 'ready';
+    el('start-job').disabled = !!workerAction || startingQueue || active || !job || job.status !== 'ready' || !savedPreferences || !supervision;
+    el('requeue-job').hidden = !job || !['failed','cancelled'].includes(job.status) || !job.can_delete;
+    el('requeue-job').disabled = !!job && (requeuingJobs.has(job.id) || deletingJobs.has(job.id));
+    el('requeue-job').textContent = job && requeuingJobs.has(job.id) ? 'Preparing…' : 'Requeue';
+    const labels = {pause:'Pause queue', resume:'Start queue', end:'End rental', recover:'Resume supervision'};
+    const pendingLabels = {pause:'Pausing…', resume:'Resuming…', end:'Ending rental…', recover:'Resuming supervision…'};
+    Object.keys(labels).forEach(action => {
+      const button = el(action + '-worker');
+      button.disabled = !active || !!workerAction || startingQueue;
+      button.textContent = workerAction === action ? pendingLabels[action] : labels[action];
+    });
+    el('pause-worker').disabled ||= !!queueState.paused;
+    el('resume-worker').disabled ||= !queueState.paused;
     el('stop-job').textContent = stopPhase(job) || 'Stop & collect';
     el('stop-job').disabled = !!stopPhase(job) || !job || !['provisioning', 'uploading', 'running', 'collecting'].includes(job.status);
     el('recover-job').disabled = !job || !job.final_collected || (!!job.result_path && !job.result_partial);
-    el('job-log').disabled = !job || !job.has_log;
     el('job-results').hidden = !job || !job.result_path;
-    el('job-state').textContent = job ? [
-      job.config_name + ' · ' + job.id,
-      'Job: ' + job.status + ' | Rental: ' + job.rental_state,
-      'Exact evaluations: ' + (job.exact_completed || 0) + ' / ' + job.iterations + ' | GPU candidates screened: ' + (job.gpu_candidates || 0),
-      'Input: ' + fmt((job.input_bytes || 0) / 1e6, 1) + ' MB | CPU workers: ' + job.workers,
-      job.deadline ? 'Deletion deadline: ' + new Date(job.deadline * 1000).toLocaleString() : '',
-      job.last_backup_at ? 'Last local backup: ' + new Date(job.last_backup_at * 1000).toLocaleString() : '',
-      job.result_path ? 'Imported results: ' + job.result_path : '',
-      job.error || '', job.cleanup_error || ''
-    ].filter(Boolean).join('\n') : 'No jobs prepared.';
   }
 
   function renderQueueOverview() {
@@ -273,7 +284,7 @@
     try {
       const data = await request('/jobs');
       if (disposed || current !== jobGeneration) return;
-      const selected = preferred || el('job-select').value;
+      const selected = preferred || selectedJobId;
       const previousResults = new Map(jobRows.map(job => [job.id, [job.result_path, job.last_backup_at, job.result_partial].join('|')]));
       const resultsChanged = data.jobs.some(job => job.result_path && previousResults.get(job.id) !==
         [job.result_path, job.last_backup_at, job.result_partial].join('|'));
@@ -282,11 +293,12 @@
         const row = jobRows.find(item => item.id === id);
         if (!row || ['completed','failed','cancelled'].includes(row.status)) stoppingJobs.delete(id);
       }
-      el('job-select').replaceChildren();
-      jobRows.forEach(job => { const option = document.createElement('option'); option.value = job.id;
-        option.textContent = job.config_name + ' · ' + job.status + ' · ' + job.id.slice(0, 8); el('job-select').appendChild(option); });
-      if (jobRows.some(job => job.id === selected)) el('job-select').value = selected;
-      el('supervision-status').textContent = supervision ? 'Local rental supervision is available.' : 'Rental requires a working user systemd manager and OpenSSH on the PBGui host.';
+      selectedJobId = jobRows.some(job => job.id === selected) ? selected : (jobRows[0]?.id || null);
+      ['supervision-status', 'settings-supervision-status'].forEach(id => {
+        const notice = el(id); if (!notice) return;
+        notice.hidden = !!supervision;
+        notice.textContent = supervision ? '' : 'GPU start unavailable: rental supervision requires a working user systemd manager and OpenSSH on the PBGui host.';
+      });
       renderJob();
       const displayed = jobRows.find(row => window.state && row.id === window.state.cloudLogId);
       if (displayed) renderCloudDashboard(displayed);
@@ -339,7 +351,7 @@
     box.hidden = false;
     box.classList.toggle('cloud-validation-error', !!errors.length);
     const heading = document.createElement('strong');
-    heading.textContent = 'GPU configuration is invalid';
+    heading.textContent = errors.some(error => error.path === 'validation') ? 'GPU validation unavailable' : 'GPU configuration is invalid';
     heading.dataset.tip = 'Saving remains available. Resolve these errors before queueing. Market data is checked during preparation.';
     content.appendChild(heading);
     if (report) heading.dataset.tip += ' Worker PB8 ' + report.revision.slice(0, 7) + '.';
@@ -359,6 +371,9 @@
         button.addEventListener('click', callback || (() => applyCloudAlternative(action, entryIndex))); actions.appendChild(button);
         return button;
       };
+      if (['validation', 'config'].includes(error.path)) {
+        addAction('Retry validation', 'Check the current draft again. Queueing requires successful validation; Save remains available.', 'retry', null, scheduleValidation);
+      }
       const objectiveMatch = /^optimize\.scoring\.(\d+)\.metric$/.exec(error.path);
       if (objectiveMatch && error.message.includes('gain_strategy_eq')) {
         addAction('Use ADG', 'Replace this objective with average daily growth in the draft. This changes the objective; it is not identical to total-period gain. Goal and scenario stay unchanged.', 'adg', Number(objectiveMatch[1]));
@@ -481,7 +496,7 @@
       ['Budget / deadline', '$' + fmt(rental.budget_usd, 2) + ' · ' + (rental.deadline ? new Date(rental.deadline * 1000).toLocaleString() : '—'), 'Shared rental budget target and original deletion deadline. The budget target is not a provider spending cap.']
     ];
     const parts = billing && billing.breakdown || {};
-    fields.push(['Vast instance charges', billing && billing.amount_usd != null ? '$' + fmt(billing.amount_usd, 4) : 'Pending',
+    fields.push(['Vast instance charges', billing && billing.amount_usd != null ? '$' + fmt(billing.amount_usd, 4) + (billing.error ? ' (last retrieved)' : '') : billing && billing.error ? 'Unavailable' : 'Pending',
       'Provider-reported charges for the entire rented instance, including other jobs sharing it. Reporting may lag behind usage.'
       + (billing && billing.reported_at ? ' Retrieved: ' + new Date(billing.reported_at * 1000).toLocaleString() + '.' : '')
       + (billing && billing.amount_usd != null ? ' GPU: $' + fmt(parts.gpu || 0, 4) + '; disk: $' + fmt(parts.disk || 0, 4)
@@ -527,7 +542,7 @@
       process:{started_at:job.started_at ? new Date(job.started_at*1000).toISOString() : null},
       queue:{running:jobRows.filter(row => ['running','provisioning','uploading','collecting'].includes(row.status)).length,
         queued:jobRows.filter(row => row.status==='ready').length,error:jobRows.filter(row => row.status==='failed').length},
-      log:{last_error:(worker && worker.creation_error) || job.error || job.cleanup_error || (worker && worker.cleanup_error) || '',last_line:el('worker-state').textContent,
+      log:{last_error:(worker && worker.creation_error) || job.error || job.cleanup_error || (worker && worker.cleanup_error) || '',last_line:workerActivity(),
         updated_at:job.updated_at ? new Date(job.updated_at*1000).toISOString() : null}});
     if (job.elapsed_seconds != null && ['completed','cancelled','failed'].includes(job.status)) {
       el('optlog-elapsed').textContent = formatDurationCompact(job.elapsed_seconds);
@@ -535,7 +550,10 @@
     el('optlog-pareto').textContent = job.pareto_count == null ? '—' : Number(job.pareto_count).toLocaleString();
     if (job.auto_cpu_workers && !job.cpu_allocation_resolved) el('optlog-cpu').textContent = 'Auto (instance allocation)';
     renderUtilization(job);
-    const config = job.convergence_config || {}, convergence = job.convergence || {};
+    const config = job.convergence_config || {}, history = job.convergence || {};
+    const convergence = history.final || history;
+    const terminal = ['completed', 'cancelled', 'failed'].includes(job.status);
+    const finalChecked = !!history.final && convergence.phase !== 'waiting' && convergence.checked_exact != null;
     el('convergence-help').dataset.tip = 'First collect at least ' + (config.convergence_min_exact || 512) +
       ' exact CPU evaluations. Then stop and collect after ' + (config.convergence_patience || 512) +
       ' further exact evaluations without a Pareto hypervolume improvement greater than ' +
@@ -546,8 +564,13 @@
     el('convergence-sample').textContent = convergence.checked_exact == null ? 'Waiting for the first verified result snapshot.' :
       'Checked through exact result ' + Number(convergence.checked_exact).toLocaleString() +
       (convergence.last_improvement_exact == null ? '' : ' · Last significant improvement at ' + Number(convergence.last_improvement_exact).toLocaleString()) +
-      ' · ' + Math.max(0, (job.exact_completed || 0) - convergence.checked_exact).toLocaleString() + ' newer results awaiting snapshot check';
+      (finalChecked ? ' · Final snapshot checked (not a per-result replay)' : terminal ? ' · Final convergence check unavailable' :
+        ' · ' + Math.max(0, (job.exact_completed || 0) - convergence.checked_exact).toLocaleString() + ' newer results awaiting snapshot check');
+    if (terminal && !finalChecked && convergence.checked_exact == null) el('convergence-sample').textContent = 'Final convergence check unavailable';
     el('convergence-phase').textContent = job.completion_reason === 'convergence' ? 'Completed: no significant improvement' :
+      job.completion_reason === 'rental_deadline' ? 'Stopped: rental time limit' :
+      terminal && finalChecked ? (convergence.threshold_reached ? 'Final snapshot: stagnation threshold reached' : 'Final snapshot checked') :
+      terminal ? 'Final convergence check unavailable' :
       convergence.reason || ({warming:'Minimum evaluations', tracking:'Monitoring', stopping:'Collecting results'}[convergence.phase] || 'Waiting for exact results');
     el('convergence-since').textContent = convergence.last_improvement_exact == null ? '—' :
       Math.max(0, (job.exact_completed || 0) - convergence.last_improvement_exact).toLocaleString() + ' exact evaluations';
@@ -568,7 +591,12 @@
         const active = jobRows.find(row => window.state && row.id === window.state.cloudLogId && row.lease_id === lease);
         if (active) renderRentalDetails(active.rental, billingSnapshot);
       }).catch(error => {
-        if (!disposed) { billingLease = lease; billingSnapshot = {error:error.message}; billingNextCheck = Date.now() + 60000; }
+        if (!disposed) {
+          billingSnapshot = {...(billingLease === lease ? billingSnapshot : null), error:error.message};
+          billingLease = lease; billingNextCheck = Date.now() + 60000;
+          const active = jobRows.find(row => window.state && row.id === window.state.cloudLogId && row.lease_id === lease);
+          if (active) renderRentalDetails(active.rental, billingSnapshot);
+        }
       }).finally(() => { billingPending = false; });
     }
     const imageProgress = job.image_progress;
@@ -607,7 +635,7 @@
   function openCloudLog(job) {
     if (typeof openLogPanel !== 'function') return;
     openLogPanel(job.id, job.config_name, {cloud:true,hasLog:!!job.has_log,hasProviderLog:!!job.has_provider_log});
-    el('job-select').value = job.id;
+    selectedJobId = job.id;
     renderJob();
     el('cloud-job-details').hidden = false;
     renderCloudDashboard(job);
@@ -628,7 +656,7 @@
       if (index === 3) {
         const badge = document.createElement('span');
         badge.className = 'badge badge-' + item.status;
-        badge.textContent = stopPhase(job) || (startingJobId === job.id ? 'Starting…' : value); cell.appendChild(badge);
+        badge.textContent = deletingJobs.has(job.id) ? 'Deleting…' : requeuingJobs.has(job.id) ? 'Preparing…' : stopPhase(job) || (startingJobId === job.id ? 'Starting…' : value); cell.appendChild(badge);
       } else cell.textContent = value;
       row.appendChild(cell);
     });
@@ -636,34 +664,51 @@
     const button = (label, title, action) => {
       const node = document.createElement('button'); node.className = 'icon-btn';
       node.textContent = label; node.title = title;
-      if (title === 'Start') node.disabled = startingQueue;
+      if (title === 'Start') {
+        node.disabled = startingQueue || !!workerAction || !supervision || !savedPreferences || deletingJobs.has(job.id);
+        if (!supervision) node.dataset.tip = 'Start unavailable: rental supervision requires user systemd and OpenSSH on the PBGui host.';
+      }
+      if (['Requeue', 'Delete queue item'].includes(title)) node.disabled = requeuingJobs.has(job.id) || deletingJobs.has(job.id);
       if (title === 'Stop') node.disabled = !!stopPhase(job);
       node.addEventListener('click', event => { event.stopPropagation(); action(); });
       actions.appendChild(node);
     };
     if (item.status === 'queued') button('▶', 'Start', () => {
-      el('job-select').value = job.id; renderJob();
+      selectedJobId = job.id; renderJob();
       startCloudQueue(job);
     });
     if (['error','cancelled'].includes(item.status) && job.can_delete) {
       button('↺', 'Requeue', () => requeueCloudJob(job));
     }
     if (!['queued','complete','error','cancelled'].includes(item.status)) button('⬛', 'Stop', () => {
-      el('job-select').value = job.id; renderJob(); el('stop-job').click();
+      selectedJobId = job.id; renderJob(); el('stop-job').click();
     });
-    if (job.has_log || job.error || job.creation_error || job.cleanup_error || (worker && !['none','deletion_verified'].includes(worker.rental_state)) || ['provisioning','running','failed','error','completed'].includes(job.status)) button('📋', 'Open log', () => openCloudLog(job));
+    if (job.has_log || job.has_provider_log || job.error || job.creation_error || job.cleanup_error || (worker && !['none','deletion_verified'].includes(worker.rental_state)) || ['provisioning','running','failed','error','completed'].includes(job.status)) button('📋', 'Open log', () => openCloudLog(job));
     if (typeof openConfigEditor === 'function') button('✏️', 'Edit config', () => {
       openConfigEditor(job.config_name).catch(handleError);
     });
-    if (job.can_delete) button('🗑', 'Delete queue item', async () => {
-      try {
-        await request('/jobs/' + encodeURIComponent(job.id), {method:'DELETE'});
-        if (el('job-select').value === job.id) closeLog();
-        await refreshJobs();
-      } catch (error) { message(error.message, true); }
-    });
+    if (job.can_delete) button('🗑', 'Delete queue item', () => deleteCloudJob(job));
     if (job.can_delete) actions.lastElementChild.classList.add('danger');
     row.appendChild(actions); return row;
+  }
+
+  async function deleteCloudJob(job) {
+    if (disposed || deletingJobs.has(job.id) || requeuingJobs.has(job.id)) return;
+    deletingJobs.add(job.id); renderJob(); renderQueueOverview();
+    try {
+      if (!window.PBGuiDialogs || !window.PBGuiDialogs.confirm) throw new Error('Delete confirmation unavailable. Reload this page.');
+      if (!await window.PBGuiDialogs.confirm({title:'Delete queue item',
+        message:'Delete "' + job.config_name + '" from the queue?', confirmText:'Delete'})) return;
+      if (disposed) return;
+      await request('/jobs/' + encodeURIComponent(job.id), {method:'DELETE'});
+      if (disposed) return;
+      if (window.state && window.state.cloudLogId === job.id) closeLog();
+      await refreshJobs();
+    } catch (error) { if (!disposed) message(error.message, true); }
+    finally {
+      deletingJobs.delete(job.id);
+      if (!disposed) { renderJob(); renderQueueOverview(); }
+    }
   }
 
   window.PBGuiVast = {
@@ -682,6 +727,12 @@
     updateEditor: function () {
       const execution = el('opted-execution'), target = el('opted-vast-worker');
       if (target) target.hidden = !execution || execution.value !== 'vast';
+      const iterations = el('opted-iters');
+      if (execution && execution.value === 'vast' && iterations
+          && Object.prototype.hasOwnProperty.call(iterations.dataset, 'vastDefaultFrom')) {
+        if (iterations.value === iterations.dataset.vastDefaultFrom) iterations.value = '20000';
+        delete iterations.dataset.vastDefaultFrom;
+      }
       scheduleValidation();
     },
     closeEditor: function () { validationGeneration++; clearTimeout(validationTimer); setQueueBlocked(false); },
@@ -694,23 +745,12 @@
   };
   if (el('opted-execution')) window.PBGuiVast.openEditor(window.state.editorLastConfig);
   function closeLog() {
-    if (logViewer) logViewer.close(); logViewer = null;
-    el('vast-log').hidden = true; el('close-job-log').hidden = true;
     el('cloud-job-details').hidden = true;
     if (window.state) window.state.cloudLogId = null;
   }
-  el('job-select').addEventListener('change', () => { closeLog(); renderJob(); });
-  el('close-job-log').addEventListener('click', closeLog);
-  el('job-log').addEventListener('click', () => {
-    const job = selectedJob(); if (!job || !job.has_log) return;
-    closeLog(); el('vast-log').hidden = false; el('close-job-log').hidden = false;
-    logViewer = new LogViewerPanel({containerId:'vast-log', wsBase:window.WS_BASE,
-      defaultHost:'local', defaultFile:'optimizes_v8/vast_' + job.id + '.log', presets:'system', showRestart:false, height:'400px'});
-    logViewer.open();
-  });
   async function requeueCloudJob(job) {
-    if (!job || requeuingJobs.has(job.id)) return;
-    requeuingJobs.add(job.id); renderJob();
+    if (disposed || !job || requeuingJobs.has(job.id) || deletingJobs.has(job.id)) return;
+    requeuingJobs.add(job.id); renderJob(); renderQueueOverview();
     try {
       const replacement = await request('/jobs/' + encodeURIComponent(job.id) + '/requeue', {method:'POST'});
       await refreshJobs(replacement.id);
@@ -719,12 +759,12 @@
       if (!disposed) { message(error.message, true); await refreshJobs(); }
     } finally {
       requeuingJobs.delete(job.id);
-      if (!disposed) renderJob();
+      if (!disposed) { renderJob(); renderQueueOverview(); }
     }
   }
   el('requeue-job').addEventListener('click', () => requeueCloudJob(selectedJob()));
   async function startCloudQueue(job) {
-    if (startingQueue || disposed) return;
+    if (startingQueue || workerAction || disposed || !supervision || !savedPreferences || (job && deletingJobs.has(job.id))) return;
     startingQueue = true;
     startingJobId = job && job.id;
     document.querySelectorAll('tr[data-cloud-id]').forEach(row => {
@@ -735,13 +775,12 @@
         if (badge) badge.textContent = 'Starting…';
       }
     });
-    el('start-job').disabled = true;
+    renderJob();
     message('Starting GPU queue…');
     try {
       await request('/queue/start', {method:'POST', body:JSON.stringify({use_saved_settings:true, accept_rental_and_cleanup:true})});
       await refreshJobs(job && job.id);
-
-      message('');
+      if (!disposed) message('');
     } catch (error) {
       if (!disposed) { message(error.message, true); if (typeof toast === 'function') toast(error.message, 'err'); }
     } finally {
@@ -750,7 +789,7 @@
         renderJob();
         document.querySelectorAll('tr[data-cloud-id]').forEach(row => {
           const start = row.querySelector('button[title="Start"]');
-          if (start) start.disabled = false;
+          if (start) start.disabled = !!workerAction || !supervision || !savedPreferences;
           const item = cloudQueueItems().find(item => item.cloudJob.id === row.dataset.cloudId);
           const badge = row.querySelector('.badge');
           if (item && badge) badge.textContent = item.status;
@@ -779,8 +818,17 @@
     finally { if (!disposed) renderJob(); }
   }));
   ['pause', 'resume', 'end', 'recover'].forEach(action => el(action + '-worker').addEventListener('click', async () => {
-    try { await request('/queue/' + action, {method:'POST'}); message(''); await refreshJobs(); }
-    catch (error) { message(error.message, true); }
+    if (disposed || workerAction || startingQueue) return;
+    workerAction = action; renderJob(); renderQueueOverview();
+    message(el(action + '-worker').textContent);
+    try {
+      await request('/queue/' + action, {method:'POST'});
+      if (!disposed) { message(''); await refreshJobs(); }
+    } catch (error) { if (!disposed) message(error.message, true); }
+    finally {
+      workerAction = null;
+      if (!disposed) { renderJob(); renderQueueOverview(); }
+    }
   }));
   if (new URLSearchParams(location.search).get('view') === 'queue' && window.setPanel) window.setPanel('queue');
   pollJobs();
@@ -788,6 +836,7 @@
   el('credentials-form').addEventListener('submit', event => saveSecret(event, 'api_key', 'api-key'));
   el('refresh-balance').addEventListener('click', refreshBalance);
   el('offers-form').addEventListener('submit', findOffers);
+  el('show-incompatible').addEventListener('change', () => { if (!disposed) el('offers-form').requestSubmit(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden) clearSecrets(); });
   window.addEventListener('pagehide', () => { disposed = true; validationGeneration++; clearTimeout(validationTimer); closeLog(); clearTimeout(jobTimer); jobGeneration++; generation++; accountGeneration++; offerGeneration++; clearSecrets(); controllers.forEach(controller => controller.abort()); });
   const initial = generation;

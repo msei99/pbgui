@@ -3,15 +3,36 @@
 Cloud optimization is integrated into **PB8 Optimize**. There is no separate
 Vast system page. Each installation uses its own Vast account and rental credit.
 
-## Cloud setup in Optimizer Settings
+## Optimizer Settings
 
-The existing **Settings** sidebar button opens a full-width view beside the sidebar, with local execution settings, cloud account setup and GPU requirements. **Back to Queue** returns to the job list.
+The **Settings** sidebar button opens local execution, cloud account and GPU requirements. **Guide** opens this section directly. **Back to Queue** returns to jobs.
 
-Open **Queue → Settings → Cloud setup**. Save your Vast API key and click **Test connection
-& refresh balance**. The key is stored locally with owner-only permissions and
-is never sent to bot servers. The balance uses available Vast rental credit.
-Reading the account requires User Read; renting and cleanup need Instance
-Read/Write and the SSH/bootstrap operations. PBGui does not top up the account.
+### Local execution
+
+CPU and **Override config CPU** control local optimizer workers. **Use PBGui Market Data** selects PBGui's prepared data; **Autostart** controls the local queue. These controls are separate from the cloud GPU requirements below. Save local changes with **Save**, and cloud requirements with **Save settings**.
+
+### Vast API key
+
+1. Sign in to the [Vast console Keys page](https://console.vast.ai/manage-keys/). Under **API Keys**, click **+New**.
+2. Name the key `PBGui`. Select scoped/custom permissions and enable the categories below.
+3. Click **Create** and copy the key shown once.
+4. In PBGui, open **PB8 Optimize → Settings → Cloud setup**. Paste it into **Vast API key**, click **Save key**, then **Test connection & refresh balance**.
+
+| Permission | Used by PBGui |
+| --- | --- |
+| `user_read` | Account and available credit |
+| `misc` | GPU offer search |
+| `instance_read` | Instance status and logs |
+| `instance_write` | Rent, start, stop, delete and attach the worker SSH key |
+| `billing_read` | Provider-reported instance charges |
+
+`billing_write`, `user_write`, machine and team permissions are not required for this workflow. A read-only key cannot rent or clean up instances. Enabling billing **read** does not authorize credit transfers.
+
+The key stays in PBGui's local credential store with owner-only permissions; it is not copied to the rented worker or bot servers. No manually uploaded SSH key or GitHub registry credential is needed. PBGui manages its worker SSH identity. Fund the Vast account separately; PBGui does not add credit.
+
+A successful balance test confirms account access, not every rental permission. If offer search, logs or startup return a permission error, check the corresponding category. Missing `billing_read` prevents the cost lookup; even with permission, charges can remain **Pending** until Vast posts them. To replace a key, save the replacement and test it before revoking the old key in Vast.
+
+Sources: [Vast API key setup](https://docs.vast.ai/guides/reference/api-keys) and [permission reference](https://docs.vast.ai/api-reference/permissions).
 
 **Create Vast.ai account** opens the PBGui referral link. It supports PBGui through
 the Vast referral program and is loaded only when clicked.
@@ -208,11 +229,15 @@ During optimization, verified result snapshots are published approximately every
 
 ### Stop on stagnation
 
+New PB8 configurations use **20,000 exact evaluations** when first switched to Vast, provided the iteration field has not been edited. Saved configurations and explicit iteration values are preserved. This is an upper limit; enabled stagnation detection may stop earlier, but does not guarantee it.
+
 Setup offers an optional early stop (off by default). Minimum exact evaluations defaults to 512, patience to a further 512 exact evaluations, and improvement tolerance to 0.1%. Settings are frozen when each queued job starts; saving changes does not alter a running job.
 
 After the minimum, PBGui measures the feasible exact Pareto front using normalized hypervolume with a fixed scale/reference established by the initial front. This supports one to three signed minimization objectives, including PB8 suite reductions. Relative improvements above the tolerance reset patience; smaller improvements accumulate against the last accepted baseline. Proxy counts and elapsed minutes do not consume patience. Missing, invalid, unsupported or entirely infeasible snapshots suspend detection and restart the observation window.
 
 The job log shows the detection phase, evaluations since the last significant improvement, and patience used. Checks follow verified periodic result snapshots, so stopping can exceed the configured patience by one snapshot interval. On stagnation PBGui requests a graceful stop, collects the final native results, and records a successful stop as completed with a convergence reason. The shared queue then continues or applies its configured idle cleanup. The detector is a heuristic, not proof of optimality; rental deadlines and iteration limits still apply.
+
+Final collection also checks the final Pareto snapshot, using the verified imported evaluation count. The dashboard identifies this as a final snapshot check, not a replay of every evaluation. It preserves the original stop reason (stagnation, requested stop or rental time limit); a retrospective threshold crossing does not rewrite that reason. Retry result import performs the same final check. If the final front cannot be assessed, the saved results remain available and the dashboard reports the check as unavailable.
 
 The open Results/Paretos list refreshes when the next ten-second job poll discovers a newly published snapshot (normally about 60 seconds plus up to 10 seconds and transfer time). Elapsed measures optimizer runtime, excluding provisioning and upload; it freezes at the reported runtime when finished.
 
@@ -235,3 +260,12 @@ The log also shows the last checked exact result, the last significant improveme
 Vast scoring and limits use the complete PB8 GPU metric contract, including supported aliases. The current worker and local PB8 have identical metric schema, registry and reduction-source hashes: 157 supported metric names and 460 accepted spellings including aliases. These are not 460 distinct metrics. CPU-only metrics remain unavailable. Broader metric support does not remove other GPU strategy or execution restrictions.
 
 A new run shows a waiting message until its own provider or optimizer log is available. Earlier runs from the global runner log are not shown as its startup output.
+
+### Recovering from UI request failures
+
+- Worker actions show a pending label and remain locked until the request finishes. Requeue shows **Preparing…** in the queue; deleting a queue item asks for confirmation.
+- If GPU validation cannot be completed, use **Retry validation**. Ordinary **Save** remains available, but **Save and Queue** requires successful validation.
+- A rejected Vast key or missing provider permission is shown as a provider error. Correct the key/permissions and retry. **PBGui session expired** instead requires signing in again and reloading the page.
+- **Vast instance charges** shows **Unavailable** after a failed billing request. A previously retrieved amount remains visible as **last retrieved**; hover the label for the failure and retrieval details.
+- If local rental supervision is unavailable, Settings and the job log explain the systemd/OpenSSH prerequisite. Choose a job using **Open log** in the unified queue; that shared window contains its progress, errors, rental details and latest downloaded log.
+- **Show incompatible hosts** refreshes the offer preview. Selecting an offer copies its GPU type into the requirements; save the requirements before starting. It does not reserve that offer.

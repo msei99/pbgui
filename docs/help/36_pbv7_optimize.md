@@ -293,3 +293,7 @@ When you multi-select several pareto rows, **Seed Selected** creates a small see
 When a Suite scenario editor is open, applying a template, resetting to Base, or applying generated training scenarios asks for confirmation before discarding unsaved edits. Cancel keeps the draft intact.
 
 Queue Backtest and Queue Validation now add the selected candidates directly and keep the current chart, filters and selection. Open Queue is the only navigation action; its count includes pending and running jobs. The status shows whether existing autostart settings may launch queued jobs. Adding does not send a start command. Keep candidate dates, exchanges, balance and overrides as configured; change them in Backtests if needed. Adding… prevents duplicate clicks; confirmed jobs are remembered during this page session. On a partial PB8 failure, retry continues with unconfirmed items using the same operation IDs.
+
+## Optimizer Settings
+
+The sidebar **Settings** opens local queue settings. **Guide** jumps here while Settings is open. Set CPU, Override config CPU, Use PBGui Market Data and Autostart, then click **Save**. **Back to Queue** returns to jobs. Vast cloud execution is available in PB8 Optimize.

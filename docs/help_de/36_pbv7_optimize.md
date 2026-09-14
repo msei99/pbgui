@@ -293,3 +293,7 @@ Wenn mehrere Pareto-Zeilen markiert sind, erstellt **Seed Selected** ein kleines
 Wenn ein Suite-Szenarioeditor geoeffnet ist, erfordern Templates, Reset to Base und Apply Training Scenarios eine Bestaetigung, bevor ungespeicherte Aenderungen verworfen werden. Abbrechen behaelt den Entwurf bei.
 
 Queue Backtest und Queue Validation fügen die Kandidaten direkt hinzu; Diagramm, Filter und Auswahl bleiben erhalten. Erst Open Queue wechselt die Seite. Der Zähler umfasst wartende und laufende Jobs. Daneben steht, ob Autostart aktiv ist und Jobs automatisch starten kann. Hinzufügen sendet keinen Startbefehl. Zeiträume, Börsen, Startkapital und Overrides werden aus der Konfiguration übernommen; Änderungen sind bei Backtests möglich. Adding… verhindert doppelte Klicks. Bestätigte Jobs werden während dieser Seitensitzung gemerkt. Bei einem teilweise fehlgeschlagenen PB8-Aufruf setzt ein erneuter Klick mit denselben Vorgangs-IDs fort.
+
+## Optimizer Settings
+
+**Settings** in der Sidebar öffnet die lokalen Queue-Einstellungen. **Guide** springt bei geöffneten Settings hierher. CPU, Override config CPU, Use PBGui Market Data und Autostart einstellen und mit **Save** speichern. **Back to Queue** führt zur Jobliste zurück. Vast-Cloud-Ausführung ist in PB8 Optimize verfügbar.
