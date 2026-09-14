@@ -259,7 +259,7 @@ Das Mausrad zoomt im Chart um den Mauszeiger. Shift-Ziehen im Kursbereich versch
 
 Neue Fenster direkt durch Ziehen auf freier Chartflaeche erstellen. Auf der Holdout-Bahn entstehen Holdouts, sonst Trainingsfenster. Ein einfacher Klick erstellt kein Fenster.
 
-Browser-Refresh oeffnet die gespeicherte Config erneut, auch bei Aufruf aus der Queue. Ungespeicherte Aenderungen werden nicht wiederhergestellt. Home/Schliessen entfernt die Editor-Adresse.
+Browser-Refresh oeffnet die gespeicherte Config erneut, auch bei Aufruf aus der Queue. Ungespeicherte Aenderungen an einer bestehenden gespeicherten Config werden nicht wiederhergestellt; neue und kopierte Entwuerfe haben eine eigene temporaere Wiederherstellung im Tab. Home/Schliessen entfernt die Editor-Adresse.
 
 Die vier Chart-Icons sind Undo, Redo, Papierkorb und Gesamtbereich, jeweils mit Tooltip. Ein Fenster auf die andere Training/Holdout-Bahn ziehen, um seine Rolle zu wechseln. Neue Fenster direkt zeichnen; separate Hinzufuegen- oder Kursbereich-Knoepfe entfallen.
 
@@ -286,3 +286,11 @@ Der Chart ist die Szenariovorschau. **Generate windows** erzeugt den grafischen 
 Die kompakte Referenzzeile zeigt Exchange, Coin, Tage und Complete. Fehlende oder unvollstaendige Tage erscheinen nur, wenn vorhanden. Der Tooltip erklaert Quellaufloesung und Pruefumfang; dies betrifft nur den Referenzchart.
 
 Vast-Uploads verwenden wiederaufnehmbare 2-MiB-Bloecke und stabile komprimierte Archive. Der Fortschrittsbalken zaehlt per Pruefsumme bestaetigte Bloecke; empfangene Bytes des laufenden Blocks werden separat angezeigt. Nach Verbindungsabbruch werden nur unbestaetigte Bloecke erneut gesendet. Die Geschwindigkeit misst bestaetigte Bytes im aktuellen Versuch. Solange der Empfaenger Fortschritt meldet, darf ein Upload laenger als zehn Minuten dauern. 120 Sekunden ohne Empfaengerfortschritt loesen einen Retry aus; die Mietfrist begrenzt weiterhin den Transfer.
+
+In den Optimizer Settings ein kompatibles Angebot auswaehlen und **Rent** klicken: Genau diese GPU wird sofort gemietet. Abrechnung und Mietfrist beginnen sofort; Queue-Jobs bleiben pausiert. Ist das Angebot nicht mehr verfuegbar oder teurer geworden, muss neu ausgewaehlt werden; es wird kein Ersatz automatisch gemietet. Die Reservierung bleibt bis zum ersten Job, **End rental** oder der Mietfrist bestehen. **Start queue** verwendet diese GPU; nach dem ersten Job gilt wieder die normale Leerlauf-Regel. Queue und Settings zeigen die aktive Miete und **End rental**. Bei einem laufenden Job verwendet das Beenden den bestehenden Stop-and-collect-Ablauf.
+
+Bei Sweep Cycles stellt das grafische **Check & Apply windows** fuer EMA und Trailing die drei Scoring-Defaults wieder her: ADG (Vast) beziehungsweise Gain (lokal), Sortino und groesster Drawdown. Bearbeitete Strategieparameter und Limits bleiben erhalten. Apply gleicht ausserdem die Short-Coin-Liste an Long an (ohne Short-Trading einzuschalten) und uebernimmt das Sweep-Startkapital in den Backtest.
+
+Save und Save & Queue zeigen den laufenden Vorgang und melden Pruef- oder API-Fehler sichtbar, ohne den Editor zu schliessen. Den gemeldeten Fehler beheben und erneut speichern; wiederholte Klicks waehrend des Speicherns erzeugen keine doppelten Anfragen.
+
+Neue und kopierte Optimize-Entwuerfe werden nach Refresh im selben Browser-Tab wiederhergestellt. Das ist eine temporaere Wiederherstellung, keine gespeicherte Config und kein Queue-Eintrag. Schliessen des Editors entfernt sie. Configs mit Zugangsdatenfeldern werden nicht zur Wiederherstellung abgelegt.

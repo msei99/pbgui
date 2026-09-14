@@ -3231,3 +3231,142 @@ finishResults();await pending;
 })().catch(e=>{console.error(e);process.exit(1);});
 """)
     assert page.index("classList.add('restoring-optimize-editor')") < page.index('<body')
+
+
+def test_graphical_sweep_apply_restores_only_three_scoring_defaults():
+    """Actual graphical Apply reaches the scoring preset without resetting other edits."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text(encoding='utf-8')
+    preset = '\n'.join(_page_function(page, name) for name in ('applyOptimizeSweepCoinSymmetry', 'applyOptimizeSweepPreset'))
+    script = """
+    (async () => {
+      const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+      _suiteRender = () => {};
+      _suiteNotifyStructuredSync = () => {};
+      toast = () => {};
+      _suiteState.editIdx = -1;
+      _suiteState.getScenarioContext = () => ({});
+      let scoring;
+      let execution = 'vast';
+      const balance = {value:'123'};
+      const el = id => id === 'opted-execution' ? {value:execution} : id === 'opted-starting-balance' ? balance : null;
+      const setScoringEntries = value => {scoring=value;};
+      const setLimitEntries = () => {throw Error('Existing limits reset');};
+      const coins = {'ms-opt-app-long':['ETH'], 'ms-opt-app-short':[], 'ms-opt-ign-short':['ETH','BTC']};
+      const optGetMs = id => coins[id];
+      const optSetMs = (id,value) => {coins[id]=value;};
+      const applyOptimizeSweepLongBoundsPreset = () => {throw Error('Existing strategy reset');};
+    """ + preset + """
+      _suiteState.onApplyScenarioPreview = applyOptimizeSweepPreset;
+      for (const strategy of ['ema_anchor','trailing_grid']) {
+        for (execution of ['vast','local']) {
+          scoring = [{metric:'old'}];
+          _suiteState.scenarioPreview = {contract_version:2,template:'sweep_cycles',
+            parameters:{sweep_policy:{starting_balance:10000}},
+            training_scenarios:[{label:'train'}],reducer:{default:'median'},
+            provenance:{template:'sweep_cycles',strategy}};
+          _suiteState.scenarioPreviewContext = _suiteScenarioContextSignature({});
+          await _suiteApplyScenarioPreview();
+          assert.deepEqual(coins['ms-opt-app-short'],['ETH']);
+          assert.deepEqual(coins['ms-opt-ign-short'],['BTC']);
+          assert.equal(balance.value,'10000');
+          assert.deepEqual(scoring,[
+            {metric:execution==='vast'?'adg_strategy_eq':'gain_strategy_eq',goal:'max'},
+            {metric:'sortino_ratio_strategy_eq',goal:'max'},
+            {metric:'drawdown_worst_strategy_eq',goal:'min'}]);
+        }
+      }
+    })().catch(error=>{console.error(error);process.exit(1);});
+    """
+    _run_node(script)
+
+
+def test_save_actions_report_failures_and_allow_retry():
+    """Both save actions surface collection/API errors and release their pending lock."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text(encoding='utf-8')
+    source = _page_function(page, 'saveEditor')
+    script = """
+    (async () => {
+      const assert = require('node:assert/strict');
+      const state = {};
+      const optimizeEditorAdapter = {isV8:true};
+      const editorVisible = () => true;
+      const ensureRawJsonValidForSave = () => true;
+      const ensureStructuredJsonFieldsValidForSave = () => true;
+      let failure='', notices=[], requests=[], closed=0, statuses=[];
+      function collectEditorConfig() {
+        if(failure==='validation') throw Error('Select at least one exchange.');
+        return {name:'sample',config:{optimize:{scoring:[{metric:'adg_strategy_eq'}]}}};
+      }
+      const setPageEditorStatus = message => statuses.push(message);
+      const handleError = error => notices.push(error.message);
+      async function apiFetch(path,options) {
+        if(failure==='api') throw Error('Save rejected by API');
+        requests.push(path);return {};
+      }
+      const refreshOpenedQueueSnapshot = async()=>{};
+      const closeEditor = ()=>{closed++;};
+      const toast = ()=>{};
+      const loadConfigs = async()=>{};
+      const loadQueue = async()=>{};
+      const setPanel = ()=>{};
+    """ + source + """
+      for (const queue of [false,true]) {
+        for (failure of ['validation','api']) {
+          const before=closed;
+          await saveEditor(queue);
+          assert.equal(closed,before);
+          assert.equal(state.editorSaving,false);
+          assert.equal(notices.at(-1),failure==='api'?'Save rejected by API':'Select at least one exchange.');
+        }
+        failure=''; requests=[];
+        await saveEditor(queue);
+        assert.deepEqual(requests,queue?['/configs/sample','/queue']:['/configs/sample']);
+        assert.equal(state.editorSaving,false);
+      }
+      assert(statuses.includes('Saving…'));
+      assert(statuses.includes('Saving and queueing…'));
+    })().catch(error=>{console.error(error);process.exit(1);});
+    """
+    _run_node(script)
+
+
+def test_unsaved_editor_refresh_round_trip():
+    """New/copy drafts retain edits and overrides without becoming saved configs."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'optimizeDraftStorageKey', 'storeOptimizeDraft', 'captureOptimizeDraftForRefresh',
+        'updateOptimizeEditorUrl', 'openEditorWithConfig', 'handleOpenConfigParam')).split('/* ── data-tip')[0]
+    _run_node("""
+const assert=require('node:assert/strict');
+const storage=new Map();
+const listeners={};
+const window={addEventListener:(name,fn)=>{listeners[name]=fn;},location:{href:'http://localhost/main#configs',pathname:'/main'},
+ sessionStorage:{setItem:(k,v)=>storage.set(k,v),getItem:k=>storage.get(k),removeItem:k=>storage.delete(k)}};
+const history={replaceState:(_,t,p)=>{window.location.href=new URL(p,window.location.href).href;}};
+const state={}; let shown,status;
+const deepClone=x=>JSON.parse(JSON.stringify(x));
+const normalizeOptimizeEditorPayload=p=>({...p,param_status:{}});
+const showStructuredEditor=(config,name,source)=>{shown={config,name};state.editorSourceName=source;};
+const editorVisible=()=>true;
+const setPageEditorStatus=s=>{status=s;};
+let edited={name:'My draft',config:{bot:{long:{test:3}},pbgui:{scenario_template:{parameters:{windows:[{start:'2020-01-01'}]}}}}};
+const collectEditorConfig=()=>edited;
+const handleError=e=>{throw e;};
+"""+functions+"""
+(async()=>{
+openEditorWithConfig({config:{bot:{}},override_configs:{ETH:{bot:{long:{test:1}}}}},'Copy','');
+assert.equal(new URL(window.location.href).searchParams.get('open_draft'),'1');
+listeners.beforeunload();
+await handleOpenConfigParam();
+assert.deepEqual(shown,edited);
+assert.equal(state.editorOverrideConfigs.ETH.bot.long.test,1);
+assert.equal(storeOptimizeDraft({config:{api_key:'must-not-store'}}),false);
+assert.equal(storage.size,0);
+assert.match(status,/recovery unavailable/);
+updateOptimizeEditorUrl('Saved',null);
+assert.equal(new URL(window.location.href).searchParams.has('open_draft'),false);
+})().catch(e=>{console.error(e);process.exit(1);});
+""")
+    assert "removeItem(optimizeDraftStorageKey())" in _page_function(page, 'closeEditor')

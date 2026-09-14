@@ -66,7 +66,7 @@ class CloudQueue:
         return sorted((row for row in self.store.list() if row.get('kind') != 'worker' and row['status'] == 'ready'),
                       key=lambda row: (row.get('created_at', 0), row['id']))
 
-    def start(self, offer: dict, hours: float, budget: float, idle_seconds: int) -> dict:
+    def start(self, offer: dict, hours: float, budget: float, idle_seconds: int, *, manual: bool = False) -> dict:
         """Rent once for the queue; duplicate starts return the existing worker."""
         if idle_seconds not in (0, 300):
             raise VastError('Choose immediate cleanup or five minutes idle', 422)
@@ -76,19 +76,19 @@ class CloudQueue:
             if current and current['rental_state'] not in ('none', 'deletion_verified'):
                 return current
             jobs = self.waiting()
-            if not jobs:
+            if not jobs and not manual:
                 raise VastError('Queue a cloud optimizer config first', 409)
             identifier = uuid.uuid4().hex
             directory = ensure_private_directory(self.root / 'jobs' / identifier)
             write_json(directory / 'state.json', {'id': identifier, 'kind': 'worker', 'status': 'ready',
-                       'rental_state': 'none', 'workers': max(1 if row.get('auto_cpu_workers') else row['workers'] for row in jobs),
-                       'created_at': time.time(), 'generation': 0, 'idle_seconds': idle_seconds})
+                       'rental_state': 'none', 'workers': max((1 if row.get('auto_cpu_workers') else row['workers'] for row in jobs), default=1),
+                       'created_at': time.time(), 'generation': 0, 'idle_seconds': idle_seconds, 'awaiting_queue_start': manual})
             write_json(directory / 'control.json', {'stop': False, 'cleanup': False})
             write_json(directory / 'intent.json', {'id': identifier, 'image': IMAGE, 'pb8_revision': REVISION,
                        'bundle_bytes': sum(row.get('input_bytes', 0) for row in jobs), 'job_count': len(jobs)})
             # Publish the worker before launching so recovery uses the same identity.
             state = self.read()
-            state.update(worker_id=identifier, selected_offer=offer, paused=False, idle_seconds=idle_seconds)
+            state.update(worker_id=identifier, selected_offer=offer, paused=manual, idle_seconds=idle_seconds)
             write_json(self.root / 'queue.json', state)
             return self.store.start(identifier, offer, hours, budget)
 
@@ -169,8 +169,11 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
                 store.update(candidate['id'], lease_id=identifier, dispatch_at=now, status='provisioning', error=None,
                              convergence_config=convergence_config, setup_started_at=None)
                 store.update(identifier, active_job=candidate['id'], idle_since=None,
-                             transfer_reserved_used=used + expected, status='provisioning')
+                             transfer_reserved_used=used + expected, status='provisioning', awaiting_queue_start=False)
                 return candidate['id']
+        if worker.get('awaiting_queue_start'):
+            store.update(identifier, status='reserved', idle_since=None)
+            return None
         idle_since = worker.get('idle_since')
         if idle_since is None:
             idle_since = now

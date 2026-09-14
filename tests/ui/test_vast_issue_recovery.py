@@ -265,3 +265,38 @@ def test_malformed_success_response_remains_retryable(cloud_page):
     del overrides['/api/vast/account']
     page.locator('#refresh-balance').click()
     page.wait_for_function("document.getElementById('balance').textContent === '$3.00'")
+
+
+def test_rent_now_and_queue_release_use_selected_offer(cloud_page):
+    """Rent immediately posts the exact offer, then Queue shows and releases the lease."""
+    page, data, calls, overrides, held = cloud_page
+    page.add_init_script("""document.addEventListener('DOMContentLoaded',()=>{
+      const box=document.createElement('div');box.id='queue-rental';
+      box.innerHTML='<span id="queue-rental-status"></span><button id="queue-end-rental">End rental</button>';
+      document.body.prepend(box);
+    });""")
+    data['worker'] = None
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('#find-offers').click()
+    page.locator('tr[data-offer="1"]').click()
+    overrides['/api/vast/queue/start'] = 'hold'
+    page.locator('#rent-offer').click()
+    page.wait_for_function("document.querySelector('#rent-offer').textContent==='Renting…'")
+    page.wait_for_timeout(50)
+    assert len(held) == 1
+    payload = held[0].request.post_data_json
+    assert payload['rent_only'] is True
+    assert payload['offer_id'] == 1
+    assert payload['preferences']['max_price'] == .15
+    assert page.locator('#rent-offer').is_disabled()
+    data['worker'] = dict(id='lease-a', rental_state='active', gpu_name='RTX 3090', instance_id=123,
+                          status='reserved', price_hour_usd=.15, deadline=2000000000, awaiting_queue_start=True)
+    data['queue']['paused'] = True
+    held.pop().fulfill(json=data['worker'])
+    page.wait_for_function("document.querySelector('#queue-rental-status').textContent.includes('Reserved for queue start')")
+    assert page.locator('#rent-offer').is_disabled()
+    assert 'instance 123' in page.locator('#queue-rental-status').inner_text()
+    page.locator('#queue-end-rental').click()
+    page.wait_for_timeout(100)
+    assert any(method == 'POST' and url.endswith('/queue/end') for method, url in calls)

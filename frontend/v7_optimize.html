@@ -4,7 +4,7 @@
 <script>
 (function () {
   var params = new URLSearchParams(window.location.search);
-  if (params.has('open_config') || params.has('open_queue_config')) {
+  if (params.has('open_config') || params.has('open_queue_config') || params.has('open_draft')) {
     document.documentElement.classList.add('restoring-optimize-editor');
   }
 }());
@@ -2418,6 +2418,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
         <button class="act-btn" onclick="selectAllQueue()" title="Select all visible rows">Select All</button>
         <button class="act-btn" onclick="deselectAllQueue()" title="Deselect all">Deselect</button>
       </div>
+      <div id="queue-rental" class="panel-toolbar" hidden><span id="queue-rental-status"></span><span style="flex:1"></span><button id="queue-end-rental" class="btn" type="button">End rental</button></div>
       <div id="queue-list-wrap">
         <table class="tbl">
           <thead id="queue-thead">
@@ -2709,7 +2710,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <script src="/app/js/editor_shared.js?v=15"></script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
 <script src="/app/js/scenario_visual_editor.js?v=20"></script>
-<script src="/app/js/suite_editor.js?v=32"></script>
+<script src="/app/js/suite_editor.js?v=33"></script>
 <script src="/app/js/log_viewer_panel.js?v=46"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
@@ -9812,13 +9813,7 @@ function applyOptimizeSweepPreset(preview) {
       {suppressSync: true}
     );
   }
-  setLimitEntries(
-    [
-      {metric: 'drawdown_worst_strategy_eq', penalize_if: 'greater_than', value: 0.8},
-      {metric: 'backtest_completion_ratio', penalize_if: 'less_than', value: 0.99}
-    ],
-    {suppressSync: true}
-  );
+  // Suite prerequisites also apply to graphical windows; keep strategy/limit edits.
   if (preview.template === 'sweep_cycles') {
     var parameters = preview.parameters || {};
     var policy = parameters.sweep_policy || {};
@@ -9827,8 +9822,16 @@ function applyOptimizeSweepPreset(preview) {
       balanceInput.value = String(policy.starting_balance);
     }
     applyOptimizeSweepCoinSymmetry();
-    applyOptimizeSweepLongBoundsPreset();
   }
+  if (preview.contract_version === 2) return;
+  setLimitEntries(
+    [
+      {metric: 'drawdown_worst_strategy_eq', penalize_if: 'greater_than', value: 0.8},
+      {metric: 'backtest_completion_ratio', penalize_if: 'less_than', value: 0.99}
+    ],
+    {suppressSync: true}
+  );
+  if (preview.template === 'sweep_cycles') applyOptimizeSweepLongBoundsPreset();
   var objectiveMode = el('opted-objective-scenario-mode');
   var objectiveName = el('opted-objective-scenario-name');
   if (objectiveMode) objectiveMode.value = 'aggregate';
@@ -10869,6 +10872,7 @@ function showStructuredEditor(config, name, sourceName, paramStatusOverride, bac
 function closeEditor() {
   if (!editorVisible()) return;
   updateOptimizeEditorUrl(null, null);
+  try { window.sessionStorage.removeItem(optimizeDraftStorageKey()); } catch (storageError) {}
   if (window.PBGuiVast) window.PBGuiVast.closeEditor();
   var returnPanel = state.editorReturnPanel || 'configs';
   if (_optOhlcvPreflightController) _optOhlcvPreflightController.close();
@@ -12162,10 +12166,51 @@ function normalizeOptimizeEditorPayload(data) {
   return { config: config, param_status: paramStatus, backend_hint: backendHint, override_configs: overrideConfigs };
 }
 
+function optimizeDraftStorageKey() {
+  return 'pbgui.optimize.unsaved.' + window.location.pathname;
+}
+
+function storeOptimizeDraft(payload) {
+  // Configs do not need credentials. Never persist credential-bearing custom fields.
+  function check(value) {
+    if (!value || typeof value !== 'object') return;
+    Object.keys(value).forEach(function(key) {
+      if (/(password|secret|private.?key|api.?key|token|credential)/i.test(key)) {
+        throw new Error('This draft contains credential fields and cannot be kept in browser storage.');
+      }
+      check(value[key]);
+    });
+  }
+  try {
+    check(payload);
+    window.sessionStorage.setItem(optimizeDraftStorageKey(), JSON.stringify(payload));
+    return true;
+  } catch (error) {
+    try { window.sessionStorage.removeItem(optimizeDraftStorageKey()); } catch (storageError) {}
+    setPageEditorStatus('Draft recovery unavailable. Save before refreshing.', 'err');
+    return false;
+  }
+}
+
+function captureOptimizeDraftForRefresh() {
+  if (!editorVisible() || state.editorSourceName || state.editorQueueFilename) return;
+  try {
+    var collected = collectEditorConfig(null, {strict: false});
+    storeOptimizeDraft({config: collected.config, name: collected.name,
+      override_configs: state.editorOverrideConfigs || {}});
+  } catch (error) {
+    setPageEditorStatus('Could not update draft recovery. Save before refreshing.', 'err');
+  }
+}
+
+window.addEventListener('beforeunload', captureOptimizeDraftForRefresh);
+window.addEventListener('pagehide', captureOptimizeDraftForRefresh);
+
 function updateOptimizeEditorUrl(configName, queueFilename) {
   var url = new URL(window.location.href);
   url.searchParams.delete('open_config');
   url.searchParams.delete('open_queue_config');
+  url.searchParams.delete('open_draft');
   if (queueFilename) url.searchParams.set('open_queue_config', queueFilename);
   else if (configName) url.searchParams.set('open_config', configName);
   history.replaceState({}, '', url.pathname + url.search + url.hash);
@@ -12176,7 +12221,14 @@ function openEditorWithConfig(configOrPayload, name, sourceName) {
   state.editorOverrideConfigs = deepClone(payload.override_configs || {});
   showStructuredEditor(payload.config, name, sourceName, payload.param_status, payload.backend_hint);
   updateOptimizeEditorUrl(sourceName, null);
+  if (!sourceName && storeOptimizeDraft({config: payload.config, name: name || '',
+      override_configs: payload.override_configs || {}})) {
+    var url = new URL(window.location.href);
+    url.searchParams.set('open_draft', '1');
+    history.replaceState({}, '', url.pathname + url.search + url.hash);
+  }
 }
+
 
 async function openNewConfig() {
   var data = await apiFetch('/configs/new-config');
@@ -13018,6 +13070,10 @@ async function validateEditor() {
 }
 
 async function saveEditor(andQueue) {
+  if (state.editorSaving) return;
+  state.editorSaving = true;
+  try {
+  setPageEditorStatus(andQueue ? 'Saving and queueing…' : 'Saving…', '');
   var queueAfterSave = !!andQueue;
   var name = '';
   var configPayload = null;
@@ -13037,8 +13093,7 @@ async function saveEditor(andQueue) {
       name = collected.name;
       configPayload = collected.config;
     } catch (error) {
-      setPageEditorStatus(error.message, 'err');
-      return;
+      throw error;
     }
   } else {
     name = el('editor-name').value.trim();
@@ -13055,8 +13110,7 @@ async function saveEditor(andQueue) {
   }
   if (queueAfterSave && optimizeEditorAdapter.isV8 && configPayload.pbgui && configPayload.pbgui.execution === 'vast') {
     if (!window.PBGuiVast || !(await window.PBGuiVast.validateConfig(configPayload))) {
-      setPageEditorStatus('Resolve the GPU compatibility errors before queueing.', 'err');
-      return;
+      throw new Error('Resolve the GPU compatibility errors before queueing.');
     }
   }
   isNewName = !!(state.editorSourceName && state.editorSourceName !== name);
@@ -13097,6 +13151,12 @@ async function saveEditor(andQueue) {
   await loadConfigs();
   await loadQueue();
   if (queueAfterSave) setPanel('queue');
+  } catch (error) {
+    setPageEditorStatus(error && error.message ? error.message : 'Could not save config.', 'err');
+    handleError(error);
+  } finally {
+    state.editorSaving = false;
+  }
 }
 
 async function saveAndQueue() {
@@ -14480,6 +14540,7 @@ async function handleIncomingDraft() {
     var suggested = draftName || (((payload.config || {}).backtest || {}).base_dir || '').split('/').slice(-1)[0] || '';
     openEditorWithConfig(payload, suggested, '');
     setPageEditorStatus('Loaded backtest result into Optimize with Starting Seeds = self.', 'ok');
+    url = new URL(window.location.href);
     url.searchParams.delete('opt_draft_id');
     url.searchParams.delete('draft_name');
     var remainingSearch = url.searchParams.toString();
@@ -14522,6 +14583,7 @@ async function handleMigrationDraft(draftPromise) {
       ? draft.migration_report
       : null;
     setPageEditorStatus('Loaded unsaved V7 → V8 Optimize preview. Review and save explicitly.', 'info');
+    url = new URL(window.location.href);
     url.searchParams.delete('migration_draft_id');
     url.searchParams.delete('draft_name');
     var remainingSearch = url.searchParams.toString();
@@ -14535,8 +14597,15 @@ async function handleOpenConfigParam() {
   var url = new URL(window.location.href);
   var configName = (url.searchParams.get('open_config') || '').trim();
   var queueFilename = (url.searchParams.get('open_queue_config') || '').trim();
-  if (!configName && !queueFilename) return;
+  var draftRequested = url.searchParams.has('open_draft');
+  if (!configName && !queueFilename && !draftRequested) return;
   try {
+    if (draftRequested && !configName && !queueFilename) {
+      var draft = JSON.parse(window.sessionStorage.getItem(optimizeDraftStorageKey()) || 'null');
+      if (!draft || !draft.config) throw new Error('This unsaved draft is no longer available in this browser tab.');
+      openEditorWithConfig(draft, draft.name || '', '');
+      return;
+    }
     if (queueFilename) await openQueueConfigEditor(queueFilename);
     else await openConfigEditor(configName);
   } catch (error) {
@@ -14608,7 +14677,7 @@ async function init() {
     var initialPanel = location.hash.replace('#', '');
     if (PANEL_META[initialPanel]) setPanel(initialPanel);
     var initialUrl = new URL(window.location.href);
-    var restoreEditor = initialUrl.searchParams.has('open_config') || initialUrl.searchParams.has('open_queue_config');
+    var restoreEditor = initialUrl.searchParams.has('open_config') || initialUrl.searchParams.has('open_queue_config') || initialUrl.searchParams.has('open_draft');
     var migrationDraftId = initialUrl.searchParams.get('migration_draft_id');
     var migrationDraftPromise = null;
     if (migrationDraftId) {
@@ -15094,6 +15163,6 @@ window.PBGUI_NAV_CONFIG = {
 
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
-<script src="/app/js/vast.js?v=51"></script>
+<script src="/app/js/vast.js?v=52"></script>
 </body>
 </html>

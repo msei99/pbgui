@@ -20,7 +20,7 @@
     if (!leaving) host.textContent = 'Cloud controls could not load. Check the API restart indicator and reload this page.';
     return;
   } finally { clearTimeout(bootstrapTimer); }
-  let worker = null, queueState = {};
+  let worker = null, queueState = {}, selectedOffer = null, renting = false;
 
   const el = id => document.getElementById(id);
   let generation = 0;
@@ -136,6 +136,7 @@
   }
 
   function renderOffers(rows) {
+    selectedOffer = null;
     renderJob();
     const body = el('offers-body'); body.replaceChildren();
     el('selection').textContent = 'Save GPU requirements for future queue starts.';
@@ -179,10 +180,11 @@
       actionCell.appendChild(expand); row.appendChild(actionCell);
       const select = () => {
         body.querySelectorAll('tr').forEach(other => { other.classList.remove('selected'); other.setAttribute('aria-selected', 'false'); });
-        el('gpu-model').value = offer.gpu_name;
+        selectedOffer = reasons.length ? null : offer;
         row.classList.add('selected'); row.setAttribute('aria-selected', 'true');
         el('selection').hidden = false;
-        el('selection').textContent = 'GPU type: ' + offer.gpu_name + '. Save requirements to use this type; this offer is not reserved.';
+        el('selection').textContent = offer.gpu_name + ' · ' + offer.location + ' · $' + fmt(offer.price_hour_usd, 4) + '/hour · not reserved. Rent starts billing immediately.';
+        renderJob();
       };
       row.addEventListener('click', select);
       row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); } });
@@ -253,8 +255,14 @@
   function renderJob() {
     const job = selectedJob();
     const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
+    el('rent-offer').disabled = !selectedOffer || active || renting || startingQueue || !!workerAction || !supervision;
+    el('rent-offer').textContent = renting ? 'Renting…' : 'Rent';
+    el('settings-rental-status').textContent = workerActivity() + (active && worker.awaiting_queue_start ? ' · Reserved for queue start' : '');
+    el('settings-end-rental').hidden = !active;
+    el('settings-end-rental').disabled = !!workerAction || renting || startingQueue;
+    el('settings-end-rental').textContent = workerAction === 'end' ? 'Ending rental…' : 'End rental';
     el('start-job').hidden = !job || job.status !== 'ready';
-    el('start-job').disabled = !!workerAction || startingQueue || active || !job || job.status !== 'ready' || !savedPreferences || !supervision;
+    el('start-job').disabled = !!workerAction || renting || startingQueue || !job || job.status !== 'ready' || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || !supervision;
     el('requeue-job').hidden = !job || !['failed','cancelled'].includes(job.status) || !job.can_delete;
     el('requeue-job').disabled = !!job && (requeuingJobs.has(job.id) || deletingJobs.has(job.id));
     el('requeue-job').textContent = job && requeuingJobs.has(job.id) ? 'Preparing…' : 'Requeue';
@@ -274,6 +282,15 @@
   }
 
   function renderQueueOverview() {
+    const banner = el('queue-rental');
+    if (banner) {
+      banner.hidden = false;
+      const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
+      el('queue-rental-status').textContent = workerActivity() + (active && worker.awaiting_queue_start ? ' · Reserved for queue start' : '');
+      const end = el('queue-end-rental');
+      end.hidden = !active; end.disabled = !!workerAction || renting || startingQueue;
+      end.textContent = workerAction === 'end' ? 'Ending rental…' : 'End rental';
+    }
     if (window.state) window.state.cloudQueueCount = jobRows.length;
     if (typeof renderQueueMaybeDeferred === 'function') renderQueueMaybeDeferred();
     else if (typeof updateMetaCounts === 'function') updateMetaCounts();
@@ -666,7 +683,7 @@
       const node = document.createElement('button'); node.className = 'icon-btn';
       node.textContent = label; node.title = title;
       if (title === 'Start') {
-        node.disabled = startingQueue || !!workerAction || !supervision || !savedPreferences || deletingJobs.has(job.id);
+        node.disabled = startingQueue || !!workerAction || !supervision || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || deletingJobs.has(job.id);
         if (!supervision) node.dataset.tip = 'Start unavailable: rental supervision requires user systemd and OpenSSH on the PBGui host.';
       }
       if (['Requeue', 'Delete queue item'].includes(title)) node.disabled = requeuingJobs.has(job.id) || deletingJobs.has(job.id);
@@ -765,7 +782,7 @@
   }
   el('requeue-job').addEventListener('click', () => requeueCloudJob(selectedJob()));
   async function startCloudQueue(job) {
-    if (startingQueue || workerAction || disposed || !supervision || !savedPreferences || (job && deletingJobs.has(job.id))) return;
+    if (renting || startingQueue || workerAction || disposed || !supervision || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || (job && deletingJobs.has(job.id))) return;
     startingQueue = true;
     startingJobId = job && job.id;
     document.querySelectorAll('tr[data-cloud-id]').forEach(row => {
@@ -790,7 +807,7 @@
         renderJob();
         document.querySelectorAll('tr[data-cloud-id]').forEach(row => {
           const start = row.querySelector('button[title="Start"]');
-          if (start) start.disabled = !!workerAction || !supervision || !savedPreferences;
+          if (start) start.disabled = !!workerAction || !supervision || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state)));
           const item = cloudQueueItems().find(item => item.cloudJob.id === row.dataset.cloudId);
           const badge = row.querySelector('.badge');
           if (item && badge) badge.textContent = item.status;
@@ -799,6 +816,26 @@
       }
     }
   }
+  el('rent-offer').addEventListener('click', async () => {
+    if (!selectedOffer || renting || startingQueue || workerAction || !supervision || disposed) return;
+    if (!el('offers-form').reportValidity()) return;
+    const offer = selectedOffer;
+    renting = true; renderJob();
+    try {
+      await request('/queue/start', {method:'POST', body:JSON.stringify({
+        rent_only:true, offer_id:offer.id, accept_rental_and_cleanup:true,
+        preferences:{gpu_name:el('gpu-model').value, max_price:Math.min(Number(el('max-price').value),offer.price_hour_usd),
+          min_vram:Number(el('min-vram').value), min_ram:Number(el('min-ram').value), min_cpu:Number(el('min-cpu').value),
+          disk_gb:Number(el('disk').value), verified_only:el('verified').value === 'true'},
+        hours:Number(el('job-hours').value), budget:Number(el('job-budget').value), idle_seconds:Number(el('worker-idle').value)
+      })});
+      await refreshJobs();
+      if (!disposed) message('GPU rental started. Queued jobs remain paused until Start queue.');
+    } catch (error) { if (!disposed) { message(error.message,true); await refreshJobs(); } }
+    finally { renting=false; if (!disposed) { renderJob(); renderQueueOverview(); } }
+  });
+  el('settings-end-rental').addEventListener('click', () => el('end-worker').click());
+  if (el('queue-end-rental')) el('queue-end-rental').addEventListener('click', () => el('end-worker').click());
   el('start-job').addEventListener('click', () => startCloudQueue(selectedJob()));
   ['stop', 'recover'].forEach(action => el(action + '-job').addEventListener('click', async () => {
     const job = selectedJob(); if (!job) return;
@@ -819,7 +856,7 @@
     finally { if (!disposed) renderJob(); }
   }));
   ['pause', 'resume', 'end', 'recover'].forEach(action => el(action + '-worker').addEventListener('click', async () => {
-    if (disposed || workerAction || startingQueue) return;
+    if (disposed || renting || workerAction || startingQueue) return;
     workerAction = action; renderJob(); renderQueueOverview();
     message(el(action + '-worker').textContent);
     try {

@@ -259,7 +259,7 @@ Use the mouse wheel over the chart to zoom around the pointer. Shift-drag the pr
 
 Draw a new window directly by dragging empty chart space. The Holdout lane creates Holdouts; other empty areas create Training windows. A click alone creates nothing.
 
-Browser refresh reopens the saved config currently open in Optimize, including configs opened from the queue. Unsaved edits are not restored. Home/closing the editor removes that editor address.
+Browser refresh reopens the saved config currently open in Optimize, including configs opened from the queue. Unsaved changes to an existing saved config are not restored; new and copied drafts have separate temporary tab recovery. Home/closing the editor removes that editor address.
 
 The four chart toolbar icons are Undo, Redo, Trash and Full range, with tooltips. Move a window onto the other Training/Holdout lane to change its role. New windows are drawn directly; there are no add-window or separate price-history buttons.
 
@@ -286,3 +286,11 @@ The chart is the scenario preview. **Generate windows** builds the graphical dra
 The compact reference line shows exchange, coin, days and Complete. Missing or incomplete days appear only when present. Hover for source resolution and coverage scope; this describes the reference chart only.
 
 Vast uploads use resumable 2 MiB blocks and stable compressed archives. The progress bar counts checksum-verified blocks; current-block bytes are separately acknowledged by the host. Reconnects retry only unverified blocks. Speed measures verified bytes during the current attempt. Uploads may exceed ten minutes while the receiver keeps progressing; 120 seconds without receiver progress triggers a retry, and the rental deadline still bounds the transfer.
+
+Select a compatible offer in Optimizer Settings and click **Rent** to rent that exact GPU immediately. Billing and the rental deadline start immediately; queued jobs stay paused. An unavailable or more expensive offer requires a new selection, never an automatic substitute. The reservation stays available until the first job, explicit **End rental**, or the deadline. **Start queue** reuses the reserved GPU; after its first job, the normal idle cleanup setting applies. The Queue and Settings show the active rental and an **End rental** button. Ending a rental with an active job uses the existing stop-and-collect cleanup flow.
+
+For Sweep Cycles, graphical **Check & Apply windows** restores the three scoring defaults for both EMA and Trailing: ADG (Vast) or Gain (local), Sortino, and worst Drawdown. Edited strategy settings and limits are retained. Apply also mirrors the Long approved coins to Short (without enabling Short trading) and copies the Sweep starting balance to the backtest.
+
+Save and Save & Queue show pending status and notify validation or API failures without closing the editor. Fix the reported issue and retry; repeated clicks while saving do not create duplicate requests.
+
+New and copied Optimize drafts are restored in the same browser tab after refresh. This is temporary browser recovery, not a saved config or queue entry. Closing the editor clears it. Configs containing credential fields are not stored for recovery.

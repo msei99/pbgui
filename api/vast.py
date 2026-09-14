@@ -79,6 +79,8 @@ class StartJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     preferences: GpuPreferences | None = None
     use_saved_settings: bool = False
+    rent_only: bool = False
+    offer_id: int | None = Field(default=None, gt=0)
     hours: float = Field(default=1, ge=.25, le=24)
     budget: float = Field(default=1, ge=.1, le=100)
     accept_rental_and_cleanup: bool = False
@@ -357,6 +359,14 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
         queue = CloudQueue()
         if not body.accept_rental_and_cleanup:
             raise VastError("Confirm the shared rental and automatic cleanup first", 422)
+        current = queue.worker()
+        if current and current['rental_state'] not in ('none', 'deletion_verified'):
+            control = queue.store.read(current['id'], 'control.json')
+            if control.get('cleanup') or control.get('stop') or current['rental_state'] == 'destroy_pending':
+                raise VastError('Previous GPU rental is still being cleaned up. No new job has started; finish rental cleanup before starting again.', 409)
+            if not body.rent_only and queue.read().get('paused'):
+                queue.action('resume')
+            return current
         if body.use_saved_settings:
             stored = queue.read().get('gpu_preferences')
             if not stored:
@@ -367,23 +377,17 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
                 raise VastError('Save valid GPU requirements and rental limits in Settings', 422) from None
             body = StartJobRequest(preferences=GpuPreferences.model_validate(saved.model_dump(include=set(GpuPreferences.model_fields))),
                                    hours=saved.hours, budget=saved.budget, idle_seconds=saved.idle_seconds,
-                                   accept_rental_and_cleanup=True)
+                                   accept_rental_and_cleanup=True, rent_only=body.rent_only, offer_id=body.offer_id)
         if body.preferences is None:
             raise VastError('Save GPU requirements in Settings first', 422)
-        current = queue.worker()
-        if current and current['rental_state'] not in ('none', 'deletion_verified'):
-            control = queue.store.read(current['id'], 'control.json')
-            if control.get('cleanup') or control.get('stop') or current['rental_state'] == 'destroy_pending':
-                raise VastError('Previous GPU rental is still being cleaned up. No new job has started; finish rental cleanup before starting again.', 409)
-            if queue.read().get('paused'):
-                queue.action('resume')
-            return current
+        if body.rent_only != (body.offer_id is not None):
+            raise VastError('Immediate rental requires one selected offer', 422)
         waiting = queue.waiting()
-        if not waiting:
+        if not waiting and not body.rent_only:
             raise VastError("Queue a cloud optimizer config first", 409)
         preferences = body.preferences.model_dump()
         preferences['gpu_name'] = preferences['gpu_name'].strip()
-        preferences['min_cpu'] = max(preferences['min_cpu'], max(1 if row.get('auto_cpu_workers') else row['workers'] for row in waiting))
+        preferences['min_cpu'] = max(preferences['min_cpu'], max((1 if row.get('auto_cpu_workers') else row['workers'] for row in waiting), default=1))
         client = VastClient(VastCredentialStore().secrets()['api_key'])
         rows = client.offers(**preferences, min_cuda=13, min_duration=body.hours * 3600)
         # Recheck hard requirements even if the provider ignores a query filter.
@@ -398,9 +402,15 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
                    and (row.get('cpu_cores') or 0) >= preferences['min_cpu']
                    and (row.get('disk_gb') or 0) >= preferences['disk_gb']
                    and (not preferences['verified_only'] or row.get('verified') is True)]
+        if body.rent_only:
+            matches = [row for row in matches if row['id'] == body.offer_id]
+            if not matches:
+                raise VastError('The selected GPU is no longer available or no longer meets the rental limits. Refresh offers and select again; no replacement was rented.', 409)
         if not matches:
             raise VastError("No available GPU matches your Settings requirements. No rental started; try again later or adjust the requirements.", 409)
         selected = min(matches, key=lambda row: (row['price_hour_usd'], row['id']))
+        if body.rent_only:
+            return queue.start(selected, body.hours, body.budget, body.idle_seconds, manual=True)
         return queue.start(selected, body.hours, body.budget, body.idle_seconds)
     except VastError as exc:
         raise _error(exc) from None

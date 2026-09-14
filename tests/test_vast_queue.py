@@ -246,3 +246,50 @@ def test_new_dispatch_resets_setup_timer_but_recovery_does_not(queue):
     assert worker_step(queue, worker, now=1600) == job
     assert queue.store.read(job)['setup_started_at'] == 1501
     assert queue.store.read(worker)['deadline'] == 10000
+
+
+def test_manual_rental_waits_for_start_and_then_uses_idle_policy(queue):
+    """Reservation survives idle timeout but releases normally after the first run."""
+    queue, worker = queue
+    queue.update(paused=True)
+    queue.store.update(worker, awaiting_queue_start=True, idle_seconds=0)
+    assert worker_step(queue, worker, now=100) is None
+    assert worker_step(queue, worker, now=1000) is None
+    assert not queue.store.read(worker, 'control.json')['cleanup']
+    assert queue.store.read(worker)['status'] == 'reserved'
+    queue.update(paused=False)
+    assert worker_step(queue, worker, now=1001) == 'b'*32
+    assert queue.store.read(worker)['awaiting_queue_start'] is False
+    for item in ('b'*32, 'c'*32):
+        queue.store.update(item, status='completed')
+    worker_step(queue, worker, now=1002)
+    assert queue.store.read(worker, 'control.json')['cleanup']
+
+
+@pytest.mark.parametrize('stop,now', [(True, 100), (False, 9900)])
+def test_manual_rental_can_end_and_cannot_outlive_deadline(queue, stop, now):
+    """Manual reservation never suppresses explicit release or deadline cleanup."""
+    queue, worker = queue
+    queue.update(paused=True)
+    queue.store.update(worker, awaiting_queue_start=True)
+    if stop:
+        queue.store.control(worker, 'stop')
+    worker_step(queue, worker, now=now)
+    assert queue.store.read(worker, 'control.json')['cleanup']
+
+
+def test_rent_without_jobs_starts_services_immediately(tmp_path, monkeypatch):
+    """Manual rental creates a paused supervised worker even with an empty queue."""
+    queue = CloudQueue(JobStore(tmp_path/'vast'))
+    calls = []
+    def start(identifier, offer, hours, budget):
+        """Capture the rental boundary without launching real services."""
+        calls.append(identifier)
+        return queue.store.update(identifier, rental_state='creation_pending')
+    monkeypatch.setattr(queue.store, 'start', start)
+    first = queue.start({'id':123}, 1, 1, 300, manual=True)
+    second = queue.start({'id':456}, 1, 1, 300, manual=True)
+    assert calls == [first['id']]
+    assert second['id'] == first['id']
+    assert first['awaiting_queue_start']
+    assert queue.read()['paused']

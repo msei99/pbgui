@@ -207,3 +207,47 @@ def test_invalid_convergence_settings_rejected(field, value):
     """No zero windows or nonfinite tolerances can enable accidental stopping."""
     with pytest.raises(ValidationError):
         vast.RentalPreferences(**{field: value})
+
+
+def test_manual_rent_selects_exact_offer_without_jobs(rental):
+    """Rent immediately binds the selected offer instead of the cheapest alternative."""
+    queue, rows, calls = rental
+    queue.waiting = lambda: []
+    queue.start = lambda *args, **kwargs: calls.append(('manual', (args, kwargs))) or args[0]
+    rows.extend([offer(9, price_hour_usd=.1), offer(42)])
+    body = request().model_copy(update={'rent_only': True, 'offer_id': 42})
+    assert vast.start_queue(body, session=None)['id'] == 42
+    assert calls[-1][1][1] == {'manual': True}
+
+
+def test_manual_rent_never_substitutes_unavailable_offer(rental):
+    """A disappeared manual selection cannot silently rent another host."""
+    _, rows, calls = rental
+    rows.append(offer(9))
+    with pytest.raises(HTTPException) as error:
+        vast.start_queue(request().model_copy(update={'rent_only': True, 'offer_id': 42}), session=None)
+    assert error.value.status_code == 409
+    assert 'no replacement' in error.value.detail
+    assert [item[0] for item in calls] == ['search']
+
+
+def test_manual_rent_retry_does_not_resume_queue(rental):
+    """Repeated Rent reuses the existing lease without dispatching waiting jobs."""
+    queue, _, calls = rental
+    current = {'id': 'existing', 'rental_state': 'active'}
+    queue.worker = lambda: current
+    queue.read = lambda: {'paused': True}
+    queue.action = lambda action: calls.append(action)
+    assert vast.start_queue(request().model_copy(update={'rent_only': True, 'offer_id': 42}), session=None) == current
+    assert calls == []
+
+
+def test_queue_start_reuses_manual_rental_without_saved_preferences(rental):
+    """A reserved GPU needs no fresh search or saved filter to start the queue."""
+    queue, _, calls = rental
+    current = {'id': 'existing', 'rental_state': 'active'}
+    queue.worker = lambda: current
+    queue.read = lambda: {'paused': True}
+    queue.action = lambda action: calls.append(action)
+    assert vast.start_queue(vast.StartJobRequest(use_saved_settings=True, accept_rental_and_cleanup=True), session=None) == current
+    assert calls == ['resume']

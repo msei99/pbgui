@@ -852,7 +852,7 @@ async function _suiteApplyScenarioPreview() {
   _suiteState.aggregate = JSON.parse(JSON.stringify(preview.reducer || { default: 'mean' }));
   _suiteState.scenarioTemplate = JSON.parse(JSON.stringify(preview.provenance || null));
   _suiteState.editIdx = -1;
-  if (_suiteState.onApplyScenarioPreview && preview.contract_version !== 2) _suiteState.onApplyScenarioPreview(preview);
+  if (_suiteState.onApplyScenarioPreview && (preview.contract_version !== 2 || preview.template === 'sweep_cycles')) _suiteState.onApplyScenarioPreview(preview);
   _suiteState.applyingGeneratedTemplate = true;
   _suiteNotifyStructuredSync();
   _suiteState.applyingGeneratedTemplate = false;
