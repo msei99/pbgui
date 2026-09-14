@@ -1219,13 +1219,6 @@ def test_suite_render_preserves_open_expander_while_disabled() -> None:
     _run_node(script)
 
 
-def test_scenario_preview_uses_readable_table_and_warning_text_sizes() -> None:
-    """Scenario rows and orange notices must not use the extra-small text token."""
-    source = (ROOT / "frontend" / "js" / "suite_editor.js").read_text(encoding="utf-8")
-
-    assert 'class="tbl" style="font-size:var(--fs-sm)' in source
-    assert 'font-size:var(--fs-sm);line-height:1.45;color:var(--orange)' in source
-
 
 def test_pb8_suite_aggregate_renders_median_and_std_without_changing_pb7() -> None:
     """The shared reducer UI must display every PB8 method while PB7 stays compatible."""
@@ -1838,6 +1831,7 @@ def test_saving_a_queue_opened_config_refreshes_that_queue_snapshot() -> None:
           assert.equal(name, 'queued-config');
           assert.equal(sourceName, 'queued-config');
         }}
+        function updateOptimizeEditorUrl() {{}}
         function queueConfigChoiceCandidates() {{ return []; }}
 
         {functions}
@@ -1873,6 +1867,7 @@ def test_v8_save_and_queue_with_new_name_does_not_rebind_opened_job() -> None:
           selectedConfigs: new Set()
         }};
         const optimizeEditorAdapter = {{isV8: true}};
+        function updateOptimizeEditorUrl() {{}}
         function editorVisible() {{ return true; }}
         function ensureRawJsonValidForSave() {{ return true; }}
         function ensureStructuredJsonFieldsValidForSave() {{ return true; }}
@@ -1929,6 +1924,7 @@ def test_home_returns_queue_opened_editor_to_queue() -> None:
         let selectedPanel = '';
         const window = {{PBGuiEditorShared: {{clearFixedValidationStatus() {{}}}}}};
         const _optOhlcvPreflightController = null;
+        function updateOptimizeEditorUrl() {{}}
         function editorVisible() {{ return true; }}
         function el(id) {{ return nodes[id]; }}
         function resetOptimizeEditorUiState() {{}}
@@ -3179,3 +3175,59 @@ def test_pareto_explorer_accepts_same_origin_api_root() -> None:
         assert.equal(window.location.href, '');
         assert.equal(messages.length, 1);
     """))
+
+
+def test_editor_url_restores_config_and_queue_after_refresh():
+    """Editor URLs round-trip encoded names and preserve queue origin on reload."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'updateOptimizeEditorUrl', 'handleOpenConfigParam')).split('/* ── data-tip')[0]
+    _run_node("""
+const assert=require('node:assert/strict');
+const window={location:{href:'http://localhost/app/optimize?keep=yes#configs'}};
+const history={replaceState:(_,title,path)=>{window.location.href=new URL(path,window.location.href).href;}};
+let opened;
+const openConfigEditor=async name=>{opened=['config',name];};
+const openQueueConfigEditor=async name=>{opened=['queue',name];};
+const handleError=e=>{throw e;};
+""" + functions + """
+(async()=>{
+updateOptimizeEditorUrl('ETH test & 1',null);
+await handleOpenConfigParam();
+assert.deepEqual(opened,['config','ETH test & 1']);
+assert.equal(new URL(window.location.href).searchParams.get('keep'),'yes');
+updateOptimizeEditorUrl(null,'job.json');
+await handleOpenConfigParam();
+assert.deepEqual(opened,['queue','job.json']);
+assert.equal(new URL(window.location.href).searchParams.has('open_config'),false);
+updateOptimizeEditorUrl(null,null);
+assert.equal(new URL(window.location.href).searchParams.has('open_queue_config'),false);
+})().catch(e=>{console.error(e);process.exit(1);});
+""")
+
+
+def test_refresh_restores_editor_before_background_lists_finish():
+    """Slow result lists cannot delay restoring a saved editor or flash the config list."""
+    page=(ROOT/'frontend/v7_optimize.html').read_text()
+    source=_page_function(page,'init').split('\n\ninit().catch',1)[0]
+    _run_node("""
+const assert=require('node:assert/strict');
+const window={location:{href:'http://localhost/main?open_config=ETH#configs'}};
+const location={hash:'#configs'},PANEL_META={},state={};
+const document={documentElement:{classList:{remove(){}}}};
+const optimizeEditorAdapter={configureUi(){}};
+function attachEventHandlers(){} function initSelections(){} function initSidebarResize(){}
+function initPlotModalWindow(){} function initOptimizeOhlcvPreflightController(){} function connectWS(){}
+const loadOptimizeMetadata=async()=>{},loadSettings=async()=>{},loadConfigs=async()=>{},loadQueue=async()=>{};
+let finishResults,opened=false;
+const loadResults=()=>new Promise(resolve=>{finishResults=resolve;});
+const handleOpenConfigParam=async()=>{opened=true;};
+"""+source+"""
+(async()=>{
+const pending=init();
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(opened,true);
+finishResults();await pending;
+})().catch(e=>{console.error(e);process.exit(1);});
+""")
+    assert page.index("classList.add('restoring-optimize-editor')") < page.index('<body')

@@ -85,7 +85,7 @@ TIER_3_SERVICES = {
     "BalanceCalc", "BitgetUTA", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",
     "ParetoDataLoader", "ProfitSweep", "Services", "Status", "User", "V7Instances", "V8Instances", "VPSManager",
-    "VPSManagerApi", "Vast",
+    "VPSManagerApi", "Vast", "ScenarioChart", "ScenarioWindows",
 }
 DEDICATED_SERVICES = {
     "Database", "Exchange", "MarketData", "OptimizeQueueAPI", "PBApiServer",

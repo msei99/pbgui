@@ -200,3 +200,7 @@ Die Bitget-Classic-Transfer-History-Reconciliation verwendet die erforderlichen 
 Browser-Requests verwenden das PBGui-HttpOnly-Session-Cookie. API Keys, Private Keys, Passphrases, Descriptors, feste Route-Payloads und rohe Exchange-Antworten werden auf dieser Seite nicht angezeigt.
 
 Profit Sweep und Transfers erhalten den konfigurierten ASGI-Mount-Prefix in API- und lokalen Asset-URLs, auch bei Reverse-Proxy-Unterpfaden und IPv6-Zugriff. API-Requests bleiben auf dem aktuellen Browser-Origin.
+
+### Nicht abgesendete Testtransfers
+
+Ein Prepared-Test wurde noch nicht abgesendet. **Cancel prepared test** schliesst ihn ab, ohne Geld zu senden oder zurueckzubuchen. Submitted/Unknown-Transfers muessen stattdessen abgeglichen werden. Abgelaufene, nicht abgesendete Hyperliquid-Vault-Signaturanfragen werden nach fuenf Minuten bei der Scheduler-Wiederherstellung oder der naechsten Live-Auswertung automatisch abgebrochen. Abgebrochene Tests bleiben im Verlauf und blockieren Live nicht mehr.

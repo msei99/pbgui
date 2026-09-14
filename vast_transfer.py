@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import ipaddress
 import json
 import os
@@ -130,7 +131,7 @@ class WorkerConnection:
             public_key = fetch_host_key_result(url, lease_id=self.lease_id)
             atomic_write_private_text(known_hosts, f"pbgui-{self.lease_id} {public_key}\n")
 
-    def command(self, command: str, *, stdin=None, stdout=None, timeout: int = 30, max_output: int = 1024 * 1024, progress=None) -> bytes:
+    def command(self, command: str, *, stdin=None, stdout=None, timeout: int = 30, max_output: int = 1024 * 1024, progress=None, idle_timeout: int | None = None) -> bytes:
         """Execute only fixed internal operations with strict host-key verification."""
         args = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=10",
                 "-o", "ServerAliveCountMax=2", "-o", "StrictHostKeyChecking=yes", "-o", "IdentitiesOnly=yes",
@@ -141,22 +142,38 @@ class WorkerConnection:
         received = 0
         process = None
         try:
-            process = subprocess.Popen(args, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            process = subprocess.Popen(args, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             deadline = time.monotonic() + max(1, timeout)
             last_progress = 0.0
+            last_received = time.monotonic()
+            diagnostic = bytearray()
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
+                selector.register(process.stderr, selectors.EVENT_READ)
                 while True:
                     if progress is not None and time.monotonic() - last_progress >= 2:
                         progress()
                         last_progress = time.monotonic()
                     if time.monotonic() >= deadline:
                         raise VastError("SSH operation timed out; reconnecting")
-                    if not selector.select(min(.25, max(.01, deadline - time.monotonic()))):
+                    if idle_timeout and time.monotonic() - last_received >= idle_timeout:
+                        raise VastError("SSH upload stalled; no receiver progress, reconnecting")
+                    events = selector.select(min(.25, max(.01, deadline - time.monotonic())))
+                    ready = False
+                    for key, _ in events:
+                        if key.fileobj is process.stderr:
+                            error_bytes = os.read(process.stderr.fileno(), 8192)
+                            diagnostic.extend(error_bytes[:max(0, 8192-len(diagnostic))])
+                            if not error_bytes:
+                                selector.unregister(process.stderr)
+                        else:
+                            ready = True
+                    if not ready:
                         continue
                     chunk = os.read(process.stdout.fileno(), 65536)
                     if not chunk:
                         break
+                    last_received = time.monotonic()
                     received += len(chunk)
                     if received > max_output:
                         raise VastError("SSH output exceeds the permitted transfer size")
@@ -165,7 +182,19 @@ class WorkerConnection:
                     elif stdout != subprocess.DEVNULL:
                         stdout.write(chunk)
                 if process.wait(timeout=max(.01, deadline - time.monotonic())):
-                    raise VastError("SSH worker operation failed")
+                    # Report only known categories, never raw remote output or credentials.
+                    detail = diagnostic.decode('utf-8', errors='replace').lower()
+                    category = next((label for token, label in (
+                        ('permission denied', 'authentication or permission denied'),
+                        ('host key verification failed', 'host identity verification failed'),
+                        ('no space left', 'remote disk full'),
+                        ('connection timed out', 'connection timed out'),
+                        ('connection reset', 'connection reset by peer'),
+                        ('broken pipe', 'connection interrupted'),
+                        ('connection refused', 'connection refused'),
+                        ('could not resolve', 'hostname resolution failed'),
+                    ) if token in detail), 'remote command or connection failed')
+                    raise VastError('SSH worker operation failed: ' + category)
                 if progress is not None:
                     progress()
         except (OSError, subprocess.TimeoutExpired):
@@ -176,6 +205,7 @@ class WorkerConnection:
                     process.kill()
                 process.wait()
                 process.stdout.close()
+                process.stderr.close()
         return bytes(captured)
 
     def operation(self, action: str, timeout: int = 30) -> dict:
@@ -197,32 +227,49 @@ class WorkerConnection:
 
     def upload(self, timeout: int) -> None:
         """Transfer only data missing from the shared content-addressed worker cache."""
+        upload_deadline = time.monotonic() + timeout
+        def remaining():
+            """Keep packaging, transfer and install inside the caller's deadline."""
+            seconds = int(upload_deadline-time.monotonic())
+            if seconds <= 0:
+                raise VastError('Upload deadline reached; verified chunks retained')
+            return seconds
         config_root = execution_input(self.store, self.identifier)
         manifest = json.loads((config_root / 'manifest.json').read_text())
         with (config_root / 'manifest.json').open('rb') as source:
             self.command('mkdir -p ' + self.remote_root + ' && cat > ' + self.remote_root + '/cache-request.json',
-                         stdin=source, stdout=subprocess.DEVNULL, timeout=timeout)
-        response = self.operation('cache-missing', timeout=timeout)
+                         stdin=source, stdout=subprocess.DEVNULL, timeout=remaining())
+        response = self.operation('cache-missing', timeout=remaining())
         missing = response.get('missing')
         expected = {item['sha256'] for item in manifest['files']}
         if not isinstance(missing, list) or any(not isinstance(key, str) or key not in expected for key in missing):
             raise VastError('Invalid remote cache response', 422)
         missing = set(missing)
         delta = self.directory / 'upload.tar.gz'
-        with tarfile.open(delta, 'w:gz') as archive:
-            for name in ('manifest.json', 'optimize.json'):
-                archive.add(config_root / name, arcname='input/' + name, recursive=False)
-            for item in manifest['files']:
-                if item['sha256'] in missing:
-                    source = safe_path(self.directory / 'input', item['path'])
-                    archive.add(source, arcname='input/' + item['path'], recursive=False)
+        # A stable gzip header preserves chunk hashes across retries.
+        fd, temporary_name = tempfile.mkstemp(prefix='upload-', suffix='.tmp', dir=self.directory)
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(fd, 'wb') as target:
+                with gzip.GzipFile(filename='', fileobj=target, mode='wb', mtime=0) as compressed:
+                    with tarfile.open(fileobj=compressed, mode='w') as archive:
+                        for name in ('manifest.json', 'optimize.json'):
+                            archive.add(config_root / name, arcname='input/' + name, recursive=False)
+                        for item in manifest['files']:
+                            if item['sha256'] in missing:
+                                source = safe_path(self.directory / 'input', item['path'])
+                                archive.add(source, arcname='input/' + item['path'], recursive=False)
+            temporary.chmod(0o600)
+            os.replace(temporary, delta)
+        finally:
+            temporary.unlink(missing_ok=True)
         delta.chmod(0o600)
         self.store.update(self.identifier, transfer_input_bytes=delta.stat().st_size,
                           cached_files=sum(item['sha256'] not in missing for item in manifest['files']))
-        self.upload_archive(delta, timeout=timeout)
-        self.operation('install', timeout=timeout)
+        self.upload_archive(delta, timeout=remaining())
+        self.operation('install', timeout=remaining())
 
-    def upload_archive(self, archive: Path, *, timeout: int, chunk_bytes: int = 8 * 1024**2) -> None:
+    def upload_archive(self, archive: Path, *, timeout: int, chunk_bytes: int = 2 * 1024**2) -> None:
         """Resume verified content-addressed chunks after interrupted SSH transfers."""
         import hashlib
         started = time.monotonic()
@@ -247,12 +294,16 @@ class WorkerConnection:
         if not isinstance(present, list) or any(h not in expected for h in present):
             raise VastError('Invalid upload chunk inventory', 422)
         present = set(present)
-        confirmed = 0
+        confirmed = sum(size for checksum, size in chunks if checksum in present)
+        initial_confirmed = confirmed
+        received_current = 0
         retry_bytes = 0
         def report(sent, stage='sending'):
             """Report verified progress, including chunks retained from earlier attempts."""
             self.store.update(self.identifier, upload_progress={'bytes': sent, 'total': total,
-                'bytes_per_second': 0, 'stage': stage})
+                'bytes_per_second': max(0, confirmed-initial_confirmed) / max(.001, time.monotonic()-started),
+                'in_flight_bytes': received_current, 'stage': stage})
+        report(confirmed)
         with archive.open('rb') as source:
             for checksum, size in chunks:
                 data = source.read(size)
@@ -266,19 +317,44 @@ class WorkerConnection:
                               'os.replace(p,' + repr(destination) + ')')
                     for attempt in range(3):
                         try:
+                            received_current = 0
+                            class ReceiverProgress:
+                                """Parse bounded byte acknowledgements emitted by our receiver."""
+                                pending = b''
+                                last_report = 0.0
+                                def write(self, value):
+                                    nonlocal received_current
+                                    self.pending += value
+                                    lines = self.pending.split(b'\n')
+                                    self.pending = lines.pop()
+                                    for line in lines:
+                                        if not line.isdigit() or not received_current <= int(line) <= size:
+                                            raise VastError('Invalid upload progress acknowledgement', 422)
+                                        received_current = int(line)
+                                    if time.monotonic()-self.last_report >= 2:
+                                        report(confirmed)
+                                        self.last_report = time.monotonic()
+                            receiver = ('import sys,os; p=' + repr(destination + '.tmp') + '; n=0\n'
+                                        'with open(p,"wb") as out:\n'
+                                        ' while True:\n'
+                                        '  data=sys.stdin.buffer.read1(65536)\n'
+                                        '  if not data: break\n'
+                                        '  out.write(data); out.flush(); n+=len(data); print(n,flush=True)\n')
                             with tempfile.TemporaryFile() as chunk:
                                 chunk.write(data); chunk.seek(0)
-                                self.command('cat > ' + destination + '.tmp && python3 -c ' + shlex.quote(verify),
-                                             stdin=chunk, stdout=subprocess.DEVNULL, timeout=remaining(),
-                                             progress=lambda: report(min(total, confirmed + chunk.tell())))
+                                self.command('python3 -c ' + shlex.quote(receiver) + ' && python3 -c ' + shlex.quote(verify),
+                                             stdin=chunk, stdout=ReceiverProgress(), timeout=remaining(),
+                                             idle_timeout=120, max_output=max(1024*1024, size*8))
                             break
                         except VastError as exc:
                             retry_bytes += size
                             if exc.status != 502 or attempt == 2 or retry_bytes > total:
                                 raise
+                            received_current = 0
                             report(confirmed, 'reconnecting')
                             time.sleep(min(2 * (attempt + 1), remaining()))
-                confirmed += size
+                    confirmed += size
+                received_current = 0
                 report(confirmed)
         report(total, 'verifying')
         script = ('import pathlib,hashlib,os; root=pathlib.Path(' + repr(root) + '); '
@@ -513,6 +589,11 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False) -
                 stage = Path(temporary) / "result"
                 shutil.copytree(source, stage, ignore=shutil.ignore_patterns("checkpoint.pkl"))
                 manifest = store.read(identifier, "input/manifest.json")
+                if manifest.get('validation_plan'):
+                    from scenario_windows import build_validation_plan, VALIDATION_PLAN_FILENAME
+                    plan = build_validation_plan({'pbgui': {'scenario_template': manifest['validation_plan']}})
+                    if plan is not None:
+                        write_json(stage / VALIDATION_PLAN_FILENAME, plan)
                 if manifest.get("sweep_plan"):
                     write_json(stage / ".pbgui_sweep_cycles.json", manifest["sweep_plan"])
                 write_json(stage / ".pbgui_vast.json", {"job_id": identifier, "image": intent["image"],

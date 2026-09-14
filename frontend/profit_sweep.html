@@ -987,6 +987,7 @@
       return { source: 'Trading account', destination: 'Internal destination account' };
     }
     function testOperationDetail(operation) {
+      if(operation.error && operation.error.reason==='cancelled_before_submission')return 'Cancelled before submission. No transfer was sent.';
       if (!operation) return '-';
       if (!operation.error) return text(operation.transfer_back_reason, '-');
       if (typeof operation.error === 'string') return operation.error;
@@ -1034,7 +1035,11 @@
         row.appendChild(statusCell);
         [operation.requested_amount, operation.actual_amount, formatTime(operation.prepared_at), formatTime(operation.resolved_at), testOperationDetail(operation)].forEach(function (value) { appendText(row, 'td', value); });
         var actionCell = document.createElement('td');
-        if (operation === latestForward && operation.status === 'confirmed' && operation.can_transfer_back === true) {
+        if (operation.can_cancel === true) {
+          var cancelButton=appendText(actionCell,'button','Cancel prepared test','btn');
+          cancelButton.type='button';cancelButton.disabled=state.testActionPending;
+          cancelButton.addEventListener('click',function(){cancelPreparedTest(operation);});
+        } else if (operation === latestForward && operation.status === 'confirmed' && operation.can_transfer_back === true) {
           var backButton = appendText(actionCell, 'button', operation.retry_of ? 'Retry transfer back' : 'Transfer back', 'btn warning');
           backButton.type = 'button';
           backButton.disabled = state.testActionPending;
@@ -1782,6 +1787,24 @@
           state.testActionPending = false;
           renderTestTransfers(user);
         }
+      }
+    }
+
+    async function cancelPreparedTest(operation) {
+      var userName=state.selectedUser,generation=state.accountGeneration;
+      if(!userName||state.testActionPending||operation.can_cancel!==true)return;
+      state.testActionPending=true;
+      var user=state.users.find(function(item){return item.name===userName;})||null;
+      renderTestTransfers(user);
+      try {
+        await requestJson('/test-transfers/'+encodeURIComponent(userName)+'/'+encodeURIComponent(operation.operation_id)+'/cancel',{method:'POST',signal:state.accountController?state.accountController.signal:undefined});
+        if(!isCurrentAccount(userName,generation))return;
+        await refreshTestTransfersAfterAction(userName,generation);
+        if(isCurrentAccount(userName,generation))setMessage('Prepared test cancelled. No transfer was sent.','ok');
+      } catch(error) {
+        if(error.name!=='AbortError'&&isCurrentAccount(userName,generation))setMessage(error.message,'error');
+      } finally {
+        if(isCurrentAccount(userName,generation)){state.testActionPending=false;renderTestTransfers(user);}
       }
     }
 

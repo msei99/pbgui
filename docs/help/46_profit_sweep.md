@@ -200,3 +200,7 @@ Bitget Classic transfer-history reconciliation uses the required `coin`, `fromTy
 Browser requests use the PBGui HttpOnly session cookie. API keys, private keys, passphrases, descriptors, fixed-route payloads, and raw exchange responses are not rendered in this page.
 
 Profit Sweep and Transfers preserve the configured ASGI mount prefix in API and local-asset URLs, including reverse-proxy subpaths and IPv6 access. API requests stay on the browser's current origin.
+
+### Unsubmitted test transfers
+
+A Prepared test has not been submitted yet. Use **Cancel prepared test** to close it without sending or reversing funds. Submitted/Unknown transfers must be reconciled instead. Expired unsubmitted Hyperliquid Vault signature requests are automatically cancelled after five minutes during scheduler recovery or the next Live evaluation. Cancelled tests remain in the history and no longer block Live evaluation.

@@ -89,8 +89,13 @@ def _persist_open_sweep_plan(pb8_dir: Path, plan: dict) -> bool:
         result_dir = path.parent
         if not result_dir.is_dir() or result_dir.is_symlink():
             continue
-        target = result_dir / SWEEP_PLAN_FILENAME
-        atomic_write_private_text(target, json.dumps(plan, indent=4) + "\n")
+        from scenario_windows import VALIDATION_PLAN_FILENAME
+        if '_validation_windows' in plan:
+            atomic_write_private_text(result_dir / VALIDATION_PLAN_FILENAME, json.dumps(plan['_validation_windows'], indent=4) + "\n")
+            plan = plan.get('_sweep_cycles')
+        if plan is not None:
+            target = result_dir / SWEEP_PLAN_FILENAME
+            atomic_write_private_text(target, json.dumps(plan, indent=4) + "\n")
         return True
     return False
 
@@ -161,6 +166,10 @@ def main(argv: list[str] | None = None) -> int:
             if not isinstance(options, dict):
                 raise TypeError("Optimize launch options must be an object")
             sweep_plan = validate_sweep_plan(options.get("pbgui_sweep_plan"))
+            from scenario_windows import build_validation_plan
+            validation_plan = build_validation_plan({'pbgui': {'scenario_template': options.get('pbgui_validation_plan')}})
+            if validation_plan is not None:
+                sweep_plan = {'_validation_windows': validation_plan, '_sweep_cycles': sweep_plan}
             runtime_pb8_dir = Path(pb8_dir).resolve(strict=False)
             sys.argv = _optimizer_argv(cli_path, config_path, options)
             optimize_module = importlib.import_module("optimize")

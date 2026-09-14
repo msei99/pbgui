@@ -1381,3 +1381,27 @@ def test_policy_fingerprint_is_checked_inside_update_transaction(tmp_path: Path)
             {"quiet_period": 20},
             expected_policy_fingerprint=fingerprint,
         )
+
+
+def test_cancel_prepared_transfer_is_atomic_and_does_not_submit(tmp_path):
+    """Cancel unsubmitted tests idempotently; never cancel another user or a claimed send."""
+    store = ProfitSweepStore(tmp_path / 'cancel' / 'state.sqlite3')
+    for operation_id in ['cancel-me', 'claimed']:
+        store.create_test_operation('alice', operation_id=operation_id, parent_id=None,
+                                    direction='forward', route='umfuture_to_funding',
+                                    descriptor={'operation_id':operation_id,'route':'umfuture_to_funding','amount':'1'},
+                                    requested_amount='1')
+    with pytest.raises(ValueError):
+        store.cancel_prepared_test_operation('bob','cancel-me')
+    cancelled=store.cancel_prepared_test_operation('alice','cancel-me')
+    assert cancelled['state']=='failed'
+    assert cancelled['submitted_at'] is None
+    assert cancelled['actual_amount'] is None
+    assert cancelled['error']['reason']=='cancelled_before_submission'
+    assert store.cancel_prepared_test_operation('alice','cancel-me')==cancelled
+    with pytest.raises(ValueError):
+        store.transition_test_operation('cancel-me',submission={},claim=True)
+    store.transition_test_operation('claimed',submission={},claim=True)
+    with pytest.raises(ValueError):
+        store.cancel_prepared_test_operation('alice','claimed')
+    assert [op['operation_id'] for op in store.list_unresolved_transfer_operations()]==['claimed']

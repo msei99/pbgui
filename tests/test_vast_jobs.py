@@ -580,3 +580,25 @@ def test_optimizer_start_time_reads_worker_record(value, valid):
         with pytest.raises(VastError, match='start time unavailable'):
             optimizer_started_at(connection)
     assert calls == [('head -c 512 /work/pbgui/jobs/test/started.json', {'max_output': 512})]
+
+
+def test_native_import_retains_distributed_validation_windows(job):
+    """Vast result collection publishes explicit Holdouts for subsequent Validate actions."""
+    from pathlib import Path
+    from scenario_templates import generate_scenario_template
+    from scenario_windows import validation_holdouts
+    store, identifier, _ = job
+    directory = store.directory(identifier)
+    native = directory / 'final-results/optimize_results/window_run'
+    native.mkdir(parents=True)
+    (native / 'all_results.bin').write_bytes(msgpack.packb({'config': {}, 'metrics': {}}))
+    (native / 'pareto').mkdir()
+    (native / 'pareto/a.json').write_text('{}')
+    (directory / 'input').mkdir()
+    plan = generate_scenario_template({'start_date':'2024-01-01','end_date':'2024-12-31','windows':[
+        {'id':'a','label':'a','role':'training','start_date':'2024-01-01','end_date':'2024-03-31'},
+        {'id':'h','label':'h','role':'holdout','start_date':'2024-04-01','end_date':'2024-04-30'},
+        {'id':'b','label':'b','role':'training','start_date':'2024-05-01','end_date':'2024-12-31'}]})['provenance']
+    write_json(directory / 'input/manifest.json', {'validation_plan': plan})
+    result = import_results(store, identifier)
+    assert validation_holdouts(Path(result['result_path'])) == plan['holdout_scenarios']

@@ -2566,6 +2566,9 @@ def _serialize_config_detail(
         plan = _load_sweep_plan(result_directory) if result_directory is not None else None
         if plan is not None:
             validation_holdouts = sweep_holdout_scenarios(plan)
+        if result_directory is not None:
+            from scenario_windows import validation_holdouts as load_validation_holdouts
+            validation_holdouts = load_validation_holdouts(result_directory) or validation_holdouts
     override_configs: dict[str, dict] = {}
     override_error = ""
     if isinstance(full_config, dict) and str(getattr(loader, "optimize_version", "v7")).lower() == "v8":

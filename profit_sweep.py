@@ -1923,6 +1923,29 @@ class ProfitSweepStore:
 
         return self._read(load)
 
+    def cancel_prepared_test_operation(self, user_name: str, operation_id: str) -> dict[str, Any]:
+        """Atomically close an unsubmitted test without claiming or moving funds."""
+        operation = self._validate_operation_id(operation_id, "operation_id")
+        timestamp = int(time.time())
+
+        def cancel(connection: sqlite3.Connection) -> dict[str, Any]:
+            """Serialize cancellation against the existing submission claim."""
+            row = self._test_operation_row(connection, operation)
+            if row["user_name"] != user_name or row["operation_kind"] != "test":
+                raise ValueError("Operation is not an owned test transfer")
+            current = self._test_operation_dict(row)
+            if current["state"] == "failed" and (current.get("error") or {}).get("reason") == "cancelled_before_submission":
+                return current
+            if row["state"] != "prepared" or row["submitted_at"] is not None:
+                raise ValueError("Only unsubmitted prepared tests can be cancelled")
+            connection.execute(
+                "UPDATE test_operations SET state = 'failed', error_json = ?, updated_at = ?, resolved_at = ? WHERE operation_id = ?",
+                (_canonical_json({"reason": "cancelled_before_submission"}), timestamp, timestamp, operation),
+            )
+            return self._test_operation_dict(self._test_operation_row(connection, operation))
+
+        return self._write(cancel)
+
     def transition_test_operation(
         self,
         operation_id: str,

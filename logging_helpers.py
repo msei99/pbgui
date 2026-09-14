@@ -35,6 +35,8 @@ _global_min_level = 0
 # Services listed here share a common log file (group name = log stem)
 # instead of getting their own individual {service}.log file.
 LOG_GROUPS: dict[str, str] = {
+    'ScenarioChart':   'PBGui',
+    'ScenarioWindows': 'PBGui',
     'Vast':            'PBGui',
     'ApiLogging':      'PBGui',
     'ApiKeys':         'PBGui',

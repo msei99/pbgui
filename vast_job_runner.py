@@ -248,7 +248,7 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 if attempts >= 2:
                     raise VastError("Input upload failed twice; ending rental to limit transfer costs", 422)
                 store.update(identifier, upload_attempts=attempts + 1)
-                connection.upload(timeout=max(1, min(600, int(remaining - 180))))
+                connection.upload(timeout=max(1, int(intent["deadline"] - time.time() - 180)))
                 store.update(identifier, uploaded=True)
             progress = connection.operation("status")
             if not progress.get("started"):

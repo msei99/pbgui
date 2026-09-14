@@ -72,6 +72,7 @@ from pb8_config import (
 from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION, load_ini_section, pb7dir, pb8_runtime_status, save_ini_section
 from scenario_templates import ScenarioTemplateError, generate_scenario_template, list_scenario_templates
 from secure_files import atomic_write_private_text, ensure_private_directory, ensure_private_directory_tree
+from scenario_windows import validation_holdouts
 from sweep_cycles import SWEEP_METRIC_NAMES, SWEEP_PLAN_FILENAME, build_sweep_plan, evaluate_sweep_cycles, validate_sweep_plan
 
 SERVICE = "OptimizeV8"
@@ -3222,7 +3223,11 @@ class OptimizeV8Worker:
                 )
                 _write_json(_launch_config_file(filename), prepared)
                 validate_pb8_override_bundle(_launch_config_file(filename))
+                from scenario_windows import build_validation_plan
                 runner_options = dict(options)
+                validation_plan = build_validation_plan(launch_config)
+                if validation_plan is not None:
+                    runner_options['pbgui_validation_plan'] = validation_plan
                 if sweep_plan is not None:
                     runner_options["pbgui_sweep_plan"] = sweep_plan
                 _write_json(_launch_options_file(filename), runner_options)
@@ -3425,6 +3430,29 @@ def preview_scenario_template(body: dict, session: SessionToken = Depends(requir
     except ScenarioTemplateError as exc:
         _log(SERVICE, f"Rejected PB8 scenario template preview: {exc}", level="WARNING")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/scenario-templates/sources")
+def scenario_chart_sources(exchange: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """List local reference candle datasets without fetching exchange data."""
+    from scenario_chart import sources
+    try:
+        return {"sources": sources(exchange)}
+    except (ValueError, OSError) as exc:
+        _log(SERVICE, "Scenario chart source lookup failed", level="WARNING")
+        raise HTTPException(status_code=422, detail="Local candle sources unavailable") from exc
+
+
+@router.get("/scenario-templates/chart")
+def scenario_chart_data(exchange: str, dataset: str, coin: str, start: str, end: str,
+                        session: SessionToken = Depends(require_auth)) -> dict:
+    """Return bounded daily local candles for a scenario reference chart."""
+    from scenario_chart import daily_chart
+    try:
+        return daily_chart(exchange, dataset, coin, start, end)
+    except (ValueError, OSError) as exc:
+        _log(SERVICE, "Scenario chart request rejected", level="WARNING")
+        raise HTTPException(status_code=422, detail="Invalid or unavailable local candle range") from exc
 
 
 @router.get("/pbgui_data_path")
@@ -5160,6 +5188,7 @@ def list_paretos(
             "selected_scenario": selected_scenario,
             "selected_statistic": selected_statistic,
             "statistic_enabled": contract["mode"] != "suite" or selected_scenario == "Aggregated",
+            "validation_holdout_count": len(validation_holdouts(result_dir)),
             "sweep_cycles": {
                 "enabled": sweep_plan is not None,
                 "policy": copy.deepcopy(sweep_plan.get("policy")) if sweep_plan else None,
@@ -5180,6 +5209,7 @@ def get_pareto_file(path: str, session: SessionToken = Depends(require_auth)) ->
             "config": config,
             "override_configs": _result_override_payloads(pareto.parent.parent, config),
         }
+        response["validation_holdouts"] = validation_holdouts(pareto.parent.parent)
         sweep_plan = _load_sweep_plan(pareto.parent.parent)
         if sweep_plan is not None:
             suite_metrics, _labels = _suite_metric_payload(config)

@@ -1,6 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script>
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  if (params.has('open_config') || params.has('open_queue_config')) {
+    document.documentElement.classList.add('restoring-optimize-editor');
+  }
+}());
+</script>
+<style>
+.restoring-optimize-editor #configs-toolbar,
+.restoring-optimize-editor #configs-list-wrap,
+.restoring-optimize-editor #sidebar-inner { display:none !important; }
+</style>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - V7 Optimize</title>
@@ -2694,7 +2707,9 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=15"></script>
-<script src="/app/js/suite_editor.js?v=28"></script>
+<link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
+<script src="/app/js/scenario_visual_editor.js?v=20"></script>
+<script src="/app/js/suite_editor.js?v=32"></script>
 <script src="/app/js/log_viewer_panel.js?v=46"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
@@ -3049,7 +3064,7 @@ function applyParetoMeta(meta) {
   state.paretoDefaultMetrics = orderParetoMetrics(defaults).filter(function(metric) {
     return state.paretoAvailableMetrics.indexOf(metric) >= 0;
   });
-  state.paretoSweepEnabled = !!(meta && meta.sweep_cycles && meta.sweep_cycles.enabled);
+  state.paretoSweepEnabled = !!(meta && (meta.validation_holdout_count || (meta.sweep_cycles && meta.sweep_cycles.enabled)));
   if (!state.paretoDefaultMetrics.length) state.paretoDefaultMetrics = state.paretoAvailableMetrics.slice(0, 1);
   if (!state.paretoMetricColumnsLoaded) {
     var stored = readStoredParetoColumns().filter(function(metric) {
@@ -9655,6 +9670,12 @@ function populateOptimizeEditor(config, opts) {
       console.error('optKvLoadCoins failed:', error);
     });
   }
+  // The visual editor reads the coin selection synchronously during suiteInit.
+  // Seed it before the later asynchronous market metadata refresh.
+  ['long', 'short'].forEach(function(side) {
+    var selectedCoins = coinSideSelection(live.approved_coins, side, true);
+    optRebuildMs('ms-opt-app-' + side, uniqStrings(['all'].concat(selectedCoins)), selectedCoins);
+  });
   if (typeof suiteInit === 'function') {
     suiteInit('suite-container', {
       apiBase: API_BASE,
@@ -9668,6 +9689,7 @@ function populateOptimizeEditor(config, opts) {
           start_date: el('opted-start-date').value || null,
           end_date: scenarioEndDate === 'now' ? new Date().toISOString().slice(0, 10) : (scenarioEndDate || null),
           exchanges: optGetMs('ms-opt-exchanges'),
+          coins: optGetMs('ms-opt-app-long').concat(optGetMs('ms-opt-app-short')).filter(function(coin){return coin !== 'all';}),
           starting_balance: Number(el('opted-starting-balance').value) || null,
         };
       },
@@ -10846,6 +10868,7 @@ function showStructuredEditor(config, name, sourceName, paramStatusOverride, bac
 
 function closeEditor() {
   if (!editorVisible()) return;
+  updateOptimizeEditorUrl(null, null);
   if (window.PBGuiVast) window.PBGuiVast.closeEditor();
   var returnPanel = state.editorReturnPanel || 'configs';
   if (_optOhlcvPreflightController) _optOhlcvPreflightController.close();
@@ -12139,10 +12162,20 @@ function normalizeOptimizeEditorPayload(data) {
   return { config: config, param_status: paramStatus, backend_hint: backendHint, override_configs: overrideConfigs };
 }
 
+function updateOptimizeEditorUrl(configName, queueFilename) {
+  var url = new URL(window.location.href);
+  url.searchParams.delete('open_config');
+  url.searchParams.delete('open_queue_config');
+  if (queueFilename) url.searchParams.set('open_queue_config', queueFilename);
+  else if (configName) url.searchParams.set('open_config', configName);
+  history.replaceState({}, '', url.pathname + url.search + url.hash);
+}
+
 function openEditorWithConfig(configOrPayload, name, sourceName) {
   var payload = normalizeOptimizeEditorPayload(configOrPayload);
   state.editorOverrideConfigs = deepClone(payload.override_configs || {});
   showStructuredEditor(payload.config, name, sourceName, payload.param_status, payload.backend_hint);
+  updateOptimizeEditorUrl(sourceName, null);
 }
 
 async function openNewConfig() {
@@ -12621,6 +12654,7 @@ async function openQueueConfigEditor(filename) {
     openEditorWithConfig(data, configName, configName);
     state.editorQueueFilename = String(filename || '');
     state.editorReturnPanel = 'queue';
+    updateOptimizeEditorUrl(null, filename);
   } catch (error) {
     if (queueConfigChoiceCandidates(error && error.detail).length) {
       openQueueConfigChoiceModal(error.detail, 'edit');
@@ -12834,7 +12868,7 @@ async function backtestSelectedSweepHoldouts() {
     var data = await apiFetch(optimizeEditorAdapter.paretoFilePath(path));
     var payload = normalizeParetoBacktestPayload(data);
     var sweep = data && data.sweep_cycles || {};
-    var holdouts = Array.isArray(sweep.holdout_scenarios) ? sweep.holdout_scenarios : [];
+    var holdouts = Array.isArray(data.validation_holdouts) && data.validation_holdouts.length ? data.validation_holdouts : (Array.isArray(sweep.holdout_scenarios) ? sweep.holdout_scenarios : []);
     var backtest = payload.config && payload.config.backtest || {};
     var trainingScenarios = Array.isArray(backtest.scenarios) ? backtest.scenarios : [];
     var validationGroupId = optimizeEditorAdapter.isV8 ? validationBatchId + ':' + index : '';
@@ -14500,13 +14534,11 @@ async function handleMigrationDraft(draftPromise) {
 async function handleOpenConfigParam() {
   var url = new URL(window.location.href);
   var configName = (url.searchParams.get('open_config') || '').trim();
-  if (!configName) return;
+  var queueFilename = (url.searchParams.get('open_queue_config') || '').trim();
+  if (!configName && !queueFilename) return;
   try {
-    await openConfigEditor(configName);
-    setPageEditorStatus('Opened Optimize config from archive.', 'ok');
-    url.searchParams.delete('open_config');
-    var remainingSearch = url.searchParams.toString();
-    history.replaceState({}, '', url.pathname + (remainingSearch ? '?' + remainingSearch : '') + url.hash);
+    if (queueFilename) await openQueueConfigEditor(queueFilename);
+    else await openConfigEditor(configName);
   } catch (error) {
     handleError(error);
   }
@@ -14576,6 +14608,7 @@ async function init() {
     var initialPanel = location.hash.replace('#', '');
     if (PANEL_META[initialPanel]) setPanel(initialPanel);
     var initialUrl = new URL(window.location.href);
+    var restoreEditor = initialUrl.searchParams.has('open_config') || initialUrl.searchParams.has('open_queue_config');
     var migrationDraftId = initialUrl.searchParams.get('migration_draft_id');
     var migrationDraftPromise = null;
     if (migrationDraftId) {
@@ -14598,10 +14631,15 @@ async function init() {
     if (migrationDraftPromise) {
       await handleMigrationDraft(migrationDraftPromise);
     }
+    if (restoreEditor && !migrationDraftPromise) {
+      try { await handleOpenConfigParam(); }
+      finally { document.documentElement.classList.remove('restoring-optimize-editor'); }
+    }
     await backgroundData;
-    if (!migrationDraftPromise) await handleIncomingDraft();
-    await handleOpenConfigParam();
+    if (!migrationDraftPromise && !restoreEditor) await handleIncomingDraft();
+    if (!restoreEditor) await handleOpenConfigParam();
   } finally {
+    if (typeof restoreEditor !== 'undefined' && restoreEditor) document.documentElement.classList.remove('restoring-optimize-editor');
     state.initialLoadPending = false;
   }
 }
@@ -15056,6 +15094,6 @@ window.PBGUI_NAV_CONFIG = {
 
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
-<script src="/app/js/vast.js?v=50"></script>
+<script src="/app/js/vast.js?v=51"></script>
 </body>
 </html>

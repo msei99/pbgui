@@ -2567,3 +2567,28 @@ def test_overview_manual_refresh_only_queues_background_work(isolated_api, monke
     with pytest.raises(HTTPException) as error:
         asyncio.run(profit_sweep_api.refresh_overview_now(object()))
     assert error.value.status_code == 503
+
+
+def test_expired_vault_preparations_cancel_without_transfer(isolated_api, monkeypatch):
+    """Recovery expires only unsubmitted Vault preparations and preserves fresh requests."""
+    now=int(profit_sweep_api.time.time())
+    for operation_id,prepared_at in [('expired-test',now-301),('fresh-test',now)]:
+        isolated_api.store.create_test_operation('vault',operation_id=operation_id,parent_id=None,
+            direction='forward',route='vault_to_main_perps',
+            descriptor={'adapter':'hyperliquid_vault','operation_id':operation_id,'route':'vault_to_main_perps','amount':'5'},
+            requested_amount='5',now=prepared_at)
+    profit_sweep_api._reconcile_unresolved_sync('vault')
+    expired=isolated_api.store.get_test_operation('expired-test')
+    assert expired['submitted_at'] is None
+    assert expired['state']=='failed'
+    assert profit_sweep_api._public_test_operation(expired)['status']=='cancelled'
+    assert isolated_api.store.get_test_operation('fresh-test')['state']=='prepared'
+
+
+def test_cancel_test_route_checks_owner_and_claim(isolated_api):
+    """The cancellation route closes an owned preparation and rejects a different account."""
+    isolated_api.store.create_test_operation('vault',operation_id='cancel-api',parent_id=None,
+        direction='forward',route='vault_to_main_perps',descriptor={'asset':'USDC','amount':'5','operation_id':'cancel-api','route':'vault_to_main_perps'},requested_amount='5')
+    result=asyncio.run(profit_sweep_api.cancel_test_transfer('vault','cancel-api'))
+    assert result['operation']['status']=='cancelled'
+    assert result['operation']['can_cancel'] is False

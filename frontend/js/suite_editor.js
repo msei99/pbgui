@@ -149,7 +149,7 @@ function _suiteGeneratorSettings(source) {
   var settings = {};
   ['template', 'window_days', 'stride_days', 'training_windows', 'holdout_windows',
     'exchange_mode', 'auto_windows', 'balance_multiplier', 'starting_balance',
-    'refill_cost', 'cooldown_days'].forEach(function(key) {
+    'refill_cost', 'cooldown_days', 'windows'].forEach(function(key) {
     if (Object.prototype.hasOwnProperty.call(source, key)) settings[key] = source[key];
   });
   return JSON.parse(JSON.stringify(settings));
@@ -254,7 +254,32 @@ function _suiteLoadBotParams() {
 
 /* ── Structured editor sync hook ───────────────────────────── */
 function _suiteNotifyStructuredSync() {
-  if (!_suiteState.applyingGeneratedTemplate) _suiteState.scenarioTemplate = null;
+  if (!_suiteState.applyingGeneratedTemplate) {
+    var plan = _suiteState.scenarioTemplate;
+    if (plan && plan.contract_version === 2 && plan.parameters && Array.isArray(plan.parameters.windows)) {
+      var oldTraining = plan.parameters.windows.filter(function(w){return w.role === 'training';});
+      if (JSON.stringify(oldTraining.map(function(w){return w.scenario;})) !== JSON.stringify(_suiteState.scenarios)) {
+        var context = _suiteScenarioContext();
+        var training = _suiteState.scenarios.map(function(s, i) {
+          var old = oldTraining.find(function(w){return w.label === s.label;});
+          return {id:old ? old.id : 'edited_training_' + i, role:'training', label:s.label,
+            start_date:s.start_date || context.start_date, end_date:s.end_date || context.end_date,
+            scenario:JSON.parse(JSON.stringify(s))};
+        });
+        plan.parameters.windows = training.concat(plan.parameters.windows.filter(function(w){return w.role === 'holdout';}));
+        plan.parameters.training_windows = training.length;
+        if (_suiteState.scenarioGeneratorDraft) _suiteState.scenarioGeneratorDraft.windows = JSON.parse(JSON.stringify(plan.parameters.windows));
+        _suiteState.scenarioPreview = null;
+        _suiteState.scenarioRequestId++;
+        if (typeof window !== 'undefined' && window.PBGuiScenarioVisual) {
+          var host = document.getElementById('suite-visual-host');
+          if (host) _suiteMountVisual(host);
+        }
+      }
+    } else {
+      _suiteState.scenarioTemplate = null;
+    }
+  }
   if (typeof scheduleStructuredEditorSync === 'function') {
     scheduleStructuredEditorSync();
   }
@@ -544,6 +569,11 @@ function _suiteRender() {
 
   h += '\x3C/div>\x3C/div>';
   el.innerHTML = h;
+  if (typeof window !== 'undefined' && window.PBGuiScenarioVisual) {
+    window.PBGuiScenarioVisual.dispose();
+    var visualHost = document.getElementById('suite-visual-host');
+    if (visualHost) _suiteMountVisual(visualHost);
+  }
   if (_suiteState.enabled && _suiteState.editIdx >= 0) {
     var current = _suiteState.scenarios[_suiteState.editIdx] || {};
     _suiteInitCoinMs('suite-sc-coins-ms', current.coins || []);
@@ -567,7 +597,6 @@ function _suiteScenarioContext() {
 
 function _suiteRenderScenarioGenerator() {
   var context = _suiteScenarioContext();
-  var preview = _suiteState.scenarioPreview;
   var contextBalance = Number(context.starting_balance);
   var defaultBalance = isFinite(contextBalance) && contextBalance >= 1 ? contextBalance : 1000;
   var draft = Object.assign({
@@ -586,17 +615,17 @@ function _suiteRenderScenarioGenerator() {
   var isSweep = draft.template === 'sweep_cycles';
   var h = '\x3Cdiv style="border:1px solid var(--border);border-radius:6px;padding:var(--sp-md);margin-bottom:var(--sp-md);background:rgba(77,166,255,.035)">';
   h += '\x3Cdiv style="display:flex;align-items:start;justify-content:space-between;gap:var(--sp-md);margin-bottom:var(--sp-sm)">';
-  h += '\x3Cdiv>\x3Cdiv style="font-weight:650">PB8 Scenario Generator\x3C/div>';
-  h += '\x3Cdiv style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">Deterministic preview using base dates ' +
+  h += '\x3Cdiv>\x3Cdiv style="font-weight:650">PB8 Scenario Editor\x3C/div>';
+  h += '\x3Cdiv style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">Window editor using base dates ' +
     esc(context.start_date || 'unset') + ' to ' + esc(context.end_date || 'unset') + '.\x3C/div>\x3C/div>';
   h += '\x3Cdiv style="display:flex;gap:var(--sp-xs)">';
   h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteOpenScenarioGeneratorGuide()">Guide\x3C/button>';
   h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteRecalculateScenarioGenerator()">Recalculate\x3C/button>';
-  h += '\x3Cbutton type="button" class="act-btn" id="suite-generator-preview-btn" onclick="_suitePreviewScenarioTemplate()">Preview\x3C/button>\x3C/div>\x3C/div>';
+  h += '\x3Cbutton type="button" class="act-btn" id="suite-generator-preview-btn" onclick="_suitePreviewScenarioTemplate()">Generate windows\x3C/button>\x3C/div>\x3C/div>';
   h += '\x3Cdiv style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:var(--sp-sm);align-items:end">';
-  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Choose rolling training windows, chronological walk-forward training with untouched holdout windows, or walk-forward windows with sweep evaluation provenance.">Template\x3C/span>\x3C/label>\x3Cselect id="suite-generator-template" onchange="_suiteUpdateGeneratorFields(this.value)">';
+  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Generate equal training windows, training with end holdouts, or sequential Sweep windows. Edit individual dates and distributed holdouts below; these presets do not launch repeated walk-forward optimization.">Template\x3C/span>\x3C/label>\x3Cselect id="suite-generator-template" onchange="_suiteUpdateGeneratorFields(this.value)">';
   h += '\x3Coption value="rolling_windows"' + (draft.template === 'rolling_windows' ? ' selected' : '') + '>Rolling Windows\x3C/option>';
-  h += '\x3Coption value="walk_forward"' + (draft.template === 'walk_forward' ? ' selected' : '') + '>Walk-Forward\x3C/option>';
+  h += '\x3Coption value="walk_forward"' + (draft.template === 'walk_forward' || draft.template === 'custom_windows' ? ' selected' : '') + '>Windows + Holdouts\x3C/option>';
   h += '\x3Coption value="sweep_cycles"' + (isSweep ? ' selected' : '') + '>Sweep Cycles\x3C/option>\x3C/select>\x3C/div>';
   h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Number of calendar days included in each generated scenario.">Window days\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-window" min="1" max="3650" value="' + esc(draft.window_days) + '" onchange="_suiteAlignSweepStride()">\x3C/div>';
   h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Distance between consecutive window end dates. Sweep Cycles calculates this automatically as Window days plus Cooldown days.">Stride days\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-stride" min="1" max="3650" value="' + esc(draft.stride_days) + '"' + (isSweep ? ' readonly' : '') + '>\x3C/div>';
@@ -610,25 +639,7 @@ function _suiteRenderScenarioGenerator() {
   h += '\x3Cdiv class="form-group suite-generator-sweep" style="' + (isSweep ? '' : 'display:none') + '">\x3Clabel>\x3Cspan data-tip="Minimum no-trading gap between sweep-cycle windows. Stride must be at least window days plus cooldown days.">Cooldown days\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-cooldown" min="0" max="3650" value="' + esc(draft.cooldown_days) + '" onchange="_suiteAlignSweepStride()">\x3C/div>';
   h += '\x3C/div>';
 
-  if (preview) {
-    h += '\x3Cdiv style="margin-top:var(--sp-md);padding-top:var(--sp-sm);border-top:1px solid var(--border)">';
-    h += '\x3Cdiv style="display:flex;align-items:center;justify-content:space-between;gap:var(--sp-md);margin-bottom:var(--sp-sm)">';
-    h += '\x3Cspan style="font-size:var(--fs-sm);font-weight:600">Preview: ' + preview.training_scenarios.length +
-      ' training, ' + preview.holdout_scenarios.length + ' holdout\x3C/span>';
-    h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteApplyScenarioPreview()">Apply Training Scenarios\x3C/button>\x3C/div>';
-    h += '\x3Cdiv style="max-height:190px;overflow:auto">\x3Ctable class="tbl" style="font-size:var(--fs-sm)">';
-    h += '\x3Cthead>\x3Ctr>\x3Cth>Use\x3C/th>\x3Cth>Label\x3C/th>\x3Cth>Period\x3C/th>\x3C/tr>\x3C/thead>\x3Ctbody>';
-    preview.training_scenarios.concat(preview.holdout_scenarios).forEach(function(scenario, index) {
-      var training = index < preview.training_scenarios.length;
-      h += '\x3Ctr>\x3Ctd>' + (training ? 'Train' : 'Holdout') + '\x3C/td>\x3Ctd>' + esc(scenario.label) +
-        '\x3C/td>\x3Ctd>' + esc(scenario.start_date) + ' to ' + esc(scenario.end_date) + '\x3C/td>\x3C/tr>';
-    });
-    h += '\x3C/tbody>\x3C/table>\x3C/div>';
-    (preview.warnings || []).forEach(function(warning) {
-      h += '\x3Cdiv style="font-size:var(--fs-sm);line-height:1.45;color:var(--orange);margin-top:4px">' + esc(warning) + '\x3C/div>';
-    });
-    h += '\x3C/div>';
-  }
+  h += '\x3Cdetails open>\x3Csummary>Visual windows · drag to move or resize\x3C/summary>\x3Cdiv id="suite-visual-host">\x3C/div>\x3C/details>';
   h += '\x3C/div>';
   return h;
 }
@@ -728,6 +739,9 @@ function _suiteCaptureScenarioGeneratorDraft() {
     exchange_mode: document.getElementById('suite-generator-exchange-mode').value,
     auto_windows: template === 'sweep_cycles',
   };
+  if (_suiteState.scenarioGeneratorDraft && _suiteState.scenarioGeneratorDraft.windows) {
+    draft.windows = JSON.parse(JSON.stringify(_suiteState.scenarioGeneratorDraft.windows));
+  }
   if (template === 'sweep_cycles') {
     draft.balance_multiplier = _suiteGeneratorNumber('suite-generator-multiplier');
     draft.starting_balance = _suiteGeneratorNumber('suite-generator-balance');
@@ -780,6 +794,7 @@ function _suitePreviewScenarioTemplate() {
     toast('The base date range does not fit a training window after reserving Holdouts.', 'err');
     return;
   }
+  delete draft.windows;
   var template = draft.template;
   var payload = Object.assign({}, draft, {
     start_date: context.start_date,
@@ -798,8 +813,8 @@ function _suitePreviewScenarioTemplate() {
     _suiteRender();
   }).catch(function(error) {
     if (requestId !== _suiteState.scenarioRequestId) return;
-    toast(error.message || 'Scenario preview failed', 'err');
-    if (button) { button.disabled = false; button.textContent = 'Preview'; }
+    toast(error.message || 'Window generation failed', 'err');
+    if (button) { button.disabled = false; button.textContent = 'Generate windows'; }
   });
 }
 
@@ -837,7 +852,7 @@ async function _suiteApplyScenarioPreview() {
   _suiteState.aggregate = JSON.parse(JSON.stringify(preview.reducer || { default: 'mean' }));
   _suiteState.scenarioTemplate = JSON.parse(JSON.stringify(preview.provenance || null));
   _suiteState.editIdx = -1;
-  if (_suiteState.onApplyScenarioPreview) _suiteState.onApplyScenarioPreview(preview);
+  if (_suiteState.onApplyScenarioPreview && preview.contract_version !== 2) _suiteState.onApplyScenarioPreview(preview);
   _suiteState.applyingGeneratedTemplate = true;
   _suiteNotifyStructuredSync();
   _suiteState.applyingGeneratedTemplate = false;
@@ -902,7 +917,7 @@ async function _suiteResetToBase() {
 /* ── Scenarios table ────────────────────────────────────────── */
 function _suiteRenderScenariosTable() {
   var s = _suiteState.scenarios;
-  var h = '\x3Cdiv style="margin-bottom:var(--sp-md)">';
+  var h = '\x3Cdiv class="suite-scenarios-table" style="margin-bottom:var(--sp-md)">';
   h += '\x3Cdiv style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-sm)">';
   h += '\x3Cspan style="font-size:var(--fs-sm);font-weight:600">Scenarios (' + s.length + ')\x3C/span>';
   h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteAddScenario()">+ Add Scenario\x3C/button>';
@@ -1331,4 +1346,55 @@ function _suiteInitCoinSources(sc) {
 function _suiteCollectCoinSources() {
   if (typeof kvCollect === 'function') return kvCollect(_suiteCoinSourcesPrefix);
   return {};
+}
+
+function _suiteVisualWindows() {
+  var draft = _suiteState.scenarioGeneratorDraft || {};
+  if (Array.isArray(draft.windows)) return JSON.parse(JSON.stringify(draft.windows));
+  var preview = _suiteState.scenarioPreview;
+  var template = _suiteState.scenarioTemplate || {};
+  if (!preview && Array.isArray(template.parameters && template.parameters.windows)) return JSON.parse(JSON.stringify(template.parameters.windows));
+  var context = _suiteScenarioContext();
+  var train = preview ? preview.training_scenarios : _suiteState.scenarios;
+  var holdouts = preview ? preview.holdout_scenarios : template.holdout_scenarios || [];
+  return (train || []).map(function(s, i) { return {id:'training_'+i,role:'training',label:s.label||'training_'+i,start_date:s.start_date||context.start_date,end_date:s.end_date||context.end_date,scenario:JSON.parse(JSON.stringify(s))}; })
+    .concat(holdouts.map(function(s,i){return {id:'holdout_'+i,role:'holdout',label:s.label||'holdout_'+i,start_date:s.start_date,end_date:s.end_date,scenario:JSON.parse(JSON.stringify(s))};}));
+}
+
+function _suiteMountVisual(host) {
+  var context = _suiteScenarioContext();
+  window.PBGuiScenarioVisual.mount(host, {
+    apiBase:_suiteState.apiBase, context:context, windows:_suiteVisualWindows(),
+    settings:function(){return _suiteCaptureScenarioGeneratorDraft() || {};},
+    coverage:function() {
+      var button=document.getElementById('opted-sidebar-ohlcv-preflight-btn');
+      if(button)button.click();
+    },
+    change:function(windows) {
+      var draft = _suiteCaptureScenarioGeneratorDraft() || {};
+      draft.windows=windows;
+      _suiteState.scenarioGeneratorDraft=draft;
+      _suiteState.scenarioPreview=null;
+      _suiteState.scenarioRequestId++;
+      if(typeof scheduleStructuredEditorSync==='function')scheduleStructuredEditorSync();
+    },
+    apply:async function(windows) {
+      var signature=_suiteScenarioContextSignature(context);
+      if(signature!==_suiteScenarioContextSignature(_suiteScenarioContext()))throw new Error('Base dates or exchanges changed. Reopen the editor before applying.');
+      var draft=_suiteCaptureScenarioGeneratorDraft() || {};
+      var payload=Object.assign({},draft,{windows:windows,start_date:context.start_date,end_date:context.end_date,exchanges:context.exchanges,reducer:_suiteState.aggregate});
+      var generation=++_suiteState.scenarioRequestId;
+      var preview=await apiFetch('/scenario-templates/preview',{method:'POST',body:JSON.stringify(payload)});
+      if(generation!==_suiteState.scenarioRequestId || signature!==_suiteScenarioContextSignature(_suiteScenarioContext()))throw new Error('Windows changed during validation. Apply again.');
+      if(!preview||!Array.isArray(preview.training_scenarios))throw new Error('The API did not return training scenarios. Restart the API and try again.');
+      _suiteState.scenarioPreview=preview;
+      _suiteState.scenarioPreviewContext=signature;
+      _suiteState.scenarioGeneratorDraft=Object.assign({},draft,{windows:windows});
+      await _suiteApplyScenarioPreview();
+      if(_suiteState.scenarioTemplate!==null && JSON.stringify(_suiteState.scenarios)===JSON.stringify(preview.training_scenarios)){
+        var table=document.querySelector('#suite-container .suite-scenarios-table');
+        if(table)table.scrollIntoView({block:'nearest'});
+      }else throw new Error('Scenarios were not applied. Close the individual scenario editor and try again.');
+    }
+  });
 }

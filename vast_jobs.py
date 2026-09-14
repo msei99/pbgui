@@ -228,9 +228,11 @@ class JobStore:
         try:
             folder = ensure_private_directory(directory / "input")
             save_prepared_pb8_config(config, folder / "optimize.json")
+            from scenario_windows import build_validation_plan
             sweep = build_sweep_plan(source)
+            validation_plan = build_validation_plan(source)
             manifest = {"schema_version": 1, "pb8_revision": REVISION, "config_sha256": digest(folder / "optimize.json"),
-                        "source_config_sha256": source_sha256, "sweep_plan": sweep, "files": []}
+                        "source_config_sha256": source_sha256, "sweep_plan": sweep, "validation_plan": validation_plan, "files": []}
             for original, relative in shards:
                 destination = folder / "ohlcv" / relative
                 ensure_private_directory(destination.parent)

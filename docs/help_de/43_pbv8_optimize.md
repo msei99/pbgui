@@ -52,7 +52,7 @@ Mehrere ausgewaehlte Exchanges behalten PB8s kombiniertes Dataset-Verhalten. Fue
 
 Die zwei kompakten Buttons direkt neben **start_date** in PB8 Optimize ermitteln mit PB8 die ersten verfuegbaren Kerzen fuer die aktuell ausgewaehlten Exchanges und explizit freigegebenen Coins. **1st** verwendet die aelteste bekannte ausgewaehlte Markthistorie. **All** startet erst, wenn jeder ausgewaehlte Coin auf jeder ausgewaehlten Exchange einen bekannten OHLCV-Zeitstempel besitzt. Waehrend des Lookups zeigt ein kompakter Fortschrittsbalken die tatsaechlich abgeschlossenen Exchange/Coin-Paare und den aktuellen PB8-Schritt. **Stop** beendet nur diesen Lookup. PBGui addiert PB8s benoetigten Strategie-Warmup und rundet auf den ersten vollstaendig nutzbaren UTC-Tag auf, bevor das reine Datum `backtest.start_date` gesetzt wird. Fehlt ein Coin auf einer Exchange oder ist sein erster Zeitstempel unbekannt, meldet **All** das erste nicht aufloesbare Paar. Die dynamische Coin-Auswahl `all` ist nicht erlaubt; ein Lookup ist auf 200 Exchange/Coin-Paare begrenzt. Der ausdrueckliche Lookup darf PB8s nativen First-Timestamp-Cache fuellen, laedt aber nicht den vollstaendigen OHLCV-Bereich herunter. Beim Schliessen oder Ersetzen des Editors wird sein aktiver Lookup automatisch gestoppt.
 
-Der **PB8 Scenario Generator** in Suite Mode zeigt deterministische Plaene fuer `rolling_windows`, `walk_forward` und `sweep_cycles` aus dem Basis-Datumsbereich des Editors. Fensterlaenge, Schrittweite, Anzahl der Trainings- und optionalen Holdout-Fenster sowie Exchange-Aufteilung werden serverseitig validiert und auf 64 erzeugte Szenarien begrenzt. Preview veraendert die Config nicht. **Apply Training Scenarios** ersetzt ausdruecklich die ungespeicherten Suite-Szenarien und den Reducer und setzt fuer alle drei Templates dasselbe Default-Rezept fuer Scoring und Limits; Holdout-Fenster bleiben ausserhalb von `backtest.scenarios` und werden als `pbgui.scenario_template`-Provenance gespeichert. Jede spaetere manuelle Suite-Aenderung entfernt diese Provenance. Sweep Cycles bindet diesen unveraenderlichen Plan zusaetzlich an das PB8-Result und berechnet aus dem szenarioweisen Gain jedes Pareto-Kandidaten sequenzielle Sweep-/Refill-Cashflow-Metriken. PBGui AI bietet denselben Generator als Read-only-Preview-Tool an und muss fuer Save oder Queue weiterhin den bestehenden Proposal-Flow verwenden.
+Der **PB8 Scenario Generator** in Suite Mode zeigt deterministische Plaene fuer `rolling_windows`, `walk_forward` und `sweep_cycles` aus dem Basis-Datumsbereich des Editors. Fensterlaenge, Schrittweite, Anzahl der Trainings- und optionalen Holdout-Fenster sowie Exchange-Aufteilung werden serverseitig validiert und auf 64 erzeugte Szenarien begrenzt. Preview veraendert die Config nicht. **Check & Apply windows** ersetzt ausdruecklich die ungespeicherten Suite-Szenarien und den Reducer und setzt fuer alle drei Templates dasselbe Default-Rezept fuer Scoring und Limits; Holdout-Fenster bleiben ausserhalb von `backtest.scenarios` und werden als `pbgui.scenario_template`-Provenance gespeichert. Bei alten Preset-Plaenen entfernt eine manuelle Suite-Aenderung die Provenance. Explizite visuelle Fensterplaene behalten ihre Holdouts bei Aenderungen an Trainingsszenarien und Aggregation. Sweep Cycles bindet diesen unveraenderlichen Plan zusaetzlich an das PB8-Result und berechnet aus dem szenarioweisen Gain jedes Pareto-Kandidaten sequenzielle Sweep-/Refill-Cashflow-Metriken. PBGui AI bietet denselben Generator als Read-only-Preview-Tool an und muss fuer Save oder Queue weiterhin den bestehenden Proposal-Flow verwenden.
 
 ### Scenario Generator
 
@@ -64,8 +64,8 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
 | --- | --- | --- |
 | **1st / All** neben `start_date` | Ermittelt ein OHLCV-basiertes Startdatum | Suite-Szenarien und Generator-Einstellungen |
 | **Recalculate** | Liest aktuelle Basiseinstellungen neu und berechnet fuer jedes Template die maximal passende Training-Anzahl | Gespeicherte Config und bereits angewendete Suite |
-| **Preview** | Zeigt exakte Train-/Holdout-Fenster und Warnungen | Config, Suite, Scoring, Bounds und Queue |
-| **Apply Training Scenarios** | Aktiviert Suite Mode, setzt Train-Szenarien/Reducer, speichert Holdout-Provenance und wendet den Sweep-Preset an | Es wird noch nichts gespeichert oder gequeued |
+| **Generate windows** | Zeigt exakte Train-/Holdout-Fenster und Warnungen | Config, Suite, Scoring, Bounds und Queue |
+| **Check & Apply windows** | Aktiviert Suite Mode, setzt Train-Szenarien/Reducer, speichert Holdout-Provenance und wendet den Sweep-Preset an | Es wird noch nichts gespeichert oder gequeued |
 | **Save / Save & Queue** | Speichert oder startet das angewendete Experiment | Holdout bleibt aus der Optimierung ausgeschlossen |
 | **Paretos** | Zeigt PB8-Metriken plus PBGui-`sweep_*`-Cashflow-Metriken | Originale PB8-Kandidatenmetriken |
 | **Holdout** in der Pareto-Sidebar | Baut eigenstaendige PB8-Backtest-Queue-Drafts aus unveraenderlichen Holdout-Daten | Kandidatenparameter, Coins, Exchange, Balance und Overrides |
@@ -90,8 +90,8 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
 1. Explizite Coins und Exchanges auswaehlen.
 2. **All** fuer ein gemeinsames Startdatum aller Exchange/Coin-Paare verwenden; **1st** nur, wenn eine sich veraendernde Coin-Historie beabsichtigt ist.
 3. **Sweep Cycles** waehlen und Window, Holdout, Starting balance, Multiplier, Refill cost sowie Cooldown setzen. PBGui berechnet Stride und Training windows.
-4. Nach jeder OHLCV-/Datums-/Exchange-Aenderung **Recalculate**, danach **Preview** klicken.
-5. **Apply Training Scenarios** klicken. PBGui synchronisiert Basisbalance, symmetrische Suite-Coin-Listen, Reducer, Scoring, Limits und sinnvolle Long-Bounds.
+4. Nach jeder OHLCV-/Datums-/Exchange-Aenderung **Recalculate**, danach **Generate windows** klicken.
+5. **Check & Apply windows** klicken. PBGui synchronisiert Basisbalance, symmetrische Suite-Coin-Listen, Reducer, Scoring, Limits und sinnvolle Long-Bounds.
 6. Optimize-Run speichern und queuen. `write_all_results=true` ist verpflichtend, damit PBGui den unveraenderlichen Sweep-Plan dem richtigen Result zuordnen kann.
 7. Fertige Kandidaten nach `sweep_net_cashflow`, abgeschlossenen Zyklen, externem Kapital/Refills, Drawdown und Sortino bewerten.
 8. Finalisten auswaehlen und **Holdout** klicken. Die erzeugten eigenstaendigen Backtests ohne Retuning queuen.
@@ -114,12 +114,12 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
    - **Sweep Cycles** erzeugt einen sequenziellen Combined-Exchange-Track und wertet die Fenster-Gains jedes Kandidaten mit Carry-, Sweep-Reset- und Refill-Reset-Regeln aus. PBGui berechnet Stride und die maximale Anzahl vollstaendiger Training-Fenster nach Reservierung der Holdouts automatisch aus dem Basis-Datumsbereich.
 4. **Window days** bestimmt die Laenge jedes Szenarios. Rolling Windows und Walk-Forward erlauben einen manuellen **Stride days**-Wert. Sweep Cycles berechnet Stride automatisch als Window days plus Cooldown days.
 5. **Training windows** bei Rolling Windows oder Walk-Forward manuell setzen oder mit **Recalculate** anhand der aktuellen Daten und des konfigurierten Stride maximal einpassen. Sweep Cycles berechnet nach Reservierung der **Holdout windows** immer automatisch die maximale vollstaendige Training-Anzahl. Passt kein Trainingsfenster, bleibt der Plan ungueltig, statt kuenstlich auf eins gesetzt zu werden. Mit **Exchange mode = Inherit base** verwendet jedes Fenster die kombinierte Basis-Exchange-Auswahl.
-6. **Preview** klicken. Labels, exakte Datumsbereiche, Train-/Holdout-Zuordnung, Szenarioanzahl und Warnungen pruefen. Preview allein veraendert weder Suite noch Config.
-7. Wenn der Plan stimmt, **Apply Training Scenarios** klicken. Dadurch wird Suite Mode aktiviert, die aktuelle ungespeicherte Suite ersetzt und der vorgeschlagene Reducer angewendet. Holdout-Zeilen werden absichtlich nicht nach `backtest.scenarios` kopiert.
+6. **Generate windows** klicken. Die erzeugten Fenster direkt im Chart pruefen und bearbeiten. Das Erzeugen der Fenster veraendert weder Suite noch Config.
+7. Wenn der Plan stimmt, **Check & Apply windows** klicken. Dadurch wird Suite Mode aktiviert, die aktuelle ungespeicherte Suite ersetzt und der konfigurierte Reducer beibehalten. Holdout-Zeilen werden absichtlich nicht nach `backtest.scenarios` kopiert.
 8. Nach dem Ersetzen einer bestehenden Suite die benannten Objective-Scenario-, Scoring- und Limit-Referenzen pruefen. Deren Szenarionamen muessen weiterhin in der neu erzeugten Trainings-Suite existieren.
 9. Erst nach Kontrolle der angewendeten Suite den normalen **Save**- oder Queue-Workflow verwenden. Save speichert Generatorparameter und Holdout-Zeilen zur Nachvollziehbarkeit unter `pbgui.scenario_template`.
 
-Wenn Basis-Daten oder Exchanges nach der Preview geaendert wurden, muss vor Apply erneut **Preview** ausgefuehrt werden. PBGui blockiert das Anwenden einer veralteten Preview. Manuelles Bearbeiten, Hinzufuegen, Entfernen, Verschieben oder Ersetzen von Suite-Szenarien nach Apply entfernt die Generator-Provenance, weil die gespeicherte Suite nicht mehr exakt dem erzeugten Plan entspricht.
+Wenn Basis-Daten oder Exchanges nach der Preview geaendert wurden, muss vor Apply erneut **Generate windows** ausgefuehrt werden. PBGui blockiert das Anwenden einer veralteten Preview. Manuelles Bearbeiten, Hinzufuegen, Entfernen, Verschieben oder Ersetzen von Suite-Szenarien nach Apply entfernt die Generator-Provenance, weil die gespeicherte Suite nicht mehr exakt dem erzeugten Plan entspricht.
 
 Nach einer Aenderung der Approved Coins, Basis-Starting-Balance oder einem neuen `start_date` ueber **1st** oder **All** muss **Recalculate** neben **Guide** geklickt werden. Die Aktion liest aktuelle Basiseinstellungen, passt Rolling-/Walk-Forward-Counts mit ihrem konfigurierten Stride ein, berechnet Sweep-Stride/-Count automatisch und verwirft veralteten Preview-State. Preview behaelt weiterhin eine manuell gewaehlte kleinere Rolling-/Walk-Forward-Anzahl.
 
@@ -229,3 +229,60 @@ Der Pareto Explorer lässt sich auch für importierte Vast-Ergebnisse öffnen. G
 Queue Backtest und Queue Validation fügen die Kandidaten direkt hinzu; Diagramm, Filter und Auswahl bleiben erhalten. Erst Open Queue wechselt die Seite. Der Zähler umfasst wartende und laufende Jobs. Daneben steht, ob Autostart aktiv ist und Jobs automatisch starten kann. Hinzufügen sendet keinen Startbefehl. Zeiträume, Börsen, Startkapital und Overrides werden aus der Konfiguration übernommen; Änderungen sind bei Backtests möglich. Während frühere Aufträge im Hintergrund übertragen werden, kannst du weitere Kandidaten auswählen und hinzufügen. Jeder Klick übernimmt seine Konfiguration und Validierungsart; die Übertragung erfolgt nacheinander und der Status zeigt wartende Aufträge. Bereits bestätigte Jobs werden bei Wiederholungen in dieser Seitensitzung übersprungen. Lass die Seite bis zum Ende des Hinzufügens geöffnet. Solange noch Aufträge ausstehen, öffnet Open Queue einen weiteren Tab, damit das Hinzufügen weiterlaufen kann. Bei einem teilweise fehlgeschlagenen PB8-Aufruf setzt ein erneuter Klick mit denselben Vorgangs-IDs fort.
 
 Das ausdrückliche Anwenden von **Sweep Cycles** setzt für EMA und Trailing genau drei Scoring-Ziele: Gain (ADG bei Vast GPU), Sortino und maximaler Drawdown. Alle unterstützten Metriken bleiben für anschließende manuelle Änderungen auswählbar.
+
+### Visueller Scenario Editor
+
+Oeffne **Suite Mode → Visual windows**. Oben erscheinen lokale OHLCV-Archive als Tageskerzen oder Kurslinie. Exchange und Coin betreffen nur diesen Referenzchart. Fehlende Tage werden orange markiert, unvollstaendige Tage gezaehlt. Es startet kein Exchange-Download. Beim Reinzoomen wechselt die Kurslinie automatisch zu Kerzen, sobald genug Platz vorhanden ist. Als Referenz stehen nur konfigurierte Optimizer-Coins zur Auswahl. Leere Holdout-Bahnen bleiben als Drop-Ziel sichtbar; beim Ziehen bleiben die Bahnpositionen stabil. Die Datenaufloesung der Optimierung bleibt unveraendert.
+
+- Ziehe die Fenstermitte zum Verschieben oder einen Rand zum Vergroessern/Verkleinern. Datumswerte rasten auf UTC-Tage ein.
+- Training/Holdout auf freier Chartflaeche zeichnen, mit dem Papierkorb loeschen und Undo/Redo bearbeiten den Entwurf.
+- Holdouts duerfen zwischen Trainingsperioden liegen. Trainingsfenster werden nach Abschluss der Bearbeitung automatisch um Holdouts gekuerzt oder geteilt. Training/Holdout-Ueberschneidungen blockieren Apply. Ueberlappende Trainingsfenster erscheinen in separaten Spuren. Sweep verlangt zusaetzlich chronologische, nicht ueberlappende Fenster mit dem eingestellten Cooldown.
+- **Check & Apply windows** prueft die Daten und uebernimmt nur Training in die Suite. Scoring, Limits und Aggregation bleiben erhalten. **Save** oder **Save & Queue** speichert anschliessend die angewendete Konfiguration. Erlaubt sind bis zu 48 Trainings- und 16 Holdout-Fenster.
+
+Rolling Windows und Windows + Holdouts bleiben Vorlagen fuer gleichmaessige Fenster. Preview erzeugt deren Entwurf neu; danach lassen sich Fenster einzeln anpassen. Bestehende Vorlagen bleiben kompatibel. Ein verteilter Holdout ist ein ausgeschlossener Zeitraum, aber nicht automatisch ein chronologischer Forward-Test: echtes Walk-Forward wuerde vor jedem Test separat nur mit davorliegenden Daten optimieren.
+
+Lokale und von Vast importierte Resultate behalten die expliziten Holdout-Daten. **Validate** in Results und Pareto Explorer verwendet diese Zeitraeume auch bei verteilten Holdouts. Aggregationsaenderungen entfernen sie nicht. Passt ein Plan nicht mehr zur Trainingskonfiguration, muss er vor dem Start erneut angewendet werden.
+
+Visuelle Fensterplaene benoetigen `optimize.write_all_results=true`, damit die lokalen Metadaten dem Resultat zugeordnet werden koennen.
+
+Neue Fenster verwenden **Window days** und **Stride days**. Training folgt dem letzten Trainingsstart plus Schrittweite; der erste Holdout folgt den vorhandenen Fenstern. Passt das ganze Fenster nicht mehr, erweitere den Bereich oder zeichne es explizit. PBGui verkuerzt es nicht automatisch.
+
+Als Referenz wird ein konfigurierter Coin anhand des lokalen Market-Mappings vorausgewaehlt. Gibt es keinen Treffer, waehle ihn explizit aus. Eine manuelle Referenzauswahl bleibt beim Neuzeichnen erhalten. Datenluecken erscheinen als schmaler orangefarbener Streifen. **Full range** zeigt den gesamten konfigurierten Zeitraum, ohne Fensterdaten zu veraendern.
+
+Tageszusammenfassungen werden bis zu fuenf Minuten im API-Speicher zwischengespeichert und beim erneuten Laden wiederverwendet. Geaenderte Quelldateien verwerfen den Cache des betroffenen Tages sofort. Beim ersten Laden werden weiterhin die lokalen Minutenarchive gelesen; es startet kein Exchange-Download.
+
+Ein ausgewaehltes Fenster mit dem Papierkorb oben loeschen oder seinen Balken auf den Papierkorb ziehen. Undo stellt es wieder her. Die Markierungen im Kurschart zeigen ueber alle Fenster hinweg direkte Anschluesse gruen, Luecken orange und Ueberlappungen rot. Der Tooltip nennt Datum und Tagesanzahl. Ueberlappende Trainingsfenster koennen beabsichtigt sein.
+
+Duenn gezeichnete gruene Anschluesse liegen im Kurschart. Beim Ziehen zum Papierkorb folgt eine schwebende Beschriftung der Maus.
+
+Das Mausrad zoomt im Chart um den Mauszeiger. Shift-Ziehen im Kursbereich verschiebt den sichtbaren Zeitraum; Doppelklick auf eine freie Chartstelle zeigt den gesamten Zeitraum. Die Fensterbalken verschieben und aendern weiterhin ihre Datumsgrenzen.
+
+Neue Fenster direkt durch Ziehen auf freier Chartflaeche erstellen. Auf der Holdout-Bahn entstehen Holdouts, sonst Trainingsfenster. Ein einfacher Klick erstellt kein Fenster.
+
+Browser-Refresh oeffnet die gespeicherte Config erneut, auch bei Aufruf aus der Queue. Ungespeicherte Aenderungen werden nicht wiederhergestellt. Home/Schliessen entfernt die Editor-Adresse.
+
+Die vier Chart-Icons sind Undo, Redo, Papierkorb und Gesamtbereich, jeweils mit Tooltip. Ein Fenster auf die andere Training/Holdout-Bahn ziehen, um seine Rolle zu wechseln. Neue Fenster direkt zeichnen; separate Hinzufuegen- oder Kursbereich-Knoepfe entfallen.
+
+Beim Ziehen ist nur das Fenster unter dem Mauszeiger sichtbar; die urspruengliche Kopie wird bis zum Loslassen ausgeblendet. Refresh stellt den Editor ohne kurzzeitige Config-Auswahl wieder her.
+
+Das gezogene Fenster zeigt bereits vor dem Ablegen die Zielrolle Training/Holdout mit passender Beschriftung und Farbe.
+
+Das Magnet-Icon schaltet Einrasten ein/aus (anfangs aktiv). Beim Verschieben oder Skalieren rastet eine Grenze innerhalb von acht Bildschirmpixeln an anderen Fenstergrenzen ein. Verschieben erhaelt die Dauer. Balken zeigen Start/Ende und Dauer; bei schmalen Fenstern zeigt der Tooltip den ganzen Text.
+
+Check & Apply zeigt Prueffortschritt und Fehler direkt neben dem Knopf. Nach erfolgreicher Uebernahme wird die Szenarioliste unten aktualisiert; die Config wird dadurch noch nicht auf Disk gespeichert.
+
+Holdouts schliessen ihre Datumsbereiche nach Bearbeiten oder Ablegen automatisch vom Training aus. Ueberlappende Trainingsfenster werden gekuerzt, geteilt oder entfernt. Undo stellt die gesamte vorherige Aenderung inklusive betroffenem Training wieder her. Das Backend weist verbleibende Training/Holdout-Ueberlappungen weiterhin zurueck.
+
+Direkt angrenzende Fenster erhalten bei eindeutiger Zuordnung einen gemeinsamen Grenzgriff. Ziehen verschiebt linkes Ende und rechten Start gemeinsam, ohne die aeusseren Grenzen zu aendern. Beide Fenster bleiben mindestens einen Tag lang. Undo stellt beide Fenster wieder her.
+
+An einer gemeinsamen Grenze aendert der linke Griff nur das linke Fensterende, der mittlere beide Fenster und der rechte nur den rechten Fensterstart. Zum Trennen einen seitlichen Griff wegziehen; der Magnet greift weiterhin innerhalb seiner normalen Distanz und kann abgeschaltet werden.
+
+Seitliche Griffe sind kleine Markierungen am unteren Balkenrand. Ihre groesseren unsichtbaren Mausflaechen bleiben leicht greifbar, ohne die Datumsangaben zu verdecken.
+
+Unter dem Chart bleiben nur **Check & Apply windows** und Pruefrueckmeldungen. Fenster direkt im Chart auswaehlen und bearbeiten.
+
+Der Chart ist die Szenariovorschau. **Generate windows** erzeugt den grafischen Entwurf aus den Template-Einstellungen. **Check & Apply windows** prueft ihn und ersetzt direkt die Suite-Szenarioliste; eine separate Preview-Tabelle und ein zweiter Apply-Schritt entfallen. Bei fehlgeschlagener Pruefung bleiben bestehende Szenarien erhalten. Save speichert die Config.
+
+Die kompakte Referenzzeile zeigt Exchange, Coin, Tage und Complete. Fehlende oder unvollstaendige Tage erscheinen nur, wenn vorhanden. Der Tooltip erklaert Quellaufloesung und Pruefumfang; dies betrifft nur den Referenzchart.
+
+Vast-Uploads verwenden wiederaufnehmbare 2-MiB-Bloecke und stabile komprimierte Archive. Der Fortschrittsbalken zaehlt per Pruefsumme bestaetigte Bloecke; empfangene Bytes des laufenden Blocks werden separat angezeigt. Nach Verbindungsabbruch werden nur unbestaetigte Bloecke erneut gesendet. Die Geschwindigkeit misst bestaetigte Bytes im aktuellen Versuch. Solange der Empfaenger Fortschritt meldet, darf ein Upload laenger als zehn Minuten dauern. 120 Sekunden ohne Empfaengerfortschritt loesen einen Retry aus; die Mietfrist begrenzt weiterhin den Transfer.

@@ -615,11 +615,12 @@
       const percent = total && sent != null ? Math.min(100, 100 * sent / total) : 0;
       const label = upload.stage === 'verifying' ? 'Verifying input data' : upload.stage === 'reconnecting' ? 'Reconnecting upload (verified chunks retained)' : 'Uploading input';
       const detail = label + ' · ' + (sent != null ? fmt(sent / 1e6, 1) + ' / ' : '') + fmt(total / 1e6, 1) + ' MB'
-        + (sent != null ? ' (' + fmt(percent, 1) + '%)' : '')
+        + (sent != null ? ' verified (' + fmt(percent, 1) + '%)' : '')
+        + (upload.in_flight_bytes > 0 ? ' · current block: ' + fmt(upload.in_flight_bytes / 1e6, 2) + ' MB received' : '')
         + (upload.bytes_per_second > 0 && upload.stage !== 'verifying' ? ' · ' + fmt(upload.bytes_per_second / 1e6, 2) + ' MB/s' : '');
       el('optlog-progress-fill').style.width = percent + '%';
       el('optlog-progress-label').textContent = detail;
-      el('optlog-progress-label').dataset.tip = 'Bytes passed to SSH and average transfer speed. Remote checksum verification follows the upload.';
+      el('optlog-progress-label').dataset.tip = 'Progress counts checksum-verified blocks. Current block bytes are acknowledged by the receiver and may be retried. Speed is verified data per second during this attempt.';
       el('optlog-activity').textContent = detail;
     }
     const optimizerLog = 'optimizes_v8/vast_' + job.id + (job.has_log ? '.log' : '_provider.log');

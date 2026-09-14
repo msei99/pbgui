@@ -710,7 +710,7 @@ def _public_test_operation(
         "operation_id": operation["operation_id"],
         "parent_id": operation["parent_id"],
         "direction": operation["direction"],
-        "status": operation["state"],
+        "status": "cancelled" if (operation.get("error") or {}).get("reason") == "cancelled_before_submission" else operation["state"],
         "requested_amount": operation["requested_amount"],
         "actual_amount": operation["actual_amount"],
         "asset": str((operation.get("descriptor") or {}).get("asset") or ""),
@@ -719,6 +719,7 @@ def _public_test_operation(
         "resolved_at": operation["resolved_at"],
         "error": error,
         "can_reconcile": operation["state"] in {"submitting", "unknown"},
+        "can_cancel": operation["state"] == "prepared" and operation["submitted_at"] is None,
         "retry_of": retry_of if can_transfer_back else None,
         "return_endpoints": return_endpoints if operation["direction"] == "forward" else None,
         "can_transfer_back": bool(
@@ -1579,6 +1580,18 @@ def _create_vault_leg_two(
         raise
 
 
+def _cancel_expired_test(store: ProfitSweepStore, operation: dict[str, Any]) -> bool:
+    """Retire an expired Vault signature request while the caller owns the account lock."""
+    if (operation["operation_kind"] == "test" and operation["state"] == "prepared"
+            and operation.get("submitted_at") is None
+            and (operation.get("descriptor") or {}).get("adapter") == "hyperliquid_vault"
+            and int(time.time()) - operation["prepared_at"] > 300):
+        store.cancel_prepared_test_operation(operation["user_name"], operation["operation_id"])
+        _log(SERVICE, "Expired unsubmitted Vault test cancelled; no transfer was sent", level="INFO", user=operation["user_name"])
+        return True
+    return False
+
+
 def _evaluate_live_sync(user_name: str) -> dict[str, Any]:
     """Evaluate, reserve, submit once, and reconcile one Live policy."""
 
@@ -1591,10 +1604,9 @@ def _evaluate_live_sync(user_name: str) -> dict[str, Any]:
         raise ValueError("Live evaluation requires operating_mode=live")
     if store.list_live_intents(user_name, unresolved_only=True):
         raise ValueError("An unresolved Live intent blocks new work")
-    if any(
-        operation["user_name"] == user_name
-        for operation in store.list_unresolved_transfer_operations()
-    ):
+    for operation in store.list_unresolved_transfer_operations():
+        if operation["user_name"] != user_name or _cancel_expired_test(store, operation):
+            continue
         raise ValueError("An unresolved manual transfer blocks Live evaluation")
     now_ms = int(time.time() * 1000)
     since_ms, until_ms = _history_window(policy_record, now_ms, state_kind="live")
@@ -1983,6 +1995,8 @@ def _reconcile_unresolved_sync(user_name: str) -> None:
         if operation["user_name"] != user_name:
             continue
         try:
+            if _cancel_expired_test(store, operation):
+                continue
             if operation["operation_kind"] == "top_up" and operation["state"] == "prepared":
                 store.transition_test_operation(
                     operation["operation_id"],
@@ -3003,6 +3017,26 @@ def get_test_transfers(
             for item in operations
         ]
     }
+
+
+@router.post("/test-transfers/{user_name}/{operation_id}/cancel")
+async def cancel_test_transfer(user_name: str, operation_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Cancel only an owned, unsubmitted test under the account operation lock."""
+    _user_or_404(user_name)
+    try:
+        operation = await _run_account_operation(
+            user_name, _store().cancel_prepared_test_operation, user_name, operation_id
+        )
+    except HTTPException:
+        raise
+    except KeyError as exc:
+        raise _logged_http_error(404, "Test transfer not found", operation="cancel_test_transfer", user_name=user_name) from exc
+    except ValueError as exc:
+        raise _logged_http_error(409, "Only an unsubmitted prepared test can be cancelled", operation="cancel_test_transfer", user_name=user_name) from exc
+    except Exception as exc:
+        raise _logged_http_error(503, "Test transfer cancellation unavailable", operation="cancel_test_transfer", user_name=user_name) from exc
+    _log(SERVICE, "Prepared test cancelled; no transfer was sent", level="INFO", user=user_name)
+    return {"status": operation["state"], "operation": _public_test_operation(operation)}
 
 
 @router.post("/test-transfers/{user_name}/{operation_id}/reconcile")
