@@ -1701,6 +1701,23 @@ textarea.json-invalid:focus {
   font-size: var(--fs-sm);
 }
 
+#opted-vast-validation { margin:var(--sp-md) 0 0; padding:var(--sp-md); background:var(--bg2); border:1px solid var(--border); border-radius:6px; color:var(--text); overflow-wrap:anywhere; }
+#opted-vast-validation > strong { font-size:var(--fs-sm); }
+#opted-vast-validation > p { color:var(--text-dim); font-size:var(--fs-xs); margin-top:var(--sp-xs); }
+#opted-vast-validation.cloud-validation-error > strong { color:var(--red); }
+#opted-vast-validation ul { list-style:none; padding:0; margin:var(--sp-sm) 0; }
+#opted-vast-validation li { padding:var(--sp-sm) 0; border-top:1px solid var(--border); }
+#opted-vast-validation .cloud-issue-title { color:var(--red); }
+#opted-vast-validation .cloud-fix-actions { display:flex; flex-wrap:wrap; gap:var(--sp-sm); margin-top:var(--sp-sm); }
+#opted-vast-validation summary { cursor:pointer; color:var(--text-dim); }
+input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; outline:1px solid #ef4444; }
+.limits-table tr.cloud-invalid td { background:rgba(239,68,68,.12); color:#fca5a5; }
+#panel-settings.active { overflow-y:auto; }
+.queue-settings-page { width:100%; min-width:0; }
+.queue-settings-page > .modal-body { overflow:visible; background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin:16px 0; }
+.queue-settings-page h4 { margin:0; }
+.queue-settings-page .settings-stack { max-width:760px; }
+#btn-queue-settings.active { border-color:var(--accent); }
 .settings-stack {
   display: flex;
   flex-direction: column;
@@ -1862,8 +1879,8 @@ textarea.json-invalid:focus {
   position: fixed;
   right: 0;
   bottom: 0;
-  width: 50%;
-  height: 62vh;
+  width: min(1200px, 85vw);
+  height: 75vh;
   min-width: 360px;
   min-height: 260px;
   background: var(--bg2);
@@ -2039,6 +2056,16 @@ textarea.json-invalid:focus {
   min-height: 0;
   overflow: hidden;
 }
+#log-panel .lvp-sidebar:not(.lvp-collapsed) {
+  width: 230px;
+  max-width: 35%;
+  min-width: 0;
+}
+#log-panel .lvp-item-list { min-width: 0; overflow-x: hidden; }
+#optlog-activity, #optlog-error { white-space: normal; overflow-wrap: anywhere; }
+#optlog-rental { margin-top: 8px; }
+#optlog-rental[hidden] { display: none; }
+#optlog-rental .optlog-detail-text { white-space: normal; overflow-wrap: anywhere; }
 
 .lp-resize {
   position: absolute;
@@ -2173,6 +2200,7 @@ textarea.json-invalid:focus {
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script defer src="/app/js/pb8_parameter_help.js?v=1"></script>
+<link rel="stylesheet" href="/app/css/vast.css?v=6">
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -2263,14 +2291,17 @@ textarea.json-invalid:focus {
 
       <div id="ctx-paretos" class="ctx-actions" style="display:none">
         <button class="sb-btn" id="btn-open-pareto-explorer-paretos">🎯 Pareto Explorer</button>
-        <button class="sb-btn" id="btn-backtest-selected-paretos">🔄 Backtest</button>
+        <button class="sb-btn" id="btn-backtest-selected-paretos">🔄 Queue Backtest</button>
         <select class="sb-input" id="holdout-validation-mode" title="Choose which standalone validation periods to queue per candidate">
           <option value="holdout_only">Holdout only</option>
           <option value="full_timerange">Full timerange only</option>
           <option value="holdout_and_full_timerange">Holdout + Full timerange</option>
           <option value="all_timeranges">Training + Holdout + Full timerange</option>
         </select>
-        <button class="sb-btn" id="btn-holdout-selected-paretos">🧪 Validate</button>
+        <button class="sb-btn" id="btn-holdout-selected-paretos">🧪 Queue Validation</button>
+        <button class="sb-btn" data-backtest-open-queue>Open Queue</button>
+        <div class="muted" data-backtest-autostart></div>
+        <div class="muted" role="status" aria-live="polite" data-backtest-queue-status></div>
         <button class="sb-btn" id="btn-seed-selected-paretos">🧬 Seed Selected</button>
         <button class="sb-btn" id="btn-seed-whole-result">📂 Seed Whole Result</button>
       </div>
@@ -2282,7 +2313,7 @@ textarea.json-invalid:focus {
       <div class="sidebar-toolbar">
         <button class="sb-btn" onclick="closeEditor()" title="Back to config list">🏠 Home</button>
         <button class="sb-btn primary" onclick="saveEditor()" title="Save config">💾 Save</button>
-        <button class="sb-btn info" onclick="saveAndQueue()" title="Save config and queue it">▶ Save &amp; Queue</button>
+        <button class="sb-btn info" id="btn-cloud-save-queue" onclick="saveAndQueue()" title="Save config and queue it">▶ Save &amp; Queue</button>
         <hr class="sb-sep">
         <button class="sb-btn" id="opted-sidebar-ohlcv-preflight-btn" title="Check PB7 OHLCV readiness for the current config" aria-expanded="false">🧭 OHLCV Readiness</button>
         <button class="sb-btn" id="opted-sidebar-apply-filters-btn" onclick="applyOptimizeFilters()" title="Apply market cap, volume, tag, CPT, and notice filters to approved/ignored coins">🔎 Apply Filters</button>
@@ -2319,6 +2350,51 @@ textarea.json-invalid:focus {
         </table>
       </div>
       <div id="configs-editor" style="display:none"></div>
+    </div>
+
+    <div id="panel-settings" class="view-panel">
+<section id="settings-modal" class="queue-settings-page">
+  <div class="modal-head">
+    <div>
+      <h3>Optimizer Settings</h3>
+    </div>
+    <button class="btn ghost" id="btn-close-settings">Back to Queue</button>
+  </div>
+  <div class="modal-body">
+    <h4>Local execution</h4>
+    <div class="settings-stack">
+      <div class="modal-field">
+        <label for="settings-cpu-value"><span data-tip="CPU value autostart will enforce before launching a queued optimize config (writes optimize.n_cpus right before start).">Autostart CPU</span></label>
+        <div class="settings-stepper">
+          <span class="muted-line">CPU</span>
+          <button class="btn" type="button" id="btn-settings-cpu-down">−</button>
+          <input id="settings-cpu-value" class="panel-input" type="number" min="1" step="1" inputmode="numeric">
+          <button class="btn" type="button" id="btn-settings-cpu-up">+</button>
+          <span class="muted-line">max <span id="settings-cpu-max">1</span></span>
+        </div>
+        <div class="muted-line" id="settings-cpu-effective">Autostart uses: -</div>
+      </div>
+      <label class="toggle" for="settings-cpu-override">
+        <input id="settings-cpu-override" type="checkbox">
+        <span data-tip="If enabled, autostart rewrites optimize.n_cpus right before launch. If disabled, PBGui uses the n_cpus already stored in each config.">Override config CPU</span>
+      </label>
+      <label class="toggle" for="settings-use-pbgui-market-data">
+        <input id="settings-use-pbgui-market-data" type="checkbox">
+        <span data-tip="If enabled, PBGui rewrites backtest.ohlcv_source_dir to the PBGui market data path right before launching a queued optimize config.">Use PBGui Market Data</span>
+      </label>
+      <label class="toggle" for="settings-autostart">
+        <input id="settings-autostart" type="checkbox">
+        <span data-tip="When enabled, PBGui starts the next queued optimize job automatically once no other optimize is running.">Autostart</span>
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btn-settings-cancel">Cancel</button>
+      <button class="btn primary" id="btn-settings-save">Save</button>
+    </div>
+  </div>
+  <div id="vast-queue-host"></div>
+  <div id="vast-offer-parking" hidden></div>
+</section>
     </div>
 
     <div id="panel-queue" class="view-panel">
@@ -2502,45 +2578,7 @@ textarea.json-invalid:focus {
   </div>
 </section>
 
-<section id="settings-modal" class="modal">
-  <div class="modal-head">
-    <div>
-      <h3>Queue Settings</h3>
-    </div>
-    <button class="btn ghost" id="btn-close-settings">Close</button>
-  </div>
-  <div class="modal-body">
-    <div class="settings-stack">
-      <div class="modal-field">
-        <label for="settings-cpu-value"><span data-tip="CPU value autostart will enforce before launching a queued optimize config (writes optimize.n_cpus right before start).">Autostart CPU</span></label>
-        <div class="settings-stepper">
-          <span class="muted-line">CPU</span>
-          <button class="btn" type="button" id="btn-settings-cpu-down">−</button>
-          <input id="settings-cpu-value" class="panel-input" type="number" min="1" step="1" inputmode="numeric">
-          <button class="btn" type="button" id="btn-settings-cpu-up">+</button>
-          <span class="muted-line">max <span id="settings-cpu-max">1</span></span>
-        </div>
-        <div class="muted-line" id="settings-cpu-effective">Autostart uses: -</div>
-      </div>
-      <label class="toggle" for="settings-cpu-override">
-        <input id="settings-cpu-override" type="checkbox">
-        <span data-tip="If enabled, autostart rewrites optimize.n_cpus right before launch. If disabled, PBGui uses the n_cpus already stored in each config.">Override config CPU</span>
-      </label>
-      <label class="toggle" for="settings-use-pbgui-market-data">
-        <input id="settings-use-pbgui-market-data" type="checkbox">
-        <span data-tip="If enabled, PBGui rewrites backtest.ohlcv_source_dir to the PBGui market data path right before launching a queued optimize config.">Use PBGui Market Data</span>
-      </label>
-      <label class="toggle" for="settings-autostart">
-        <input id="settings-autostart" type="checkbox">
-        <span data-tip="When enabled, PBGui starts the next queued optimize job automatically once no other optimize is running.">Autostart</span>
-      </label>
-    </div>
-    <div class="modal-actions">
-      <button class="btn ghost" id="btn-settings-cancel">Cancel</button>
-      <button class="btn primary" id="btn-settings-save">Save</button>
-    </div>
-  </div>
-</section>
+
 
 <section id="queue-config-choice-modal" class="modal">
   <div class="modal-head">
@@ -2620,6 +2658,7 @@ textarea.json-invalid:focus {
       <div class="optlog-card"><div class="optlog-label">System Memory</div><div id="optlog-memory" class="optlog-value">-</div></div>
       <div class="optlog-card"><div class="optlog-label">Queue</div><div id="optlog-queue" class="optlog-value">-</div></div>
     </div>
+    <div id="optlog-rental" class="optlog-summary-grid" hidden></div>
     <div class="optlog-detail-grid">
       <div class="optlog-detail"><div class="optlog-label">Objectives</div><div id="optlog-objectives" class="optlog-detail-text">-</div></div>
       <div class="optlog-detail"><div class="optlog-label">Ranges</div><div id="optlog-ranges" class="optlog-detail-text">-</div></div>
@@ -2627,6 +2666,8 @@ textarea.json-invalid:focus {
       <div class="optlog-detail"><div class="optlog-label">Last Error</div><div id="optlog-error" class="optlog-detail-text">-</div></div>
     </div>
   </div>
+  <div id="vast-jobs-host" class="vast-component"></div>
+  <div id="log-waiting" role="status" hidden>Waiting for this run’s first log output…</div>
   <div id="log-viewer-target"></div>
 </div>
 
@@ -2653,8 +2694,8 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=15"></script>
-<script src="/app/js/suite_editor.js?v=27"></script>
-<script src="/app/js/log_viewer_panel.js?v=43"></script>
+<script src="/app/js/suite_editor.js?v=28"></script>
+<script src="/app/js/log_viewer_panel.js?v=46"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
 var API_BASE = "%%API_BASE%%";
@@ -2802,6 +2843,7 @@ var state = {
 };
 
 var PANEL_META = {
+  settings: {title: "Optimizer Settings", subtitle: "Local execution and Vast.ai GPU settings."},
   configs: {
     title: 'Optimize Configs',
     subtitle: 'Manage saved optimize setups and queue them in batches.'
@@ -3211,7 +3253,8 @@ function limitMetricOptions(metricType, currentBaseMetric) {
   var key = metricType && Array.isArray(meta.metrics_by_group[metricType]) ? metricType : 'all';
   var options = Array.isArray(meta.metrics_by_group[key]) ? meta.metrics_by_group[key].slice() : [];
   options = options.filter(metricAvailableForCurrentBackend);
-  if (currentBaseMetric && options.indexOf(currentBaseMetric) < 0) options.unshift(currentBaseMetric);
+  var cloud = el('opted-execution') && el('opted-execution').value === 'vast';
+  if (!cloud && currentBaseMetric && options.indexOf(currentBaseMetric) < 0) options.unshift(currentBaseMetric);
   return uniqStrings(options);
 }
 
@@ -5470,6 +5513,8 @@ function buildOptimizeCpuTooltip(system, runtime, process) {
 }
 
 function renderOptimizeLogDashboard(status) {
+  delete el('optlog-progress-label').dataset.tip;
+  el('optlog-rental').hidden = true;
   var cpuEl = el('optlog-cpu');
   var resultName = status && status.name ? String(status.name) : state.logResultName;
   var hasLogResult = !!String(resultName || state.logFilename || '').trim();
@@ -7597,6 +7642,8 @@ function optimizeGpuMetricSet() {
 }
 
 function metricAvailableForCurrentBackend(baseMetric) {
+  var execution = el('opted-execution');
+  if (execution && execution.value === 'vast') return !!window.PBGuiVast && window.PBGuiVast.metricAllowed(baseMetric);
   var backendNode = el('opted-opt-backend');
   if (!backendNode || normalizeOptimizeBackendValue(backendNode.value) !== 'gpu') return true;
   var supported = optimizeGpuMetricSet();
@@ -9300,6 +9347,11 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
           .replace('<select id="opted-strategy-kind"', '<select id="opted-strategy-kind" data-current-strategy="' + escapeHtml(live.strategy_kind || strategyOptions[0] || '') + '" onchange="changeOptimizeStrategyKind(this.value)"')
         + '</div>'
       : '')
+    + (optimizeEditorAdapter.isV8 ? '<div class="expander open"><div class="expander-header">Execution</div><div class="expander-body">'
+      + '<div class="form-row cols-8">'
+      + fieldSelect2('opted-execution', 'Run on', [{value:'local',label:'Local'}, {value:'vast',label:'Vast.ai GPU · shared queue worker'}], (config.pbgui || {}).execution === 'vast' ? 'vast' : 'local', false, 'Choose where queued optimizer jobs run. GPU requirements are in Settings; rental controls and jobs are in Queue. Queued cloud jobs share the rented GPU.', 3)
+        .replace('<select id="opted-execution"', '<select id="opted-execution" onchange="window.PBGuiVast && window.PBGuiVast.updateEditor();scheduleStructuredEditorSync()"')
+      + '</div><div id="opted-vast-validation" role="status" aria-live="polite" hidden></div></div></div>' : '')
     + '<div id="suite-container"></div>'
 
     + '<div class="expander' + (normalizeScoringEntries(optimize.scoring).length ? ' open' : '') + '" id="exp-opt-scoring">'
@@ -9724,14 +9776,20 @@ function applyOptimizeSweepCoinSymmetry() {
 
 function applyOptimizeSweepPreset(preview) {
   if (!preview) return;
-  setScoringEntries(
-    [
-      {metric: 'gain_strategy_eq', goal: 'max'},
-      {metric: 'sortino_ratio_strategy_eq', goal: 'max'},
-      {metric: 'drawdown_worst_strategy_eq', goal: 'min'}
-    ],
-    {suppressSync: true}
-  );
+  var execution = el('opted-execution');
+  var cloud = execution && execution.value === 'vast';
+  // Explicit Sweep Apply restores the three-objective recipe for every strategy.
+  // Other cloud templates retain manually selected objectives.
+  if (preview.template === 'sweep_cycles' || !cloud || !getScoringEntries().length) {
+    setScoringEntries(
+      [
+        {metric: cloud ? 'adg_strategy_eq' : 'gain_strategy_eq', goal: 'max'},
+        {metric: 'sortino_ratio_strategy_eq', goal: 'max'},
+        {metric: 'drawdown_worst_strategy_eq', goal: 'min'}
+      ],
+      {suppressSync: true}
+    );
+  }
   setLimitEntries(
     [
       {metric: 'drawdown_worst_strategy_eq', penalize_if: 'greater_than', value: 0.8},
@@ -9979,6 +10037,9 @@ function collectEditorConfig(baseConfig, opts) {
     );
   }
   cfg.backtest.suite_enabled = !!suite.suite_enabled;
+  if (optimizeEditorAdapter.isV8 && suite.scenario_generator) {
+    pbgui.scenario_generator = suite.scenario_generator;
+  }
   if (suite.suite_enabled) {
     cfg.backtest.scenarios = Array.isArray(suite.scenarios) ? suite.scenarios : [];
     var suiteReducer = suite.aggregate && typeof suite.aggregate === 'object' ? suite.aggregate : { default: 'mean' };
@@ -10031,6 +10092,10 @@ function collectEditorConfig(baseConfig, opts) {
   optimizeEditorAdapter.collectVersionRunSettings(cfg, el, strict);
   optimize.enable_overrides = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, live.strategy_kind);
   applyOptimizeExtraParamValues(cfg);
+  if (optimizeEditorAdapter.isV8 && el('opted-execution')) {
+    cfg.pbgui = cfg.pbgui || {};
+    cfg.pbgui.execution = el('opted-execution').value === 'vast' ? 'vast' : 'local';
+  }
   return { name: name, config: cfg };
 }
 
@@ -10470,10 +10535,12 @@ var _optJsonSync = window.PBGuiEditorShared.createJsonSyncController({
 
 function scheduleRawJsonEditorSync() {
   _optJsonSync.scheduleRaw();
+  if (window.PBGuiVast) window.PBGuiVast.scheduleValidation();
 }
 
 function scheduleStructuredEditorSync() {
   _optJsonSync.scheduleStructured();
+  if (window.PBGuiVast) window.PBGuiVast.scheduleValidation();
 }
 
 function applyStructuredEditorSync() {
@@ -10751,6 +10818,7 @@ function initOptimizeOhlcvPreflightController() {
 }
 
 function showStructuredEditor(config, name, sourceName, paramStatusOverride, backendHint) {
+  if (window.PBGuiVast) window.PBGuiVast.closeEditor();
   closeAllModals();
   resetOptimizeEditorUiState();
   state.editorSourceName = sourceName || '';
@@ -10770,6 +10838,7 @@ function showStructuredEditor(config, name, sourceName, paramStatusOverride, bac
   el('sidebar-editor').style.display = '';
   setPanel('configs');
   populateOptimizeEditor(config || {});
+  if (window.PBGuiVast) window.PBGuiVast.openEditor(config || {});
   setPageEditorStatus('', '');
   var nameNode = el('opted-name');
   if (nameNode) nameNode.focus();
@@ -10777,6 +10846,7 @@ function showStructuredEditor(config, name, sourceName, paramStatusOverride, bac
 
 function closeEditor() {
   if (!editorVisible()) return;
+  if (window.PBGuiVast) window.PBGuiVast.closeEditor();
   var returnPanel = state.editorReturnPanel || 'configs';
   if (_optOhlcvPreflightController) _optOhlcvPreflightController.close();
   window.PBGuiEditorShared.clearFixedValidationStatus();
@@ -10836,11 +10906,12 @@ function openFastApiParetoExplorer(resultPath) {
     toast('Select an optimize result first.', 'warn');
     return;
   }
-  var apiRoot = String(API_BASE || '').replace(/\/api\/optimize-v[78]\/?$/, '');
-  if (!apiRoot) {
+  var apiBase = String(API_BASE || '');
+  if (!/\/api\/optimize-v[78]\/?$/.test(apiBase)) {
     toast('Pareto Explorer route is unavailable.', 'err');
     return;
   }
+  var apiRoot = apiBase.replace(/\/api\/optimize-v[78]\/?$/, '');
   var params = new URLSearchParams();
   params.set('result_path', path);
   params.set('optimize_version', optimizeEditorAdapter.version);
@@ -10992,7 +11063,7 @@ function renderQueueTableHead() {
     state.queueSortDir,
     queueHeaderLabel,
     '<th class="queue-order-head"></th>',
-    '<th>Actions</th>'
+    '<th>Execution</th><th>Actions</th>'
   );
 }
 
@@ -11083,16 +11154,21 @@ function filterResults() {
 }
 
 function setPanel(panel) {
+  if (state.panel === 'settings' && panel !== 'settings' && window.PBGuiVast) window.PBGuiVast.hideSettings();
+  if (panel === 'settings' && state.panel !== 'settings') syncQueueSettingsModalFields();
+  el('settings-modal').classList.toggle('open', panel === 'settings');
   if (state.panel !== panel) state.navigationSeq += 1;
   state.panel = panel;
   Object.keys(PANEL_META).forEach(function(name) {
     var active = name === panel;
     el('panel-' + name).classList.toggle('active', active);
     var nav = document.querySelector('.sb-section[data-panel="' + name + '"]');
-    if (nav) nav.classList.toggle('active', active);
+    if (nav) nav.classList.toggle('active', active || (name === 'queue' && panel === 'settings'));
   });
   el('ctx-configs').style.display = panel === 'configs' ? '' : 'none';
-  el('ctx-queue').style.display = panel === 'queue' ? '' : 'none';
+  el('ctx-queue').style.display = panel === 'queue' || panel === 'settings' ? '' : 'none';
+  el('btn-queue-settings').classList.toggle('active', panel === 'settings');
+  el('btn-delete-selected-queue').style.display = panel === 'settings' ? 'none' : '';
   el('ctx-results').style.display = panel === 'results' ? '' : 'none';
   el('ctx-paretos').style.display = panel === 'paretos' ? '' : 'none';
   location.hash = panel;
@@ -11109,7 +11185,7 @@ function updateMetaCounts() {
   var filteredConfigs = filterConfigs();
   var filteredResults = filterResults();
   el('nav-config-count').textContent = String(state.configs.length);
-  el('nav-queue-count').textContent = String(state.queue.length);
+  el('nav-queue-count').textContent = String(state.queue.length + (state.cloudQueueCount || 0));
   el('nav-result-count').textContent = String(state.results.length);
   el('nav-pareto-count').textContent = String(state.paretos.length);
   el('config-count-chip').textContent = filteredConfigs.length + ' configs';
@@ -11369,14 +11445,16 @@ function renderQueue() {
   renderQueueTableHead();
   var tbody = el('queue-tbody');
   tbody.innerHTML = '';
-  if (!state.queue.length) {
-    renderEmpty('queue-tbody', 6, 'Queue is empty.', '', '');
+  var queueItems = state.queue.concat(window.PBGuiVast ? window.PBGuiVast.queueItems() : []);
+  if (!queueItems.length) {
+    renderEmpty('queue-tbody', 7, 'Queue is empty.', '', '');
     updateQueueStatus();
     updateQueueSelectionUi();
     updateMetaCounts();
     return;
   }
-  sortQueueItems(state.queue).forEach(function(item) {
+  sortQueueItems(queueItems).forEach(function(item) {
+    if (item.cloudJob) { tbody.appendChild(window.PBGuiVast.queueRow(item)); return; }
     var tr = document.createElement('tr');
     tr.setAttribute('data-filename', item.filename);
     if (state.selectedQueue.has(item.filename)) tr.classList.add('selected');
@@ -11402,6 +11480,7 @@ function renderQueue() {
       + '<td>' + escapeHtml(formatExchange(item.exchange)) + '</td>'
       + '<td><span class="badge badge-' + escapeHtml(item.status || 'queued') + '">' + escapeHtml(item.status || 'queued') + '</span></td>'
       + '<td class="muted">' + escapeHtml(formatIso(item.created)) + '</td>'
+      + '<td>Local</td>'
       + '<td class="actions-cell">'
       + actions
       + '</td>';
@@ -12024,7 +12103,6 @@ function closeAllModals() {
   el('editor-modal').classList.remove('open');
   el('import-config-modal').classList.remove('open');
   el('json-modal').classList.remove('open');
-  el('settings-modal').classList.remove('open');
   el('queue-config-choice-modal').classList.remove('open');
   el('plot-modal').classList.remove('open');
   state.queueConfigChoiceDetail = null;
@@ -12657,13 +12735,7 @@ async function openBacktestDraft(config, draftName, overrideConfigs) {
 }
 
 async function openBacktestQueueDraft(items) {
-  var draft = await authFetch(optimizeEditorAdapter.backtestApiBase() + '/queue-draft', {
-    method: 'POST',
-    body: JSON.stringify({ items: items || [] })
-  });
-  window.location.href = buildBacktestMainPageUrl({
-    queue_draft_id: draft && draft.draft_id ? draft.draft_id : ''
-  });
+  return window.PBGuiBacktestQueue.submit(items || []);
 }
 
 async function backtestSelectedParetos(paths) {
@@ -12685,11 +12757,8 @@ async function backtestSelectedParetos(paths) {
   if (selectedItems.length === 1) {
     var singleData = await apiFetch(optimizeEditorAdapter.paretoFilePath(selectedItems[0].path));
     var singlePayload = normalizeParetoBacktestPayload(singleData);
-    return openBacktestDraft(
-      applyParetoBacktestScenario(singlePayload.config, selectedItems[0].scenario),
-      selectedItems[0].name || state.selectedResultName || 'pareto_backtest',
-      singlePayload.override_configs
-    );
+    return openBacktestQueueDraft([{config:extractConfigSections(applyParetoBacktestScenario(singlePayload.config, selectedItems[0].scenario)),
+      name:selectedItems[0].name || state.selectedResultName || 'pareto_backtest', override_configs:singlePayload.override_configs}]);
   }
   var queueItems = await Promise.all(selectedItems.map(function(item) {
     return apiFetch(optimizeEditorAdapter.paretoFilePath(item.path)).then(function(data) {
@@ -12943,6 +13012,12 @@ async function saveEditor(andQueue) {
     }
     configPayload = parsed.value;
   }
+  if (queueAfterSave && optimizeEditorAdapter.isV8 && configPayload.pbgui && configPayload.pbgui.execution === 'vast') {
+    if (!window.PBGuiVast || !(await window.PBGuiVast.validateConfig(configPayload))) {
+      setPageEditorStatus('Resolve the GPU compatibility errors before queueing.', 'err');
+      return;
+    }
+  }
   isNewName = !!(state.editorSourceName && state.editorSourceName !== name);
   var savePayload = optimizeEditorAdapter.isV8
     ? {
@@ -12958,7 +13033,10 @@ async function saveEditor(andQueue) {
   if (!(optimizeEditorAdapter.isV8 && isNewName)) {
     await refreshOpenedQueueSnapshot(queueFilename, name);
   }
-  if (queueAfterSave) {
+  if (queueAfterSave && optimizeEditorAdapter.isV8 && configPayload.pbgui && configPayload.pbgui.execution === 'vast') {
+    if (!window.PBGuiVast) throw new Error('Cloud controls are still loading. Please try again.');
+    await window.PBGuiVast.queue(name, configPayload);
+  } else if (queueAfterSave) {
     await apiFetch('/queue', {
       method: 'POST',
       body: JSON.stringify({ name: name })
@@ -13126,9 +13204,13 @@ function ensureLogViewer() {
   return state.logViewer;
 }
 
-function openLogPanel(filename, name) {
-  state.logFile = optimizeEditorAdapter.queueLogFile(filename);
-  state.logFilename = filename;
+function openLogPanel(filename, name, options) {
+  options = options || {};
+  stopOptimizeLogStatusPolling();
+  if (window.PBGuiVast) window.PBGuiVast.closeLog();
+  state.cloudLogId = options.cloud ? filename : null;
+  state.logFile = options.cloud ? (options.hasLog ? 'optimizes_v8/vast_' + filename + '.log' : (options.hasProviderLog ? 'optimizes_v8/vast_' + filename + '_provider.log' : '')) : optimizeEditorAdapter.queueLogFile(filename);
+  state.logFilename = options.cloud ? null : filename;
   state.logResultName = name || '';
   var panel = el('log-panel');
   el('log-panel-title').textContent = 'Optimize log - ' + (name || filename);
@@ -13136,10 +13218,15 @@ function openLogPanel(filename, name) {
     state.logViewer.close();
     state.logViewer = null;
   }
-  var viewer = ensureLogViewer();
-  viewer.open();
-  viewer.setHost('local');
-  viewer.setFile(state.logFile);
+  el('log-viewer-target').replaceChildren();
+  el('log-viewer-target').hidden = !state.logFile;
+  el('log-waiting').hidden = !!state.logFile;
+  if (state.logFile) {
+    var viewer = ensureLogViewer();
+    viewer.open();
+    viewer.setHost('local');
+    viewer.setFile(state.logFile);
+  }
   if (!panel.style.left) {
     panel.style.right = '0';
     panel.style.bottom = '0';
@@ -13147,7 +13234,7 @@ function openLogPanel(filename, name) {
     panel.style.top = '';
   }
   panel.classList.add('visible');
-  startOptimizeLogStatusPolling(filename);
+  if (!options.cloud) startOptimizeLogStatusPolling(filename);
   if (!panel._dragBound) {
     panel._dragBound = true;
     el('log-panel-header').addEventListener('mousedown', function(event) {
@@ -13236,6 +13323,8 @@ function openLogPanel(filename, name) {
 }
 
 function closeLogPanel() {
+  if (window.PBGuiVast) window.PBGuiVast.closeLog();
+  state.cloudLogId = null;
   el('log-panel').classList.remove('visible');
   stopOptimizeLogStatusPolling();
   renderOptimizeLogDashboard(null);
@@ -13737,8 +13826,7 @@ function openQueueSettingsModal() {
   state.settingsModalCpuDirty = false;
   state.settingsModalCpuOverrideDirty = false;
   syncQueueSettingsModalFields();
-  openBackdrop();
-  el('settings-modal').classList.add('open');
+  setPanel('settings');
 }
 
 function adjustQueueSettingsCpu(delta) {
@@ -13774,7 +13862,6 @@ async function saveQueueSettingsFromModal() {
   state.settingsModalDirty = false;
   state.settingsModalCpuDirty = false;
   state.settingsModalCpuOverrideDirty = false;
-  closeAllModals();
   toast('Queue settings updated.', 'ok');
 }
 
@@ -13948,10 +14035,10 @@ function attachEventHandlers() {
     resumeOptimizeResult(selected.path, selected.name || selected.result).catch(handleError);
   });
   el('btn-backtest-selected-paretos').addEventListener('click', function() {
-    backtestSelectedParetos().catch(handleError);
+    window.PBGuiBacktestQueue.perform(el('btn-backtest-selected-paretos'), backtestSelectedParetos).catch(handleError);
   });
   el('btn-holdout-selected-paretos').addEventListener('click', function() {
-    backtestSelectedSweepHoldouts().catch(handleError);
+    window.PBGuiBacktestQueue.perform(el('btn-holdout-selected-paretos'), backtestSelectedSweepHoldouts).catch(handleError);
   });
   el('holdout-validation-mode').addEventListener('change', updateParetoSelectionUi);
   el('btn-seed-selected-paretos').addEventListener('click', function() {
@@ -13962,8 +14049,8 @@ function attachEventHandlers() {
   });
   el('btn-close-editor').addEventListener('click', closeAllModals);
   el('btn-close-json').addEventListener('click', closeAllModals);
-  el('btn-close-settings').addEventListener('click', closeAllModals);
-  el('btn-settings-cancel').addEventListener('click', closeAllModals);
+  el('btn-close-settings').addEventListener('click', function() { setPanel('queue'); });
+  el('btn-settings-cancel').addEventListener('click', function() { setPanel('queue'); });
   el('btn-close-queue-config-choice').addEventListener('click', closeAllModals);
   el('btn-queue-config-choice-cancel').addEventListener('click', closeAllModals);
   el('btn-settings-save').addEventListener('click', function() {
@@ -14955,5 +15042,9 @@ window.PBGUI_NAV_CONFIG = {
 </script>
 <script src="/app/js/shared_help_overlay.js?v=7"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+
+
+<script src="/app/js/backtest_queue_actions.js?v=1"></script>
+<script src="/app/js/vast.js?v=47"></script>
 </body>
 </html>

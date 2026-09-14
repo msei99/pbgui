@@ -215,3 +215,17 @@ Deletion accepts only complete, top-level run directories below the managed resu
 PB8 Optimize configurations and PB8 Backtest results use the existing Archive workflow. Files are stored under their `config_version`, so PB7 and PB8 content cannot overwrite each other. Import, export, view, delete, restore, and handoff actions always use the parser belonging to the archived configuration version.
 
 If an OHLCV start-date lookup does not confirm Stop within 10 seconds, Optimize releases the controls and reports a timeout. The backend may still be stopping; a late result is not applied.
+
+## Vast.ai cloud execution
+
+Choose **Execution → Vast.ai GPU** in the editor and use **Save & Queue**.
+Save the GPU type and limits under **Queue → Settings → GPU requirements**. PBGui selects a current matching offer when starting the queue.
+Configure your account under **Queue → Settings → Cloud setup** and confirm **Rent GPU &
+start queue** there. Multiple cloud jobs share one rented worker and cached
+market data. See [Vast.ai GPU queue](48_vast_gpu.md) for setup, limits and cleanup.
+
+Pareto Explorer can be opened from imported Vast results as well as local results. Verified final Vast imports include all_results.bin; periodic snapshots contain the current Pareto files, so full evaluation history is available after final collection.
+
+Queue Backtest and Queue Validation now add the selected candidates directly and keep the current chart, filters and selection. Open Queue is the only navigation action; its count includes pending and running jobs. The status shows whether existing autostart settings may launch queued jobs. Adding does not send a start command. Keep candidate dates, exchanges, balance and overrides as configured; change them in Backtests if needed. Adding… prevents duplicate clicks; confirmed jobs are remembered during this page session. On a partial PB8 failure, retry continues with unconfirmed items using the same operation IDs.
+
+Explicitly applying **Sweep Cycles** restores exactly three scoring objectives for both EMA and Trailing: gain (ADG for Vast GPU), Sortino, and worst drawdown. All supported metrics remain available for subsequent manual edits.

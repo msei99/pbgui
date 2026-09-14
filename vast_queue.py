@@ -1,0 +1,198 @@
+"""Persistent shared Vast worker ownership for the PB8 optimizer cloud queue."""
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from pathlib import Path
+
+from file_lock import advisory_file_lock
+from secure_files import ensure_private_directory, read_regular_file_nofollow
+from vast_jobs import JobStore, IMAGE, REVISION, TERMINAL, job_id, write_json
+from vast_provider import VastError
+
+SERVICE = "VastRunner"
+
+
+def can_remove_job(row: dict, worker: dict | None) -> bool:
+    """Keep active work and unfinished standalone rental supervision reachable."""
+    if row.get('kind') == 'worker' or (worker and worker.get('active_job') == row.get('id')):
+        return False
+    if row.get('status') not in TERMINAL | {'ready'}:
+        return False
+    if row.get('status') == 'ready' and row.get('lease_id'):
+        return False
+    return row.get('rental_state') in ('none', 'deletion_verified') or bool(row.get('lease_id'))
+
+
+class CloudQueue:
+    """Keep worker selection and queue controls separate from optimizer snapshots."""
+    def __init__(self, store: JobStore | None = None):
+        """Allow isolated storage in tests without import-time runtime reads."""
+        self.store = store or JobStore()
+        self.root = self.store.root
+
+    def read(self) -> dict:
+        """Read the private queue control record without following links."""
+        path = self.root / 'queue.json'
+        if not path.exists() and not path.is_symlink():
+            return {'worker_id': None, 'selected_offer': None, 'paused': False, 'idle_seconds': 300}
+        try:
+            value = json.loads(read_regular_file_nofollow(path, self.root))
+            if not isinstance(value, dict):
+                raise ValueError('invalid')
+            if value.get('worker_id'):
+                job_id(value['worker_id'])
+            return value
+        except (OSError, ValueError, RuntimeError):
+            raise VastError('Cloud queue state cannot be read', 500) from None
+
+    def update(self, **changes) -> dict:
+        """Merge queue controls with cross-process exclusion."""
+        ensure_private_directory(self.root)
+        with advisory_file_lock(self.root / '.queue-lock'):
+            state = self.read()
+            state.update(changes)
+            write_json(self.root / 'queue.json', state)
+            return state
+
+    def worker(self) -> dict | None:
+        """Return the current worker, including a verified closed rental."""
+        identifier = self.read().get('worker_id')
+        return self.store.read(identifier) if identifier else None
+
+    def waiting(self) -> list[dict]:
+        """Use FIFO ordering for prepared cloud jobs, independently of local CPUs."""
+        return sorted((row for row in self.store.list() if row.get('kind') != 'worker' and row['status'] == 'ready'),
+                      key=lambda row: (row.get('created_at', 0), row['id']))
+
+    def start(self, offer: dict, hours: float, budget: float, idle_seconds: int) -> dict:
+        """Rent once for the queue; duplicate starts return the existing worker."""
+        if idle_seconds not in (0, 300):
+            raise VastError('Choose immediate cleanup or five minutes idle', 422)
+        ensure_private_directory(self.root)
+        with advisory_file_lock(self.root / '.queue-lock'):
+            current = self.worker()
+            if current and current['rental_state'] not in ('none', 'deletion_verified'):
+                return current
+            jobs = self.waiting()
+            if not jobs:
+                raise VastError('Queue a cloud optimizer config first', 409)
+            identifier = uuid.uuid4().hex
+            directory = ensure_private_directory(self.root / 'jobs' / identifier)
+            write_json(directory / 'state.json', {'id': identifier, 'kind': 'worker', 'status': 'ready',
+                       'rental_state': 'none', 'workers': max(1 if row.get('auto_cpu_workers') else row['workers'] for row in jobs),
+                       'created_at': time.time(), 'generation': 0, 'idle_seconds': idle_seconds})
+            write_json(directory / 'control.json', {'stop': False, 'cleanup': False})
+            write_json(directory / 'intent.json', {'id': identifier, 'image': IMAGE, 'pb8_revision': REVISION,
+                       'bundle_bytes': sum(row.get('input_bytes', 0) for row in jobs), 'job_count': len(jobs)})
+            # Publish the worker before launching so recovery uses the same identity.
+            state = self.read()
+            state.update(worker_id=identifier, selected_offer=offer, paused=False, idle_seconds=idle_seconds)
+            write_json(self.root / 'queue.json', state)
+            return self.store.start(identifier, offer, hours, budget)
+
+    def remove_job(self, identifier: str) -> dict:
+        """Remove a queue entry atomically while retaining snapshots and results."""
+        identifier = job_id(identifier)
+        with advisory_file_lock(self.root / '.queue-lock'):
+            row = self.store.read(identifier)
+            if row.get('deleted_at'):
+                return {'id': identifier, 'deleted': True}
+            if not can_remove_job(row, self.worker()):
+                raise VastError('Stop the job and finish collection/cleanup before deleting it', 409)
+            changes = {'deleted_at': time.time()}
+            if row['status'] == 'ready':
+                changes['status'] = 'cancelled'
+            self.store.update(identifier, **changes)
+            return {'id': identifier, 'deleted': True}
+
+    def action(self, action: str) -> dict:
+        """Control queue scheduling without implicitly creating a replacement GPU."""
+        if action not in {'pause', 'resume', 'end', 'recover'}:
+            raise VastError('Invalid cloud queue action', 422)
+        worker = self.worker()
+        if action in {'pause', 'resume'}:
+            self.update(paused=action == 'pause')
+        if action == 'end':
+            self.update(paused=True)
+            if worker and worker['rental_state'] not in ('none', 'deletion_verified'):
+                self.store.control(worker['id'], 'stop')
+        if action in {'resume', 'recover', 'end'} and worker and worker['rental_state'] not in ('none', 'deletion_verified'):
+            self.store.launch_service(worker['id'], 'guard')
+            self.store.launch_service(worker['id'], 'run')
+        return self.read()
+
+
+def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None) -> str | None:
+    """Claim the next compatible job or request idle/deadline cleanup atomically."""
+    now = time.time() if now is None else now
+    store = queue.store
+    with advisory_file_lock(queue.root / '.queue-lock'):
+        worker = store.read(identifier)
+        control = store.read(identifier, 'control.json')
+        if worker['rental_state'] == 'deletion_verified':
+            store.update(identifier, status='completed')
+            return None
+        active = worker.get('active_job')
+        if not active:
+            claimed = [row for row in store.list() if row.get('lease_id') == identifier and row['status'] not in TERMINAL and row['status'] != 'ready']
+            if len(claimed) > 1:
+                raise VastError('Multiple unfinished jobs claim this worker; inspection required', 409)
+            if claimed:
+                active = claimed[0]['id']
+                store.update(identifier, active_job=active)
+        if active and store.read(job_id(active))['status'] not in TERMINAL:
+            return active
+        if active:
+            store.update(identifier, active_job=None)
+        if control['stop'] or control['cleanup'] or now >= worker['deadline'] - 240:
+            store.control(identifier, 'cleanup')
+            return None
+        state = queue.read()
+        candidates = [] if state.get('paused') else queue.waiting()
+        if candidates:
+            intent = store.read(identifier, 'intent.json')
+            for candidate in candidates:
+                if not candidate.get('auto_cpu_workers') and candidate['workers'] > worker.get('allocated_cpus', worker['workers']):
+                    store.update(candidate['id'], error='Waiting for a worker with enough allocated CPU cores')
+                    continue
+                expected = (2 * candidate.get('input_bytes', 0) / 1e9 * intent['offer']['download_gb_usd']
+                            + 3 * intent['offer']['upload_gb_usd'])
+                used = worker.get('transfer_reserved_used', 0)
+                if used + expected > intent['transfer_reserve_usd'] + 1e-9:
+                    store.update(candidate['id'], error='Waiting: this rental has insufficient remaining transfer reserve')
+                    continue
+                from vast_convergence import DEFAULTS
+                preferences = state.get('gpu_preferences', {})
+                convergence_config = {key: preferences.get(key, value) for key, value in DEFAULTS.items()}
+                store.update(candidate['id'], lease_id=identifier, dispatch_at=now, status='provisioning', error=None,
+                             convergence_config=convergence_config, setup_started_at=None)
+                store.update(identifier, active_job=candidate['id'], idle_since=None,
+                             transfer_reserved_used=used + expected, status='provisioning')
+                return candidate['id']
+        idle_since = worker.get('idle_since')
+        if idle_since is None:
+            idle_since = now
+        store.update(identifier, status='paused' if state.get('paused') else 'idle', idle_since=idle_since)
+        if now - idle_since >= worker.get('idle_seconds', 300):
+            store.control(identifier, 'cleanup')
+        return None
+
+
+def worker_loop(store: JobStore, identifier: str) -> None:
+    """Reuse one supervised instance across sequential isolated optimizer jobs."""
+    from vast_job_runner import run_loop
+    queue = CloudQueue(store)
+    while True:
+        next_job = worker_step(queue, identifier)
+        worker = store.read(identifier)
+        if worker['rental_state'] == 'deletion_verified' or store.read(identifier, 'control.json')['cleanup']:
+            return
+        if next_job:
+            run_loop(store, next_job, lease_id=identifier)
+            result = store.read(next_job)
+            if result['status'] == 'failed' and not result.get('final_collected'):
+                queue.update(paused=True)
+        else:
+            time.sleep(5)

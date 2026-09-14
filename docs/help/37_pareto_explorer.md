@@ -152,3 +152,11 @@ Use a small bounds window first. A tight window is useful for refinement, but to
 - PBv7/PBv8 Optimize: create and queue follow-up optimize runs.
 - PBv7/PBv8 Backtest: validate a selected config before trusting it.
 - Strategy Explorer: inspect one config visually after narrowing the shortlist. For PB8, pin one candidate with **Pin Explorer Baseline**, select a different candidate from the same result, and open Strategy Explorer to compare both with native bounded replays. The baseline is temporary and page-local; changing the result or reloading clears it. Referenced sparse overrides must be available or PBGui blocks the handoff. Explorer fields within 5% of the active Optimize bounds are highlighted; runtime parameter ranges are the fallback when configured bounds are absent.
+
+
+
+When PB8 omits GUI metadata in its output, recognized validation periods are grouped by candidate name and configuration fingerprint (excluding period-specific fields). Different configurations remain separate. Existing Explorer validation results are recognized too; no rerun is needed.
+
+In Correlations, click a radar marker to select its configuration. The selected configuration details appear below the chart in both Pareto-only and full-history modes.
+
+Queue Backtest and Queue Validation now add the selected candidates directly and keep the current chart, filters and selection. Open Queue is the only navigation action; its count includes pending and running jobs. The status shows whether existing autostart settings may launch queued jobs. Adding does not send a start command. Keep candidate dates, exchanges, balance and overrides as configured; change them in Backtests if needed. Adding… prevents duplicate clicks; confirmed jobs are remembered during this page session. On a partial PB8 failure, retry continues with unconfirmed items using the same operation IDs.

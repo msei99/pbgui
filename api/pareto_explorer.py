@@ -2558,6 +2558,14 @@ def _serialize_config_detail(
     loader.ensure_details(config)
     risk_profile = loader.compute_risk_profile_score(config)
     full_config = loader.get_full_config(config.config_index)
+    validation_holdouts = []
+    if str(getattr(loader, "optimize_version", "v7")).lower() == "v8":
+        from api.optimize_v8 import _load_sweep_plan
+        from sweep_cycles import sweep_holdout_scenarios
+        result_directory = _resolve_result_dir(str(getattr(loader, "results_path", "") or ""))
+        plan = _load_sweep_plan(result_directory) if result_directory is not None else None
+        if plan is not None:
+            validation_holdouts = sweep_holdout_scenarios(plan)
     override_configs: dict[str, dict] = {}
     override_error = ""
     if isinstance(full_config, dict) and str(getattr(loader, "optimize_version", "v7")).lower() == "v8":
@@ -2655,6 +2663,7 @@ def _serialize_config_detail(
         "scenario_metrics": _json_safe(config.scenario_metrics),
         "has_scenarios": bool(loader.scenario_labels) and bool(config.scenario_metrics),
         "full_config": _json_safe(full_config),
+        "validation_holdouts": _json_safe(validation_holdouts),
         "override_configs": _json_safe(override_configs),
         "override_error": override_error,
     }

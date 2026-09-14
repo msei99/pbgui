@@ -215,3 +215,17 @@ Loeschen akzeptiert nur vollstaendige Run-Verzeichnisse direkt unter dem verwalt
 PB8-Optimize-Configs und PB8-Backtest-Ergebnisse verwenden den bestehenden Archive-Workflow. Dateien werden unter ihrer `config_version` gespeichert, damit PB7- und PB8-Inhalte einander nicht ueberschreiben. Import, Export, Ansicht, Loeschen, Restore und Handoffs verwenden immer den Parser der archivierten Config-Version.
 
 Wenn eine OHLCV-Startdatumssuche Stop nicht innerhalb von 10 Sekunden bestaetigt, gibt Optimize die Bedienelemente frei und meldet einen Timeout. Das Backend kann noch stoppen; ein verspaetetes Ergebnis wird nicht angewendet.
+
+## Vast.ai Cloud-Ausführung
+
+Im Editor **Execution → Vast.ai GPU** wählen und **Save & Queue** verwenden.
+GPU-Typ und Grenzen unter **Queue → Settings → GPU requirements** speichern. PBGui wählt erst beim Queue-Start ein aktuelles passendes Angebot.
+Das Konto unter **Queue → Settings → Cloud setup** einrichten und dort **Rent GPU & start
+queue** bestätigen. Mehrere Cloud-Jobs teilen sich einen Worker und dessen
+Kursdaten-Cache. Details unter [Vast.ai GPU-Queue](48_vast_gpu.md).
+
+Der Pareto Explorer lässt sich auch für importierte Vast-Ergebnisse öffnen. Geprüfte finale Vast-Importe enthalten all_results.bin; regelmäßige Zwischensicherungen enthalten die aktuellen Pareto-Dateien. Die vollständige Auswertungshistorie ist nach der finalen Sicherung verfügbar.
+
+Queue Backtest und Queue Validation fügen die Kandidaten direkt hinzu; Diagramm, Filter und Auswahl bleiben erhalten. Erst Open Queue wechselt die Seite. Der Zähler umfasst wartende und laufende Jobs. Daneben steht, ob Autostart aktiv ist und Jobs automatisch starten kann. Hinzufügen sendet keinen Startbefehl. Zeiträume, Börsen, Startkapital und Overrides werden aus der Konfiguration übernommen; Änderungen sind bei Backtests möglich. Adding… verhindert doppelte Klicks. Bestätigte Jobs werden während dieser Seitensitzung gemerkt. Bei einem teilweise fehlgeschlagenen PB8-Aufruf setzt ein erneuter Klick mit denselben Vorgangs-IDs fort.
+
+Das ausdrückliche Anwenden von **Sweep Cycles** setzt für EMA und Trailing genau drei Scoring-Ziele: Gain (ADG bei Vast GPU), Sortino und maximaler Drawdown. Alle unterstützten Metriken bleiben für anschließende manuelle Änderungen auswählbar.

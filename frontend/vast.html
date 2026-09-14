@@ -1,0 +1,84 @@
+<div class="vast-component">
+  <details class="card" id="vast-setup"><summary title="Save your Vast API key and check your balance. Account read and instance read/write permissions are required.">Cloud setup</summary><section aria-labelledby="account-title">
+    <div class="heading"><h2 id="account-title">Vast.ai account</h2>
+      <a href="https://cloud.vast.ai/?ref_id=522435" target="_blank" rel="noopener noreferrer sponsored" title="This referral link supports PBGui.">Create Vast.ai account ↗</a>
+    </div>
+    <form id="credentials-form">
+      <div class="fields">
+        <label>Vast API key<input id="api-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="Enter a new key to save or replace it"></label>
+        <button type="submit" id="save-key">Save key</button>
+        <button type="button" id="refresh-balance">Test connection &amp; refresh balance</button>
+      </div>
+    </form>
+    <p id="key-status" class="muted">Loading account settings…</p>
+    <p>Balance: <strong id="balance">Not checked</strong> <span id="balance-time" class="muted"></span></p>
+
+  </section></details>
+  <section class="card" id="vast-offers" aria-labelledby="offers-title">
+    <div class="heading"><h2 id="offers-title" title="Save a GPU type and requirements. A matching available offer is selected when the queue starts; hourly prices include disk, transfers are separate.">GPU requirements</h2><span id="offer-time" class="muted"></span></div>
+    <form id="offers-form"><div class="fields">
+      <label>GPU type<input id="gpu-model" placeholder="All models (e.g. 3090 or RTX 3090)" maxlength="80"></label>
+      <label>Max USD/hour<input id="max-price" type="number" min="0.01" max="100" step="0.01" value="0.50" required></label>
+      <label>Min VRAM (GB)<input id="min-vram" type="number" min="0" max="256" value="12" required></label>
+      <label>Min RAM (GB)<input id="min-ram" type="number" min="0" max="4096" value="16" required></label>
+      <label>Min CPU cores<input id="min-cpu" type="number" min="0" max="512" value="4" required></label>
+      <label>Disk (GB)<input id="disk" type="number" min="40" max="2000" value="40" required></label>
+      <label>Hosts<select id="verified"><option value="true">Verified only</option><option value="false">All</option></select></label>
+      <button type="submit" id="find-offers">Preview available GPUs</button>
+      <label><span data-tip="Maximum duration of the shared rental. PBGui deletes the instance at the deadline.">Maximum rental hours</span><input id="job-hours" type="number" min="0.25" max="24" step="0.25" value="1"></label>
+      <label><span data-tip="Shared rental budget estimate, including reserved transfers. This is not a provider spending cap.">Budget target (USD)</span><input id="job-budget" type="number" min="0.1" max="100" step="0.1" value="1"></label>
+      <label><span data-tip="Optional early stop from the exact Pareto front, checked after each result snapshot. Applies when a job first starts. Supports up to three objectives.">Stop on stagnation</span><select id="convergence-enabled"><option value="false">Off</option><option value="true">On</option></select></label>
+      <label><span data-tip="Exact evaluations before establishing the fixed comparison scale and beginning stagnation detection.">Minimum exact evaluations</span><input id="convergence-min" type="number" min="256" max="10000000" step="1" value="512" required></label>
+      <label><span data-tip="Additional exact evaluations without a significant improvement before collecting the final result.">Patience (exact evaluations)</span><input id="convergence-patience" type="number" min="128" max="10000000" step="1" value="512" required></label>
+      <label><span data-tip="Relative improvement in normalized Pareto hypervolume needed to reset patience. Several small improvements accumulate against the last accepted improvement.">Improvement tolerance (%)</span><input id="convergence-tolerance" type="number" min="0.001" max="10" step="0.001" value="0.1" required></label>
+      <label><span data-tip="Delete the rented instance when the queue is idle to avoid ongoing costs.">When idle</span><select id="worker-idle"><option value="300">Delete after 5 minutes</option><option value="0">Delete immediately</option></select></label>
+      <button type="button" id="save-gpu-preferences">Save settings</button>
+      <label class="offer-toggle"><input id="show-incompatible" type="checkbox">Show incompatible hosts</label>
+    </div></form>
+    <div class="table-wrap"><table><thead><tr>
+      <th>GPU</th><th>VRAM</th><th>CPU / RAM</th><th>USD/hour</th><th>Transfer in / out (USD/GB)</th><th>Network ↓ / ↑ (Mbps)</th><th>Location</th><th>Reliability</th><th>Max duration</th><th>Compatibility</th><th>Details</th>
+    </tr></thead><tbody id="offers-body"><tr><td colspan="11">Save your key, then find available GPUs.</td></tr></tbody></table></div>
+    <p id="selection" class="muted" hidden>Preview offers to choose a GPU type, or enter it above.</p>
+    <p id="saved-requirements" class="muted">Loading saved GPU requirements…</p>
+  </section>
+  <section id="vast-jobs">
+    <div id="cloud-job-details" hidden>
+    <div id="cloud-utilization" class="optlog-summary-grid" hidden>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Live rented GPU utilization from nvidia-smi. Sampled approximately every 15 seconds.">GPU utilization</span></div><div id="cloud-gpu-util" class="optlog-value">—</div></div>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Container CPU use divided by its effective CPU allocation. The first reading needs a second sample.">CPU utilization</span></div><div id="cloud-cpu-util" class="optlog-value">—</div></div>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Container memory usage including cache, compared with its effective memory limit.">RAM usage</span></div><div id="cloud-ram-util" class="optlog-value">—</div></div>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Used and total memory on the rented GPU, reported by nvidia-smi.">VRAM usage</span></div><div id="cloud-vram-util" class="optlog-value">—</div></div>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Submitted CPU validations not yet incorporated into results: waiting, running, or finished but awaiting earlier submissions. PB8 does not report these groups separately. Sampled from generation profiles, not a live process count.">CPU checks outstanding</span></div><div id="cloud-exact-queue" class="optlog-value">—</div><div id="cloud-exact-queue-age" class="muted"></div></div>
+    </div>
+    <div id="cloud-convergence" class="optlog-summary-grid" hidden>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Quality of the exact feasible Pareto front, measured on a fixed scale. This is a stopping heuristic, not proof that no better configuration exists.">Convergence</span></div><div id="convergence-phase" class="optlog-value"></div></div>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Current exact CPU count minus the count at the last accepted Pareto improvement. This is not elapsed time or GPU proxy count. The improvement baseline is checked after verified snapshots; this live count can therefore be ahead of the Stagnation bar, which uses the last checked snapshot. A dash means no baseline is available yet.">Since last improvement ⓘ</span></div><div id="convergence-since" class="optlog-value"></div></div>
+      <div class="optlog-card"><div class="optlog-label"><span id="convergence-help" data-tip="Before the minimum is reached, the bar counts initial exact evaluations. Afterwards it counts exact evaluations without a significant improvement against the patience limit. Reaching the limit requests a graceful stop and final result collection. A significant improvement resets this counter. This is not overall run progress.">Stagnation ⓘ</span></div><div id="convergence-progress" class="optlog-value"></div><progress id="convergence-bar" max="100" value="0" aria-label="Stagnation patience used"></progress></div>
+    </div>
+    <p id="convergence-sample" class="muted" hidden></p>
+    <div id="queue-message" role="status" aria-live="polite"></div>
+    <p id="worker-state" hidden></p>
+    <p id="supervision-status" class="muted" hidden></p>
+    <div class="fields"><label hidden>Job<select id="job-select"></select></label>
+      <button id="requeue-job" type="button" hidden>Requeue</button>
+      <button id="start-job" type="button" hidden disabled>Start</button>
+      <button id="pause-worker" type="button">Pause queue</button>
+      <button id="resume-worker" type="button">Start queue</button>
+      <button id="end-worker" type="button">End rental</button>
+      <button id="recover-worker" type="button">Resume supervision</button>
+      <button id="stop-job" type="button" disabled>Stop &amp; collect</button>
+      <button id="recover-job" type="button" disabled>Retry result import</button>
+
+
+    </div>
+
+    <pre id="job-state" aria-live="polite" hidden>No jobs prepared.</pre>
+    <button id="job-log" type="button" hidden disabled>Open last downloaded log</button>
+    <button id="close-job-log" type="button" hidden>Close</button>
+    <div id="vast-log" hidden></div>
+    <a id="job-results" href="/api/optimize-v8/main_page" hidden>Open PB8 optimizer results</a>
+    </div>
+  </section>
+  <div id="message" role="status" aria-live="polite"></div>
+
+</div>

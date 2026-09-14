@@ -254,3 +254,10 @@ def sample_config():
         "user": "test_user",
         "market_type": "swap",
     }
+
+
+@pytest.fixture(autouse=True)
+def isolate_vast_provider_coordination(tmp_path, monkeypatch):
+    """Never let provider tests touch the real shared cooldown/cache."""
+    import vast_provider
+    monkeypatch.setattr(vast_provider, 'COORDINATION_ROOT', tmp_path / 'vast-provider')

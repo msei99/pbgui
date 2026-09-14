@@ -8,12 +8,16 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXCLUDED_PARTS = {"tests", "data", "pb7", "upstream", "vendor", "generated", ".git", ".venv", "venv"}
+EXCLUDED_PARTS = {".local-work", "tests", "data", "pb7", "upstream", "vendor", "generated", ".git", ".venv", "venv"}
 DOCUMENTED_SCRIPT_DIRS = {
     "scripts": "One-off maintenance and diagnostic scripts are human-facing CLIs.",
     "tools": "Developer audit and comparison tools intentionally report to stdout.",
 }
 PRINT_ALLOWLIST = {
+    "setup/vast_gpu_benchmark/cloud_worker.py": "Remote worker stdout is the machine-readable SSH control protocol.",
+    "setup/vast_gpu_benchmark/prepare.py": "Isolated benchmark preparation CLI reports its export path.",
+    "setup/vast_gpu_benchmark/export_metric_contract.py": "CLI exports the machine-readable PB8 metric contract.",
+    "setup/vast_gpu_benchmark/store_pull_key.py": "Credential storage CLI reports completion without secrets.",
     "pb7_guard.py": "PB7 guard is a human-facing install/update safety CLI.",
     "starter.py": "Starter is the human-facing service-control CLI.",
     "reprocess_tradfi_splits.py": "Maintenance CLI prints progress and its final report.",
@@ -51,6 +55,10 @@ PRINT_ALLOWLIST = {
     "tools/verify_executions_db_vs_exchange.py": "Read-only execution verification CLI.",
 }
 APPEND_ALLOWLIST = {
+    "vast_job_runner.py": "Advisory per-role process lock, not a log sink.",
+    "setup/vast_gpu_benchmark/cloud_worker.py": "Worker lock and dedicated optimizer subprocess transcript.",
+    "setup/vast_gpu_benchmark/rental.py": "Advisory rental ownership lock, not a log sink.",
+    "setup/vast_gpu_benchmark/cleanup.py": "Advisory cleanup ownership lock, not a log sink.",
     "PBApiServer.py": "Managed API console transcript.",
     "file_lock.py": "Advisory lock file, not a log sink.",
     "logging_helpers.py": "Central logging fallback and lock implementation.",
@@ -77,7 +85,7 @@ TIER_3_SERVICES = {
     "BalanceCalc", "BitgetUTA", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",
     "ParetoDataLoader", "ProfitSweep", "Services", "Status", "User", "V7Instances", "V8Instances", "VPSManager",
-    "VPSManagerApi",
+    "VPSManagerApi", "Vast",
 }
 DEDICATED_SERVICES = {
     "Database", "Exchange", "MarketData", "OptimizeQueueAPI", "PBApiServer",

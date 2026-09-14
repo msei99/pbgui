@@ -1,0 +1,18 @@
+{
+    "name": "PBGui PB8 GPU Benchmark ee2b7d4",
+    "image": "ghcr.io/msei99/pbgui-pb8-gpu",
+    "tag": "ee2b7d4-layered",
+    "private": true,
+    "runtype": "ssh",
+    "ssh_direct": true,
+    "use_ssh": true,
+    "env": "",
+    "onstart": "umask 077\ntouch /root/.no_auto_tmux\n",
+    "recommended_disk_space": 40,
+    "extra_filters": {
+        "cuda_max_good": {"gte": 13.0},
+        "num_gpus": {"eq": 1}
+    },
+    "desc": "Private PB8 CUDA benchmark image; RTX 3090 execution verified. Use the rental supervisor for deadline and verified cleanup.",
+    "readme": "PB8 source ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8, Python 3.12, PyTorch CUDA 13 and source-stamped Rust extension. Linux x86_64 image. Verified image digest: sha256:4c280d1e027e037c7a17952b45c8c5f4af821ff3737bc3d469c34c35c3952a9d. Target 24 GB VRAM; check effective CPU quota rather than visible host CPU count. Transfer private configs and selected OHLCV separately to /work/input; Binance source-directory name is binance. GPU gain_strategy_eq scoring is unsupported in this revision; the approved benchmark uses adg_strategy_eq. No automatic optimizer start. This template alone does not install a paid-instance cleanup deadline: provision through the benchmark rental supervisor, which supplies both guards and separate private registry pull access. No account credentials belong in the template."
+}

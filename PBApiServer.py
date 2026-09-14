@@ -117,6 +117,7 @@ from api.cluster import router as cluster_router, shutdown as cluster_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
 from api.optimize_v8 import router as optimize_v8_router
+from api.vast import router as vast_router
 from api.optimize_v8 import startup as opt8_startup, shutdown as opt8_shutdown
 from api.pareto_explorer import router as pareto_explorer_router, shutdown as pareto_explorer_shutdown
 from api.pb7_ohlcv_tools import startup as ohlcv_preload_startup
@@ -1058,6 +1059,7 @@ app.include_router(backtest_v8_router, prefix="/api/backtest-v8", tags=["backtes
 app.include_router(cluster_router, prefix="/api/cluster", tags=["cluster"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
 app.include_router(optimize_v8_router, prefix="/api/optimize-v8", tags=["optimize-v8"])
+app.include_router(vast_router, prefix="/api/vast", tags=["vast"])
 app.include_router(pareto_explorer_router, prefix="/api/pareto-explorer", tags=["pareto-explorer"])
 app.include_router(strategy_explorer_router, prefix="/api/strategy-explorer", tags=["strategy-explorer"])
 app.include_router(strategy_explorer_v8_router, prefix="/api/strategy-explorer-v8", tags=["strategy-explorer-v8"])

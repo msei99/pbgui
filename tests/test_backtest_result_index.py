@@ -93,3 +93,24 @@ def test_index_failure_falls_back_to_filesystem_builder(tmp_path: Path, monkeypa
 
     assert calls == [["fallback"]]
     assert results[0]["gain"] == 1.4
+
+
+def test_old_index_rebuilds_group_metadata_after_schema_change(tmp_path: Path, monkeypatch) -> None:
+    """Unchanged result files must gain grouping after upgrading a persisted index."""
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', str(tmp_path))
+    analysis = _result(tmp_path, 'backtests_full_timerange', 1.2)
+    current_schema = backtest_result_index._SUMMARY_SCHEMA_VERSION
+    monkeypatch.setattr(backtest_result_index, '_SUMMARY_SCHEMA_VERSION', 2)
+    backtest_result_index.load_indexed_results('v8', [analysis], _builder([]))
+    monkeypatch.setattr(backtest_result_index, '_SUMMARY_SCHEMA_VERSION', current_schema)
+    calls = []
+
+    def grouped(paths):
+        """Simulate the current parser adding group metadata on a cache miss."""
+        calls.append(paths)
+        return [{'path':str(path.parent), 'result_group':{'kind':'optimize_validate','id':'same-candidate'}} for path in paths]
+
+    result = backtest_result_index.load_indexed_results('v8', [analysis], grouped)
+    assert result[0]['result_group']['id'] == 'same-candidate'
+    assert backtest_result_index.load_indexed_results('v8', [analysis], grouped) == result
+    assert len(calls) == 1

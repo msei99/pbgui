@@ -12,6 +12,7 @@ import json
 import math
 import multiprocessing
 import os
+import re
 import platform
 import secrets
 import signal
@@ -721,6 +722,24 @@ def _get_pbgui_market_data_path() -> str:
     return str(get_market_data_root_dir())
 
 
+def _clear_cloud_dataset_paths(config: dict) -> bool:
+    """Remove only PBGui container-local dataset paths before a local backtest."""
+    import re
+    backtest = config.get('backtest')
+    if not isinstance(backtest, dict):
+        return False
+    changed = False
+    for key, pattern in (
+        ('hlcvs_data_dir', r'/work/pbgui/jobs/[0-9a-f]{32}/input/dataset/?'),
+        ('ohlcv_source_dir', r'/work/pbgui/(?:jobs/[0-9a-f]{32}/)?input/ohlcv/?'),
+    ):
+        value = backtest.get(key)
+        if isinstance(value, str) and re.fullmatch(pattern, value):
+            backtest.pop(key)
+            changed = True
+    return changed
+
+
 def _apply_pbgui_market_data_override(config: dict, enabled: bool) -> tuple[bool, str]:
     """Apply the shared market-data setting without clearing custom source paths."""
     target_path = _get_pbgui_market_data_path()
@@ -1294,8 +1313,12 @@ def _derived_optimize_result_group(config: dict, relative_parts: tuple[str, ...]
     source_name = relative_parts[0]
     candidate = source_name[:64].lower()
     if len(candidate) != 64 or any(char not in "0123456789abcdef" for char in candidate):
-        return None
-    suffix = source_name[64:]
+        explorer = re.fullmatch(r"(backtests|pareto_config_[0-9]+)(_train_[A-Za-z0-9_.-]+|_holdout_[A-Za-z0-9_.-]+|_full_timerange)", source_name)
+        if explorer is None:
+            return None
+        candidate, suffix = explorer.groups()
+    else:
+        suffix = source_name[64:]
     if suffix and not suffix.startswith(("_train_", "_holdout_", "_full_timerange")):
         return None
 
@@ -1329,7 +1352,8 @@ def _derived_optimize_result_group(config: dict, relative_parts: tuple[str, ...]
     return {
         "kind": "optimize_validate",
         "id": f"derived:{candidate}:{fingerprint}",
-        "label": candidate,
+        "label": (f"Explorer candidate #{candidate.removeprefix('pareto_config_')}" if candidate.startswith('pareto_config_')
+                  else f"Explorer validation {fingerprint}" if candidate == 'backtests' else candidate),
         "item": item[:128],
     }
 
@@ -1800,6 +1824,7 @@ class BacktestV8Worker:
                 launch_config = prepare_pb8_config(copy.deepcopy(base_snapshot), base_config_path=str(snapshot))
             else:
                 launch_config = load_pb8_config(snapshot)
+            cloud_paths_changed = _clear_cloud_dataset_paths(launch_config)
             settings = load_ini_section(_QUEUE_SETTINGS_SECTION)
             explicit_market_data = data.get("use_pbgui_market_data")
             if isinstance(explicit_market_data, bool):
@@ -1814,8 +1839,10 @@ class BacktestV8Worker:
                     market_data_changed, market_data_path = _apply_pbgui_market_data_override(launch_config, True)
                 else:
                     market_data_changed, market_data_path = False, _get_pbgui_market_data_path()
-            if isinstance(base_snapshot, dict) or market_data_changed:
+            if isinstance(base_snapshot, dict) or market_data_changed or cloud_paths_changed:
                 save_prepared_pb8_config(launch_config, snapshot)
+            if cloud_paths_changed:
+                _log(SERVICE, f"Removed container-only dataset paths before local PB8 backtest {filename}", level="INFO")
             if market_data_changed:
                 action = "Set" if use_pbgui_market_data else "Cleared"
                 detail = f" to {market_data_path}" if use_pbgui_market_data else ""

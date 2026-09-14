@@ -503,7 +503,7 @@ def test_sweep_holdout_button_builds_standalone_backtest_config() -> None:
     assert 'value="all_timeranges"' in page
     assert "requiresSweepPlan = validationMode === 'holdout_only'" in page
     assert "includeFullTimerange" in page
-    assert "backtestSelectedSweepHoldouts().catch(handleError)" in page
+    assert "PBGuiBacktestQueue.perform(el('btn-holdout-selected-paretos'), backtestSelectedSweepHoldouts).catch(handleError)" in page
 
 
 def test_pb8_multi_pareto_backtest_preserves_dates_and_exchange_groups() -> None:
@@ -3058,3 +3058,124 @@ def test_optimize_apply_filters_updates_both_sides_across_exchanges() -> None:
         """
     )
     _run_node(script)
+
+
+def test_cloud_scenario_apply_preserves_objectives_after_adg_fix():
+    """Repeated scenario application cannot restore the CPU-only gain objective."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "applyOptimizeSweepPreset")
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const el = id => id === 'opted-execution' ? {{value:'vast'}} : null;
+        let scoring = [{{metric:'adg_strategy_eq',goal:'max',scenario:null,aggregate:'median'}},
+                       {{metric:'drawdown_worst_strategy_eq',goal:'min'}}];
+        const original = structuredClone(scoring);
+        let writes = 0;
+        const getScoringEntries = () => structuredClone(scoring);
+        const setScoringEntries = entries => {{ writes++; scoring = entries; }};
+        const setLimitEntries = () => {{}};
+        const applyOptimizeSweepCoinSymmetry = () => {{}};
+        const applyOptimizeSweepLongBoundsPreset = () => {{}};
+        const toggleOptimizeObjectiveScenarioInput = () => {{}};
+        {function_source}
+        for (const template of ['rolling_windows','walk_forward']) {{
+            applyOptimizeSweepPreset({{template,parameters:{{}}}});
+            assert.deepEqual(scoring, original);
+        }}
+        assert.equal(writes, 0);
+        for (const strategy of ['ema_anchor', 'trailing_grid']) {{
+            scoring = [...original, {{metric:'sharpe_ratio_strategy_eq',goal:'max'}},
+                       {{metric:'loss_profit_ratio',goal:'min'}}];
+            applyOptimizeSweepPreset({{template:'sweep_cycles', parameters:{{strategy}}}});
+            assert.deepEqual(scoring, [
+                {{metric:'adg_strategy_eq',goal:'max'}},
+                {{metric:'sortino_ratio_strategy_eq',goal:'max'}},
+                {{metric:'drawdown_worst_strategy_eq',goal:'min'}}
+            ]);
+        }}
+        assert.equal(writes, 2);
+    """))
+
+
+def test_scenario_generator_saved_settings_roundtrip_and_legacy_restore() -> None:
+    """Restore applied templates and persist unapplied inputs without changing provenance."""
+    _run_node(textwrap.dedent("""
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteRender = () => {};
+        let fields = {};
+        global.document = {getElementById: id => fields[id] || null};
+        _suiteState.scenarioGeneratorEnabled = true;
+        const provenance = {template: 'sweep_cycles', parameters: {
+          window_days:400, stride_days:400, training_windows:5, holdout_windows:1,
+          exchange_mode:'inherit', auto_windows:true,
+          sweep_policy:{balance_multiplier:2, starting_balance:10000, refill_cost:3, cooldown_days:2}
+        }, holdout_scenarios:[{label:'holdout'}]};
+        const config = {backtest:{suite_enabled:true, scenarios:[{label:'train'}]},
+          pbgui:{scenario_template:provenance}};
+        suiteLoad(config);
+        assert.equal(_suiteState.scenarioGeneratorDraft.template, 'sweep_cycles');
+        assert.equal(_suiteState.scenarioGeneratorDraft.window_days, 400);
+        assert.equal(_suiteState.scenarioGeneratorDraft.training_windows, 5);
+        assert.equal(_suiteState.scenarioGeneratorDraft.holdout_windows, 1);
+        assert.equal(_suiteState.scenarioGeneratorDraft.starting_balance, 10000);
+        assert.equal(_suiteState.scenarioGeneratorDraft.refill_cost, 3);
+        assert.equal(_suiteState.scenarioGeneratorDraft.cooldown_days, 2);
+        let saved = suiteCollect();
+        suiteLoad({backtest:config.backtest, pbgui:saved});
+        assert.deepEqual(suiteCollect(), saved);
+
+        // Saving edited inputs must not require Preview or Apply.
+        fields = Object.fromEntries(Object.entries({
+          template:'walk_forward', window:'120', stride:'60', training:'3',
+          holdout:'2', 'exchange-mode':'inherit'
+        }).map(([key,value]) => ['suite-generator-'+key, {value}]));
+        saved = suiteCollect();
+        assert.equal(saved.scenario_generator.template, 'walk_forward');
+        assert.equal(saved.scenario_generator.window_days, 120);
+        assert.deepEqual(saved.scenario_template, provenance);
+        fields = {};
+        suiteLoad({backtest:config.backtest, pbgui:saved});
+        assert.equal(_suiteState.scenarioGeneratorDraft.template, 'walk_forward');
+        assert.equal(_suiteState.scenarioGeneratorDraft.window_days, 120);
+        _suiteNotifyStructuredSync();
+        assert.equal(suiteCollect().scenario_template, undefined);
+        assert.equal(suiteCollect().scenario_generator.template, 'walk_forward');
+        suiteLoad({backtest:{suite_enabled:true}});
+        assert.equal(_suiteState.scenarioGeneratorDraft, null);
+        assert.equal(suiteCollect().scenario_generator, undefined);
+        _suiteState.scenarioGeneratorEnabled = false;
+        suiteLoad(config);
+        assert.equal(suiteCollect().scenario_generator, undefined);
+    """))
+
+
+def test_pareto_explorer_accepts_same_origin_api_root() -> None:
+    """Relative API bases must navigate just like prefixed and absolute bases."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text(encoding='utf-8')
+    function = _page_function(page, 'openFastApiParetoExplorer')
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        let API_BASE;
+        const optimizeEditorAdapter = {{supportsParetoExplorer:true, version:'v8'}};
+        const window = {{location:{{href:''}}}};
+        const messages = [];
+        const toast = message => messages.push(message);
+        {function}
+        const result = '/results/cloud run & sample';
+        for (const base of ['/api/optimize-v8', '/api/optimize-v7/', '/prefix/api/optimize-v8', 'https://example.test/api/optimize-v8']) {{
+            API_BASE = base;
+            openFastApiParetoExplorer(result);
+            const url = new URL(window.location.href, 'https://example.test');
+            assert.equal(url.searchParams.get('result_path'), result);
+            assert.equal(url.searchParams.get('optimize_version'), 'v8');
+            assert.ok(url.pathname.endsWith('/api/pareto-explorer/main_page'));
+        }}
+        assert.equal(messages.length, 0);
+        API_BASE = '';
+        window.location.href = '';
+        openFastApiParetoExplorer(result);
+        assert.equal(window.location.href, '');
+        assert.equal(messages.length, 1);
+    """))

@@ -234,9 +234,26 @@ def _exercise_filter_keyboard(page, pending, subscriptions):
     field.press("End")
     assert len(pending) == 1
     socket, response = pending.pop()
+    # Hold render frames until a real key event overlaps the pending snapshot.
+    page.evaluate("""() => {
+        const raf = window.requestAnimationFrame.bind(window);
+        const held = [];
+        let waiting = true;
+        window.requestAnimationFrame = callback => raf(stamp => {
+            if (waiting) held.push(callback); else callback(stamp);
+        });
+        window.releaseSnapshotFrames = () => {
+            waiting = false;
+            window.requestAnimationFrame = raf;
+            held.splice(0).forEach(callback => raf(callback));
+        };
+    }""")
     started = perf_counter()
     socket.send(response)
-    field.press_sequentially("keys", delay=80)
+    page.wait_for_function("panel._fullRenderPending")
+    field.press("k")
+    page.evaluate("releaseSnapshotFrames()")
+    field.press_sequentially("eys", delay=80)
     during_ms = (perf_counter() - started) * 1000
     assert field.input_value() == "apikeys"
     assert page.evaluate("interaction.during") > 0, "No keystroke overlapped snapshot rendering"

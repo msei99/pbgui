@@ -35,6 +35,7 @@
   --sp-md: 12px;
   --sp-lg: 20px;
   --btn-h: 32px;
+  --input-h: 32px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1115,7 +1116,17 @@ input[type="range"]::-moz-range-thumb {
 
       <div class="ctx-actions" style="display:block">
         <button class="sb-btn" id="btn-back-optimize">← Back to Optimize</button>
-        <button class="sb-btn" id="btn-run-backtest">🚀 Run Backtest</button>
+        <button class="sb-btn" id="btn-run-backtest">🚀 Queue Backtest</button>
+        <select class="sb-input" id="explorer-validation-mode" aria-label="Validation periods" title="Create standalone backtests using the saved training and Holdout periods">
+          <option value="holdout_only">Holdout only</option>
+          <option value="full_timerange">Full timerange only</option>
+          <option value="holdout_and_full_timerange">Holdout + Full timerange</option>
+          <option value="all_timeranges">Training + Holdout + Full timerange</option>
+        </select>
+        <button class="sb-btn" id="btn-validate-config" data-tip="Add grouped standalone backtests and stay in the Explorer. Holdout modes require a saved Holdout plan. Existing queue autostart settings apply.">🧪 Queue Validation</button>
+        <button class="sb-btn" data-backtest-open-queue>Open Queue</button>
+        <div class="muted-line" data-backtest-autostart></div>
+        <div class="muted-line" role="status" aria-live="polite" data-backtest-queue-status></div>
         <button class="sb-btn" id="btn-pin-strategy-baseline">Pin Explorer Baseline</button>
         <button class="sb-btn" id="btn-open-strategy-explorer">🔍 Strategy Explorer</button>
         <button class="sb-btn" id="btn-load-all-results">📂 Scan all_results</button>
@@ -3991,7 +4002,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var isCorrelations = tab === 'correlations';
     if (state.stage === 'deep_intelligence') {
       var evolutionRequiresFullMode = !!(state.deepEvolution && state.deepEvolution.requires_full_mode);
-      var showConfigDetail = isEvolution && state.allResultsLoaded && !evolutionRequiresFullMode;
+      var showConfigDetail = isCorrelations || (isEvolution && state.allResultsLoaded && !evolutionRequiresFullMode);
       el('selected-config-detail').style.display = showConfigDetail ? 'block' : 'none';
       el('selected-config-section').style.display = showConfigDetail ? 'grid' : 'none';
     }
@@ -4181,9 +4192,29 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       pushMessage('error', 'No selected config with full configuration is available yet.');
       return;
     }
-    openBacktestDraft(detail.full_config, suggestDraftName(detail.full_config)).catch(function(err) {
+    window.PBGuiBacktestQueue.perform(el('btn-run-backtest'), async function() {
+      if (detail.config_index !== state.selectedConfigIndex) throw new Error('Wait for the selected configuration to load.');
+      if (detail.override_error) throw new Error(detail.override_error);
+      return window.PBGuiBacktestQueue.submit([{name:'pareto_config_' + detail.config_index,
+        config:extractConfigSections(detail.full_config), override_configs:detail.override_configs || {}}]);
+    }).catch(function(err) {
       pushMessage('error', 'Run Backtest failed: ' + err.message);
     });
+  }
+
+  async function validateSelectedConfig() {
+    var button = el('btn-validate-config');
+    try {
+      await window.PBGuiBacktestQueue.perform(button, async function() {
+      var detail = state.selectedDetail;
+      if (!detail || detail.config_index !== state.selectedConfigIndex) throw new Error('Wait for the selected configuration to load.');
+      var name = 'pareto_config_' + String(detail.config_index);
+      var items = window.PBGuiParetoValidation.buildItems(detail, el('explorer-validation-mode').value, name, 'explorer-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
+      await window.PBGuiBacktestQueue.submit(items);
+      });
+    } catch (error) {
+      pushMessage('error', 'Validate failed: ' + error.message);
+    }
   }
 
   function openSelectedStrategyExplorer() {
@@ -4474,6 +4505,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       });
     });
     el('btn-run-backtest').addEventListener('click', runSelectedConfigBacktest);
+    el('btn-validate-config').addEventListener('click', validateSelectedConfig);
     el('btn-open-strategy-explorer').addEventListener('click', openSelectedStrategyExplorer);
     el('btn-pin-strategy-baseline').addEventListener('click', pinSelectedStrategyBaseline);
     el('btn-load-all-results').addEventListener('click', loadAllResultsFromSidebar);
@@ -4792,6 +4824,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   });
 }());
 </script>
+<script src="/app/js/pareto_validation.js?v=1"></script>
+<script src="/app/js/backtest_queue_actions.js?v=1"></script>
 <script src="/app/js/shared_help_overlay.js?v=7"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>

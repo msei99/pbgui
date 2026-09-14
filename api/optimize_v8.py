@@ -3870,9 +3870,26 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> d
                 if not path.is_file() or path.is_symlink():
                     raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
                 prepared = load_pb8_config(path)
-            _validate_optimizer_overrides(prepared, base_config_path=str(_config_file(name)))
-            _validate_optimize_backend(prepared, base_config_path=str(_config_file(name)))
-            overrides = _load_override_payloads(prepared, _config_dir(name))
+            cloud = (prepared.get("pbgui") or {}).get("execution") == "vast"
+            if cloud:
+                from vast_jobs import digest
+                source_hash = digest(_config_file(name))
+            else:
+                _validate_optimizer_overrides(prepared, base_config_path=str(_config_file(name)))
+                _validate_optimize_backend(prepared, base_config_path=str(_config_file(name)))
+                overrides = _load_override_payloads(prepared, _config_dir(name))
+        if cloud:
+            from vast_jobs import JobStore
+            from vast_provider import VastError
+            try:
+                opt = prepared.get("optimize") or {}
+                workers = (opt.get("gpu") or {}).get("exact_workers") or opt.get("n_cpus", 4)
+                job = JobStore().prepare(name, prepared, source_hash, Path(PBGDIR) / "data/ohlcv",
+                                        Path(PBGDIR) / "data/coindata", _results_root(), opt.get("iters", 512), workers, False)
+                return {"ok": True, "filename": job["id"], "execution": "vast"}
+            except VastError as exc:
+                _log(SERVICE, str(exc), level="WARNING")
+                raise HTTPException(status_code=exc.status, detail=str(exc)) from None
         options = _validate_launch_options((body or {}).get("launch_options") or _runtime_options_from_config(prepared))
     except PB8ConfigurationError as exc:
         raise _configuration_error(f"Queueing PB8 optimize config {name}", exc) from exc

@@ -144,6 +144,17 @@ function _suiteAggMetricOptions(extraMetrics) {
 }
 
 /* ── Load config into suite editor ──────────────────────────── */
+function _suiteGeneratorSettings(source) {
+  if (!source || typeof source !== 'object') return null;
+  var settings = {};
+  ['template', 'window_days', 'stride_days', 'training_windows', 'holdout_windows',
+    'exchange_mode', 'auto_windows', 'balance_multiplier', 'starting_balance',
+    'refill_cost', 'cooldown_days'].forEach(function(key) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) settings[key] = source[key];
+  });
+  return JSON.parse(JSON.stringify(settings));
+}
+
 function suiteLoad(cfg, opts) {
   opts = opts || {};
   var bt = cfg.backtest || {};
@@ -168,6 +179,17 @@ function suiteLoad(cfg, opts) {
   _suiteState.scenarioTemplate = cfg.pbgui && cfg.pbgui.scenario_template
     ? JSON.parse(JSON.stringify(cfg.pbgui.scenario_template))
     : null;
+  if (_suiteState.scenarioGeneratorEnabled) {
+    var savedGenerator = cfg.pbgui && cfg.pbgui.scenario_generator;
+    var template = _suiteState.scenarioTemplate;
+    if (!savedGenerator && template) {
+      var parameters = template.parameters || {};
+      savedGenerator = Object.assign({}, parameters, parameters.sweep_policy || {}, {
+        template: template.template,
+      });
+    }
+    _suiteState.scenarioGeneratorDraft = _suiteGeneratorSettings(savedGenerator);
+  }
   if (opts.preserveEdit && _suiteState.enabled && prevEditIdx >= 0) {
     var nextEditIdx = -1;
     if (prevLabel) {
@@ -188,11 +210,19 @@ function suiteLoad(cfg, opts) {
 
 /* ── Collect current state → config fragment ────────────────── */
 function suiteCollect() {
+  // Keep unapplied generator inputs separate from applied scenario provenance.
+  if (_suiteState.scenarioGeneratorEnabled && typeof document !== 'undefined') {
+    var draft = _suiteCaptureScenarioGeneratorDraft();
+    if (draft) _suiteState.scenarioGeneratorDraft = draft;
+  }
   // If editing a scenario, auto-save it first
   if (_suiteState.editIdx >= 0) _suiteSaveEditingScenario();
 
   var result = {};
   result.suite_enabled = _suiteState.enabled;
+  if (_suiteState.scenarioGeneratorEnabled && _suiteState.scenarioGeneratorDraft) {
+    result.scenario_generator = _suiteGeneratorSettings(_suiteState.scenarioGeneratorDraft);
+  }
 
   if (_suiteState.enabled) {
     result.scenarios = JSON.parse(JSON.stringify(_suiteState.scenarios));

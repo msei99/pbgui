@@ -541,6 +541,23 @@ class LogViewerPanel {
        ═══════════════════════════════════════════════════════ */
     _bindEvents() {
         var me = this;
+        var terminal = this._q('terminal');
+        this._tailPinned = true;
+        terminal.addEventListener('wheel', function(event) {
+            if (event.deltaY < 0) me._tailPinned = false;
+        }, {passive:true});
+        terminal.addEventListener('pointerdown', function() { me._tailPointerActive = true; });
+        terminal.addEventListener('pointerup', function() { me._tailPointerActive = false; });
+        terminal.addEventListener('pointercancel', function() { me._tailPointerActive = false; });
+        terminal.addEventListener('touchmove', function() { me._tailPinned = false; }, {passive:true});
+        terminal.addEventListener('keydown', function(event) {
+            if (['ArrowUp','PageUp','Home'].includes(event.key)) me._tailPinned = false;
+        });
+        terminal.addEventListener('scroll', function() {
+            if (terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 40) me._tailPinned = true;
+            else if (me._tailPointerActive) me._tailPinned = false;
+        }, {passive:true});
+        this._watchTailLayout();
         var levels = ['DEBUG','INFO','WARNING','ERROR','CRITICAL'];
         for (var i = 0; i < levels.length; i++)
             (function(lvl) {
@@ -600,9 +617,43 @@ class LogViewerPanel {
     /* ═══════════════════════════════════════════════════════════
        Public API
        ═══════════════════════════════════════════════════════ */
-    open()  { this._closed = false; if (!this._authExpired) this._connect(); }
+    _settleTail() {
+        // content-visibility resolves wrapped line heights after the first scroll.
+        // Follow those layout passes without taking over deliberate history scrolling.
+        if (this._closed || !this._tailPinned || this._tailFrame) return;
+        var me = this, frames = 12, previous = -1, stable = 0;
+        function settle() {
+            me._tailFrame = 0;
+            var term = me._q('terminal');
+            if (me._closed || !me._tailPinned || !term || !term.clientHeight) return;
+            var height = term.scrollHeight;
+            term.scrollTop = height;
+            stable = height === previous ? stable + 1 : 0;
+            previous = height;
+            if (--frames > 0 && stable < 2) me._tailFrame = requestAnimationFrame(settle);
+        }
+        this._tailFrame = requestAnimationFrame(settle);
+    }
+
+    _watchTailLayout() {
+        if (typeof ResizeObserver === 'undefined' || this._tailObserver) return;
+        var me = this, terminal = this._q('terminal');
+        if (!terminal) return;
+        this._tailObserver = new ResizeObserver(function() {
+            if (!me._closed && me._tailPinned && terminal.clientHeight) {
+                terminal.scrollTop = terminal.scrollHeight; me._settleTail();
+            }
+        });
+        this._tailObserver.observe(terminal);
+    }
+
+    open()  { this._closed = false; this._watchTailLayout(); if (!this._authExpired) this._connect(); }
     close() {
         this._closed = true;
+        if (this._tailFrame) cancelAnimationFrame(this._tailFrame);
+        this._tailFrame = 0;
+        if (this._tailObserver) this._tailObserver.disconnect();
+        this._tailObserver = null;
         ++this._restartGeneration;
         this._disconnect();
         this._finishRestartAttempt();
@@ -2130,6 +2181,7 @@ class LogViewerPanel {
                 frag.appendChild(this._buildDiv(renderLines[i], renderBase + i + 1));
             term.appendChild(frag);
             term.scrollTop = term.scrollHeight;
+            this._settleTail();
             var me = this;
             if (renderSearchTerm || this._searchTerm || renderSearchId !== this._searchAbort)
                 setTimeout(function() { if (rid === me._renderAbort) me._applySearch(); }, 0);
@@ -2158,6 +2210,7 @@ class LogViewerPanel {
                 status.remove();
                 term.appendChild(frag);
                 term.scrollTop = term.scrollHeight;
+                me._settleTail();
                 me._fullRenderPending = false;
                 me._appendLines([]);
                 if (renderSearchTerm || me._searchTerm || renderSearchId !== me._searchAbort)
@@ -2194,7 +2247,7 @@ class LogViewerPanel {
             if (rid !== me._renderAbort) return;
             var term = me._q('terminal');
             if (!term) { me._pending = []; me._rafPending = false; return; }
-            var atBottom = term.scrollTop + term.clientHeight >= term.scrollHeight - 40;
+            var atBottom = me._tailPinned === true || term.scrollTop + term.clientHeight >= term.scrollHeight - 40;
             var frag = document.createDocumentFragment();
             for (var j = 0; j < me._pending.length; j++) {
                 var item = me._pending[j];
@@ -2204,7 +2257,7 @@ class LogViewerPanel {
             me._rafPending = false;
             term.appendChild(frag);
             while (term.childElementCount > me._MAX) term.removeChild(term.firstChild);
-            if (atBottom) term.scrollTop = term.scrollHeight;
+            if (atBottom) { term.scrollTop = term.scrollHeight; me._settleTail(); }
             me._updateMatchCount(0);
         });
     }
@@ -2220,7 +2273,7 @@ class LogViewerPanel {
             return;
         }
         var terminal = this._q('terminal');
-        var atBottom = !terminal || terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 40;
+        var atBottom = this._tailPinned === true || !terminal || terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 40;
         var nextLines = this._lines.slice();
         var nextMatches = new Uint8Array(nextLines.length);
         var dropped = Math.max(0, this._lineBase - this._filteredBase);
@@ -2579,6 +2632,7 @@ class LogViewerPanel {
             }
             me._fullRenderPending = false;
             terminal.scrollTop = scrollBottom ? terminal.scrollHeight : oldScrollTop;
+            if (scrollBottom) me._settleTail();
             me._updateMatchCount(blocks.length, me._filteredMatchCount);
         }
 

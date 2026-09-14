@@ -18,7 +18,7 @@ from secure_files import ensure_private_directory
 
 SERVICE = "BacktestResultIndex"
 _DB_NAME = "backtest_results.sqlite"
-_SUMMARY_SCHEMA_VERSION = 2
+_SUMMARY_SCHEMA_VERSION = 3
 _LOCK = threading.RLock()
 _CONFIG_NAMES = ("config.json", "analysis_config.json", "config_used.json", "backtest_config.json")
 

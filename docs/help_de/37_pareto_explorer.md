@@ -152,3 +152,11 @@ Starte mit einem kleinen Bounds Window. Ein enges Window ist gut für Refinement
 - PBv7/PBv8 Optimize: Folge-Optimize-Runs erstellen und queuen.
 - PBv7/PBv8 Backtest: eine selektierte Config validieren, bevor du ihr vertraust.
 - Strategy Explorer: eine einzelne Config nach dem Eingrenzen der Shortlist visuell pruefen. Bei PB8 wird ein Kandidat mit **Pin Explorer Baseline** fixiert, ein anderer Kandidat desselben Results ausgewaehlt und beide anschliessend im Strategy Explorer ueber begrenzte native Replays verglichen. Die Baseline ist temporaer und seitenlokal; Result-Wechsel oder Reload loeschen sie. Referenzierte Sparse Overrides muessen verfuegbar sein, sonst blockiert PBGui den Handoff. Explorer-Felder innerhalb von 5% der aktiven Optimize-Bounds werden markiert; fehlen konfigurierte Bounds, dienen Runtime-Parameterbereiche als Fallback.
+
+
+
+Wenn PB8 die GUI-Metadaten nicht ausgibt, werden erkannte Validierungszeiträume anhand von Kandidatenname und Config-Fingerabdruck gruppiert; zeitraumspezifische Felder sind ausgenommen. Unterschiedliche Konfigurationen bleiben getrennt. Auch bisherige Explorer-Validierungen werden erkannt und müssen nicht erneut laufen.
+
+In Correlations wählt ein Klick auf einen Marker im Radardiagramm dessen Konfiguration aus. Die Config-Details erscheinen unter dem Diagramm, sowohl im Pareto-Modus als auch mit vollständiger Historie.
+
+Queue Backtest und Queue Validation fügen die Kandidaten direkt hinzu; Diagramm, Filter und Auswahl bleiben erhalten. Erst Open Queue wechselt die Seite. Der Zähler umfasst wartende und laufende Jobs. Daneben steht, ob Autostart aktiv ist und Jobs automatisch starten kann. Hinzufügen sendet keinen Startbefehl. Zeiträume, Börsen, Startkapital und Overrides werden aus der Konfiguration übernommen; Änderungen sind bei Backtests möglich. Adding… verhindert doppelte Klicks. Bestätigte Jobs werden während dieser Seitensitzung gemerkt. Bei einem teilweise fehlgeschlagenen PB8-Aufruf setzt ein erneuter Klick mit denselben Vorgangs-IDs fort.

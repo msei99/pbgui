@@ -221,3 +221,59 @@ def test_collapsed_results_only_materialize_headers_and_expand_lazily(log_page):
     page.evaluate("panel._toggleAllGroups(true); panel._clear()")
     page.wait_for_timeout(300)
     assert page.evaluate("panel._q('terminal').childElementCount") == 0
+
+
+def test_live_tail_follows_resize_but_respects_reading_history(log_page):
+    """Layout changes keep the tail visible until the reader scrolls upward."""
+    page, _ = log_page
+    page.evaluate("""() => {
+        const term = panel._q('terminal');
+        term.style.flex = 'none'; term.style.height = '250px';
+        panel._lines = Array.from({length:200}, (_, i) => '[INFO] line ' + i);
+        panel._renderFull();
+    }""")
+    page.wait_for_function("panel._q('terminal').scrollHeight > 250")
+    page.evaluate("""() => {
+        const t = panel._q('terminal');
+        t.dispatchEvent(new PointerEvent('pointerdown'));
+        t.dispatchEvent(new PointerEvent('pointerup'));
+    }""")
+    assert page.evaluate('panel._tailPinned') is True
+    page.evaluate("panel._q('terminal').style.height = '150px'")
+    page.wait_for_function("""() => {
+        const t = panel._q('terminal');
+        return Math.abs(t.scrollHeight - t.clientHeight - t.scrollTop) < 2;
+    }""")
+    page.evaluate("""() => {
+        const t = panel._q('terminal');
+        t.dispatchEvent(new WheelEvent('wheel', {deltaY:-100}));
+        t.scrollTop = 100;
+    }""")
+    page.evaluate("panel._q('terminal').style.height = '100px'")
+    page.wait_for_timeout(100)
+    assert page.evaluate("panel._q('terminal').scrollTop") == 100
+    page.evaluate("panel.close()")
+    assert page.evaluate("panel._tailObserver === null")
+
+
+def test_live_tail_after_long_wrapped_snapshot_and_append(log_page):
+    """Deferred line layout must not strand live logs above their newest entries."""
+    page, _ = log_page
+    page.evaluate('''() => {
+        const term = panel._q('terminal');
+        term.style.flex = 'none'; term.style.width = '600px'; term.style.height = '250px';
+        panel._lines = Array.from({length:200}, (_, i) => '[INFO] gpu profile ' + i + ' ' + 'candidate '.repeat(700));
+        panel._renderFull();
+    }''')
+    page.wait_for_timeout(500)
+    def at_tail():
+        """Read final layout after content-visibility has resolved wrapped lines."""
+        return page.evaluate('''() => {const t=panel._q('terminal');
+            return t.scrollHeight-t.clientHeight-t.scrollTop < 3;}''')
+    assert at_tail()
+    page.evaluate("panel._ingestLines(['[INFO] newest gpu profile ' + 'candidate '.repeat(700)])")
+    page.wait_for_timeout(500)
+    assert at_tail()
+    page.evaluate("panel._q('terminal').style.width='350px'")
+    page.wait_for_timeout(500)
+    assert at_tail()
