@@ -389,7 +389,8 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
         preferences['gpu_name'] = preferences['gpu_name'].strip()
         preferences['min_cpu'] = max(preferences['min_cpu'], max((1 if row.get('auto_cpu_workers') else row['workers'] for row in waiting), default=1))
         client = VastClient(VastCredentialStore().secrets()['api_key'])
-        rows = client.offers(**preferences, min_cuda=13, min_duration=body.hours * 3600)
+        rows = client.offers(**preferences, min_cuda=13, min_duration=body.hours * 3600,
+                             **({'offer_id': body.offer_id} if body.rent_only else {}))
         # Recheck hard requirements even if the provider ignores a query filter.
         matches = [row for row in rows if
                    gpu_name_matches(row.get('gpu_name', ''), preferences['gpu_name'])

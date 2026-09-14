@@ -210,7 +210,7 @@ class VastClient:
         if verified_only:
             query["verified"] = {"eq": True}
         if offer_id is not None:
-            query["id"] = {"eq": positive_id(offer_id)}
+            query["ask_contract_id"] = {"eq": positive_id(offer_id)}
         matching_names = None
         if gpu_name.strip():
             names = self.request("GET", "/gpu_names/unique/").get("gpu_names")
@@ -249,6 +249,7 @@ class VastClient:
                 "cpu_cores": number(row.get("cpu_cores_effective")),
                 "cpu_name": public_text(row.get("cpu_name")),
                 "gpu_mem_bw_gbps": number(row.get("gpu_mem_bw")),
+                "tflops": number(row.get("total_flops")),
                 "pci_gen": number(row.get("pci_gen")),
                 "gpu_lanes": number(row.get("gpu_lanes")),
                 "pcie_bw_gbps": number(row.get("pcie_bw")),

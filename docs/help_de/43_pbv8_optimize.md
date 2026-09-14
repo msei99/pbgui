@@ -294,3 +294,7 @@ Bei Sweep Cycles stellt das grafische **Check & Apply windows** fuer EMA und Tra
 Save und Save & Queue zeigen den laufenden Vorgang und melden Pruef- oder API-Fehler sichtbar, ohne den Editor zu schliessen. Den gemeldeten Fehler beheben und erneut speichern; wiederholte Klicks waehrend des Speicherns erzeugen keine doppelten Anfragen.
 
 Neue und kopierte Optimize-Entwuerfe werden nach Refresh im selben Browser-Tab wiederhergestellt. Das ist eine temporaere Wiederherstellung, keine gespeicherte Config und kein Queue-Eintrag. Schliessen des Editors entfernt sie. Configs mit Zugangsdatenfeldern werden nicht zur Wiederherstellung abgelegt.
+
+Rent prueft das ausgewaehlte Angebot direkt anhand seiner Vertrags-ID; die allgemeine Marktsuche kann ein anderes repraesentatives Angebot anzeigen. Fehler stehen direkt bei Rent. Es wird keine Ersatz-GPU automatisch gemietet.
+
+GPU-Zeile und Details zeigen die von Vast gemeldeten TFLOPS. Der Wert vergleicht Rechenleistung, nicht den gemessenen Optimizer-Durchsatz; CPU-Pruefungen und Speicher beeinflussen die Laufzeit ebenfalls. Fehlende Werte erscheinen als „TFLOPS unknown“.

@@ -218,6 +218,7 @@ def test_manual_rent_selects_exact_offer_without_jobs(rental):
     body = request().model_copy(update={'rent_only': True, 'offer_id': 42})
     assert vast.start_queue(body, session=None)['id'] == 42
     assert calls[-1][1][1] == {'manual': True}
+    assert calls[0][1]['offer_id'] == 42
 
 
 def test_manual_rent_never_substitutes_unavailable_offer(rental):

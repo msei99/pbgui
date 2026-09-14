@@ -133,7 +133,7 @@ def test_offer_projection_and_query(monkeypatch):
         """Provide one affordable offer and one outside the requested price cap."""
         calls.append((method,path,body))
         return {'offers':[
-            {'id':7,'gpu_name':'RTX 3090','gpu_ram':24576,'cpu_ram':32768,'cpu_cores_effective':8.7,'dph_total':0.17,'verification':'verified','inet_up_cost':0.01,'inet_down_cost':0.02,'secret':'hidden'},
+            {'id':7,'gpu_name':'RTX 3090','gpu_ram':24576,'cpu_ram':32768,'cpu_cores_effective':8.7,'total_flops':35.58,'dph_total':0.17,'verification':'verified','inet_up_cost':0.01,'inet_down_cost':0.02,'secret':'hidden'},
             {'id':8,'dph_total':3}, {'id':9,'dph_total':'nan'},
         ]}
     monkeypatch.setattr(VastClient,'request',request)
@@ -141,6 +141,7 @@ def test_offer_projection_and_query(monkeypatch):
     assert len(rows)==1 and rows[0]['vram_gb']==24
     assert rows[0]['verified'] and rows[0]['price_hour_usd']==0.17
     assert 'hidden' not in json.dumps(rows)
+    assert rows[0]['tflops'] == 35.58
     assert calls[0][:2]==('POST','/bundles')
     assert calls[0][2]['allocated_storage']==40
     assert calls[0][2]['type']=='on-demand'
@@ -440,3 +441,18 @@ def test_browser_auth_error_has_no_vast_marker(client, status):
     response = http.post('/api/vast/account')
     assert response.status_code == status
     assert 'x-pbgui-error-source' not in response.headers
+
+
+def test_exact_offer_search_uses_contract_id(monkeypatch):
+    """A selected offer remains discoverable despite general-search deduplication."""
+    queries = []
+    def request(self, method, path, body=None):
+        """Model the provider returning another representative in a general search."""
+        queries.append(body)
+        identifier = 7 if body.get('ask_contract_id') == {'eq': 7} else 8
+        return {'offers': [{'id': identifier, 'dph_total': .17}]}
+    monkeypatch.setattr(VastClient, 'request', request)
+    assert VastClient('fake').offers()[0]['id'] == 8
+    assert VastClient('fake').offers(offer_id=7)[0]['id'] == 7
+    assert queries[-1]['ask_contract_id'] == {'eq': 7}
+    assert 'id' not in queries[-1]

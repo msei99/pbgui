@@ -49,7 +49,7 @@
   }
 
   function message(text, error) {
-    ['message', 'queue-message'].forEach(id => {
+    ['message', 'queue-message', 'rent-message'].forEach(id => {
       const target = el(id);
       if (target) { target.textContent = text; target.classList.toggle('error', !!error); }
     });
@@ -157,6 +157,8 @@
         offer.reliability == null ? 'Unknown' : fmt(offer.reliability * 100, 1) + '%', offerDuration(offer.duration_seconds), reasons.length ? reasons.join(' · ') : 'Compatible'];
       values.forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell); });
       const secondary = (cell, value) => { const line = document.createElement('div'); line.className = 'muted offer-secondary'; line.textContent = value; cell.appendChild(line); };
+      secondary(row.cells[0], offer.tflops == null ? 'TFLOPS unknown' : fmt(offer.tflops, 1) + ' TFLOPS');
+      row.cells[0].title = 'GPU compute capacity reported by Vast. Optimizer speed also depends on CPU and memory.';
       secondary(row.cells[1], fmt(offer.gpu_mem_bw_gbps, 0) + ' GB/s');
       secondary(row.cells[2], offer.cpu_name || 'CPU model unknown');
       secondary(row.cells[9], 'CUDA ' + fmt(offer.cuda_max_good, 1));
@@ -166,6 +168,7 @@
       detailsRow.className = 'offer-details'; detailsRow.hidden = true; detailsCell.colSpan = 11;
       const details = document.createElement('div'); details.className = 'offer-detail-grid';
       const entries = [
+        ['GPU compute (Vast)', offer.tflops == null ? 'TFLOPS unknown' : fmt(offer.tflops, 2) + ' TFLOPS'],
         ['PCIe', 'PCIe ' + fmt(offer.pci_gen, 1) + ' ×' + fmt(offer.gpu_lanes, 0) + ' · ' + fmt(offer.pcie_bw_gbps, 1) + ' GB/s'],
         ['Storage', (offer.disk_name || 'Unknown device') + ' · ' + fmt(offer.disk_bw_mbps, 0) + ' MB/s'],
         ['Allocated disk', fmt(offer.disk_gb, 0) + ' GB'],

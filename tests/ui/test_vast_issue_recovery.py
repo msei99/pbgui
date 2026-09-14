@@ -83,7 +83,7 @@ def cloud_page():
             payload = dict(billing=dict(amount_usd=.12))
         elif path == '/api/vast/offers':
             payload = dict(offers=[dict(id=1, gpu_name='RTX 3090', price_hour_usd=.15,
-                 duration_seconds=86400, cuda_max_good=13, location='test')])
+                 duration_seconds=86400, cuda_max_good=13, location='test', tflops=35.58)])
         else:
             payload = {}
         route.fulfill(json=payload)
@@ -300,3 +300,30 @@ def test_rent_now_and_queue_release_use_selected_offer(cloud_page):
     page.locator('#queue-end-rental').click()
     page.wait_for_timeout(100)
     assert any(method == 'POST' and url.endswith('/queue/end') for method, url in calls)
+
+
+def test_rent_failure_is_visible_beside_button(cloud_page):
+    """A rejected rental stays visible in Settings and permits another selection."""
+    page, data, calls, overrides, held = cloud_page
+    data['worker'] = None
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('#find-offers').click()
+    page.locator('tr[data-offer="1"]').click()
+    reason = 'The selected GPU is no longer available.'
+    overrides['/api/vast/queue/start'] = (409, json.dumps({'detail': reason}), {})
+    page.locator('#rent-offer').click()
+    page.wait_for_function("document.querySelector('#rent-message').textContent.includes('no longer available')")
+    assert page.locator('#rent-message').is_visible()
+    assert page.locator('#rent-message').inner_text() == reason
+    assert not page.locator('#rent-offer').is_disabled()
+
+
+def test_offer_tflops_in_list_and_details(cloud_page):
+    """Provider compute capacity is readable in the GPU row and expanded details."""
+    page, *_ = cloud_page
+    page.locator('#find-offers').click()
+    row = page.locator('tr[data-offer="1"]')
+    assert '35.6 TFLOPS' in row.inner_text()
+    row.get_by_role('button', name='Details').click()
+    assert '35.58 TFLOPS' in page.locator('.offer-details').inner_text()

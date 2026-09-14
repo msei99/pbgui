@@ -294,3 +294,7 @@ For Sweep Cycles, graphical **Check & Apply windows** restores the three scoring
 Save and Save & Queue show pending status and notify validation or API failures without closing the editor. Fix the reported issue and retry; repeated clicks while saving do not create duplicate requests.
 
 New and copied Optimize drafts are restored in the same browser tab after refresh. This is temporary browser recovery, not a saved config or queue entry. Closing the editor clears it. Configs containing credential fields are not stored for recovery.
+
+Rent rechecks the selected offer directly by its contract ID; a general marketplace search may show a different representative offer. Rental failures appear beside Rent. No replacement GPU is rented automatically.
+
+The GPU row and Details show Vast-reported TFLOPS. This compares compute capacity, not measured optimizer throughput; CPU validation and memory also affect run speed. Missing values show “TFLOPS unknown”.
