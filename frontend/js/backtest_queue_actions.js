@@ -2,11 +2,30 @@
 (function () {
   'use strict';
   const completed = new Map(), operations = new Map();
-  let busy = false, refreshGeneration = 0;
+  let refreshGeneration = 0, pendingBatches = 0, pendingJobs = 0, activeActions = 0;
+  let queueTail = Promise.resolve(), progressMessage = '';
   const version = () => window.OPTIMIZE_VERSION === 'v8' ? 'v8' : 'v7';
   const base = () => '/api/backtest-' + version();
   const nodes = selector => document.querySelectorAll(selector);
-  function message(text) { nodes('[data-backtest-queue-status]').forEach(node => { node.textContent = text; }); }
+  function message(text) {
+    progressMessage = text;
+    const waiting = pendingBatches > 1 ? ' · ' + (pendingBatches - 1) + ' more batch(es) waiting' : '';
+    nodes('[data-backtest-queue-status]').forEach(node => { node.textContent = text + waiting; });
+  }
+  function enqueueBatch(items, action) {
+    if (pendingJobs + items.length > 256) throw new Error('Too many pending jobs. Wait for a batch to finish before adding more.');
+    pendingJobs += items.length;
+    pendingBatches++;
+    message(pendingBatches === 1 ? 'Preparing ' + items.length + ' jobs · ' + items[0].name : progressMessage);
+    const task = queueTail.then(action);
+    // A failed batch must not prevent later candidates from being submitted.
+    queueTail = task.catch(() => {});
+    return task.finally(() => {
+      pendingJobs -= items.length;
+      pendingBatches--;
+      message(progressMessage);
+    });
+  }
   async function request(path, body) {
     const response = await fetch(base() + path, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {});
     if (!response.ok) throw new Error(await response.text() || ('HTTP ' + response.status));
@@ -39,56 +58,60 @@
   }
   async function submit(items) {
     if (!items.length) throw new Error('No backtest jobs to queue.');
-    if (operations.size + items.length > 256) throw new Error('Queue session limit reached. Reload the page before adding more jobs.');
     items = JSON.parse(JSON.stringify(items));
-    const keys = await Promise.all(items.map(keyFor));
-    keys.forEach(key => {
-      const scoped = version() + ':' + key;
-      if (!operations.has(scoped)) {
-        const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2,'0')).join('');
-        operations.set(scoped, 'explorer-' + id);
+    return enqueueBatch(items, async () => {
+      const keys = await Promise.all(items.map(keyFor));
+      const newKeys = new Set(keys.map(key => version() + ':' + key).filter(key => !operations.has(key)));
+      if (operations.size + newKeys.size > 256) throw new Error('Queue session limit reached. Reload the page before adding more jobs.');
+      keys.forEach(key => {
+        const scoped = version() + ':' + key;
+        if (!operations.has(scoped)) {
+          const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2,'0')).join('');
+          operations.set(scoped, 'explorer-' + id);
+        }
+      });
+      const groups = new Map();
+      items.forEach((item, index) => {
+        const group = item.config && item.config.pbgui && item.config.pbgui.backtest_result_group;
+        if (group) {
+          if (!groups.has(group.id)) groups.set(group.id, operations.get(version() + ':' + keys[index]));
+          group.id = groups.get(group.id);
+        }
+      });
+      let added = 0, skipped = 0;
+      // Retain operation IDs after errors: a retry must not duplicate an accepted POST.
+      for (const [index, item] of items.entries()) {
+        const key = version() + ':' + keys[index];
+        if (completed.has(key)) { skipped++; continue; }
+        try {
+          const result = await request('/queue', {...item, operation_id:operations.get(key)});
+          completed.set(key, result.filename);
+          added++;
+          message((added + skipped) + ' / ' + items.length + ' jobs confirmed · ' + items[0].name);
+        } catch (error) {
+          await refresh();
+          throw new Error(added + ' jobs added; remaining jobs were not confirmed. Retry to continue. ' + error.message);
+        }
       }
+      message(added + ' jobs added' + (skipped ? ' · ' + skipped + ' already queued' : '') + ' · ' + items[0].name);
+      await refresh();
+      return {added, skipped};
     });
-    const groups = new Map();
-    items.forEach((item, index) => {
-      const group = item.config && item.config.pbgui && item.config.pbgui.backtest_result_group;
-      if (group) {
-        if (!groups.has(group.id)) groups.set(group.id, operations.get(version() + ':' + keys[index]));
-        group.id = groups.get(group.id);
-      }
-    });
-    let added = 0, skipped = 0;
-    // Retain operation IDs after errors: a retry must not duplicate an accepted POST.
-    for (const [index, item] of items.entries()) {
-      const key = version() + ':' + keys[index];
-      if (completed.has(key)) { skipped++; continue; }
-      try {
-        const result = await request('/queue', {...item, operation_id:operations.get(key)});
-        completed.set(key, result.filename);
-        added++;
-        message(added + ' / ' + items.length + ' jobs added…');
-      } catch (error) {
-        await refresh();
-        throw new Error(added + ' jobs added; remaining jobs were not confirmed. Retry to continue. ' + error.message);
-      }
-    }
-    message(added + ' jobs added' + (skipped ? ' · ' + skipped + ' already queued' : '') + ' · ' + items[0].name);
-    await refresh();
-    return {added, skipped};
   }
   async function perform(button, action) {
-    if (busy) return;
-    busy = true;
-    const label = button.textContent;
-    button.disabled = true; button.textContent = 'Adding…';
-    message('Preparing queue jobs…');
+    activeActions++;
+    if (!pendingBatches) message('Preparing queue jobs…');
     try { return await action(); }
     catch (error) { message('Queue failed: ' + error.message); throw error; }
-    finally { busy = false; button.disabled = false; button.textContent = label; }
+    finally { activeActions--; }
   }
   window.PBGuiBacktestQueue = {submit, perform, refresh};
   function init() {
-    nodes('[data-backtest-open-queue]').forEach(button => button.addEventListener('click', () => { window.location.href = base() + '/main_page?panel=queue'; }));
+    nodes('[data-backtest-open-queue]').forEach(button => button.addEventListener('click', () => {
+      const target = base() + '/main_page?panel=queue';
+      if (pendingBatches || activeActions) window.open(target, '_blank', 'noopener');
+      else window.location.href = target;
+    }));
     refresh();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, {once:true}); else init();
