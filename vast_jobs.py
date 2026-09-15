@@ -24,9 +24,13 @@ from vast_provider import VastClient, VastError, number, positive_id
 
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
-IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743"
+IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc"
 # Existing immutable rental intents must remain recoverable after a wrapper update.
-SUPPORTED_RENTAL_IMAGES = (IMAGE, "ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88")
+SUPPORTED_RENTAL_IMAGES = (
+    IMAGE,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743",
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88",
+)
 REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 from vast_config_validation import METRICS, validate_cloud_config
 

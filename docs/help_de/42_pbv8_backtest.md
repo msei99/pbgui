@@ -1,5 +1,7 @@
 # PBv8 Backtest
 
+Szenario-Backtests (Suite) benötigen identische Long-/Short-Listen für freigegebene und ignorierte Coins. Ist genau eine Seite durch null Positionen oder null Total Wallet Exposure deaktiviert, übernimmt sie beim Speichern bzw. Einreihen die Listen der aktiven Seite. Beim Start gilt dies auch für ältere Queue-Einträge. Die deaktivierte Seite wird dadurch nicht aktiviert. Bei zwei aktiven Seiten müssen die Listen selbst angeglichen werden; PBGui weist widersprüchliche Listen zurück. Fehler des Runners erscheinen im Job-Log und bleiben zusätzlich in der Queue-Statusdatei erhalten.
+
 PBv8 Backtest verwaltet Passivbot-V8-Konfigurationen und Jobs getrennt von PBv7. PBGui validiert jede Konfiguration vor dem Speichern oder Starten mit dem aktuell installierten PB8-Loader.
 
 Die Seite rendert exakt dieselbe Seitenvorlage und denselben visuellen Konfigurationseditor wie PBv7 Backtest. Es gibt keine separate PB8-Editorimplementierung. PB8-spezifisch bleiben nur Pfad-/API-Adapter, Config-Validierung, Prozess-Runner und Ergebnisdaten.

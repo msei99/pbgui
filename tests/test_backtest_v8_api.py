@@ -1296,7 +1296,8 @@ def test_add_to_queue_is_idempotent_for_ai_operation_id(tmp_path, monkeypatch) -
     assert len(list(queue.glob("*.json"))) == 1
 
 
-def test_worker_launches_pb8_cli_with_queue_snapshot(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("suite_source", [None, "config_snapshot", "disk"])
+def test_worker_launches_pb8_cli_with_queue_snapshot(tmp_path, monkeypatch, suite_source) -> None:
     """The worker must launch the PB8 CLI from PB8 cwd using its isolated snapshot."""
     _configs, _v7_configs, queue, _logs = _patch_roots(tmp_path, monkeypatch)
     filename = "queue-demo"
@@ -1306,10 +1307,17 @@ def test_worker_launches_pb8_cli_with_queue_snapshot(tmp_path, monkeypatch) -> N
         "filename": filename,
         "config_snapshot": {"config_version": "v8.0.0", "backtest": {}},
     }
+    config = payload["config_snapshot"]
+    if suite_source:
+        config["backtest"]["suite_enabled"] = True
+        config["live"] = {"approved_coins": {"long": ["BTC"], "short": []}}
+        config["bot"] = {"short": {"risk": {"n_positions": 0}}}
+    if suite_source == "disk":
+        del payload["config_snapshot"]
     (queue / f"{filename}.json").write_text(json.dumps(payload), encoding="utf-8")
     snapshot_path = queue / "configs" / filename / "backtest.json"
     snapshot_path.parent.mkdir(parents=True)
-    snapshot_path.write_text(json.dumps(payload["config_snapshot"]), encoding="utf-8")
+    snapshot_path.write_text(json.dumps(config), encoding="utf-8")
     pb8_dir = tmp_path / "pb8"
     cli = tmp_path / "venv_pb8" / "bin" / "passivbot"
     pb8_dir.mkdir()
@@ -1371,7 +1379,12 @@ def test_worker_launches_pb8_cli_with_queue_snapshot(tmp_path, monkeypatch) -> N
     assert saved_queue["pb8_version"] == "8.0.0"
     assert saved_queue["pb8_commit"] == "abc123"
     assert json.loads(snapshot_path.read_text(encoding="utf-8"))["backtest"]["ohlcv_source_dir"] == str(tmp_path / "market-data")
-    assert saved_queue["config_snapshot"]["backtest"].get("ohlcv_source_dir") is None
+    if suite_source != "disk":
+        assert saved_queue["config_snapshot"]["backtest"].get("ohlcv_source_dir") is None
+    if suite_source:
+        launched = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        assert launched["live"]["approved_coins"] == {"long": ["BTC"], "short": ["BTC"]}
+        assert launched["bot"]["short"]["risk"]["n_positions"] == 0
 
 
 def test_linux_backtest_uses_separate_transient_systemd_unit(tmp_path, monkeypatch) -> None:

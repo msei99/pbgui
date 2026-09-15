@@ -239,9 +239,17 @@ class WorkerConnection:
                 raise VastError('Upload deadline reached; verified chunks retained')
             return seconds
         config_root = execution_input(self.store, self.identifier)
+        from vast_rsync import available as rsync_available
+        if rsync_available(self, remaining()):
+            from vast_rsync import sync_files
+            sync_files(self, config_root, timeout=remaining())
+            return
         manifest = json.loads((config_root / 'manifest.json').read_text())
-        self.store.update(self.identifier, upload_progress={'stage': 'checking_cache'})
-        missing = self.missing_cache_files(manifest['files'], remaining)
+        def cache_progress(checked, total):
+            """Persist acknowledged pages so reopening the UI retains real progress."""
+            self.store.update(self.identifier, upload_progress={
+                'stage': 'checking_cache', 'files_checked': checked, 'files_total': total})
+        missing = self.missing_cache_files(manifest['files'], remaining, progress=cache_progress)
         self.store.update(self.identifier, upload_progress={'stage': 'packing'})
         delta = self.directory / 'upload.tar.gz'
         # A stable gzip header preserves chunk hashes across retries.
@@ -264,14 +272,20 @@ class WorkerConnection:
         delta.chmod(0o600)
         self.store.update(self.identifier, transfer_input_bytes=delta.stat().st_size,
                           cached_files=sum(item['sha256'] not in missing for item in manifest['files']))
-        self.upload_archive(delta, timeout=remaining())
+        from vast_rsync import available as rsync_available, upload as rsync_upload
+        if rsync_available(self, remaining()):
+            rsync_upload(self, delta, timeout=remaining())
+        else:
+            self.upload_archive(delta, timeout=remaining())
         self.store.update(self.identifier, upload_progress={'stage': 'installing',
                           'bytes': delta.stat().st_size, 'total': delta.stat().st_size})
         self.operation('install', timeout=remaining())
 
-    def missing_cache_files(self, files: list[dict], remaining) -> set[str]:
+    def missing_cache_files(self, files: list[dict], remaining, *, progress=None) -> set[str]:
         """Check bounded manifest pages using the existing worker protocol."""
         missing = set()
+        if progress is not None:
+            progress(0, len(files))
         for offset in range(0, len(files), 1024):
             page = files[offset:offset + 1024]
             # Send only cache identity and size; paths are not needed by the worker.
@@ -287,6 +301,8 @@ class WorkerConnection:
                     or any(not isinstance(key, str) or key not in expected for key in keys)):
                 raise VastError('Invalid remote cache response', 422)
             missing.update(keys)
+            if progress is not None:
+                progress(offset + len(page), len(files))
         return missing
 
     def upload_archive(self, archive: Path, *, timeout: int, chunk_bytes: int = 2 * 1024**2) -> None:
@@ -444,6 +460,9 @@ class WorkerConnection:
         """Idempotently start the remote wrapper, which owns its optimizer group."""
         manifest = self.store.read(self.identifier, 'input/manifest.json')
         cache_times = manifest.get('public_market_cache_mtimes', {})
+        if not cache_times:
+            from vast_market_cache import stage_public_markets
+            stage_public_markets(self)
         if cache_times:
             if not isinstance(cache_times, dict) or set(cache_times) - {'binance', 'bybit'}:
                 raise VastError('Invalid public market cache metadata', 422)
@@ -469,6 +488,8 @@ class WorkerConnection:
                 ' os.utime(target,(stamp,stamp))\n'
             )
             self.command('/usr/local/bin/python -c ' + shlex.quote(script), timeout=30)
+        from vast_inception import stage_inception
+        stage_inception(self)
         self.command("mkdir -p " + self.remote_root + " && " + "PBGUI_WORKDIR=" + self.remote_root + " nohup " + WORKER + "run > " + self.remote_root + "/runner.log 2>&1 < /dev/null &", timeout=15)
 
     def collect(self, final: bool, timeout: int) -> Path:

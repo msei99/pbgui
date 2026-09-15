@@ -115,12 +115,12 @@ class VastClient:
             if state.get('account') != fingerprint:
                 state = {'account': fingerprint}
             now = time.time()
-            remaining = state.get('retry_at', 0) - now
-            if remaining > 0:
-                raise VastRateLimit(remaining, request_sent=False)
             listing = method == 'GET' and path == '/instances/'
             if listing and not fresh and 0 <= now - state.get('instances_at', 0) < INSTANCE_TTL and 'instances' in state:
                 return {'instances': state['instances']}
+            remaining = state.get('retry_at', 0) - now
+            if remaining > 0:
+                raise VastRateLimit(remaining, request_sent=False)
             try:
                 result = self._request(method, path, body)
             except VastRateLimit as exc:
@@ -135,7 +135,7 @@ class VastClient:
                 rows = result['instances']
                 if all(isinstance(row, dict) and type(row.get('id')) is int for row in rows):
                     state.update(instances=[{key: row[key] for key in fields if key in row} for row in rows], instances_at=time.time())
-            elif method != 'GET':
+            elif method != 'GET' and not (method == 'PUT' and path.startswith('/instances/request_logs/')):
                 state.pop('instances', None)
                 state.pop('instances_at', None)
             atomic_write_private_text(state_path, json.dumps(state, indent=4))

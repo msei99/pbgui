@@ -92,3 +92,23 @@ allowlisted for validating and managing existing immutable rental intents;
 creation payloads retain the image authorized in their intent. Existing rented
 containers are not upgraded by changing the local pin. No paid GPU performance
 test or deployment to an existing rental was performed for this wrapper update.
+
+## Published rsync transport image (2026-09-15)
+
+- Local review image: `pbgui-pb8-worker:rsync-review`
+- Image ID: `sha256:5934d691673e92721e01853c7743a12160f10700068fb1314fa06ec721059b6a`
+- Approved public tag: `ee2b7d4-queue-v3`.
+- Manifest: `sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc`.
+- Debian rsync package: `3.2.7-1+deb12u6`; protocol 32.
+- PB8 remains `ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8`.
+- Worker script SHA256 remains `53e06990e15785f246c93a3826160cc0b9614381554d207ba949859bc1bdd07a`.
+
+Built from a temporary context containing only Dockerfile.worker and cloud_worker.py.
+The additional layer installs Debian's rsync and libpopt0 packages, retains their
+license metadata and removes apt lists. No credentials, jobs, caches or user
+configuration are copied into the image. A network-disabled container check
+verified rsync, Python compilation and the unchanged PB8 revision. Publication
+was explicitly approved by the user. Anonymous manifest access and its SHA256
+were verified after publication; the manifest config digest matches the reviewed
+local image ID. PBGui now pins this digest for new rentals and retains queue-v1
+and queue-v2 digests for recovery and cleanup of existing rentals.

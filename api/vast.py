@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Literal
@@ -279,6 +280,7 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
                 from vast_provisioning_log import image_layer_progress
                 try:
                     with provider_log.open('rb') as stream:
+                        row['provider_log_fetched_at'] = os.fstat(stream.fileno()).st_mtime
                         text = stream.read(1024 * 1024).decode('utf-8', errors='replace')
                     row['image_progress'] = image_layer_progress(text, row.get('image_progress'))
                 except OSError:

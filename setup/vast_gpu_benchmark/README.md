@@ -8,7 +8,7 @@ The current integration is in **PB8 Optimize**, with Cloud setup in Queue and GP
 selection in the editor. Multiple jobs share one rental and cached market data.
 See the [user guide](../../docs/help/48_vast_gpu.md).
 
-Public image: `ghcr.io/msei99/pbgui-pb8-worker:ee2b7d4-queue-v2`.
+Public image: `ghcr.io/msei99/pbgui-pb8-worker:ee2b7d4-queue-v3` (includes rsync).
 PBGui pins its manifest digest; no registry token is needed to download it.
 The [image release review](../../docs/plans/vast-worker-image-release.md) records
 content/license checks and anonymous access validation. `Dockerfile.worker`

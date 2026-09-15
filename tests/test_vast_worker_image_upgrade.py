@@ -6,6 +6,12 @@ from vast_provider import VastError
 from tests.test_vast_jobs import job, Provider
 
 
+def test_creation_and_validation_use_same_image():
+    """The config preflight must accept the image selected for new rentals."""
+    from vast_config_validation import PROFILE_IMAGE
+    assert IMAGE == PROFILE_IMAGE
+
+
 @pytest.mark.parametrize('image', SUPPORTED_RENTAL_IMAGES)
 def test_known_image_keeps_intent_and_creation_image(job, image):
     """Recovery and creation retain the exact previously authorized image."""

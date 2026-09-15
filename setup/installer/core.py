@@ -44,6 +44,7 @@ TOTP_QR_END = "__PBGUI_TOTP_QR_END__"
 SAFE_INSTALL_PATH_RE = re.compile(r"^[A-Za-z0-9._~/-]+$")
 SAFE_GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 LOCAL_APT_PACKAGES = [
+    "rsync",
     "software-properties-common",
     "ca-certificates",
     "curl",
@@ -56,6 +57,7 @@ LOCAL_APT_PACKAGES = [
     "pkg-config",
 ]
 LOCAL_PREREQUISITE_COMMANDS = {
+    "rsync": "rsync",
     "git": "git",
     "curl": "curl",
     "gcc": "gcc/build-essential",
@@ -544,7 +546,7 @@ def _install_local_prerequisites(log: LogCallback, sudo_password: str = "") -> N
     except RuntimeError as exc:
         raise RuntimeError(
             "Could not install local prerequisites automatically. Run "
-            "sudo apt-get update && sudo apt-get install -y git curl build-essential pkg-config python3.12-venv "
+            "sudo apt-get update && sudo apt-get install -y git curl rsync build-essential pkg-config python3.12-venv "
             "and retry, or enter your local sudo password in the installer."
         ) from exc
 

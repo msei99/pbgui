@@ -299,7 +299,7 @@ Rent rechecks the selected offer directly by its contract ID; a general marketpl
 
 The GPU row and Details show Vast-reported TFLOPS. This compares compute capacity, not measured optimizer throughput; CPU validation and memory also affect run speed. Missing values show “TFLOPS unknown”.
 
-Cache availability is checked in pages of 1,024 files, so large multi-coin datasets do not need a single oversized SSH response. Up to two 2 MiB blocks upload concurrently. Progress combines both connections; only checksum-verified blocks count as completed. A permanent transfer failure cancels and joins the other connection; verified blocks remain reusable. This works with the existing worker image.
+On the legacy fallback for hosts without rsync, cache availability is checked in pages of 1,024 files, so large multi-coin datasets do not need a single oversized SSH response. Up to two 2 MiB blocks upload concurrently. Progress combines both connections; only checksum-verified blocks count as completed. A permanent transfer failure cancels and joins the other connection; verified blocks remain reusable. This works with the existing worker image.
 
 Automatic CPU selection uses the smaller of measured container capacity and the rented offer allocation, rounded down to whole workers (minimum one). For example, a host reporting 256 CPUs with a 21.3-core rental uses 21 exact workers. Invalid allocation data blocks startup.
 
@@ -309,7 +309,7 @@ The queue rental bar also provides **Start queue**. After starting, a reserved G
 
 If input preparation is interrupted by process shutdown, the job is marked failed when detected. Use **Requeue** to prepare it again; an existing rental can be reused.
 
-Upload status distinguishes cache checking, archive preparation, byte transfer, verification and installation. Byte percentages apply to verified transferred blocks, not cache checking or packaging. Opening the log again shows the persisted phase and available startup/optimizer log; before a log exists, a phase-specific waiting message is shown.
+The direct rsync upload distinguishes file preparation, synchronization and installation. Its progress counts logical file bytes processed by rsync, not measured network traffic. Legacy uploads without rsync retain cache checking, archive preparation and verified block transfer. Opening the log again shows the persisted phase and available startup/optimizer log; before a log exists, a phase-specific waiting message is shown.
 
 
 Upload speed and host network bandwidth both use **Mbps**; payload sizes remain **MB** (1 byte = 8 bits). During transfer, PBGui shows measured speed, advertised host download speed, the percentage reached, and both remaining-time estimates simultaneously. The host-rate estimate is theoretical: local uplink, route, SSH overhead and retries also limit throughput, so a low reached percentage does not prove inaccurate host specifications. Packaging, reconnects and verification do not show transfer estimates.
@@ -319,3 +319,15 @@ The **− / +** buttons beside **Budget / deadline** request 30-minute changes f
 GPU logs may repeat `chunks=2/2 candidates=1024/1024`: in Suite mode a candidate batch is screened separately for each scenario. `eta=0` refers to that dispatch, not the whole optimization. Exact/Pareto results arrive after the selected candidates complete their CPU evaluations; the first suite pass can therefore show GPU activity before any exact results.
 
 Multicoin GPU runtime need not scale linearly with coin count. Compare warm proxy profiles with the same coin set, scenarios and candidate count: `kernel_execution` isolates GPU computation from compilation and data transfer. A busy GPU alone does not establish normal host performance.
+
+Only the legacy fallback performs cache checking. It shows acknowledged files out of the total and its own percentage before byte transfer starts. This counter is retained when reopening the log; it is separate from upload progress.
+
+For queued bundles without public market snapshots, PBGui fetches fresh Binance/Bybit market metadata locally just before starting the remote optimizer. These describe instruments, not additional OHLCV candles. A failure to fetch or install this metadata prevents startup; PBGui does not substitute stale snapshots.
+
+Vast input uploads synchronize individual files directly with rsync when it is installed on PBGui and the worker. There is no preceding cache query, dataset rehash or large upload archive. Immutable data files have content-hash names; rsync uses name and size to skip identical data across jobs even if local timestamps differ. Changed transfers use rsync’s built-in integrity checks and atomic publication; interrupted files remain separate and are reused on retry. Job configuration and manifest are sent separately. Completed data is linked into the job input without another full read or copy. The initial total includes reusable files, so remaining-time estimates can overstate the transfer. After synchronization the transfer-cost estimate uses rsync-reported sent bytes, not the size of reused data; provider billing remains authoritative. This works with the published queue-v3 image through a PBGui-supplied SSH helper; no worker image replacement is needed. Older workers without rsync retain verified chunk uploads. Existing PBGui hosts can install rsync through their package manager; new installers include it. This does not guarantee the advertised host rate, which can still exceed your local uplink or route capacity.
+
+During image preparation, the animated bar indicates an unknown amount of work remaining, not measured byte progress. The elapsed time and completed layer counts are shown with the host log source (Vast Extra Debug Logs). Fetched records when PBGui retrieved that log snapshot, not when its last line was produced. Vast Instance Logs may report No such container until the image has been downloaded and the container created.
+
+Requeue immediately shows Preparing and disables repeated submission while the local input bundle is rebuilt. It queues the replacement without renting a GPU.
+
+Before optimizer launch, PBGui also fetches the authoritative first daily candle for every exported coin (including BTC) on each selected exchange. It sends the complete PB8 inception cache, including exchange-specific timestamps, resolved symbols and the resolver version. This prevents a region-blocked worker from trying to discover coin inception remotely. Minimum coin age is preserved; missing or incompatible metadata stops startup with an error. This also supports older queued bundles and needs no replacement worker image.

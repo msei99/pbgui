@@ -6,6 +6,10 @@ The page renders the exact same page template and visual configuration editor as
 
 PBGui keeps a short, bounded cache of PB8 templates and already validated config files. The first PB8 operation after an API restart may still initialize the isolated PB8 Python runtime; subsequent editor, queue, and start steps reuse canonical results while file-signature checks invalidate changed configs.
 
+## Scenario coin lists
+
+Scenario (suite) backtests require identical Long/Short approved and ignored coin lists. When exactly one side is disabled through zero positions or zero total wallet exposure, PBGui copies the active side's lists to the disabled side during save/queue preparation and again at launch for older queue entries. This does not enable that side. With two active sides, align the lists yourself; PBGui rejects conflicting lists instead of changing the trading universe. Runner exceptions appear in the job log and are also retained in the queue state file.
+
 ## Parameter tooltips
 
 Hover a parameter label to read the original explanation from the installed Passivbot documentation. The tooltip names its local source file; long descriptions can be scrolled by moving the pointer into the tooltip. The same parameter uses the same explanation in Run, Backtest, and Optimize, including nested bounds and optimizer overrides. Documentation is loaded locally without an internet request or a working Rust extension. PBGui-specific controls retain their own input hints; generic runtime placeholders are suppressed when upstream has no matching description.

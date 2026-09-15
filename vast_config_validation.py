@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 SERVICE = 'Vast'
-PROFILE_IMAGE = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743'
+PROFILE_IMAGE = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc'
 PROFILE_REVISION = 'ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8'
 _METRIC_CONTRACT = json.loads((Path(__file__).resolve().parent / 'setup/vast_gpu_benchmark/gpu_metric_contract.json').read_text())
 METRICS = frozenset(_METRIC_CONTRACT['allowed_metrics'])

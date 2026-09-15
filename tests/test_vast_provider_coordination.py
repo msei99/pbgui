@@ -9,6 +9,47 @@ import pytest
 import vast_provider as provider
 
 
+def test_log_requests_keep_instance_cache(monkeypatch):
+    """Reading either provider log must not force controllers to refetch instances."""
+    calls = []
+    def request(self, method, path, body=None):
+        """Record upstream activity without network access."""
+        calls.append((method, path))
+        return {'instances': [{'id': 1, 'actual_status': 'running'}]} if method == 'GET' else {'success': True}
+    monkeypatch.setattr(provider.VastClient, '_request', request)
+    client = provider.VastClient('test-key')
+    client.instances()
+    for body in ({'tail': '1000'}, {'tail': '1000', 'daemon_logs': 'true'}):
+        client.request('PUT', '/instances/request_logs/1/', body)
+        assert client.instances()[0]['actual_status'] == 'running'
+    assert len(calls) == 3
+
+
+def test_valid_cache_remains_readable_during_backoff(monkeypatch):
+    """Only unsent cache reads bypass cooldown; fresh or expired reads stay blocked."""
+    now = [1000.0]
+    monkeypatch.setattr(provider, 'time', SimpleNamespace(time=lambda: now[0]))
+    calls = []
+    def request(self, method, path, body=None):
+        """Cache one listing, then rate-limit an independent provider operation."""
+        calls.append(path)
+        if path != '/instances/':
+            raise provider.VastRateLimit(120, request_sent=True)
+        return {'instances': [{'id': 1}]}
+    monkeypatch.setattr(provider.VastClient, '_request', request)
+    client = provider.VastClient('test-key')
+    client.instances()
+    with pytest.raises(provider.VastRateLimit):
+        client.request('PUT', '/instances/request_logs/1/', {'tail': '1000'})
+    assert client.instances() == [{'id': 1}]
+    with pytest.raises(provider.VastRateLimit):
+        client.instances(fresh=True)
+    now[0] += provider.INSTANCE_TTL
+    with pytest.raises(provider.VastRateLimit):
+        client.instances()
+    assert len(calls) == 2
+
+
 def test_instances_share_cache_but_cleanup_reads_are_fresh(monkeypatch):
     """Concurrent controllers share a bounded snapshot; cleanup never reuses absence."""
     calls = []

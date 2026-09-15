@@ -231,6 +231,47 @@ def _managed_base_dir(name: str) -> str:
     return f"backtests/pbgui/{name}"
 
 
+def _normalize_suite_coin_lists(config: dict) -> bool:
+    """Align a disabled suite side without changing the active trading universe."""
+    if not config.get("backtest", {}).get("suite_enabled"):
+        return False
+    live = config.get("live", {})
+    bot = config.get("bot", {})
+
+    def disabled(side: str) -> bool:
+        """Require an explicit zero position count or exposure limit."""
+        values = bot.get(side, {})
+        risk = values.get("risk", values)
+        for key in ("n_positions", "total_wallet_exposure_limit"):
+            try:
+                if key in risk and float(risk[key]) == 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    disabled_sides = [side for side in ("long", "short") if disabled(side)]
+    changed = False
+    for field in ("approved_coins", "ignored_coins"):
+        lists = live.get(field)
+        if not isinstance(lists, dict):
+            continue
+        long = lists.get("long", [])
+        short = lists.get("short", [])
+        if long == short or (isinstance(long, list) and isinstance(short, list) and sorted(long) == sorted(short)):
+            continue
+        if len(disabled_sides) != 1:
+            raise HTTPException(status_code=422, detail=(
+                f"PB8 scenario backtests require identical live.{field}.long and live.{field}.short lists. "
+                "Automatic alignment is only possible when exactly one trading side is disabled."
+            ))
+        target = disabled_sides[0]
+        source = "short" if target == "long" else "long"
+        lists[target] = copy.deepcopy(lists.get(source, []))
+        changed = True
+    return changed
+
+
 def _normalize_config(config: dict, name: str) -> dict:
     candidate = copy.deepcopy(config)
     backtest = candidate.setdefault("backtest", {})
@@ -268,6 +309,7 @@ def _normalize_config(config: dict, name: str) -> dict:
             normalized_scenario["exchanges"] = retained
             filtered_scenarios.append(normalized_scenario)
         backtest["scenarios"] = filtered_scenarios
+    _normalize_suite_coin_lists(candidate)
     return candidate
 
 
@@ -1824,6 +1866,7 @@ class BacktestV8Worker:
                 launch_config = prepare_pb8_config(copy.deepcopy(base_snapshot), base_config_path=str(snapshot))
             else:
                 launch_config = load_pb8_config(snapshot)
+            suite_coins_changed = _normalize_suite_coin_lists(launch_config)
             cloud_paths_changed = _clear_cloud_dataset_paths(launch_config)
             settings = load_ini_section(_QUEUE_SETTINGS_SECTION)
             explicit_market_data = data.get("use_pbgui_market_data")
@@ -1839,7 +1882,7 @@ class BacktestV8Worker:
                     market_data_changed, market_data_path = _apply_pbgui_market_data_override(launch_config, True)
                 else:
                     market_data_changed, market_data_path = False, _get_pbgui_market_data_path()
-            if isinstance(base_snapshot, dict) or market_data_changed or cloud_paths_changed:
+            if isinstance(base_snapshot, dict) or market_data_changed or cloud_paths_changed or suite_coins_changed:
                 save_prepared_pb8_config(launch_config, snapshot)
             if cloud_paths_changed:
                 _log(SERVICE, f"Removed container-only dataset paths before local PB8 backtest {filename}", level="INFO")

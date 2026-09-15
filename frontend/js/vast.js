@@ -592,7 +592,8 @@
   function renderCloudDashboard(job) {
     if (!window.state || window.state.cloudLogId !== job.id) return;
     if (typeof renderOptimizeLogDashboard !== 'function') return;
-    renderOptimizeLogDashboard({name:job.config_name, phase:stopPhase(job) || job.status,
+    const uploadPhase = job.status === 'uploading' ? {preparing_files:'Preparing file synchronization', checking_cache:'Checking cache', packing:'Preparing transfer archive', installing:'Installing input data', verifying:'Verifying input data'}[job.upload_progress?.stage] : null;
+    renderOptimizeLogDashboard({name:job.config_name, phase:stopPhase(job) || uploadPhase || job.status,
       progress:{exact_evaluations:job.exact_completed || 0,target_exact_evaluations:job.iterations,
         proxy_evaluations:job.gpu_candidates || 0,percent:job.iterations ? 100*(job.exact_completed || 0)/job.iterations : 0},
       runtime:{backend:'gpu',algorithm:'Vast.ai',config_n_cpus:job.auto_cpu_workers && !job.cpu_allocation_resolved ? null : job.workers},
@@ -657,26 +658,48 @@
       }).finally(() => { billingPending = false; });
     }
     const imageProgress = job.image_progress;
-    if (job.status === 'provisioning' && imageProgress && imageProgress.total > 0) {
-      el('optlog-progress-fill').style.width = Math.max(0, Math.min(100, imageProgress.percent)) + '%';
-      el('optlog-progress-label').textContent = 'Image layers: ' + imageProgress.ready + '/' + imageProgress.total
-        + ' ready · ' + imageProgress.downloaded + '/' + imageProgress.total + ' downloaded'
-        + (imageProgress.ready === imageProgress.total ? ' · preparing worker' : '');
-      el('optlog-progress-label').dataset.tip = 'Progress by observed image layers, not bytes or remaining time. Layers differ in size. Download complete precedes extraction (Pull complete).';
+    el('optlog-progress-fill').classList.toggle('is-indeterminate', job.status === 'provisioning');
+    if (job.status === 'provisioning') {
+      const hasLayers = imageProgress && imageProgress.total > 0;
+      const phase = !hasLayers ? 'Preparing worker' : imageProgress.ready === imageProgress.total ? 'Starting worker'
+        : imageProgress.downloaded === imageProgress.total ? 'Extracting worker image' : 'Downloading worker image';
+      const now = Date.now() / 1000;
+      const started = job.dispatch_at || (worker && worker.id === job.lease_id ? worker.started_at : null);
+      const elapsed = started ? Math.max(0, Math.floor(now - started)) : null;
+      const fetched = Number(job.provider_log_fetched_at);
+      const age = fetched > 0 ? Math.max(0, Math.floor(now - fetched)) : null;
+      const duration = seconds => Math.floor(seconds / 60) + 'm ' + seconds % 60 + 's';
+      const detail = phase + (elapsed == null ? '' : ' · ' + duration(elapsed))
+        + (hasLayers ? ' · Layers: ' + imageProgress.downloaded + '/' + imageProgress.total + ' downloaded, '
+          + imageProgress.ready + '/' + imageProgress.total + ' ready' : '')
+        + (job.has_provider_log ? ' · Host log (Extra Debug Logs)' : ' · Waiting for host log')
+        + (age == null ? '' : ' · Fetched ' + duration(age) + ' ago');
+      el('optlog-progress-fill').style.width = '100%';
+      el('optlog-progress-label').textContent = detail;
+      el('optlog-progress-label').dataset.tip = 'Vast reports completed image layers, not downloaded bytes. The animated bar indicates an unquantified preparation phase, not measured data transfer. Fetch time records when PBGui retrieved this log, not when the host produced a new line. Instance Logs can say No such container while the image is still downloading; this host log is shown under Extra Debug Logs in Vast.';
+      el('optlog-activity').textContent = detail;
+      if (elapsed != null) el('optlog-elapsed').textContent = duration(elapsed);
     } else {
       delete el('optlog-progress-label').dataset.tip;
     }
     if (job.status === 'uploading') {
       const upload = job.upload_progress || {}, total = upload.total || job.transfer_input_bytes || job.input_bytes || 0;
-      const sent = upload.bytes;
-      const percent = total && sent != null ? Math.min(100, 100 * sent / total) : 0;
-      const stageLabel = {checking_cache:'Checking cached input data', packing:'Preparing transfer archive', installing:'Installing input data'}[upload.stage];
-      const label = upload.stage === 'verifying' ? 'Verifying input data' : upload.stage === 'reconnecting' ? 'Reconnecting upload (verified chunks retained)' : 'Uploading input';
+      const rsync = upload.transport === 'rsync';
+      const directFiles = rsync && upload.mode === 'files';
+      const verified = upload.bytes === total && total > 0;
+      const sent = rsync ? upload.transferred_bytes : upload.bytes;
+      const checkingCache = upload.stage === 'checking_cache';
+      const filesTotal = Number(upload.files_total), filesChecked = Number(upload.files_checked);
+      const fileProgress = checkingCache && Number.isInteger(filesTotal) && filesTotal >= 0 && Number.isInteger(filesChecked) && filesChecked >= 0 && filesChecked <= filesTotal;
+      const percent = checkingCache ? (fileProgress && filesTotal > 0 ? 100 * filesChecked / filesTotal : 0)
+        : total && sent != null ? Math.min(100, 100 * sent / total) : 0;
+      const stageLabel = {preparing_files:'Preparing file synchronization', checking_cache:'Checking cached input data', packing:'Preparing transfer archive', installing:'Installing input data', synchronized:'Input files synchronized'}[upload.stage];
+      const label = upload.stage === 'verifying' ? 'Verifying input data' : upload.stage === 'reconnecting' ? (rsync ? 'Reconnecting upload (partial data retained)' : 'Reconnecting upload (verified chunks retained)') : directFiles ? 'Synchronizing input files' : 'Uploading input';
       let eta = '', speed = '';
       const measured = Number(upload.bytes_per_second), network = Number(job.rental?.offer?.inet_down_mbps);
       const transferring = !stageLabel && upload.stage !== 'verifying' && upload.stage !== 'reconnecting';
       if (transferring) {
-        if (Number.isFinite(measured) && measured > 0) speed = ' · Upload: ' + fmt(measured * 8 / 1e6, 1) + ' Mbps';
+        if (Number.isFinite(measured) && measured > 0) speed = (directFiles ? ' · Rsync: ' : ' · Upload: ') + fmt(measured * 8 / 1e6, 1) + ' Mbps';
         if (Number.isFinite(network) && network > 0) {
           speed += ' · Host: ' + fmt(network, 0) + ' Mbps';
           if (Number.isFinite(measured) && measured > 0) speed += ' · ' + fmt(measured * 8 / 1e6 / network * 100, 1) + '% reached';
@@ -691,13 +714,16 @@
           if (Number.isFinite(network) && network > 0) eta += ' · Host-rate remaining (theoretical): ~' + duration(network * 1e6 / 8);
         }
       }
-      const detail = stageLabel || label + ' · ' + (sent != null ? fmt(sent / 1e6, 1) + ' / ' : '') + fmt(total / 1e6, 1) + ' MB'
-        + (sent != null ? ' verified (' + fmt(percent, 1) + '%)' : '')
+      const cacheDetail = fileProgress ? 'Checking cached input data · ' + filesChecked.toLocaleString('en-US') + ' / ' + filesTotal.toLocaleString('en-US') + ' files checked (' + fmt(percent, 1) + '%)' : '';
+      const detail = cacheDetail || stageLabel || label + ' · ' + (sent != null ? fmt(sent / 1e6, 1) + ' / ' : '') + fmt(total / 1e6, 1) + ' MB'
+        + (sent != null ? (directFiles ? ' processed (' : rsync && !verified ? ' transferred (' : ' verified (') + fmt(percent, 1) + '%)' : '')
         + (upload.in_flight_bytes > 0 ? ' · current block: ' + fmt(upload.in_flight_bytes / 1e6, 2) + ' MB received' : '')
         + speed + eta;
       el('optlog-progress-fill').style.width = percent + '%';
       el('optlog-progress-label').textContent = detail;
-      el('optlog-progress-label').dataset.tip = 'Progress counts checksum-verified blocks. Current block bytes are acknowledged by the receiver and may be retried. Speed is verified data per second during this attempt. Remaining time uses remaining verified bytes divided by measured speed and excludes final verification/install. The theoretical remaining time uses the rented host download Mbps and is shown alongside the measured estimate. 1 byte = 8 bits. Local uplink, network route, SSH overhead and retries can limit throughput; the reached percentage alone does not prove an inaccurate host claim.';
+      el('optlog-progress-label').dataset.tip = checkingCache ? 'Cache checking counts files acknowledged by the worker, before input transfer begins. Each confirmed page updates the counter; this is not uploaded bytes.' : 'Progress counts checksum-verified blocks. Current block bytes are acknowledged by the receiver and may be retried. Speed is verified data per second during this attempt. Remaining time uses remaining verified bytes divided by measured speed and excludes final verification/install. The theoretical remaining time uses the rented host download Mbps and is shown alongside the measured estimate. 1 byte = 8 bits. Local uplink, network route, SSH overhead and retries can limit throughput; the reached percentage alone does not prove an inaccurate host claim.';
+      if (rsync) el('optlog-progress-label').dataset.tip = 'Rsync resumes the partial archive over one SSH connection. Progress and estimated speed come from rsync, excluding the retained prefix; buffered data may still be in transit. The complete archive is SHA256-verified before installation. Remaining time excludes this final check and installation. Host-rate remaining uses advertised download Mbps and is theoretical; local uplink and routing also limit speed. 1 byte = 8 bits.';
+      if (directFiles) el('optlog-progress-label').dataset.tip = 'Rsync synchronizes individual immutable files over one SSH connection. Content-hash filenames and file sizes identify reusable data without reading it again. Partial files are retained separately and completed transfers are checked by rsync before publication. Progress reflects logical file bytes processed by rsync, not measured network traffic. The total includes reusable files, so remaining-time estimates can overstate the transfer. Host-rate remaining is theoretical. 1 byte = 8 bits.';
       el('optlog-activity').textContent = detail;
     }
     const rentalLog = worker && worker.has_provider_log && !['none','deletion_verified'].includes(worker.rental_state)
@@ -837,12 +863,31 @@
   };
   if (el('opted-execution')) window.PBGuiVast.openEditor(window.state.editorLastConfig);
   function closeLog() {
+    el('optlog-progress-fill')?.classList.remove('is-indeterminate');
     el('cloud-job-details').hidden = true;
     if (window.state) window.state.cloudLogId = null;
+  }
+  function showRequeuePending(identifier, pending) {
+    document.querySelectorAll('tr[data-cloud-id]').forEach(row => {
+      if (row.dataset.cloudId !== identifier) return;
+      row.setAttribute('aria-busy', String(pending));
+      row.querySelectorAll('button').forEach(button => {
+        if (['Requeue', 'Delete queue item'].includes(button.title)) button.disabled = pending || deletingJobs.has(identifier);
+      });
+      const badge = row.querySelector('.badge');
+      if (badge && pending) {
+        badge.dataset.beforeRequeue = badge.textContent;
+        badge.textContent = 'Preparing…';
+      } else if (badge && badge.dataset.beforeRequeue != null) {
+        badge.textContent = badge.dataset.beforeRequeue;
+        delete badge.dataset.beforeRequeue;
+      }
+    });
   }
   async function requeueCloudJob(job) {
     if (disposed || !job || requeuingJobs.has(job.id) || deletingJobs.has(job.id)) return;
     requeuingJobs.add(job.id); renderJob(); renderQueueOverview();
+    showRequeuePending(job.id, true);
     try {
       const replacement = await request('/jobs/' + encodeURIComponent(job.id) + '/requeue', {method:'POST'});
       await refreshJobs(replacement.id);
@@ -851,7 +896,11 @@
       if (!disposed) { message(error.message, true); await refreshJobs(); }
     } finally {
       requeuingJobs.delete(job.id);
-      if (!disposed) { renderJob(); renderQueueOverview(); }
+      if (!disposed) {
+        showRequeuePending(job.id, false);
+        renderJob(); renderQueueOverview();
+        if (typeof renderQueueMaybeDeferred === 'function') renderQueueMaybeDeferred();
+      }
     }
   }
   el('requeue-job').addEventListener('click', () => requeueCloudJob(selectedJob()));

@@ -478,6 +478,7 @@ def test_start_stages_public_cache_with_original_freshness(job, monkeypatch, age
             exec(shlex.split(value)[2], {})
         return b''
     monkeypatch.setattr(connection, 'command', command)
+    monkeypatch.setattr('vast_inception.stage_inception', lambda connection: None)
     if not valid:
         with pytest.raises(VastError, match='expired'):
             connection.start()

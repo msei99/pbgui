@@ -289,3 +289,30 @@ def test_cancelled_ssh_command_kills_and_joins_child(tmp_path, monkeypatch):
     assert len(children) == 1
     assert children[0].poll() is not None
     assert children[0].stdout.closed and children[0].stderr.closed
+
+
+@pytest.mark.parametrize('fail_second_page', [False, True])
+def test_cache_progress_counts_only_acknowledged_files(fail_second_page):
+    """Pending/invalid pages cannot advance the visible cache-check counter."""
+    files = [{'sha256': f'{i:064x}', 'bytes': 4} for i in range(2050)]
+    connection = object.__new__(WorkerConnection)
+    connection.remote_root = '/unused'
+    reports, pages = [], []
+    def command(cmd, *, stdin, **kwargs):
+        """Record page payloads locally without SSH."""
+        import json
+        pages.append(json.loads(stdin.read()))
+        assert reports[-1] == ((len(pages) - 1) * 1024, len(files))
+    def operation(*args, **kwargs):
+        """Return valid hashes except the deliberately unconfirmed second page."""
+        if fail_second_page and len(pages) == 2:
+            return {'missing': ['f' * 64]}
+        return {'missing': [item['sha256'] for item in pages[-1]['files']]}
+    connection.command, connection.operation = command, operation
+    if fail_second_page:
+        with pytest.raises(VastError, match='Invalid remote cache'):
+            connection.missing_cache_files(files, lambda: 30, progress=lambda *values: reports.append(values))
+        assert reports == [(0, 2050), (1024, 2050)]
+    else:
+        connection.missing_cache_files(files, lambda: 30, progress=lambda *values: reports.append(values))
+        assert reports == [(0, 2050), (1024, 2050), (2048, 2050), (2050, 2050)]

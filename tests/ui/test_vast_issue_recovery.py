@@ -449,3 +449,91 @@ def test_old_worker_deadline_controls_are_disabled(cloud_page):
     controls = page.get_by_role('button', name='Requires an updated worker deadline guard', exact=True)
     assert controls.count() == 2
     assert controls.nth(0).is_disabled() and controls.nth(1).is_disabled()
+
+
+def test_cache_check_counter_survives_log_reopen(cloud_page):
+    """File progress is separate from transfer bytes and restored on reopening."""
+    page, data, _, _, _ = cloud_page
+    data['jobs'][0].update(status='uploading', upload_progress=dict(
+        stage='checking_cache', files_checked=1024, files_total=2048,
+        bytes=90, total=100))
+    for _ in range(2):
+        page.reload()
+        page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+        page.locator('[title="Open log"]').click()
+        label = page.locator('#optlog-progress-label').inner_text()
+        assert '1,024 / 2,048 files checked (50.0%)' in label
+        assert 'MB' not in label and 'remaining' not in label
+        assert page.locator('#optlog-progress-fill').evaluate('(el) => el.style.width') == '50%'
+
+
+def test_rsync_progress_survives_log_reopen(cloud_page):
+    """Rsync bytes remain visible without being mislabeled as checksum verified."""
+    page, data, _, _, _ = cloud_page
+    data['jobs'][0].update(status='uploading', upload_progress=dict(
+        transport='rsync', stage='sending', bytes=0, transferred_bytes=50_000_000,
+        total=100_000_000, bytes_per_second=1_000_000))
+    for _ in range(2):
+        page.reload()
+        page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+        page.locator('[title="Open log"]').click()
+        label = page.locator('#optlog-progress-label').inner_text()
+        assert '50.0 / 100.0 MB transferred (50.0%)' in label
+        assert 'verified' not in label
+        assert 'Upload: 8.0 Mbps' in label
+        assert page.locator('#optlog-progress-fill').evaluate('(el) => el.style.width') == '50%'
+
+
+def test_image_preparation_shows_source_and_fetch_age(cloud_page):
+    """A zero-layer snapshot is a timed preparation phase, not a false byte percentage."""
+    page, data, _, _, _ = cloud_page
+    now = page.evaluate('Date.now() / 1000')
+    data['jobs'][0].update(status='provisioning', has_provider_log=True,
+        dispatch_at=now-180, provider_log_fetched_at=now-20,
+        image_progress=dict(total=27, ready=0, downloaded=0, percent=0))
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    text = page.locator('#optlog-progress-label').inner_text()
+    assert 'Downloading worker image · 3m ' in text
+    assert 'Host log (Extra Debug Logs)' in text
+    assert 'Fetched 0m ' in text and '%' not in text
+    assert page.locator('#optlog-progress-fill').evaluate('(el) => el.classList.contains("is-indeterminate")')
+    page.evaluate('PBGuiVast.closeLog()')
+    assert not page.locator('#optlog-progress-fill').evaluate('(el) => el.classList.contains("is-indeterminate")')
+
+
+def test_requeue_acknowledges_click_before_poll_or_redraw(cloud_page):
+    """Immediate feedback must not depend on the table's deferred polling render."""
+    page, data, calls, overrides, held = cloud_page
+    path = '/api/vast/jobs/' + 'a'*32 + '/requeue'
+    overrides[path] = 'hold'
+    page.evaluate('window.renderQueueMaybeDeferred=()=>{}')
+    page.locator('[title="Requeue"]').click()
+    assert page.locator('#rows .badge').inner_text() == 'Preparing…'
+    assert page.locator('[title="Requeue"]').is_disabled()
+    assert page.locator('[title="Delete queue item"]').is_disabled()
+    page.locator('[title="Requeue"]').evaluate('(el)=>{el.click();el.click()}')
+    assert sum(url.endswith('/requeue') for method, url in calls) == 1
+    page.wait_for_timeout(50)
+    held.pop().fulfill(status=500, json={'detail':'Preparation failed'})
+    page.wait_for_function("!document.querySelector('[title=\"Requeue\"]').disabled")
+    assert page.locator('#rows .badge').inner_text() != 'Preparing…'
+
+
+def test_direct_file_sync_progress_survives_reopen(cloud_page):
+    """Direct synchronization stays distinct from cache scans and archive uploads."""
+    page, data, _, _, _ = cloud_page
+    data['jobs'][0].update(status='uploading', upload_progress=dict(
+        transport='rsync', mode='files', stage='sending', bytes=0,
+        transferred_bytes=50_000_000, total=100_000_000, bytes_per_second=1_000_000))
+    for _ in range(2):
+        page.reload()
+        page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+        page.locator('[title="Open log"]').click()
+        label = page.locator('#optlog-progress-label').inner_text()
+        assert 'Synchronizing input files' in label
+        assert '50.0 / 100.0 MB processed (50.0%)' in label
+        assert 'Rsync: 8.0 Mbps' in label
+        assert 'files checked' not in label and 'verified' not in label
+        assert 'not measured network traffic' in page.locator('#optlog-progress-label').get_attribute('data-tip')

@@ -409,6 +409,30 @@ def test_stop_request_survives_job_polling(tmp_path, monkeypatch):
     assert row['stop_requested'] is True
 
 
+def test_provider_log_fetch_time_is_file_snapshot_time(tmp_path, monkeypatch):
+    """API polling must not make an older downloaded log appear freshly retrieved."""
+    import os
+    from fastapi import Response
+    from vast_jobs import JobStore, write_json
+    from vast_queue import CloudQueue
+    from secure_files import ensure_private_directory
+    store = JobStore(tmp_path / 'queue')
+    identifier = 'a' * 32
+    directory = ensure_private_directory(store.root / 'jobs' / identifier)
+    write_json(directory / 'state.json', {'id': identifier, 'status': 'provisioning', 'rental_state': 'none'})
+    log_root = ensure_private_directory(tmp_path / 'logs')
+    path = log_root / ('vast_' + identifier + '_provider.log')
+    path.write_text('aaaaaaaaaaaa: Pulling fs layer\n')
+    os.utime(path, (1000, 1000))
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: CloudQueue(store))
+    monkeypatch.setattr(vast, 'CLOUD_LOG_ROOT', log_root)
+    monkeypatch.setattr(vast, 'services_available', lambda: False)
+    for _ in range(2):
+        row = vast.jobs(Response(), None)['jobs'][0]
+        assert row['provider_log_fetched_at'] == 1000
+        assert row['image_progress']['downloaded'] == 0
+
+
 @pytest.mark.parametrize('status', [401, 403, 429, 503])
 def test_vast_domain_errors_are_distinct_from_browser_auth(client, monkeypatch, status):
     """Preserve provider status while explicitly identifying authenticated domain errors."""

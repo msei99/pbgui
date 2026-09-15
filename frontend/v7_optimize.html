@@ -1973,6 +1973,21 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
   transition: width .2s ease;
 }
 
+.optlog-progress-fill.is-indeterminate {
+  background: repeating-linear-gradient(110deg, var(--accent) 0 12px, transparent 12px 24px);
+  background-size: 52px 100%;
+  opacity: .55;
+  animation: optlog-preparing 1.4s linear infinite;
+}
+
+@keyframes optlog-preparing {
+  to { background-position: 52px 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .optlog-progress-fill.is-indeterminate { animation: none; }
+}
+
 .optlog-progress-meta {
   display: flex;
   justify-content: space-between;
@@ -15163,6 +15178,6 @@ window.PBGUI_NAV_CONFIG = {
 
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
-<script src="/app/js/vast.js?v=58"></script>
+<script src="/app/js/vast.js?v=63"></script>
 </body>
 </html>

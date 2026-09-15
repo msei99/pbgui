@@ -17,7 +17,7 @@ if apt-cache policy python3.12-venv | grep -Eq 'Candidate:\s+\(none\)'; then
 fi
 
 # Install git, python3.12-venv, rclone, rustc and cargo
-sudo apt install git python3.12-venv rclone rustc cargo sshpass -y
+sudo apt install git python3.12-venv rclone rsync rustc cargo sshpass -y
 sudo apt install rustup -y
 
 # Update rust

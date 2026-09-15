@@ -2,4 +2,6 @@
 FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88
 LABEL org.opencontainers.image.title="PBGui PB8 GPU Worker"
 LABEL org.opencontainers.image.source="https://github.com/msei99/pbgui"
+RUN apt-get update && apt-get install -y --no-install-recommends rsync \
+    && rm -rf /var/lib/apt/lists/*
 COPY cloud_worker.py /opt/pbgui/worker.py

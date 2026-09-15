@@ -171,7 +171,7 @@ info "Installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
 APT_OPTS=(-o Dpkg::Use-Pty=0 -o APT::Color=0)
 apt-get "${APT_OPTS[@]}" update
-apt-get "${APT_OPTS[@]}" install -y software-properties-common sudo curl ca-certificates git ufw openvpn easy-rsa qrencode libpam-google-authenticator oathtool python3 python3-pip gcc build-essential pkg-config sshpass
+apt-get "${APT_OPTS[@]}" install -y software-properties-common sudo curl ca-certificates git ufw openvpn easy-rsa qrencode libpam-google-authenticator oathtool python3 python3-pip gcc build-essential pkg-config sshpass rsync
 if apt-cache policy python3.12-venv | grep -Eq 'Candidate:\s+\(none\)'; then
   add-apt-repository ppa:deadsnakes/ppa -y
   apt-get "${APT_OPTS[@]}" update

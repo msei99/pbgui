@@ -8,12 +8,16 @@ import json
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 
 import psutil
 
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from secure_files import atomic_write_private_text
+from logging_helpers import human_log as _log, _redact_text
+
+SERVICE = "BacktestsV8"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,10 +55,22 @@ def main(argv: list[str] | None = None) -> int:
                 returncode = int(result) if isinstance(result, int) else 0
             except SystemExit as exc:
                 returncode = int(exc.code) if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+                if returncode:
+                    error = f"SystemExit: {exc.code}"
         finally:
             sys.argv = previous_argv
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
+        detail = _redact_text(traceback.format_exc())
+        sys.stderr.write(detail + "\n")
+        sys.stderr.flush()
+        _log(SERVICE, error, level="ERROR", meta={"traceback": detail})
+    if returncode and not error:
+        error = f"PB8 backtest exited with code {returncode}"
+    if error:
+        error = _redact_text(error)
+        sys.stderr.write(f"[BacktestsV8] [ERROR] {error}\n")
+        sys.stderr.flush()
     payload = {
         "started_at": started_at,
         "completed_at": time.time(),
