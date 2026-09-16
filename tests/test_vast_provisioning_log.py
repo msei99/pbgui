@@ -5,6 +5,32 @@ import pytest
 import vast_provisioning_log as logs
 
 
+def test_manifest_weighted_progress_preserves_rolling_tail():
+    """Large completed layers outweigh tiny ones; rolling logs preserve completion."""
+    from vast_image_layers import IMAGE_LAYERS
+    image, sizes = next(iter(IMAGE_LAYERS.items()))
+    progress = logs.image_layer_progress('ea381c80ad7f: Download complete\n02a27392fe49: Already exists', image=image)
+    assert progress['total'] == 27
+    assert progress['completed_bytes'] == 820822233 + 250
+    assert progress['total_bytes'] == sum(sizes.values())
+    assert progress['download_percent'] == pytest.approx(100 * (820822233 + 250) / sum(sizes.values()))
+    assert progress['ready'] == 1
+    later = logs.image_layer_progress('ea381c80ad7f: Pull complete\nffffffffffff: Pull complete', progress, image=image)
+    assert later['completed_bytes'] == progress['completed_bytes']
+    assert later['ready'] == 2
+    assert 'completed_bytes' not in logs.image_layer_progress('', later, image='unknown')
+
+
+def test_manifest_complete_download_is_not_ready():
+    """All compressed bytes can be available while layers still need extraction."""
+    from vast_image_layers import IMAGE_LAYERS
+    image, sizes = next(iter(IMAGE_LAYERS.items()))
+    text = '\n'.join(f'{key}: Download complete' for key in sizes)
+    progress = logs.image_layer_progress(text, image=image)
+    assert progress['download_percent'] == 100
+    assert progress['ready'] == 0
+
+
 @pytest.mark.parametrize('url,allowed', [('https://s3.amazonaws.com/vast.ai/instance_logs/abc.log', True), ('https://s3.amazonaws.com/public.vast.ai/instance_logs/abc.log', True), ('http://127.0.0.1/private', False)])
 def test_provider_log_download_is_bounded_and_throttled(tmp_path, monkeypatch, url, allowed):
     """Only the provider log bucket may be fetched; repeated polls use a cooldown."""

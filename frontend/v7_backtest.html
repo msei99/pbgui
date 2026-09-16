@@ -6268,7 +6268,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
       (hasColumn('final_equity') ? '\x3Ctd>' + fmt(r.final_equity, 0) + '\x3C/td>' : '') +
       (hasColumn('balance_equity_diff') ? '\x3Ctd>' + fmt(r.balance_equity_diff, 4) + '\x3C/td>' : '') +
       (hasColumn('twe') ? '\x3Ctd>' + fmt(r.twe_long, 2) + ' / ' + fmt(r.twe_short, 2) + '\x3C/td>' : '') +
-      (hasColumn('pos') ? '\x3Ctd>' + fmt(r.pos_long, 0) + ' / ' + fmt(r.pos_short, 0) + '\x3C/td>' : '') +
+      (hasColumn('pos') ? '\x3Ctd>' + (r.pos_long === 0 || r.twe_long === 0 ? '-' : fmt(r.pos_long, 0)) + ' / ' + (r.pos_short === 0 || r.twe_short === 0 ? '-' : fmt(r.pos_short, 0)) + '\x3C/td>' : '') +
       '\x3Ctd class="actions-cell" onclick="event.stopPropagation()">' +
         '\x3Cbutton class="icon-btn" data-action="view" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Balance &amp; Equity, PnL, Drawdown, WE charts">👁\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="analysis" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Analysis JSON">🔬\x3C/button>' +

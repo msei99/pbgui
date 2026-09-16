@@ -22,6 +22,22 @@ SERVICE = "VastRunner"
 _PROGRESS = re.compile(rb"^\s*([\d,]+)\s+\d+%\s")
 
 
+def _safe_rsync_diagnostic(diagnostic: str) -> str:
+    """Turn rsync's untrusted stderr into a short public failure category."""
+    categories = (
+        ('permission denied', 'authentication or permission denied'),
+        ('host key verification failed', 'host identity verification failed'),
+        ('no space left', 'remote disk full'),
+        ('connection timed out', 'connection timed out'),
+        ('connection reset', 'connection reset by peer'),
+        ('broken pipe', 'connection interrupted'),
+        ('connection refused', 'connection refused'),
+        ('could not resolve', 'hostname resolution failed'),
+    )
+    return next((label for token, label in categories if token in diagnostic),
+                'remote rsync or SSH operation failed')
+
+
 def available(connection, timeout):
     """Retain the old transport only when either endpoint lacks rsync."""
     if shutil.which('rsync') is None:
@@ -177,7 +193,8 @@ def upload(connection, archive: Path, *, timeout: int):
             'permission denied', 'host key verification failed', 'no space left',
             'command not found', 'unknown option'))
         if permanent or code not in {10, 12, 30, 35, 255} or attempt == 2:
-            raise VastError('Rsync upload failed (exit ' + str(code) + '); partial archive retained',
+            raise VastError('Rsync upload failed: ' + _safe_rsync_diagnostic(diagnostic)
+                            + ' (exit ' + str(code) + '); partial archive retained',
                             422 if permanent else 502)
         report(offset, stage='reconnecting')
         human_log(SERVICE, 'Rsync connection interrupted; resuming partial input archive', level='WARNING')
@@ -222,16 +239,34 @@ def sync_files(connection, config_root: Path, *, timeout: int):
             raise VastError('Rsync synchronization deadline reached; partial files retained')
         return seconds
 
+    def report(count, rate=0, stage='sending'):
+        """Persist sender work; skipped-file savings are known at completion."""
+        connection.store.update(identifier, upload_progress={
+            'transport': 'rsync', 'mode': 'files', 'stage': stage,
+            'bytes': 0, 'transferred_bytes': count, 'total': total,
+            'bytes_per_second': rate})
+
     def worker_step(action):
-        """Execute the shipped compatibility helper over the pinned SSH channel."""
-        with tempfile.TemporaryFile() as stream:
-            if action == 'prepare':
-                stream.write(json.dumps({name: safe_path(config_root, name).read_text()
-                                         for name in ('manifest.json', 'optimize.json')}).encode())
-            stream.seek(0)
-            return connection.command('PBGUI_WORKDIR=' + root + ' /usr/local/bin/python -c '
-                                      + shlex.quote(helper.decode()) + ' ' + action,
-                                      stdin=stream, timeout=remaining())
+        """Retry idempotent remote preparation/publication without spending an upload attempt."""
+        payload = (json.dumps({name: safe_path(config_root, name).read_text()
+                              for name in ('manifest.json', 'optimize.json')}).encode()
+                   if action == 'prepare' else None)
+        for attempt in range(3):
+            try:
+                with tempfile.TemporaryFile() as stream:
+                    if payload is not None:
+                        stream.write(payload)
+                    stream.seek(0)
+                    return connection.command('PBGUI_WORKDIR=' + root + ' /usr/local/bin/python -c '
+                                              + shlex.quote(helper.decode()) + ' ' + action,
+                                              stdin=stream, timeout=remaining())
+            except VastError as exc:
+                if exc.status == 422 or attempt == 2:
+                    raise VastError('Worker input ' + action + ' failed after '
+                                    + str(attempt + 1) + ' SSH attempts: ' + str(exc), exc.status) from None
+                report(0, stage='reconnecting')
+                human_log(SERVICE, 'Worker input ' + action + ' interrupted; retrying pinned SSH operation '
+                     + str(attempt + 2) + '/3', level='WARNING')
 
     connection.store.update(identifier, upload_progress={
         'transport': 'rsync', 'mode': 'files', 'stage': 'preparing_files'})
@@ -271,13 +306,6 @@ def sync_files(connection, config_root: Path, *, timeout: int):
         worker_step('prepare')
         connection.store.update(identifier, transfer_input_bytes=total)
 
-        def report(count, rate=0, stage='sending'):
-            """Persist sender work; skipped-file savings are known at completion."""
-            connection.store.update(identifier, upload_progress={
-                'transport': 'rsync', 'mode': 'files', 'stage': stage,
-                'bytes': 0, 'transferred_bytes': count, 'total': total,
-                'bytes_per_second': rate})
-
         host = '[' + connection.host + ']' if ':' in connection.host else connection.host
         args = ['rsync', '--recursive', '--times', '--size-only', '--protect-args', '--stats',
                 '--partial-dir=.rsync-partial', '--compress', '--info=progress2',
@@ -302,7 +330,8 @@ def sync_files(connection, config_root: Path, *, timeout: int):
                 'permission denied', 'host key verification failed', 'no space left',
                 'command not found', 'unknown option'))
             if permanent or code not in {10, 12, 30, 35, 255} or attempt == 2:
-                raise VastError('Rsync file synchronization failed (exit ' + str(code)
+                raise VastError('Rsync file synchronization failed: ' + _safe_rsync_diagnostic(diagnostic)
+                                + ' (exit ' + str(code)
                                 + '); partial files retained', 422 if permanent else 502)
             report(0, stage='reconnecting')
             human_log(SERVICE, 'Rsync connection interrupted; reusing completed and partial input files', level='WARNING')

@@ -1,5 +1,15 @@
 # PBv8 Optimize
 
+**Settings → Performance History** bewahrt Vast-Durchsatz und Aufgabenmerkmale nach dem Entfernen aus der Queue auf. Wähle gleiche Aufgaben für Geschwindigkeitsvergleiche; Details im [Vast-GPU-Guide](48_vast_gpu.md#performance-history).
+
+Die Cloud-CPU-Mindestleistung stellst du unter **Min CPU cores** in den Vast Settings ein; Cloud Auto nutzt die gemietete Zuteilung. Manuelles Rent übernimmt die Eigenschaften des ausgewählten Angebots. Später hinzugefügte Jobs können eine bestätigte Umschichtung von Mietzeit in Transferreserve innerhalb desselben Budgets auslösen. Fehler beim Abruf des Optimizer-Logs verhindern Stop und Ergebnissicherung nicht mehr.
+
+Vast-Uploads dürfen sich bei vorübergehenden Verbindungsfehlern bis zu 15 Minuten ohne neuen Transferfortschritt erholen. Zwischen Versuchen liegen 15/30/60 Sekunden; Teildaten bleiben erhalten. Das Log zeigt den Retry-Status. Nach erfolgreicher Worker-Health-Prüfung verkürzt der vorherige Setup-Timer die Upload-Zeit nicht mehr; Mietfrist und Reserve für Ergebnissicherung gelten weiterhin.
+
+Die Vast-Angebotssuche zeigt **Previously used**, **Working** und **Preferred** an. Mit **Prefer host** in den Angebotsdetails oder der Host-Karte einer Miete bevorzugst du den Rechner innerhalb deiner bestehenden Grenzen. Präferenzen und manuelle Working-Markierungen verwaltest du unter **Settings → Known & preferred hosts**. Gesperrte Hosts bleiben ausgeschlossen.
+
+Bei Vast-Mieten schließt **Block host** in der Host-Karte des Logs den Rechner von zukünftigen Angeboten und Mieten aus. Unter **Settings → Blocked hosts** kannst du Sperren verwalten und aufheben. Die laufende Miete bleibt dabei bestehen; **End rental** ist eine separate Aktion. Details stehen im Vast-GPU-Guide.
+
 PBv8 Optimize verwaltet Passivbot-V8-Optimizer-Configs, Queue-Jobs, Ergebnisse und Pareto-Kandidaten getrennt von PBv7. Die Seite verwendet dieselbe Vorlage, dieselben Panels und denselben visuellen Editor wie PBv7 Optimize. Ein Versionsadapter uebersetzt nur PB8-API-Pfade und das verschachtelte Config-Modell; es gibt keine separate PB8-Optimizer-Oberflaeche.
 
 Wenn PB8 nach einer unvollstaendigen Installation oder Aktualisierung nicht verfuegbar ist, erscheint oberhalb der Arbeitsflaeche dauerhaft **PB8 update required** mit dem Runtime-Fehler und einem Link zum VPS Manager. Die Seite bleibt fuer die Diagnose nutzbar, statt den Hinweis nur als kurzlebige Benachrichtigung zu zeigen.

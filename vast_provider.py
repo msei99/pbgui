@@ -190,12 +190,14 @@ class VastClient:
         }
 
     def offers(self, *, max_price: float = 1, min_vram: float = 12,
-               min_ram: float = 16, min_cpu: float = 4, disk_gb: int = 40,
+               min_ram: float = 16, min_cpu: float = 4, min_tflops: float = 0, disk_gb: int = 40,
                verified_only: bool = True, gpu_name: str = "", offer_id: int | None = None,
-               min_cuda: float = 0, min_duration: float = 0) -> list[dict]:
+               min_cuda: float = 0, min_duration: float = 0,
+               excluded_machine_ids: list[int] | None = None,
+               included_machine_ids: list[int] | None = None) -> list[dict]:
         """Search a bounded page of single-GPU on-demand offers."""
-        values = [number(x) for x in (max_price, min_vram, min_ram, min_cpu, disk_gb, min_cuda, min_duration)]
-        if any(x is None for x in values) or not (0 < max_price <= 100 and 1 <= disk_gb <= 2000):
+        values = [number(x) for x in (max_price, min_vram, min_ram, min_cpu, min_tflops, disk_gb, min_cuda, min_duration)]
+        if any(x is None for x in values) or not (0 < max_price <= 100 and min_tflops >= 0 and 1 <= disk_gb <= 2000):
             raise VastError("Invalid GPU search limits", 422)
         query = {"rentable": {"eq": True}, "rented": {"eq": False}, "gpu_arch": {"eq": "nvidia"},
                  "num_gpus": {"eq": 1}, "gpu_ram": {"gte": min_vram * 1024},
@@ -203,6 +205,16 @@ class VastClient:
                  "dph_total": {"lte": max_price}, "disk_space": {"gte": disk_gb},
                  "type": "on-demand", "allocated_storage": disk_gb,
                  "order": [["dph_total", "asc"]], "limit": 100}
+        excluded = {positive_id(value) for value in (excluded_machine_ids or [])}
+        included = None if included_machine_ids is None else {positive_id(value) for value in included_machine_ids} - excluded
+        if included is not None:
+            if not included:
+                return []
+            query['machine_id'] = {'in': sorted(included)}
+        elif excluded:
+            query['machine_id'] = {'notin': sorted(excluded)}
+        if min_tflops:
+            query["total_flops"] = {"gte": min_tflops}
         if min_cuda:
             query["cuda_max_good"] = {"gte": min_cuda}
         if min_duration:
@@ -230,6 +242,13 @@ class VastClient:
         for row in rows[:100]:
             if not isinstance(row, dict) or type(row.get("id")) is not int:
                 continue
+            machine_id = row.get('machine_id')
+            if type(machine_id) is not int or machine_id <= 0:
+                machine_id = None
+            if excluded and (machine_id is None or machine_id in excluded):
+                continue
+            if included is not None and machine_id not in included:
+                continue
             price = number(row.get("dph_total"))
             if price is None or price > max_price:
                 continue
@@ -241,15 +260,19 @@ class VastClient:
                 continue
             if min_duration and duration is not None and duration < min_duration:
                 continue
+            tflops = number(row.get("total_flops"))
+            if min_tflops and (tflops is None or tflops < min_tflops):
+                continue
             output.append({
                 "id": positive_id(row["id"]), "gpu_name": public_text(row.get("gpu_name")),
+                "machine_id": machine_id,
                 "num_gpus": number(row.get("num_gpus")),
                 "vram_gb": (number(row.get("gpu_ram")) or 0) / 1024,
                 "ram_gb": (number(row.get("cpu_ram")) or 0) / 1024,
                 "cpu_cores": number(row.get("cpu_cores_effective")),
                 "cpu_name": public_text(row.get("cpu_name")),
                 "gpu_mem_bw_gbps": number(row.get("gpu_mem_bw")),
-                "tflops": number(row.get("total_flops")),
+                "tflops": tflops,
                 "pci_gen": number(row.get("pci_gen")),
                 "gpu_lanes": number(row.get("gpu_lanes")),
                 "pcie_bw_gbps": number(row.get("pcie_bw")),

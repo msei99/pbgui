@@ -74,7 +74,7 @@ def _missing_log(text):
         r"|Error response from daemon: No such container: C\.\d+)", text.strip()))
 
 
-def image_layer_progress(text, previous=None):
+def image_layer_progress(text, previous=None, *, image=None):
     """Count observed Docker layers, preserving completion across rolling log tails."""
     layers = dict((previous or {}).get('layers') or {})
     ranks = {'Pulling fs layer': 0, 'Waiting': 0, 'Verifying Checksum': 1,
@@ -87,6 +87,24 @@ def image_layer_progress(text, previous=None):
     if not layers:
         return None
     ready = sum(rank == 3 for rank in layers.values())
-    return {'layers': layers, 'total': len(layers), 'ready': ready,
+    result = {'layers': layers, 'total': len(layers), 'ready': ready,
             'downloaded': sum(rank >= 2 for rank in layers.values()),
             'percent': 100 * ready / len(layers)}
+    from vast_image_layers import IMAGE_LAYERS
+    sizes = IMAGE_LAYERS.get(image)
+    if sizes:
+        # Wrapper layers in host logs are excluded from the pinned image totals.
+        known = {}
+        for digest, rank in layers.items():
+            prefix = digest[:12]
+            if prefix in sizes:
+                known[prefix] = max(rank, known.get(prefix, 0))
+        total_bytes = sum(sizes.values())
+        completed_bytes = sum(sizes[key] for key, rank in known.items() if rank >= 2)
+        result.update(total=len(sizes), ready=sum(rank == 3 for rank in known.values()),
+                      downloaded=sum(rank >= 2 for rank in known.values()),
+                      total_bytes=total_bytes, completed_bytes=completed_bytes,
+                      download_percent=100 * completed_bytes / total_bytes,
+                      bytes_basis='completed_layers_including_cache')
+        result['percent'] = 100 * result['ready'] / result['total']
+    return result

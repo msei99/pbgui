@@ -114,6 +114,26 @@ def test_direct_sync_reuses_data_across_jobs_and_updates_same_size_changes(sync_
     assert (published / manifest['files'][0]['path']).read_bytes() == content[0]
 
 
+def test_direct_sync_retries_transient_worker_prepare_without_spending_upload_attempt(sync_transfer):
+    """A short SSH loss before rsync is retried inside the one upload operation."""
+    connection, source, _, reports, *_ = sync_transfer
+    prepare_input(source, [b'data'])
+    command = connection.command
+    attempts = [0]
+
+    def flaky(value, **kwargs):
+        """Drop exactly the first remote preparation command."""
+        if value.endswith(' prepare') and attempts[0] == 0:
+            attempts[0] += 1
+            raise VastError('SSH worker operation failed: connection timed out')
+        return command(value, **kwargs)
+
+    connection.command = flaky
+    vast_rsync.sync_files(connection, source, timeout=20)
+    assert attempts == [1]
+    assert any(row.get('upload_progress', {}).get('stage') == 'reconnecting' for row in reports)
+
+
 def test_direct_sync_resumes_without_publishing_partial_files(sync_transfer):
     """A cancelled transfer leaves only partial data; resuming publishes complete input."""
     connection, source, remote, reports, controls, throttle, _ = sync_transfer

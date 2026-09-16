@@ -266,6 +266,17 @@ def test_manual_rental_waits_for_start_and_then_uses_idle_policy(queue):
     assert queue.store.read(worker, 'control.json')['cleanup']
 
 
+def test_resume_repairs_manual_reservation_after_partial_start(queue, monkeypatch):
+    """Resume clears the manual start gate even when the queue is already unpaused."""
+    queue, worker = queue
+    queue.update(paused=False)
+    queue.store.update(worker, awaiting_queue_start=True, status='reserved')
+    monkeypatch.setattr(queue.store, 'launch_service', lambda *args: None)
+    queue.action('resume')
+    assert queue.read()['paused'] is False
+    assert queue.store.read(worker)['awaiting_queue_start'] is False
+
+
 @pytest.mark.parametrize('stop,now', [(True, 100), (False, 9900)])
 def test_manual_rental_can_end_and_cannot_outlive_deadline(queue, stop, now):
     """Manual reservation never suppresses explicit release or deadline cleanup."""

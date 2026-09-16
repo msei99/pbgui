@@ -1,5 +1,15 @@
 # PBv8 Optimize
 
+**Settings → Performance History** retains Vast throughput and workload metadata after queue deletion. Select matching workloads for speed comparisons; see the [Vast GPU guide](48_vast_gpu.md#performance-history).
+
+For cloud CPU capacity, set **Min CPU cores** in Vast Settings; Cloud Auto uses the rented allocation. Manual Rent takes its specifications from the selected offer. Later queued jobs may trigger a confirmed transfer-reserve adjustment that shortens rental time within the same budget. Optimizer log retrieval errors no longer prevent stop or final collection.
+
+Vast input uploads recover from transient connection errors for up to 15 minutes without new transfer progress, with 15/30/60-second retry pauses and retained partial data. The log displays retry status. A healthy worker's upload is no longer cut short by its earlier setup timer; the rental deadline and collection reserve still apply.
+
+Vast offer searches show **Previously used**, **Working** and **Preferred** host status. Use **Prefer host** in offer Details or the rental Host card to prioritize that physical machine within your existing limits. Manage preferences and manual Working marks in **Settings → Known & preferred hosts**. Blocked hosts remain excluded.
+
+For Vast rentals, **Block host** in the log's Host card excludes the physical machine from future offers and rentals. Manage or undo exclusions under **Settings → Blocked hosts**. Blocking leaves the current rental running; **End rental** remains a separate action. See the Vast GPU guide for details.
+
 PBv8 Optimize manages Passivbot V8 optimizer configurations, queued jobs, results, and Pareto candidates independently from PBv7. The page uses the same template, panels, and visual editor as PBv7 Optimize. A version adapter translates only the PB8 API paths and nested configuration model; there is no separate PB8 optimizer UI.
 
 If PB8 is unavailable after an incomplete installation or update, a persistent **PB8 update required** warning appears above the workspace with the runtime error and a link to VPS Manager. The page remains usable for diagnosis instead of hiding the issue in transient notifications.

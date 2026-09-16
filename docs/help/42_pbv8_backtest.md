@@ -1,5 +1,7 @@
 # PBv8 Backtest
 
+The POS column shows Long / Short position limits. A disabled side (zero position limit or zero total wallet exposure) is displayed as `-`, for example `4 / -`.
+
 PBv8 Backtest manages Passivbot V8 configurations and jobs independently from PBv7. PBGui validates every configuration through the currently installed PB8 loader before saving or starting it.
 
 The page renders the exact same page template and visual configuration editor as PBv7 Backtest. There is no separate PB8 editor implementation. PB8-specific behavior is limited to a path/API adapter, config validation, the process runner, and result data.

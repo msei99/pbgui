@@ -1,9 +1,34 @@
 # Vast.ai GPU queue
 
+If a rental control is unavailable, clicking it explains why; the cards do not show permanent startup notices.
+
+Unsaved budget, transfer-reserve and deadline-minute edits survive automatic log-dashboard refreshes. Switching to another rental discards those edits. Changes take effect only after saving and worker acknowledgement.
+
+During image download, the progress bar uses compressed layer sizes from the pinned worker manifest. “At least … GB available” counts completed downloads and cached layers; partial downloads are not estimated. The ready-layer counter tracks extraction separately. Unknown image versions fall back to layer counts. Update `vast_image_layers.py` when publishing a new worker image.
+
 Cloud optimization is integrated into **PB8 Optimize**. There is no separate
 Vast system page. Each installation uses its own Vast account and rental credit.
 
+The log dashboard shows **Proxy / min**, **Exact / min**, **Proxy / exact** and **Exact / USD (estimate)**. Rates use counter differences over approximately the last 60 seconds of timestamped native GPU logs (at least 10 seconds are required). The interval and sample age are displayed; live rates disappear after 90 seconds without a new sample. Finished jobs show the last recorded interval, not a whole-run average. Proxy/exact is cumulative screening workload, not result quality or acceptance rate. Exact/USD uses the rental hourly price and excludes transfers, startup and idle time. Missing counters remain unavailable; population size is never used as a substitute. A bounded observation history is saved while PBGui polls jobs, so counter samples survive log-tail replacement and page/API reloads. No remote worker update is required.
+
+## Performance History
+
+Open **Settings → Performance History** in the existing sidebar. The API records local job snapshots approximately every 60 seconds, even when no browser is open. The private SQLite database is `data/vast/performance.sqlite3`; removing a job from the queue does not remove its history. Recording pauses while the API is stopped. On restart, available log-tail counters can be recovered, but unavailable earlier history cannot be reconstructed.
+
+Select rows by click, keyboard (Space/Enter), or click-drag; select up to four. **View selected run** opens one run, including incomplete older records. **Same workload only** filters the entire retained history to the first selected workload. **Compare selected** is enabled only for matching verified fingerprints; the API also enforces this rule. **Filter this page** searches the loaded page by config, GPU, machine, coin or exchange. Previous/Next page through older records. **Refresh history** retrieves new measurements.
+
+The fingerprint covers the prepared config, data-file hashes and PB8 revision/worker image. It excludes job-specific paths, the local user name and allocated CPU worker counts. Seed, population, objectives, bounds, scenarios and data dates remain part of task identity. CPU allocation, GPU, memory and rental price are separate comparison axes. Missing or inconsistent frozen inputs are marked unverified, never silently grouped. A matching fingerprint does not certify identical cache state, scheduling or random outcomes.
+
+Complexity fields distinguish configured coins from exported symbol datasets (including BTC references). Exported candles are counted from NumPy headers without loading the arrays; actual runtime-consumed candles remain unknown. Unreadable headers remain unknown rather than being estimated. Scenario count, date range, timeframes, population, parameter count and seed are retained with each run. No complete config, credentials or SSH details are stored in the history database.
+
+Charts compare proxy/min and exact/min against minutes since the first recorded counter. Averages divide total measured counter increments by covered seconds, not the mean of instantaneous rates. Counter decreases break intervals. Repeated/stale observations do not create additional work; the latest native counter in each minute is retained. Utilization keeps its original measurement time and is unavailable when stale. Phases and genuine utilization observations are saved independently of counter arrival.
+
+First-counter delay means the **first observed** counter relative to container setup (or job creation if setup is unknown), so late recording can overstate startup time. Exact/USD uses measured optimizer throughput and hourly rental price. Run cost estimates separately show container time and observed transfer volume; they are not provider invoices and do not allocate shared idle time between jobs. The comparable-host count includes retained runs with the same fingerprint, machine ID and measurable counter interval. No universal complexity score or automatic benchmark rentals are introduced.
+
 ## Optimizer Settings
+
+In Settings, use the left sidebar to switch between **GPU offers**, **Known & preferred hosts** and **Blocked hosts**. Host management opens in its own main view. **Rent** and **End rental** are in the sidebar.
+
 
 The **Settings** sidebar button opens local execution, cloud account and GPU requirements. **Guide** opens this section directly. **Back to Queue** returns to jobs.
 
@@ -44,6 +69,10 @@ not user configurations, course data or credentials.
 
 ## GPU requirements in Settings
 
+For Cloud **Auto** CPU mode, **Min CPU cores** is the rental requirement. Set it to 16 or 32 here when that capacity is required. The CPU count in a local optimizer config does not override this minimum; the cloud execution copy uses the measured allocation, capped by the rented CPU quota. Legacy jobs with an explicit fixed CPU requirement still enforce that count.
+
+Manual **Rent** uses the selected offer's GPU type, hardware, disk size, verification status and displayed price. Editing search filters after selecting a row does not replace that offer's specifications. Rental hours and budget still come from the rental controls; availability and limits are checked again before renting.
+
 In the editor, choose only **Execution → Vast.ai GPU** or **Local**.
 Under **Queue → Settings → GPU requirements**, choose a GPU type and maximum
 hourly price, minimum VRAM/RAM/CPU, disk size and verified-host preference.
@@ -73,9 +102,16 @@ change the requirements. A race where an offer disappears before provisioning
 can still fail; PBGui does not create an unapproved replacement rental.
 Hourly estimates include disk; transfers cost extra. The worker checks its actual
 CPU quota. Saved requirements apply to the next rental, not an existing worker.
+Set **Min TFLOPS** to require the provider-advertised minimum GPU compute throughput;
+`0` leaves compute throughput unrestricted. This requirement applies both to the
+preview and to the final offer selection before a rental is created.
 
-**Save & Queue** uses the current configuration and prepares a frozen input
-snapshot. **Queue Selected** also respects the saved execution target. Local
+**Save & Queue** saves and immediately creates a cloud queue row with status
+**Preparing input**. Its frozen input snapshot is then copied and compressed in
+the background; no GPU can be rented until that preparation reaches **queued**.
+The row shows copied input MB, completed file count and a progress bar; archive
+compression is shown as a final indeterminate phase.
+**Queue Selected** also respects the saved execution target. Local
 configs continue through the existing local queue. Cloud jobs are shown in the
 same **Queue** table as local jobs, identified by the **Execution** column.
 
@@ -87,6 +123,20 @@ choose a supported objective such as `adg_strategy_eq` explicitly in the editor
 if appropriate. PBGui does not silently change the optimization objective.
 Local daily history for the selected coin and BTC reference is included to
 preserve warmup; load missing data through Market Data first.
+
+### Known, working and preferred hosts
+
+The offer list identifies **Previously used** machines from actual local rental history. **Working** means at least one exact optimization result was recorded on that machine, or you explicitly chose **Mark working**. A rental stuck downloading an image is not automatically marked Working. This is historical evidence, not a guarantee about the next rental.
+
+Use **Prefer host** in an offer's Details, in the rental's Host card or under **Settings → Known & preferred hosts**. Preferred machines are shown and considered first, ordered by price within that group. PBGui searches those machines explicitly even when they are absent from the cheapest first page. Hardware requirements, maximum price, rental duration and budget checks still apply. If no preferred machine qualifies, ordinary matching offers remain available. Manual **Rent** still rents exactly the selected offer, and a block always overrides a preference.
+
+Preferences and manual Working marks survive reloads and API restarts. Use **Remove preference** or **Clear working mark** to undo your marks; verified historical results remain visible. Old rentals without a saved Machine ID cannot be matched by GPU name. For a still-existing rental, a host action resolves the Machine ID from Vast; otherwise enter the known Machine ID manually. Future rental supervision records the machine identity automatically. These marks do not stop or change a current rental.
+
+### Block unreliable hosts
+
+Use **Block host** beside an offer, beside the current rental in Settings, or in the optimizer log's **Host** card. PBGui saves the physical Vast **Machine ID**, so new offers from the same machine are excluded from previews and future manual or automatic rentals. Blocking does not end a current rental; use **End rental** separately when needed.
+
+Open **Blocked hosts** in Settings to review the IDs, add a known Vast Machine ID, or use **Unblock host**. Exclusions survive reloads and API restarts. Older rentals resolve their machine ID from the matching Vast instance when you click Block host. If that instance is no longer available, enter its Machine ID manually. When exclusions exist, offers without a valid Machine ID are also excluded because PBGui cannot verify that the host is allowed.
 
 ## GPU configuration validation
 
@@ -107,6 +157,8 @@ Market data availability/export and native runtime/device checks are additional
 stages; passing the configuration check does not guarantee a successful GPU run.
 
 ## One rental for several jobs
+
+When a later job needs more transfer allowance, a worker with the current budget-control guard can automatically move unused rental time into transfer reserve within the same authorized budget. PBGui waits for the worker to confirm the shorter deadline before dispatching the job. A pending adjustment prevents idle cleanup. Older guards or insufficient remaining budget show a reason to adjust **Transfer reserve/Budget** manually; PBGui does not spend an unconfirmed allowance or increase the budget automatically.
 
 In **Queue → Settings**, save maximum hours, budget target and idle cleanup with the GPU requirements. The job row’s **Start** action immediately rents using these saved settings, without another confirmation, and finds a current matching offer. PBGui
 creates one instance, establishes verified SSH access, starts the first job,
@@ -146,12 +198,21 @@ merely stopping a Vast instance can leave disk storage billable.
 
 ## Limits and recovery
 
+Transient upload/SSH failures receive a 15-minute recovery window instead of a fixed two-attempt limit. PBGui retries after 15, 30, then at most 60 seconds and reuses partial files or verified chunks. New observed transfer progress renews that window; repeated retries without progress do not. The log shows the next retry and the original connection error. The separate 15-minute worker-setup timer stops applying once worker health is verified, so slow setup does not consume the upload's recovery time. Active transfers remain bounded by the rental deadline minus the three-minute collection reserve. Stop remains responsive during retry waits. Identity, integrity and disk-full errors still fail immediately; no deadline or budget is extended automatically.
+
 A functioning local systemd user manager and OpenSSH are required. Separate
 controller and rental-guard services survive browser and API restarts. A remote
 guard attempts deletion at the fixed deadline independently. After a PBGui-host
 reboot, use **Resume supervision** to restore transient local services.
 
-The budget is an estimate, not a provider-enforced spending cap. At the deadline,
+Separate **Budget**, **Deadline** and **Transfer reserve** cards show the rental controls. Reserve inputs show four decimal places. The deadline adjustment field always defaults to 60 minutes. Older workers support only 30-minute deadline steps; when applying another value, PBGui explains the restriction so you can enter 30 explicitly.
+
+The active rental card lets you edit the **Budget target**. PBGui recalculates the
+deletion deadline and sends the change to the worker guard for acknowledgement;
+the change is pending until it is acknowledged. The same card shows the transfer
+reserve retained for input and result transfers. Increase it there if a queued
+job reports an insufficient transfer reserve; PBGui shortens the deadline within
+the chosen budget. The budget is an estimate, not a provider-enforced spending cap. At the deadline,
 deletion takes priority over unfinished collection; provider outages can delay
 it. Current limits per job: 10 GiB input, two upload attempts and 2 GiB result
 transfers. Raw verified backups remain under `data/vast/jobs/<job-id>/`.

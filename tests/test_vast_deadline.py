@@ -8,8 +8,36 @@ from secure_files import ensure_private_directory
 from vast_jobs import JobStore, write_json
 from vast_queue import CloudQueue
 from vast_provider import VastError
-from vast_deadline import effective_intent, request_deadline, reconcile_deadline, maximum_deadline
+from vast_deadline import effective_intent, request_budget, request_deadline, reconcile_deadline, maximum_deadline
 from setup.vast_gpu_benchmark.cloud_worker import apply_deadline_request
+
+
+def test_legacy_lease_without_changes_keeps_original_intent():
+    """Unadjusted legacy rentals need no newly introduced billing metadata."""
+    intent = {'deadline': 8000}
+    store = SimpleNamespace(read=lambda identifier: {})
+    assert effective_intent(store, 'a'*32, intent) is intent
+
+
+def test_old_worker_rejects_unsupported_step_before_sending(rental):
+    """Protocol one workers accept only their original thirty-minute step."""
+    queue, identifier, _ = rental
+    queue.store.update(identifier, deadline_protocol=1)
+    with pytest.raises(VastError, match='30-minute'):
+        request_deadline(queue, identifier, 8000, 60)
+    assert not queue.store.read(identifier).get('deadline_request')
+
+
+@pytest.mark.parametrize('control', ['stop', 'cleanup'])
+def test_budget_and_reserve_reject_cleanup(rental, control):
+    """A budget edit cannot interfere with a rental already being stopped."""
+    from vast_deadline import request_transfer_reserve
+    queue, identifier, _ = rental
+    queue.store.control(identifier, control)
+    with pytest.raises(VastError, match='cleanup'):
+        request_budget(queue, identifier, 2, 3)
+    with pytest.raises(VastError, match='cleanup'):
+        request_transfer_reserve(queue, identifier, .5, .6)
 
 
 @pytest.fixture
@@ -24,7 +52,7 @@ def rental(tmp_path, monkeypatch):
                   offer=dict(download_gb_usd=0, upload_gb_usd=0, price_hour_usd=.1))
     write_json(folder/'intent.json', intent)
     write_json(folder/'state.json', dict(id=identifier, status='running', rental_state='active',
-               deadline_protocol=1, deadline=8000, generation=0))
+               deadline_protocol=2, deadline=8000, generation=0))
     write_json(folder/'control.json', dict(stop=False, cleanup=False))
     queue = CloudQueue(store)
     queue.update(worker_id=identifier)
@@ -58,7 +86,7 @@ def test_deadline_rejects_unavailable_or_busy_rental(rental, change, expected):
         request_deadline(queue, identifier, 8000, 30)
 
 
-@pytest.mark.parametrize('expected,minutes', [(7000,30),(8000,60),(8000,True)])
+@pytest.mark.parametrize('expected,minutes', [(7000,30),(8000,0),(8000,1441),(8000,True)])
 def test_deadline_rejects_stale_or_invalid_steps(rental, expected, minutes):
     """An old browser cannot apply its click to a newer deadline."""
     queue, identifier, _ = rental
@@ -138,8 +166,21 @@ def test_deadline_preserves_already_reserved_transfer_budget(rental):
         request_deadline(queue, identifier, 8000, 30)
 
 
-@pytest.mark.parametrize('restart', [False, True])
-def test_guard_process_publishes_and_restores_confirmed_deadline(tmp_path, monkeypatch, restart):
+def test_budget_request_recalculates_deadline_after_guard_confirmation(rental):
+    """Editing the active budget changes its acknowledged deadline without exceeding it."""
+    queue, identifier, intent = rental
+    result = request_budget(queue, identifier, 2, .7)
+    assert result['pending'] and result['requested_deadline'] == pytest.approx(7700)
+    request = queue.store.read(identifier)['deadline_request']
+    queue.store.update(identifier, deadline_confirmed=request, budget_confirmed=.7, deadline_request=None)
+    effective = effective_intent(queue.store, identifier, intent)
+    assert effective['budget_usd'] == .7
+    assert effective['deadline'] == pytest.approx(7700)
+    assert effective['transfer_reserve_usd'] == .5
+
+
+@pytest.mark.parametrize('restart,maximum', [(False, 20000), (True, 20000), (True, 25000)])
+def test_guard_process_publishes_and_restores_confirmed_deadline(tmp_path, monkeypatch, restart, maximum):
     """Exercise the real guard loop without sleeping or calling the provider."""
     from setup.vast_gpu_benchmark import cloud_worker as worker
     monkeypatch.setattr(worker, 'ROOT', tmp_path)
@@ -153,7 +194,7 @@ def test_guard_process_publishes_and_restores_confirmed_deadline(tmp_path, monke
     request = dict(id='b'*32, expected=8000, deadline=9800, job_id='a'*32)
     if restart:
         worker.write_record(tmp_path/'guard.json', dict(instance_id=123, job_id='a'*32,
-            deadline=9800, max_deadline=20000, deadline_protocol=1, request_id='b'*32))
+            deadline=9800, max_deadline=maximum, deadline_protocol=2, request_id='b'*32))
     else:
         worker.write_record(tmp_path/'deadline-request.json', request)
 

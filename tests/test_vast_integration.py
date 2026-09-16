@@ -21,6 +21,9 @@ from vast_provider import NoRedirect, VastClient, VastError, number
 def client(tmp_path, monkeypatch):
     """Build an authenticated isolated app without PBGui startup or real HTTP."""
     store = VastCredentialStore(tmp_path / "vast")
+    from vast_queue import CloudQueue
+    from vast_jobs import JobStore
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: CloudQueue(JobStore(store.root)))
     monkeypatch.setattr(vast, "VastCredentialStore", lambda: store)
     app = FastAPI()
     app.include_router(vast.router, prefix="/api/vast")
@@ -504,12 +507,96 @@ def test_requeue_after_interrupted_attempt_shows_latest_only(tmp_path, monkeypat
 
 
 def test_deadline_route_requires_explicit_valid_request(client, monkeypatch):
-    """The authenticated endpoint accepts only the two supported deadline steps."""
+    """The authenticated endpoint accepts bounded whole-minute adjustments."""
     http, _, _ = client
     calls = []
     monkeypatch.setattr('vast_deadline.request_deadline', lambda queue, worker, expected, minutes:
                         calls.append((worker, expected, minutes)) or {'pending':True})
-    response = http.post('/api/vast/queue/deadline', json=dict(worker_id='a'*32, expected_deadline=8000, minutes=30))
+    response = http.post('/api/vast/queue/deadline', json=dict(worker_id='a'*32, expected_deadline=8000, minutes=60))
     assert response.status_code == 202
-    assert calls == [('a'*32, 8000, 30)]
-    assert http.post('/api/vast/queue/deadline', json=dict(worker_id='a'*32, expected_deadline=8000, minutes=60)).status_code == 422
+    assert calls == [('a'*32, 8000, 60)]
+    assert http.post('/api/vast/queue/deadline', json=dict(worker_id='a'*32, expected_deadline=8000, minutes=0)).status_code == 422
+    assert http.post('/api/vast/queue/deadline', json=dict(worker_id='a'*32, expected_deadline=8000, minutes=1441)).status_code == 422
+
+
+def test_jobs_statistics_use_existing_local_log_without_remote_access(client, monkeypatch, tmp_path):
+    """Existing rentals gain measured throughput through the authenticated job snapshot."""
+    from secure_files import ensure_private_directory
+    from vast_jobs import JobStore, write_json
+    from vast_queue import CloudQueue
+    http, _, _ = client
+    queue = CloudQueue(JobStore(tmp_path / 'queue'))
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
+    monkeypatch.setattr(vast, 'services_available', lambda: True)
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    monkeypatch.setattr(vast, 'CLOUD_LOG_ROOT', logs)
+    identifier = 'c' * 32
+    folder = ensure_private_directory(queue.root / 'jobs' / identifier)
+    write_json(folder / 'state.json', {'id':identifier, 'status':'running', 'rental_state':'none'})
+    logfile = logs / f'vast_{identifier}.log'
+    logfile.write_text('2026-09-16T10:00:00Z INFO GPU optimize | gen=1 proxy=100 (1.0/s) exact=10 inflight=0\n'
+                      '2026-09-16T10:01:00Z INFO GPU optimize | gen=2 proxy=700 (1.0/s) exact=40 inflight=0\n')
+    first = http.get('/api/vast/jobs').json()['jobs'][0]['throughput']
+    assert first['proxy_per_minute'] == 600
+    assert first['exact_per_minute'] == 30
+    assert http.get('/api/vast/jobs').json()['jobs'][0]['throughput'] == first
+    logfile.unlink()
+    logfile.symlink_to(tmp_path / 'outside.log')
+    (tmp_path / 'outside.log').write_text('must not read this file')
+    assert http.get('/api/vast/jobs').json()['jobs'][0]['throughput'] == first
+
+
+def test_performance_api_retains_history_and_checks_comparison_identity(client):
+    """Historical comparisons require authenticated, distinct IDs and a verified matching task."""
+    from vast_performance import PerformanceHistory
+    http, store, _ = client
+    history = PerformanceHistory(store.root)
+    for character, fingerprint in [('a','f'*64), ('b','f'*64), ('c','0'*64), ('d',None)]:
+        history.record({'id':character*32, 'captured_at':1000, 'config_name':'history-only',
+            'workload':{'fingerprint':fingerprint}, 'hardware':{'price_hour_usd':.5}},
+            [{'sampled_at':1000,'proxy_total':100,'exact_total':10},
+             {'sampled_at':1060,'proxy_total':700,'exact_total':40}])
+    response = http.get('/api/vast/performance?limit=2')
+    assert response.status_code == 200 and response.headers['cache-control'] == 'no-store'
+    assert response.json()['total'] == 4 and len(response.json()['runs']) == 2
+    assert http.get('/api/vast/performance?fingerprint=' + 'f'*64).json()['total'] == 2
+    assert http.get('/api/vast/performance?fingerprint=invalid').status_code == 422
+    assert http.post('/api/vast/performance/compare', json={'ids':['a'*32,'b'*32]}).status_code == 200
+    assert http.post('/api/vast/performance/compare', json={'ids':['a'*32,'c'*32]}).status_code == 409
+    assert http.post('/api/vast/performance/compare', json={'ids':['a'*32,'d'*32]}).status_code == 409
+    assert http.post('/api/vast/performance/compare', json={'ids':['d'*32]}).status_code == 200
+    assert http.post('/api/vast/performance/compare', json={'ids':['a'*32,'a'*32]}).status_code == 422
+    assert http.post('/api/vast/performance/compare', json={'ids':['../bad']}).status_code == 422
+    assert http.post('/api/vast/performance/compare', json={'ids':['e'*32]}).status_code == 404
+
+
+def test_performance_collector_lifecycle_is_owned_and_idempotent(monkeypatch, tmp_path):
+    """API shutdown always stops and joins its collector without touching rentals."""
+    import asyncio
+    import vast_performance
+    from vast_jobs import JobStore
+    stopped = []
+    class Collector:
+        """Track ownership without starting a real background thread."""
+        def __init__(self, *args):
+            """Accept isolated store arguments."""
+        def start(self):
+            """Record startup."""
+            stopped.append('start')
+        def stop(self):
+            """Record cancellation signal."""
+            stopped.append('stop')
+        def join(self):
+            """Record deterministic drain."""
+            stopped.append('join')
+    monkeypatch.setattr(vast, '_PREPARATION_STOPPING', False)
+    monkeypatch.setattr(vast, '_PREPARATION_EXECUTOR', None)
+    monkeypatch.setattr(vast, '_PERFORMANCE_COLLECTOR', None)
+    monkeypatch.setattr(vast_performance, 'PerformanceCollector', Collector)
+    monkeypatch.setattr(vast, 'JobStore', lambda: JobStore(tmp_path))
+    vast.startup(); vast.startup()
+    asyncio.run(vast.shutdown()); asyncio.run(vast.shutdown())
+    assert stopped == ['start', 'stop', 'join']
+    assert vast._PREPARATION_EXECUTOR is None
+    assert vast._PERFORMANCE_COLLECTOR is None

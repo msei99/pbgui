@@ -21,8 +21,52 @@
     return;
   } finally { clearTimeout(bootstrapTimer); }
   let worker = null, queueState = {}, selectedOffer = null, renting = false;
+  let hostBlockBusy = false, offerRows = [];
+  let hostProfiles = new Map(), hostGeneration = 0;
 
   const el = id => document.getElementById(id);
+  const settingsSidebar = el('vast-sidebar-controls');
+  if (settingsSidebar) {
+    settingsSidebar.appendChild(el('vast-settings-nav'));
+    settingsSidebar.appendChild(el('vast-performance-actions'));
+    const actions = document.createElement('div');
+    actions.className = 'ctx-actions';
+    actions.id = 'vast-rental-actions';
+    const rentalTitle = document.createElement('div');
+    rentalTitle.className = 'sb-label'; rentalTitle.textContent = 'Rental';
+    actions.appendChild(rentalTitle);
+    ['rent-offer', 'settings-end-rental'].forEach(id => {
+      const button = el(id);
+      if (button) { button.classList.add('sb-btn'); actions.appendChild(button); }
+    });
+    settingsSidebar.appendChild(actions);
+    el('settings-host-block').classList.add('ctx-actions');
+    settingsSidebar.appendChild(el('settings-host-block'));
+  }
+  const performanceView = window.PBGuiVastPerformance?.create({request});
+  el('vast-settings-nav').querySelectorAll('[data-vast-view]').forEach(button => {
+    button.addEventListener('click', () => {
+      const view = button.dataset.vastView;
+      el('vast-offers').hidden = view !== 'offers';
+      el('vast-setup').hidden = view !== 'offers';
+      el('vast-known-hosts').hidden = view !== 'known';
+      el('vast-blocked-hosts').hidden = view !== 'blocked';
+      el('vast-performance').hidden = view !== 'performance';
+      el('vast-performance-actions').hidden = view !== 'performance';
+      if (el('vast-rental-actions')) el('vast-rental-actions').hidden = view === 'performance';
+      el('settings-host-block').hidden = view === 'performance';
+      if (view === 'performance') performanceView?.show();
+      else performanceView?.hide();
+      const local = el('settings-modal')?.querySelector(':scope > .modal-body');
+      if (local) local.hidden = view !== 'offers';
+      el('vast-settings-nav').querySelectorAll('[data-vast-view]').forEach(item => {
+        item.classList.toggle('active', item === button);
+        item.setAttribute('aria-pressed', String(item === button));
+      });
+      if (view !== 'offers') clearSecrets();
+    });
+    button.setAttribute('aria-pressed', String(button.classList.contains('active')));
+  });
   let generation = 0;
   let offerGeneration = 0;
   let accountGeneration = 0;
@@ -136,6 +180,7 @@
   }
 
   function renderOffers(rows) {
+    offerRows = rows;
     selectedOffer = null;
     renderJob();
     const body = el('offers-body'); body.replaceChildren();
@@ -161,6 +206,9 @@
       row.cells[0].title = 'GPU compute capacity reported by Vast. Optimizer speed also depends on CPU and memory.';
       secondary(row.cells[1], fmt(offer.gpu_mem_bw_gbps, 0) + ' GB/s');
       secondary(row.cells[2], offer.cpu_name || 'CPU model unknown');
+      secondary(row.cells[6], offer.machine_id ? 'Machine ' + offer.machine_id : 'Machine ID unavailable');
+      const history = hostProfiles.get(offer.machine_id) || {};
+      secondary(row.cells[6], hostStatus(history));
       secondary(row.cells[9], 'CUDA ' + fmt(offer.cuda_max_good, 1));
       row.cells[9].classList.add(reasons.length ? 'offer-incompatible' : 'offer-compatible');
       row.cells[9].title = 'Marketplace compatibility check. Requirements are checked again at rental start.';
@@ -176,11 +224,13 @@
       ];
       entries.forEach(([label, value]) => { const item = document.createElement('div'), title = document.createElement('strong'); title.textContent = label; item.appendChild(title); secondary(item, value); details.appendChild(item); });
       detailsCell.appendChild(details); detailsRow.appendChild(detailsCell);
+      if (offer.machine_id) details.appendChild(hostPreferenceControls(offer.machine_id));
       const actionCell = document.createElement('td'), expand = document.createElement('button');
       expand.type = 'button'; expand.textContent = 'Details'; expand.setAttribute('aria-expanded', 'false');
       expand.addEventListener('click', event => { event.stopPropagation(); detailsRow.hidden = !detailsRow.hidden; expand.setAttribute('aria-expanded', String(!detailsRow.hidden)); expand.textContent = detailsRow.hidden ? 'Details' : 'Close details'; });
       expand.addEventListener('keydown', event => event.stopPropagation());
       actionCell.appendChild(expand); row.appendChild(actionCell);
+      if (offer.machine_id) actionCell.appendChild(hostBlockButton(offer.machine_id));
       const select = () => {
         body.querySelectorAll('tr').forEach(other => { other.classList.remove('selected'); other.setAttribute('aria-selected', 'false'); });
         selectedOffer = reasons.length ? null : offer;
@@ -195,17 +245,163 @@
     });
   }
 
+  function hostStatus(profile) {
+    return [profile.used ? 'Previously used' : 'No recorded use',
+      profile.working ? 'Working' : '', profile.preferred ? 'Preferred' : ''].filter(Boolean).join(' · ');
+  }
+
+  function acceptHostProfiles(data) {
+    if (Array.isArray(data.hosts)) hostProfiles = new Map(data.hosts.map(profile => [profile.machine_id, profile]));
+  }
+
+  function hostPreferenceControls(machineId, rentalId) {
+    const profile = hostProfiles.get(machineId) || {};
+    const container = document.createElement('span'); container.className = 'fields';
+    const label = document.createElement('span'); label.textContent = hostStatus(profile);
+    label.title = profile.working_detected ? 'Working: exact optimization results were recorded on this machine.'
+      : profile.working_marked ? 'Working: manually marked by you.' : 'Rental history is local to PBGui.';
+    container.appendChild(label);
+    const choices = [['preferred', profile.preferred ? 'Remove preference' : 'Prefer host', !profile.preferred]];
+    if (!profile.working_detected) choices.push(['working', profile.working_marked ? 'Clear working mark' : 'Mark working', !profile.working_marked]);
+    choices.forEach(([field, text, value]) => {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'btn';
+      button.textContent = text; button.dataset.hostBlock = ''; button.disabled = hostBlockBusy;
+      button.title = field === 'preferred' ? 'Prioritize this machine within your rental limits. Blocked hosts remain excluded.' : 'Record your own working assessment for this machine.';
+      button.addEventListener('keydown', event => event.stopPropagation());
+      button.addEventListener('click', event => { event.stopPropagation(); changeHostPreference(machineId, {[field]:value}, rentalId); });
+      container.appendChild(button);
+    });
+    return container;
+  }
+
+  function renderKnownHosts() {
+    const list = el('known-hosts-list'); list.replaceChildren();
+    if (!hostProfiles.size) list.textContent = 'No identified rental history or host marks yet.';
+    [...hostProfiles.values()].sort((a,b) => Number(b.preferred) - Number(a.preferred) || a.machine_id - b.machine_id).forEach(profile => {
+      const item = document.createElement('div'); item.className = 'fields';
+      const label = document.createElement('span');
+      label.textContent = 'Machine ' + profile.machine_id + ' · ' + (profile.rentals || 0) + ' rentals'
+        + ((queueState.blocked_machine_ids || []).includes(profile.machine_id) ? ' · Blocked' : '');
+      item.append(label, hostPreferenceControls(profile.machine_id)); list.appendChild(item);
+    });
+  }
+
+  async function refreshHostHistory() {
+    const current = ++hostGeneration;
+    try {
+      const data = await request('/hosts');
+      if (disposed || current !== hostGeneration) return;
+      acceptHostProfiles(data); renderHostBlocks();
+    } catch (error) { if (!disposed && current === hostGeneration) message(error.message, true); }
+  }
+
+  async function changeHostPreference(machineId, changes, rentalId) {
+    if (disposed || hostBlockBusy) return;
+    hostBlockBusy = true; hostGeneration++; jobGeneration++; offerGeneration++;
+    el('find-offers').disabled = true; renderJob();
+    try {
+      const path = rentalId ? '/jobs/' + encodeURIComponent(rentalId) + '/host-preferences' : '/host-preferences';
+      const data = await request(path, {method:'POST', body:JSON.stringify(rentalId ? changes : {machine_id:machineId, ...changes})});
+      if (disposed) return;
+      hostGeneration++; jobGeneration++; offerGeneration++;
+      acceptHostProfiles(data);
+      if (worker && worker.id === rentalId && data.machine_id) worker.host_machine_id = data.machine_id;
+      renderOffers([...offerRows].sort((a,b) => Number(!!hostProfiles.get(b.machine_id)?.preferred) - Number(!!hostProfiles.get(a.machine_id)?.preferred)
+        || a.price_hour_usd - b.price_hour_usd || a.id - b.id));
+      message('Host preference saved. Rental limits and host blocks still apply.');
+      await refreshJobs();
+    } catch (error) { if (!disposed) message(error.message, true); }
+    finally {
+      hostBlockBusy = false;
+      if (!disposed) {
+        el('find-offers').disabled = false; renderJob();
+        const displayed = jobRows.find(row => window.state && row.id === window.state.cloudLogId);
+        if (displayed) renderCloudDashboard(displayed);
+      }
+    }
+  }
+
+  function hostBlockButton(machineId, rentalId) {
+    const blocked = (queueState.blocked_machine_ids || []).includes(machineId);
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'btn';
+    button.dataset.hostBlock = '';
+    button.textContent = blocked ? 'Unblock host' : 'Block host';
+    button.disabled = hostBlockBusy;
+    button.title = 'Exclude this machine from future rentals. The current rental continues.';
+    button.addEventListener('keydown', event => event.stopPropagation());
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      changeHostBlock(machineId, !blocked, rentalId);
+    });
+    return button;
+  }
+
+  function renderHostBlocks() {
+    const list = el('blocked-hosts-list');
+    list.replaceChildren();
+    const ids = queueState.blocked_machine_ids || [];
+    if (!ids.length) list.textContent = 'No blocked hosts.';
+    ids.forEach(id => {
+      const item = document.createElement('div'); item.className = 'fields';
+      const label = document.createElement('span'); label.textContent = 'Machine ' + id;
+      item.append(label, hostBlockButton(id)); list.appendChild(item);
+    });
+    el('block-machine-submit').disabled = hostBlockBusy;
+    const rental = el('settings-host-block'); rental.replaceChildren();
+    if (worker) {
+      const machine = worker.host_machine_id || (queueState.selected_offer || {}).machine_id;
+      rental.appendChild(hostBlockButton(machine, worker.id));
+      rental.appendChild(hostPreferenceControls(machine, worker.id));
+    }
+    if (settingsSidebar) rental.querySelectorAll('button').forEach(button => {
+      button.classList.remove('btn'); button.classList.add('sb-btn');
+    });
+    renderKnownHosts();
+    document.querySelectorAll('[data-host-block]').forEach(button => { button.disabled = hostBlockBusy; });
+  }
+
+  async function changeHostBlock(machineId, blocked, rentalId) {
+    if (disposed || hostBlockBusy) return;
+    hostBlockBusy = true; hostGeneration++; jobGeneration++; offerGeneration++;
+    el('find-offers').disabled = true;
+    renderJob();
+    try {
+      const path = rentalId ? '/jobs/' + encodeURIComponent(rentalId) + '/host-block' : '/blocked-hosts';
+      const data = await request(path, {method:'POST', body:JSON.stringify(rentalId ? {blocked} : {machine_id:machineId, blocked})});
+      if (disposed) return;
+      jobGeneration++; offerGeneration++;
+      queueState.blocked_machine_ids = data.blocked_machine_ids;
+      if (worker && worker.id === rentalId && data.machine_id) worker.host_machine_id = data.machine_id;
+      const ids = data.blocked_machine_ids;
+      renderOffers(offerRows.filter(offer => !ids.length || (offer.machine_id && !ids.includes(offer.machine_id))));
+      message(blocked ? 'Host blocked for future rentals. Any current rental continues.' : 'Host unblocked for future rentals.');
+      await refreshJobs();
+      await refreshHostHistory();
+    } catch (error) { if (!disposed) message(error.message, true); }
+    finally {
+      hostBlockBusy = false;
+      if (!disposed) {
+        el('find-offers').disabled = false;
+        renderJob();
+        const displayed = jobRows.find(row => window.state && row.id === window.state.cloudLogId);
+        if (displayed) renderCloudDashboard(displayed);
+      }
+    }
+  }
+
   async function findOffers(event) {
     event.preventDefault();
+    if (hostBlockBusy) return;
     const current = ++offerGeneration;
     el('find-offers').disabled = true;
     const params = new URLSearchParams({max_price:el('max-price').value, min_vram:el('min-vram').value,
-      min_ram:el('min-ram').value, min_cpu:el('min-cpu').value, disk_gb:el('disk').value,
+      min_ram:el('min-ram').value, min_cpu:el('min-cpu').value, min_tflops:el('min-tflops').value, disk_gb:el('disk').value,
       verified_only:el('verified').value, gpu_name:el('gpu-model').value.trim(),
       include_incompatible:String(el('show-incompatible').checked), rental_hours:el('job-hours').value});
     try {
       const data = await request('/offers?' + params);
       if (disposed || current !== offerGeneration) return;
+      hostGeneration++; acceptHostProfiles(data);
       renderOffers(data.offers); el('offer-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
       message(data.offers.length + ' offers found (up to 100 shown).', false);
     } catch (error) { if (!disposed && current === offerGeneration) message(error.message, true); }
@@ -213,12 +409,12 @@
   }
 
   const preferenceFields = {gpu_name:'gpu-model', max_price:'max-price', min_vram:'min-vram',
-    min_ram:'min-ram', min_cpu:'min-cpu', disk_gb:'disk', verified_only:'verified', hours:'job-hours', budget:'job-budget', idle_seconds:'worker-idle', convergence_enabled:'convergence-enabled', convergence_min_exact:'convergence-min', convergence_patience:'convergence-patience', convergence_tolerance_pct:'convergence-tolerance'};
+    min_ram:'min-ram', min_cpu:'min-cpu', min_tflops:'min-tflops', disk_gb:'disk', verified_only:'verified', hours:'job-hours', budget:'job-budget', idle_seconds:'worker-idle', convergence_enabled:'convergence-enabled', convergence_min_exact:'convergence-min', convergence_patience:'convergence-patience', convergence_tolerance_pct:'convergence-tolerance'};
   function applyPreferences(data) {
-    data = {convergence_enabled:false, convergence_min_exact:512, convergence_patience:512, convergence_tolerance_pct:0.1, ...data};
+    data = {min_tflops:0, convergence_enabled:false, convergence_min_exact:512, convergence_patience:512, convergence_tolerance_pct:0.1, ...data};
     savedPreferences = {...data};
     Object.entries(preferenceFields).forEach(([key, id]) => { el(id).value = data[key] == null ? '' : String(data[key]); });
-    el('saved-requirements').textContent = 'Saved: ' + (data.gpu_name || 'any GPU type') + ' · max $' + fmt(data.max_price, 4) + '/hour · ' + data.min_vram + ' GB VRAM / ' + data.min_ram + ' GB RAM / ' + data.min_cpu + ' CPU cores. Current matching offers are selected only at start.';
+    el('saved-requirements').textContent = 'Saved: ' + (data.gpu_name || 'any GPU type') + ' · max $' + fmt(data.max_price, 4) + '/hour · ' + data.min_vram + ' GB VRAM / ' + data.min_ram + ' GB RAM / ' + data.min_cpu + ' CPU cores / min ' + fmt(data.min_tflops || 0, 1) + ' TFLOPS. Current matching offers are selected only at start.';
     renderJob();
   }
   el('save-gpu-preferences').addEventListener('click', async () => {
@@ -256,14 +452,18 @@
   }
 
   function renderJob() {
+    renderHostBlocks();
     const job = selectedJob();
     const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
     el('rent-offer').disabled = !selectedOffer || active || renting || startingQueue || !!workerAction || !supervision;
     el('rent-offer').textContent = renting ? 'Renting…' : 'Rent';
     el('settings-rental-status').textContent = workerActivity() + (active && worker.awaiting_queue_start ? (queueState.paused ? ' · Reserved for queue start' : ' · Queue started — waiting for input preparation') : '');
-    el('settings-end-rental').hidden = !active;
-    el('settings-end-rental').disabled = !!workerAction || renting || startingQueue;
-    el('settings-end-rental').textContent = workerAction === 'end' ? 'Ending rental…' : 'End rental';
+    const settingsEndRental = el('settings-end-rental');
+    if (settingsEndRental) {
+      settingsEndRental.hidden = !active;
+      settingsEndRental.disabled = !!workerAction || renting || startingQueue;
+      settingsEndRental.textContent = workerAction === 'end' ? 'Ending rental…' : 'End rental';
+    }
     el('start-job').hidden = !job || job.status !== 'ready';
     el('start-job').disabled = !!workerAction || renting || startingQueue || !job || job.status !== 'ready' || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || !supervision;
     el('requeue-job').hidden = !job || !['failed','cancelled'].includes(job.status) || !job.can_delete;
@@ -503,6 +703,8 @@
   }
 
   let deadlineChanging = false;
+  let budgetChanging = false;
+  let reserveChanging = false;
   async function adjustRentalDeadline(rental, minutes) {
     if (deadlineChanging || disposed) return;
     deadlineChanging = true;
@@ -519,11 +721,57 @@
     }
   }
 
+  async function adjustRentalBudget(rental, budget) {
+    if (budgetChanging || disposed) return;
+    budgetChanging = true;
+    renderRentalDetails(rental, billingSnapshot);
+    try {
+      await request('/queue/budget', {method:'POST', body:JSON.stringify({worker_id:rental.id, expected_budget_usd:rental.budget_usd, budget_usd:budget})});
+      await refreshJobs();
+    } catch (error) {
+      if (!disposed) { message(error.message, true); if (typeof toast === 'function') toast(error.message, 'err'); }
+    } finally {
+      budgetChanging = false;
+      const job = jobRows.find(row => window.state && row.id === window.state.cloudLogId);
+      if (job && !disposed) renderRentalDetails(job.rental, billingSnapshot);
+    }
+  }
+
+  async function adjustRentalTransferReserve(rental, reserve) {
+    if (reserveChanging || disposed) return;
+    reserveChanging = true;
+    renderRentalDetails(rental, billingSnapshot);
+    try {
+      await request('/queue/transfer-reserve', {method:'POST', body:JSON.stringify({worker_id:rental.id, expected_reserve_usd:rental.transfer_reserve_usd, reserve_usd:reserve})});
+      await refreshJobs();
+    } catch (error) {
+      if (!disposed) { message(error.message, true); if (typeof toast === 'function') toast(error.message, 'err'); }
+    } finally {
+      reserveChanging = false;
+      const job = jobRows.find(row => window.state && row.id === window.state.cloudLogId);
+      if (job && !disposed) renderRentalDetails(job.rental, billingSnapshot);
+    }
+  }
+
   function renderRentalDetails(rental, billing) {
     const panel = el('optlog-rental');
     if (!panel) return;
+    const sameRental = rental && panel.dataset.rentalId === rental.id;
+    const focused = sameRental && panel.contains(document.activeElement) ? document.activeElement : null;
+    const inputs = new Map(sameRental ? [...panel.querySelectorAll('input[aria-label]')].map(input => [input.getAttribute('aria-label'), input]) : []);
+    function retainInput(input, label) {
+      // Reuse the input node, including its unsaved value, across polling renders.
+      const previous = inputs.get(label);
+      if (!previous) { input.defaultValue = input.value; return input; }
+      if (previous.value === previous.defaultValue || Number(previous.value) === Number(input.value)) {
+        previous.value = input.value;
+        previous.defaultValue = input.value;
+      }
+      return previous;
+    }
     panel.hidden = !rental;
     panel.replaceChildren();
+    panel.dataset.rentalId = rental ? rental.id || '' : '';
     if (!rental) return;
     const o = rental.offer || {};
     const fields = [
@@ -536,7 +784,9 @@
       ['Disk', fmt(o.disk_gb, 0) + ' GB · ' + fmt(o.disk_bw_mbps, 0) + ' MB/s', o.disk_name || 'Allocated disk and provider-reported disk bandwidth.'],
       ['Host', (o.location || '—') + ' · ' + (o.reliability == null ? '—' : fmt(o.reliability * 100, 1) + '%'), 'Location and provider reliability. ' + (o.verified ? 'Verified host.' : 'Host not marked verified.')],
       ['PCIe', fmt(o.pci_gen, 0) + ' ×' + fmt(o.gpu_lanes, 0) + ' · ' + fmt(o.pcie_bw_gbps, 1) + ' GB/s', 'Provider-reported PCIe generation, lanes and bandwidth.'],
-      ['Budget / deadline', '$' + fmt(rental.budget_usd, 2) + ' · ' + (rental.deadline ? new Date(rental.deadline * 1000).toLocaleString() : '—'), 'Shared rental budget target and confirmed deletion deadline. −/+ adjusts by 30 minutes, within the existing budget and 24-hour maximum. Changes require worker acknowledgement. The budget target is not a provider spending cap.']
+      ['Budget', '$' + fmt(rental.budget_usd, 2), 'Shared rental budget target. Changing it recalculates the deadline and requires worker acknowledgement. This is not a provider spending cap.'],
+      ['Deadline', rental.deadline ? new Date(rental.deadline * 1000).toLocaleString() : '—', 'Confirmed deletion deadline. Enter an adjustment in minutes, then use −/+. Older workers support only 30-minute adjustments.'],
+      ['Transfer reserve', '$' + fmt(rental.transfer_reserve_usd, 4), 'Amount retained inside the budget for uploading input and returning results. Increase it when a queued job reports insufficient transfer reserve; PBGui shortens the deadline by the required amount.']
     ];
     const parts = billing && billing.breakdown || {};
     fields.push(['Vast instance charges', billing && billing.amount_usd != null ? '$' + fmt(billing.amount_usd, 4) + (billing.error ? ' (last retrieved)' : '') : billing && billing.error ? 'Unavailable' : 'Pending',
@@ -551,22 +801,102 @@
       const caption = document.createElement('span'); caption.textContent = label; caption.dataset.tip = help;
       heading.appendChild(caption);
       const content = document.createElement('div'); content.className = 'optlog-detail-text'; content.textContent = value;
-      if (label === 'Budget / deadline') {
+      if (label === 'Host') {
+        const identity = document.createElement('div');
+        identity.textContent = o.machine_id ? 'Machine ' + o.machine_id : 'Machine ID will be resolved when blocking';
+        content.append(identity, hostBlockButton(o.machine_id, rental.id), hostPreferenceControls(o.machine_id, rental.id));
+      }
+      if (label === 'Budget') {
+        card.classList.add('optlog-rental-edit-card');
         const active = worker && worker.id === rental.id && worker.rental_state === 'active';
-        for (const minutes of [-30, 30]) {
+        let budgetInput = document.createElement('input');
+        budgetInput.type = 'number'; budgetInput.className = 'deadline-minutes';
+        budgetInput.min = '0.1'; budgetInput.max = '100'; budgetInput.step = '0.01'; budgetInput.value = String(rental.budget_usd);
+        budgetInput.title = 'Budget target in USD'; budgetInput.setAttribute('aria-label', 'Budget target in USD');
+        budgetInput = retainInput(budgetInput, 'Budget target in USD');
+        const budgetButton = document.createElement('button'); budgetButton.type = 'button'; budgetButton.className = 'btn'; budgetButton.textContent = budgetChanging ? 'Saving…' : 'Save budget';
+        budgetButton.title = rental.deadline_protocol !== 2 ? 'Requires the updated budget-control worker guard' : 'Save budget target and recalculate deadline';
+        budgetButton.disabled = rental.deadline_pending || budgetChanging;
+        budgetButton.addEventListener('click', () => {
+          const value = Number(budgetInput.value);
+          if (!Number.isFinite(value) || value < .1 || value > 100) { message('Choose a budget between $0.10 and $100.00', true); return; }
+          adjustRentalBudget(rental, value);
+        });
+        const controls = document.createElement('span'); controls.className = 'optlog-rental-controls';
+        controls.append('$', budgetInput, budgetButton);
+        content.append(controls);
+      }
+      if (label === 'Deadline') {
+        card.classList.add('optlog-rental-edit-card');
+        const active = worker && worker.id === rental.id && worker.rental_state === 'active';
+        let minutesInput = document.createElement('input');
+        minutesInput.type = 'number'; minutesInput.className = 'deadline-minutes';
+        minutesInput.min = '1'; minutesInput.max = '1440'; minutesInput.step = '1'; minutesInput.value = '60';
+        minutesInput.title = 'Deadline adjustment in minutes';
+        minutesInput.setAttribute('aria-label', 'Deadline adjustment in minutes');
+        minutesInput = retainInput(minutesInput, 'Deadline adjustment in minutes');
+        const deadlineControls = document.createElement('span'); deadlineControls.className = 'optlog-rental-controls';
+        deadlineControls.append(minutesInput, ' min');
+        for (const direction of [-1, 1]) {
           const button = document.createElement('button'); button.type = 'button'; button.className = 'btn';
-          button.textContent = minutes < 0 ? '−' : '+';
-          button.title = rental.deadline_protocol !== 1 ? 'Requires an updated worker deadline guard' : (minutes < 0 ? 'Shorten' : 'Extend') + ' deadline by 30 minutes';
+          button.textContent = direction < 0 ? '−' : '+';
+          button.title = rental.deadline_protocol !== 1 && rental.deadline_protocol !== 2 ? 'Requires an updated worker deadline guard' : (direction < 0 ? 'Shorten' : 'Extend') + ' deadline by entered minutes';
           button.setAttribute('aria-label', button.title);
-          button.disabled = !active || rental.deadline_protocol !== 1 || rental.deadline_pending || deadlineChanging;
-          button.addEventListener('click', () => adjustRentalDeadline(rental, minutes));
-          content.append(' ', button);
+          button.disabled = rental.deadline_pending || deadlineChanging;
+          button.addEventListener('click', () => {
+            const value = Number(minutesInput.value);
+            if (!Number.isInteger(value) || value < 1 || value > 1440) {
+              minutesInput.focus();
+              message('Enter a whole number between 1 and 1,440 minutes', true);
+              return;
+            }
+            adjustRentalDeadline(rental, direction * value);
+          });
+          deadlineControls.append(button);
         }
+        content.append(deadlineControls);
         if (rental.deadline_pending || deadlineChanging) content.append(' Awaiting worker confirmation…');
         if (rental.deadline_error) content.append(' ' + rental.deadline_error);
       }
+      if (label === 'Transfer reserve') {
+        card.classList.add('optlog-rental-edit-card');
+        const active = worker && worker.id === rental.id && worker.rental_state === 'active';
+        let reserveInput = document.createElement('input');
+        reserveInput.type = 'number'; reserveInput.className = 'deadline-minutes';
+        reserveInput.min = '0.05'; reserveInput.max = '100'; reserveInput.step = '0.0001'; reserveInput.value = Number.isFinite(rental.transfer_reserve_usd) ? (Math.ceil(rental.transfer_reserve_usd * 10000) / 10000).toFixed(4) : '';
+        reserveInput.title = 'Transfer reserve in USD'; reserveInput.setAttribute('aria-label', 'Transfer reserve in USD');
+        reserveInput = retainInput(reserveInput, 'Transfer reserve in USD');
+        const reserveButton = document.createElement('button'); reserveButton.type = 'button'; reserveButton.className = 'btn'; reserveButton.textContent = reserveChanging ? 'Saving…' : 'Save reserve';
+        reserveButton.title = rental.deadline_protocol !== 2 ? 'Requires the updated budget-control worker guard' : 'Save transfer reserve and shorten deadline if needed';
+        reserveButton.disabled = rental.deadline_pending || reserveChanging;
+        reserveButton.addEventListener('click', () => {
+          const value = Number(reserveInput.value);
+          if (!Number.isFinite(value) || value < .05 || value > 100) { message('Choose a transfer reserve between $0.05 and $100.00', true); return; }
+          adjustRentalTransferReserve(rental, value);
+        });
+        const controls = document.createElement('span'); controls.className = 'optlog-rental-controls';
+        controls.append('$', reserveInput, reserveButton);
+        content.append(controls);
+      }
+      if (['Budget', 'Deadline', 'Transfer reserve'].includes(label)) {
+        const active = worker && worker.id === rental.id && worker.rental_state === 'active';
+        card.addEventListener('click', event => {
+          if (!event.target.closest('button')) return;
+          let reason = '';
+          if (!active) reason = 'This rental is not active.';
+          else if (![1, 2].includes(rental.deadline_protocol)) reason = 'Worker is not ready for changes yet. Please try again after startup.';
+          else if (rental.deadline_protocol === 1 && label !== 'Deadline') reason = 'This worker version does not support changing this value.';
+          else if (rental.deadline_protocol === 1 && Number(content.querySelector('input').value) !== 30) reason = 'This worker supports only 30-minute steps.';
+          if (reason) {
+            event.stopPropagation();
+            if (typeof toast === 'function') toast(reason, 'err');
+            else message(reason, true);
+          }
+        }, true);
+      }
       card.append(heading, content); panel.appendChild(card);
     });
+    if (focused && panel.contains(focused)) focused.focus({preventScroll:true});
   }
 
   function renderUtilization(job) {
@@ -589,10 +919,31 @@
     el('cloud-utilization').setAttribute('aria-label', fresh ? 'Live utilization' : 'Utilization currently unavailable');
   }
 
+  function renderThroughput(job) {
+    const sample = job.throughput;
+    const terminal = ['completed', 'cancelled', 'failed'].includes(job.status);
+    const age = sample && Number.isFinite(sample.sampled_at) ? Math.max(0, Math.floor(Date.now()/1000 - sample.sampled_at)) : null;
+    const current = age !== null && (terminal || (['running', 'collecting'].includes(job.status) && age <= 90));
+    const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits:1}) : '—';
+    const rate = value => current ? number(value) : '—';
+    el('cloud-proxy-rate').textContent = rate(sample?.proxy_per_minute);
+    el('cloud-exact-rate').textContent = rate(sample?.exact_per_minute);
+    el('cloud-proxy-total').textContent = sample ? number(sample.proxy_total) + ' logged proxy evaluations' : '';
+    el('cloud-exact-total').textContent = sample ? number(sample.exact_total) + ' logged exact evaluations' : '';
+    el('cloud-proxy-exact').textContent = number(sample?.proxy_per_exact);
+    const price = job.rental?.offer?.price_hour_usd;
+    const efficiency = Number.isFinite(price) && price > 0 && Number.isFinite(sample?.exact_per_minute) ? sample.exact_per_minute * 60 / price : null;
+    el('cloud-cost-efficiency').textContent = rate(efficiency);
+    el('cloud-throughput-sample').textContent = !sample ? 'Waiting for timestamped optimizer counters.' :
+      (terminal ? 'Last recorded interval' : !current ? 'Stale sample — rates unavailable' : 'Latest measured interval') +
+      ' · ' + number(sample.window_seconds) + 's · sample ' + age + 's ago' +
+      (sample.proxy_per_minute == null ? ' · waiting for at least 10 seconds between counters' : '');
+  }
+
   function renderCloudDashboard(job) {
     if (!window.state || window.state.cloudLogId !== job.id) return;
     if (typeof renderOptimizeLogDashboard !== 'function') return;
-    const uploadPhase = job.status === 'uploading' ? {preparing_files:'Preparing file synchronization', checking_cache:'Checking cache', packing:'Preparing transfer archive', installing:'Installing input data', verifying:'Verifying input data'}[job.upload_progress?.stage] : null;
+    const uploadPhase = job.status === 'uploading' ? {preparing_files:'Preparing file synchronization', checking_cache:'Checking cache', packing:'Preparing transfer archive', installing:'Installing input data', verifying:'Verifying input data', reconnecting:'Waiting to retry upload'}[job.upload_progress?.stage] : null;
     renderOptimizeLogDashboard({name:job.config_name, phase:stopPhase(job) || uploadPhase || job.status,
       progress:{exact_evaluations:job.exact_completed || 0,target_exact_evaluations:job.iterations,
         proxy_evaluations:job.gpu_candidates || 0,percent:job.iterations ? 100*(job.exact_completed || 0)/job.iterations : 0},
@@ -600,7 +951,7 @@
       process:{started_at:job.started_at ? new Date(job.started_at*1000).toISOString() : null},
       queue:{running:jobRows.filter(row => ['running','provisioning','uploading','collecting'].includes(row.status)).length,
         queued:jobRows.filter(row => row.status==='ready').length,error:jobRows.filter(row => row.status==='failed').length},
-      log:{last_error:(worker && worker.creation_error) || job.error || job.cleanup_error || (worker && worker.cleanup_error) || '',last_line:workerActivity(),
+      log:{last_error:(worker && worker.creation_error) || job.error || job.log_error || job.cleanup_error || (worker && worker.cleanup_error) || '',last_line:workerActivity(),
         updated_at:job.updated_at ? new Date(job.updated_at*1000).toISOString() : null}});
     if (job.elapsed_seconds != null && ['completed','cancelled','failed'].includes(job.status)) {
       el('optlog-elapsed').textContent = formatDurationCompact(job.elapsed_seconds);
@@ -608,6 +959,7 @@
     el('optlog-pareto').textContent = job.pareto_count == null ? '—' : Number(job.pareto_count).toLocaleString();
     if (job.auto_cpu_workers && !job.cpu_allocation_resolved) el('optlog-cpu').textContent = 'Auto (instance allocation)';
     renderUtilization(job);
+    renderThroughput(job);
     const config = job.convergence_config || {}, history = job.convergence || {};
     const convergence = history.final || history;
     const terminal = ['completed', 'cancelled', 'failed'].includes(job.status);
@@ -661,6 +1013,7 @@
     el('optlog-progress-fill').classList.toggle('is-indeterminate', job.status === 'provisioning');
     if (job.status === 'provisioning') {
       const hasLayers = imageProgress && imageProgress.total > 0;
+      const hasBytes = hasLayers && imageProgress.total_bytes > 0 && Number.isFinite(imageProgress.completed_bytes);
       const phase = !hasLayers ? 'Preparing worker' : imageProgress.ready === imageProgress.total ? 'Starting worker'
         : imageProgress.downloaded === imageProgress.total ? 'Extracting worker image' : 'Downloading worker image';
       const now = Date.now() / 1000;
@@ -670,13 +1023,16 @@
       const age = fetched > 0 ? Math.max(0, Math.floor(now - fetched)) : null;
       const duration = seconds => Math.floor(seconds / 60) + 'm ' + seconds % 60 + 's';
       const detail = phase + (elapsed == null ? '' : ' · ' + duration(elapsed))
+        + (hasBytes ? ' · At least ' + fmt(imageProgress.completed_bytes / 1e9, 2) + ' / '
+          + fmt(imageProgress.total_bytes / 1e9, 2) + ' GB available (' + fmt(imageProgress.download_percent, 1) + '%)' : '')
         + (hasLayers ? ' · Layers: ' + imageProgress.downloaded + '/' + imageProgress.total + ' downloaded, '
           + imageProgress.ready + '/' + imageProgress.total + ' ready' : '')
         + (job.has_provider_log ? ' · Host log (Extra Debug Logs)' : ' · Waiting for host log')
         + (age == null ? '' : ' · Fetched ' + duration(age) + ' ago');
-      el('optlog-progress-fill').style.width = '100%';
+      el('optlog-progress-fill').classList.toggle('is-indeterminate', !hasBytes);
+      el('optlog-progress-fill').style.width = hasBytes ? imageProgress.download_percent + '%' : '100%';
       el('optlog-progress-label').textContent = detail;
-      el('optlog-progress-label').dataset.tip = 'Vast reports completed image layers, not downloaded bytes. The animated bar indicates an unquantified preparation phase, not measured data transfer. Fetch time records when PBGui retrieved this log, not when the host produced a new line. Instance Logs can say No such container while the image is still downloading; this host log is shown under Extra Debug Logs in Vast.';
+      el('optlog-progress-label').dataset.tip = (hasBytes ? 'Compressed sizes from this pinned image manifest. Only completed or already cached layers count, so this is a lower bound; in-flight bytes are not estimated. This is image availability, not billed network traffic. 100% available still requires extraction and worker startup. ' : 'Layer sizes are unavailable for this image; the animated bar is not a byte percentage. ') + 'Fetch time is when PBGui retrieved the host log, not when the host produced a new line.';
       el('optlog-activity').textContent = detail;
       if (elapsed != null) el('optlog-elapsed').textContent = duration(elapsed);
     } else {
@@ -694,7 +1050,10 @@
       const percent = checkingCache ? (fileProgress && filesTotal > 0 ? 100 * filesChecked / filesTotal : 0)
         : total && sent != null ? Math.min(100, 100 * sent / total) : 0;
       const stageLabel = {preparing_files:'Preparing file synchronization', checking_cache:'Checking cached input data', packing:'Preparing transfer archive', installing:'Installing input data', synchronized:'Input files synchronized'}[upload.stage];
-      const label = upload.stage === 'verifying' ? 'Verifying input data' : upload.stage === 'reconnecting' ? (rsync ? 'Reconnecting upload (partial data retained)' : 'Reconnecting upload (verified chunks retained)') : directFiles ? 'Synchronizing input files' : 'Uploading input';
+      const retrySeconds = Math.max(0, Math.ceil((job.upload_retry_at || 0) - Date.now()/1000));
+      const label = upload.stage === 'verifying' ? 'Verifying input data' : upload.stage === 'reconnecting' ?
+        (job.upload_retry_at ? 'Upload retry in ' + retrySeconds + 's (partial data retained)' :
+          rsync ? 'Reconnecting upload (partial data retained)' : 'Reconnecting upload (verified chunks retained)') : directFiles ? 'Synchronizing input files' : 'Uploading input';
       let eta = '', speed = '';
       const measured = Number(upload.bytes_per_second), network = Number(job.rental?.offer?.inet_down_mbps);
       const transferring = !stageLabel && upload.stage !== 'verifying' && upload.stage !== 'reconnecting';
@@ -775,6 +1134,28 @@
         const badge = document.createElement('span');
         badge.className = 'badge badge-' + item.status;
         badge.textContent = deletingJobs.has(job.id) ? 'Deleting…' : requeuingJobs.has(job.id) ? 'Preparing…' : stopPhase(job) || (startingJobId === job.id ? 'Starting…' : value); cell.appendChild(badge);
+        const progress = job.input_progress || {};
+        if (job.status === 'preparing') {
+          const total = Number(progress.bytes_total), completed = Number(progress.bytes_completed);
+          const filesTotal = Number(progress.files_total), filesCompleted = Number(progress.files_completed);
+          const determinate = Number.isFinite(total) && total > 0 && Number.isFinite(completed);
+          const percent = determinate ? Math.max(0, Math.min(100, 100 * completed / total)) : 0;
+          const details = document.createElement('div'); details.className = 'cloud-prepare-progress';
+          const track = document.createElement('div'); track.className = 'cloud-prepare-progress-track';
+          track.setAttribute('role', 'progressbar'); track.setAttribute('aria-label', 'Preparing cloud input data');
+          track.setAttribute('aria-valuemin', '0'); track.setAttribute('aria-valuemax', '100');
+          if (determinate) track.setAttribute('aria-valuenow', String(Math.round(percent)));
+          const fill = document.createElement('div'); fill.className = 'cloud-prepare-progress-fill';
+          fill.style.width = determinate ? percent + '%' : '100%';
+          if (!determinate) fill.classList.add('is-indeterminate');
+          track.appendChild(fill);
+          const label = document.createElement('span'); label.className = 'cloud-prepare-progress-label';
+          label.textContent = progress.stage === 'compressing' ? 'Compressing input archive…' : determinate
+            ? fmt(completed / 1e6, 1) + ' / ' + fmt(total / 1e6, 1) + ' MB · ' + Math.round(percent) + '%'
+            : 'Selecting input files…';
+          if (Number.isFinite(filesTotal) && filesTotal > 0) label.textContent += ' · ' + (Number.isFinite(filesCompleted) ? Math.max(0, filesCompleted) : 0) + ' / ' + filesTotal + ' files';
+          details.append(track, label); cell.appendChild(details);
+        }
       } else cell.textContent = value;
       row.appendChild(cell);
     });
@@ -836,7 +1217,10 @@
     scheduleValidation,
     validateConfig: validateEditorConfig,
     metricAllowed: function (metric) { return !!cloudMetrics && cloudMetrics.includes(metric); },
-    hideSettings: function () { clearSecrets(); closeLog(); },
+    hideSettings: function () { clearSecrets(); closeLog(); performanceView?.hide(); },
+    showSettings: function () {
+      if (!el('vast-performance').hidden) performanceView?.show();
+    },
     openEditor: function (config) {
       const execution = el('opted-execution');
       if (execution) execution.value = config && config.pbgui && config.pbgui.execution === 'vast' ? 'vast' : 'local';
@@ -947,9 +1331,10 @@
     try {
       await request('/queue/start', {method:'POST', body:JSON.stringify({
         rent_only:true, offer_id:offer.id, accept_rental_and_cleanup:true,
-        preferences:{gpu_name:el('gpu-model').value, max_price:Math.min(Number(el('max-price').value),offer.price_hour_usd),
-          min_vram:Number(el('min-vram').value), min_ram:Number(el('min-ram').value), min_cpu:Number(el('min-cpu').value),
-          disk_gb:Number(el('disk').value), verified_only:el('verified').value === 'true'},
+        preferences:{gpu_name:offer.gpu_name, max_price:offer.price_hour_usd,
+          min_vram:offer.vram_gb ?? 0, min_ram:offer.ram_gb ?? 0, min_cpu:offer.cpu_cores ?? 0,
+          min_tflops:offer.tflops ?? 0,
+          disk_gb:offer.disk_gb ?? Number(el('disk').value), verified_only:!!offer.verified},
         hours:Number(el('job-hours').value), budget:Number(el('job-budget').value), idle_seconds:Number(el('worker-idle').value)
       })});
       await refreshJobs();
@@ -957,7 +1342,7 @@
     } catch (error) { if (!disposed) { message(error.message,true); await refreshJobs(); } }
     finally { renting=false; if (!disposed) { renderJob(); renderQueueOverview(); } }
   });
-  el('settings-end-rental').addEventListener('click', () => el('end-worker').click());
+  el('settings-end-rental')?.addEventListener('click', () => el('end-worker')?.click());
   if (el('queue-start-rental')) el('queue-start-rental').addEventListener('click', () => el('resume-worker').click());
   if (el('queue-end-rental')) el('queue-end-rental').addEventListener('click', () => el('end-worker').click());
   el('start-job').addEventListener('click', () => startCloudQueue(selectedJob()));
@@ -998,9 +1383,20 @@
   el('credentials-form').addEventListener('submit', event => saveSecret(event, 'api_key', 'api-key'));
   el('refresh-balance').addEventListener('click', refreshBalance);
   el('offers-form').addEventListener('submit', findOffers);
+  el('block-machine-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const machine = Number(el('block-machine-id').value);
+    if (Number.isSafeInteger(machine) && machine > 0) changeHostBlock(machine, true);
+  });
+  el('mark-machine-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const machine = Number(el('mark-machine-id').value);
+    if (Number.isSafeInteger(machine) && machine > 0) changeHostPreference(machine, {[event.submitter?.dataset.mark || 'preferred']:true});
+  });
   el('show-incompatible').addEventListener('change', () => { if (!disposed) el('offers-form').requestSubmit(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden) clearSecrets(); });
-  window.addEventListener('pagehide', () => { disposed = true; validationGeneration++; clearTimeout(validationTimer); closeLog(); clearTimeout(jobTimer); jobGeneration++; generation++; accountGeneration++; offerGeneration++; clearSecrets(); controllers.forEach(controller => controller.abort()); });
+  window.addEventListener('pagehide', () => { disposed = true; performanceView?.dispose(); validationGeneration++; clearTimeout(validationTimer); closeLog(); clearTimeout(jobTimer); jobGeneration++; generation++; accountGeneration++; offerGeneration++; clearSecrets(); controllers.forEach(controller => controller.abort()); });
   const initial = generation;
+  refreshHostHistory();
   request('/settings').then(data => { if (!disposed && initial === generation) renderSettings(data); }).catch(error => { if (!disposed) message(error.message, true); });
 })();

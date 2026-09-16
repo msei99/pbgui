@@ -99,6 +99,7 @@ from api.vps_manager import (
     shutdown as vps_manager_shutdown,
     startup as vps_manager_startup,
 )
+from api.vast import startup as vast_startup, shutdown as vast_shutdown
 from api.services import router as services_router
 from api.live import router as live_router, shutdown as live_shutdown
 from api.v7_instances import router as v7_router
@@ -887,6 +888,7 @@ async def _lifespan(app: FastAPI):
         coin_data_startup()
         ohlcv_preload_startup()
         vps_manager_startup()
+        vast_startup()
         market_data_startup()
         strategy_explorer_v8_startup()
         profit_sweep_startup()
@@ -917,6 +919,7 @@ async def _lifespan(app: FastAPI):
             ("market-data", market_data_shutdown),
             ("profit-sweep", profit_sweep_shutdown),
             ("vps-manager", vps_manager_shutdown),
+            ("vast-input", vast_shutdown),
             ("cluster", cluster_shutdown),
             ("db-tools", db_tools_shutdown),
             ("backtest-v7", bt7_shutdown),

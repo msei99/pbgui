@@ -1980,6 +1980,12 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
   animation: optlog-preparing 1.4s linear infinite;
 }
 
+.cloud-prepare-progress { display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 180px; }
+.cloud-prepare-progress-track { width: 74px; height: 5px; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--bg3); }
+.cloud-prepare-progress-fill { width: 0; height: 100%; background: var(--accent); transition: width .2s ease; }
+.cloud-prepare-progress-fill.is-indeterminate { width: 100%; background: repeating-linear-gradient(110deg, var(--accent) 0 8px, transparent 8px 16px); background-size: 32px 100%; animation: optlog-preparing 1.4s linear infinite; }
+.cloud-prepare-progress-label { color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
+
 @keyframes optlog-preparing {
   to { background-position: 52px 0; }
 }
@@ -2094,6 +2100,28 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 #optlog-rental { margin-top: 8px; }
 #optlog-rental[hidden] { display: none; }
 #optlog-rental .optlog-detail-text { white-space: normal; overflow-wrap: anywhere; }
+#optlog-rental { grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); }
+#optlog-rental .optlog-rental-edit-card .optlog-detail-text { overflow: visible; }
+#optlog-rental .optlog-rental-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  vertical-align: middle;
+  margin-top: 6px;
+}
+#optlog-rental .deadline-minutes {
+  width: 112px;
+  flex: 0 0 112px;
+  box-sizing: border-box;
+  margin-left: 0;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg2);
+  color: var(--text);
+  font: inherit;
+}
 
 .lp-resize {
   position: absolute;
@@ -2228,7 +2256,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script defer src="/app/js/pb8_parameter_help.js?v=1"></script>
-<link rel="stylesheet" href="/app/css/vast.css?v=7">
+<link rel="stylesheet" href="/app/css/vast.css?v=9">
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -2304,6 +2332,10 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
       <div id="ctx-queue" class="ctx-actions" style="display:none">
         <button class="sb-btn danger" id="btn-delete-selected-queue">🗑 Delete Selected</button>
         <button class="sb-btn" id="btn-queue-settings">⚙ Settings</button>
+      </div>
+
+      <div id="ctx-settings" class="ctx-actions" style="display:none">
+        <div id="vast-sidebar-controls" class="ctx-actions"></div>
       </div>
 
       <div id="ctx-results" class="ctx-actions" style="display:none">
@@ -11211,9 +11243,11 @@ function setPanel(panel) {
   el('ctx-queue').style.display = panel === 'queue' || panel === 'settings' ? '' : 'none';
   el('btn-queue-settings').classList.toggle('active', panel === 'settings');
   el('btn-delete-selected-queue').style.display = panel === 'settings' ? 'none' : '';
+  el('ctx-settings').style.display = panel === 'settings' ? '' : 'none';
   el('ctx-results').style.display = panel === 'results' ? '' : 'none';
   el('ctx-paretos').style.display = panel === 'paretos' ? '' : 'none';
   location.hash = panel;
+  if (panel === 'settings') window.PBGuiVast?.showSettings?.();
   refreshLiveResultsDuringRun().catch(handleError).finally(function() {
     restoreSelectedOptimizeResultWhenReady().catch(handleError);
   });
@@ -13163,9 +13197,13 @@ async function saveEditor(andQueue) {
   } else {
     toast(isNewName ? ('Saved as new config "' + name + '".') : 'Config saved.', 'ok');
   }
-  await loadConfigs();
-  await loadQueue();
-  if (queueAfterSave) setPanel('queue');
+  if (queueAfterSave) {
+    setPanel('queue');
+    Promise.all([loadConfigs(), loadQueue()]).catch(handleError);
+  } else {
+    await loadConfigs();
+    await loadQueue();
+  }
   } catch (error) {
     setPageEditorStatus(error && error.message ? error.message : 'Could not save config.', 'err');
     handleError(error);
@@ -15178,6 +15216,7 @@ window.PBGUI_NAV_CONFIG = {
 
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
-<script src="/app/js/vast.js?v=63"></script>
+<script src="/app/js/vast_performance.js?v=1"></script>
+<script src="/app/js/vast.js?v=80"></script>
 </body>
 </html>

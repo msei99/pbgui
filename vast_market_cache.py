@@ -39,9 +39,21 @@ def stage_public_markets(connection):
             or any(name not in ("binance", "bybit") for name in exchanges)):
         raise VastError("Missing or unsupported exchanges for public market metadata", 422)
     try:
-        snapshots = asyncio.run(fetch_markets(list(dict.fromkeys(exchanges))))
-    except Exception:
+        async def bounded_fetch():
+            """Cancel and close exchange clients if local metadata preparation stalls."""
+            return await asyncio.wait_for(fetch_markets(list(dict.fromkeys(exchanges))), timeout=180)
+        snapshots = asyncio.run(bounded_fetch())
+        if not isinstance(snapshots, dict) or set(snapshots) != set(exchanges):
+            raise VastError('Public market metadata is incomplete', 422)
+        for item in snapshots.values():
+            if (not isinstance(item, dict) or not isinstance(item.get('markets'), dict) or not item['markets']
+                    or type(item.get('fetched_at')) not in (int, float)
+                    or not 0 <= time.time() - item['fetched_at'] < 86400):
+                raise VastError('Public market metadata is empty or expired', 422)
+    except Exception as exc:
         human_log(SERVICE, "Could not refresh public market metadata before optimizer start", level="ERROR")
+        if isinstance(exc, VastError):
+            raise
         raise VastError("Public market metadata could not be refreshed on PBGui; optimizer was not started") from None
     payload = json.dumps(snapshots).encode()
     if len(payload) > 64 * 1024**2:

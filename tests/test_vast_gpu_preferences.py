@@ -65,6 +65,17 @@ def test_start_uses_current_matching_offer_not_preview(rental):
     assert calls[1][0] == 'start'
 
 
+def test_min_tflops_is_required_at_provider_and_selection(rental):
+    """GPU compute throughput remains a hard rental requirement."""
+    _, rows, calls = rental
+    rows.append(offer(tflops=15))
+    body = request()
+    body.preferences.min_tflops = 20
+    with pytest.raises(HTTPException, match='No available GPU'):
+        vast.start_queue(body, session=None)
+    assert calls[0][1]['min_tflops'] == 20
+
+
 @pytest.mark.parametrize('changes', [
     {'gpu_name':'RTX 4090'}, {'price_hour_usd':.6}, {'cpu_cores':4},
     {'vram_gb':8}, {'ram_gb':8}, {'disk_gb':20}, {'verified':False},
@@ -92,7 +103,10 @@ def test_active_worker_reused_without_marketplace_search(rental):
     """Another start on an active rental returns it without looking for a GPU."""
     queue, _, calls = rental
     queue.worker = lambda: {'id':'existing', 'rental_state':'running'}
+    resumed = []
+    queue.action = resumed.append
     assert vast.start_queue(request(), session=None)['id'] == 'existing'
+    assert resumed == ['resume']
     assert calls == []
 
 
@@ -249,6 +263,17 @@ def test_queue_start_reuses_manual_rental_without_saved_preferences(rental):
     current = {'id': 'existing', 'rental_state': 'active'}
     queue.worker = lambda: current
     queue.read = lambda: {'paused': True}
+    queue.action = lambda action: calls.append(action)
+    assert vast.start_queue(vast.StartJobRequest(use_saved_settings=True, accept_rental_and_cleanup=True), session=None) == current
+    assert calls == ['resume']
+
+
+def test_queue_start_repairs_unpaused_manual_reservation(rental):
+    """Start Queue releases a reserved GPU even after an earlier partial start."""
+    queue, _, calls = rental
+    current = {'id':'existing', 'rental_state':'active', 'awaiting_queue_start':True}
+    queue.worker = lambda: current
+    queue.read = lambda: {'paused': False}
     queue.action = lambda action: calls.append(action)
     assert vast.start_queue(vast.StartJobRequest(use_saved_settings=True, accept_rental_and_cleanup=True), session=None) == current
     assert calls == ['resume']

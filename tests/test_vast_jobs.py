@@ -86,6 +86,16 @@ def job(tmp_path):
     return store, identifier, intent
 
 
+def test_create_preparation_publishes_pending_job_before_snapshot_work(tmp_path):
+    """A cloud job is visible immediately while its immutable input is prepared."""
+    store = JobStore(tmp_path / 'vast')
+    state = store.create_preparation('cloud-test', 512, 4, False)
+    assert state['status'] == 'preparing'
+    assert state['config_name'] == 'cloud-test'
+    assert state['input_progress']['stage'] == 'selecting'
+    assert store.read(state['id'], 'control.json') == {'stop': False, 'cleanup': False}
+
+
 class Provider:
     """A provider double with ambiguous create and observable mutation calls."""
     def __init__(self, rows=(), fail=False):

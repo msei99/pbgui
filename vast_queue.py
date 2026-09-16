@@ -9,9 +9,23 @@ from pathlib import Path
 from file_lock import advisory_file_lock
 from secure_files import ensure_private_directory, read_regular_file_nofollow
 from vast_jobs import JobStore, IMAGE, REVISION, TERMINAL, job_id, write_json
-from vast_provider import VastError
+from vast_provider import VastError, positive_id
 
 SERVICE = "VastRunner"
+
+
+def blocked_machine_ids(state: dict) -> list[int]:
+    """Validate persisted exclusions instead of silently ignoring corrupt state."""
+    values = state.get('blocked_machine_ids', [])
+    if not isinstance(values, list) or any(type(value) is not int or value <= 0 for value in values):
+        raise VastError('Blocked GPU hosts cannot be read', 500)
+    return sorted(set(values))
+
+
+def offer_host_allowed(offer: dict, blocked: list[int]) -> bool:
+    """Fail closed for unidentified machines when exclusions are active."""
+    machine = offer.get('machine_id')
+    return not blocked or (type(machine) is int and machine > 0 and machine not in blocked)
 
 
 def can_remove_job(row: dict, worker: dict | None) -> bool:
@@ -61,6 +75,23 @@ class CloudQueue:
         identifier = self.read().get('worker_id')
         return self.store.read(identifier) if identifier else None
 
+    def set_host_block(self, machine_id: int, blocked: bool) -> list[int]:
+        """Atomically change one exclusion without overwriting concurrent edits."""
+        machine_id = positive_id(machine_id)
+        if type(blocked) is not bool:
+            raise VastError('Invalid host block action', 422)
+        ensure_private_directory(self.root)
+        with advisory_file_lock(self.root / '.queue-lock'):
+            state = self.read()
+            machines = set(blocked_machine_ids(state))
+            if blocked:
+                machines.add(machine_id)
+            else:
+                machines.discard(machine_id)
+            state['blocked_machine_ids'] = sorted(machines)
+            write_json(self.root / 'queue.json', state)
+            return state['blocked_machine_ids']
+
     def waiting(self) -> list[dict]:
         """Use FIFO ordering for prepared cloud jobs, independently of local CPUs."""
         return sorted((row for row in self.store.list() if row.get('kind') != 'worker' and row['status'] == 'ready'),
@@ -75,6 +106,8 @@ class CloudQueue:
             current = self.worker()
             if current and current['rental_state'] not in ('none', 'deletion_verified'):
                 return current
+            if not offer_host_allowed(offer, blocked_machine_ids(self.read())):
+                raise VastError('GPU host is blocked or its machine ID is unavailable; refresh offers', 409)
             jobs = self.waiting()
             if not jobs and not manual:
                 raise VastError('Queue a cloud optimizer config first', 409)
@@ -114,6 +147,11 @@ class CloudQueue:
         worker = self.worker()
         if action in {'pause', 'resume'}:
             self.update(paused=action == 'pause')
+        if action == 'resume' and worker and worker['rental_state'] not in ('none', 'deletion_verified'):
+            # A manual Rent deliberately keeps the worker reserved.  Starting
+            # the queue must always release that gate, even if a previous start
+            # request had already changed only the queue's paused flag.
+            self.store.update(worker['id'], awaiting_queue_start=False)
         if action == 'end':
             self.update(paused=True)
             if worker and worker['rental_state'] not in ('none', 'deletion_verified'):
@@ -162,7 +200,24 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
                             + 3 * intent['offer']['upload_gb_usd'])
                 used = worker.get('transfer_reserved_used', 0)
                 if used + expected > intent['transfer_reserve_usd'] + 1e-9:
-                    store.update(candidate['id'], error='Waiting: this rental has insufficient remaining transfer reserve')
+                    from vast_deadline import request_transfer_reserve
+                    target = max(.05, used + expected)
+                    previous = worker.get('auto_reserve_target')
+                    if worker.get('deadline_protocol') == 2 and not (worker.get('deadline_error') and previous == target):
+                        try:
+                            request_transfer_reserve(queue, identifier, intent['transfer_reserve_usd'], target)
+                        except VastError as exc:
+                            from logging_helpers import human_log
+                            error = 'Waiting: transfer reserve cannot be increased: ' + str(exc)
+                            if candidate.get('error') != error:
+                                human_log(SERVICE, error, level='WARNING')
+                            store.update(candidate['id'], error=error)
+                        else:
+                            store.update(candidate['id'], error='Waiting for worker confirmation of transfer reserve; rental time will shorten within the same budget')
+                            store.update(identifier, auto_reserve_target=target, idle_since=None)
+                            return None
+                    else:
+                        store.update(candidate['id'], error='Waiting: insufficient transfer reserve. Adjust Transfer reserve/Budget in the rental card; this worker cannot confirm an automatic adjustment.')
                     continue
                 from vast_convergence import DEFAULTS
                 preferences = state.get('gpu_preferences', {})

@@ -60,16 +60,18 @@ def apply_deadline_request(state: dict, request: dict, now: float) -> dict:
     """Validate a compare-and-set request inside the independent guard process."""
     import math
     target = request.get('deadline')
+    requested_max = request.get('max_deadline', state['max_deadline'])
     valid = (isinstance(request.get('id'), str) and re.fullmatch(r'[0-9a-f]{32}', request['id'])
              and request.get('job_id') == state['job_id'] and request.get('expected') == state['deadline']
              and type(target) in (int, float) and math.isfinite(target)
-             and now + 300 < min(state['deadline'], target) and target <= state['max_deadline']
-             and abs(target - state['deadline']) == 1800)
+             and type(requested_max) in (int, float) and math.isfinite(requested_max)
+             and now + 300 < min(state['deadline'], target) and target <= requested_max
+             and requested_max <= state.get('hard_deadline', now + 86400))
     if request.get('id') == state.get('request_id'):
         return state
     if not valid:
         return dict(state, rejected_request_id=str(request.get('id', ''))[:32])
-    return dict(state, deadline=target, request_id=request['id'], rejected_request_id=None)
+    return dict(state, deadline=target, max_deadline=requested_max, request_id=request['id'], rejected_request_id=None)
 
 
 def guard() -> None:
@@ -82,15 +84,18 @@ def guard() -> None:
     maximum = float(os.environ.get("PBGUI_MAX_DEADLINE", str(deadline)))
     if not deadline <= maximum <= time.time() + 86400:
         raise ValueError("Invalid maximum deadline")
+    hard_deadline = float(os.environ.get('PBGUI_HARD_DEADLINE', str(time.time() + 86400)))
     state = {"instance_id": instance, "deadline": deadline, "job_id": os.environ["PBGUI_JOB_ID"],
-             "max_deadline": maximum, "deadline_protocol": 1}
+             "max_deadline": maximum, "hard_deadline": hard_deadline, "deadline_protocol": 2}
     saved_path = ROOT / 'guard.json'
     if saved_path.is_file() and not saved_path.is_symlink():
         saved = json.loads(saved_path.read_text())
         if (saved.get('instance_id') == instance and saved.get('job_id') == state['job_id']
-                and saved.get('max_deadline') == maximum and saved.get('deadline_protocol') == 1
-                and type(saved.get('deadline')) in (int, float) and 0 < saved['deadline'] <= maximum):
-            state = saved
+                and saved.get('deadline_protocol') in (1, 2)
+                and type(saved.get('max_deadline')) in (int, float)
+                and type(saved.get('deadline')) in (int, float)
+                and 0 < saved['deadline'] <= saved['max_deadline'] <= hard_deadline):
+            state = dict(saved, deadline_protocol=2, hard_deadline=min(hard_deadline, saved.get('hard_deadline', hard_deadline)))
             deadline = state['deadline']
     monotonic_deadline = time.monotonic() + max(0, deadline - time.time())
     write_record(ROOT / "guard.json", state)

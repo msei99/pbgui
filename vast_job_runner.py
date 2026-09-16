@@ -17,6 +17,71 @@ from vast_provider import VastRateLimit, VastClient, VastError, positive_id
 from vast_transfer import WorkerConnection, import_results
 
 SERVICE = "VastRunner"
+UPLOAD_RECOVERY_SECONDS = 15 * 60
+UPLOAD_FINISH_RESERVE_SECONDS = 180
+
+
+def schedule_upload_retry(store: JobStore, identifier: str, exc: Exception, deadline: float) -> None:
+    """Persist a bounded recovery window, retaining resumable transfer state."""
+    if not isinstance(exc, VastError):
+        raise VastError('Input upload failed unexpectedly; inspect the local worker log', 422) from None
+    if exc.status != 502:
+        raise exc
+    reason = str(exc)
+    # These diagnoses cannot recover by waiting and must never bypass validation.
+    if any(token in reason.lower() for token in ('host identity verification failed',
+            'host key verification failed', 'remote disk full', 'no space left',
+            'invalid ', 'checksum', 'exceeds the permitted')):
+        raise VastError(reason, 422) from None
+    transient = any(token in reason.lower() for token in ('timed out', 'timeout',
+        'connection', 'interrupted', 'reconnecting', 'stalled', 'hostname resolution',
+        'authentication or permission denied'))
+    if not transient:
+        raise VastError(reason, 422) from None
+    now = time.time()
+    state = store.read(identifier)
+    progress = state.get('upload_progress') or {}
+    count = max((progress.get(key) or 0 for key in ('bytes', 'transferred_bytes')), default=0)
+    previous = state.get('upload_retry_bytes', 0)
+    since = state.get('upload_recovery_since')
+    if since is None or count > previous:
+        since = now
+    if now >= deadline - UPLOAD_FINISH_RESERVE_SECONDS:
+        raise VastError('Input upload could not finish before the rental collection reserve; partial data retained', 422)
+    if now - since >= UPLOAD_RECOVERY_SECONDS:
+        raise VastError('Input upload could not recover for 15 minutes without new transfer progress; last error: ' + reason, 422)
+    failures = state.get('upload_retry_failures', 0) + 1
+    delay = min(60, 15 * 2 ** min(failures - 1, 2))
+    retry_at = min(now + delay, since + UPLOAD_RECOVERY_SECONDS, deadline - UPLOAD_FINISH_RESERVE_SECONDS)
+    progress = dict(progress, stage='reconnecting', bytes_per_second=0)
+    store.update(identifier, upload_recovery_since=since, upload_retry_bytes=max(count, previous),
+                 upload_retry_failures=failures, upload_retry_at=retry_at,
+                 upload_progress=progress, status='uploading',
+                 error=f'Upload connection interrupted; retrying in {max(1, int(retry_at - now))}s '
+                       f'(up to 15 minutes to recover; partial data retained). Last error: {reason}')
+
+
+def sync_optimizer_log(connection, store: JobStore, identifier: str) -> None:
+    """Bound telemetry independently so log failures cannot skip stop or collection."""
+    from secure_files import atomic_write_private_text, ensure_private_directory
+    from vast_jobs import PROJECT
+    try:
+        raw_log = connection.command('if test -f ' + connection.remote_root + '/output/optimizer.log; then tail -c 65536 '
+                                     + connection.remote_root + '/output/optimizer.log; fi', max_output=131072)
+        raw_log = raw_log[-65536:]
+        if raw_log:
+            from vast_exact_queue import parse_exact_queue
+            exact_queue = parse_exact_queue(raw_log)
+            if exact_queue is not None:
+                store.update(identifier, exact_queue=exact_queue)
+            log_root = ensure_private_directory(PROJECT / 'data/logs/optimizes_v8')
+            atomic_write_private_text(log_root / ('vast_' + identifier + '.log'), raw_log.decode('utf-8', errors='replace'))
+        store.update(identifier, log_error=None)
+    except Exception as exc:
+        # Never publish arbitrary remote payloads or exception values.
+        error = str(exc) if isinstance(exc, VastError) else 'Optimizer log synchronization failed'
+        _log(SERVICE, error, level='WARNING')
+        store.update(identifier, log_error=error)
 
 
 def validate_intent(intent: dict, identifier: str) -> dict:
@@ -45,7 +110,7 @@ def rental_payload(intent: dict, registry_token: str = "") -> dict:
                "nohup /usr/local/bin/python /work/pbgui/worker.py guard > /work/pbgui/guard.log 2>&1 < /dev/null &\n")
     return {"client_id": "me", "image": intent["image"], "disk": intent["offer"]["disk_gb"],
             "label": intent["label"], "runtype": "ssh_direct", "target_state": "running", "cancel_unavail": True,
-            "onstart": startup, "env": {"PBGUI_DEADLINE": str(intent["deadline"]), "PBGUI_JOB_ID": intent["id"], "PBGUI_MAX_DEADLINE": str(maximum_deadline(intent))}}
+            "onstart": startup, "env": {"PBGUI_DEADLINE": str(intent["deadline"]), "PBGUI_JOB_ID": intent["id"], "PBGUI_MAX_DEADLINE": str(maximum_deadline(intent)), "PBGUI_HARD_DEADLINE": str(intent['accepted_at'] + 86400 if 'accepted_at' in intent else maximum_deadline(intent))}}
 
 
 def owned_instance(client: VastClient, intent: dict, *, fresh: bool = False) -> dict | None:
@@ -88,7 +153,8 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
         if state.get("instance_id") and row["id"] != state["instance_id"]:
             raise VastError("Instance ID does not match the rental authorization")
         store.update(identifier, instance_id=row["id"], rental_state="destroy_pending" if ending else "active",
-                     provider_status=str(row.get("actual_status") or "unknown")[:50], absent_checks=0, cleanup_error=None, creation_error=None)
+                     provider_status=str(row.get("actual_status") or "unknown")[:50], absent_checks=0, cleanup_error=None, creation_error=None,
+                     **({'host_machine_id': row['machine_id']} if type(row.get('machine_id')) is int and row['machine_id'] > 0 else {}))
         if ending:
             client.request("DELETE", f"/instances/{positive_id(row['id'])}")
         return False
@@ -213,7 +279,7 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
             if not lease_id:
                 store.control(identifier, "cleanup")
             return
-        if (not state.get("uploaded") and state.get("setup_started_at") is not None
+        if (not state.get("worker_ready") and not state.get("uploaded") and state.get("setup_started_at") is not None
                 and time.time() > state["setup_started_at"] + 900):
             store.update(identifier, status="failed", error="Worker setup exceeded 15 minutes")
             if not lease_id:
@@ -225,6 +291,16 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 store.control(identifier, "cleanup")
             store.update(identifier, status="failed", error="Rental deadline reached; preserving last local snapshot")
             return
+        if state.get('worker_ready') and not state.get('uploaded'):
+            if remaining <= UPLOAD_FINISH_RESERVE_SECONDS:
+                store.update(identifier, status='failed', error='Input upload could not finish before the rental collection reserve; partial data retained')
+                if not lease_id:
+                    store.control(identifier, 'cleanup')
+                return
+            retry_at = state.get('upload_retry_at') or 0
+            if retry_at > time.time():
+                time.sleep(min(5, retry_at - time.time()))
+                continue
         try:
             client = VastClient(VastCredentialStore(store.root).secrets()["api_key"])
             row = owned_instance(client, intent)
@@ -263,11 +339,10 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 if digest(directory / "input.tar.gz") != job_intent["bundle_sha256"]:
                     raise VastError("Local input bundle changed after authorization", 422)
                 attempts = int(state.get("upload_attempts", 0))
-                if attempts >= 2:
-                    raise VastError("Input upload failed twice; ending rental to limit transfer costs", 422)
-                store.update(identifier, upload_attempts=attempts + 1)
-                connection.upload(timeout=max(1, int(intent["deadline"] - time.time() - 180)))
-                store.update(identifier, uploaded=True)
+                store.update(identifier, upload_attempts=attempts + 1, upload_retry_at=None)
+                connection.upload(timeout=max(1, int(intent["deadline"] - time.time() - UPLOAD_FINISH_RESERVE_SECONDS)))
+                store.update(identifier, uploaded=True, error=None, upload_recovery_since=None,
+                             upload_retry_at=None, upload_retry_failures=0, upload_retry_bytes=0)
             progress = connection.operation("status")
             if not progress.get("started"):
                 connection.start()
@@ -278,17 +353,7 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 sample_metrics(connection, store, identifier)
                 last_metrics = time.time()
             if time.time() - last_log >= 15:
-                from secure_files import atomic_write_private_text, ensure_private_directory
-                from vast_jobs import PROJECT
-                raw_log = connection.command('if test -f ' + connection.remote_root + '/output/optimizer.log; then tail -c 65536 '
-                                             + connection.remote_root + '/output/optimizer.log; fi', max_output=65536)
-                if raw_log:
-                    from vast_exact_queue import parse_exact_queue
-                    exact_queue = parse_exact_queue(raw_log)
-                    if exact_queue is not None:
-                        store.update(identifier, exact_queue=exact_queue)
-                    log_root = ensure_private_directory(PROJECT / 'data/logs/optimizes_v8')
-                    atomic_write_private_text(log_root / ('vast_' + identifier + '.log'), raw_log.decode('utf-8', errors='replace'))
+                sync_optimizer_log(connection, store, identifier)
                 last_log = time.time()
             if control["stop"] or remaining < 240:
                 if not state.get('stop_reason') and not progress.get('finished'):
@@ -314,6 +379,23 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
         except Exception as exc:
             safe_error = str(exc) if isinstance(exc, VastError) else "Worker operation failed; reconnecting"
             _log(SERVICE, safe_error, level="WARNING")
+            current = store.read(identifier)
+            if current.get('worker_ready') and not current.get('uploaded'):
+                stopped = any(store.read(owner, 'control.json').get(key)
+                              for owner in {identifier, lease_id or identifier} for key in ('stop', 'cleanup'))
+                if stopped:
+                    store.update(identifier, status='cancelled', error=None, upload_retry_at=None)
+                    if not lease_id:
+                        store.control(identifier, 'cleanup')
+                    return
+                try:
+                    schedule_upload_retry(store, identifier, exc, intent['deadline'])
+                except VastError as fatal:
+                    exc = fatal
+                    safe_error = str(fatal)
+                    _log(SERVICE, safe_error, level='WARNING')
+                else:
+                    continue
             store.update(identifier, error=safe_error)
             if isinstance(exc, VastError) and exc.status == 422:
                 store.update(identifier, status="failed")

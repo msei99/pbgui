@@ -1,4 +1,18 @@
 <div class="vast-component">
+  <nav id="vast-settings-nav" class="ctx-actions" aria-label="Cloud settings">
+    <button type="button" class="sb-btn active" data-vast-view="offers">GPU offers</button>
+    <button type="button" class="sb-btn" data-vast-view="known">Known &amp; preferred hosts</button>
+    <button type="button" class="sb-btn" data-vast-view="blocked">Blocked hosts</button>
+    <button type="button" class="sb-btn" data-vast-view="performance">Performance History</button>
+  </nav>
+  <div id="vast-performance-actions" class="ctx-actions" hidden>
+    <button type="button" class="sb-btn" id="performance-refresh">Refresh history</button>
+    <button type="button" class="sb-btn" id="performance-view" disabled>View selected run</button>
+    <button type="button" class="sb-btn" id="performance-compare" disabled>Compare selected</button>
+    <button type="button" class="sb-btn" id="performance-same" disabled>Same workload only</button>
+    <button type="button" class="sb-btn" id="performance-clear">Clear selection / filter</button>
+    <button type="button" class="sb-btn" id="performance-back" hidden>Back to history</button>
+  </div>
   <details class="card" id="vast-setup"><summary title="Save your Vast API key and check your balance. Account read and instance read/write permissions are required.">Cloud setup</summary><section aria-labelledby="account-title">
     <div class="heading"><h2 id="account-title">Vast.ai account</h2>
       <a href="https://cloud.vast.ai/?ref_id=522435" target="_blank" rel="noopener noreferrer sponsored" title="This referral link supports PBGui.">Create Vast.ai account ↗</a>
@@ -21,7 +35,8 @@
       <label>Max USD/hour<input id="max-price" type="number" min="0.01" max="100" step="0.01" value="0.50" required></label>
       <label>Min VRAM (GB)<input id="min-vram" type="number" min="0" max="256" value="12" required></label>
       <label>Min RAM (GB)<input id="min-ram" type="number" min="0" max="4096" value="16" required></label>
-      <label>Min CPU cores<input id="min-cpu" type="number" min="0" max="512" value="4" required></label>
+      <label><span data-tip="Minimum CPU allocation for cloud rentals. Set 16 or 32 here if required. Cloud jobs automatically use the allocated cores; local optimizer CPU settings do not set this minimum.">Min CPU cores</span><input id="min-cpu" type="number" min="0" max="512" value="4" required></label>
+      <label><span data-tip="Minimum advertised GPU compute throughput. Set 0 to allow all offers.">Min TFLOPS</span><input id="min-tflops" type="number" min="0" max="100000" step="0.1" value="0" required></label>
       <label>Disk (GB)<input id="disk" type="number" min="40" max="2000" value="40" required></label>
       <label>Hosts<select id="verified"><option value="true">Verified only</option><option value="false">All</option></select></label>
       <button type="submit" id="find-offers">Preview available GPUs</button>
@@ -41,9 +56,48 @@
     <button id="rent-offer" type="button" disabled>Rent</button>
     <div id="rent-message" role="status" aria-live="polite"></div>
     <button id="settings-end-rental" type="button" hidden>End rental</button>
+    <span id="settings-host-block"></span>
     <p id="settings-rental-status" class="muted"></p>
     <p id="selection" class="muted" hidden>Preview offers to choose a GPU type, or enter it above.</p>
     <p id="saved-requirements" class="muted">Loading saved GPU requirements…</p>
+  </section>
+  <section id="vast-known-hosts" class="card" hidden>
+      <h2>Host history &amp; preferences</h2>
+      <p class="muted">Previously used means a real rental was recorded. Working means optimization results were recorded, or you marked the host manually. Preferred hosts are selected first within your limits; blocked hosts remain excluded.</p>
+      <form id="mark-machine-form" class="fields">
+        <label>Vast machine ID<input id="mark-machine-id" type="number" min="1" step="1" required></label>
+        <button type="submit" data-mark="preferred" data-host-block>Prefer host</button>
+        <button type="submit" data-mark="working" data-host-block>Mark working</button>
+      </form>
+      <div id="known-hosts-list"></div>
+  </section>
+  <section id="vast-blocked-hosts" class="card" hidden>
+      <h2>Host exclusions</h2>
+      <p class="muted">Blocked machines are excluded from future offers and rentals. Current rentals continue until you end them.</p>
+      <form id="block-machine-form" class="fields">
+        <label>Vast machine ID<input id="block-machine-id" type="number" min="1" step="1" required></label>
+        <button id="block-machine-submit" type="submit">Block host</button>
+      </form>
+      <div id="blocked-hosts-list"></div>
+  </section>
+  <section id="vast-performance" class="card" hidden aria-labelledby="performance-title">
+    <div class="heading"><h2 id="performance-title">Performance History</h2><span id="performance-count" class="muted"></span></div>
+    <p class="muted">Recorded locally while the API is running. Select up to four runs with the same workload to compare. Exported candles include reference and warm-up data; actual consumed candles are not reported. Costs are estimates.</p>
+    <p id="performance-status" role="status" aria-live="polite"></p>
+    <div id="performance-browser">
+      <label>Filter this page<input id="performance-filter" type="search" placeholder="Config, GPU, machine, coin, exchange…" maxlength="120"></label>
+      <div class="table-wrap"><table aria-label="Recorded optimizer performance"><thead><tr>
+        <th>Run / status</th><th>GPU / machine</th><th>CPU</th><th>Coins</th><th>Exchanges</th><th>Scenarios</th><th>Exported candles</th><th>Proxy/min</th><th>Exact/min</th><th>Proxy/min range</th><th>First counter (s)</th><th>Exact/USD</th><th>Run cost (USD)</th><th>Comparable host runs</th><th>Workload</th>
+      </tr></thead><tbody id="performance-rows"></tbody></table></div>
+      <div class="fields"><button id="performance-prev" type="button">Previous</button><button id="performance-next" type="button">Next</button></div>
+      <div id="performance-selection" class="muted"></div>
+    </div>
+    <div id="performance-comparison" hidden>
+      <div id="performance-details"></div>
+      <div id="performance-proxy-chart" class="performance-chart"></div>
+      <div id="performance-exact-chart" class="performance-chart"></div>
+      <p class="muted">Time is relative to the first recorded counter. Averages use total observed work divided by covered time; counter resets are excluded. Same input does not guarantee identical cache state or scheduling. Missing history before recording began cannot be reconstructed.</p>
+    </div>
   </section>
   <section id="vast-jobs">
     <div id="cloud-job-details" hidden>
@@ -54,6 +108,13 @@
       <div class="optlog-card"><div class="optlog-label"><span data-tip="Used and total memory on the rented GPU, reported by nvidia-smi.">VRAM usage</span></div><div id="cloud-vram-util" class="optlog-value">—</div></div>
       <div class="optlog-card"><div class="optlog-label"><span data-tip="Submitted CPU validations not yet incorporated into results: waiting, running, or finished but awaiting earlier submissions. PB8 does not report these groups separately. Sampled from generation profiles, not a live process count.">CPU checks outstanding</span></div><div id="cloud-exact-queue" class="optlog-value">—</div><div id="cloud-exact-queue-age" class="muted"></div></div>
     </div>
+    <div id="cloud-throughput" class="optlog-summary-grid" aria-label="Optimizer throughput">
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Measured proxy counter increase per minute over the most recent log interval (about 60 seconds when available). Excludes image preparation and input upload. Stale samples are not shown as live throughput.">Proxy / min</span></div><div id="cloud-proxy-rate" class="optlog-value">—</div><div id="cloud-proxy-total" class="muted"></div></div>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Completed exact CPU evaluations per minute, measured over the same interval as the proxy rate.">Exact / min</span></div><div id="cloud-exact-rate" class="optlog-value">—</div><div id="cloud-exact-total" class="muted"></div></div>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Cumulative logged proxy evaluations divided by completed exact evaluations. Describes screening workload, not result quality, acceptance rate or hardware utilization. Exact evaluations can lag behind proxy work.">Proxy / exact</span></div><div id="cloud-proxy-exact" class="optlog-value">—</div></div>
+      <div class="optlog-card"><div class="optlog-label"><span data-tip="Estimated completed exact evaluations per USD at the measured rate and this rental's hourly price. Excludes transfer charges, startup and idle time; this is not actual billed efficiency or a quality score.">Exact / USD (estimate)</span></div><div id="cloud-cost-efficiency" class="optlog-value">—</div></div>
+    </div>
+    <p id="cloud-throughput-sample" class="muted" role="status">Waiting for timestamped optimizer counters.</p>
     <div id="cloud-convergence" class="optlog-summary-grid" hidden>
       <div class="optlog-card"><div class="optlog-label"><span data-tip="Quality of the exact feasible Pareto front, measured on a fixed scale. This is a stopping heuristic, not proof that no better configuration exists.">Convergence</span></div><div id="convergence-phase" class="optlog-value"></div></div>
       <div class="optlog-card"><div class="optlog-label"><span data-tip="Current exact CPU count minus the count at the last accepted Pareto improvement. This is not elapsed time or GPU proxy count. The improvement baseline is checked after verified snapshots; this live count can therefore be ahead of the Stagnation bar, which uses the last checked snapshot. A dash means no baseline is available yet.">Since last improvement ⓘ</span></div><div id="convergence-since" class="optlog-value"></div></div>
