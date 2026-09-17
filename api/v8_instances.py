@@ -17,7 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, authenticate_websocket, require_auth
@@ -1654,6 +1654,7 @@ async def save_v8_instance_config(
     body: dict = Body(...),
     create_only: bool = Query(False),
     session: SessionToken = Depends(require_auth),
+    background_tasks: BackgroundTasks = None,
 ) -> dict[str, Any]:
     """Prepare, atomically save, manifest, and publish one PB8 live config."""
 
@@ -1801,7 +1802,13 @@ async def save_v8_instance_config(
             cache_prepared_pb8_config(saved, path)
         except Exception as exc:
             _log(SERVICE, f"PB8 config cache warmup skipped for '{name}': {exc}", level="WARNING")
-    activation = await _activate_pb8_target(name, operation)
+    if background_tasks is not None:
+        # Response-owned work is awaited by ASGI after sending the response.
+        # The durable cluster operation remains recoverable across API restarts.
+        background_tasks.add_task(_activate_pb8_target, name, operation)
+        activation = {"ok": False, "pending": True, "direct": False, "status": "queued"}
+    else:
+        activation = await _activate_pb8_target(name, operation)
     _log(SERVICE, f"Saved PB8 live config '{name}' (v{saved['pbgui']['version']})", level="INFO")
     return {
         "ok": True,

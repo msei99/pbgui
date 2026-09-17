@@ -1363,6 +1363,7 @@ function _suiteVisualWindows() {
 
 function _suiteMountVisual(host) {
   var context = _suiteScenarioContext();
+  _suiteState.visualContextSignature = _suiteScenarioContextSignature(context);
   window.PBGuiScenarioVisual.mount(host, {
     apiBase:_suiteState.apiBase, context:context, windows:_suiteVisualWindows(),
     settings:function(){return _suiteCaptureScenarioGeneratorDraft() || {};},
@@ -1379,8 +1380,9 @@ function _suiteMountVisual(host) {
       if(typeof scheduleStructuredEditorSync==='function')scheduleStructuredEditorSync();
     },
     apply:async function(windows) {
+      // Revalidate the existing draft against the current form without discarding windows.
+      context = _suiteScenarioContext();
       var signature=_suiteScenarioContextSignature(context);
-      if(signature!==_suiteScenarioContextSignature(_suiteScenarioContext()))throw new Error('Base dates or exchanges changed. Reopen the editor before applying.');
       var draft=_suiteCaptureScenarioGeneratorDraft() || {};
       var payload=Object.assign({},draft,{windows:windows,start_date:context.start_date,end_date:context.end_date,exchanges:context.exchanges,reducer:_suiteState.aggregate});
       var generation=++_suiteState.scenarioRequestId;
@@ -1397,4 +1399,17 @@ function _suiteMountVisual(host) {
       }else throw new Error('Scenarios were not applied. Close the individual scenario editor and try again.');
     }
   });
+}
+
+function suiteRefreshVisualContext() {
+  var host = document.getElementById('suite-visual-host');
+  if (!host || !window.PBGuiScenarioVisual) return;
+  var context = _suiteScenarioContext();
+  var signature = _suiteScenarioContextSignature(context);
+  if (signature === _suiteState.visualContextSignature) return;
+  var start = Date.parse(context.start_date), end = Date.parse(context.end_date);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) return;
+  _suiteState.scenarioPreview = null;
+  _suiteState.scenarioRequestId++;
+  _suiteMountVisual(host);
 }

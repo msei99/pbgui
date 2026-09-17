@@ -1,5 +1,7 @@
 # PBv7 Run
 
+Saving returns after local persistence and publication of the cluster operation. SSH activation continues after the response; Activation pending does not yet confirm activation on the target host.
+
 Backup-retention responses preserve values typed while loading. Repeated conversion clicks are ignored while conversion runs; pending Delete and forced-mode actions cannot close a later dialog. Dynamic Ignore previews refresh when tags change.
 
 If an existing instance configuration cannot be loaded, the editor reports the error and disables Save. Reload the editor after resolving the load error.

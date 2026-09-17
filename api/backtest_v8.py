@@ -89,6 +89,35 @@ from secure_files import atomic_write_private_text
 SERVICE = "BacktestV8"
 router = APIRouter()
 
+
+@router.get("/scenario-templates")
+def get_scenario_templates(session: SessionToken = Depends(require_auth)) -> dict:
+    """Expose the shared PB8 scenario catalog in the backtest namespace."""
+    from api.optimize_v8 import get_scenario_templates as shared
+    return shared(session=session)
+
+
+@router.post("/scenario-templates/preview")
+def preview_scenario_template(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Validate backtest windows with the same service as Optimize."""
+    from api.optimize_v8 import preview_scenario_template as shared
+    return shared(body, session=session)
+
+
+@router.get("/scenario-templates/sources")
+def scenario_chart_sources(exchange: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """List local scenario chart sources for the backtest editor."""
+    from api.optimize_v8 import scenario_chart_sources as shared
+    return shared(exchange, session=session)
+
+
+@router.get("/scenario-templates/chart")
+def scenario_chart_data(exchange: str, dataset: str, coin: str, start: str, end: str,
+                        session: SessionToken = Depends(require_auth)) -> dict:
+    """Read bounded local candles through the shared scenario chart service."""
+    from api.optimize_v8 import scenario_chart_data as shared
+    return shared(exchange, dataset, coin, start, end, session=session)
+
 _QUEUE_SETTINGS_SECTION = "backtest_v7"
 _MATERIALIZED_LOCK_FILENAME = ".materialized.lock.json"
 _MATERIALIZED_OP_LOCK_DIRNAME = ".materialized.op.lock"

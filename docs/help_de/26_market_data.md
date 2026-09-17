@@ -1,5 +1,7 @@
 # Market Data
 
+Unter Status ist Refresh Now während einer laufenden, vorgemerkten oder gerade angeforderten Aktualisierung deaktiviert. Aktionsfehler werden auch bei nicht als JSON gelieferten Serverfehlern angezeigt. Delete by Date erlaubt nur eine Bestätigung/Löschung gleichzeitig; bei Löschfehlern schließt der Datumsdialog und der Fehler erscheint als Toast und in der Sidebar.
+
 Die Aktionen Delete, Retry und Requeue im Hyperliquid-Auftragsverlauf zeigen HTTP- und Verbindungsfehler sichtbar an.
 
 Das Loeschen eines Hyperliquid-Verlaufsjobs erfordert eine Bestaetigung, bevor der Job und seine Logs entfernt werden. Cancel behaelt den Job; wiederholte Klicks koennen waehrend der Bestaetigung oder Anfrage keine doppelten Loeschungen ausloesen.

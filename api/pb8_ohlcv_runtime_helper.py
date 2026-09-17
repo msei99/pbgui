@@ -6,7 +6,7 @@ import asyncio
 import copy
 import json
 import sys
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +58,8 @@ def _load_modules(pb8_dir: Path) -> dict[str, Any]:
         to_standard_exchange_name,
     )
     from warmup_utils import compute_backtest_warmup_minutes
+    if (src_dir / "simulation_data.py").is_file():
+        from simulation_data import simulation_data_policy
 
     return locals()
 
@@ -366,10 +368,11 @@ def _build_start_date_options(
     }
 
 
-async def _build(payload: dict[str, Any]) -> dict[str, Any]:
+async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
     """Prepare a config and evaluate its local ranges with PB8 modules."""
     pb8_dir = Path(str(payload.get("pb8_dir") or "")).resolve()
-    modules = _load_modules(pb8_dir)
+    if modules is None:
+        modules = _load_modules(pb8_dir)
     raw_config = payload.get("config")
     if not isinstance(raw_config, dict):
         raise TypeError("config must be an object")
@@ -574,7 +577,9 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
                         entry.update(
                             status=status,
                             status_label=(
-                                "Missing from configured source"
+                                "Missing offline data"
+                                if status == "missing_local" and backtest.get("offline")
+                                else "Missing from configured source"
                                 if status == "missing_local" and source_dir
                                 else STATUS_LABELS[status]
                             ),
@@ -594,7 +599,7 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
                             start_ts=adjusted_start_ts,
                             end_ts=end_ts,
                         )
-                        entry.update(status=plan.status, status_label=STATUS_LABELS.get(plan.status, plan.status))
+                        entry.update(status=plan.status, status_label=("Missing offline data" if backtest.get("offline") and plan.status == "missing_local" else STATUS_LABELS.get(plan.status, plan.status)))
                         if plan.bounds[0] is not None or plan.bounds[1] is not None:
                             entry["catalog_bounds"] = {
                                 "first": modules["ts_to_date"](plan.bounds[0]) if plan.bounds[0] is not None else None,
@@ -690,7 +695,13 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
     ]
     if source_dir:
         notes.append(f"PB8 explicit source checked read-only: {source_dir}")
-    summary = _summary(best_counts, len(best_entries), explicit_source=bool(source_dir))
+    summary = _summary(best_counts, len(best_entries), explicit_source=bool(source_dir) or bool(backtest.get("offline")))
+    if backtest.get("offline"):
+        notes.append("Offline mode: cached metadata and candles only; the PB8 run also verifies offline dataset provenance.")
+        summary.update(preload_supported=False, preload_label="Offline mode",
+                       preload_detail="Disable backtest.offline explicitly to download missing inputs, or supply complete local data and metadata.")
+        if best_counts.get("missing_local"):
+            summary.update(overall_status="blocked", headline="Offline OHLCV data is incomplete")
     scenario_only_exchanges = set(required_exchange_labels) - set(base_exchanges)
     if gpu_suite and scenario_only_exchanges and summary.get("preload_supported"):
         summary.update(
@@ -726,6 +737,22 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+async def _build_with_data_policy(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep metadata and inception lookups inside PB8's offline policy when requested."""
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        raise TypeError("config must be an object")
+    offline = config.get("backtest", {}).get("offline", False)
+    if not isinstance(offline, bool):
+        raise ValueError("backtest.offline must be a boolean")
+    modules = _load_modules(Path(str(payload.get("pb8_dir") or "")).resolve())
+    policy = modules.get("simulation_data_policy")
+    if offline and policy is None:
+        raise ValueError("The installed PB8 runtime does not support backtest.offline")
+    with policy(config) if policy else nullcontext():
+        return await _build(payload, modules=modules)
+
+
 def main() -> int:
     """Read one JSON request from stdin and write one JSON response."""
     try:
@@ -733,7 +760,7 @@ def main() -> int:
         if not isinstance(payload, dict):
             raise TypeError("request must be an object")
         with redirect_stdout(sys.stderr):
-            result = asyncio.run(_build(payload))
+            result = asyncio.run(_build_with_data_policy(payload))
         response = {"ok": True, "result": result}
     except Exception as exc:
         response = {"ok": False, "error": type(exc).__name__, "detail": str(exc)}

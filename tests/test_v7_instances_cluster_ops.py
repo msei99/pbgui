@@ -12,6 +12,40 @@ from types import SimpleNamespace
 from api import v7_instances
 
 
+def test_http_save_owns_activation_after_response(monkeypatch, tmp_path):
+    """PB7 save persists its operation before queued background SSH work (#360)."""
+    from fastapi import BackgroundTasks
+
+    (tmp_path / 'pbgui.ini').write_text('[main]\npbname=master\n')
+    monkeypatch.setattr(v7_instances, 'PBGDIR', str(tmp_path))
+    monkeypatch.setattr(v7_instances, '_monitor', None)
+    monkeypatch.setattr(v7_instances, 'save_pb7_config', lambda cfg, path: path.write_text(json.dumps(cfg)))
+    monkeypatch.setitem(sys.modules, 'User', SimpleNamespace(Users=lambda: SimpleNamespace(find_exchange=lambda _: '')))
+    calls = []
+
+    async def compatible(*args):
+        """Skip real runtime and remote compatibility checks."""
+
+    async def activate(name, operation):
+        """Record the queued activation without SSH."""
+        calls.append((name, operation['op']))
+        return {'ok': 1}
+
+    async def body():
+        """Supply a minimal isolated save request."""
+        return {'config': {'live': {'user': 'test_inst'}, 'pbgui': {'enabled_on': 'disabled'}}}
+
+    monkeypatch.setattr(v7_instances, '_ensure_target_runtime_compatible', compatible)
+    monkeypatch.setattr(v7_instances, '_ssh_sync_instance', activate)
+    tasks = BackgroundTasks()
+    result = asyncio.run(v7_instances.save_instance_config('test_inst', SimpleNamespace(json=body), session=None, background_tasks=tasks))
+    assert result['sync']['pending'] is True
+    assert calls == []
+    assert (tmp_path / 'data/run_v7/test_inst/config.json').is_file()
+    asyncio.run(tasks())
+    assert calls == [('test_inst', 'UPSERT_CONFIG')]
+
+
 def _write_config(instance_dir: Path, version: int, enabled_on: str) -> dict:
     """Write a minimal V7 config and return the config dict."""
 

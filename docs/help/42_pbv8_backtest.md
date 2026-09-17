@@ -1,5 +1,9 @@
 # PBv8 Backtest
 
+On supported PB8 versions, **Additional Parameters → offline** uses cached simulation candles and metadata only. Missing inputs cause an error; prepared datasets require verified offline provenance. OHLCV Readiness also respects offline mode and disables remote preload. Other PBGui services are unaffected.
+
+The visual Scenario Editor uses the authenticated Backtest scenario endpoints for local candle sources, charts and window previews. Changing base dates or exchanges preserves the drawn windows; Check & Apply validates them against the current base settings.
+
 The POS column shows Long / Short position limits. A disabled side (zero position limit or zero total wallet exposure) is displayed as `-`, for example `4 / -`.
 
 PBv8 Backtest manages Passivbot V8 configurations and jobs independently from PBv7. PBGui validates every configuration through the currently installed PB8 loader before saving or starting it.

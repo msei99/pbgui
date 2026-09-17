@@ -344,6 +344,7 @@
     var destroyed = false;
 
     // === State ===
+    var actionPending = false;
     var currentStatus = {
         running: false,
         queued: false,
@@ -435,11 +436,11 @@
         var btnCancel = $('btn-cancel');
         var btnStop = $('btn-stop');
 
-        btnRefresh.disabled = data.queued;
+        btnRefresh.disabled = actionPending || Boolean(data.queued || data.running);
         btnRefresh.style.display = data.queued ? 'none' : 'block';
-        btnCancel.disabled = !data.queued;
+        btnCancel.disabled = actionPending || !data.queued;
         btnCancel.style.display = data.queued ? 'block' : 'none';
-        btnStop.disabled = !data.running;
+        btnStop.disabled = actionPending || !data.running;
         btnStop.style.display = data.running ? 'block' : 'none';
 
         // Progress
@@ -543,22 +544,40 @@
     }
 
     function callAPI(endpoint, body, successMessage) {
-        fetch(API_BASE + endpoint, {
+        if (destroyed || actionPending) return;
+        if (endpoint.endsWith('/refresh-now') && (currentStatus.running || currentStatus.queued)) return;
+        actionPending = true;
+        var statusAtStart = currentStatus;
+        updateUI(currentStatus);
+        return fetch(API_BASE + endpoint, {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         })
-        .then(function(resp) { return resp.json(); })
+        .then(async function(resp) {
+            var data;
+            try { data = await resp.json(); } catch (error) { throw new Error('HTTP ' + resp.status + ': invalid server response'); }
+            if (!resp.ok) throw new Error(typeof data.detail === 'string' ? data.detail : (typeof data.error === 'string' ? data.error : 'HTTP ' + resp.status));
+            return data;
+        })
         .then(function(data) {
+            if (destroyed) return;
             if (data.success) {
+                if (currentStatus === statusAtStart) {
+                    if (endpoint.endsWith('/refresh-now')) currentStatus.queued = true;
+                    if (endpoint.endsWith('/cancel-refresh')) currentStatus.queued = false;
+                }
                 showToast(successMessage, 'success');
             } else {
                 showToast(data.error || 'Action failed', 'error');
             }
         })
         .catch(function(error) {
-            showToast('Error: ' + error.message, 'error');
+            if (!destroyed) showToast('Error: ' + error.message, 'error');
+        }).finally(function() {
+            actionPending = false;
+            if (!destroyed) updateUI(currentStatus);
         });
     }
 

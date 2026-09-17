@@ -1,5 +1,7 @@
 # PBv7 Run
 
+Speichern antwortet nach dem lokalen Sichern und Veröffentlichen der Cluster-Operation. Die SSH-Aktivierung folgt nach der Antwort; Activation pending bestätigt noch keine Aktivierung auf dem Zielhost.
+
 Antworten zu Backup-Aufbewahrungswerten erhalten während des Ladens eingegebene Werte. Wiederholte Konvertierungsklicks werden während einer Konvertierung ignoriert; laufende Delete- und Forced-Mode-Aktionen können keinen späteren Dialog schließen. Dynamic-Ignore-Vorschauen aktualisieren sich bei Tag-Änderungen.
 
 Kann die Konfiguration einer bestehenden Instanz nicht geladen werden, zeigt der Editor einen Fehler und sperrt Save. Nach Behebung des Ladefehlers muss der Editor neu geladen werden.

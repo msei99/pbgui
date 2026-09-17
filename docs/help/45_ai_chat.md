@@ -1,5 +1,7 @@
 # AI Chat
 
+Stop also works while a new conversation is still being created. The pending prompt is not sent when the delayed creation response arrives, and the composer becomes available again.
+
 ## Purpose
 
 AI Chat is the first productive PBGui AI integration. It combines provider chat with controlled PBGui capabilities.

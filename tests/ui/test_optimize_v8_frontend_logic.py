@@ -1341,7 +1341,7 @@ def test_pb8_gpu_editor_uses_the_standard_eight_column_responsive_grid() -> None
     ):
         assert heading in section
     assert "justify-content:space-between" not in section
-    assert section.count("form-row cols-8") == 4
+    assert section.count("form-row cols-8") == 5
     assert section.count("gpu-desktop-headings") == 2
     assert section.count("gpu-mobile-heading") == 4
     assert "gpu-settings-grid" not in section
@@ -1856,7 +1856,7 @@ def test_saving_a_queue_opened_config_refreshes_that_queue_snapshot() -> None:
 def test_v8_save_and_queue_with_new_name_does_not_rebind_opened_job() -> None:
     """Renaming a queue-opened PB8 config creates a new job and leaves the old job immutable."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
-    save_source = _page_function(page, "saveEditor")
+    save_source = _page_function(page, "setOptimizeEditorSaving") + _page_function(page, "saveEditor")
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
@@ -1866,7 +1866,9 @@ def test_v8_save_and_queue_with_new_name_does_not_rebind_opened_job() -> None:
           editorSourceName: 'HYPE_trailing_030',
           selectedConfigs: new Set()
         }};
-        const optimizeEditorAdapter = {{isV8: true}};
+            const optimizeEditorAdapter = {{isV8: true}};
+            const el = () => null;
+            const handleError = error => {{ throw error; }};
         function updateOptimizeEditorUrl() {{}}
         function editorVisible() {{ return true; }}
         function ensureRawJsonValidForSave() {{ return true; }}
@@ -3285,11 +3287,12 @@ def test_graphical_sweep_apply_restores_only_three_scoring_defaults():
 def test_save_actions_report_failures_and_allow_retry():
     """Both save actions surface collection/API errors and release their pending lock."""
     page = (ROOT / 'frontend/v7_optimize.html').read_text(encoding='utf-8')
-    source = _page_function(page, 'saveEditor')
+    source = _page_function(page, 'setOptimizeEditorSaving') + _page_function(page, 'saveEditor')
     script = """
     (async () => {
       const assert = require('node:assert/strict');
       const state = {};
+      const el = () => null;
       const optimizeEditorAdapter = {isV8:true};
       const editorVisible = () => true;
       const ensureRawJsonValidForSave = () => true;

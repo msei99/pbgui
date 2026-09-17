@@ -531,7 +531,7 @@ textarea.json-invalid:focus {
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
-<script defer src="/app/js/pb8_parameter_help.js?v=1"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=2"></script>
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -3193,7 +3193,8 @@ async function saveConfig() {
     var syncOk = (data.sync && data.sync.ok) || 0;
     var syncFail = (data.sync && data.sync.failed) || 0;
     var syncMsg = '';
-    if (syncOk > 0) syncMsg = ' | SSH sync: ' + syncOk + ' host(s) OK';
+    if (data.sync && data.sync.pending) syncMsg = ' | Activation pending';
+    else if (syncOk > 0) syncMsg = ' | SSH sync: ' + syncOk + ' host(s) OK';
     else if (syncFail > 0) syncMsg = ' | SSH sync: ' + syncFail + ' failed';
 
     toast('Saved ' + runEditorAdapter.label + ' v' + data.version + syncMsg, 'ok');

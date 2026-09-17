@@ -306,6 +306,10 @@ def start_pb8_migration_helper() -> None:
 
 def _call_helper(operation: str, **payload) -> dict:
     """Execute one helper request in PB8's Python environment."""
+    if operation in {"prepare", "load", "validate_overrides", "validate_optimizer_overrides"}:
+        # Reuse the lifespan-owned helper for local config work. Propagate validation
+        # and shutdown errors unchanged; a cold retry would hide failures and double work.
+        return _call_migration_helper(operation, **payload)
     runtime_lease = None
     try:
         runtime_lease = acquire_master_runtime_lock(Path(PBGDIR))

@@ -1292,6 +1292,11 @@ body.pb8-runtime-warning-visible #page-body { height: calc(100vh - 94px); }
   color: var(--text-dim);
   border-color: var(--border);
 }
+.cloud-cpu-auto input:disabled {
+  opacity: 0.45;
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
 
 .ms-wrap {
   border: 1px solid var(--border);
@@ -2255,7 +2260,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
-<script defer src="/app/js/pb8_parameter_help.js?v=1"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=2"></script>
 <link rel="stylesheet" href="/app/css/vast.css?v=9">
 </head>
 <body>
@@ -2372,7 +2377,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
       </div>
       <div class="sidebar-toolbar">
         <button class="sb-btn" onclick="closeEditor()" title="Back to config list">🏠 Home</button>
-        <button class="sb-btn primary" onclick="saveEditor()" title="Save config">💾 Save</button>
+        <button class="sb-btn primary" id="btn-cloud-save" onclick="saveEditor()" title="Save config">💾 Save</button>
         <button class="sb-btn info" id="btn-cloud-save-queue" onclick="saveAndQueue()" title="Save config and queue it">▶ Save &amp; Queue</button>
         <hr class="sb-sep">
         <button class="sb-btn" id="opted-sidebar-ohlcv-preflight-btn" title="Check PB7 OHLCV readiness for the current config" aria-expanded="false">🧭 OHLCV Readiness</button>
@@ -2757,7 +2762,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <script src="/app/js/editor_shared.js?v=15"></script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
 <script src="/app/js/scenario_visual_editor.js?v=20"></script>
-<script src="/app/js/suite_editor.js?v=33"></script>
+<script src="/app/js/suite_editor.js?v=35"></script>
 <script src="/app/js/log_viewer_panel.js?v=47"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
@@ -4060,7 +4065,7 @@ function renderOptimizeLimitsEditor() {
         + '<td class="mono">' + escapeHtml(entry.metric || '?') + '</td>'
         + '<td>' + escapeHtml(entry.penalize_if || '?') + '</td>'
         + (isV8 ? '<td>' + escapeHtml(formatScenarioSelection(entry, false)) + '</td>' : '')
-        + '<td>' + escapeHtml(entry.stat || '') + '</td>'
+        + '<td>' + escapeHtml(entry[meta.limit_basis_field] || '') + '</td>'
         + '<td class="mono">' + escapeHtml(formatLimitDisplayValue(entry)) + '</td>'
         + '<td>' + escapeHtml(entry.enabled === false ? 'no' : 'yes') + '</td>'
         + '<td class="cell-actions"><div class="limits-inline-actions">'
@@ -7758,6 +7763,18 @@ function collectOptimizeGpuSettings(optimize, strict) {
   if (supports('drift_window')) gpu.drift_window = nullablePositiveInteger('opted-gpu-drift-window', 'GPU drift_window') || 128;
   if (supports('drift_min_samples')) gpu.drift_min_samples = nullablePositiveInteger('opted-gpu-drift-min-samples', 'GPU drift_min_samples') || 32;
   if (supports('drift_halt')) gpu.drift_halt = toNumberOr(el('opted-gpu-drift-halt').value, 0.6);
+  if (supports('drift_rank_halt') && el('opted-gpu-drift-rank-halt')) {
+    var rankRaw = el('opted-gpu-drift-rank-halt').value.trim();
+    var rank = rankRaw === '' ? null : Number(rankRaw);
+    if (strict && rank !== null && (!Number.isFinite(rank) || rank <= 0 || rank > 1)) throw new Error('GPU drift_rank_halt must be within (0, 1] or blank to inherit drift_halt.');
+    gpu.drift_rank_halt = rank;
+  }
+  if (supports('drift_objective_tolerance') && el('opted-gpu-drift-objective-tolerance')) {
+    var toleranceRaw = el('opted-gpu-drift-objective-tolerance').value.trim();
+    var tolerance = toleranceRaw === '' ? defaults.drift_objective_tolerance : Number(toleranceRaw);
+    if (strict && (!Number.isFinite(tolerance) || tolerance < 0)) throw new Error('GPU drift_objective_tolerance must be a finite non-negative number.');
+    gpu.drift_objective_tolerance = tolerance;
+  }
   if (strict && (gpu.checkpoint_interval_seconds <= 0 || gpu.drift_halt <= 0 || gpu.drift_halt > 1)) {
     throw new Error('GPU checkpoint interval must be positive and drift_halt must be within (0, 1].');
   }
@@ -7793,11 +7810,13 @@ function populateOptimizeGpuSettings(optimize) {
     'opted-gpu-drift-window': gpu.drift_window,
     'opted-gpu-drift-min-samples': gpu.drift_min_samples,
     'opted-gpu-drift-halt': gpu.drift_halt,
+    'opted-gpu-drift-rank-halt': gpu.drift_rank_halt,
+    'opted-gpu-drift-objective-tolerance': gpu.drift_objective_tolerance == null ? defaults.drift_objective_tolerance : gpu.drift_objective_tolerance,
     'opted-gpu-halving-survival': halving.survival_fraction,
     'opted-gpu-halving-min-survivors': halving.min_survivors
   };
   Object.keys(values).forEach(function(id) {
-    el(id).value = values[id] == null ? '' : String(values[id]);
+    if (el(id)) el(id).value = values[id] == null ? '' : String(values[id]);
   });
   el('opted-gpu-auto-lean').checked = gpu.auto_lean_parallelism !== false;
   el('opted-gpu-halving-enabled').checked = !!halving.enabled;
@@ -7819,6 +7838,8 @@ function resetOptimizeGpuSettings() {
     'opted-gpu-drift-window': defaults.drift_window,
     'opted-gpu-drift-min-samples': defaults.drift_min_samples,
     'opted-gpu-drift-halt': defaults.drift_halt,
+    'opted-gpu-drift-rank-halt': defaults.drift_rank_halt,
+    'opted-gpu-drift-objective-tolerance': defaults.drift_objective_tolerance,
     'opted-gpu-halving-survival': halving.survival_fraction,
     'opted-gpu-halving-min-survivors': halving.min_survivors
   };
@@ -9339,6 +9360,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 
     + '<div class="form-row cols-8">'
       + '<div class="form-group" style="grid-column:span 8"><label><span data-tip="Optional path to a pre-populated OHLCV source directory.">ohlcv_source_dir</span></label><div style="display:flex;gap:var(--sp-xs)"><input type="text" id="opted-ohlcv-source-dir" value="' + escapeHtml(backtest.ohlcv_source_dir || '') + '" placeholder="Leave empty for default"><button type="button" class="act-btn" style="white-space:nowrap" onclick="clearOptimizeOhlcvSourceDir()" title="Clear path">×</button><button type="button" class="act-btn" style="white-space:nowrap" onclick="fillOptimizePbguiDataPath()" title="Use PBGui market data directory">📂 PBGui Data</button></div></div>'
+      + (optimizeEditorAdapter.isV8 && Object.prototype.hasOwnProperty.call(backtest, 'offline') ? '<div class="form-group"><div class="chk-row"><input type="checkbox" id="opted-offline"' + (backtest.offline ? ' checked' : '') + '><label for="opted-offline"><span data-tip="Use cached simulation candles and metadata only. Missing inputs fail instead of being downloaded. Prepared datasets require verified offline provenance. This does not disable other PBGui services; the pinned Vast worker does not support this mode.">offline</span></label></div></div>' : '')
     + '</div>'
 
     + '<div class="form-row cols-8">'
@@ -9481,12 +9503,16 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
         + fieldNumber2('opted-gpu-drift-probes', 'drift_probes', gpu.drift_probes == null ? 4 : gpu.drift_probes, 1, 'Proxy drift probes per validation batch.', 1)
         + fieldNumber2('opted-gpu-drift-window', 'drift_window', gpu.drift_window == null ? 128 : gpu.drift_window, 1, 'Rolling proxy drift sample window.', 1)
         + fieldNumber2('opted-gpu-drift-min-samples', 'drift_min_samples', gpu.drift_min_samples == null ? 32 : gpu.drift_min_samples, 1, 'Minimum samples before drift halt decisions.', 1)
-        + fieldNumber2('opted-gpu-drift-halt', 'drift_halt', gpu.drift_halt == null ? 0.6 : gpu.drift_halt, 0.01, 'Fail-closed proxy drift halt threshold.', 1)
+        + fieldNumber2('opted-gpu-drift-halt', 'drift_halt', gpu.drift_halt == null ? 0.6 : gpu.drift_halt, 0.01, 'Constraint agreement threshold; also the rank threshold when drift_rank_halt is blank.', 1)
         + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Successive halving</div>'
         + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-halving-enabled"' + (gpuHalving.enabled ? ' checked' : '') + '><label for="opted-gpu-halving-enabled"><span data-tip="Only supported for non-suite single-coin Trailing Martingale optimization.">enabled</span></label></div></div>'
         + fieldText2('opted-gpu-halving-fractions', 'history_fractions', Array.isArray(gpuHalving.history_fractions) ? gpuHalving.history_fractions.join(', ') : '0.25, 0.5, 1.0', true, '0.25, 0.5, 1.0', 'Strictly increasing fractions ending at 1.0.', 1)
         + fieldNumber2('opted-gpu-halving-survival', 'survival_fraction', gpuHalving.survival_fraction == null ? 0.5 : gpuHalving.survival_fraction, 0.05, 'Candidate share retained at each partial-history rung.', 1)
         + fieldNumber2('opted-gpu-halving-min-survivors', 'min_survivors', gpuHalving.min_survivors == null ? 64 : gpuHalving.min_survivors, 1, 'Minimum candidates retained for the next rung.', 1)
+      + '</div>'
+      + '<div class="form-row cols-8">'
+        + (Object.prototype.hasOwnProperty.call(optimizeGpuDefaults(), 'drift_rank_halt') ? fieldNumber2('opted-gpu-drift-rank-halt', 'drift_rank_halt', gpu.drift_rank_halt == null ? '' : gpu.drift_rank_halt, 0.01, 'Blank inherits drift_halt. Otherwise set a rank threshold in (0, 1] independently of constraint agreement. Custom values require Local execution with the current pinned Vast worker.', 2, 'Inherit drift_halt') : '')
+        + (Object.prototype.hasOwnProperty.call(optimizeGpuDefaults(), 'drift_objective_tolerance') ? fieldNumber2('opted-gpu-drift-objective-tolerance', 'drift_objective_tolerance', gpu.drift_objective_tolerance == null ? optimizeGpuDefaults().drift_objective_tolerance : gpu.drift_objective_tolerance, 0.000001, 'Absolute objective error allowance in fixed initial objective-scale units, not a profit percentage. Zero requires identical values for the small-error exception. The pinned Vast worker uses its older scalar drift checks.', 2) : '')
       + '</div>'
     + '</div>'
 
@@ -9618,6 +9644,7 @@ function populateOptimizeEditor(config, opts) {
   el('opted-seed-mode').value = seedState.mode;
   el('opted-seed-path').value = seedState.path;
   el('opted-ohlcv-source-dir').value = backtest.ohlcv_source_dir || '';
+  if (el('opted-offline')) el('opted-offline').checked = backtest.offline === true;
   el('opted-candle-interval').value = backtest.candle_interval_minutes == null ? '' : String(backtest.candle_interval_minutes);
   el('opted-memory-snapshot').value = logging.memory_snapshot_interval_minutes == null ? '' : String(logging.memory_snapshot_interval_minutes);
   el('opted-btc-collateral-cap').value = backtest.btc_collateral_cap == null ? '' : String(backtest.btc_collateral_cap);
@@ -9966,6 +9993,7 @@ function collectEditorConfig(baseConfig, opts) {
   backtest.end_date = normalizeOptimizeEndDateValue(el('opted-end-date').value) || null;
   backtest.starting_balance = toNumberOr(el('opted-starting-balance').value, 1000.0);
   backtest.ohlcv_source_dir = el('opted-ohlcv-source-dir').value.trim();
+  if (optimizeEditorAdapter.isV8 && el('opted-offline')) backtest.offline = !!el('opted-offline').checked;
   backtest.candle_interval_minutes = toNumberOr(el('opted-candle-interval').value, 60);
   backtest.btc_collateral_cap = toNullableNumber(el('opted-btc-collateral-cap').value);
   var btcLtvCap = toNullableNumber(el('opted-btc-collateral-ltv-cap').value);
@@ -10612,6 +10640,7 @@ function scheduleRawJsonEditorSync() {
 
 function scheduleStructuredEditorSync() {
   _optJsonSync.scheduleStructured();
+  if (typeof suiteRefreshVisualContext === 'function') suiteRefreshVisualContext();
   if (window.PBGuiVast) window.PBGuiVast.scheduleValidation();
 }
 
@@ -12221,17 +12250,18 @@ function optimizeDraftStorageKey() {
 
 function storeOptimizeDraft(payload) {
   // Configs do not need credentials. Never persist credential-bearing custom fields.
-  function check(value) {
+  function check(value, path) {
     if (!value || typeof value !== 'object') return;
     Object.keys(value).forEach(function(key) {
-      if (/(password|secret|private.?key|api.?key|token|credential)/i.test(key)) {
+      var symbolKey = path === 'override_configs' && value[key] && typeof value[key] === 'object' && !Array.isArray(value[key]);
+      if (!symbolKey && /(password|secret|private.?key|api.?key|token|credential)/i.test(key)) {
         throw new Error('This draft contains credential fields and cannot be kept in browser storage.');
       }
-      check(value[key]);
+      check(value[key], path ? path + '.' + key : key);
     });
   }
   try {
-    check(payload);
+    check(payload, '');
     window.sessionStorage.setItem(optimizeDraftStorageKey(), JSON.stringify(payload));
     return true;
   } catch (error) {
@@ -13118,9 +13148,30 @@ async function validateEditor() {
   }
 }
 
+function setOptimizeEditorSaving(saving, andQueue) {
+  state.editorSaving = saving;
+  ['btn-cloud-save', 'btn-editor-save', 'btn-cloud-save-queue', 'btn-editor-save-queue'].forEach(function(id) {
+    var button = el(id);
+    if (!button) return;
+    if (saving) {
+      if (!Object.prototype.hasOwnProperty.call(button.dataset, 'idleLabel')) button.dataset.idleLabel = button.textContent;
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      if (id.endsWith('-queue') === !!andQueue) button.textContent = andQueue ? 'Saving & queueing…' : 'Saving…';
+    } else {
+      button.disabled = button.dataset.queueBlocked === 'true';
+      button.removeAttribute('aria-busy');
+      if (Object.prototype.hasOwnProperty.call(button.dataset, 'idleLabel')) {
+        button.textContent = button.dataset.idleLabel;
+        delete button.dataset.idleLabel;
+      }
+    }
+  });
+}
+
 async function saveEditor(andQueue) {
   if (state.editorSaving) return;
-  state.editorSaving = true;
+  setOptimizeEditorSaving(true, andQueue);
   try {
   setPageEditorStatus(andQueue ? 'Saving and queueing…' : 'Saving…', '');
   var queueAfterSave = !!andQueue;
@@ -13158,6 +13209,7 @@ async function saveEditor(andQueue) {
     configPayload = parsed.value;
   }
   if (queueAfterSave && optimizeEditorAdapter.isV8 && configPayload.pbgui && configPayload.pbgui.execution === 'vast') {
+    setPageEditorStatus('Checking cloud compatibility…', '');
     if (!window.PBGuiVast || !(await window.PBGuiVast.validateConfig(configPayload))) {
       throw new Error('Resolve the GPU compatibility errors before queueing.');
     }
@@ -13170,6 +13222,7 @@ async function saveEditor(andQueue) {
         migration_report: state.editorMigrationReport
       }
     : configPayload;
+  setPageEditorStatus('Saving and validating config…', '');
   await apiFetch('/configs/' + encodeURIComponent(name), {
     method: 'PUT',
     body: JSON.stringify(savePayload)
@@ -13179,6 +13232,7 @@ async function saveEditor(andQueue) {
   }
   if (queueAfterSave && optimizeEditorAdapter.isV8 && configPayload.pbgui && configPayload.pbgui.execution === 'vast') {
     if (!window.PBGuiVast) throw new Error('Cloud controls are still loading. Please try again.');
+    setPageEditorStatus('Adding cloud job to queue…', '');
     await window.PBGuiVast.queue(name, configPayload);
   } else if (queueAfterSave) {
     await apiFetch('/queue', {
@@ -13208,7 +13262,7 @@ async function saveEditor(andQueue) {
     setPageEditorStatus(error && error.message ? error.message : 'Could not save config.', 'err');
     handleError(error);
   } finally {
-    state.editorSaving = false;
+    setOptimizeEditorSaving(false, andQueue);
   }
 }
 
@@ -15217,6 +15271,6 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
 <script src="/app/js/vast_performance.js?v=1"></script>
-<script src="/app/js/vast.js?v=82"></script>
+<script src="/app/js/vast.js?v=86"></script>
 </body>
 </html>

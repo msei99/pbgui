@@ -49,7 +49,7 @@ def test_all_three_editors_load_the_local_shared_help_assets() -> None:
     """All productive PB8 editors use one cached asset version and original-text provider."""
     for page in ("v7_optimize.html", "v7_backtest.html", "v7_edit.html"):
         source = (ROOT / "frontend" / page).read_text()
-        assert '<script defer src="/app/js/pb8_parameter_help.js?v=1"></script>' in source
+        assert '<script defer src="/app/js/pb8_parameter_help.js?v=2"></script>' in source
         assert 'href="/app/css/pb8_parameter_help.css?v=1"' in source
 
 
@@ -91,6 +91,7 @@ def test_hover_uses_original_text_and_cleans_up_handlers_and_timers() -> None:
       const group = {querySelector: () => control};
       const attrs = {'data-tip': 'PB8 optimizer override reported by the installed runtime.'};
       const target = {textContent: 'couple_unstuck_ema_spans', isConnected: true,
+        hasAttribute: key => Object.prototype.hasOwnProperty.call(attrs, key),
         closest: selector => selector.includes('.form-group') ? group : target,
         getAttribute: key => attrs[key], setAttribute: (key, value) => attrs[key] = value,
         removeAttribute: key => delete attrs[key], contains: node => node === target,
@@ -108,6 +109,17 @@ def test_hover_uses_original_text_and_cleans_up_handlers_and_timers() -> None:
         assert.equal(tip.hidden, false);
         assert.equal(event.stopped, true);
         assert.equal(legacy.style.display, 'none');
+        attrs['data-tip-context'] = '';
+        attrs['data-tip'] = 'Disabled because CPU allocation is automatic on Vast.ai.';
+        event.stopped = false;
+        listeners.get('mouseover')(event);
+        assert.equal(tip.hidden, true);
+        assert.equal(event.stopped, false);
+        assert.equal(attrs['data-tip'], 'Disabled because CPU allocation is automatic on Vast.ai.');
+        delete attrs['data-tip-context'];
+        listeners.get('mouseover')(event);
+        assert.equal(attrs['data-tip'], original);
+        assert.equal(tip.hidden, false);
         assert.ok(parseFloat(tip.style.left) + tip.offsetWidth <= window.innerWidth);
         listeners.get('mouseout')({relatedTarget: tip});
         assert.equal([...timers.values()].filter(timer => timer.delay === 150).length, 0);

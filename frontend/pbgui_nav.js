@@ -982,7 +982,8 @@
   }
 
   function _ensureLogViewer(cb) {
-    if (typeof window.LogViewerPanel === 'function') { cb(); return; }
+    // A classic-script class is a global lexical binding, not a window property.
+    if (typeof LogViewerPanel === 'function') { cb(); return; }
     var s = document.createElement('script');
     s.src = _appPath('/app/js/log_viewer_panel.js?v=47');
     s.onload = cb;

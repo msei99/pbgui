@@ -1,5 +1,7 @@
 # AI Chat
 
+Stop funktioniert auch während eine neue Unterhaltung noch angelegt wird. Der wartende Prompt wird nach der verspäteten Antwort nicht mehr gesendet; das Eingabefeld wird wieder freigegeben.
+
 ## Zweck
 
 AI Chat ist die erste produktive PBGui-AI-Integration. Sie verbindet Provider-Chat mit kontrollierten PBGui-Capabilities.

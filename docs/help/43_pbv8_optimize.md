@@ -1,8 +1,18 @@
 # PBv8 Optimize
 
+PB8 runtimes with offline simulation support expose **offline** under Market & Universe. It uses cached candles and metadata only; missing inputs fail instead of downloading. OHLCV Readiness respects this mode and disables remote preload. This setting does not put other PBGui services offline. Prepared datasets also require PB8's verified offline provenance.
+
+Newer PB8 GPU runtimes expose **drift_rank_halt** (blank inherits `drift_halt`) and **drift_objective_tolerance** (default `0.000001`, zero is valid). The tolerance is an absolute allowance in fixed initial objective-scale units, not a profit percentage. Constraint agreement still uses `drift_halt`. A local PB8 update does not update the pinned Vast image: that image retains scalar drift checks, accepts the new default values for compatibility, and rejects custom values or offline mode before queueing.
+
+Local PB8 config validation reuses the managed helper process after its initial startup. Draft recovery permits TOKEN coin override objects while still rejecting nested credential fields. After changing base dates or exchanges, Check & Apply validates the retained visual windows against the current form; it does not require reopening the editor.
+
 **Settings → Performance History** retains Vast throughput and workload metadata after queue deletion. Select matching workloads for speed comparisons; see the [Vast GPU guide](48_vast_gpu.md#performance-history).
 
 For cloud CPU capacity, set **Min CPU cores** in Vast Settings; Cloud Auto uses the rented allocation. Manual Rent takes its specifications from the selected offer. Later queued jobs may trigger a confirmed transfer-reserve adjustment that shortens rental time within the same budget. Optimizer log retrieval errors no longer prevent stop or final collection.
+
+When **Run on** is set to **Vast.ai**, the optimizer's **n_cpus** and **exact_workers** fields are greyed out. Their dotted help labels explain that **Min CPU cores** in Vast GPU settings controls the rental minimum; the actual run uses the effective container CPU allocation, capped by the rented CPU quota. Switching back to **Local** restores editing and the previous values.
+
+**Save & Queue** reports cloud compatibility checking, config saving and job creation in the editor. The save buttons stay disabled throughout this operation, with a steady **Saving & queueing…** label until completion or an error. Once the server confirms the new job, PBGui opens Queue with **Preparing** while the full queue refresh continues in the background.
 
 Vast input uploads recover from transient connection errors for up to 15 minutes without new transfer progress, with 15/30/60-second retry pauses and retained partial data. The log displays retry status. A healthy worker's upload is no longer cut short by its earlier setup timer; the rental deadline and collection reserve still apply.
 
@@ -149,7 +159,7 @@ For explicit Long coin selections, Apply also sets Long `n_positions` to `1..coi
 
 PB8 Suite mode requires identical Long and Short approved-coin lists even when one side is disabled. Sweep Apply therefore mirrors the Long approved list to Short and removes those coins from Short ignored coins. This does not enable Short trading: Short remains disabled while its TWE is `0`. Fixed selectors written by this preset use the actual `long.*` optimize-bound keys, avoiding unmatched `bot.long.*` selectors.
 
-PB8.1 scoring objectives can inherit the global **Objective Scenario**, explicitly use the suite aggregate, or select a named Suite scenario. Aggregate objectives support `mean`, `min`, `max`, `std`, and `median`. Limits can use the suite aggregate with an omitted Scenario, preserve an explicit `scenario: null`, or select a named Suite scenario; omitted and explicit null have the same runtime basis but remain structurally distinct. PBGui reads the canonical reduction field from the installed PB8 runtime: current PB8 uses `reducer`, while older compatible PB8 releases use `aggregate` for scoring and `stat` for limits. A named scenario cannot also use a reduction field. Scenario labels must exist in the active Suite. PBGui preserves these distinctions when synchronizing Visual Editor and Raw JSON.
+PB8.1 scoring objectives can inherit the global **Objective Scenario**, explicitly use the suite aggregate, or select a named Suite scenario. Aggregate objectives support `mean`, `min`, `max`, `std`, and `median`. Limits can use the suite aggregate with an omitted Scenario, preserve an explicit `scenario: null`, or select a named Suite scenario; omitted and explicit null have the same runtime basis but remain structurally distinct. PBGui reads the canonical reduction field from the installed PB8 runtime: current PB8 uses `reducer`, while older compatible PB8 releases use `aggregate` for scoring and `stat` for limits. A named scenario cannot also use a reduction field. Scenario labels must exist in the active Suite. PBGui preserves these distinctions when synchronizing Visual Editor and Raw JSON. The Limits table's **Stat** column shows the saved reduction choice (for example, `max`) after leaving inline editing.
 
 PB8 market selection uses the official resolver across the complete exchange set. Unique markets remain short in the config; real multiplier or venue collisions use exact scoped identifiers while the editor keeps compact labels. Exact imported IDs remain unchanged in coin lists, Coin Sources, Suite scenarios, and Raw JSON.
 

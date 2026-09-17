@@ -908,6 +908,15 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     var generation = state.chatGeneration;
     setNotice('Stopping current response...', false);
     $('stop').disabled = true;
+    if (!conversationId) {
+      ++state.chatGeneration;
+      state.busy = false;
+      state.pendingMessage = '';
+      stopActivityPolling();
+      setNotice('Response stopped.', false);
+      updateComposer();
+      return;
+    }
     if (conversationId) {
       try {
         await api('/conversations/' + encodeURIComponent(conversationId) + '/cancel', { method: 'POST' });

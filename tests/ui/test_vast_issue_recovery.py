@@ -8,6 +8,52 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_save_and_queue_navigates_before_slow_jobs_refresh(cloud_page):
+    """A confirmed preparation job is visible without awaiting a held queue poll."""
+    page, data, calls, overrides, held = cloud_page
+    job = dict(id='d' * 32, config_name='test', status='preparing', workers=4,
+               rental_state='none', created_at=1, input_progress={})
+    overrides['/api/vast/jobs/prepare'] = (200, json.dumps(job), {'Content-Type': 'application/json'})
+    overrides['/api/vast/jobs'] = 'hold'
+    source = (ROOT / 'frontend/v7_optimize.html').read_text()
+    save = source[source.index('function setOptimizeEditorSaving('):source.index('\nfunction openJsonModal')]
+    page.add_script_tag(content='''
+      window.optimizeEditorAdapter = {isV8:true};
+      window.el = id => document.getElementById(id);
+      window.editorVisible = () => true;
+      window.ensureRawJsonValidForSave = () => true;
+      window.ensureStructuredJsonFieldsValidForSave = () => true;
+      window.collectEditorConfig = () => ({name:'test', config:{pbgui:{execution:'vast'}, optimize:{iters:100,n_cpus:4}}});
+      window.setPageEditorStatus = text => {window.saveStatus=text;};
+      window.apiFetch = () => new Promise(resolve => {window.finishSave=resolve;});
+      window.refreshOpenedQueueSnapshot = async () => {};
+      window.closeEditor = () => {window.editorClosed=true;};
+      window.toast = () => {};
+      window.setPanel = panel => {window.selectedPanel=panel;};
+      window.loadConfigs = window.loadQueue = async () => {};
+      window.handleError = error => {window.saveError=error.message;};
+    ''' + save + '''
+      document.getElementById('btn-cloud-save-queue').onclick = saveAndQueue;
+    ''')
+    page.locator('#btn-cloud-save-queue').click()
+    page.wait_for_function('typeof window.finishSave === "function"')
+    assert page.locator('#btn-cloud-save-queue').is_disabled()
+    assert page.locator('#btn-cloud-save-queue').inner_text() == 'Saving & queueing…'
+    page.evaluate('PBGuiVast.closeEditor()')
+    assert page.locator('#btn-cloud-save-queue').is_disabled()
+    page.evaluate('window.finishSave({})')
+    page.wait_for_function("window.selectedPanel === 'queue'")
+    assert page.evaluate('window.editorClosed && !window.saveError')
+    assert page.evaluate("PBGuiVast.queueItems().some(item => item.cloudJob.id === '" + job['id'] + "' && item.status === 'preparing')")
+    assert any('/jobs/prepare' in url for method, url in calls if method == 'POST')
+    assert held
+    assert page.locator('#btn-cloud-save-queue').is_enabled()
+    assert page.locator('#btn-cloud-save-queue').inner_text() == 'Queue'
+    data['jobs'].insert(0, job)
+    for route in held:
+        route.fulfill(json=data)
+
+
 def test_missing_settings_end_button_keeps_queue_controls_working(cloud_page):
     """Issue 345: an absent optional Settings button must not stop initialization."""
     page, data, calls, overrides, _ = cloud_page

@@ -1,5 +1,7 @@
 # PBv8 Run
 
+Saving confirms the locally persisted configuration and cluster operation before SSH activation completes. Activation pending means the target has not yet acknowledged activation; PBCluster can recover delivery after an API restart. Local PB8 config checks reuse the managed helper process.
+
 Backup-retention responses preserve values typed while loading. Pending Delete and forced-mode actions cannot close a later dialog. Dynamic Ignore previews refresh when tags change.
 
 If an existing instance configuration cannot be loaded, the editor reports the error and disables Save. Reload the editor after resolving the load error.

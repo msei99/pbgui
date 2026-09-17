@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
@@ -1824,6 +1824,7 @@ async def save_instance_config(
     name: str,
     request: Request,
     session: SessionToken = Depends(require_auth),
+    background_tasks: BackgroundTasks = None,
 ):
     """Save config.json for a v7 instance via pb7_config pipeline.
 
@@ -1839,13 +1840,14 @@ async def save_instance_config(
     cfg = body.get("config")
     if not isinstance(cfg, dict):
         raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
-    return await _save_instance_config_payload(name, cfg)
+    return await _save_instance_config_payload(name, cfg, background_tasks=background_tasks)
 
 
 async def _save_instance_config_payload(
     name: str,
     cfg: dict,
     override_source_name: str | None = None,
+    background_tasks: BackgroundTasks = None,
 ) -> dict:
     """Save a prepared v7 config and optionally copy referenced override files."""
     _validate_name(name)
@@ -1989,8 +1991,13 @@ async def _save_instance_config_payload(
         allow_tombstone_recreate=backup_src_dir is not None or is_new_instance,
     )
 
-    # Try the bounded target fast path; PBCluster remains the replication fallback.
-    sync_result = await _ssh_sync_instance(name, operation)
+    # Send the HTTP response before bounded SSH activation. PBCluster owns recovery.
+    if background_tasks is not None:
+        background_tasks.add_task(_ssh_sync_instance, name, operation)
+        sync_result = {"name": name, "pending": True, "direct": False, "cluster_sync": True,
+                       "hosts": {}, "ok": 0, "failed": 0}
+    else:
+        sync_result = await _ssh_sync_instance(name, operation)
 
     _log(SERVICE, f"Saved config for '{name}' (v{version})")
     result = {

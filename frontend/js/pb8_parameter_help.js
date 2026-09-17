@@ -228,6 +228,8 @@
         target = group && group.querySelector('[data-tip], label');
       }
       if (!target) return;
+      // Context-specific PBGui help takes precedence over upstream parameter docs.
+      if (target.hasAttribute('data-tip-context')) { hide(); return; }
       var help = resolveHelp(entries, fieldFor(target), editor);
       if (!help) {
         if (isPlaceholder(target.getAttribute('data-tip'))) target.removeAttribute('data-tip');

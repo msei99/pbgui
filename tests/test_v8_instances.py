@@ -79,6 +79,29 @@ def _payload(*, enabled_on: str = "disabled", note: str = "first") -> dict:
     }
 
 
+def test_http_save_defers_activation_until_response_background(monkeypatch, tmp_path):
+    """Durable PB8 saves return pending before any SSH activation (#360)."""
+    from fastapi import BackgroundTasks
+
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    calls = []
+
+    async def activate(name, operation):
+        """Record activation without contacting a bot host."""
+        calls.append((name, operation['op_id']))
+        return {'ok': True}
+
+    monkeypatch.setattr(v8_instances, '_activate_pb8_target', activate)
+    tasks = BackgroundTasks()
+    result = asyncio.run(v8_instances.save_v8_instance_config('alice', _payload(), False, session=None, background_tasks=tasks))
+    assert result['sync']['pending'] is True
+    assert calls == []
+    assert (tmp_path / 'data/run_v8/alice/config.json').is_file()
+    asyncio.run(tasks())
+    assert calls == [('alice', result['op_id'])]
+
+
 def test_restart_uses_persisted_remote_assignment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PB8 restart targets the persisted host and delegates an exact v8 stop."""
 

@@ -297,7 +297,8 @@ def _load_pb8_modules(pb8_dir: Path):
     src_dir = pb8_dir / "src"
     if not src_dir.is_dir():
         raise RuntimeError(f"PB8 source directory not found: {src_dir}")
-    sys.path.insert(0, str(src_dir))
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
 
     from config.load import load_prepared_config, prepare_config
     from config.coerce import normalize_hsl_signal_mode

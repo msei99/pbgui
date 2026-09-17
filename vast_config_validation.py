@@ -64,6 +64,8 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
     source = obj(config, 'config')
     live = obj(source.get('live'), 'live')
     bt = obj(source.get('backtest'), 'backtest')
+    if bt.get('offline', False) is not False:
+        error('backtest.offline', 'The pinned Vast worker does not support PB8 offline provenance. Use Local for offline runs, or explicitly set offline to false.')
     opt = obj(source.get('optimize'), 'optimize')
     bot = obj(source.get('bot'), 'bot')
     if live.get('strategy_kind') not in ('ema_anchor', 'trailing_martingale'):
@@ -84,6 +86,10 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
         if hsl.get('enabled'):
             error('bot.' + side + '.hsl.enabled', 'The cloud profile requires HSL disabled.')
     gpu = obj(opt.get('gpu', {}), 'optimize.gpu')
+    if gpu.get('drift_rank_halt') is not None:
+        error('optimize.gpu.drift_rank_halt', 'The pinned Vast worker does not support a separate rank threshold. Use Local or leave this field blank to inherit drift_halt.')
+    if 'drift_objective_tolerance' in gpu and (not finite(gpu['drift_objective_tolerance']) or gpu['drift_objective_tolerance'] != 1e-6):
+        error('optimize.gpu.drift_objective_tolerance', 'The pinned Vast worker does not support objective-aware drift checks. Use Local for a custom tolerance; leave the default 0.000001 for cloud compatibility.')
     halving = obj(gpu.get('successive_halving') or {}, 'optimize.gpu.successive_halving')
     if halving.get('enabled'):
         error('optimize.gpu.successive_halving.enabled', 'Successive halving is not supported by this cloud profile.')

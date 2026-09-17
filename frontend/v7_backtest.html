@@ -723,7 +723,7 @@ textarea.json-invalid:focus {
 </style>
 <link rel="stylesheet" href="/app/css/backtest_shell.css?v=5">
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
-<script defer src="/app/js/pb8_parameter_help.js?v=1"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=2"></script>
 </head>
 <body>
 
@@ -1220,6 +1220,10 @@ var PB8_ADVANCED_BT_PARAMS = new Set([
    tip: shown as hover tooltip on the label.
    fmt: static format hint shown below the input field. */
 var EXTRA_BT_META = {
+  'offline': {
+    tip: 'Use cached simulation candles and metadata only. Missing inputs fail instead of being downloaded. Prepared datasets require verified offline provenance. Other PBGui services remain independent.',
+    fmt: 'Requires complete local candles and cached metadata. Does not download missing data.'
+  },
   'hlcvs_data_dir': {
     tip: 'Optional PB8 server path to a verified prepared HLCVS dataset. Leave null for normal automatic dataset resolution.',
     fmt: 'Expert option: requires an existing PB8 dataset directory with a valid manifest.json.'
@@ -3487,6 +3491,7 @@ function scheduleRawJsonEditorSync() {
 }
 
 function scheduleStructuredEditorSync() {
+  if (typeof suiteRefreshVisualContext === 'function') suiteRefreshVisualContext();
   configEditRevision += 1;
   _btJsonSync.scheduleStructured();
 }
@@ -11069,7 +11074,7 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 </script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=2">
 <script src="/app/js/scenario_visual_editor.js?v=3"></script>
-<script src="/app/js/suite_editor.js?v=32"></script>
+<script src="/app/js/suite_editor.js?v=35"></script>
 <script src="/app/js/coin_overrides_editor.js?v=26"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

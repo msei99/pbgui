@@ -8267,6 +8267,10 @@
         var selectionBox = document.getElementById('inventory-delete-date-selection');
         var selectionList = document.getElementById('inventory-delete-date-selection-list');
         if (!box) return;
+        if (inventoryState.deleteOlderPending) {
+          if (deleteButton) deleteButton.disabled = true;
+          return;
+        }
         var preview = viewState.olderPreview;
         var coins = getInventoryOlderScopeCoins();
         var coinLabels = getInventoryCoinDisplayNames(coins);
@@ -8786,7 +8790,11 @@
       }
 
       async function runInventoryDeleteOlder() {
+        if (inventoryState.deleteOlderPending) return;
         var viewState = getCurrentInventoryViewState();
+        var exchange = uiState.contextExchange;
+        var view = getResolvedInventoryView();
+        var cutoff = viewState.olderCutoffDay;
         var coins = getInventoryOlderScopeCoins();
         var coinLabels = getInventoryCoinDisplayNames(coins);
         var payload = viewState.payload || {};
@@ -8799,23 +8807,26 @@
           showToast('Select a row or coins first.', 'error');
           return;
         }
-        if (!(await showConfirmDialog({
-          title: 'Delete files by date',
-          message: 'Delete files older than ' + viewState.olderCutoffDay + ' for the selected coins?',
-          detail: String(exchangeMeta.label || uiState.contextExchange) + ' • ' + String(payload.view_label || getResolvedInventoryView()),
-          items: coinLabels,
-          listLabel: coins.length === 1 ? 'Selected coin' : 'Selected coins',
-          confirmText: 'Delete files'
-        }))) return;
-
-        setInventoryBox('inventory-delete-feedback', 'Deleting old files…', 'info');
+        inventoryState.deleteOlderPending = true;
+        var confirmButton = document.getElementById('btn-inventory-delete-by-date-confirm');
+        if (confirmButton) confirmButton.disabled = true;
         try {
-          var result = await fetchJson('/inventory/' + encodeURIComponent(uiState.contextExchange) + '/delete-older', {
+          if (!(await showConfirmDialog({
+            title: 'Delete files by date',
+            message: 'Delete files older than ' + cutoff + ' for the selected coins?',
+            detail: String(exchangeMeta.label || exchange) + ' • ' + String(payload.view_label || view),
+            items: coinLabels,
+            listLabel: coins.length === 1 ? 'Selected coin' : 'Selected coins',
+            confirmText: 'Delete files'
+          }))) return;
+
+          setInventoryBox('inventory-delete-feedback', 'Deleting old files…', 'info');
+          var result = await fetchJson('/inventory/' + encodeURIComponent(exchange) + '/delete-older', {
             method: 'POST',
             body: JSON.stringify({
-              view: getResolvedInventoryView(),
+              view: view,
               coins: coins,
-              cutoff_day: viewState.olderCutoffDay.replace(/-/g, '')
+              cutoff_day: cutoff.replace(/-/g, '')
             })
           });
           if (!result.success) throw new Error(result.error || 'Failed to delete old files.');
@@ -8827,8 +8838,12 @@
           await loadInventoryPanel(true);
         } catch (error) {
           var message = error && error.message ? error.message : 'Failed to delete old files.';
+          closeInventoryDeleteOlderDialog();
           showToast(message, 'error');
           setInventoryBox('inventory-delete-feedback', message, 'error');
+        } finally {
+          inventoryState.deleteOlderPending = false;
+          renderInventoryOlderPreview(getCurrentInventoryViewState());
         }
       }
 

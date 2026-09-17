@@ -1,5 +1,7 @@
 # PBv8 Run
 
+Speichern bestätigt die lokal gesicherte Config und Cluster-Operation, bevor die SSH-Aktivierung abgeschlossen ist. Activation pending bedeutet, dass das Ziel die Aktivierung noch nicht bestätigt hat; PBCluster kann die Übertragung nach einem API-Neustart fortsetzen. Lokale PB8-Config-Prüfungen nutzen den verwalteten Helper-Prozess erneut.
+
 Antworten zu Backup-Aufbewahrungswerten erhalten während des Ladens eingegebene Werte. Laufende Delete- und Forced-Mode-Aktionen können keinen späteren Dialog schließen. Dynamic-Ignore-Vorschauen aktualisieren sich bei Tag-Änderungen.
 
 Kann die Konfiguration einer bestehenden Instanz nicht geladen werden, zeigt der Editor einen Fehler und sperrt Save. Nach Behebung des Ladefehlers muss der Editor neu geladen werden.

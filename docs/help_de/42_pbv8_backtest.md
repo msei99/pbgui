@@ -1,5 +1,9 @@
 # PBv8 Backtest
 
+Bei unterstützten PB8-Versionen verwendet **Additional Parameters → offline** nur lokale Simulationskerzen und zwischengespeicherte Metadaten. Fehlende Daten führen zum Fehler; vorbereitete Datensätze benötigen einen geprüften Offline-Herkunftsnachweis. OHLCV Readiness berücksichtigt den Offline-Modus und deaktiviert den Remote-Preload. Andere PBGui-Dienste sind davon unabhängig.
+
+Der visuelle Scenario Editor nutzt die authentifizierten Backtest-Endpunkte für lokale Kerzendaten, Charts und Fenstervorschauen. Änderungen an Basisdaten oder Exchanges erhalten die gezeichneten Fenster; Check & Apply prüft sie gegen die aktuellen Basiseinstellungen.
+
 Die Spalte POS zeigt die Positionslimits Long / Short. Eine deaktivierte Seite (Positionslimit oder Total Wallet Exposure null) erscheint als `-`, zum Beispiel `4 / -`.
 
 Szenario-Backtests (Suite) benötigen identische Long-/Short-Listen für freigegebene und ignorierte Coins. Ist genau eine Seite durch null Positionen oder null Total Wallet Exposure deaktiviert, übernimmt sie beim Speichern bzw. Einreihen die Listen der aktiven Seite. Beim Start gilt dies auch für ältere Queue-Einträge. Die deaktivierte Seite wird dadurch nicht aktiviert. Bei zwei aktiven Seiten müssen die Listen selbst angeglichen werden; PBGui weist widersprüchliche Listen zurück. Fehler des Runners erscheinen im Job-Log und bleiben zusätzlich in der Queue-Statusdatei erhalten.

@@ -540,7 +540,12 @@
 
   let validationGeneration = 0, validationTimer = null, cloudMetrics = null;
   function setQueueBlocked(blocked) {
-    ['btn-cloud-save-queue', 'btn-editor-save-queue'].forEach(id => { const button = el(id); if (button) button.disabled = blocked; });
+    ['btn-cloud-save-queue', 'btn-editor-save-queue'].forEach(id => {
+      const button = el(id);
+      if (!button) return;
+      button.dataset.queueBlocked = String(blocked);
+      button.disabled = blocked || !!window.state?.editorSaving;
+    });
   }
   function applyCloudAlternative(action, index) {
     if (!el('opted-execution') || el('opted-execution').value !== 'vast') return;
@@ -1233,6 +1238,24 @@
     updateEditor: function () {
       const execution = el('opted-execution'), target = el('opted-vast-worker');
       if (target) target.hidden = !execution || execution.value !== 'vast';
+      const cloud = !!execution && execution.value === 'vast';
+      ['opted-n-cpus', 'opted-gpu-exact-workers'].forEach(id => {
+        const input = el(id);
+        const group = input?.closest('.form-group');
+        if (!group) return;
+        group.classList.toggle('cloud-cpu-auto', cloud);
+        group.querySelectorAll('input, button').forEach(control => { control.disabled = cloud; });
+        const help = group.querySelector('label [data-tip]');
+        if (help) {
+          help.toggleAttribute('data-tip-context', cloud);
+          if (!Object.prototype.hasOwnProperty.call(help.dataset, 'localCpuTip')) {
+            help.dataset.localCpuTip = help.dataset.tip;
+          }
+          help.dataset.tip = cloud
+            ? 'Disabled because CPU allocation is automatic on Vast.ai. Set Min CPU cores in Settings → Vast GPU settings to choose the minimum rental capacity. The cloud run uses the effective CPU allocation available to the container, capped by the rented CPU quota. This local setting is not used.'
+            : help.dataset.localCpuTip;
+        }
+      });
       const iterations = el('opted-iters');
       if (execution && execution.value === 'vast' && iterations
           && Object.prototype.hasOwnProperty.call(iterations.dataset, 'vastDefaultFrom')) {
@@ -1245,7 +1268,14 @@
     queue: async function (name, config) {
       const job = await request('/jobs/prepare', {method:'POST', body:JSON.stringify({config_name:name,
         iterations:Number(config.optimize.iters), workers:Number(config.optimize.gpu && config.optimize.gpu.exact_workers || config.optimize.n_cpus), use_adg:false})});
-      await refreshJobs(job.id);
+      if (!disposed) {
+        // Publish the confirmed job immediately; a full refresh must not delay navigation.
+        ++jobGeneration;
+        jobRows = [job, ...jobRows.filter(row => row.id !== job.id)];
+        selectedJobId = job.id;
+        renderQueueOverview();
+        void refreshJobs(job.id);
+      }
       return job;
     }
   };

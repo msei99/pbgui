@@ -1,5 +1,7 @@
 # Market Data
 
+In Status, Refresh Now is disabled while a refresh is running, queued or being requested. Action failures are shown even if the server returns a non-JSON error. Delete by Date accepts only one confirmation/deletion at a time; deletion errors close the date dialog and appear in the toast and sidebar feedback.
+
 Hyperliquid job-history Delete, Retry and Requeue actions report HTTP and connection failures visibly.
 
 Deleting a Hyperliquid history job requires confirmation before the job record and its logs are removed. Cancel keeps the job, and repeated clicks cannot submit duplicate deletions while the confirmation or request is pending.
