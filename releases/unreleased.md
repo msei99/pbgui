@@ -1,3 +1,3 @@
 # Unreleased
 
-No unreleased changes.
+_No unreleased changes._

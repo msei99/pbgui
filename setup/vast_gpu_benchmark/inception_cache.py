@@ -37,7 +37,7 @@ def install(root, raw, checksum, safe_path, source=Path('/opt/passivbot/src/util
         raise ValueError('Incomplete inception metadata')
     for coin, first in unified.items():
         values = specific[coin]
-        if (not isinstance(values, dict) or not values or set(values) - {'binanceusdm', 'bybit'}
+        if (not isinstance(values, dict) or not values or set(values) - {'binanceusdm', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin'}
                 or not isinstance(symbols[coin], dict) or set(symbols[coin]) != set(values)):
             raise ValueError('Incomplete exchange inception metadata')
         if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 1262304000000 for v in values.values()):

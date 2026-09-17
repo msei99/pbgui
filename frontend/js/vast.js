@@ -577,7 +577,7 @@
     box.hidden = false;
     box.classList.toggle('cloud-validation-error', !!errors.length);
     const heading = document.createElement('strong');
-    heading.textContent = errors.some(error => error.path === 'validation') ? 'GPU validation unavailable' : 'GPU configuration is invalid';
+    heading.textContent = errors.some(error => error.path === 'validation') ? 'GPU validation unavailable' : 'Cloud configuration needs attention (' + errors.length + ')';
     heading.dataset.tip = 'Saving remains available. Resolve these errors before queueing. Market data is checked during preparation.';
     content.appendChild(heading);
     if (report) heading.dataset.tip += ' Worker PB8 ' + report.revision.slice(0, 7) + '.';
@@ -589,6 +589,11 @@
       const item = document.createElement('li'), issue = document.createElement('div'); issue.className = 'cloud-issue-title'; issue.textContent = error.message; item.appendChild(issue);
       (index < 6 ? list : extraList).appendChild(item);
       issue.dataset.tip = [error.path].concat(error.suggestions || []).join('\n');
+      if (error.path) {
+        const location = document.createElement('small');
+        location.className = 'muted'; location.textContent = 'Field: ' + error.path;
+        item.appendChild(location);
+      }
       const actions = document.createElement('div'); actions.className = 'cloud-fix-actions';
       const addAction = (label, help, action, entryIndex, callback) => {
         const button = document.createElement('button'); button.type = 'button'; button.className = action === 'adg' ? 'btn primary' : 'btn ghost';
@@ -785,7 +790,7 @@
       ['Host', (o.location || '—') + ' · ' + (o.reliability == null ? '—' : fmt(o.reliability * 100, 1) + '%'), 'Location and provider reliability. ' + (o.verified ? 'Verified host.' : 'Host not marked verified.')],
       ['PCIe', fmt(o.pci_gen, 0) + ' ×' + fmt(o.gpu_lanes, 0) + ' · ' + fmt(o.pcie_bw_gbps, 1) + ' GB/s', 'Provider-reported PCIe generation, lanes and bandwidth.'],
       ['Budget', '$' + fmt(rental.budget_usd, 2), 'Shared rental budget target. Changing it recalculates the deadline and requires worker acknowledgement. This is not a provider spending cap.'],
-      ['Deadline', rental.deadline ? new Date(rental.deadline * 1000).toLocaleString() : '—', 'Confirmed deletion deadline. Enter an adjustment in minutes, then use −/+. Older workers support only 30-minute adjustments.'],
+      ['Deadline', rental.deadline ? new Date(rental.deadline * 1000).toLocaleString() : '—', 'Confirmed deletion deadline. Enter an adjustment in minutes, then use −/+. Older rental guards are upgraded automatically when you request a change; the optimizer keeps running.'],
       ['Transfer reserve', '$' + fmt(rental.transfer_reserve_usd, 4), 'Amount retained inside the budget for uploading input and returning results. Increase it when a queued job reports insufficient transfer reserve; PBGui shortens the deadline by the required amount.']
     ];
     const parts = billing && billing.breakdown || {};
@@ -886,7 +891,6 @@
           if (!active) reason = 'This rental is not active.';
           else if (![1, 2].includes(rental.deadline_protocol)) reason = 'Worker is not ready for changes yet. Please try again after startup.';
           else if (rental.deadline_protocol === 1 && label !== 'Deadline') reason = 'This worker version does not support changing this value.';
-          else if (rental.deadline_protocol === 1 && Number(content.querySelector('input').value) !== 30) reason = 'This worker supports only 30-minute steps.';
           if (reason) {
             event.stopPropagation();
             if (typeof toast === 'function') toast(reason, 'err');

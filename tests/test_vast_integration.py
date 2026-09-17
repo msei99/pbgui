@@ -244,7 +244,7 @@ def test_unsaved_config_validation_is_pinned_and_read_only(client, monkeypatch):
     monkeypatch.setattr(vast, 'CloudQueue', forbidden)
     monkeypatch.setattr(vast, 'VastClient', forbidden)
     config = {'live':{'strategy_kind':'ema_anchor','approved_coins':{'long':['BTC'],'short':[]}},
-              'bot':{'long':{},'short':{}},'backtest':{},
+              'bot':{'long':{},'short':{}},'backtest':{'exchanges':['binance']},
               'optimize':{'scoring':[{'metric':'gain_strategy_eq'}],'limits':[]}}
     response = http.post('/api/vast/validate-config', json={'config':config})
     assert response.status_code == 200

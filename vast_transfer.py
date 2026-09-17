@@ -27,6 +27,8 @@ from vast_jobs import PROJECT, JobStore, digest, write_json, job_id
 from vast_provider import NoRedirect, VastClient, VastError, positive_id
 from setup.vast_gpu_benchmark.cloud_worker import safe_path
 
+from vast_exchanges import SUPPORTED_EXCHANGES
+
 SERVICE = "VastRunner"
 WORKER = "/usr/local/bin/python /work/pbgui/worker.py "
 
@@ -464,7 +466,7 @@ class WorkerConnection:
             from vast_market_cache import stage_public_markets
             stage_public_markets(self)
         if cache_times:
-            if not isinstance(cache_times, dict) or set(cache_times) - {'binance', 'bybit'}:
+            if not isinstance(cache_times, dict) or set(cache_times) - set(SUPPORTED_EXCHANGES):
                 raise VastError('Invalid public market cache metadata', 422)
             for exchange, stamp in cache_times.items():
                 if (type(stamp) not in (int, float) or not 0 <= time.time() - stamp < 86400):

@@ -3,6 +3,9 @@ import math
 import json
 from pathlib import Path
 
+from vast_exchanges import SUPPORTED_EXCHANGES
+from vast_scenarios import scenario_plan
+
 SERVICE = 'Vast'
 PROFILE_IMAGE = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc'
 PROFILE_REVISION = 'ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8'
@@ -26,6 +29,8 @@ def cloud_alternatives(path, message):
         return ['Disable HSL in a separate GPU test configuration. This removes HSL protection and changes the strategy risk behavior.', local]
     if path == 'live.approved_coins':
         return ['Select explicit approved coin lists containing between 1 and 64 distinct coins across both sides.', local]
+    if path.startswith('backtest.exchanges'):
+        return ['Select supported exchanges: ' + ', '.join(SUPPORTED_EXCHANGES) + '. Local mapped perpetual data is required for every selected coin and BTC.', local]
     if path == 'backtest.btc_collateral_cap':
         return ['Set BTC collateral to 0 in a separate GPU test configuration. This changes collateral exposure.', local]
     if path == 'optimize.gpu.successive_halving.enabled':
@@ -34,12 +39,12 @@ def cloud_alternatives(path, message):
         return ['Use a fixed number, [minimum, maximum], or [minimum, maximum, step]. Use step 0 or null for continuous bounds; keep minimum <= maximum.']
     if path == 'live.strategy_kind':
         return ['Create a separate ema_anchor or trailing_martingale configuration with that strategy’s defaults. Do not simply rename the existing strategy.', local]
-    if 'override' in message.lower() or 'date-only' in message:
-        return ['Create a separate GPU test configuration without overrides and with date-only scenarios. Removing overrides can change behavior.', local]
+    if path.startswith('backtest.scenarios') or 'override' in message.lower():
+        return ['Check the named scenario and field. Cloud suites export their combined coin/exchange data; GPU parameter restrictions still apply.', local]
     return []
 
 
-def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=False, image=PROFILE_IMAGE, revision=PROFILE_REVISION):
+def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=False, image=PROFILE_IMAGE, revision=PROFILE_REVISION, _check_scenarios=True):
     """Collect profile and structural errors without changing or exporting config."""
     errors = []
     def error(path, message):
@@ -64,14 +69,14 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
     if live.get('strategy_kind') not in ('ema_anchor', 'trailing_martingale'):
         error('live.strategy_kind', 'This image supports trailing_martingale and ema_anchor only.')
     for path, value in [('coin_overrides', source.get('coin_overrides')), ('optimize.enable_overrides', opt.get('enable_overrides')),
-                        ('backtest.coin_sources', bt.get('coin_sources')), ('backtest.market_settings_sources', bt.get('market_settings_sources'))]:
+                        ('backtest.market_settings_sources', bt.get('market_settings_sources'))]:
         if value:
             error(path, 'Cloud export does not support overrides.')
     coins = obj(live.get('approved_coins'), 'live.approved_coins')
     sides = [coins.get(side) for side in ('long', 'short')]
     if any(not isinstance(side, list) or any(not isinstance(coin, str) or not coin.strip() for coin in side) for side in sides):
         error('live.approved_coins', 'Explicit approved coin lists are required.')
-    elif not 1 <= len(set(sides[0] + sides[1])) <= 64:
+    elif not set(sides[0] + sides[1]) or (len(set(sides[0] + sides[1])) > 64 and not (bt.get('suite_enabled') and _check_scenarios)):
         error('live.approved_coins', 'The GPU worker requires 1–64 distinct approved coins across both sides.')
     for side in ('long', 'short'):
         values = obj(bot.get(side), 'bot.' + side)
@@ -117,11 +122,15 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
     if type(workers) is not int or not 1 <= workers <= 64:
         error('optimize.gpu.exact_workers', 'Choose 1–64 CPU workers.')
     exchanges = bt.get('exchanges', [])
-    if not isinstance(exchanges, list) or any(exchange not in ('binance', 'bybit') for exchange in exchanges):
-        error('backtest.exchanges', 'Cloud export supports Binance and Bybit only.')
+    if not isinstance(exchanges, list) or not exchanges:
+        error('backtest.exchanges', 'Select at least one cloud exchange: ' + ', '.join(SUPPORTED_EXCHANGES) + '.')
+    else:
+        for index, exchange in enumerate(exchanges):
+            if not isinstance(exchange, str) or exchange not in SUPPORTED_EXCHANGES:
+                error(f'backtest.exchanges.{index}', f'Unsupported cloud exchange {exchange!r}. Supported exchanges: ' + ', '.join(SUPPORTED_EXCHANGES) + '. Select an exchange using its standard name.')
     scenarios = bt.get('scenarios', [])
     if not isinstance(scenarios, list):
-        error('backtest.scenarios', 'Expected a list of date-only suite scenarios.')
+        error('backtest.scenarios', 'Expected a list of suite scenario objects.')
         scenarios = []
     labels = set()
     for index, scenario in enumerate(scenarios):
@@ -132,8 +141,6 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
             error(path + '.label', 'Scenario labels must be unique, non-empty and trimmed.')
         else:
             labels.add(label)
-        if set(scenario) - {'label', 'start_date', 'end_date'}:
-            error(path, 'Cloud export supports date-only suite scenarios.')
     suite = bool(bt.get('suite_enabled'))
     objective = opt.get('objective_scenario')
     if objective and (not isinstance(objective, str) or not suite or objective not in labels):
@@ -186,4 +193,17 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
                         error(path + '.range', 'Provide two finite range values with low <= high.')
                 elif not finite(entry.get('value')):
                     error(path + '.value', 'Limit value must be a finite number.')
+    if _check_scenarios:
+        contexts, _, planning_errors = scenario_plan(source)
+        for item in planning_errors:
+            error(item['path'], item['message'])
+        base_errors = {(item['path'], item['message']) for item in errors}
+        if bt.get('suite_enabled'):
+            for context in contexts:
+                if context['path'] == 'backtest':
+                    continue
+                for item in validate_cloud_config(context['config'], iterations, workers, use_adg=use_adg,
+                                                  image=image, revision=revision, _check_scenarios=False):
+                    if (item['path'], item['message']) not in base_errors:
+                        error(context['path'] + '.' + item['path'], context['label'] + ': ' + item['message'])
     return errors

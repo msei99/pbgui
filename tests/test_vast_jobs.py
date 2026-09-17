@@ -311,7 +311,7 @@ def test_incomplete_native_binary_is_not_imported(job):
 def test_job_objective_change_is_explicit_and_source_is_immutable():
     """ADG conversion affects only the authorized copy and retains source metadata."""
     source = {'live': {'strategy_kind':'ema_anchor', 'approved_coins':{'long':['BTC'], 'short':[]}},
-              'bot': {'long':{}, 'short':{}}, 'backtest': {}, 'pbgui': {'sweep': 'keep'},
+              'bot': {'long':{}, 'short':{}}, 'backtest': {'exchanges':['binance']}, 'pbgui': {'sweep': 'keep'},
               'optimize': {'scoring':[{'metric':'gain_strategy_eq'}], 'limits':[]}}
     original = copy.deepcopy(source)
     with pytest.raises(VastError, match='Unsupported cloud metrics'):
@@ -370,7 +370,7 @@ def test_resume_existing_supervisor_does_not_launch_duplicate(job, monkeypatch):
 def test_multicoin_native_job_preserves_both_sides():
     """Export multiple coins without narrowing the portfolio or modifying the source."""
     source = {'live': {'strategy_kind':'ema_anchor', 'approved_coins':{'long':['BTC','ETH'], 'short':['ETH','SOL']}},
-              'bot': {'long':{}, 'short':{}}, 'backtest': {},
+              'bot': {'long':{}, 'short':{}}, 'backtest': {'exchanges':['binance']},
               'optimize': {'scoring':[{'metric':'adg_strategy_eq'}], 'limits':[]}}
     original = copy.deepcopy(source)
     result = native_job_config(source, 512, 4, False)

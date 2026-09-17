@@ -371,3 +371,19 @@ def test_restart_blockers_keep_local_registry_reads_on_event_loop(monkeypatch) -
     assert local_threads == [event_loop_thread] * 8
     assert len(external_threads) == 1
     assert external_threads[0] != event_loop_thread
+
+
+def test_guard_handover_blocks_api_restart(monkeypatch) -> None:
+    """A synchronous guard migration participates in the actual API restart check."""
+    import vast_guard_migration
+    from api import cluster, coin_data, dashboard, db_tools, pareto_explorer
+
+    for module in (cluster, coin_data, dashboard, db_tools, pareto_explorer):
+        monkeypatch.setattr(module, 'restart_block_reason', lambda: '')
+    for name in ('profit_sweep_restart_block_reason', 'ai_restart_block_reason',
+                 'credential_migration_restart_block_reason'):
+        monkeypatch.setattr(PBApiServer, name, lambda *args: '')
+    monkeypatch.setattr(vast_guard_migration, '_ACTIVE_OPERATIONS', 1)
+    blocked, reason = asyncio.run(PBApiServer._restart_block_state())
+    assert blocked
+    assert 'Vast deadline guard upgrade' in reason

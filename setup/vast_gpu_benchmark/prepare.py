@@ -14,6 +14,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from secure_files import atomic_write_private_text, ensure_private_directory, secure_private_file
+from vast_exchanges import CCXT_EXCHANGES, SUPPORTED_EXCHANGES, quote_currency
 SERVICE = "VastGpuBenchmark"
 PB8_REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 
@@ -60,48 +61,81 @@ def benchmark_configs(source: dict, iterations: int, seed: int, *, gpu_adg_objec
 
 
 def select_shards(config: dict, market_root: Path, mapping_root: Path) -> list[tuple[Path, Path]]:
-    """Select mapped USDT perpetual data, including BTC reference history.
+    """Export the suite's complete mapped market pool, including BTC and warmup.
 
-    The first prototype exports all available daily history for selected symbols
-    to retain warmup data. It rejects overrides needing a richer data planner.
+    PB8 preloads shared datasets before applying scenario selections. Include all
+    mapped candidate venues in that pool so its best-per-coin choice cannot use
+    an accidentally incomplete export. A coin need not be listed on every venue.
     """
+    from vast_scenarios import scenario_plan
+
     bt = config["backtest"]
-    if config.get("coin_overrides") or bt.get("coin_sources") or bt.get("market_settings_sources"):
-        raise ValueError("This prototype does not export coin/source overrides")
-    for scenario in bt.get("scenarios", []):
-        if set(scenario) - {"label", "start_date", "end_date"}:
-            raise ValueError("This prototype supports date-only suite scenarios")
+    if config.get("coin_overrides") or bt.get("market_settings_sources"):
+        raise ValueError("Cloud export does not package per-coin or market-settings overrides")
+    contexts, sources, errors = scenario_plan(config)
+    if errors:
+        raise ValueError('; '.join(item['path'] + ': ' + item['message'] for item in errors))
     approved = config["live"]["approved_coins"]
     if not isinstance(approved, dict) or any(not isinstance(approved.get(side), list) for side in ("long", "short")):
         raise ValueError("Explicit approved coin lists are required")
-    coins = set(approved["long"] + approved["short"]) | {"BTC"}
-    selected = []
-    for exchange in bt["exchanges"]:
-        if exchange not in ("binance", "bybit"):
-            raise ValueError("This prototype supports Binance and Bybit only")
-        mapping = contained_file(mapping_root, mapping_root / exchange / "mapping.json")
+    coins = {"BTC"}
+    exchanges = set(bt["exchanges"])
+    for context in contexts:
+        coins.update(context['coins'])
+        exchanges.update(context['exchanges'])
+    exchanges.update(sources.values())
+    selected, available = {}, {}
+    for coin in coins:
+        safe_component(coin)
+    for exchange in sorted(exchanges):
+        if exchange not in SUPPORTED_EXCHANGES:
+            raise ValueError(f"Unsupported cloud exchange {exchange!r}; supported: " + ", ".join(SUPPORTED_EXCHANGES))
         try:
+            mapping = contained_file(mapping_root, mapping_root / exchange / "mapping.json")
             rows = json.loads(mapping.read_text())
+        except FileNotFoundError as exc:
+            raise ValueError(f"Missing Market Data mapping for {exchange}; refresh its mappings before queueing") from exc
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid mapping for {exchange}") from exc
         if not isinstance(rows, list):
-            raise ValueError("Expected a market mapping list")
-        directory = "binanceusdm" if exchange == "binance" else exchange
+            raise ValueError(f"Expected a market mapping list for {exchange}")
         for coin in sorted(coins):
-            safe_component(coin)
-            matches = [row for row in rows if row.get("coin") == coin and row.get("quote") == "USDT" and row.get("swap") is True and row.get("linear") is True]
-            if len(matches) != 1:
-                raise ValueError(f"Missing or ambiguous USDT perpetual mapping: {exchange}/{coin}")
-            symbol = safe_component(matches[0]["ccxt_symbol"].replace("/", "_"))
-            relative = Path(directory) / "1m" / symbol
-            folder = market_root / relative
+            if coin != 'BTC' and sources.get(coin, exchange) != exchange:
+                continue
+            quote = quote_currency(exchange)
+            matches = [row for row in rows if isinstance(row, dict) and row.get("coin") == coin
+                       and row.get("quote") == quote and row.get("swap") is True and row.get("linear") is True]
+            if len(matches) > 1:
+                raise ValueError(f"Missing or ambiguous {quote} linear perpetual mapping: {exchange}/{coin}; refresh Market Data mappings")
+            if not matches:
+                continue  # Another candidate venue may supply this coin.
+            symbol_value = matches[0].get('ccxt_symbol')
+            if not isinstance(symbol_value, str):
+                raise ValueError(f"Invalid market symbol mapping: {exchange}/{coin}")
+            symbol = safe_component(symbol_value.replace("/", "_"))
+            folder = market_root / CCXT_EXCHANGES[exchange] / "1m" / symbol
             shards = sorted(path for path in folder.glob("*") if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.(npz|npy)", path.name))
+            consumers = [context['label'] for context in contexts if coin in context['coins'] and exchange in context['exchanges']]
+            label = ', '.join(consumers) or ('BTC reference' if coin == 'BTC' else 'Shared suite dataset')
             if not shards:
-                raise ValueError(f"No local OHLCV files for {exchange}/{coin}")
-            # PBGui storage uses the CCXT ID; PB8's source loader uses the standard name.
-            destination = Path(exchange) / "1m" / symbol
-            selected.extend((contained_file(market_root, path), destination / path.name) for path in shards)
-    return selected
+                raise ValueError(f"{label}: no local OHLCV files for {exchange}/{coin} ({symbol_value}). Download 1m history in Market Data before queueing.")
+            available.setdefault(coin, set()).add(exchange)
+            for shard in shards:
+                destination = Path(exchange) / "1m" / symbol / shard.name
+                selected[destination] = contained_file(market_root, shard)
+    for exchange in exchanges:
+        if exchange not in available.get('BTC', set()):
+            raise ValueError(f"BTC reference: Missing or ambiguous {quote_currency(exchange)} perpetual mapping for {exchange}/BTC")
+    for context in contexts:
+        for coin in context['coins']:
+            candidates = set(context['exchanges'])
+            if coin in sources:
+                candidates &= {sources[coin]}
+            if not candidates & available.get(coin, set()):
+                venues = ', '.join(sorted(candidates)) or ', '.join(context['exchanges'])
+                forced = f"; coin_sources requires {sources[coin]}" if coin in sources else ''
+                raise ValueError(f"{context['label']}: Missing or ambiguous mapped perpetual data for {coin} on {venues}{forced}. Check scenario exchanges, coin_sources and Market Data mappings.")
+    return [(source, relative) for relative, source in sorted(selected.items())]
 
 
 def vast_benchmark_main() -> None:

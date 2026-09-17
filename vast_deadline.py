@@ -60,8 +60,6 @@ def request_deadline(queue, identifier: str, expected: float, minutes: int) -> d
             raise VastError('Rental cleanup has already been requested', 409)
         if worker.get('deadline_protocol') not in (1, 2):
             raise VastError('This worker requires an updated deadline guard; its deadline cannot be changed', 409)
-        if worker.get('deadline_protocol') == 1 and abs(minutes) != 30:
-            raise VastError('This older worker supports only 30-minute deadline adjustments', 409)
         if worker.get('deadline_request'):
             raise VastError('A deadline change is awaiting worker confirmation', 409)
         intent = effective_intent(queue.store, identifier, queue.store.read(identifier, 'intent.json'))
@@ -75,6 +73,9 @@ def request_deadline(queue, identifier: str, expected: float, minutes: int) -> d
         if target > maximum_deadline(intent) or rental_cost + worker.get('transfer_reserved_used', 0) > intent['budget_usd']:
             raise VastError('Deadline exceeds the existing budget or the 24-hour rental limit', 422)
         request = dict(id=uuid.uuid4().hex, expected=current, deadline=target, job_id=identifier)
+        if worker.get('deadline_protocol') == 1 or worker.get('deadline_guard_upgraded_at'):
+            from vast_guard_migration import apply_migrated_deadline
+            return apply_migrated_deadline(queue, identifier, intent, request)
         queue.store.update(identifier, deadline_request=request, deadline_error=None)
         return {'pending': True, 'deadline': current, 'requested_deadline': target}
 

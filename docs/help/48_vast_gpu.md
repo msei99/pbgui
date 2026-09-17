@@ -116,7 +116,7 @@ configs continue through the existing local queue. Cloud jobs are shown in the
 same **Queue** table as local jobs, identified by the **Execution** column.
 
 The current profile supports fresh multi-coin `ema_anchor` and
-`trailing_martingale` jobs, Binance/Bybit and date-only suites. HSL, overrides,
+`trailing_martingale` jobs, Binance, Bybit, Bitget, OKX, Hyperliquid and KuCoin with scenario-specific coins, exchanges, dates and supported GPU parameter overrides. HSL, per-coin override bundles,
 BTC collateral and successive halving are rejected before rental. Pareto seeds
 are not applied. The pinned GPU backend does not support `gain_strategy_eq`;
 choose a supported objective such as `adg_strategy_eq` explicitly in the editor
@@ -205,7 +205,7 @@ controller and rental-guard services survive browser and API restarts. A remote
 guard attempts deletion at the fixed deadline independently. After a PBGui-host
 reboot, use **Resume supervision** to restore transient local services.
 
-Separate **Budget**, **Deadline** and **Transfer reserve** cards show the rental controls. Reserve inputs show four decimal places. The deadline adjustment field always defaults to 60 minutes. Older workers support only 30-minute deadline steps; when applying another value, PBGui explains the restriction so you can enter 30 explicitly.
+Separate **Budget**, **Deadline** and **Transfer reserve** cards show the rental controls. Reserve inputs show four decimal places. The deadline adjustment field always defaults to 60 minutes. Adjustments accept whole minutes from 1 to 1,440, subject to the budget, 24-hour rental limit and cleanup margin. On an explicit deadline change, PBGui upgrades an older rental guard while the optimizer continues running. The new guard must first confirm the unchanged deadline; only then is the requested change sent. Failed handovers restore the old guard. Unconfirmed adjustments remain pending and do not extend the local deadline. API restart is blocked during the handover.
 
 The active rental card lets you edit the **Budget target**. PBGui recalculates the
 deletion deadline and sends the change to the worker guard for acknowledgement;
@@ -330,3 +330,9 @@ A new run shows a waiting message until its own provider or optimizer log is ava
 - **Vast instance charges** shows **Unavailable** after a failed billing request. A previously retrieved amount remains visible as **last retrieved**; hover the label for the failure and retrieval details.
 - If local rental supervision is unavailable, Settings and the job log explain the systemd/OpenSSH prerequisite. Choose a job using **Open log** in the unified queue; that shared window contains its progress, errors, rental details and latest downloaded log.
 - **Show incompatible hosts** refreshes the offer preview. Selecting an offer copies its GPU type into the requirements; save the requirements before starting. It does not reserve that offer.
+
+Cloud export plans all active scenarios together: `coins`, `ignored_coins`, `exchanges`, dates and `coin_sources` are supported. It includes the shared market pool and BTC reference history, deduplicates files and retains all available daily shards for warmup and scenario windows. Additional scenario exchanges are included in public-market and first-candle metadata staging. The original config is unchanged; nested parameter overrides are flattened only in the frozen worker copy.
+
+Missing mappings or local OHLCV files identify the scenario, coin and exchange; download the required history in Market Data before queueing. A coin need not be listed on every exchange. `coin_sources` must assign a coin consistently across the suite. Hyperliquid uses USDC; the other supported venues use USDT.
+
+Empty or omitted scenario `exchanges` inherit the base exchanges. Omitted/null `coins` inherit the base selection, while `coins: []` explicitly selects no coins and is rejected with that explanation, matching PB8. Empty `overrides` and `coin_sources` are accepted. Each active scenario must contain 1–64 selected coins; the total suite may contain more. Parameter overrides must reference existing canonical PB8 paths supported by the pinned GPU worker. Per-coin override bundles, data-path overrides and HSL remain outside this cloud profile; errors identify the scenario and exact field.

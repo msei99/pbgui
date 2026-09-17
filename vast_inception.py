@@ -15,6 +15,8 @@ from logging_helpers import human_log
 from vast_jobs import PROJECT
 from vast_provider import VastError
 
+from vast_exchanges import CCXT_EXCHANGES, SUPPORTED_EXCHANGES, quote_currency
+
 SERVICE = 'VastRunner'
 CACHE_VERSION = 2  # Resolver format used by the pinned PB8 worker revision.
 CACHE_FILES = (
@@ -34,7 +36,7 @@ def required_markets(manifest, mapping_root):
         if not name.startswith('ohlcv/'):
             continue
         parts = name.split('/')
-        if (len(parts) != 5 or parts[1] not in ('binance', 'bybit') or parts[2] != '1m'
+        if (len(parts) != 5 or parts[1] not in SUPPORTED_EXCHANGES or parts[2] != '1m'
                 or any(part in ('', '.', '..') or '\\' in part or any(ord(c) < 32 for c in part) for part in parts)):
             raise VastError('Invalid OHLCV dataset path', 422)
         datasets.add((parts[1], parts[3]))
@@ -56,7 +58,7 @@ def required_markets(manifest, mapping_root):
         selected = {}
         for _, dataset in sorted(pair for pair in datasets if pair[0] == exchange):
             matches = [row for row in rows if isinstance(row, dict)
-                       and row.get('quote') == 'USDT' and row.get('swap') is True and row.get('linear') is True
+                       and row.get('quote') == quote_currency(exchange) and row.get('swap') is True and row.get('linear') is True
                        and isinstance(row.get('ccxt_symbol'), str)
                        and row['ccxt_symbol'].replace('/', '_') == dataset]
             if len(matches) != 1 or not isinstance(matches[0].get('coin'), str) or not matches[0]['coin']:
@@ -72,19 +74,69 @@ def required_markets(manifest, mapping_root):
     return result
 
 
+async def bitget_first_candles(client, symbol):
+    """Find Bitget listing history with bounded backward monthly pages, then daily refinement.
+
+    Like pinned PB8's resolver, use `until` rather than `since`: Bitget's
+    historical endpoint pages backwards. Never use a local shard as listing age.
+    """
+    month_ms = 30 * 86400000
+    candles = await client.fetch_ohlcv(symbol, timeframe='1M', params={'limit': 200})
+    if not candles:
+        return []
+    first = min(candles, key=lambda item: item[0])
+    low, high = 0, max(client.milliseconds(), max(item[0] for item in candles) + month_ms)
+    for _ in range(64):
+        if high - low <= month_ms:
+            break
+        midpoint = (low + high) // 2
+        page = await client.fetch_ohlcv(symbol, timeframe='1M', params={'until': int(midpoint), 'limit': 200})
+        if not page:
+            low = midpoint
+            continue
+        candidate = min(page, key=lambda item: item[0])
+        if candidate[0] >= high:
+            break
+        first, high = candidate, candidate[0]
+    for _ in range(128):
+        until = max(0, int(first[0]) - 1)
+        if not until:
+            break
+        page = await client.fetch_ohlcv(symbol, timeframe='1M', params={'until': until, 'limit': 200})
+        if not page:
+            break
+        candidate = min(page, key=lambda item: item[0])
+        if candidate[0] >= first[0]:
+            raise VastError('Bitget inception pagination did not advance for ' + symbol, 422)
+        first = candidate
+    else:
+        raise VastError('Bitget inception pagination limit reached for ' + symbol, 422)
+    daily = await client.fetch_ohlcv(symbol, timeframe='1d',
+                                     params={'until': int(first[0]) + 32 * 86400000, 'limit': 200})
+    return [min(daily, key=lambda item: item[0])] if daily else [first]
+
+
 async def fetch_inception(markets):
     """Use PB8's first-daily-candle requests, releasing clients even on failure."""
     import ccxt.async_support as ccxt
     timestamps, symbols = {}, {}
     for exchange, coins in markets.items():
         identifier = 'binanceusdm' if exchange == 'binance' else exchange
-        client = getattr(ccxt, identifier)({'enableRateLimit': True, 'timeout': 30000})
+        client = getattr(ccxt, CCXT_EXCHANGES[exchange])({'enableRateLimit': True, 'timeout': 30000})
         try:
             # Identical request horizons to pinned PB8 procedures.py. A local
             # dataset's first day is NOT an authoritative listing timestamp.
             since = 1 if exchange == 'binance' else 1514764800000
             for coin, symbol in coins.items():
-                candles = await client.fetch_ohlcv(symbol, since=since, timeframe='1d')
+                if exchange == 'bitget':
+                    candles = await bitget_first_candles(client, symbol)
+                elif exchange == 'kucoin':
+                    candles = await client.fetch_ohlcv(symbol, since=since, timeframe='1d',
+                                                       limit=1, params={'to': client.milliseconds()})
+                else:
+                    candles = await client.fetch_ohlcv(symbol,
+                        since=1609459200000 if exchange == 'hyperliquid' else since,
+                        timeframe='1M' if exchange == 'okx' else '1w' if exchange == 'hyperliquid' else '1d')
                 stamp = candles[0][0] if candles else None
                 if (type(stamp) not in (int, float) or not math.isfinite(stamp)
                         or not 1262304000000 < stamp <= time.time() * 1000):

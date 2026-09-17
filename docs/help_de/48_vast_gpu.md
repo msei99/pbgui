@@ -118,7 +118,7 @@ Konfigurationen bleiben im bisherigen lokalen Ablauf. Cloud-Jobs erscheinen als
 gemeinsamen Tabelle unter **Queue**, erkennbar an der Spalte **Execution**.
 
 Aktuell unterstützt: frische Multi-Coin-Läufe mit `ema_anchor` oder
-`trailing_martingale`, Binance/Bybit und reine Datumsszenarien. HSL, Overrides,
+`trailing_martingale`, Binance, Bybit, Bitget, OKX, Hyperliquid, KuCoin und Szenarien mit eigenen Coins, Börsen, Zeiträumen und unterstützten GPU-Parameter-Overrides. HSL, separate Coin-Override-Pakete,
 BTC-Collateral und Successive Halving werden vor der Miete abgewiesen.
 Pareto-Seeds werden nicht übernommen. `gain_strategy_eq` wird vom festen
 GPU-Backend nicht unterstützt. Gegebenenfalls bewusst ein unterstütztes Ziel
@@ -210,7 +210,7 @@ Controller und Mietwächter überleben Browser-/API-Neustarts. Ein entfernter
 Wächter versucht die Löschung unabhängig zur festen Frist. Nach einem Neustart
 des PBGui-Rechners mit **Resume supervision** die temporären Dienste wiederherstellen.
 
-**Budget**, **Deadline** und **Transfer reserve** stehen in eigenen Karten. Reserve-Eingaben zeigen vier Nachkommastellen. Das Eingabefeld für die Deadline-Anpassung startet immer mit 60 Minuten. Ältere Worker unterstützen nur 30-Minuten-Schritte; beim Anwenden eines anderen Werts erklärt PBGui diese Einschränkung, damit du ausdrücklich 30 eingeben kannst.
+**Budget**, **Deadline** und **Transfer reserve** stehen in eigenen Karten. Reserve-Eingaben zeigen vier Nachkommastellen. Das Eingabefeld für die Deadline-Anpassung startet immer mit 60 Minuten. Anpassungen sind in ganzen Minuten von 1 bis 1.440 möglich, innerhalb von Budget, 24-Stunden-Mietlimit und Aufräumreserve. Bei einer ausdrücklich angeforderten Deadline-Änderung aktualisiert PBGui einen älteren Mietwächter, während der Optimizer weiterläuft. Der neue Wächter muss zuerst die unveränderte Deadline bestätigen; erst danach wird die gewünschte Änderung gesendet. Bei fehlgeschlagener Übergabe wird der alte Wächter wieder aktiviert. Unbestätigte Anpassungen bleiben ausstehend und verlängern die lokale Deadline nicht. Während der Übergabe ist ein API-Neustart blockiert.
 
 In der Karte der aktiven Miete kann das **Budgetziel** geändert werden. PBGui
 berechnet daraus die Löschfrist neu und übergibt die Änderung zur Bestätigung an
@@ -336,3 +336,9 @@ Ein neuer Run zeigt einen Wartehinweis, bis sein eigenes Provider- oder Optimize
 - **Vast instance charges** zeigt nach einer fehlgeschlagenen Abrechnungsabfrage **Unavailable**. Ein bereits geladener Betrag bleibt als **last retrieved** sichtbar; der Hinweis am Feldtitel nennt Fehler und Abrufdetails.
 - Fehlt die lokale Mietüberwachung, erklären Settings und Job-Log die systemd/OpenSSH-Voraussetzung. Jobs werden über **Open log** in der gemeinsamen Queue ausgewählt; dieses Fenster enthält Fortschritt, Fehler, Mietdetails und das zuletzt heruntergeladene Log.
 - **Show incompatible hosts** aktualisiert die Angebotsvorschau. Die Auswahl eines Angebots übernimmt dessen GPU-Typ in die Anforderungen; diese vor dem Start speichern. Das Angebot wird dadurch nicht reserviert.
+
+Der Cloud-Export plant alle aktiven Szenarien gemeinsam: `coins`, `ignored_coins`, `exchanges`, Datumsfelder und `coin_sources` werden berücksichtigt. Er exportiert den gemeinsamen Markt-Datenbestand inklusive BTC-Referenz, entfernt doppelte Dateien und behält die gesamte vorhandene Tageshistorie für Warmup und Szenariozeiträume. Zusätzliche Szenario-Börsen werden auch bei Markt- und Erstkerzen-Metadaten berücksichtigt. Die ursprüngliche Konfiguration bleibt unverändert; verschachtelte Parameter-Overrides werden nur in der eingefrorenen Worker-Kopie in Punktpfade umgewandelt.
+
+Fehlende Mappings oder lokale OHLCV-Dateien nennen Szenario, Coin und Börse; die benötigte Historie vor dem Einreihen unter Market Data herunterladen. Eine Coin muss nicht auf jeder Börse gelistet sein. `coin_sources` muss eine Coin über die Suite hinweg derselben Börse zuordnen. Hyperliquid verwendet USDC, die anderen unterstützten Börsen USDT.
+
+Leere oder fehlende Szenario-`exchanges` übernehmen die Basisbörsen. Fehlende/null `coins` übernehmen die Basisauswahl; `coins: []` wählt dagegen ausdrücklich keine Coins und wird mit dieser Begründung abgelehnt, entsprechend PB8. Leere `overrides` und `coin_sources` sind erlaubt. Pro aktivem Szenario gelten 1–64 ausgewählte Coins; die gesamte Suite darf mehr enthalten. Parameter-Overrides müssen vorhandene kanonische PB8-Pfade verwenden, die der festgelegte GPU-Worker unterstützt. Separate Coin-Override-Pakete, Datenpfad-Overrides und HSL bleiben außerhalb dieses Cloud-Profils; Fehler nennen Szenario und konkretes Feld.

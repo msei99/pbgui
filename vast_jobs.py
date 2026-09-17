@@ -22,6 +22,8 @@ from secure_files import atomic_write_private_text, ensure_private_directory, re
 from vast_credentials import VastCredentialStore
 from vast_provider import VastClient, VastError, number, positive_id
 
+from vast_exchanges import SUPPORTED_EXCHANGES
+
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
 IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc"
@@ -71,9 +73,16 @@ def native_job_config(source: dict, iterations: int, workers: int, use_adg: bool
         raise VastError("Cloud configuration is invalid: " + "; ".join(item['path'] + ": " + item['message'] for item in errors), 422)
     config = copy.deepcopy(source)
     live, bt, opt = config["live"], config["backtest"], config["optimize"]
+    if bt.get("suite_enabled"):
+        from vast_scenarios import flatten_overrides
+        for scenario in bt.get("scenarios", []):
+            if scenario.get("overrides"):
+                # PB8's GPU preflight expects dotted paths before suite materialization.
+                scenario["overrides"] = flatten_overrides(scenario["overrides"])
+
     if live.get("strategy_kind") not in ("trailing_martingale", "ema_anchor"):
         raise VastError("This image supports trailing_martingale and ema_anchor", 422)
-    if config.get("coin_overrides") or opt.get("enable_overrides") or bt.get("coin_sources") or bt.get("market_settings_sources"):
+    if config.get("coin_overrides") or opt.get("enable_overrides") or bt.get("market_settings_sources"):
         raise VastError("Cloud export does not yet support coin or optimizer overrides", 422)
     if bt.get("btc_collateral_cap") or (opt.get("gpu", {}).get("successive_halving") or {}).get("enabled"):
         raise VastError("Cloud jobs currently require no BTC collateral and no successive halving", 422)
@@ -187,7 +196,7 @@ class JobStore:
             parts = Path(path).parts if isinstance(path, str) else ()
             if len(parts) > 1 and parts[0] == 'ohlcv':
                 exchange = parts[1]
-                if exchange in ('binance', 'bybit') and exchange not in result:
+                if exchange in SUPPORTED_EXCHANGES and exchange not in result:
                     result.append(exchange)
         return result
 
@@ -267,7 +276,7 @@ class JobStore:
                 raise VastError('Cloud job is no longer awaiting input preparation', 409)
         config["backtest"]["ohlcv_source_dir"] = "/work/pbgui/jobs/" + identifier + "/input/ohlcv"
         directory = self.directory(identifier)
-        self.update(identifier, exchanges=list(config["backtest"].get("exchanges", [])), input_progress={
+        self.update(identifier, exchanges=sorted({relative.parts[0] for _, relative in shards}), input_progress={
             "stage": "copying", "files_completed": 0, "files_total": len(shards),
             "bytes_completed": 0, "bytes_total": total_bytes,
         })

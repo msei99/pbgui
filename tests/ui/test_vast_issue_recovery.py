@@ -958,6 +958,7 @@ def test_performance_mismatched_workloads_disable_comparison(cloud_page):
     assert page.locator('#performance-compare').is_disabled()
     assert 'identical' in page.locator('#performance-selection').inner_text()
     page.locator('#performance-clear').click()
+    page.wait_for_function("document.querySelectorAll('#performance-rows tr.selected').length === 0")
     assert page.locator('#performance-rows tr.selected').count() == 0
 
 
@@ -974,3 +975,42 @@ def test_late_performance_response_cannot_revive_hidden_view(cloud_page):
     page.wait_for_timeout(50)
     assert page.locator('#vast-performance').is_hidden()
     assert page.locator('#performance-rows tr[data-run]').count() == 0
+
+
+def test_cloud_validation_names_scenarios_and_displays_field_paths_safely(cloud_page):
+    """Show actionable validation text without interpreting untrusted scenario labels."""
+    page, _, _, overrides, _ = cloud_page
+    label = '<img src=x onerror=alert(1)>'
+    message = f'Scenario 2 {label!r}: unknown fields: custom_data_path. Use the supported scenario fields.'
+    overrides['/api/vast/validate-config'] = (200, json.dumps(dict(valid=False, revision='test1234', metrics=[],
+        errors=[dict(path='backtest.scenarios.1', message=message, suggestions=[])])), {'Content-Type': 'application/json'})
+    page.select_option('#opted-execution', 'vast')
+    page.evaluate('PBGuiVast.updateEditor()')
+    page.get_by_text('Field: backtest.scenarios.1', exact=True).wait_for()
+    box = page.locator('#opted-vast-validation')
+    assert message in box.inner_text()
+    assert 'Cloud configuration needs attention (1)' in box.inner_text()
+    assert box.locator('img').count() == 0
+    assert page.locator('#btn-editor-save-queue').is_disabled()
+    assert page.locator('#btn-editor-save').is_enabled()
+
+
+@pytest.mark.parametrize('minutes', [1, 7, 60])
+def test_legacy_rental_submits_arbitrary_deadline_steps(cloud_page, minutes):
+    """Legacy guards use the same minute input and explicit adjustment endpoint."""
+    page, data, _, overrides, held = cloud_page
+    lease = 'c'*32
+    data['worker'].update(id=lease, deadline_protocol=1)
+    data['jobs'][0].update(lease_id=lease)
+    data['jobs'][0]['rental'].update(id=lease, deadline_protocol=1, deadline=2000000000)
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    field = page.get_by_role('spinbutton', name='Deadline adjustment in minutes', exact=True)
+    assert field.input_value() == '60'
+    field.fill(str(minutes))
+    overrides['/api/vast/queue/deadline'] = 'hold'
+    page.get_by_role('button', name='Extend deadline by entered minutes', exact=True).click()
+    page.wait_for_timeout(100)
+    assert json.loads(held[0].request.post_data)['minutes'] == minutes
+    held.pop().fulfill(json={'pending': True})

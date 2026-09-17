@@ -117,7 +117,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 page.wait_for_function("document.getElementById('api-key').value === ''")
                 page.evaluate("""() => {
                     state.editorLastConfig = {live:{strategy_kind:'ema_anchor',approved_coins:{long:['BTC'],short:[]}},
-                        bot:{long:{},short:{}},backtest:{},optimize:{iters:512,n_cpus:4,scoring:[{metric:'gain_strategy_eq',goal:'max'}],limits:[]}};
+                        bot:{long:{},short:{}},backtest:{exchanges:['binance']},optimize:{iters:512,n_cpus:4,scoring:[{metric:'gain_strategy_eq',goal:'max'}],limits:[]}};
                     PBGuiVast.openEditor({pbgui:{execution:'vast'}});
                 }""")
                 page.wait_for_function("document.getElementById('opted-vast-validation').textContent.includes('Unsupported cloud metrics')")

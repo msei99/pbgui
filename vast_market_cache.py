@@ -11,6 +11,8 @@ import time
 from logging_helpers import human_log
 from vast_provider import VastError
 
+from vast_exchanges import CCXT_EXCHANGES, SUPPORTED_EXCHANGES
+
 SERVICE = "VastRunner"
 
 
@@ -20,7 +22,7 @@ async def fetch_markets(exchanges):
 
     result = {}
     for exchange in exchanges:
-        client = getattr(ccxt, {"binance": "binanceusdm", "bybit": "bybit"}[exchange])(
+        client = getattr(ccxt, CCXT_EXCHANGES[exchange])(
             {"enableRateLimit": True, "timeout": 30000})
         try:
             markets = await client.load_markets(True)
@@ -36,7 +38,7 @@ def stage_public_markets(connection):
     """Seed PB8's working-directory cache without modifying immutable input."""
     exchanges = connection.store.read(connection.identifier).get("exchanges")
     if (not isinstance(exchanges, list) or not exchanges
-            or any(name not in ("binance", "bybit") for name in exchanges)):
+            or any(not isinstance(name, str) or name not in SUPPORTED_EXCHANGES for name in exchanges)):
         raise VastError("Missing or unsupported exchanges for public market metadata", 422)
     try:
         async def bounded_fetch():
@@ -64,7 +66,7 @@ def stage_public_markets(connection):
         "raw=gzip.decompress(sys.stdin.buffer.read()); "
         "assert hashlib.sha256(raw).hexdigest()==" + repr(checksum) + "; "
         "data=json.loads(raw); root=pathlib.Path(" + repr(connection.remote_root + "/output/caches") + "); "
-        "assert set(data).issubset({'binance','bybit'})\n"
+        "assert set(data).issubset(" + repr(SUPPORTED_EXCHANGES) + ")\n"
         "for exchange,item in data.items():\n"
         " stamp=item['fetched_at']; assert 0 <= time.time()-stamp < 86400\n"
         " target=root/exchange/'markets.json'; target.parent.mkdir(parents=True,exist_ok=True)\n"

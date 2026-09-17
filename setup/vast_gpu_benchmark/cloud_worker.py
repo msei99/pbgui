@@ -86,7 +86,7 @@ def guard() -> None:
         raise ValueError("Invalid maximum deadline")
     hard_deadline = float(os.environ.get('PBGUI_HARD_DEADLINE', str(time.time() + 86400)))
     state = {"instance_id": instance, "deadline": deadline, "job_id": os.environ["PBGUI_JOB_ID"],
-             "max_deadline": maximum, "hard_deadline": hard_deadline, "deadline_protocol": 2}
+             "max_deadline": maximum, "hard_deadline": hard_deadline, "deadline_protocol": 2, "guard_pid": os.getpid()}
     saved_path = ROOT / 'guard.json'
     if saved_path.is_file() and not saved_path.is_symlink():
         saved = json.loads(saved_path.read_text())
@@ -95,7 +95,7 @@ def guard() -> None:
                 and type(saved.get('max_deadline')) in (int, float)
                 and type(saved.get('deadline')) in (int, float)
                 and 0 < saved['deadline'] <= saved['max_deadline'] <= hard_deadline):
-            state = dict(saved, deadline_protocol=2, hard_deadline=min(hard_deadline, saved.get('hard_deadline', hard_deadline)))
+            state = dict(saved, deadline_protocol=2, guard_pid=os.getpid(), hard_deadline=min(hard_deadline, saved.get('hard_deadline', hard_deadline)))
             deadline = state['deadline']
     monotonic_deadline = time.monotonic() + max(0, deadline - time.time())
     write_record(ROOT / "guard.json", state)

@@ -29,7 +29,7 @@ def test_supported_config_is_not_modified(config):
     ('optimize.limits.0.value','nan'), ('optimize.limits.0.penalize_if','invalid'),
     ('optimize.scoring.0.scenario','missing'), ('optimize.limits.0.stat','invalid'),
     ('optimize.iters',10), ('optimize.n_cpus',65), ('live.strategy_kind','other'),
-    ('backtest.btc_collateral_cap',.2), ('backtest.exchanges',['hyperliquid']),
+    ('backtest.btc_collateral_cap',.2), ('backtest.exchanges',['unknown-exchange']),
     ('live.approved_coins.long',[]), ('optimize.scoring',{}),
     ('optimize.limits.0.enabled','true'),
 ])
