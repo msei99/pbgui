@@ -83,7 +83,6 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
 | Action | What changes | What does not change |
 | --- | --- | --- |
 | **1st / All** beside `start_date` | Resolves an OHLCV-based start date | Suite scenarios and generator settings |
-| **Recalculate** | Re-reads current base settings and fits the maximum valid Training count for every template | Saved config and applied Suite |
 | **Generate windows** | Shows exact Train/Holdout windows and warnings | Config, Suite, scoring, bounds, and queue |
 | **Check & Apply windows** | Enables Suite Mode, installs Train scenarios/reducer, stores Holdout provenance, and applies the Sweep preset | No config is saved or queued yet |
 | **Save / Save & Queue** | Persists or launches the applied experiment | Holdout remains excluded from optimization |
@@ -97,10 +96,10 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
 | **Template** | Rolling comparison, Walk-Forward validation, or sequential Sweep cash-flow evaluation |
 | **Window days** | Trading days contained in each scenario |
 | **Stride days** | Distance between consecutive window end dates; automatic for Sweep |
-| **Training windows** | Scenarios PB8 evaluates; editable for Rolling/Walk-Forward, fitted by Recalculate, and automatic for Sweep |
+| **Training windows** | Editable for Rolling/Walk-Forward; automatically fitted for Sweep when generating windows |
 | **Holdout windows** | Untouched periods reserved for final out-of-sample Backtests |
 | **Exchange mode** | Inherit the combined base exchanges or expand separate exchange scenarios where supported |
-| **Starting balance** | PB8 simulation capital and Sweep reset capital after Apply; defaults to the current base Starting balance |
+| **Starting balance** | PB8 simulation capital and Sweep reset capital after Apply; always uses the current general Starting balance; no separate generator field |
 | **Balance multiplier** | Sweep target: Starting balance multiplied by this value |
 | **Refill cost** | Additional external cost booked when a loss window is refilled |
 | **Cooldown days** | No-trading gap between Sweep windows; included automatically in Stride |
@@ -109,8 +108,8 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
 
 1. Select explicit coins and exchanges.
 2. Use **All** for a start date common to every selected Exchange/Coin pair, or **1st** when changing-universe history is intentional.
-3. Select **Sweep Cycles**, set Window, Holdout, Starting balance, Multiplier, Refill cost, and Cooldown. PBGui calculates Stride and Training windows.
-4. Click **Recalculate** after any OHLCV/date/exchange change, then **Generate windows**.
+3. Select **Sweep Cycles**, set Window, Holdout, Multiplier, Refill cost, and Cooldown. PBGui calculates Stride and Training windows.
+4. After changing dates or exchanges, click **Generate windows** to calculate and display the new windows.
 5. Click **Check & Apply windows**. PBGui synchronizes base balance, symmetric Suite coin lists, reducer, scoring, limits, and meaningful Long bounds.
 6. Save and queue the Optimize run. `write_all_results=true` is mandatory so PBGui can bind the immutable Sweep plan to the correct result.
 7. Rank completed candidates by `sweep_net_cashflow`, cycles completed, external capital/refills, Drawdown, and Sortino.
@@ -133,7 +132,7 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
    - **Walk-Forward** creates chronological training windows followed by separate holdout windows.
    - **Sweep Cycles** creates one sequential combined-exchange track and evaluates each candidate's window gains with carry, sweep-reset, and refill-reset rules. PBGui automatically calculates Stride and the maximum number of complete Training windows from the base date range after reserving Holdouts.
 4. Set **Window days** to the length of each scenario. Rolling Windows and Walk-Forward accept a manual **Stride days** value. Sweep Cycles calculates Stride automatically as Window days plus Cooldown days.
-5. Set **Training windows** manually for Rolling Windows or Walk-Forward, or use **Recalculate** to fit their maximum count from the current dates and configured Stride. Sweep Cycles always calculates the maximum complete Training count automatically after reserving **Holdout windows**. A range fitting no training window remains invalid instead of being forced to one. With **Exchange mode = Inherit base**, every window uses the combined base exchange selection.
+5. Set the Training count for Rolling/Walk-Forward. Sweep automatically fits complete windows after reserving Holdouts.
 6. Click **Generate windows**. Review and adjust the generated windows directly in the chart. Generating windows alone does not change the Suite or config.
 7. Click **Check & Apply windows** when the plan is correct. This enables Suite Mode, replaces the current unsaved Suite scenarios, and preserves the configured reducer. Holdout rows are deliberately not copied into `backtest.scenarios`.
 8. Review named Objective Scenario, scoring, and limit references after replacing an existing Suite. Their scenario labels must still exist in the newly generated training set.
@@ -141,17 +140,17 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
 
 Run **Generate windows** again before Apply if the base dates or exchanges changed. PBGui blocks application of a stale preview. Editing, adding, removing, reordering, or replacing Suite scenarios after Apply clears the generator provenance because the saved Suite no longer exactly matches the generated plan.
 
-After changing approved coins, base Starting balance, or `start_date` through **1st** or **All**, click **Recalculate** beside **Guide**. It reloads the current base settings, fits Rolling/Walk-Forward counts with their configured Stride, recalculates automatic Sweep Stride/counts, and discards stale Preview state. Preview still preserves a manually selected smaller Rolling/Walk-Forward count.
+**Generate windows** uses the current base dates and generator inputs and displays the result directly. **Check & Apply windows** validates and adopts this preview. There is no separate recalculation step.
 
 Example: for three non-overlapping quarterly training periods and one untouched quarter, choose **Walk-Forward**, `Window days = 90`, `Stride days = 90`, `Training windows = 3`, and `Holdout windows = 1`. For six overlapping three-month training periods sampled monthly, choose **Rolling Windows**, `Window days = 90`, `Stride days = 30`, and `Training windows = 6`.
 
-**Sweep Cycles example:** evaluate repeated account-growth cycles from `1,000` to `2,000` USD. Select **Sweep Cycles**, set `Window days = 180`, `Cooldown days = 7`, and `Holdout windows = 1`. PBGui calculates `Stride days = 187` and the maximum complete Training count automatically from the base dates; incomplete leading days are reported instead of requiring manual arithmetic. Set **Starting balance** to `1000`, **Balance multiplier** to `2`, and **Refill cost** to `25`. Preview shows every complete 180-day training window separated by seven no-trading days plus the reserved untouched holdout window. For every Pareto candidate PBGui applies the windows chronologically. Positive gains below 2,000 USD carry into the next window. At or above 2,000 USD, everything above 1,000 USD becomes swept cash and working capital resets to 1,000 USD. Below 1,000 USD, PBGui books the missing amount plus 25 USD external refill cost and resets to 1,000 USD. Pareto columns then expose `sweep_net_cashflow`, `sweep_total_swept`, `sweep_external_capital`, `sweep_cycles_completed`, `sweep_refill_count`, `sweep_final_balance`, and `sweep_target_hit_rate`. The holdout remains pending until the selected candidate is run separately over that period. This is a deterministic window-boundary evaluation; it does not move real funds or claim target crossings inside a window.
+**Sweep Cycles example:** evaluate repeated account-growth cycles from `1,000` to `2,000` USD. Select **Sweep Cycles**, set `Window days = 180`, `Cooldown days = 7`, and `Holdout windows = 1`. PBGui calculates `Stride days = 187` and the maximum complete Training count automatically from the base dates; incomplete leading days are reported instead of requiring manual arithmetic. Set the general **Starting balance** to `1000`, **Balance multiplier** to `2`, and **Refill cost** to `25`. Preview shows every complete 180-day training window separated by seven no-trading days plus the reserved untouched holdout window. For every Pareto candidate PBGui applies the windows chronologically. Positive gains below 2,000 USD carry into the next window. At or above 2,000 USD, everything above 1,000 USD becomes swept cash and working capital resets to 1,000 USD. Below 1,000 USD, PBGui books the missing amount plus 25 USD external refill cost and resets to 1,000 USD. Pareto columns then expose `sweep_net_cashflow`, `sweep_total_swept`, `sweep_external_capital`, `sweep_cycles_completed`, `sweep_refill_count`, `sweep_final_balance`, and `sweep_target_hit_rate`. The holdout remains pending until the selected candidate is run separately over that period. This is a deterministic window-boundary evaluation; it does not move real funds or claim target crossings inside a window.
 
 PB8 Gain values are terminal multipliers, not additive returns: `1.0` is break-even, `2.0` doubles the opening balance, and `0.8` loses 20%. Sweep evaluation therefore calculates each window as `ending_balance = opening_balance × gain_strategy_eq`.
 
 To run validation without manual editing, select one or more candidates in the Paretos table, choose **Holdout only**, **Full timerange only**, **Holdout + Full timerange**, or **Training + Holdout + Full timerange**, and click **Validate**. Full timerange is available for ordinary PB8 Pareto results without a Sweep plan. PBGui reads immutable holdout dates where available, creates one standalone PB8 Backtest item per candidate and holdout, and optionally adds one continuous Backtest over the candidate's original base `start_date` through `end_date`. The all-period mode additionally creates one standalone Backtest for every configured Suite training window, making Training, Holdout, and continuous Full results directly selectable in Backtest Compare. Combined mode without Holdout dates still queues the available Training and/or Full timerange jobs and reports the skipped Holdout. Every generated validation draft disables Suite Mode, preserves its own exact date range and configured exchange group, and carries a per-candidate validation group into Backtest Results. Completed members of that group stay together behind one expandable **Optimize validation** header. A multi-exchange optimizer scenario therefore remains one comparable Combined backtest per period instead of being split into artificial single-exchange jobs that may have no valid coin in an early window. The continuous run includes training data and is a path-dependence/compounding diagnostic, not a replacement for untouched out-of-sample Holdout validation.
 
-Applying a Sweep Cycles preview also sets the main PB8 `backtest.starting_balance` to the generator's **Starting balance**. Save and Queue reject a later mismatch because PB8 must calculate gains at the same capital size used by the cash-flow model.
+Generating or applying Sweep windows reads the current general `backtest.starting_balance`. After changing that value, apply the windows again before saving or queueing so PB8 and the cash-flow model use the same capital.
 
 Apply also replaces the optimizer recipe with the Sweep preset: `gain_strategy_eq` max, `sortino_ratio_strategy_eq` max, and `drawdown_worst_strategy_eq` min, all inheriting Suite Aggregate. The Suite reducer uses `median` by default, `max` for worst Drawdown, and `min` for Backtest Completion Ratio so one incomplete scenario cannot be hidden by the others. Limits become Drawdown greater than `0.80` and Backtest Completion Ratio less than `0.99`. The 80% cap deliberately permits high-risk candidates for profit sweeping; Drawdown remains a minimizing Pareto objective so a lower-risk candidate is preferred when Gain is comparable.
 
@@ -363,3 +362,9 @@ Date fields in the optimizer overwrite existing digits when typing within a comp
 Parameter help appears when hovering over the dotted field title. Clicking, focusing, or editing a field does not open parameter help.
 
 After changing visual windows, use **Check & Apply windows** before Save or Save & Queue. PBGui rejects unapplied window dates/roles and applied windows outside the current base dates. Queue workload estimates describe the applied training scenarios, not the generator draft; holdouts are excluded.
+
+Green lines also mark the start of the first window and the end of the last window.
+
+For Sweep Cycles, **Generate windows** also copies the current general **Starting balance** into the generator and generated preview.
+
+The pinned Vast GPU worker supports HSL for ema_anchor and trailing_martingale. HSL settings are preserved during cloud export; native GPU configuration checks still apply.

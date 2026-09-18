@@ -723,6 +723,7 @@ textarea.json-invalid:focus {
 </style>
 <link rel="stylesheet" href="/app/css/backtest_shell.css?v=5">
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
+<script src="/app/js/date_overwrite.js?v=2"></script>
 <script defer src="/app/js/pb8_parameter_help.js?v=3"></script>
 </head>
 <body>
@@ -4874,27 +4875,12 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
   };
 }();
 function fieldDate2(id, label, value, tip, span) {
-  /* Custom __dp popup — 📅 button overlaid inside the field */
-  var dateVal = value || '';
-  var inputHtml = '<div style="position:relative">' +
-    '<input type="text" id="' + id + '" value="' + esc(dateVal) + '"' +
-    ' data-prev="' + esc(dateVal) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value;this.dataset.semanticValue=\'\'">' +
-    '<button type="button" data-dp="' + id + '" onclick="window.__dp.show(\'' + id + '\',this)"' +
-    ' style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;' +
-    'padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
-    '</div>';
+  var inputHtml = PBGuiDateInput.render(id, value, {clearSemantic:true});
   return fmtGroupSpan(id, label, inputHtml, tip, span || 1);
 }
 
 function backtestDialogDateInputHtml(id, value) {
-  var dateVal = value || '';
-  return '<div style="position:relative">' +
-    '<input type="text" id="' + escAttr(id) + '" class="sb-input" value="' + escAttr(dateVal) + '"' +
-    ' data-prev="' + escAttr(dateVal) + '" style="width:100%;box-sizing:border-box;padding-right:26px">' +
-    '<button type="button" data-dp="' + escAttr(id) + '" onclick="window.__dp.show(\'' + escAttr(id) + '\',this)"' +
-    ' style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;' +
-    'padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
-    '</div>';
+  return PBGuiDateInput.render(id, value, {className:'sb-input'});
 }
 
 function cfgDateValueToMs(value) {
@@ -11073,8 +11059,8 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 }];
 </script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=2">
-<script src="/app/js/scenario_visual_editor.js?v=3"></script>
-<script src="/app/js/suite_editor.js?v=37"></script>
+<script src="/app/js/scenario_visual_editor.js?v=4"></script>
+<script src="/app/js/suite_editor.js?v=40"></script>
 <script src="/app/js/coin_overrides_editor.js?v=26"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

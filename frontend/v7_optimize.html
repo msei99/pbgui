@@ -2762,10 +2762,10 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=15"></script>
-<script src="/app/js/date_overwrite.js?v=1"></script>
+<script src="/app/js/date_overwrite.js?v=2"></script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
-<script src="/app/js/scenario_visual_editor.js?v=20"></script>
-<script src="/app/js/suite_editor.js?v=37"></script>
+<script src="/app/js/scenario_visual_editor.js?v=21"></script>
+<script src="/app/js/suite_editor.js?v=40"></script>
 <script src="/app/js/log_viewer_panel.js?v=47"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
@@ -4911,11 +4911,7 @@ state.limitAddForm = defaultLimitForm();
 }();
 
 function fieldDate2(id, label, value, tip, span) {
-  var dateValue = value || '';
-  var inputHtml = '<div style="position:relative">' +
-    '<input type="text" data-date-overwrite="true" id="' + id + '" value="' + esc(dateValue) + '" data-prev="' + esc(dateValue) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
-    '<button type="button" data-dp="' + id + '" onclick="window.__dp.show(\'' + id + '\',this)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
-    '</div>';
+  var inputHtml = PBGuiDateInput.render(id, value);
   return fmtGroupSpan(id, label, inputHtml, tip, span || 1);
 }
 
@@ -4929,10 +4925,7 @@ function fieldOptimizeStartDate2(id, label, value, tip, span) {
   var dateValue = normalizeOptimizeDateOnlyValue(value || '');
   var inputHtml = '<div>' +
     '<div style="display:flex;gap:3px;align-items:center">' +
-      '<div style="position:relative;min-width:0;flex:1">' +
-        '<input type="text" data-date-overwrite="true" id="' + id + '" value="' + esc(dateValue) + '" data-prev="' + esc(dateValue) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
-        '<button type="button" data-dp="' + id + '" onclick="window.__dp.show(\'' + id + '\',this)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
-      '</div>' +
+      PBGuiDateInput.render(id, dateValue) +
       '<button type="button" class="act-btn opted-ohlcv-start-btn" style="padding:0 5px;white-space:nowrap" onclick="setOptimizeStartDateFromOhlcv(\'earliest\',this)" title="Set to the earliest selected market with OHLCV coverage" aria-label="Set earliest OHLCV start date">1st</button>' +
       '<button type="button" class="act-btn opted-ohlcv-start-btn" style="padding:0 5px;white-space:nowrap" onclick="setOptimizeStartDateFromOhlcv(\'all_markets\',this)" title="Set to the first date available for every selected exchange and coin" aria-label="Set common OHLCV start date">All</button>' +
     '</div>' +

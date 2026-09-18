@@ -49,7 +49,7 @@ def test_collects_errors_and_rejects_before_export(config, tmp_path, monkeypatch
     """Direct queue preparation cannot bypass the same validator used by the UI."""
     config['optimize']['scoring'][0]['metric'] = 'gain_strategy_eq'
     config['bot']['long']['hsl'] = {'enabled':True}
-    assert len(validate_cloud_config(config)) == 2
+    assert len(validate_cloud_config(config)) == 1
     from setup.vast_gpu_benchmark import prepare
     def forbidden(*args):
         """Input export must not begin for an invalid configuration."""
@@ -141,3 +141,29 @@ def test_exact_only_metrics_remain_rejected(config, metric, group):
     config['optimize'][group][0]['metric'] = metric
     errors = validate_cloud_config(config)
     assert any(error['path'] == 'optimize.' + group + '.0.metric' for error in errors)
+
+
+@pytest.mark.parametrize('strategy', ['ema_anchor', 'trailing_martingale'])
+@pytest.mark.parametrize('sides', [('long',), ('short',), ('long', 'short')])
+def test_gpu_hsl_survives_cloud_export(config, strategy, sides):
+    """Pinned GPU HSL remains enabled with all risk settings unchanged in job copies."""
+    from vast_jobs import native_job_config
+    config['live']['strategy_kind'] = strategy
+    for side in sides:
+        config['live']['approved_coins'][side] = ['BTC']
+        config['bot'][side]['hsl'] = {
+            'enabled': True, 'red_threshold': .2,
+            'panic_close_order_type': 'market', 'cooldown_minutes_after_red': 120,
+        }
+    original = copy.deepcopy(config)
+    assert validate_cloud_config(config) == []
+    exported = native_job_config(config, 512, 4, False)
+    assert exported['bot'] == original['bot']
+    assert config == original
+
+
+def test_invalid_hsl_panic_order_is_rejected(config):
+    """Supported HSL does not permit panic order types rejected by the native GPU."""
+    config['bot']['long']['hsl'] = {'enabled': True, 'panic_close_order_type': 'invalid'}
+    errors = validate_cloud_config(config)
+    assert any(e['path'] == 'bot.long.hsl.panic_close_order_type' for e in errors)

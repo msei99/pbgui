@@ -1,5 +1,7 @@
 # PBv8 Backtest
 
+Date fields use the same input component as Optimize. Typing inside a complete date overwrites digits and skips separators; selected text and pasted dates can still be replaced normally. The calendar button remains available, including in re-backtest dialogs.
+
 On supported PB8 versions, **Additional Parameters → offline** uses cached simulation candles and metadata only. Missing inputs cause an error; prepared datasets require verified offline provenance. OHLCV Readiness also respects offline mode and disables remote preload. Other PBGui services are unaffected.
 
 The visual Scenario Editor uses the authenticated Backtest scenario endpoints for local candle sources, charts and window previews. Changing base dates or exchanges preserves the drawn windows; Check & Apply validates them against the current base settings.

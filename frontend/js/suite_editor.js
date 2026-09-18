@@ -606,8 +606,7 @@ function _suiteRenderScenarioGenerator() {
   }, _suiteState.scenarioGeneratorDraft || {});
   var multiplier = Number(draft.balance_multiplier);
   if (!isFinite(multiplier) || multiplier < 1.01 || multiplier > 100) draft.balance_multiplier = 2;
-  var startingBalance = Number(draft.starting_balance);
-  if (!isFinite(startingBalance) || startingBalance < 1) draft.starting_balance = defaultBalance;
+  draft.starting_balance = Number(context.starting_balance);
   var refillCost = Number(draft.refill_cost);
   if (!isFinite(refillCost) || refillCost < 0) draft.refill_cost = 0;
   var cooldownDays = Number(draft.cooldown_days);
@@ -620,7 +619,6 @@ function _suiteRenderScenarioGenerator() {
     esc(context.start_date || 'unset') + ' to ' + esc(context.end_date || 'unset') + '.\x3C/div>\x3C/div>';
   h += '\x3Cdiv style="display:flex;gap:var(--sp-xs)">';
   h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteOpenScenarioGeneratorGuide()">Guide\x3C/button>';
-  h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteRecalculateScenarioGenerator()">Recalculate\x3C/button>';
   h += '\x3Cbutton type="button" class="act-btn" id="suite-generator-preview-btn" onclick="_suitePreviewScenarioTemplate()">Generate windows\x3C/button>\x3C/div>\x3C/div>';
   h += '\x3Cdiv style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:var(--sp-sm);align-items:end">';
   h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Generate equal training windows, training with end holdouts, or sequential Sweep windows. Edit individual dates and distributed holdouts below; these presets do not launch repeated walk-forward optimization.">Template\x3C/span>\x3C/label>\x3Cselect id="suite-generator-template" onchange="_suiteUpdateGeneratorFields(this.value)">';
@@ -634,7 +632,6 @@ function _suiteRenderScenarioGenerator() {
   h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Inherit base evaluates the selected exchanges together. One per exchange creates a separate scenario for every selected base exchange.">Exchange mode\x3C/span>\x3C/label>\x3Cselect id="suite-generator-exchange-mode">';
   h += '\x3Coption value="inherit"' + (draft.exchange_mode === 'inherit' ? ' selected' : '') + '>Inherit base\x3C/option>\x3Coption value="per_exchange"' + (draft.exchange_mode === 'per_exchange' ? ' selected' : '') + '>One per exchange\x3C/option>\x3C/select>\x3C/div>';
   h += '\x3Cdiv class="form-group suite-generator-sweep" style="' + (isSweep ? '' : 'display:none') + '">\x3Clabel>\x3Cspan data-tip="Absolute sweep target equals Starting balance multiplied by this value. When reached at a window end, all balance above Starting balance is swept and the next window resets.">Balance multiplier\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-multiplier" min="1.01" max="100" step="0.01" value="' + esc(draft.balance_multiplier) + '">\x3C/div>';
-  h += '\x3Cdiv class="form-group suite-generator-sweep" style="' + (isSweep ? '' : 'display:none') + '">\x3Clabel>\x3Cspan data-tip="Working capital at the beginning of the first cycle and after every sweep or refill reset.">Starting balance\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-balance" min="1" value="' + esc(draft.starting_balance) + '">\x3C/div>';
   h += '\x3Cdiv class="form-group suite-generator-sweep" style="' + (isSweep ? '' : 'display:none') + '">\x3Clabel>\x3Cspan data-tip="Additional external cost booked whenever a loss window is refilled back to Starting balance.">Refill cost\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-refill" min="0" value="' + esc(draft.refill_cost) + '">\x3C/div>';
   h += '\x3Cdiv class="form-group suite-generator-sweep" style="' + (isSweep ? '' : 'display:none') + '">\x3Clabel>\x3Cspan data-tip="Minimum no-trading gap between sweep-cycle windows. Stride must be at least window days plus cooldown days.">Cooldown days\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-cooldown" min="0" max="3650" value="' + esc(draft.cooldown_days) + '" onchange="_suiteAlignSweepStride()">\x3C/div>';
   h += '\x3C/div>';
@@ -744,33 +741,11 @@ function _suiteCaptureScenarioGeneratorDraft() {
   }
   if (template === 'sweep_cycles') {
     draft.balance_multiplier = _suiteGeneratorNumber('suite-generator-multiplier');
-    draft.starting_balance = _suiteGeneratorNumber('suite-generator-balance');
+    draft.starting_balance = Number(_suiteScenarioContext().starting_balance);
     draft.refill_cost = _suiteGeneratorNumber('suite-generator-refill');
     draft.cooldown_days = _suiteGeneratorInteger('suite-generator-cooldown');
   }
   return draft;
-}
-
-function _suiteRecalculateScenarioGenerator() {
-  var template = document.getElementById('suite-generator-template');
-  var balanceInput = document.getElementById('suite-generator-balance');
-  var contextBalance = Number(_suiteScenarioContext().starting_balance);
-  if (template && template.value === 'sweep_cycles' && balanceInput && isFinite(contextBalance) && contextBalance >= 1) {
-    balanceInput.value = String(contextBalance);
-  }
-  var fit = _suiteFitScenarioTrainingCount();
-  var draft = _suiteCaptureScenarioGeneratorDraft();
-  if (!draft) return;
-  _suiteState.scenarioGeneratorDraft = draft;
-  _suiteState.scenarioPreview = null;
-  _suiteState.scenarioPreviewContext = '';
-  _suiteState.scenarioRequestId += 1;
-  _suiteRender();
-  if (!fit.ok) {
-    toast(fit.message, 'err');
-    return;
-  }
-  toast('Scenario Generator recalculated from current base settings', 'ok');
 }
 
 function _suiteOpenScenarioGeneratorGuide() {

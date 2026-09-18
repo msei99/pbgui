@@ -119,6 +119,13 @@
         const title=document.createElementNS(svg.namespaceURI,'title');title.textContent=(count?'Overlap':'Gap')+': '+(b-a)+' days · '+iso(a)+' — '+iso(b-1)+(count?' · '+count+' windows':'');marker.appendChild(title);
       }
       edges.forEach(d=>{
+        if(d<viewStart||d>viewEnd)return;
+        if(d===edges[0]||d===edges[edges.length-1]){
+          const kind=d===edges[0]?'start':'end';
+          const marker=shape('rect',{x:Math.max(x(viewStart),Math.min(x(viewEnd)-1,x(d)-.5)),y:10,width:1,height:300,fill:'#49c99a','data-window-boundary':kind});
+          const title=document.createElementNS(svg.namespaceURI,'title');title.textContent=(kind==='start'?'First window starts · ':'Last window ends · ')+iso(kind==='start'?d:d-1);marker.appendChild(title);
+          return;
+        }
         const before=ranges.filter(w=>w.a<d&&w.b>=d).length,after=ranges.filter(w=>w.a<=d&&w.b>d).length;
         if(before!==1||after!==1||!ranges.some(w=>w.b===d)||!ranges.some(w=>w.a===d)||d<viewStart||d>viewEnd)return;
         const marker=shape('rect',{x:x(d)-.5,y:10,width:1,height:300,fill:'#49c99a','data-connection':'adjacent'});

@@ -146,13 +146,14 @@ def test_overrides_are_applied_to_validation_without_mutating_config(config):
     config['backtest']['scenarios'] = [
         {'label': 'nested', 'overrides': {'bot': {'long': {'risk': {'n_positions': 5}}}}},
         {'label': 'balance', 'overrides': {'backtest.starting_balance': 2000}},
-        {'label': 'unsafe-hsl', 'overrides': {'bot.short.hsl.enabled': True}}]
+        {'label': 'hsl', 'overrides': {'bot.short.hsl.enabled': True}}]
     before = copy.deepcopy(config)
     contexts, _, _ = scenario_plan(config)
     assert contexts[0]['config']['bot']['long']['risk']['n_positions'] == 5
     assert contexts[1]['config']['backtest']['starting_balance'] == 2000
     errors = validate_cloud_config(config)
-    assert len(errors) == 1 and "Scenario 3 'unsafe-hsl'" in errors[0]['message'] and 'HSL' in errors[0]['message']
+    assert errors == []
+    assert contexts[2]['config']['bot']['short']['hsl']['enabled'] is True
     assert config == before
 
 

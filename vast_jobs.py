@@ -89,9 +89,6 @@ def native_job_config(source: dict, iterations: int, workers: int, use_adg: bool
     coins = live.get("approved_coins")
     if not isinstance(coins, dict) or any(not isinstance(coins.get(side), list) for side in ("long", "short")):
         raise VastError("Explicit approved coin lists are required", 422)
-    for side in ("long", "short"):
-        if config["bot"][side].get("hsl", {}).get("enabled"):
-            raise VastError("The tested cloud profile currently requires HSL disabled", 422)
     if use_adg:
         for objective in opt["scoring"]:
             if objective.get("metric") == "gain_strategy_eq":

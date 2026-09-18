@@ -25,8 +25,6 @@ def cloud_alternatives(path, message):
         return ['Choose adg_strategy_eq (goal: max) for average daily growth. This changes the objective; it is not an identical replacement for total-period gain.', local]
     if path.endswith('.metric'):
         return ['Choose a supported metric in the Scoring or Limits editor. Metrics have different meanings; do not transfer thresholds without checking their units.', local]
-    if path.endswith('.hsl.enabled'):
-        return ['Disable HSL in a separate GPU test configuration. This removes HSL protection and changes the strategy risk behavior.', local]
     if path == 'live.approved_coins':
         return ['Select explicit approved coin lists containing between 1 and 64 distinct coins across both sides.', local]
     if path.startswith('backtest.exchanges'):
@@ -83,8 +81,9 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
     for side in ('long', 'short'):
         values = obj(bot.get(side), 'bot.' + side)
         hsl = obj(values.get('hsl', {}), 'bot.' + side + '.hsl')
-        if hsl.get('enabled'):
-            error('bot.' + side + '.hsl.enabled', 'The cloud profile requires HSL disabled.')
+        # The pinned PB8 GPU runtime supports HSL; retain its configuration.
+        if hsl.get('enabled') and str(hsl.get('panic_close_order_type', 'limit')).strip().lower() not in {'limit', 'market'}:
+            error('bot.' + side + '.hsl.panic_close_order_type', 'GPU HSL requires limit or market.')
     gpu = obj(opt.get('gpu', {}), 'optimize.gpu')
     if gpu.get('drift_rank_halt') is not None:
         error('optimize.gpu.drift_rank_halt', 'The pinned Vast worker does not support a separate rank threshold. Use Local or leave this field blank to inherit drift_halt.')

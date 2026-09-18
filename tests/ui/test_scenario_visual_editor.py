@@ -481,3 +481,31 @@ def _draw_dates(page, role, start, end, total):
     page.mouse.down()
     page.mouse.move(svg['x']+100+(svg['width']-120)*(end-1)/total, y, steps=5)
     page.mouse.up()
+
+
+def test_outer_window_boundaries_align_with_window_dates():
+    """Outer green markers follow window dates, not the chart's full date range."""
+    playwright = pytest.importorskip('playwright.sync_api')
+    with playwright.sync_playwright() as runner:
+        browser = runner.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.set_content('<div id="editor"></div>')
+            page.add_script_tag(path=str(ROOT / 'frontend/js/scenario_visual_editor.js'))
+            page.evaluate("""() => PBGuiScenarioVisual.mount(document.getElementById('editor'), {
+                context:{start_date:'2024-01-01',end_date:'2024-04-09',exchanges:[]},
+                windows:[{id:'a',label:'train',role:'training',start_date:'2024-02-01',end_date:'2024-02-20',scenario:{}}],
+                change:()=>{},apply:async()=>{}
+            })""")
+            start = page.locator('[data-window-boundary="start"]')
+            end = page.locator('[data-window-boundary="end"]')
+            assert '2024-02-01' in start.locator('title').text_content()
+            assert '2024-02-20' in end.locator('title').text_content()
+            bar = page.locator('[data-id="a"][data-part="move"]')
+            x = float(bar.get_attribute('x'))
+            width = float(bar.get_attribute('width'))
+            assert float(start.get_attribute('x')) == pytest.approx(x - .5)
+            assert float(end.get_attribute('x')) == pytest.approx(x + width - .5)
+            assert page.locator('[data-connection="adjacent"]').count() == 0
+        finally:
+            browser.close()

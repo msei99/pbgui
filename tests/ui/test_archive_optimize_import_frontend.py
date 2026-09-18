@@ -91,9 +91,11 @@ def test_rebacktest_dialogs_use_the_editor_calendar_control() -> None:
     source = BACKTEST_PATH.read_text(encoding="utf-8")
     helper = _extract_function(source, "backtestDialogDateInputHtml")
 
-    assert '<input type="text"' in helper
-    assert "window.__dp.show" in helper
-    assert "📅" in helper
+    assert 'PBGuiDateInput.render' in helper
+    shared = (ROOT / 'frontend/js/date_overwrite.js').read_text()
+    assert '<input type="text"' in shared
+    assert 'window.__dp.show' in shared
+    assert '📅' in shared
     for name in (
         "showInitialBacktestQueueDraftModal",
         "rebacktestSelected",

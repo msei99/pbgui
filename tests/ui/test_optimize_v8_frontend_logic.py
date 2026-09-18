@@ -296,7 +296,6 @@ def test_suite_generator_settings_expose_inline_help_tooltips() -> None:
         "Holdout windows",
         "Exchange mode",
         "Balance multiplier",
-        "Starting balance",
         "Refill cost",
         "Cooldown days",
     )
@@ -1118,8 +1117,8 @@ def test_scenario_template_switch_updates_automatic_field_modes_immediately() ->
     _run_node(script)
 
 
-def test_scenario_generator_recalculate_uses_current_base_dates() -> None:
-    """Recalculate must replace stale counts after an OHLCV start-date change."""
+def test_scenario_generator_generate_uses_current_base_dates() -> None:
+    """Generate must fit current dates and display the returned windows in one action."""
     script = textwrap.dedent(
         """
         const assert = require('node:assert/strict');
@@ -1147,16 +1146,27 @@ def test_scenario_generator_recalculate_uses_current_base_dates() -> None:
         _suiteState.scenarioRequestId = 4;
 
         context = {start_date: '2025-04-01', end_date: '2025-12-31', exchanges: ['doge-exchange'], starting_balance: 500};
-        _suiteRecalculateScenarioGenerator();
+        const preview = {training_scenarios: [{label:'new'}]};
+        apiFetch = async (url, request) => {
+          const payload = JSON.parse(request.body);
+          assert.equal(payload.start_date, '2025-04-01');
+          assert.equal(payload.training_windows, 2);
+          assert.equal(payload.starting_balance, 500);
+          return preview;
+        };
+        _suitePreviewScenarioTemplate();
+        setImmediate(() => {
 
         assert.equal(fields['suite-generator-training'].value, '2');
-        assert.equal(fields['suite-generator-balance'].value, '500');
+        context.starting_balance = 750;
+        assert.equal(_suiteCaptureScenarioGeneratorDraft().starting_balance, 750);
         assert.equal(_suiteState.scenarioGeneratorDraft.training_windows, 2);
         assert.equal(_suiteState.scenarioGeneratorDraft.starting_balance, 500);
-        assert.equal(_suiteState.scenarioPreview, null);
-        assert.equal(_suiteState.scenarioPreviewContext, '');
+        assert.equal(_suiteState.scenarioPreview, preview);
+        assert.ok(_suiteState.scenarioPreviewContext.includes('2025-04-01'));
         assert.equal(_suiteState.scenarioRequestId, 5);
         assert.equal(renders, 1);
+        });
         """
     )
     _run_node(script)
@@ -1190,7 +1200,7 @@ def test_sweep_generator_repairs_missing_or_invalid_template_specific_defaults()
         const html = _suiteRenderScenarioGenerator();
 
         assert.match(html, /id="suite-generator-multiplier"[^>]*value="2"/);
-        assert.match(html, /id="suite-generator-balance"[^>]*value="100000"/);
+        assert.ok(!html.includes('id="suite-generator-balance"'));
         """
     )
     _run_node(script)
