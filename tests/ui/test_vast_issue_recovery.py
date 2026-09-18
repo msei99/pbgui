@@ -134,7 +134,7 @@ def test_known_host_badges_and_preference_reorder_offers(cloud_page):
     assert 'Preferred' in page.locator('#offers-body tr[data-offer="2"]').inner_text()
     assert not any('/queue/start' in url for _, url in calls)
     page.reload()
-    page.get_by_text('Known & preferred hosts', exact=True).click()
+    page.locator('[data-vast-view=hosts]').click()
     page.locator('#known-hosts-list').get_by_role('button', name='Remove preference').wait_for()
     assert 'Previously used · Working · Preferred' in page.locator('#known-hosts-list').inner_text()
 
@@ -144,7 +144,7 @@ def test_manual_working_mark_does_not_invent_usage(cloud_page):
     page, data, calls, overrides, _ = cloud_page
     profile = dict(machine_id=7, used=False, working=True, working_marked=True, working_detected=False, preferred=False, rentals=0)
     overrides['/api/vast/host-preferences'] = (200, json.dumps(dict(hosts=[profile])), {'Content-Type': 'application/json'})
-    page.get_by_text('Known & preferred hosts', exact=True).click()
+    page.locator('[data-vast-view=hosts]').click()
     page.locator('#mark-machine-id').fill('7')
     with page.expect_request('**/host-preferences') as pending:
         page.locator('#mark-machine-form').get_by_role('button', name='Mark working', exact=True).click()
@@ -164,7 +164,7 @@ def test_late_host_history_does_not_erase_new_preference(cloud_page):
     page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
     profile = dict(machine_id=7, preferred=True)
     overrides['/api/vast/host-preferences'] = (200, json.dumps(dict(hosts=[profile])), {'Content-Type': 'application/json'})
-    page.get_by_text('Known & preferred hosts', exact=True).click()
+    page.locator('[data-vast-view=hosts]').click()
     page.locator('#mark-machine-id').fill('7')
     page.locator('#mark-machine-form').get_by_role('button', name='Prefer host', exact=True).click()
     page.locator('#known-hosts-list').get_by_role('button', name='Remove preference').wait_for()
@@ -191,7 +191,7 @@ def test_block_rental_host_and_unblock_in_settings(cloud_page):
     assert pending.value.post_data_json == {'blocked': True}
     page.locator('#optlog-rental').get_by_role('button', name='Unblock host', exact=True).wait_for()
     assert not any('/queue/end' in url or '/cleanup' in url for _, url in calls)
-    page.get_by_text('Blocked hosts', exact=True).click()
+    page.locator('[data-vast-view=hosts]').click()
     data['queue']['blocked_machine_ids'] = []
     overrides['/api/vast/blocked-hosts'] = (200, json.dumps(dict(blocked_machine_ids=[])), {'Content-Type': 'application/json'})
     with page.expect_request('**/blocked-hosts') as pending:
@@ -228,7 +228,7 @@ def test_pending_offer_response_cannot_restore_blocked_host(cloud_page):
     assert held
     data['queue']['blocked_machine_ids'] = [7]
     overrides['/api/vast/blocked-hosts'] = (200, json.dumps(dict(blocked_machine_ids=[7])), {'Content-Type': 'application/json'})
-    page.get_by_text('Blocked hosts', exact=True).click()
+    page.locator('[data-vast-view=hosts]').click()
     page.locator('#block-machine-id').fill('7')
     page.locator('#block-machine-submit').click()
     page.wait_for_function("document.getElementById('blocked-hosts-list').textContent.includes('Machine 7')")
@@ -377,6 +377,8 @@ def cloud_page():
         if path == '/api/vast/jobs' and request.method == 'GET':
             payload = data
         elif path == '/api/vast/gpu-preferences':
+            if request.method == 'PATCH':
+                preferences.update(request.post_data_json)
             payload = preferences
         elif path == '/api/vast/settings':
             payload = dict(configured=False)
@@ -454,14 +456,17 @@ def test_provider_auth_failure_does_not_dispose_pb_gui(cloud_page, status):
     """A rejected provider credential is recoverable; expired PBGui sessions fail closed."""
     page, _, calls, overrides, _ = cloud_page
     overrides['/api/vast/account'] = (status, json.dumps({'detail':'Vast key rejected'}), {'X-PBGui-Error-Source':'vast'})
+    page.locator('[data-vast-view=account]').click()
     page.locator('#refresh-balance').click()
     page.wait_for_function("document.getElementById('message').textContent.includes('Vast key rejected')")
     assert page.locator('#refresh-balance').is_enabled()
     del overrides['/api/vast/account']
+    page.locator('[data-vast-view=account]').click()
     page.locator('#refresh-balance').click()
     page.wait_for_function("document.getElementById('balance').textContent === '$3.00'")
     overrides['/api/vast/account'] = (status, json.dumps({'detail':'Authentication required'}), {})
     page.locator('#api-key').fill('unsaved-test-key')
+    page.locator('[data-vast-view=account]').click()
     page.locator('#refresh-balance').click()
     page.wait_for_function("document.getElementById('message').textContent.includes('PBGui session expired')")
     assert page.locator('#api-key').input_value() == ''
@@ -563,11 +568,13 @@ def test_malformed_success_response_remains_retryable(cloud_page):
     """A 200 HTML response is not treated as successful account data or a logout."""
     page, _, _, overrides, _ = cloud_page
     overrides['/api/vast/account'] = (200, '<html>unexpected login page</html>', {})
+    page.locator('[data-vast-view=account]').click()
     page.locator('#refresh-balance').click()
     page.wait_for_function("document.getElementById('message').textContent.includes('Invalid response from PBGui')")
     assert page.locator('#refresh-balance').is_enabled()
     assert '<html>' not in page.locator('#message').inner_text()
     del overrides['/api/vast/account']
+    page.locator('[data-vast-view=account]').click()
     page.locator('#refresh-balance').click()
     page.wait_for_function("document.getElementById('balance').textContent === '$3.00'")
 
@@ -867,7 +874,7 @@ def test_direct_file_sync_progress_survives_reopen(cloud_page):
 
 
 def test_host_management_uses_existing_optimizer_sidebar(cloud_page):
-    """Host views replace offers and rental actions stay in the shared sidebar."""
+    """Five cloud areas share the sidebar; rental controls stay with their content."""
     page, _, _, _, _ = cloud_page
     source = (ROOT/'frontend/v7_optimize.html').read_text()
     sidebar = source[source.index('  <div id="sidebar">'):source.index('  <div id="main-content">')]
@@ -875,10 +882,6 @@ def test_host_management_uses_existing_optimizer_sidebar(cloud_page):
         "const template = document.createElement('template'); template.innerHTML = " + json.dumps(sidebar) + ";"
         "document.body.prepend(template.content);"
         "document.getElementById('ctx-settings').style.display = '';"
-        "const settings = document.createElement('section'); settings.id = 'settings-modal';"
-        "const local = document.createElement('div'); local.className = 'modal-body'; local.textContent = 'Local execution';"
-        "local.style.display = 'block'; settings.appendChild(local);"
-        "document.body.appendChild(settings); settings.appendChild(document.getElementById('vast-queue-host'));"
         "});")
     page.reload()
     page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
@@ -887,22 +890,20 @@ def test_host_management_uses_existing_optimizer_sidebar(cloud_page):
     page.add_script_tag(content=(ROOT/'frontend/js/sidebar_resize.js').read_text())
     page.evaluate('PBGuiSidebarResize.init()')
     nav = page.locator('#sidebar #vast-settings-nav')
-    assert nav.is_visible()
-    assert page.locator('#sidebar #rent-offer').count() == 1
-    assert page.locator('#sidebar #settings-end-rental').count() == 1
-    assert page.locator('#sidebar #settings-host-block').count() == 1
-    nav.get_by_role('button', name='Known & preferred hosts', exact=True).click()
+    assert nav.locator('[data-vast-view]').count() == 5
+    assert page.locator('#sidebar #rent-offer').count() == 0
+    assert page.locator('#settings-end-rental').count() == 0
+    nav.get_by_role('button', name='Hosts', exact=True).click()
     assert page.locator('#vast-known-hosts').is_visible()
+    assert page.locator('#vast-blocked-hosts').is_visible()
     assert page.locator('#vast-offers').is_hidden()
     assert page.locator('#vast-setup').is_hidden()
-    assert page.locator('#settings-modal > .modal-body').is_hidden()
-    nav.get_by_role('button', name='Blocked hosts', exact=True).click()
+    page.locator('#host-status-filter').select_option('blocked')
     assert page.locator('#vast-blocked-hosts').is_visible()
     assert page.locator('#vast-known-hosts').is_hidden()
-    nav.get_by_role('button', name='GPU offers', exact=True).click()
+    nav.get_by_role('button', name='GPU & Offers', exact=True).click()
     assert page.locator('#vast-offers').is_visible()
     assert page.locator('#vast-blocked-hosts').is_hidden()
-    assert page.locator('#settings-modal > .modal-body').is_visible()
     assert page.locator('#sidebar-resize').get_attribute('data-sidebar-resize-bound') == 'true'
 
 
@@ -975,7 +976,7 @@ def test_performance_sidebar_selection_and_comparison(cloud_page):
     assert page.locator('#performance-rows tr.selected').count() == 2
     with page.expect_request('**/performance/compare') as pending:
         page.locator('#performance-compare').click()
-    assert pending.value.post_data_json == {'ids':['a'*32,'b'*32]}
+    assert pending.value.post_data_json == {'ids':['a'*32,'b'*32], 'mode':'hardware'}
     page.locator('#performance-proxy-chart svg').wait_for()
     assert page.locator('#performance-exact-chart svg').is_visible()
     legend = page.locator('#performance-proxy-chart .performance-legend button').first
@@ -1015,7 +1016,7 @@ def test_late_performance_response_cannot_revive_hidden_view(cloud_page):
     overrides['/api/vast/performance'] = 'hold'
     page.reload(); page.get_by_role('button', name='Performance History', exact=True).click()
     page.wait_for_timeout(50)
-    page.get_by_role('button', name='Blocked hosts', exact=True).click()
+    page.locator('[data-vast-view=hosts]').click()
     assert held
     held.pop().fulfill(json={'runs':performance_rows(),'total':2})
     page.wait_for_timeout(50)

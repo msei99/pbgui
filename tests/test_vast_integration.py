@@ -32,6 +32,42 @@ def client(tmp_path, monkeypatch):
         yield test_client, store, app
 
 
+def test_partial_preferences_preserve_other_groups_and_validate(client):
+    """Independent form saves merge with stored policy without resetting other fields."""
+    http, _, _ = client
+    assert http.post('/api/vast/gpu-preferences', json={'gpu_name': 'RTX 3090', 'hours': 4, 'budget': 7}).status_code == 200
+    result = http.patch('/api/vast/gpu-preferences', json={'min_cpu': 16})
+    assert result.status_code == 200
+    assert result.json()['hours'] == 4
+    assert result.json()['budget'] == 7
+    result = http.patch('/api/vast/gpu-preferences', json={'hours': 2})
+    assert result.json()['min_cpu'] == 16
+    assert result.json()['gpu_name'] == 'RTX 3090'
+    assert http.patch('/api/vast/gpu-preferences', json={'hours': 0}).status_code == 422
+    assert http.patch('/api/vast/gpu-preferences', json={'unknown': True}).status_code == 422
+    assert http.get('/api/vast/gpu-preferences').json()['hours'] == 2
+
+
+def test_concurrent_preference_groups_do_not_lose_updates(client):
+    """Two browser tabs can save disjoint groups through the same queue lock."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    http, _, _ = client
+    gate = Barrier(2)
+
+    def save(values):
+        """Start the two independent authenticated requests together."""
+        gate.wait(timeout=5)
+        return http.patch('/api/vast/gpu-preferences', json=values)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(save, [{'min_cpu': 24}, {'hours': 3, 'budget': 8}]))
+    assert all(response.status_code == 200 for response in results)
+    saved = http.get('/api/vast/gpu-preferences').json()
+    assert (saved['min_cpu'], saved['hours'], saved['budget']) == (24, 3, 8)
+
+
 def test_credentials_are_private_and_responses_do_not_reveal_them(client):
     """Save and read metadata without disclosing either provider credential."""
     http, store, _ = client
@@ -564,6 +600,11 @@ def test_performance_api_retains_history_and_checks_comparison_identity(client):
     assert http.get('/api/vast/performance?fingerprint=invalid').status_code == 422
     assert http.post('/api/vast/performance/compare', json={'ids':['a'*32,'b'*32]}).status_code == 200
     assert http.post('/api/vast/performance/compare', json={'ids':['a'*32,'c'*32]}).status_code == 409
+    config_comparison = http.post('/api/vast/performance/compare', json={'ids':['a'*32,'c'*32], 'mode':'config'})
+    assert config_comparison.status_code == 200
+    assert config_comparison.json()['mode'] == 'config'
+    assert len(config_comparison.json()['runs']) == 2
+    assert http.post('/api/vast/performance/compare', json={'ids':['a'*32,'c'*32], 'mode':'invalid'}).status_code == 422
     assert http.post('/api/vast/performance/compare', json={'ids':['a'*32,'d'*32]}).status_code == 409
     assert http.post('/api/vast/performance/compare', json={'ids':['d'*32]}).status_code == 200
     assert http.post('/api/vast/performance/compare', json={'ids':['a'*32,'a'*32]}).status_code == 422

@@ -19,6 +19,9 @@ const state = {panel:'settings'};
 const optimizeEditorAdapter = {isV8:true};
 ''' + page[start:end] + '''
 window._openOptimizeHelp();
+assert.deepEqual(calls.pop(), ['43_pbv8_optimize', {anchor:'optimizer-settings'}]);
+state.panel = 'vast';
+window._openOptimizeHelp();
 assert.deepEqual(calls.pop(), ['48_vast_gpu', {anchor:'optimizer-settings'}]);
 window._openOptimizeHelp('scenario-generator');
 assert.deepEqual(calls.pop(), ['43_pbv8_optimize', {anchor:'scenario-generator'}]);

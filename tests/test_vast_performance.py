@@ -21,6 +21,7 @@ def bundle(tmp_path, monkeypatch):
     store = JobStore(tmp_path / 'vast')
     configs = {}
     monkeypatch.setattr(performance, 'load_config', lambda path: copy.deepcopy(configs[str(path)]))
+    monkeypatch.setattr("pb8_config.load_pb8_config", performance.load_config)
 
     def create(character='a', workers=4, seed=7, candles=10):
         """Build a frozen test job and same-dataset-independent rental metadata."""
@@ -253,3 +254,17 @@ def test_missing_rental_keeps_previously_recorded_workload_and_hardware(bundle, 
     second = performance.collect_run(store, history, store.read(row['id']), tmp_path / 'logs')
     assert second['fingerprint'] == first['fingerprint']
     assert second['hardware'] == first['hardware']
+
+
+def test_legacy_history_estimate_uses_retained_snapshot(bundle):
+    """Old history gains a display estimate without changing fingerprints or disk records."""
+    store, create = bundle
+    row = create()
+    history = performance.PerformanceHistory(store.root)
+    history.record(dict(row, captured_at=1000, workload={'fingerprint':'f'*64}), [])
+    loaded = history.get(row['id'])
+    assert loaded['workload']['estimated_coin_candles'] == 32 * 1440
+    assert loaded['fingerprint'] == 'f'*64
+    assert history.list_runs()['runs'][0]['workload']['estimated_coin_candles'] == 32 * 1440
+    (store.directory(row['id']) / 'input/optimize.json').unlink()
+    assert history.get(row['id'])['workload']['estimated_coin_candles'] is None

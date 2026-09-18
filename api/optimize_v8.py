@@ -18,6 +18,7 @@ import threading
 import time
 import traceback
 import uuid
+
 from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path, PurePath
@@ -44,6 +45,7 @@ from api.pb8_ohlcv_tools import (
     stop_pb8_ohlcv_preload_job,
 )
 from file_lock import advisory_file_lock
+from optimizer_workload import estimate_snapshot
 from logging_helpers import append_managed_transcript_line, human_log as _log, rotate_managed_log_before_open
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from optimize_autostart import claim_autostart, publish_autostart_process, release_autostart
@@ -1408,6 +1410,7 @@ def _queue_item(path: Path) -> dict:
     options = data.get("launch_options") if isinstance(data.get("launch_options"), dict) else {}
     return {
         "filename": filename,
+        "estimated_coin_candles": estimate_snapshot(_snapshot_file(filename), _queue_dir()),
         "name": str(data.get("name") or filename),
         "exchange": data.get("exchange") or [],
         "status": status,

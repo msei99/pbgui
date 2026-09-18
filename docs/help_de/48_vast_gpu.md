@@ -14,9 +14,11 @@ Das Log-Dashboard zeigt **Proxy / min**, **Exact / min**, **Proxy / exact** und 
 
 ## Performance History
 
-Öffne **Settings → Performance History** in der vorhandenen Sidebar. Die API speichert ungefähr alle 60 Sekunden lokale Job-Snapshots, auch ohne geöffneten Browser. Die private SQLite-Datenbank liegt unter `data/vast/performance.sqlite3`; beim Entfernen eines Queue-Jobs bleibt seine Historie erhalten. Bei gestoppter API pausiert die Aufzeichnung. Nach dem Neustart können noch vorhandene Log-Zähler übernommen werden; fehlende frühere Messungen lassen sich nicht rekonstruieren.
+Die History-Aktionen (Aktualisieren, Öffnen, Vergleichen und Filtern) stehen in der Werkzeugleiste über der History-Tabelle. Die Sidebar enthält die fünf festen Vast.ai-Navigationspunkte.
 
-Markiere bis zu vier Zeilen per Klick, Tastatur (Leertaste/Enter) oder Ziehen. **View selected run** öffnet einen einzelnen Lauf, auch ältere unvollständige Einträge. **Same workload only** filtert die gesamte Historie nach der Aufgabe des ersten ausgewählten Laufs. **Compare selected** ist nur bei identischen verifizierten Fingerabdrücken möglich; die API prüft dies ebenfalls. **Filter this page** durchsucht die geladene Seite nach Config, GPU, Machine ID, Coin oder Exchange. Previous/Next blättern durch ältere Einträge; **Refresh history** lädt neue Messwerte.
+Öffne **Vast.ai → Performance History** in der vorhandenen Sidebar. Die API speichert ungefähr alle 60 Sekunden lokale Job-Snapshots, auch ohne geöffneten Browser. Die private SQLite-Datenbank liegt unter `data/vast/performance.sqlite3`; beim Entfernen eines Queue-Jobs bleibt seine Historie erhalten. Bei gestoppter API pausiert die Aufzeichnung. Nach dem Neustart können noch vorhandene Log-Zähler übernommen werden; fehlende frühere Messungen lassen sich nicht rekonstruieren.
+
+Markiere bis zu vier Zeilen per Klick, Tastatur (Leertaste/Enter) oder Ziehen. **View selected run** öffnet einen einzelnen Lauf, auch ältere unvollständige Einträge. **Same workload only** filtert die gesamte Historie nach der Aufgabe des ersten ausgewählten Laufs. **Compare hardware** ist nur bei identischen verifizierten Fingerabdrücken möglich; die API prüft dies ebenfalls. **Filter this page** durchsucht die geladene Seite nach Config, GPU, Machine ID, Coin oder Exchange. Previous/Next blättern durch ältere Einträge; **Refresh history** lädt neue Messwerte.
 
 Der Fingerabdruck umfasst vorbereitete Config, Daten-Prüfsummen und PB8-Version/Worker-Image. Jobspezifische Pfade, lokaler Benutzername und zugeteilte CPU-Worker werden ausgeschlossen. Seed, Population, Objectives, Bounds, Szenarien und Datenzeiträume gehören weiterhin zur Aufgabenidentität. CPU-Zuteilung, GPU, Speicher und Mietpreis sind getrennte Vergleichsmerkmale. Fehlende oder inkonsistente Eingaben gelten als unverifiziert und werden nicht automatisch zusammengefasst. Gleiche Fingerabdrücke garantieren keinen identischen Cache-Zustand, Ablauf oder Zufallsverlauf.
 
@@ -26,23 +28,33 @@ Die Diagramme zeigen Proxy/min und Exact/min relativ zur ersten aufgezeichneten 
 
 Die Anlaufzeit bezeichnet den **ersten beobachteten** Zähler seit Container-Setup, ersatzweise seit Job-Erstellung. Spät beginnende Aufzeichnung kann diese Zeit überschätzen. Exact/USD verwendet Optimizer-Durchsatz und Stundenpreis. Die Kostenschätzung weist Container-Zeit und beobachtete Transfers separat aus; sie ist keine Provider-Rechnung und verteilt keine gemeinsamen Leerlaufkosten zwischen Jobs. Die Zahl vergleichbarer Host-Läufe berücksichtigt gleichen Fingerabdruck, gleiche Machine ID und ein messbares Zählerintervall. Es gibt keinen pauschalen Komplexitätsscore und keine automatisch angemieteten Benchmark-Läufe.
 
+
+### Config workload comparison
+
+PB8-Queue und Performance History zeigen **Est. coin candles / candidate**. Die Schätzung summiert inklusive Kalendertage × 1.440 ÷ Kerzenintervall × eindeutig gewählte Coins über aktive Trainingsszenarien. Eigene Coin-Auswahl und Ausschlüsse je Szenario werden berücksichtigt; derselbe Coin auf Long und Short zählt einmal. Ohne Suite Mode gilt der Basiszeitraum. Mehrere Börsen, Iterationen und Populationsgröße sind keine zusätzlichen Multiplikatoren. Holdout-Validierung, Warm-up, Datenlücken und tatsächlich verarbeitete Kerzen sind nicht enthalten. Unbekannte oder dynamische Eingaben zeigen **—**. Dies schätzt die Datenmenge einer vollständigen Kandidatenbewertung, weder Laufzeit noch Gesamtberechnungen des Runs. Die Queue verwendet den eingefrorenen Snapshot. Für ältere History-Einträge lässt sich die Schätzung nur bei noch vorhandenem Snapshot nachholen.
+
+Zwei bis vier Runs markieren und mit **Compare configs** unterschiedliche Aufgaben vergleichen. **Compare hardware** verlangt weiterhin identische verifizierte Workload-Fingerprints. Proxy/min und Exact/min bleiben getrennt. **Minutes / 1k exact** = 1.000 ÷ gemessene Exact/min; **USD / 1k exact** = 1.000 ÷ gemessene Exact/USD. Dies sind Hochrechnungen aus dem gemessenen Durchsatz ohne Startzeit, Leerlauf und Transfers, keine Prognose der gesamten Mietkosten. Bei null oder unbekanntem Durchsatz erscheint **—**. GPU, CPU-Zuteilung, Worker-Version, Strategie und Sucheinstellungen beeinflussen ebenfalls den Durchsatz; der Config-Vergleich isoliert keine Hardwareleistung.
+
 ## Optimizer Settings
 
-In den Settings wechselst du links in der Sidebar zwischen **GPU offers**, **Known & preferred hosts** und **Blocked hosts**. Die Host-Verwaltung öffnet sich als eigene Hauptansicht. **Rent** und **End rental** stehen in der Sidebar.
+**Queue Settings** enthält nur den lokalen Autostart, die CPU-Anzahl, CPU-Override und die Auswahl der PBGui-Marktdaten.
 
+Die Queue-Sidebar bietet fünf getrennte Vast.ai-Buttons:
 
-**Settings** öffnet lokale Ausführung, Cloud-Konto und GPU-Anforderungen. **Guide** springt hier direkt zu diesem Abschnitt. **Back to Queue** führt zur Jobliste zurück.
+- **Account**: API-Key, Verbindungstest und Guthaben. Zugangsdaten mit **Save key** speichern.
+- **GPU & Offers**: Hardware-Anforderungen, maximaler Stundenpreis, Angebotsvorschau und manuelles Rent. Speichern mit **Save GPU requirements**.
+- **Hosts**: bekannte/bevorzugte/funktionierende Hosts und gesperrte Maschinen, mit Statusfilter All/Preferred/Working/Blocked. Host-Aktionen werden direkt gespeichert.
+- **Rental & Automation**: maximale Mietdauer, Budgetziel, Aufräumen bei leerer Queue und Stop on stagnation. Speichern mit **Save rental & automation**. Dies sind Vorgaben für zukünftige Mieten/Jobs.
+- **Performance History**: aufgezeichnete Runs und Vergleiche gleicher Workloads.
 
-### Lokale Ausführung
-
-CPU und **Override config CPU** steuern lokale Optimizer-Worker. **Use PBGui Market Data** verwendet vorbereitete PBGui-Daten; **Autostart** steuert die lokale Queue. Diese Optionen sind unabhängig von den Cloud-GPU-Anforderungen darunter. Lokale Änderungen mit **Save**, Cloud-Anforderungen mit **Save settings** speichern.
+Beim ersten Aufruf von GPU & Offers öffnet sich Account, falls noch kein Key eingerichtet ist. Jedes Formular speichert nur seine eigenen Felder. Ungespeicherte Eingaben anderer Bereiche und Änderungen während des Speicherns bleiben erhalten. Manuelles Rent verwendet die gespeicherten Mietregeln. Laufende Mieten steuerst du über Queue und Job-Log. **Guide** folgt dem aktuellen Bereich; **Queue** in der linken Sidebar führt zur Jobliste zurück.
 
 ### Vast API key
 
 1. Auf der [Keys-Seite der Vast-Konsole](https://console.vast.ai/manage-keys/) anmelden und unter **API Keys** auf **+New** klicken.
 2. Den Key `PBGui` nennen. Benutzerdefinierte/eingeschränkte Rechte wählen und die folgenden Kategorien aktivieren.
 3. **Create** klicken und den einmalig angezeigten Key kopieren.
-4. In PBGui **PB8 Optimize → Settings → Cloud setup** öffnen. Unter **Vast API key** einfügen, **Save key** und danach **Test connection & refresh balance** klicken.
+4. In PBGui **PB8 Optimize → Account** öffnen. Unter **Vast API key** einfügen, **Save key** und danach **Test connection & refresh balance** klicken.
 
 | Berechtigung | Verwendung in PBGui |
 | --- | --- |
@@ -60,23 +72,23 @@ Ein erfolgreicher Guthabentest bestätigt den Kontozugriff, nicht sämtliche Mie
 
 Quellen: [Vast-Key-Einrichtung](https://docs.vast.ai/guides/reference/api-keys) und [Berechtigungsreferenz](https://docs.vast.ai/api-reference/permissions).
 
-**Create Vast.ai account** verwendet deinen PBGui-Empfehlungslink. Erst ein Klick
+**Create Vast.ai account** steht direkt unter der Account-Überschrift und verwendet deinen PBGui-Empfehlungslink. Erst ein Klick
 öffnet die externe Seite. Das öffentliche, versionierte Image
 `ghcr.io/msei99/pbgui-pb8-worker` benötigt weder GitHub-Konto noch Registry-Key.
 PBGui prüft vor einer bezahlten Miete den anonymen Zugriff auf den festen Digest.
 Das Image enthält Software, keine Nutzerkonfigurationen, Kursdaten oder Keys.
 
-## GPU-Anforderungen in den Settings
+## GPU & Offers
 
 Im Cloud-CPU-Modus **Auto** bestimmt **Min CPU cores** die Mindestleistung der Miete. Trage hier 16 oder 32 ein, wenn diese CPU-Zahl benötigt wird. Die CPU-Zahl einer lokalen Optimizer-Config überschreibt diesen Wert nicht; die Cloud-Ausführung verwendet die gemessene Zuteilung, begrenzt auf die gemietete CPU-Quote. Ältere Jobs mit einer explizit festen CPU-Anforderung behalten diese Anforderung.
 
 Manuelles **Rent** verwendet GPU-Typ, Hardware, Disk-Größe, Verifizierungsstatus und angezeigten Preis des ausgewählten Angebots. Nachträgliche Änderungen der Suchfilter ersetzen dessen Eigenschaften nicht. Mietdauer und Budget stammen weiterhin aus den Miet-Einstellungen; Verfügbarkeit und Grenzen werden vor der Miete erneut geprüft.
 
 Im Editor nur **Execution → Vast.ai GPU** oder **Local** wählen.
-Unter **Queue → Settings → GPU requirements** GPU-Typ, maximalen Stundenpreis,
+Unter **Queue → GPU & Offers** GPU-Typ, maximalen Stundenpreis,
 Mindestwerte für VRAM/RAM/CPU, Disk-Größe und verifizierte Hosts festlegen.
 **Preview available GPUs** dient zur Vorschau: Ein Klick auf eine Zeile übernimmt
-nur den Typ, keine Angebots-ID. **Save settings** speichert die Vorgaben.
+nur den Typ, keine Angebots-ID. **Save GPU requirements** speichert die Vorgaben.
 Ein leerer Typ erlaubt jede GPU, welche die übrigen Anforderungen erfüllt.
 Die Suche akzeptiert Teilbegriffe unabhängig von Groß-/Kleinschreibung: `3090`
 findet `RTX 3090`; Leerzeichen, Unterstriche und Bindestriche sind austauschbar.
@@ -130,15 +142,15 @@ Die vorhandene Historie des Coins und der BTC-Referenz wird inklusive Warmup
 
 Die Angebotssuche kennzeichnet anhand der lokalen Miethistorie tatsächlich gemietete Rechner als **Previously used**. **Working** bedeutet, dass mindestens ein exaktes Optimierungsergebnis auf diesem Rechner erfasst wurde oder du ihn mit **Mark working** manuell markiert hast. Eine beim Image-Download hängende Miete wird nicht automatisch als Working markiert. Die Kennzeichnung beschreibt frühere Erfahrungen und garantiert nicht den Erfolg der nächsten Miete.
 
-Mit **Prefer host** in den Angebotsdetails, in der Host-Karte einer Miete oder unter **Settings → Known & preferred hosts** bevorzugst du einen Rechner. Bevorzugte Maschinen erscheinen zuerst und werden innerhalb dieser Gruppe nach Preis ausgewählt. PBGui sucht diese Maschinen zusätzlich gezielt, auch wenn sie nicht auf der ersten Seite der günstigsten Angebote stehen. Hardware-Anforderungen, Preisgrenze, Laufzeit und Budgetprüfung gelten weiterhin. Qualifiziert sich kein bevorzugter Rechner, bleiben andere passende Angebote verfügbar. Manuelles **Rent** mietet weiterhin exakt das ausgewählte Angebot. Eine Sperre hat immer Vorrang.
+Mit **Prefer host** in den Angebotsdetails, in der Host-Karte einer Miete oder unter **Hosts** bevorzugst du einen Rechner. Bevorzugte Maschinen erscheinen zuerst und werden innerhalb dieser Gruppe nach Preis ausgewählt. PBGui sucht diese Maschinen zusätzlich gezielt, auch wenn sie nicht auf der ersten Seite der günstigsten Angebote stehen. Hardware-Anforderungen, Preisgrenze, Laufzeit und Budgetprüfung gelten weiterhin. Qualifiziert sich kein bevorzugter Rechner, bleiben andere passende Angebote verfügbar. Manuelles **Rent** mietet weiterhin exakt das ausgewählte Angebot. Eine Sperre hat immer Vorrang.
 
 Präferenzen und manuelle Working-Markierungen bleiben nach Neuladen und API-Neustart erhalten. **Remove preference** und **Clear working mark** heben deine Markierungen auf; nachgewiesene historische Ergebnisse bleiben sichtbar. Alte Mieten ohne gespeicherte Machine ID können nicht anhand des GPU-Namens zugeordnet werden. Bei einer noch existierenden Miete ermittelt eine Host-Aktion die ID über Vast; andernfalls kannst du die bekannte Machine ID manuell eintragen. Die Mietüberwachung speichert künftig die Rechner-ID automatisch. Die Markierungen ändern oder beenden keine laufende Miete.
 
 ### Unzuverlässige Hosts sperren
 
-Mit **Block host** neben einem Angebot, neben der aktuellen Miete in den Settings oder in der **Host**-Karte des Optimizer-Logs sperrst du einen Rechner. PBGui speichert dessen dauerhafte Vast **Machine ID**. Auch neue Angebote desselben Rechners werden damit aus der Vorschau sowie aus zukünftigen manuellen und automatischen Mieten ausgeschlossen. Eine laufende Miete bleibt bestehen; beende sie bei Bedarf separat mit **End rental**.
+Mit **Block host** neben einem Angebot, unter Hosts oder in der **Host**-Karte des Optimizer-Logs sperrst du einen Rechner. PBGui speichert dessen dauerhafte Vast **Machine ID**. Auch neue Angebote desselben Rechners werden damit aus der Vorschau sowie aus zukünftigen manuellen und automatischen Mieten ausgeschlossen. Eine laufende Miete bleibt bestehen; beende sie bei Bedarf separat mit **End rental**.
 
-Unter **Blocked hosts** in den Settings kannst du die IDs ansehen, eine bekannte Vast Machine ID manuell sperren und mit **Unblock host** wieder freigeben. Die Sperren bleiben nach Neuladen und API-Neustart erhalten. Bei älteren Mieten ermittelt PBGui die Machine ID beim Klick auf Block host anhand der zugehörigen Vast-Instanz. Ist diese nicht mehr verfügbar, kannst du die ID manuell eintragen. Sobald Sperren vorhanden sind, werden auch Angebote ohne gültige Machine ID ausgeschlossen, weil sich deren Freigabe nicht zuverlässig prüfen lässt.
+Unter **Hosts** mit dem Filter **Blocked** kannst du die IDs ansehen, eine bekannte Vast Machine ID manuell sperren und mit **Unblock host** wieder freigeben. Die Sperren bleiben nach Neuladen und API-Neustart erhalten. Bei älteren Mieten ermittelt PBGui die Machine ID beim Klick auf Block host anhand der zugehörigen Vast-Instanz. Ist diese nicht mehr verfügbar, kannst du die ID manuell eintragen. Sobald Sperren vorhanden sind, werden auch Angebote ohne gültige Machine ID ausgeschlossen, weil sich deren Freigabe nicht zuverlässig prüfen lässt.
 
 ## Prüfung der GPU-Konfiguration
 
@@ -163,7 +175,7 @@ garantiert deshalb noch keinen erfolgreichen GPU-Lauf.
 
 Benötigt ein später hinzugefügter Job mehr Transferreserve, kann ein Worker mit aktuellem Budget-Control-Guard ungenutzte Mietzeit innerhalb desselben genehmigten Budgets in Transferreserve umschichten. PBGui startet den Job erst nach Bestätigung der verkürzten Deadline durch den Worker. Während einer ausstehenden Anpassung greift keine Leerlaufbereinigung. Bei älteren Guards oder unzureichendem Restbudget zeigt PBGui einen Hinweis zur manuellen Anpassung von **Transfer reserve/Budget**. Unbestätigte Reserven werden nicht ausgegeben und das Budget wird nicht automatisch erhöht.
 
-Unter **Queue → Settings** maximale Stunden, Budgetziel und Leerlaufregel zusammen mit den GPU-Anforderungen speichern. **Start** in der Jobzeile mietet direkt mit diesen gespeicherten Vorgaben, ohne weitere Bestätigung, und sucht ein aktuelles passendes Angebot.
+Unter **Rental & Automation** maximale Stunden, Budgetziel und Leerlaufregel zusammen mit den GPU-Anforderungen speichern. **Start** in der Jobzeile mietet direkt mit diesen gespeicherten Vorgaben, ohne weitere Bestätigung, und sucht ein aktuelles passendes Angebot.
 PBGui mietet einmal, richtet verifiziertes SSH ein und arbeitet die Jobs
 nacheinander auf derselben GPU ab. Ergebnisse werden jeweils vor dem nächsten
 Start lokal gesichert und importiert. Die CPU-Parallelität pro Lauf kommt aus
@@ -237,7 +249,7 @@ Bei Vast-Ausführung behält **Apply Training Scenarios** vorhandene Scoring-Ein
 
 Beim Speichern einer PB8-Optimizer-Konfiguration werden auch Vorlage und Eingaben des Scenario Generators gespeichert, bereits vor Preview oder Apply. Beim erneuten Öffnen erscheinen diese Werte wieder. Bei älteren Konfigurationen werden sie aus den Metadaten der angewendeten Vorlage übernommen, sofern vorhanden. Änderungen der Generator-Eingaben allein ersetzen die angewendeten Szenarien nicht.
 
-Lokale und Cloud-Jobs stehen in derselben **Queue**-Tabelle. **Execution** zeigt **Local** oder **Vast.ai**. Der Cloud-Status **ready** erscheint als **queued**. **Open log** in der Jobzeile öffnet Details und verfügbare Logs; **Close** blendet sie aus. Mietlimits, Konto und GPU-Anforderungen werden in Settings gespeichert. **Start** lässt die Queue sichtbar. **Open log** öffnet dasselbe schwebende Optimize-log-Fenster wie bei lokalen Jobs, mit Cloud-Fortschritt, Status und den Aktionen Pause, Stop, Mietende und Wiederaufnahme. Während der Bereitstellung wird dort bereits der Status angezeigt, bevor ein heruntergeladenes Log vorliegt. Erklärungen stehen in der Hover-Hilfe.
+Lokale und Cloud-Jobs stehen in derselben **Queue**-Tabelle. **Execution** zeigt **Local** oder **Vast.ai**. Der Cloud-Status **ready** erscheint als **queued**. **Open log** in der Jobzeile öffnet Details und verfügbare Logs; **Close** blendet sie aus. Mietlimits, Konto und GPU-Anforderungen werden getrennt unter Rental & Automation, Account und GPU & Offers gespeichert. **Start** lässt die Queue sichtbar. **Open log** öffnet dasselbe schwebende Optimize-log-Fenster wie bei lokalen Jobs, mit Cloud-Fortschritt, Status und den Aktionen Pause, Stop, Mietende und Wiederaufnahme. Während der Bereitstellung wird dort bereits der Status angezeigt, bevor ein heruntergeladenes Log vorliegt. Erklärungen stehen in der Hover-Hilfe.
 
 Die GPU-Prüfung bietet **Replace metric** mit unterstützten Scoring-Metriken, **Edit limit** oder **Remove limit** für nicht unterstützte Grenzen und **Choose coins** für ungültige Coin-Listen. Änderungen betreffen nur den Entwurf. Ein Metrikwechsel ändert die Bedeutung; das Entfernen eines Limits lockert die Einschränkungen. Erklärungen stehen an gepunktet unterstrichenen Hover-Bezeichnungen neben den Aktionen, nicht auf den Knöpfen. **Use Local** erscheint einmal als Alternative.
 

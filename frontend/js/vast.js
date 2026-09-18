@@ -28,45 +28,40 @@
   const settingsSidebar = el('vast-sidebar-controls');
   if (settingsSidebar) {
     settingsSidebar.appendChild(el('vast-settings-nav'));
-    settingsSidebar.appendChild(el('vast-performance-actions'));
-    const actions = document.createElement('div');
-    actions.className = 'ctx-actions';
-    actions.id = 'vast-rental-actions';
-    const rentalTitle = document.createElement('div');
-    rentalTitle.className = 'sb-label'; rentalTitle.textContent = 'Rental';
-    actions.appendChild(rentalTitle);
-    ['rent-offer', 'settings-end-rental'].forEach(id => {
-      const button = el(id);
-      if (button) { button.classList.add('sb-btn'); actions.appendChild(button); }
-    });
-    settingsSidebar.appendChild(actions);
-    el('settings-host-block').classList.add('ctx-actions');
-    settingsSidebar.appendChild(el('settings-host-block'));
   }
   const performanceView = window.PBGuiVastPerformance?.create({request});
-  el('vast-settings-nav').querySelectorAll('[data-vast-view]').forEach(button => {
-    button.addEventListener('click', () => {
-      const view = button.dataset.vastView;
-      el('vast-offers').hidden = view !== 'offers';
-      el('vast-setup').hidden = view !== 'offers';
-      el('vast-known-hosts').hidden = view !== 'known';
-      el('vast-blocked-hosts').hidden = view !== 'blocked';
-      el('vast-performance').hidden = view !== 'performance';
-      el('vast-performance-actions').hidden = view !== 'performance';
-      if (el('vast-rental-actions')) el('vast-rental-actions').hidden = view === 'performance';
-      el('settings-host-block').hidden = view === 'performance';
-      if (view === 'performance') performanceView?.show();
-      else performanceView?.hide();
-      const local = el('settings-modal')?.querySelector(':scope > .modal-body');
-      if (local) local.hidden = view !== 'offers';
-      el('vast-settings-nav').querySelectorAll('[data-vast-view]').forEach(item => {
-        item.classList.toggle('active', item === button);
-        item.setAttribute('aria-pressed', String(item === button));
-      });
-      if (view !== 'offers') clearSecrets();
+  let settingsView = null, settingsVisible = false, accountConfigured = null, firstVastVisit = true;
+  const viewTitles = {offers:'GPU & Offers', rental:'Rental & Automation', hosts:'Hosts', performance:'Performance History', account:'Account'};
+  function showSettings(view) {
+    if (!Object.hasOwn(viewTitles, view)) view = settingsView || (accountConfigured === false ? 'account' : 'offers');
+    if (firstVastVisit && view === 'offers' && accountConfigured === false) view = 'account';
+    firstVastVisit = false;
+    settingsView = view; settingsVisible = true;
+    el('vast-offers').hidden = view !== 'offers';
+    el('vast-rental').hidden = view !== 'rental';
+    el('vast-setup').hidden = view !== 'account';
+    el('vast-hosts-filter').hidden = view !== 'hosts';
+    el('vast-known-hosts').hidden = view !== 'hosts' || el('host-status-filter').value === 'blocked';
+    el('vast-blocked-hosts').hidden = view !== 'hosts' || !['all','blocked'].includes(el('host-status-filter').value);
+    el('vast-performance').hidden = view !== 'performance';
+    el('vast-performance-actions').hidden = view !== 'performance';
+    if (el('vast-page-title')) el('vast-page-title').textContent = viewTitles[view];
+    if (window.state?.panel === 'vast') { window.state.vastView = view; location.hash = 'vast-' + view; }
+    el('vast-settings-nav').querySelectorAll('[data-vast-view]').forEach(button => {
+      const active = button.dataset.vastView === view;
+      button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
     });
-    button.setAttribute('aria-pressed', String(button.classList.contains('active')));
+    if (view === 'performance') performanceView?.show(); else performanceView?.hide();
+    if (view !== 'account') clearSecrets();
+  }
+  el('vast-settings-nav').querySelectorAll('[data-vast-view]').forEach(button => {
+    button.setAttribute('aria-pressed', 'false');
+    button.addEventListener('click', () => {
+      if (window.setPanel) window.setPanel('vast', button.dataset.vastView);
+      else showSettings(button.dataset.vastView);
+    });
   });
+  el('host-status-filter').addEventListener('change', () => { renderKnownHosts(); showSettings('hosts'); });
   let generation = 0;
   let offerGeneration = 0;
   let accountGeneration = 0;
@@ -134,7 +129,8 @@
 
   function renderSettings(data) {
     el('key-status').textContent = data.configured ? 'API key saved locally.' : 'No API key saved.';
-    el('vast-setup').open = !data.configured;
+    accountConfigured = !!data.configured;
+    if (!accountConfigured && settingsVisible && settingsView === 'offers') showSettings('account');
   }
 
   async function saveSecret(event, field, input) {
@@ -277,7 +273,10 @@
   function renderKnownHosts() {
     const list = el('known-hosts-list'); list.replaceChildren();
     if (!hostProfiles.size) list.textContent = 'No identified rental history or host marks yet.';
-    [...hostProfiles.values()].sort((a,b) => Number(b.preferred) - Number(a.preferred) || a.machine_id - b.machine_id).forEach(profile => {
+    const filter = el('host-status-filter').value;
+    const profiles = [...hostProfiles.values()].filter(profile => !['preferred','working'].includes(filter) || !!profile[filter]);
+    if (!profiles.length && hostProfiles.size) list.textContent = 'No matching hosts.';
+    profiles.sort((a,b) => Number(b.preferred) - Number(a.preferred) || a.machine_id - b.machine_id).forEach(profile => {
       const item = document.createElement('div'); item.className = 'fields';
       const label = document.createElement('span');
       label.textContent = 'Machine ' + profile.machine_id + ' · ' + (profile.rentals || 0) + ' rentals'
@@ -353,9 +352,6 @@
       rental.appendChild(hostBlockButton(machine, worker.id));
       rental.appendChild(hostPreferenceControls(machine, worker.id));
     }
-    if (settingsSidebar) rental.querySelectorAll('button').forEach(button => {
-      button.classList.remove('btn'); button.classList.add('sb-btn');
-    });
     renderKnownHosts();
     document.querySelectorAll('[data-host-block]').forEach(button => { button.disabled = hostBlockBusy; });
   }
@@ -397,7 +393,7 @@
     const params = new URLSearchParams({max_price:el('max-price').value, min_vram:el('min-vram').value,
       min_ram:el('min-ram').value, min_cpu:el('min-cpu').value, min_tflops:el('min-tflops').value, disk_gb:el('disk').value,
       verified_only:el('verified').value, gpu_name:el('gpu-model').value.trim(),
-      include_incompatible:String(el('show-incompatible').checked), rental_hours:el('job-hours').value});
+      include_incompatible:String(el('show-incompatible').checked), rental_hours:savedPreferences?.hours ?? 1});
     try {
       const data = await request('/offers?' + params);
       if (disposed || current !== offerGeneration) return;
@@ -410,36 +406,59 @@
 
   const preferenceFields = {gpu_name:'gpu-model', max_price:'max-price', min_vram:'min-vram',
     min_ram:'min-ram', min_cpu:'min-cpu', min_tflops:'min-tflops', disk_gb:'disk', verified_only:'verified', hours:'job-hours', budget:'job-budget', idle_seconds:'worker-idle', convergence_enabled:'convergence-enabled', convergence_min_exact:'convergence-min', convergence_patience:'convergence-patience', convergence_tolerance_pct:'convergence-tolerance'};
-  function applyPreferences(data) {
+  const preferenceGroups = {
+    offers: ['gpu_name','max_price','min_vram','min_ram','min_cpu','min_tflops','disk_gb','verified_only'],
+    rental: ['hours','budget','idle_seconds','convergence_enabled','convergence_min_exact','convergence_patience','convergence_tolerance_pct']
+  };
+  const preferenceEdits = {};
+  let preferenceSavePending = false;
+  Object.entries(preferenceFields).forEach(([key,id]) => {
+    preferenceEdits[key] = 0;
+    ['input','change'].forEach(event => el(id).addEventListener(event, () => { preferenceEdits[key]++; }));
+  });
+  function applyPreferences(data, keys, editSnapshot) {
     data = {min_tflops:0, convergence_enabled:false, convergence_min_exact:512, convergence_patience:512, convergence_tolerance_pct:0.1, ...data};
     savedPreferences = {...data};
-    Object.entries(preferenceFields).forEach(([key, id]) => { el(id).value = data[key] == null ? '' : String(data[key]); });
+    el('saved-rental-policy').textContent = 'Saved rental limits: up to ' + data.hours + ' hours · budget target $' + fmt(data.budget, 2) + ' · ' + (data.idle_seconds ? 'delete after 5 idle minutes' : 'delete immediately when idle') + '. Change these in Rental & Automation.';
+    (keys || Object.keys(preferenceFields)).forEach(key => {
+      if (!editSnapshot || preferenceEdits[key] === editSnapshot[key]) el(preferenceFields[key]).value = data[key] == null ? '' : String(data[key]);
+    });
     el('saved-requirements').textContent = 'Saved: ' + (data.gpu_name || 'any GPU type') + ' · max $' + fmt(data.max_price, 4) + '/hour · ' + data.min_vram + ' GB VRAM / ' + data.min_ram + ' GB RAM / ' + data.min_cpu + ' CPU cores / min ' + fmt(data.min_tflops || 0, 1) + ' TFLOPS. Current matching offers are selected only at start.';
     renderJob();
   }
-  el('save-gpu-preferences').addEventListener('click', async () => {
-    if (!el('offers-form').reportValidity()) return;
-    const values = {};
-    Object.entries(preferenceFields).forEach(([key, id]) => {
-      values[key] = key === 'gpu_name' ? el(id).value.trim() : ['verified_only','convergence_enabled'].includes(key) ? el(id).value === 'true' : Number(el(id).value);
+  function setPreferenceSaving(pending) {
+    preferenceSavePending = pending;
+    el('save-gpu-preferences').disabled = pending || !savedPreferences;
+    el('save-rental-preferences').disabled = pending || !savedPreferences;
+  }
+  async function savePreferences(group) {
+    if (disposed || preferenceSavePending || !savedPreferences) return;
+    if (!el(group === 'offers' ? 'offers-form' : 'rental-form').reportValidity()) return;
+    const keys = preferenceGroups[group], values = {}, edits = {...preferenceEdits};
+    keys.forEach(key => {
+      const value = el(preferenceFields[key]).value;
+      values[key] = key === 'gpu_name' ? value.trim() : ['verified_only','convergence_enabled'].includes(key) ? value === 'true' : Number(value);
     });
-    el('save-gpu-preferences').disabled = true;
+    setPreferenceSaving(true);
     try {
-      const data = await request('/gpu-preferences', {method:'POST', body:JSON.stringify(values)});
-      if (!disposed) { applyPreferences(data); message('GPU requirements saved. No GPU has been rented.', false); }
+      const data = await request('/gpu-preferences', {method:'PATCH', body:JSON.stringify(values)});
+      if (!disposed) { applyPreferences(data, keys, edits); message(group === 'offers' ? 'GPU requirements saved. No GPU has been rented.' : 'Rental and automation defaults saved. The running rental is unchanged.', false); }
     } catch (error) { if (!disposed) message(error.message, true); }
-    finally { if (!disposed) el('save-gpu-preferences').disabled = false; }
-  });
-  el('save-gpu-preferences').disabled = true;
-  request('/gpu-preferences').then(data => { if (!disposed) applyPreferences(data); })
+    finally { if (!disposed) setPreferenceSaving(false); }
+  }
+  el('save-gpu-preferences').addEventListener('click', () => savePreferences('offers'));
+  el('rental-form').addEventListener('submit', event => { event.preventDefault(); savePreferences('rental'); });
+  setPreferenceSaving(true);
+  const initialPreferenceEdits = {...preferenceEdits};
+  request('/gpu-preferences').then(data => { if (!disposed) applyPreferences(data, Object.keys(preferenceFields), initialPreferenceEdits); })
     .catch(error => { if (!disposed) message(error.message, true); })
-    .finally(() => { if (!disposed) el('save-gpu-preferences').disabled = false; });
+    .finally(() => { if (!disposed) setPreferenceSaving(false); });
 
   function selectedJob() { return jobRows.find(row => row.id === selectedJobId); }
 
   function workerActivity() {
     const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
-    let text = active ? worker.gpu_name + ' · ' + (worker.rental_state === 'creation_pending' ? 'provisioning (instance not confirmed)' : worker.status) + ' · $' + fmt(worker.price_hour_usd, 4) + '/hour · rental: ' + worker.rental_state + ' · deadline: ' + new Date(worker.deadline * 1000).toLocaleString() + (worker.idle_since ? ' · idle deletion: ' + new Date((worker.idle_since + worker.idle_seconds) * 1000).toLocaleTimeString() : '') : 'No active GPU rental.' + (worker ? ' Last rental: ' + worker.rental_state + '.' : '') + ' GPU requirements are configured in Settings; a matching offer is selected at queue start.';
+    let text = active ? worker.gpu_name + ' · ' + (worker.rental_state === 'creation_pending' ? 'provisioning (instance not confirmed)' : worker.status) + ' · $' + fmt(worker.price_hour_usd, 4) + '/hour · rental: ' + worker.rental_state + ' · deadline: ' + new Date(worker.deadline * 1000).toLocaleString() + (worker.idle_since ? ' · idle deletion: ' + new Date((worker.idle_since + worker.idle_seconds) * 1000).toLocaleTimeString() : '') : 'No active GPU rental.' + (worker ? ' Last rental: ' + worker.rental_state + '.' : '') + ' GPU requirements are configured in GPU & Offers; a matching offer is selected at queue start.';
     if (active && worker.cleanup_wait_until) {
       text = 'Cleanup: no instance found · waiting until ' + new Date(worker.cleanup_wait_until * 1000).toLocaleTimeString()
         + ' · last checked ' + new Date(worker.provider_checked_at * 1000).toLocaleTimeString();
@@ -1168,6 +1187,10 @@
       } else cell.textContent = value;
       row.appendChild(cell);
     });
+    const estimate = document.createElement('td');
+    estimate.title = 'Estimated coin candles per full candidate evaluation, summed across active training scenarios. Excludes warm-up and actual data availability; not the total optimizer run.';
+    estimate.textContent = Number.isFinite(job.estimated_coin_candles) ? job.estimated_coin_candles.toLocaleString(undefined, {notation:'compact', maximumFractionDigits:2}) : '—';
+    row.appendChild(estimate);
     const actions = document.createElement('td'); actions.className = 'actions-cell';
     const button = (label, title, action) => {
       const node = document.createElement('button'); node.className = 'icon-btn';
@@ -1226,10 +1249,12 @@
     scheduleValidation,
     validateConfig: validateEditorConfig,
     metricAllowed: function (metric) { return !!cloudMetrics && cloudMetrics.includes(metric); },
-    hideSettings: function () { clearSecrets(); closeLog(); performanceView?.hide(); },
-    showSettings: function () {
-      if (!el('vast-performance').hidden) performanceView?.show();
+    hideSettings: function () {
+      settingsVisible = false; clearSecrets(); closeLog(); performanceView?.hide();
+      el('vast-performance-actions').hidden = true;
+      el('vast-settings-nav').querySelectorAll('[data-vast-view]').forEach(button => { button.classList.remove('active'); button.setAttribute('aria-pressed','false'); });
     },
+    showSettings,
     openEditor: function (config) {
       const execution = el('opted-execution');
       if (execution) execution.value = config && config.pbgui && config.pbgui.execution === 'vast' ? 'vast' : 'local';
@@ -1252,7 +1277,7 @@
             help.dataset.localCpuTip = help.dataset.tip;
           }
           help.dataset.tip = cloud
-            ? 'Disabled because CPU allocation is automatic on Vast.ai. Set Min CPU cores in Settings → Vast GPU settings to choose the minimum rental capacity. The cloud run uses the effective CPU allocation available to the container, capped by the rented CPU quota. This local setting is not used.'
+            ? 'Disabled because CPU allocation is automatic on Vast.ai. Set Min CPU cores in GPU & Offers to choose the minimum rental capacity. The cloud run uses the effective CPU allocation available to the container, capped by the rented CPU quota. This local setting is not used.'
             : help.dataset.localCpuTip;
         }
       });
@@ -1363,13 +1388,14 @@
     const offer = selectedOffer;
     renting = true; renderJob();
     try {
+      if (!savedPreferences) throw new Error('Rental defaults are still loading.');
       await request('/queue/start', {method:'POST', body:JSON.stringify({
         rent_only:true, offer_id:offer.id, accept_rental_and_cleanup:true,
         preferences:{gpu_name:offer.gpu_name, max_price:offer.price_hour_usd,
           min_vram:offer.vram_gb ?? 0, min_ram:offer.ram_gb ?? 0, min_cpu:offer.cpu_cores ?? 0,
           min_tflops:offer.tflops ?? 0,
           disk_gb:offer.disk_gb ?? Number(el('disk').value), verified_only:!!offer.verified},
-        hours:Number(el('job-hours').value), budget:Number(el('job-budget').value), idle_seconds:Number(el('worker-idle').value)
+        hours:savedPreferences.hours, budget:savedPreferences.budget, idle_seconds:savedPreferences.idle_seconds
       })});
       await refreshJobs();
       if (!disposed) message('GPU rental started. Queued jobs remain paused until Start queue.');
@@ -1411,7 +1437,8 @@
       if (!disposed) { renderJob(); renderQueueOverview(); }
     }
   }));
-  if (new URLSearchParams(location.search).get('view') === 'queue' && window.setPanel) window.setPanel('queue');
+  if (new URLSearchParams(location.search).get('view') === 'queue' && !location.hash && window.setPanel) window.setPanel('queue');
+  if (window.state?.panel === 'vast') showSettings(window.state.vastView);
   pollJobs();
 
   el('credentials-form').addEventListener('submit', event => saveSecret(event, 'api_key', 'api-key'));

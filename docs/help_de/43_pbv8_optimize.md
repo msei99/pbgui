@@ -6,7 +6,7 @@ Neuere PB8-GPU-Versionen bieten **drift_rank_halt** (leer übernimmt `drift_halt
 
 Die lokale PB8-Config-Prüfung nutzt nach dem ersten Start den verwalteten Helper-Prozess erneut. Die Draft-Wiederherstellung erlaubt TOKEN-Coin-Overrides, lehnt darin enthaltene Zugangsdatenfelder aber weiterhin ab. Nach Änderungen an Basisdaten oder Exchanges prüft Check & Apply die erhaltenen visuellen Fenster gegen die aktuellen Formularwerte; ein erneutes Öffnen des Editors ist nicht erforderlich.
 
-**Settings → Performance History** bewahrt Vast-Durchsatz und Aufgabenmerkmale nach dem Entfernen aus der Queue auf. Wähle gleiche Aufgaben für Geschwindigkeitsvergleiche; Details im [Vast-GPU-Guide](48_vast_gpu.md#performance-history).
+**Vast.ai → Performance History** bewahrt Vast-Durchsatz und Aufgabenmerkmale nach dem Entfernen aus der Queue auf. Wähle gleiche Aufgaben für Geschwindigkeitsvergleiche; Details im [Vast-GPU-Guide](48_vast_gpu.md#performance-history).
 
 Die Cloud-CPU-Mindestleistung stellst du unter **Min CPU cores** in den Vast Settings ein; Cloud Auto nutzt die gemietete Zuteilung. Manuelles Rent übernimmt die Eigenschaften des ausgewählten Angebots. Später hinzugefügte Jobs können eine bestätigte Umschichtung von Mietzeit in Transferreserve innerhalb desselben Budgets auslösen. Fehler beim Abruf des Optimizer-Logs verhindern Stop und Ergebnissicherung nicht mehr.
 
@@ -16,7 +16,7 @@ Wenn **Run on** auf **Vast.ai** steht, sind **n_cpus** und **exact_workers** im 
 
 Vast-Uploads dürfen sich bei vorübergehenden Verbindungsfehlern bis zu 15 Minuten ohne neuen Transferfortschritt erholen. Zwischen Versuchen liegen 15/30/60 Sekunden; Teildaten bleiben erhalten. Das Log zeigt den Retry-Status. Nach erfolgreicher Worker-Health-Prüfung verkürzt der vorherige Setup-Timer die Upload-Zeit nicht mehr; Mietfrist und Reserve für Ergebnissicherung gelten weiterhin.
 
-Die Vast-Angebotssuche zeigt **Previously used**, **Working** und **Preferred** an. Mit **Prefer host** in den Angebotsdetails oder der Host-Karte einer Miete bevorzugst du den Rechner innerhalb deiner bestehenden Grenzen. Präferenzen und manuelle Working-Markierungen verwaltest du unter **Settings → Known & preferred hosts**. Gesperrte Hosts bleiben ausgeschlossen.
+Die Vast-Angebotssuche zeigt **Previously used**, **Working** und **Preferred** an. Mit **Prefer host** in den Angebotsdetails oder der Host-Karte einer Miete bevorzugst du den Rechner innerhalb deiner bestehenden Grenzen. Präferenzen und manuelle Working-Markierungen verwaltest du unter **Hosts**. Gesperrte Hosts bleiben ausgeschlossen.
 
 Bei Vast-Mieten schließt **Block host** in der Host-Karte des Logs den Rechner von zukünftigen Angeboten und Mieten aus. Unter **Settings → Blocked hosts** kannst du Sperren verwalten und aufheben. Die laufende Miete bleibt dabei bestehen; **End rental** ist eine separate Aktion. Details stehen im Vast-GPU-Guide.
 
@@ -351,3 +351,9 @@ Während der Image-Vorbereitung zeigt der animierte Balken einen Vorgang mit unb
 Requeue zeigt sofort Preparing und sperrt weitere Klicks, während das lokale Eingabepaket neu erstellt wird. Der Ersatzjob wird eingereiht, ohne eine GPU zu mieten.
 
 Vor dem Optimizer-Start beschafft PBGui außerdem die erste Tageskerze für jeden exportierten Coin (einschließlich BTC) auf jeder ausgewählten Börse. Übertragen wird der vollständige PB8-Ersthandelszeitpunkt-Cache mit börsenspezifischen Zeitstempeln, aufgelösten Symbolen und Resolver-Version. Damit muss ein regional gesperrter Worker diese Daten nicht selbst nachladen. Das konfigurierte Mindestalter bleibt erhalten; fehlende oder inkompatible Metadaten stoppen den Start mit einer Fehlermeldung. Dies unterstützt auch ältere Queue-Bundles und benötigt kein neues Worker-Image.
+
+## Optimizer Settings
+
+**Queue Settings** steuert lokalen Autostart, CPU-Overrides und PBGui-Marktdaten. Vast.ai besitzt fünf getrennte Sidebar-Bereiche: GPU & Offers, Rental & Automation, Hosts, Performance History und Account. Siehe [Vast.ai-Anleitung](48_vast_gpu.md#optimizer-settings).
+
+Die Queue-Spalte **Est. coin candles / candidate** schätzt die Datenmenge einer vollständigen Kandidatenbewertung aus der eingefrorenen Config schon vor dem Start. Warm-up und Datenverfügbarkeit sind nicht enthalten. Berechnung und History-Vergleich beschreibt [Vast.ai workload comparison](48_vast_gpu.md#config-workload-comparison).

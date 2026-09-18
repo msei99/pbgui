@@ -1,4 +1,4 @@
-/* Retained Vast benchmark browsing; shared sidebar controls and local SVG charts. */
+/* Retained Vast benchmark browsing; in-page controls and local SVG charts. */
 (function (global) {
   'use strict';
   function create({request}) {
@@ -25,10 +25,11 @@
         row.setAttribute('aria-selected', String(selected.has(row.dataset.run)));
       });
       el('performance-compare').disabled = !comparable();
+      el('performance-config-compare').disabled = selected.size < 2;
       el('performance-view').disabled = selected.size !== 1;
       el('performance-same').disabled = !selected.size || !selected.values().next().value.fingerprint;
       el('performance-selection').textContent = selected.size + ' selected' +
-        (selected.size > 1 && !comparable() ? ' · comparison requires identical verified workload fingerprints' : '');
+        (selected.size > 1 && !comparable() ? ' · hardware comparison requires identical verified workloads; use Compare configs for different workloads' : '');
     }
     function visibleRows() {
       const query = el('performance-filter').value.toLowerCase().trim();
@@ -54,9 +55,9 @@
         const values = [String(row.config_name || row.id) + ' · ' + (row.status || 'unknown') + ' · ' + date,
           (h.gpu_name || 'Unknown GPU') + ' / ' + (h.machine_id ?? '—'),
           row.cpu_allocation_resolved ? number(row.workers) : 'Unverified', number(w.coin_count),
-          (w.exchanges || []).join(', ') || '—', number(w.scenario_count), number(w.exported_candles),
+          (w.exchanges || []).join(', ') || '—', number(w.scenario_count), number(w.exported_candles), number(w.estimated_coin_candles),
           number(s.proxy_per_minute), number(s.exact_per_minute), number(s.proxy_rate_min) + ' – ' + number(s.proxy_rate_max),
-          number(row.startup_to_first_counter_seconds), number(s.exact_per_usd), money(row.cost_estimate?.total_usd), number(row.comparable_host_runs),
+          number(row.startup_to_first_counter_seconds), number(s.exact_per_usd), number(s.exact_per_minute > 0 ? 1000 / s.exact_per_minute : null), money(s.exact_per_usd > 0 ? 1000 / s.exact_per_usd : null), money(row.cost_estimate?.total_usd), number(row.comparable_host_runs),
           row.fingerprint ? row.fingerprint.slice(0, 12) : 'Unverified'];
         values.forEach((value, column) => {
           const cell = text('td', column ? value : '', tr);
@@ -80,7 +81,7 @@
       });
       if (!body.children.length) {
         const row = document.createElement('tr'); const cell = text('td', 'No recorded runs match this view.', row);
-        cell.colSpan = 15; body.appendChild(row);
+        cell.colSpan = 18; body.appendChild(row);
       }
       el('performance-count').textContent = total + ' retained runs' + (fingerprint ? ' · identical workload' : '');
       el('performance-prev').disabled = offset === 0;
@@ -159,19 +160,21 @@
         });
       });
     }
-    async function compare(inspect = false) {
-      if (inspect ? selected.size !== 1 : !comparable()) return;
+    async function compare(inspect = false, mode = 'hardware') {
+      if (inspect ? selected.size !== 1 : mode === 'config' ? selected.size < 2 : !comparable()) return;
       const current = ++generation;
       status('Loading comparison…');
       try {
-        const data = await request('/performance/compare', {method:'POST', body:JSON.stringify({ids:[...selected.keys()]})});
+        const data = await request('/performance/compare', {method:'POST', body:JSON.stringify({ids:[...selected.keys()], mode})});
         if (disposed || !active || current !== generation) return;
         const details = el('performance-details'); details.replaceChildren();
         for (const run of data.runs) {
           const card = text('div', '', details, 'optlog-card'), w = run.workload || {}, h = run.hardware || {}, s = run.summary || {};
-          text('strong', (h.gpu_name || 'Unknown GPU') + ' · machine ' + (h.machine_id ?? '—'), card);
+          text('strong', (run.config_name || run.id) + ' · ' + (h.gpu_name || 'Unknown GPU') + ' · machine ' + (h.machine_id ?? '—'), card);
           [number(run.workers) + ' CPU workers · ' + number(h.ram_gb) + ' GB RAM · ' + number(h.vram_gb) + ' GB VRAM',
             number(s.proxy_per_minute) + ' proxy/min · ' + number(s.exact_per_minute) + ' exact/min',
+            'Est. coin candles / full candidate: ' + number(w.estimated_coin_candles),
+            'Per 1,000 exact: ' + number(s.exact_per_minute > 0 ? 1000 / s.exact_per_minute : null) + ' minutes · $' + money(s.exact_per_usd > 0 ? 1000 / s.exact_per_usd : null) + ' compute (measured-rate projection; excludes startup, transfers and idle)',
             'Covered: ' + number(s.covered_seconds) + 's · ' + number(s.samples) + ' counter samples',
             'Exact/min range: ' + number(s.exact_rate_min) + ' – ' + number(s.exact_rate_max),
             'Cost estimate: $' + money(run.cost_estimate?.compute_usd) + ' compute + $' + money(run.cost_estimate?.transfer_usd) + ' transfer',
@@ -185,7 +188,7 @@
         drawChart('performance-proxy-chart', data.runs, 'proxy_total', 'Proxy evaluations / minute');
         drawChart('performance-exact-chart', data.runs, 'exact_total', 'Exact evaluations / minute');
         el('performance-browser').hidden = true; el('performance-comparison').hidden = false;
-        el('performance-back').hidden = false; status((data.runs.length > 1 ? 'Identical frozen workload · ' : 'Workload · ') + (data.runs[0].fingerprint || 'Unverified — comparison unavailable'));
+        el('performance-back').hidden = false; status(mode === 'config' ? 'Config workload comparison · rates also depend on GPU, CPU allocation, worker version and search settings. This is not an isolated hardware benchmark.' : (data.runs.length > 1 ? 'Identical frozen workload · ' : 'Workload · ') + (data.runs[0].fingerprint || 'Unverified — comparison unavailable'));
       } catch (error) { if (!disposed && active && current === generation) status(error.message); }
     }
     function browse() {
@@ -197,6 +200,7 @@
     on('performance-prev', 'click', () => { offset = Math.max(0, offset-100); refresh(); });
     on('performance-next', 'click', () => { offset += 100; refresh(); });
     on('performance-compare', 'click', () => compare());
+    on('performance-config-compare', 'click', () => compare(false, 'config'));
     on('performance-view', 'click', () => compare(true));
     on('performance-back', 'click', () => { browse(); refresh(); });
     on('performance-same', 'click', () => {

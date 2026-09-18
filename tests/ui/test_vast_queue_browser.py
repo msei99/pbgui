@@ -65,6 +65,10 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
             self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
             self.wfile.write(b'{"deleted":true}')
 
+        def do_PATCH(self):
+            """Merge the requested settings group through the same isolated handler."""
+            self.do_POST()
+
         def do_POST(self):
             """Record mock writes and never contact a cloud provider."""
             payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))) or '{}')
@@ -112,6 +116,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert page.locator('#settings #vast-setup').count() == 1
                 assert page.locator('#registry-token').count() == 0
                 assert page.locator('#job-config').count() == 0
+                page.locator('[data-vast-view=account]').click()
                 page.locator('#api-key').fill('mock-test-key')
                 page.locator('#save-key').click()
                 page.wait_for_function("document.getElementById('api-key').value === ''")
@@ -178,6 +183,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert page.locator('#btn-cloud-save-queue').is_enabled()
                 assert page.locator('#opted-scoring-panel .cloud-invalid').count() == 0
                 assert page.locator('#editor #vast-offers').count() == 0
+                page.locator('[data-vast-view=offers]').click()
                 assert page.locator('#settings #vast-offers').is_visible()
                 assert not page.locator('#show-incompatible').is_checked()
                 page.locator('#gpu-model').fill('3090')
@@ -197,9 +203,13 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert page.locator('#gpu-model').input_value() == '3090'
                 assert page.locator('#offers-body tr[data-offer]').get_attribute('aria-selected') == 'true'
                 assert 'RTX 3090' in page.locator('#selection').inner_text()
+                page.locator('#save-gpu-preferences').click()
+                page.wait_for_function("document.getElementById('saved-requirements').textContent.includes('3090')")
+                page.locator('[data-vast-view=rental]').click()
                 page.locator('#convergence-enabled').select_option('true')
                 page.locator('#convergence-patience').fill('768')
-                page.locator('#save-gpu-preferences').click()
+                page.locator('#save-rental-preferences').click()
+                page.wait_for_function("!document.getElementById('save-rental-preferences').disabled")
                 page.wait_for_function("document.getElementById('saved-requirements').textContent.includes('3090')")
                 assert preferences['convergence_enabled'] is True
                 assert preferences['convergence_patience'] == 768
@@ -212,6 +222,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                     window.el = id => document.getElementById(id);
                     Object.assign(window.state, {queue:[{filename:'local-job',name:'Local config',
                         exchange:'binance',status:'queued',created:'2026-09-13'}],selectedQueue:new Set()});
+                    window.optimizeEditorAdapter = {isV8:true};
                     window.renderQueueTableHead = () => {};
                     window.sortQueueItems = items => items;
                     window.escapeHtml = value => String(value || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
@@ -262,13 +273,15 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert page.locator('#queue #job-hours').count() == 0
                 assert page.evaluate('window.state.cloudQueueCount') == 1
                 page.evaluate('PBGuiVast.closeEditor()')
+                page.locator('[data-vast-view=offers]').click()
                 assert page.locator('#settings #vast-offers').is_visible()
-                page.locator('#vast-setup > summary').click()
+                page.locator('[data-vast-view=account]').click()
                 page.locator('#api-key').fill('unsaved-test-key')
                 page.evaluate('PBGuiVast.hideSettings()')
                 assert page.locator('#api-key').input_value() == ''
                 assert not any('/start' in call for call in calls)
                 page.evaluate("window.PBGuiDialogs = {confirm: async () => {throw new Error('Unexpected confirmation');}}")
+                page.locator('[data-vast-view=offers]').click()
                 page.locator('#gpu-model').fill('unsaved-other-type')
                 row.locator('button[title="Start"]').click()
                 assert row.locator('td').nth(3).inner_text() == 'Starting…'
@@ -369,7 +382,8 @@ def test_optimizer_settings_main_area():
             page.evaluate("openQueueSettingsModal()")
             assert page.locator('#main-content #panel-settings').is_visible()
             assert page.locator('#panel-queue').is_hidden()
-            assert page.locator('#panel-settings #vast-queue-host').count() == 1
+            assert page.locator('#panel-settings #vast-queue-host').count() == 0
+            assert page.locator('#panel-vast #vast-queue-host').count() == 1
             assert page.locator('#panel-queue #vast-queue-host').count() == 0
             assert page.locator('#settings-modal.modal').count() == 0
             assert page.locator('#modal-backdrop').evaluate("node => getComputedStyle(node).pointerEvents") == 'none'

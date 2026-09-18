@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import time
+
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from threading import RLock
@@ -17,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.auth import SessionToken, require_auth
 from api.page_templates import render_page_urls
+from optimizer_workload import estimate_coin_candles, estimate_snapshot
 from logging_helpers import human_log as _log
 from vast_credentials import VastCredentialStore
 from vast_provider import REFERRAL_URL, VastClient, VastError, gpu_name_matches, positive_id
@@ -24,6 +26,7 @@ from vast_jobs import JobStore, config_name, digest, services_available, job_id
 from vast_queue import CloudQueue, can_remove_job, blocked_machine_ids, offer_host_allowed
 from vast_hosts import host_history, set_host_preference, search_host_offers, offer_priority
 from file_lock import advisory_file_lock
+from secure_files import ensure_private_directory
 
 SERVICE = "Vast"
 router = APIRouter()
@@ -186,6 +189,25 @@ def save_gpu_preferences(body: RentalPreferences, session: SessionToken = Depend
         return values
     except VastError as exc:
         raise _error(exc) from None
+
+
+@router.patch("/gpu-preferences")
+def patch_gpu_preferences(body: RentalPreferences, session: SessionToken = Depends(require_auth)) -> dict:
+    """Merge only submitted preference fields under the reentrant queue lock."""
+    try:
+        queue = CloudQueue()
+        ensure_private_directory(queue.root)
+        with advisory_file_lock(queue.root / '.queue-lock'):
+            stored = queue.read().get('gpu_preferences', {})
+            values = RentalPreferences.model_validate({**stored, **body.model_dump(exclude_unset=True)}).model_dump()
+            values['gpu_name'] = values['gpu_name'].strip()
+            queue.update(gpu_preferences=values)
+        return values
+    except VastError as exc:
+        raise _error(exc) from None
+    except (ValueError, TypeError):
+        _log(SERVICE, "Invalid stored GPU preferences during partial save", level="ERROR")
+        raise HTTPException(status_code=422, detail="Stored GPU preferences are invalid; save valid settings before retrying.") from None
 
 
 def _error(exc: VastError) -> HTTPException:
@@ -457,7 +479,11 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
                     continue
             log = CLOUD_LOG_ROOT / ('vast_' + job_id(row['id']) + '.log')
             provider_log = CLOUD_LOG_ROOT / ('vast_' + row['id'] + '_provider.log')
-            row = dict(row, exchange=', '.join(queue.store.exchanges(row)), has_log=log.is_file() and not log.is_symlink(), can_delete=can_remove_job(row, worker))
+            estimate = row.get('estimated_coin_candles')
+            if 'estimated_coin_candles' not in row:
+                estimate = estimate_snapshot(queue.store.directory(row['id']) / 'input/optimize.json', queue.store.root)
+            row = dict(row, estimated_coin_candles=estimate, exchange=', '.join(queue.store.exchanges(row)),
+                       has_log=log.is_file() and not log.is_symlink(), can_delete=can_remove_job(row, worker))
             control_exists = (queue.store.directory(row['id']) / 'control.json').exists()
             row['stop_requested'] = bool(queue.store.read(row['id'], 'control.json').get('stop')) if control_exists else False
             row['has_provider_log'] = provider_log.is_file() and not provider_log.is_symlink()
@@ -543,6 +569,7 @@ def _queue_preparation_job(body: PrepareJobRequest) -> dict:
             if _PREPARATION_EXECUTOR is None:
                 _PREPARATION_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vast-input")
             job = store.create_preparation(name, body.iterations, body.workers, body.use_adg)
+            job = store.update(job['id'], estimated_coin_candles=estimate_coin_candles(config))
             future = _PREPARATION_EXECUTOR.submit(
                 _run_preparation, store, job['id'], name, config, source_sha256,
                 body.iterations, body.workers, body.use_adg,
@@ -819,6 +846,7 @@ def performance_history(response: Response, limit: int = Query(default=100, ge=1
 class PerformanceCompareRequest(BaseModel):
     """Compare only a bounded selection of real retained run IDs."""
     ids: list[str] = Field(min_length=1, max_length=4)
+    mode: Literal['hardware', 'config'] = 'hardware'
 
     @field_validator('ids')
     @classmethod
@@ -836,13 +864,13 @@ class PerformanceCompareRequest(BaseModel):
 @router.post('/performance/compare')
 def compare_performance(body: PerformanceCompareRequest, response: Response,
                         session: SessionToken = Depends(require_auth)) -> dict:
-    """Enforce identical frozen workloads before returning comparison series."""
+    """Keep hardware comparisons strict; allow explicit descriptive config comparisons."""
     from vast_performance import PerformanceHistory
     response.headers['Cache-Control'] = 'no-store'
     history = PerformanceHistory(CloudQueue().store.root)
     rows = [history.get(identifier) for identifier in body.ids]
     if any(row is None for row in rows):
         raise HTTPException(status_code=404, detail='Performance run not found')
-    if len(rows) > 1 and (not rows[0].get('fingerprint') or len({row.get('fingerprint') for row in rows}) != 1):
+    if body.mode == 'hardware' and len(rows) > 1 and (not rows[0].get('fingerprint') or len({row.get('fingerprint') for row in rows}) != 1):
         raise HTTPException(status_code=409, detail='Select runs with the same verified workload fingerprint')
-    return {'runs': [dict(row, series=history.series(row['id'])) for row in rows]}
+    return {'mode': body.mode, 'runs': [dict(row, series=history.series(row['id'])) for row in rows]}

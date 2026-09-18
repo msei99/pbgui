@@ -1730,7 +1730,7 @@ textarea.json-invalid:focus {
 #opted-vast-validation summary { cursor:pointer; color:var(--text-dim); }
 input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; outline:1px solid #ef4444; }
 .limits-table tr.cloud-invalid td { background:rgba(239,68,68,.12); color:#fca5a5; }
-#panel-settings.active { overflow-y:auto; }
+#panel-settings.active, #panel-vast.active { overflow-y:auto; }
 .queue-settings-page { width:100%; min-width:0; }
 .queue-settings-page > .modal-body { overflow:visible; background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin:16px 0; }
 .queue-settings-page h4 { margin:0; }
@@ -2336,7 +2336,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 
       <div id="ctx-queue" class="ctx-actions" style="display:none">
         <button class="sb-btn danger" id="btn-delete-selected-queue">🗑 Delete Selected</button>
-        <button class="sb-btn" id="btn-queue-settings">⚙ Settings</button>
+        <button class="sb-btn" id="btn-queue-settings">⚙ Queue Settings</button>
       </div>
 
       <div id="ctx-settings" class="ctx-actions" style="display:none">
@@ -2421,9 +2421,8 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <section id="settings-modal" class="queue-settings-page">
   <div class="modal-head">
     <div>
-      <h3>Optimizer Settings</h3>
+      <h3>Queue Settings</h3>
     </div>
-    <button class="btn ghost" id="btn-close-settings">Back to Queue</button>
   </div>
   <div class="modal-body">
     <h4>Local execution</h4>
@@ -2457,9 +2456,12 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
       <button class="btn primary" id="btn-settings-save">Save</button>
     </div>
   </div>
-  <div id="vast-queue-host"></div>
-  <div id="vast-offer-parking" hidden></div>
 </section>
+    </div>
+    <div id="panel-vast" class="view-panel">
+      <div class="modal-head"><h3 id="vast-page-title">Vast.ai</h3></div>
+      <div id="vast-queue-host"></div>
+      <div id="vast-offer-parking" hidden></div>
     </div>
 
     <div id="panel-queue" class="view-panel">
@@ -2911,7 +2913,8 @@ var state = {
 };
 
 var PANEL_META = {
-  settings: {title: "Optimizer Settings", subtitle: "Local execution and Vast.ai GPU settings."},
+  settings: {title: "Queue Settings", subtitle: "Local optimizer execution."},
+  vast: {title: "Vast.ai", subtitle: "GPU offers, rental rules, hosts, performance and account."},
   configs: {
     title: 'Optimize Configs',
     subtitle: 'Manage saved optimize setups and queue them in batches.'
@@ -9434,7 +9437,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       : '')
     + (optimizeEditorAdapter.isV8 ? '<div class="expander open"><div class="expander-header">Execution</div><div class="expander-body">'
       + '<div class="form-row cols-8">'
-      + fieldSelect2('opted-execution', 'Run on', [{value:'local',label:'Local'}, {value:'vast',label:'Vast.ai GPU · shared queue worker'}], (config.pbgui || {}).execution === 'vast' ? 'vast' : 'local', false, 'Choose where queued optimizer jobs run. GPU requirements are in Settings; rental controls and jobs are in Queue. Queued cloud jobs share the rented GPU.', 3)
+      + fieldSelect2('opted-execution', 'Run on', [{value:'local',label:'Local'}, {value:'vast',label:'Vast.ai GPU · shared queue worker'}], (config.pbgui || {}).execution === 'vast' ? 'vast' : 'local', false, 'Choose where queued optimizer jobs run. GPU requirements are in GPU &amp; Offers; rental controls and jobs are in Queue. Queued cloud jobs share the rented GPU.', 3)
         .replace('<select id="opted-execution"', '<select id="opted-execution" onchange="window.PBGuiVast && window.PBGuiVast.updateEditor();scheduleStructuredEditorSync()"')
       + '</div><div id="opted-vast-validation" role="status" aria-live="polite" hidden></div></div></div>' : '')
     + '<div id="suite-container"></div>'
@@ -11166,7 +11169,7 @@ function renderQueueTableHead() {
     state.queueSortDir,
     queueHeaderLabel,
     '<th class="queue-order-head"></th>',
-    '<th>Execution</th><th>Actions</th>'
+    '<th>Execution</th>' + (optimizeEditorAdapter.isV8 ? '<th title="Estimated coin candles per full candidate evaluation, summed across active training scenarios. Excludes warm-up and actual data availability; not the total optimizer run.">Est. coin candles / candidate</th>' : '') + '<th>Actions</th>'
   );
 }
 
@@ -11256,8 +11259,10 @@ function filterResults() {
   });
 }
 
-function setPanel(panel) {
-  if (state.panel === 'settings' && panel !== 'settings' && window.PBGuiVast) window.PBGuiVast.hideSettings();
+function setPanel(panel, vastView) {
+  if (panel === 'vast' && !optimizeEditorAdapter.isV8) panel = 'settings';
+  if (state.panel === 'vast' && panel !== 'vast' && window.PBGuiVast) window.PBGuiVast.hideSettings();
+  if (panel === 'vast' && ['offers','rental','hosts','performance','account'].includes(vastView)) state.vastView = vastView;
   if (panel === 'settings' && state.panel !== 'settings') syncQueueSettingsModalFields();
   el('settings-modal').classList.toggle('open', panel === 'settings');
   if (state.panel !== panel) state.navigationSeq += 1;
@@ -11269,14 +11274,14 @@ function setPanel(panel) {
     if (nav) nav.classList.toggle('active', active || (name === 'queue' && panel === 'settings'));
   });
   el('ctx-configs').style.display = panel === 'configs' ? '' : 'none';
-  el('ctx-queue').style.display = panel === 'queue' || panel === 'settings' ? '' : 'none';
+  el('ctx-queue').style.display = ['queue','settings','vast'].includes(panel) ? '' : 'none';
   el('btn-queue-settings').classList.toggle('active', panel === 'settings');
-  el('btn-delete-selected-queue').style.display = panel === 'settings' ? 'none' : '';
-  el('ctx-settings').style.display = panel === 'settings' ? '' : 'none';
+  el('btn-delete-selected-queue').style.display = panel === 'queue' ? '' : 'none';
+  el('ctx-settings').style.display = optimizeEditorAdapter.isV8 && ['queue','settings','vast'].includes(panel) ? '' : 'none';
   el('ctx-results').style.display = panel === 'results' ? '' : 'none';
   el('ctx-paretos').style.display = panel === 'paretos' ? '' : 'none';
-  location.hash = panel;
-  if (panel === 'settings') window.PBGuiVast?.showSettings?.();
+  location.hash = panel === 'vast' && state.vastView ? 'vast-' + state.vastView : panel;
+  if (panel === 'vast') window.PBGuiVast?.showSettings?.(vastView || state.vastView);
   refreshLiveResultsDuringRun().catch(handleError).finally(function() {
     restoreSelectedOptimizeResultWhenReady().catch(handleError);
   });
@@ -11552,7 +11557,7 @@ function renderQueue() {
   tbody.innerHTML = '';
   var queueItems = state.queue.concat(window.PBGuiVast ? window.PBGuiVast.queueItems() : []);
   if (!queueItems.length) {
-    renderEmpty('queue-tbody', 7, 'Queue is empty.', '', '');
+    renderEmpty('queue-tbody', optimizeEditorAdapter.isV8 ? 8 : 7, 'Queue is empty.', '', '');
     updateQueueStatus();
     updateQueueSelectionUi();
     updateMetaCounts();
@@ -11586,6 +11591,7 @@ function renderQueue() {
       + '<td><span class="badge badge-' + escapeHtml(item.status || 'queued') + '">' + escapeHtml(item.status || 'queued') + '</span></td>'
       + '<td class="muted">' + escapeHtml(formatIso(item.created)) + '</td>'
       + '<td>Local</td>'
+      + (optimizeEditorAdapter.isV8 ? '<td title="Estimated coin candles per full candidate evaluation, summed across active training scenarios. Excludes warm-up and actual data availability; not the total optimizer run.">' + (Number.isFinite(item.estimated_coin_candles) ? item.estimated_coin_candles.toLocaleString(undefined, {notation:'compact', maximumFractionDigits:2}) : '—') + '</td>' : '')
       + '<td class="actions-cell">'
       + actions
       + '</td>';
@@ -14257,7 +14263,6 @@ function attachEventHandlers() {
   });
   el('btn-close-editor').addEventListener('click', closeAllModals);
   el('btn-close-json').addEventListener('click', closeAllModals);
-  el('btn-close-settings').addEventListener('click', function() { setPanel('queue'); });
   el('btn-settings-cancel').addEventListener('click', function() { setPanel('queue'); });
   el('btn-close-queue-config-choice').addEventListener('click', closeAllModals);
   el('btn-queue-config-choice-cancel').addEventListener('click', closeAllModals);
@@ -14782,6 +14787,7 @@ async function init() {
     initPlotModalWindow();
     initOptimizeOhlcvPreflightController();
     var initialPanel = location.hash.replace('#', '');
+    if (/^vast-(offers|rental|hosts|performance|account)$/.test(initialPanel)) setPanel('vast', initialPanel.slice(5));
     if (PANEL_META[initialPanel]) setPanel(initialPanel);
     var initialUrl = new URL(window.location.href);
     var restoreEditor = initialUrl.searchParams.has('open_config') || initialUrl.searchParams.has('open_queue_config') || initialUrl.searchParams.has('open_draft');
@@ -15176,10 +15182,11 @@ init().catch(handleError);
   window._openOptimizeHelp = function(anchor) {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
     var topic = optimizeEditorAdapter.isV8 ? '43_pbv8_optimize' : '36_pbv7_optimize';
-    if (!anchor && state.panel === 'settings') {
+    if (!anchor && state.panel === 'vast') {
       topic = optimizeEditorAdapter.isV8 ? '48_vast_gpu' : '36_pbv7_optimize';
       anchor = 'optimizer-settings';
     }
+    if (!anchor && state.panel === 'settings') anchor = 'optimizer-settings';
     window.PBGuiSharedHelp.open(topic, { anchor: anchor || '' });
   };
   window.PBGUI_SCENARIO_GENERATOR_HELP = function() {
@@ -15270,7 +15277,7 @@ window.PBGUI_NAV_CONFIG = {
 
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
-<script src="/app/js/vast_performance.js?v=1"></script>
-<script src="/app/js/vast.js?v=86"></script>
+<script src="/app/js/vast_performance.js?v=2"></script>
+<script src="/app/js/vast.js?v=89"></script>
 </body>
 </html>

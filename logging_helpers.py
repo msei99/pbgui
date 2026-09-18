@@ -38,6 +38,7 @@ LOG_GROUPS: dict[str, str] = {
     'ScenarioChart':   'PBGui',
     'ScenarioWindows': 'PBGui',
     'Vast':            'PBGui',
+    'OptimizerWorkload': 'PBGui',
     'ApiLogging':      'PBGui',
     'ApiKeys':         'PBGui',
     'BalanceCalc':     'PBGui',

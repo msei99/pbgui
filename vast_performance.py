@@ -14,6 +14,7 @@ import time
 import zipfile
 
 from file_lock import advisory_file_lock
+from optimizer_workload import estimate_coin_candles, estimate_snapshot
 from logging_helpers import human_log as _log
 from secure_files import ensure_private_directory, secure_private_file
 from vast_jobs import job_id
@@ -120,7 +121,7 @@ def workload_metadata(store, row, image, stop=None):
     parameters = sum(isinstance(value, list) and len(value) >= 2 and value[0] != value[1]
                      for value in bounds.values()) if isinstance(bounds, dict) else None
     fingerprint = digest(identity) if files and revision and image else None
-    return dict(fingerprint=fingerprint, reason=None if fingerprint else 'Incomplete workload identity',
+    return dict(estimated_coin_candles=estimate_coin_candles(config), fingerprint=fingerprint, reason=None if fingerprint else 'Incomplete workload identity',
                 revision=revision, image=image, coins=coins, coin_count=len(coins), exchanges=sorted(exchanges),
                 exported_symbols=len(symbols), resolutions=sorted(resolutions),
                 scenario_count=len(bt.get('scenarios') or []) or 1, scenarios=bt.get('scenarios') or [],
@@ -197,11 +198,19 @@ class PerformanceHistory:
                 connection.close()
                 secure_private_file(self.path)
 
+    def _with_workload_estimate(self, value):
+        """Backfill display metadata from surviving snapshots without rewriting history."""
+        workload = value.setdefault('workload', {})
+        if 'estimated_coin_candles' not in workload:
+            workload['estimated_coin_candles'] = estimate_snapshot(
+                self.root / 'jobs' / job_id(value['id']) / 'input/optimize.json', self.root)
+        return value
+
     def get(self, identifier):
         """Return a retained run including aggregate statistics."""
         with self.connection() as db:
             row = db.execute('SELECT payload FROM runs WHERE id=?', (job_id(identifier),)).fetchone()
-        return json.loads(row['payload']) if row else None
+        return self._with_workload_estimate(json.loads(row['payload'])) if row else None
 
     def record(self, run, samples, telemetry=None):
         """Idempotently keep the latest counter/telemetry observation per minute."""
@@ -245,7 +254,7 @@ class PerformanceHistory:
                 "SELECT fingerprint,json_extract(payload,'$.hardware.machine_id'),count(*) FROM runs "
                 "WHERE fingerprint IS NOT NULL AND json_extract(payload,'$.summary.covered_seconds') > 0 "
                 "GROUP BY fingerprint,json_extract(payload,'$.hardware.machine_id')")}
-        values = [json.loads(row[0]) for row in rows]
+        values = [self._with_workload_estimate(json.loads(row[0])) for row in rows]
         for value in values:
             machine = value.get('hardware', {}).get('machine_id')
             value['comparable_host_runs'] = counts.get((value.get('fingerprint'), machine), 0) if machine else None

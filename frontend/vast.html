@@ -1,22 +1,15 @@
 <div class="vast-component">
   <nav id="vast-settings-nav" class="ctx-actions" aria-label="Cloud settings">
-    <button type="button" class="sb-btn active" data-vast-view="offers">GPU offers</button>
-    <button type="button" class="sb-btn" data-vast-view="known">Known &amp; preferred hosts</button>
-    <button type="button" class="sb-btn" data-vast-view="blocked">Blocked hosts</button>
+    <div class="sb-label">Vast.ai</div>
+    <button type="button" class="sb-btn" data-vast-view="account">Account</button>
+    <button type="button" class="sb-btn" data-vast-view="offers">GPU &amp; Offers</button>
+    <button type="button" class="sb-btn" data-vast-view="hosts">Hosts</button>
+    <button type="button" class="sb-btn" data-vast-view="rental">Rental &amp; Automation</button>
     <button type="button" class="sb-btn" data-vast-view="performance">Performance History</button>
   </nav>
-  <div id="vast-performance-actions" class="ctx-actions" hidden>
-    <button type="button" class="sb-btn" id="performance-refresh">Refresh history</button>
-    <button type="button" class="sb-btn" id="performance-view" disabled>View selected run</button>
-    <button type="button" class="sb-btn" id="performance-compare" disabled>Compare selected</button>
-    <button type="button" class="sb-btn" id="performance-same" disabled>Same workload only</button>
-    <button type="button" class="sb-btn" id="performance-clear">Clear selection / filter</button>
-    <button type="button" class="sb-btn" id="performance-back" hidden>Back to history</button>
-  </div>
-  <details class="card" id="vast-setup"><summary title="Save your Vast API key and check your balance. Account read and instance read/write permissions are required.">Cloud setup</summary><section aria-labelledby="account-title">
-    <div class="heading"><h2 id="account-title">Vast.ai account</h2>
-      <a href="https://cloud.vast.ai/?ref_id=522435" target="_blank" rel="noopener noreferrer sponsored" title="This referral link supports PBGui.">Create Vast.ai account ↗</a>
-    </div>
+  <section class="card" id="vast-setup" aria-labelledby="account-title" hidden>
+    <div class="heading"><h2 id="account-title">Vast.ai account</h2></div>
+    <p><a href="https://cloud.vast.ai/?ref_id=522435" target="_blank" rel="noopener noreferrer sponsored" title="This referral link supports PBGui.">Create Vast.ai account ↗</a></p>
     <form id="credentials-form">
       <div class="fields">
         <label>Vast API key<input id="api-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="Enter a new key to save or replace it"></label>
@@ -27,7 +20,7 @@
     <p id="key-status" class="muted">Loading account settings…</p>
     <p>Balance: <strong id="balance">Not checked</strong> <span id="balance-time" class="muted"></span></p>
 
-  </section></details>
+  </section>
   <section class="card" id="vast-offers" aria-labelledby="offers-title">
     <div class="heading"><h2 id="offers-title" title="Save a GPU type and requirements. A matching available offer is selected when the queue starts; hourly prices include disk, transfers are separate.">GPU requirements</h2><span id="offer-time" class="muted"></span></div>
     <form id="offers-form"><div class="fields">
@@ -40,26 +33,37 @@
       <label>Disk (GB)<input id="disk" type="number" min="40" max="2000" value="40" required></label>
       <label>Hosts<select id="verified"><option value="true">Verified only</option><option value="false">All</option></select></label>
       <button type="submit" id="find-offers">Preview available GPUs</button>
-      <label><span data-tip="Maximum duration of the shared rental. PBGui deletes the instance at the deadline.">Maximum rental hours</span><input id="job-hours" type="number" min="0.25" max="24" step="0.25" value="1"></label>
-      <label><span data-tip="Shared rental budget estimate, including reserved transfers. This is not a provider spending cap.">Budget target (USD)</span><input id="job-budget" type="number" min="0.1" max="100" step="0.1" value="1"></label>
-      <label><span data-tip="Optional early stop from the exact Pareto front, checked after each result snapshot. Applies when a job first starts. Supports up to three objectives.">Stop on stagnation</span><select id="convergence-enabled"><option value="false">Off</option><option value="true">On</option></select></label>
-      <label><span data-tip="Exact evaluations before establishing the fixed comparison scale and beginning stagnation detection.">Minimum exact evaluations</span><input id="convergence-min" type="number" min="256" max="10000000" step="1" value="512" required></label>
-      <label><span data-tip="Additional exact evaluations without a significant improvement before collecting the final result.">Patience (exact evaluations)</span><input id="convergence-patience" type="number" min="128" max="10000000" step="1" value="512" required></label>
-      <label><span data-tip="Relative improvement in normalized Pareto hypervolume needed to reset patience. Several small improvements accumulate against the last accepted improvement.">Improvement tolerance (%)</span><input id="convergence-tolerance" type="number" min="0.001" max="10" step="0.001" value="0.1" required></label>
-      <label><span data-tip="Delete the rented instance when the queue is idle to avoid ongoing costs.">When idle</span><select id="worker-idle"><option value="300">Delete after 5 minutes</option><option value="0">Delete immediately</option></select></label>
-      <button type="button" id="save-gpu-preferences">Save settings</button>
+      <button type="button" id="save-gpu-preferences">Save GPU requirements</button>
       <label class="offer-toggle"><input id="show-incompatible" type="checkbox">Show incompatible hosts</label>
     </div></form>
     <div class="table-wrap"><table><thead><tr>
       <th>GPU</th><th>VRAM</th><th>CPU / RAM</th><th>USD/hour</th><th>Transfer in / out (USD/GB)</th><th>Network ↓ / ↑ (Mbps)</th><th>Location</th><th>Reliability</th><th>Max duration</th><th>Compatibility</th><th>Details</th>
     </tr></thead><tbody id="offers-body"><tr><td colspan="11">Save your key, then find available GPUs.</td></tr></tbody></table></div>
     <button id="rent-offer" type="button" disabled>Rent</button>
+    <p id="saved-rental-policy" class="muted">Loading saved rental limits…</p>
     <div id="rent-message" role="status" aria-live="polite"></div>
-    <button id="settings-end-rental" type="button" hidden>End rental</button>
-    <span id="settings-host-block"></span>
-    <p id="settings-rental-status" class="muted"></p>
+    <p id="settings-rental-status" class="muted" hidden></p>
     <p id="selection" class="muted" hidden>Preview offers to choose a GPU type, or enter it above.</p>
     <p id="saved-requirements" class="muted">Loading saved GPU requirements…</p>
+  </section>
+  <section id="vast-rental" class="card" hidden>
+    <h2>Rental &amp; Automation</h2>
+    <p class="muted">Defaults for future rentals and jobs. Control the running rental in Queue.</p>
+    <form id="rental-form"><div class="fields">
+      <label><span data-tip="Maximum duration of the shared rental. PBGui deletes the instance at the deadline.">Maximum rental hours</span><input id="job-hours" type="number" min="0.25" max="24" step="0.25" value="1" required></label>
+      <label><span data-tip="Shared rental budget estimate, including reserved transfers. This is not a provider spending cap.">Budget target (USD)</span><input id="job-budget" type="number" min="0.1" max="100" step="0.1" value="1" required></label>
+      <label><span data-tip="Delete the rented instance when the queue is idle to avoid ongoing costs.">When idle</span><select id="worker-idle"><option value="300">Delete after 5 minutes</option><option value="0">Delete immediately</option></select></label>
+    </div><h3>Stop on stagnation</h3><div class="fields">
+      <label><span data-tip="Optional early stop from the exact Pareto front, checked after each result snapshot. Applies when a job first starts. Supports up to three objectives.">Stop on stagnation</span><select id="convergence-enabled"><option value="false">Off</option><option value="true">On</option></select></label>
+      <label><span data-tip="Exact evaluations before establishing the fixed comparison scale and beginning stagnation detection.">Minimum exact evaluations</span><input id="convergence-min" type="number" min="256" max="10000000" step="1" value="512" required></label>
+      <label><span data-tip="Additional exact evaluations without a significant improvement before collecting the final result.">Patience (exact evaluations)</span><input id="convergence-patience" type="number" min="128" max="10000000" step="1" value="512" required></label>
+      <label><span data-tip="Relative improvement in normalized Pareto hypervolume needed to reset patience. Several small improvements accumulate against the last accepted improvement.">Improvement tolerance (%)</span><input id="convergence-tolerance" type="number" min="0.001" max="10" step="0.001" value="0.1" required></label>
+    </div><button type="submit" id="save-rental-preferences">Save rental &amp; automation</button></form>
+  </section>
+  <section id="vast-hosts-filter" class="card" hidden>
+    <h2>Hosts</h2>
+    <label>Status <select id="host-status-filter"><option value="all">All hosts</option><option value="preferred">Preferred</option><option value="working">Working</option><option value="blocked">Blocked</option></select></label>
+    <div id="settings-host-block" class="fields"></div>
   </section>
   <section id="vast-known-hosts" class="card" hidden>
       <h2>Host history &amp; preferences</h2>
@@ -82,12 +86,21 @@
   </section>
   <section id="vast-performance" class="card" hidden aria-labelledby="performance-title">
     <div class="heading"><h2 id="performance-title">Performance History</h2><span id="performance-count" class="muted"></span></div>
-    <p class="muted">Recorded locally while the API is running. Select up to four runs with the same workload to compare. Exported candles include reference and warm-up data; actual consumed candles are not reported. Costs are estimates.</p>
+    <p class="muted">Recorded locally while the API is running. Select up to four runs. Compare configs describes different workloads; Compare hardware requires identical workloads. Exported candles include reference and warm-up data; actual consumed candles are not reported. Costs are estimates.</p>
     <p id="performance-status" role="status" aria-live="polite"></p>
+    <div id="vast-performance-actions" class="fields" role="toolbar" aria-label="Performance history actions" hidden>
+      <button type="button" class="btn" id="performance-refresh">Refresh history</button>
+      <button type="button" class="btn" id="performance-view" disabled>View selected run</button>
+      <button type="button" class="btn" id="performance-compare" disabled>Compare hardware</button>
+      <button type="button" class="btn" id="performance-config-compare" disabled>Compare configs</button>
+      <button type="button" class="btn" id="performance-same" disabled>Same workload only</button>
+      <button type="button" class="btn" id="performance-clear">Clear selection / filter</button>
+      <button type="button" class="btn" id="performance-back" hidden>Back to history</button>
+    </div>
     <div id="performance-browser">
       <label>Filter this page<input id="performance-filter" type="search" placeholder="Config, GPU, machine, coin, exchange…" maxlength="120"></label>
       <div class="table-wrap"><table aria-label="Recorded optimizer performance"><thead><tr>
-        <th>Run / status</th><th>GPU / machine</th><th>CPU</th><th>Coins</th><th>Exchanges</th><th>Scenarios</th><th>Exported candles</th><th>Proxy/min</th><th>Exact/min</th><th>Proxy/min range</th><th>First counter (s)</th><th>Exact/USD</th><th>Run cost (USD)</th><th>Comparable host runs</th><th>Workload</th>
+        <th>Run / status</th><th>GPU / machine</th><th>CPU</th><th>Coins</th><th>Exchanges</th><th>Scenarios</th><th>Exported candles</th><th title="Estimated coin candles per full candidate evaluation, summed across active training scenarios. Excludes warm-up and actual data availability; not the total optimizer run.">Est. coin candles / candidate</th><th>Proxy/min</th><th>Exact/min</th><th>Proxy/min range</th><th>First counter (s)</th><th>Exact/USD</th><th title="Projected from measured Exact/min; excludes startup and idle time.">Minutes / 1k exact</th><th title="Projected compute cost from measured Exact/USD; excludes startup, transfers and idle time.">USD / 1k exact</th><th>Run cost (USD)</th><th>Comparable host runs</th><th>Workload</th>
       </tr></thead><tbody id="performance-rows"></tbody></table></div>
       <div class="fields"><button id="performance-prev" type="button">Previous</button><button id="performance-next" type="button">Next</button></div>
       <div id="performance-selection" class="muted"></div>

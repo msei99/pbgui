@@ -154,7 +154,7 @@ Sidebar actions:
 | Button | Action |
 |--------|--------|
 | **Delete Selected** | Remove the selected queue items, including completed entries, matching the Config list pattern |
-| **Settings** | Open queue settings in the full main area beside the sidebar for `Autostart`, the CPU value autostart should enforce, and the `Use PBGui Market Data` launch override |
+| **Queue Settings** | Open queue settings in the full main area beside the sidebar for `Autostart`, the CPU value autostart should enforce, and the `Use PBGui Market Data` launch override |
 
 Use the thin grab strip at the far left edge of each queue row to reorder the queue with drag and drop. That same start strip shows the blue marker for selected rows, but stays hidden on unselected rows until you hover that left edge, so the queue does not look permanently preselected. PBGui persists that row order on disk, and autostart now respects the same top-to-bottom order when it picks the next queued optimize job.
 If you have multiple queue rows selected and start dragging one of those selected rows, PBGui now moves that whole selected block together. The grabbed item(s) stay visible through a drag preview built from clones of the real queue rows, so the cursor carries the same row layout you see in the queue instead of a generic browser drag ghost.
@@ -175,7 +175,7 @@ Newer queue items also keep an embedded config snapshot. If the original config 
 If an older queue row predates snapshots and its original config path is gone while multiple matching configs still exist, PBGui now opens a selection modal with direct **Open** buttons for those candidates instead of only flashing a short error toast.
 PBGui now also rejects **Requeue** for queue rows whose config is still unlaunchable. Those rows keep their current `error` state and existing optimize log until the config has actually been fixed, instead of being reset to a misleading `queued` state with no runnable job behind it.
 
-The queue itself no longer needs a manual refresh button in the sidebar. It keeps updating from the live websocket feed, and the **Settings** view now owns the autostart controls instead of a permanent sidebar checkbox. PB7 and PB8 use this one shared settings configuration and one global automatic optimizer slot, so saving the settings on either page controls both queues. When autostart is enabled, PBGui sets `optimize.n_cpus` on the launch copy to the configured queue CPU value immediately before launching that item. If `Use PBGui Market Data` is enabled there as well, PBGui also sets `backtest.ohlcv_source_dir` on the launch copy, regardless of the value stored in the config editor.
+The queue itself no longer needs a manual refresh button in the sidebar. It keeps updating from the live websocket feed, and the **Queue Settings** view now owns the autostart controls instead of a permanent sidebar checkbox. PB7 and PB8 use this one shared settings configuration and one global automatic optimizer slot, so saving the settings on either page controls both queues. When autostart is enabled, PBGui sets `optimize.n_cpus` on the launch copy to the configured queue CPU value immediately before launching that item. If `Use PBGui Market Data` is enabled there as well, PBGui also sets `backtest.ohlcv_source_dir` on the launch copy, regardless of the value stored in the config editor.
 The log dashboard summary now uses the **CPU** field for the configured optimizer cores. Hovering that CPU value opens an htop-like per-core view with memory, swap, and load-average details, and that hover keeps updating live while it stays open.
 If an optimize launcher PID goes stale while the actual `optimize.py` job is still alive, PBGui now re-attaches the queue row to the live process so the item stays visible as running and **Stop** still terminates the real job.
 If multiple queue rows point at the same config, PBGui now binds the live process only to the row whose own optimize log is actually attached to that process. Other rows no longer inherit that same `running` state just because they share the config file.
@@ -271,7 +271,7 @@ When you multi-select several pareto rows, **Seed Selected** creates a small see
 ### Run a new optimisation
 1. Open **Configs** and click **New Config**.
 2. Fill the structured fields, adjust advanced JSON sections if needed, then **Save and Queue**.
-3. Open **Queue**, use **Settings** if you want to enable **Autostart** or set the queue CPU value, and use **Log** to watch progress.
+3. Open **Queue**, use **Queue Settings** if you want to enable **Autostart** or set the queue CPU value, and use **Log** to watch progress.
 4. When the job finishes, go to **Results**.
 
 ### Explore results
@@ -296,4 +296,4 @@ Queue Backtest and Queue Validation now add the selected candidates directly and
 
 ## Optimizer Settings
 
-The sidebar **Settings** opens local queue settings. **Guide** jumps here while Settings is open. Set CPU, Override config CPU, Use PBGui Market Data and Autostart, then click **Save**. **Back to Queue** returns to jobs. Vast cloud execution is available in PB8 Optimize.
+The sidebar **Queue Settings** opens local queue settings. **Guide** jumps here while Settings is open. Set CPU, Override config CPU, Use PBGui Market Data and Autostart, then click **Save**. **Queue** in the left sidebar returns to jobs. Vast cloud execution is available in PB8 Optimize.

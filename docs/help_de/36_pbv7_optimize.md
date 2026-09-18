@@ -154,7 +154,7 @@ Sidebar-Aktionen:
 | Schaltfläche | Aktion |
 |--------|--------|
 | **Delete Selected** | Entfernt die ausgewählten Queue-Einträge, inklusive fertiger Jobs, passend zum Config-Listenmuster |
-| **Settings** | Öffnet die Queue-Settings im gesamten Hauptbereich neben der Sidebar für `Autostart`, den Queue-CPU-Wert und die Launch-Option `Use PBGui Market Data` |
+| **Queue Settings** | Öffnet die Queue-Settings im gesamten Hauptbereich neben der Sidebar für `Autostart`, den Queue-CPU-Wert und die Launch-Option `Use PBGui Market Data` |
 
 Über den schmalen Greifstreifen ganz links am Anfang jeder Queue-Zeile lässt sich die Queue jetzt per Drag-and-Drop umsortieren. Genau dort erscheint bei ausgewählten Zeilen auch der blaue Marker; bei nicht ausgewählten Zeilen bleibt dieser Streifen unsichtbar, bis du direkt über die linke Greifkante hoverst, damit die Queue nicht dauerhaft wie selektiert aussieht. PBGui speichert diese Reihenfolge dauerhaft in den Queue-Einträgen, und Autostart respektiert dieselbe Reihenfolge von oben nach unten auch beim Start des nächsten gequeueeten Optimize-Jobs.
 Wenn mehrere Queue-Zeilen ausgewählt sind und du eine dieser ausgewählten Zeilen ziehst, verschiebt PBGui jetzt den gesamten ausgewählten Block gemeinsam. Die gegriffenen Einträge bleiben dabei über eine Drag-Vorschau aus Klonen der echten Queue-Zeilen am Mauszeiger erkennbar, sodass beim Ziehen dieselbe Zeilenoptik sichtbar bleibt statt nur eines generischen Browser-Drag-Ghosts.
@@ -175,7 +175,7 @@ Neuere Queue-Einträge behalten zusätzlich einen eingebetteten Config-Snapshot.
 Wenn ein älterer Queue-Eintrag noch aus der Zeit vor diesen Snapshots stammt und sein ursprünglicher Config-Pfad fehlt, während mehrere passende Configs existieren, öffnet PBGui jetzt direkt ein Auswahl-Modal mit **Open**-Buttons für diese Kandidaten statt nur kurz einen Toast-Fehler anzuzeigen.
 PBGui lehnt **Requeue** jetzt außerdem für Queue-Zeilen ab, deren Config weiterhin nicht startbar ist. Solche Zeilen behalten ihren aktuellen `error`-Status und das vorhandene Optimize-Log, bis die Config wirklich korrigiert wurde, statt in einen irreführenden `queued`-Status ohne startbaren Job zurückgesetzt zu werden.
 
-Die Queue braucht damit keinen manuellen Refresh-Knopf mehr in der Sidebar. Sie aktualisiert sich laufend über den Websocket-Feed, und die **Settings**-Ansicht übernimmt jetzt die Autostart-Steuerung statt einer permanent sichtbaren Sidebar-Checkbox. PB7 und PB8 verwenden diese eine gemeinsame Settings-Konfiguration und einen globalen automatischen Optimizer-Slot; Speichern auf einer der beiden Seiten steuert daher beide Queues. Wenn Autostart aktiv ist, setzt PBGui vor jedem automatischen Start `optimize.n_cpus` in der Launch-Kopie auf den in den Settings gesetzten Queue-CPU-Wert. Wenn dort zusätzlich `Use PBGui Market Data` aktiviert ist, setzt PBGui in der Launch-Kopie außerdem `backtest.ohlcv_source_dir` auf das aktuelle PBGui-Market-Data-Root, unabhängig vom im Config-Editor gespeicherten Pfad.
+Die Queue braucht damit keinen manuellen Refresh-Knopf mehr in der Sidebar. Sie aktualisiert sich laufend über den Websocket-Feed, und die **Queue Settings**-Ansicht übernimmt jetzt die Autostart-Steuerung statt einer permanent sichtbaren Sidebar-Checkbox. PB7 und PB8 verwenden diese eine gemeinsame Settings-Konfiguration und einen globalen automatischen Optimizer-Slot; Speichern auf einer der beiden Seiten steuert daher beide Queues. Wenn Autostart aktiv ist, setzt PBGui vor jedem automatischen Start `optimize.n_cpus` in der Launch-Kopie auf den in den Settings gesetzten Queue-CPU-Wert. Wenn dort zusätzlich `Use PBGui Market Data` aktiviert ist, setzt PBGui in der Launch-Kopie außerdem `backtest.ohlcv_source_dir` auf das aktuelle PBGui-Market-Data-Root, unabhängig vom im Config-Editor gespeicherten Pfad.
 Die Log-Dashboard-Zusammenfassung nutzt das Feld **CPU** jetzt für die konfigurierten Optimizer-Kerne. Wenn du über diesen CPU-Wert hoverst, öffnet sich eine htop-ähnliche Per-Core-Ansicht mit Speicher-, Swap- und Load-Average-Details, die sich während des offenen Hovers live weiter aktualisiert.
 Wenn der ursprüngliche Launcher-PID eines Optimizers veraltet ist, der eigentliche `optimize.py`-Prozess aber noch läuft, hängt PBGui die Queue-Zeile jetzt wieder an den Live-Prozess an. Dadurch bleibt der Eintrag als laufend sichtbar und **Stop** beendet weiterhin den echten Job.
 Wenn mehrere Queue-Zeilen dieselbe Config referenzieren, bindet PBGui den Live-Prozess jetzt nur noch an die Zeile, deren eigenes Optimize-Log wirklich zu diesem Prozess gehört. Andere Zeilen übernehmen diesen `running`-Status nicht mehr nur wegen der gemeinsamen Config-Datei.
@@ -271,7 +271,7 @@ Wenn mehrere Pareto-Zeilen markiert sind, erstellt **Seed Selected** ein kleines
 ### Neue Optimierung starten
 1. **Configs** öffnen und **New Config** klicken.
 2. Strukturierte Felder ausfüllen, bei Bedarf die Advanced-JSON-Bereiche anpassen und danach **Save and Queue** verwenden.
-3. **Queue** öffnen, bei Bedarf über **Settings** **Autostart** oder den Queue-CPU-Wert setzen und mit **Log** den Fortschritt beobachten.
+3. **Queue** öffnen, bei Bedarf über **Queue Settings** **Autostart** oder den Queue-CPU-Wert setzen und mit **Log** den Fortschritt beobachten.
 4. Nach Abschluss zu **Results** wechseln.
 
 ### Ergebnisse auswerten
@@ -296,4 +296,4 @@ Queue Backtest und Queue Validation fügen die Kandidaten direkt hinzu; Diagramm
 
 ## Optimizer Settings
 
-**Settings** in der Sidebar öffnet die lokalen Queue-Einstellungen. **Guide** springt bei geöffneten Settings hierher. CPU, Override config CPU, Use PBGui Market Data und Autostart einstellen und mit **Save** speichern. **Back to Queue** führt zur Jobliste zurück. Vast-Cloud-Ausführung ist in PB8 Optimize verfügbar.
+**Queue Settings** in der Sidebar öffnet die lokalen Queue-Einstellungen. **Guide** springt bei geöffneten Settings hierher. CPU, Override config CPU, Use PBGui Market Data und Autostart einstellen und mit **Save** speichern. **Queue** in der linken Sidebar führt zur Jobliste zurück. Vast-Cloud-Ausführung ist in PB8 Optimize verfügbar.

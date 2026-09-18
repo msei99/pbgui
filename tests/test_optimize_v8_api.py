@@ -99,6 +99,7 @@ def optimize_v8_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(optimize_v8, "_v7_configs_dir", lambda: v7_configs)
     monkeypatch.setattr(optimize_v8, "prepare_pb8_config", lambda config, **kwargs: copy.deepcopy(config))
     monkeypatch.setattr(optimize_v8, "load_pb8_config", lambda path: json.loads(Path(path).read_text(encoding="utf-8")))
+    monkeypatch.setattr("pb8_config.load_pb8_config", optimize_v8.load_pb8_config)
     monkeypatch.setattr(optimize_v8, "validate_pb8_override_bundle", lambda _path: None)
     monkeypatch.setattr(optimize_v8, "validate_pb8_optimizer_overrides", lambda _config, **_kwargs: None)
     with optimize_v8._result_progress_cache_lock:
@@ -553,17 +554,21 @@ def test_fixed_forager_spans_use_current_positive_values() -> None:
 def test_queue_snapshot_is_immutable_after_config_save(optimize_v8_roots) -> None:
     """Editing a managed config after queueing must not mutate the queued PB8 snapshot."""
     config = _full_pb8_config()
+    config['live']['approved_coins'] = {'long':['ETH'], 'short':['ETH']}
+    config['backtest'].update(start_date='2026-01-01', end_date='2026-01-02', candle_interval_minutes=1, suite_enabled=False)
     optimize_v8.save_config("immutable", config, session=None)
     filename = optimize_v8.add_to_queue({"name": "immutable"}, None)["filename"]
     snapshot_before = optimize_v8._read_json(optimize_v8._snapshot_file(filename))
 
     edited = copy.deepcopy(config)
     edited["optimize"]["seed"] = 999
+    edited["backtest"]["end_date"] = "2026-02-01"
     optimize_v8.save_config("immutable", edited, session=None)
 
     snapshot_after = optimize_v8._read_json(optimize_v8._snapshot_file(filename))
     assert snapshot_before == snapshot_after
     assert snapshot_after["optimize"]["seed"] == 12345
+    assert optimize_v8._queue_item(optimize_v8._queue_file(filename))["estimated_coin_candles"] == 2880
 
 
 def test_queue_operation_id_is_persistently_idempotent(optimize_v8_roots) -> None:

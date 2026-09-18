@@ -6,7 +6,7 @@ Newer PB8 GPU runtimes expose **drift_rank_halt** (blank inherits `drift_halt`) 
 
 Local PB8 config validation reuses the managed helper process after its initial startup. Draft recovery permits TOKEN coin override objects while still rejecting nested credential fields. After changing base dates or exchanges, Check & Apply validates the retained visual windows against the current form; it does not require reopening the editor.
 
-**Settings → Performance History** retains Vast throughput and workload metadata after queue deletion. Select matching workloads for speed comparisons; see the [Vast GPU guide](48_vast_gpu.md#performance-history).
+**Vast.ai → Performance History** retains Vast throughput and workload metadata after queue deletion. Select matching workloads for speed comparisons; see the [Vast GPU guide](48_vast_gpu.md#performance-history).
 
 For cloud CPU capacity, set **Min CPU cores** in Vast Settings; Cloud Auto uses the rented allocation. Manual Rent takes its specifications from the selected offer. Later queued jobs may trigger a confirmed transfer-reserve adjustment that shortens rental time within the same budget. Optimizer log retrieval errors no longer prevent stop or final collection.
 
@@ -16,7 +16,7 @@ When **Run on** is set to **Vast.ai**, the optimizer's **n_cpus** and **exact_wo
 
 Vast input uploads recover from transient connection errors for up to 15 minutes without new transfer progress, with 15/30/60-second retry pauses and retained partial data. The log displays retry status. A healthy worker's upload is no longer cut short by its earlier setup timer; the rental deadline and collection reserve still apply.
 
-Vast offer searches show **Previously used**, **Working** and **Preferred** host status. Use **Prefer host** in offer Details or the rental Host card to prioritize that physical machine within your existing limits. Manage preferences and manual Working marks in **Settings → Known & preferred hosts**. Blocked hosts remain excluded.
+Vast offer searches show **Previously used**, **Working** and **Preferred** host status. Use **Prefer host** in offer Details or the rental Host card to prioritize that physical machine within your existing limits. Manage preferences and manual Working marks in **Hosts**. Blocked hosts remain excluded.
 
 For Vast rentals, **Block host** in the log's Host card excludes the physical machine from future offers and rentals. Manage or undo exclusions under **Settings → Blocked hosts**. Blocking leaves the current rental running; **End rental** remains a separate action. See the Vast GPU guide for details.
 
@@ -351,3 +351,9 @@ During image preparation, the animated bar indicates an unknown amount of work r
 Requeue immediately shows Preparing and disables repeated submission while the local input bundle is rebuilt. It queues the replacement without renting a GPU.
 
 Before optimizer launch, PBGui also fetches the authoritative first daily candle for every exported coin (including BTC) on each selected exchange. It sends the complete PB8 inception cache, including exchange-specific timestamps, resolved symbols and the resolver version. This prevents a region-blocked worker from trying to discover coin inception remotely. Minimum coin age is preserved; missing or incompatible metadata stops startup with an error. This also supports older queued bundles and needs no replacement worker image.
+
+## Optimizer Settings
+
+**Queue Settings** controls local autostart, CPU overrides and PBGui market data. Vast.ai has five independent sidebar areas: GPU & Offers, Rental & Automation, Hosts, Performance History and Account. See the [Vast.ai guide](48_vast_gpu.md#optimizer-settings).
+
+The queue column **Est. coin candles / candidate** estimates the full-candidate data volume from the frozen config before a run starts. It excludes warm-up and data availability. See [Vast.ai workload comparison](48_vast_gpu.md#config-workload-comparison) for the calculation and Performance History comparisons.
