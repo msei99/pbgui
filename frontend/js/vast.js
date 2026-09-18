@@ -699,16 +699,19 @@
     extra.open = expanded;
     if (!unchanged) { box.replaceChildren(content); box.dataset.signature = signature; }
   }
-  async function validateEditorConfig(config) {
+  async function validateEditorConfig(config, options) {
     const current = ++validationGeneration;
     clearTimeout(validationTimer); setQueueBlocked(true); showValidation([], true);
     try {
       const result = await request('/validate-config', {method:'POST', body:JSON.stringify({config})});
-      if (disposed || current !== validationGeneration) return false;
+      if (disposed) return false;
+      // Background checks own current UI state; a queue check validates its captured payload.
+      if (current !== validationGeneration) return !!(options && options.forQueue && result.valid);
       cloudMetrics = result.metrics; showValidation(result.errors, false, result); setQueueBlocked(!result.valid);
       return result.valid;
     } catch (error) {
       if (!disposed && current === validationGeneration) showValidation([{path:'validation',message:error.message}], false);
+      if (options && options.forQueue) throw error;
       return false;
     }
   }
@@ -971,7 +974,7 @@
   function renderCloudDashboard(job) {
     if (!window.state || window.state.cloudLogId !== job.id) return;
     if (typeof renderOptimizeLogDashboard !== 'function') return;
-    const uploadPhase = job.status === 'uploading' ? {preparing_files:'Preparing file synchronization', checking_cache:'Checking cache', packing:'Preparing transfer archive', installing:'Installing input data', verifying:'Verifying input data', reconnecting:'Waiting to retry upload'}[job.upload_progress?.stage] : null;
+    const uploadPhase = job.status === 'uploading' ? {preparing_files:'Preparing file synchronization', preparing_worker:'Transferring job metadata', checking_cache:'Checking cache', packing:'Preparing transfer archive', installing:'Installing input data', verifying:'Verifying input data', reconnecting:'Waiting to retry upload'}[job.upload_progress?.stage] : null;
     renderOptimizeLogDashboard({name:job.config_name, phase:stopPhase(job) || uploadPhase || job.status,
       progress:{exact_evaluations:job.exact_completed || 0,target_exact_evaluations:job.iterations,
         proxy_evaluations:job.gpu_candidates || 0,percent:job.iterations ? 100*(job.exact_completed || 0)/job.iterations : 0},
@@ -1077,7 +1080,7 @@
       const fileProgress = checkingCache && Number.isInteger(filesTotal) && filesTotal >= 0 && Number.isInteger(filesChecked) && filesChecked >= 0 && filesChecked <= filesTotal;
       const percent = checkingCache ? (fileProgress && filesTotal > 0 ? 100 * filesChecked / filesTotal : 0)
         : total && sent != null ? Math.min(100, 100 * sent / total) : 0;
-      const stageLabel = {preparing_files:'Preparing file synchronization', checking_cache:'Checking cached input data', packing:'Preparing transfer archive', installing:'Installing input data', synchronized:'Input files synchronized'}[upload.stage];
+      const stageLabel = {preparing_files:'Preparing file synchronization', preparing_worker:'Transferring job metadata', checking_cache:'Checking cached input data', packing:'Preparing transfer archive', installing:'Installing input data', synchronized:'Input files synchronized'}[upload.stage];
       const retrySeconds = Math.max(0, Math.ceil((job.upload_retry_at || 0) - Date.now()/1000));
       const label = upload.stage === 'verifying' ? 'Verifying input data' : upload.stage === 'reconnecting' ?
         (job.upload_retry_at ? 'Upload retry in ' + retrySeconds + 's (partial data retained)' :
@@ -1102,15 +1105,17 @@
         }
       }
       const cacheDetail = fileProgress ? 'Checking cached input data · ' + filesChecked.toLocaleString('en-US') + ' / ' + filesTotal.toLocaleString('en-US') + ' files checked (' + fmt(percent, 1) + '%)' : '';
-      const detail = cacheDetail || stageLabel || label + ' · ' + (sent != null ? fmt(sent / 1e6, 1) + ' / ' : '') + fmt(total / 1e6, 1) + ' MB'
+      const metadata = upload.stage === 'preparing_worker';
+      const metadataDetail = metadata ? 'Job metadata · ' + fmt(Number(upload.metadata_submitted || 0) / 1e6, 2) + ' / ' + fmt(Number(upload.metadata_total || 0) / 1e6, 2) + ' MB submitted to SSH · waiting for worker acknowledgement' : '';
+      const detail = metadataDetail || cacheDetail || stageLabel || label + ' · ' + (sent != null ? fmt(sent / 1e6, 1) + ' / ' : '') + fmt(total / 1e6, 1) + ' MB'
         + (sent != null ? (directFiles ? ' processed (' : rsync && !verified ? ' transferred (' : ' verified (') + fmt(percent, 1) + '%)' : '')
         + (upload.in_flight_bytes > 0 ? ' · current block: ' + fmt(upload.in_flight_bytes / 1e6, 2) + ' MB received' : '')
         + speed + eta;
-      el('optlog-progress-fill').style.width = percent + '%';
+      el('optlog-progress-fill').style.width = (metadata && upload.metadata_total > 0 ? Math.min(100, 100 * (upload.metadata_submitted || 0) / upload.metadata_total) : percent) + '%';
       el('optlog-progress-label').textContent = detail;
-      el('optlog-progress-label').dataset.tip = checkingCache ? 'Cache checking counts files acknowledged by the worker, before input transfer begins. Each confirmed page updates the counter; this is not uploaded bytes.' : 'Progress counts checksum-verified blocks. Current block bytes are acknowledged by the receiver and may be retried. Speed is verified data per second during this attempt. Remaining time uses remaining verified bytes divided by measured speed and excludes final verification/install. The theoretical remaining time uses the rented host download Mbps and is shown alongside the measured estimate. 1 byte = 8 bits. Local uplink, network route, SSH overhead and retries can limit throughput; the reached percentage alone does not prove an inaccurate host claim.';
-      if (rsync) el('optlog-progress-label').dataset.tip = 'Rsync resumes the partial archive over one SSH connection. Progress and estimated speed come from rsync, excluding the retained prefix; buffered data may still be in transit. The complete archive is SHA256-verified before installation. Remaining time excludes this final check and installation. Host-rate remaining uses advertised download Mbps and is theoretical; local uplink and routing also limit speed. 1 byte = 8 bits.';
-      if (directFiles) el('optlog-progress-label').dataset.tip = 'Rsync synchronizes individual immutable files over one SSH connection. Content-hash filenames and file sizes identify reusable data without reading it again. Partial files are retained separately and completed transfers are checked by rsync before publication. Progress reflects logical file bytes processed by rsync, not measured network traffic. The total includes reusable files, so remaining-time estimates can overstate the transfer. Host-rate remaining is theoretical. 1 byte = 8 bits.';
+      el('optlog-progress-label').dataset.tip = metadata ? 'Compressed config and file manifest submitted to the local SSH process. This is not confirmation of remote receipt. Input candle transfer starts after worker acknowledgement.' : checkingCache ? 'Cache checking counts files acknowledged by the worker, before input transfer begins. Each confirmed page updates the counter; this is not uploaded bytes.' : 'Progress counts checksum-verified blocks. Current block bytes are acknowledged by the receiver and may be retried. Speed is verified data per second during this attempt. Remaining time uses remaining verified bytes divided by measured speed and excludes final verification/install. The theoretical remaining time uses the rented host download Mbps and is shown alongside the measured estimate. 1 byte = 8 bits. Local uplink, network route, SSH overhead and retries can limit throughput; the reached percentage alone does not prove an inaccurate host claim.';
+      if (rsync && !metadata) el('optlog-progress-label').dataset.tip = 'Rsync resumes the partial archive over one SSH connection. Progress and estimated speed come from rsync, excluding the retained prefix; buffered data may still be in transit. The complete archive is SHA256-verified before installation. Remaining time excludes this final check and installation. Host-rate remaining uses advertised download Mbps and is theoretical; local uplink and routing also limit speed. 1 byte = 8 bits.';
+      if (directFiles && !metadata) el('optlog-progress-label').dataset.tip = 'Rsync synchronizes individual immutable files over one SSH connection. Content-hash filenames and file sizes identify reusable data without reading it again. Partial files are retained separately and completed transfers are checked by rsync before publication. Progress reflects logical file bytes processed by rsync, not measured network traffic. The total includes reusable files, so remaining-time estimates can overstate the transfer. Host-rate remaining is theoretical. 1 byte = 8 bits.';
       el('optlog-activity').textContent = detail;
     }
     const rentalLog = worker && worker.has_provider_log && !['none','deletion_verified'].includes(worker.rental_state)

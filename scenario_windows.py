@@ -35,6 +35,13 @@ def preview_windows(payload: dict) -> dict:
         left, right = _parse_date(item.get('start_date'), label), _parse_date(item.get('end_date'), label)
         if not start <= left <= right <= end:
             raise ScenarioTemplateError(f'{label}: window is outside base dates or reversed')
+        # Role and dates may change when dragging preset windows. Preserve custom names.
+        generated = re.fullmatch(r'(?:train|holdout)_(\d+)_(\d{8})_(\d+)d', label)
+        if generated:
+            prefix = 'train' if role == 'training' else 'holdout'
+            label = f'{prefix}_{generated[1]}_{left:%Y%m%d}_{(right - left).days + 1}d'
+            if label in labels:
+                raise ScenarioTemplateError('Generated window labels must be unique')
         scenario = copy.deepcopy(item.get('scenario') or {})
         if not isinstance(scenario, dict):
             raise ScenarioTemplateError('Invalid scenario overrides')

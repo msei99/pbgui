@@ -222,11 +222,13 @@
 
     function show(event) {
       if (disposed || !event.target.closest || tooltip.contains(event.target)) return;
-      var target = event.target.closest('[data-tip], label, .bound-key-text, .runtime-override-label');
-      if (!target && event.type === 'focusin') {
-        var group = event.target.closest('.form-group');
-        target = group && group.querySelector('[data-tip], label');
+      // Editing a value must never open its label's documentation.
+      if (event.type === 'focusin' || (event.target.matches &&
+          event.target.matches('input, select, textarea, button, [contenteditable="true"]'))) {
+        hide();
+        return;
       }
+      var target = event.target.closest('[data-tip], label, .bound-key-text, .runtime-override-label');
       if (!target) return;
       // Context-specific PBGui help takes precedence over upstream parameter docs.
       if (target.hasAttribute('data-tip-context')) { hide(); return; }

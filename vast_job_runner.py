@@ -10,6 +10,8 @@ import re
 import sys
 import time
 
+import psutil
+
 from logging_helpers import human_log as _log
 from vast_credentials import VastCredentialStore
 from vast_jobs import SUPPORTED_RENTAL_IMAGES, REVISION, PROJECT, JobStore, digest, job_id, write_json
@@ -17,6 +19,7 @@ from vast_provider import VastRateLimit, VastClient, VastError, positive_id
 from vast_transfer import WorkerConnection, import_results
 
 SERVICE = "VastRunner"
+RUNNER_CODE_SERIAL = (PROJECT / "api/serial.txt").read_text().strip()
 UPLOAD_RECOVERY_SECONDS = 15 * 60
 UPLOAD_FINISH_RESERVE_SECONDS = 180
 
@@ -467,6 +470,9 @@ def main() -> None:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return
+        store.update(identifier, **{'supervisor_' + mode: {
+            'pid': os.getpid(), 'created_at': psutil.Process().create_time(),
+            'code_serial': RUNNER_CODE_SERIAL}})
         if mode == "guard":
             guard_loop(store, identifier)
         else:

@@ -842,11 +842,26 @@ def _validate_optimizer_overrides(modules: dict, config: dict, base_config_path:
         candidate = modules["apply_optimizer_overrides"](overrides, candidate, pside)
 
 
+def _optimizer_warmup(configs: list) -> dict:
+    """Use native bounds, strategy spans, fixed overrides, ratio and cap rules."""
+    from optimization.warmup import compute_optimizer_backtest_warmup_minutes
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    if not isinstance(configs, list) or not configs or any(not isinstance(c, dict) for c in configs):
+        raise TypeError('configs must be a nonempty array of objects')
+    return {'minutes': [max(compute_backtest_warmup_minutes(config),
+                            compute_optimizer_backtest_warmup_minutes(config))
+                        for config in configs]}
+
+
 def handle(payload: dict) -> dict:
     """Dispatch one JSON request and return a JSON-compatible result."""
     pb8_dir = Path(str(payload.get("pb8_dir") or "")).resolve()
     modules = _load_pb8_modules(pb8_dir)
     operation = str(payload.get("operation") or "")
+
+    if operation == "optimizer_warmup":
+        return _optimizer_warmup(payload.get('configs'))
 
     if operation == "status":
         return {

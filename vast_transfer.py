@@ -154,7 +154,9 @@ class WorkerConnection:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 selector.register(process.stderr, selectors.EVENT_READ)
-                while True:
+                # EOF on one pipe does not mean SSH has exited. Keep draining
+                # both streams and checking cancellation until it really exits.
+                while selector.get_map() or process.poll() is None:
                     if cancel_event is not None and cancel_event.is_set():
                         raise VastError("SSH upload cancelled after another chunk failed", 422)
                     if progress is not None and time.monotonic() - last_progress >= 2:
@@ -165,28 +167,25 @@ class WorkerConnection:
                     if idle_timeout and time.monotonic() - last_received >= idle_timeout:
                         raise VastError("SSH upload stalled; no receiver progress, reconnecting")
                     events = selector.select(min(.25, max(.01, deadline - time.monotonic())))
-                    ready = False
                     for key, _ in events:
                         if key.fileobj is process.stderr:
                             error_bytes = os.read(process.stderr.fileno(), 8192)
                             diagnostic.extend(error_bytes[:max(0, 8192-len(diagnostic))])
                             if not error_bytes:
                                 selector.unregister(process.stderr)
-                        else:
-                            ready = True
-                    if not ready:
-                        continue
-                    chunk = os.read(process.stdout.fileno(), 65536)
-                    if not chunk:
-                        break
-                    last_received = time.monotonic()
-                    received += len(chunk)
-                    if received > max_output:
-                        raise VastError("SSH output exceeds the permitted transfer size")
-                    if stdout is None:
-                        captured.extend(chunk)
-                    elif stdout != subprocess.DEVNULL:
-                        stdout.write(chunk)
+                            continue
+                        chunk = os.read(process.stdout.fileno(), 65536)
+                        if not chunk:
+                            selector.unregister(process.stdout)
+                            continue
+                        last_received = time.monotonic()
+                        received += len(chunk)
+                        if received > max_output:
+                            raise VastError("SSH output exceeds the permitted transfer size")
+                        if stdout is None:
+                            captured.extend(chunk)
+                        elif stdout != subprocess.DEVNULL:
+                            stdout.write(chunk)
                 if process.wait(timeout=max(.01, deadline - time.monotonic())):
                     # Report only known categories, never raw remote output or credentials.
                     detail = diagnostic.decode('utf-8', errors='replace').lower()

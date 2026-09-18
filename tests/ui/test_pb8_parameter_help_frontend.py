@@ -49,7 +49,7 @@ def test_all_three_editors_load_the_local_shared_help_assets() -> None:
     """All productive PB8 editors use one cached asset version and original-text provider."""
     for page in ("v7_optimize.html", "v7_backtest.html", "v7_edit.html"):
         source = (ROOT / "frontend" / page).read_text()
-        assert '<script defer src="/app/js/pb8_parameter_help.js?v=2"></script>' in source
+        assert '<script defer src="/app/js/pb8_parameter_help.js?v=3"></script>' in source
         assert 'href="/app/css/pb8_parameter_help.css?v=1"' in source
 
 

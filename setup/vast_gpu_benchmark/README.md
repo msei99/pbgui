@@ -72,11 +72,13 @@ are exported. Strategy configs are private files; do not publish the input
 bundle with the image. The exporter supports explicit approved-coin lists,
 Binance/Bybit, and date-only scenarios; source/coin overrides are rejected.
 
-The initial export copies **all available daily history for the selected
-symbols plus BTC reference data**, retaining potential warmup history. It does
-not export other coins. This is deliberately broader than a minimal prepared
-tensor bundle: `max_warmup_minutes=0` disables the warmup cap. The current
-`gpu_test` export is 9,419 files / 223,146,106 bytes (about 213 MiB).
+The export copies daily history for the selected symbols plus BTC reference
+data only within the combined base/scenario date envelope, extended backward
+by PB8's native optimizer warmup and rounded outward to complete days. Native
+optimization bounds and scenario overrides contribute to this calculation.
+`max_warmup_minutes=0` disables the cap, not the date filter. Failure to compute
+warmup stops export. Requeue builds a fresh package; existing frozen packages
+are never rewritten.
 
 File presence and hashes do not prove candle continuity or sufficient history.
 The manifest therefore marks `coverage_validated=false`. PB8 preparation must

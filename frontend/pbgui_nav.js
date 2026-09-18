@@ -24,6 +24,8 @@
   var _restartRetryTimer = null;
   var _restartPollTimer = null;
   var _restartStatus = {};
+  var _restartInFlight = false;
+  var _restartConfirmPending = false;
   var _aiDrawerLoading = false;
   var _aiContextProviders = {};
   var _aiPageActions = {};
@@ -1931,6 +1933,7 @@
     var restartBtn = document.getElementById('pbgui-restart-btn');
     if (restartBtn) {
       restartBtn.addEventListener('click', function () {
+        if (_restartInFlight || _restartConfirmPending) return;
         var blocked = restartBtn.getAttribute('data-restart-blocked') === '1';
         var blockReason = restartBtn.getAttribute('data-restart-block-reason') || '';
         if (blocked) {
@@ -1951,28 +1954,43 @@
         var restartDetail = restartLabels.length
           ? 'Outdated services: ' + restartLabels.join(', ') + '. The API server restarts last and the page reconnects automatically.'
           : 'The API server restarts and the page reconnects automatically.';
+        _restartConfirmPending = true;
         showNavConfirm({
           title: 'Restart PBGui services',
           message: 'Restart all PBGui services running outdated code?',
           detail: restartDetail,
           confirmText: 'Restart'
         }).then(function (confirmed) {
+          _restartConfirmPending = false;
           if (!confirmed) return;
+          _restartInFlight = true;
+          var previousInstance = _restartStatus.api_instance_id || '';
           var origin2 = _getAppBase();
           restartBtn.disabled = true;
           restartBtn.classList.add('disabled');
           restartBtn.innerHTML = '<span class="nav-restart-dot"></span>Restarting...';
+          showRestartOverlay(origin2, restartServices, previousInstance, true);
           fetch(origin2 + '/api/server-restart', authOptions({ method: 'POST' })).then(function(resp) {
             if (!resp.ok) {
               return resp.json().catch(function () { return {}; }).then(function (data) {
                 var detail = (data && data.detail) ? String(data.detail) : 'Restart failed.';
-                throw new Error(detail);
+                var error = new Error(detail);
+                error.restartRejected = true;
+                throw error;
               });
             }
             return resp.json().catch(function () { return {}; });
           }).then(function(data) {
-            showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : []);
+            showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : [], (data && data.api_instance_id) || previousInstance);
           }).catch(function(err) {
+            if (!err.restartRejected) {
+              // A lost response may mean the API is already shutting down. Never resubmit.
+              showRestartOverlay(origin2, restartServices, previousInstance);
+              return;
+            }
+            _restartInFlight = false;
+            var overlay = document.getElementById('pbgui-restart-overlay');
+            if (overlay) overlay.remove();
             restartBtn.disabled = false;
             restartBtn.classList.remove('disabled');
             restartBtn.innerHTML = '<span class="nav-restart-dot"></span>Restart';
@@ -2003,7 +2021,7 @@
     });
   }
 
-  function showRestartOverlay(origin, requestedServices) {
+  function showRestartOverlay(origin, requestedServices, previousInstance, awaitingResponse) {
     /* Remove any existing overlay first */
     var existing = document.getElementById('pbgui-restart-overlay');
     if (existing) existing.remove();
@@ -2015,6 +2033,11 @@
       '<div style="color:#e2e8f0;font-size:1.1rem;font-weight:600;">Restarting PBGui Services\u2026</div>' +
       '<div id="pbgui-restart-status" style="color:#64748b;font-size:0.85rem;">Waiting for services\u2026</div>';
     document.body.appendChild(ov);
+    if (awaitingResponse) {
+      var pendingStatus = document.getElementById('pbgui-restart-status');
+      if (pendingStatus) pendingStatus.textContent = 'Requesting service restart…';
+      return;
+    }
 
     var attempts = 0;
     var maxAttempts = 60;
@@ -2036,7 +2059,8 @@
           return r.json();
         })
         .then(function (data) {
-          if (!data || data.needs_restart) {
+          if (!data || data.needs_restart || data.restart_inspection_error ||
+              (!data.api_instance_id || data.api_instance_id === previousInstance)) {
             var newlyDiscovered = data && Array.isArray(data.restart_services)
               ? data.restart_services.filter(function (item) {
                   var label = String((item || {}).label || (item || {}).service || '');
@@ -2051,11 +2075,12 @@
               });
               if (statusEl) statusEl.textContent = 'Restarting remaining outdated services...';
               fetch(apiBase + '/api/server-restart', authOptions({ method: 'POST' })).then(function (response) {
-                if (response.ok) return;
+                if (response.ok) return response.json();
                 return response.json().catch(function () { return {}; }).then(function (payload) {
                   throw new Error((payload && payload.detail) ? String(payload.detail) : 'remaining service restart failed');
                 });
-              }).then(function () {
+              }).then(function (payload) {
+                previousInstance = (payload && payload.api_instance_id) || data.api_instance_id || previousInstance;
                 attempts = 0;
                 setTimeout(probe, 2000);
               }).catch(function (error) {
@@ -2074,15 +2099,20 @@
     }
 
     function _overlayFail(message) {
-      if (statusEl) statusEl.textContent = message || 'Services did not become current \u2014 please refresh and inspect service status.';
-      if (!document.getElementById('pbgui-restart-reload')) {
-        var reloadButton = document.createElement('button');
-        reloadButton.id = 'pbgui-restart-reload';
-        reloadButton.type = 'button';
-        reloadButton.textContent = 'Reload page';
-        reloadButton.style.cssText = 'border:1px solid #334155;border-radius:6px;background:#172033;color:#e2e8f0;padding:.55rem .9rem;cursor:pointer;';
-        reloadButton.addEventListener('click', function () { window.location.reload(); });
-        ov.appendChild(reloadButton);
+      if (statusEl) statusEl.textContent = message || 'The service restart could not be verified. Check service status before trying again.';
+      if (!document.getElementById('pbgui-restart-close')) {
+        var closeButton = document.createElement('button');
+        closeButton.id = 'pbgui-restart-close';
+        closeButton.type = 'button';
+        closeButton.textContent = 'Close';
+        closeButton.style.cssText = 'border:1px solid #334155;border-radius:6px;background:#172033;color:#e2e8f0;padding:.55rem .9rem;cursor:pointer;';
+        closeButton.addEventListener('click', function () {
+          ov.remove();
+          _restartInFlight = false;
+          updateRestartButtonState(_restartStatus);
+          fetchRestartStatus(apiBase);
+        });
+        ov.appendChild(closeButton);
       }
     }
 
@@ -2096,6 +2126,14 @@
     updateAuthModeState(state && state.auth ? state.auth : {});
     var btn = document.getElementById('pbgui-restart-btn');
     if (!btn) return;
+    if (_restartInFlight) {
+      btn.style.display = 'flex';
+      btn.disabled = true;
+      btn.setAttribute('aria-disabled', 'true');
+      btn.classList.add('disabled');
+      btn.innerHTML = '<span class="nav-restart-dot"></span>Restarting...';
+      return;
+    }
     var visible = !!(state && state.needs_restart);
     var blocked = state && state.restart_blocked !== undefined
       ? !!state.restart_blocked

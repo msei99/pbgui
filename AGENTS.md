@@ -153,6 +153,12 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - A generic release, commit, tag, or push approval does not imply permission to update any bot/VPS host.
 - Read-only inspection of remote hosts is allowed when needed for debugging, but any command that changes files, git state, services, processes, or runtime state requires a separate question first.
 
+### Closing Issues
+- Never close an issue without a substantive resolution comment. Post the comment before closing, or include it in the close operation.
+- State the concrete cause and fix, the checks actually performed and their results, and link the fixing commit and release when available. Do not claim unperformed tests or an unpublished release.
+- For duplicate, declined, or otherwise unfixed issues, explain the reason and link the relevant issue or decision instead of claiming a fix.
+- Apply this to every issue, including batch closures and release cleanup; a bare “fixed” or release link is insufficient.
+
 ### Release Workflow
 - Steps in `RELEASING.md`.
 - Per release: bump `pbgui_purefunc.py` `PBGUI_VERSION`, move `releases/unreleased.md` notes into a dedicated `releases/vX.YY.md` file, keep `CHANGELOG.md` index updated.

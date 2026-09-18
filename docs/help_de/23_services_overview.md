@@ -94,3 +94,5 @@ Werte besitzen bewusst keinen globalen INI-Watcher.
 - Nach Konfigurationsänderung: betroffenen Dienst über den Restart-Button neu starten
 
 Während des Speicherns sind die Einstellungen gegen doppelte Anfragen gesperrt. Validierungsfehler nennen das betroffene Feld.
+
+Die Restart-Aktion in der Navigation zeigt direkt nach der Bestätigung den Fortschritt und verhindert doppelte Anfragen. PBGui verbindet sich automatisch neu und prüft vor dem Neuladen der aktuellen Seite, ob eine neue API-Instanz läuft. Bei verlorener Antwort wird der Status geprüft, ohne den Neustart automatisch erneut anzufordern.

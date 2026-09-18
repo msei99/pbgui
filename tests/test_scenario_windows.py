@@ -73,3 +73,27 @@ def test_runner_persists_generic_validation_without_fake_sweep(tmp_path, monkeyp
     assert runner._persist_open_sweep_plan(tmp_path, {'_validation_windows': plan, '_sweep_cycles': None})
     assert validation_holdouts(folder) == plan['holdout_scenarios']
     assert not (folder / '.pbgui_sweep_cycles.json').exists()
+
+
+def test_sweep_dragged_roles_keep_two_distributed_holdouts(tmp_path):
+    """Applying eight dragged Sweep windows retains six training and two holdouts."""
+    from datetime import date, timedelta
+
+    start = date(2026, 1, 16)
+    windows = []
+    for index in range(8):
+        left = start + timedelta(days=30 * index)
+        right = left + timedelta(days=29)
+        prefix = 'holdout' if index == 7 else 'train'
+        windows.append(dict(id=f'w{index}', label=f'{prefix}_{index+1:02d}_{left:%Y%m%d}_30d',
+                            role='holdout' if index in (1, 4) else 'training',
+                            start_date=left.isoformat(), end_date=right.isoformat()))
+    result = generate_scenario_template(dict(template='sweep_cycles', windows=windows,
+        start_date='2026-01-01', end_date='2026-09-12'))
+    assert len(result['training_scenarios']) == 6
+    assert all(s['label'].startswith('train_') for s in result['training_scenarios'])
+    assert [s['start_date'] for s in result['holdout_scenarios']] == ['2026-02-15', '2026-05-16']
+    assert all(s['label'].startswith('holdout_') for s in result['holdout_scenarios'])
+    plan = build_validation_plan({'pbgui': {'scenario_template': result['provenance']}})
+    (tmp_path / VALIDATION_PLAN_FILENAME).write_text(json.dumps(plan))
+    assert validation_holdouts(tmp_path) == result['holdout_scenarios']

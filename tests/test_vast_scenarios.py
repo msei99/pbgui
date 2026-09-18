@@ -12,6 +12,46 @@ from vast_jobs import JobStore, native_job_config
 from vast_scenarios import scenario_plan
 
 
+@pytest.fixture(autouse=True)
+def native_warmup(monkeypatch):
+    """The scenario fixtures require 31 days of native optimizer warmup."""
+    monkeypatch.setattr('pb8_config._call_helper', lambda operation, **payload:
+                        {'minutes': [31 * 1440] * len(payload['configs'])})
+
+
+def test_requeue_rebuilds_history_instead_of_reusing_old_bundle(config, tmp_path, monkeypatch):
+    """Requeue invokes the real exporter; repeated clicks reuse only its new job."""
+    import api.vast as api
+    from vast_queue import CloudQueue
+    from vast_jobs import write_json
+
+    store = JobStore(tmp_path / 'vast')
+    queue = CloudQueue(store)
+    old = store.create_preparation('suite', 512, 4, False)
+    store.update(old['id'], status='cancelled')
+    legacy = {'files': [{'path': 'ohlcv/binance/1m/BTC_USDT:USDT/2019-01-01.npy'}]}
+    write_json(store.directory(old['id']) / 'input/manifest.json', legacy)
+    make_market(tmp_path, 'binance', ['BTC'])
+    monkeypatch.setattr('pb8_config.save_prepared_pb8_config',
+                        lambda value, path: path.write_text(json.dumps(value)))
+    monkeypatch.setattr(api, 'CloudQueue', lambda: queue)
+
+    def prepare(body, *, requeue_from):
+        """Build a real replacement using an isolated saved-config equivalent."""
+        return store.prepare(body.config_name, config, 'source', tmp_path / 'raw',
+                             tmp_path / 'mapping', tmp_path / 'results',
+                             body.iterations, body.workers, body.use_adg,
+                             requeue_from=requeue_from)
+
+    monkeypatch.setattr(api, '_prepare_job', prepare)
+    row = api.requeue_job(old['id'], object())
+    assert row['id'] != old['id'] and row['status'] == 'ready'
+    manifest = store.read(row['id'], 'input/manifest.json')
+    assert {Path(item['path']).stem for item in manifest['files']} == {'2023-12-01', '2024-03-01'}
+    assert store.read(old['id'], 'input/manifest.json') == legacy
+    assert api.requeue_job(old['id'], object())['id'] == row['id']
+
+
 @pytest.fixture
 def config():
     """Use explicit common-side coin lists and canonical PB8 override paths."""
@@ -46,7 +86,7 @@ def test_suite_exports_added_coins_and_exchanges_once(config, tmp_path):
     """Pack a scenario-only venue and coin, preserve full warmup and deduplicate shared data."""
     config['backtest']['scenarios'] = [
         {'label': 'base', 'exchanges': [], 'overrides': {}, 'coin_sources': {}, 'ignored_coins': []},
-        {'label': 'bybit-sol', 'exchanges': ['bybit'], 'coins': ['SOL'], 'start_date': '2025-01-01'},
+        {'label': 'bybit-sol', 'exchanges': ['bybit'], 'coins': ['SOL'], 'start_date': '2025-01-01', 'end_date': '2025-01-01'},
         {'label': 'repeat', 'exchanges': ['bybit'], 'coins': ['SOL'],
          'overrides': {'bot.long.risk.n_positions': 5}}]
     before = copy.deepcopy(config)

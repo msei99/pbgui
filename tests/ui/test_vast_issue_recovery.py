@@ -1061,3 +1061,19 @@ def test_legacy_rental_submits_arbitrary_deadline_steps(cloud_page, minutes):
     page.wait_for_timeout(100)
     assert json.loads(held[0].request.post_data)['minutes'] == minutes
     held.pop().fulfill(json={'pending': True})
+
+
+def test_metadata_submission_progress_is_not_reported_as_received(cloud_page):
+    """Show local SSH submission separately from receiver-confirmed candle data."""
+    page, data, _, _, _ = cloud_page
+    data['jobs'][0].update(status='uploading', upload_progress=dict(
+        transport='rsync', mode='files', stage='preparing_worker',
+        metadata_submitted=500_000, metadata_total=1_000_000))
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    label = page.locator('#optlog-progress-label').inner_text()
+    assert '0.50 / 1.00 MB submitted to SSH' in label
+    assert 'waiting for worker acknowledgement' in label
+    assert page.locator('#optlog-progress-fill').evaluate('(el) => el.style.width') == '50%'
+    assert 'not confirmation of remote receipt' in page.locator('#optlog-progress-label').get_attribute('data-tip')

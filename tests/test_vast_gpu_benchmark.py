@@ -23,6 +23,13 @@ prepare = load_module("prepare.py")
 runner = load_module("run.py")
 
 
+@pytest.fixture(autouse=True)
+def native_warmup(monkeypatch):
+    """Keep standalone export tests independent of an installed PB8 runtime."""
+    monkeypatch.setattr('pb8_config._call_helper', lambda operation, **payload:
+                        {'minutes': [0] * len(payload['configs'])})
+
+
 def test_adg_objective_is_explicit_and_applies_equally_to_all_cases():
     """The approved objective adjustment stays opt-in and preserves user data."""
     source = {"live": {}, "backtest": {}, "optimize": {"gpu": {}, "scoring": [{"goal": "max", "metric": "gain_strategy_eq"}, {"goal": "min", "metric": "drawdown_worst_strategy_eq"}]}}
@@ -42,7 +49,7 @@ def test_binance_export_uses_native_source_directory(tmp_path):
     source = tmp_path / "ohlcv/binanceusdm/1m/BTC_USDT:USDT/2020-01-01.npz"
     source.parent.mkdir(parents=True)
     source.write_bytes(b"fixture")
-    config = {"backtest": {"exchanges": ["binance"]}, "live": {"approved_coins": {"long": [], "short": []}}}
+    config = {"backtest": {"exchanges": ["binance"], "start_date": "2020-01-01", "end_date": "2020-01-01"}, "live": {"approved_coins": {"long": [], "short": []}}}
     assert prepare.select_shards(config, tmp_path / "ohlcv", tmp_path / "mapping") == [(source, Path("binance/1m/BTC_USDT:USDT/2020-01-01.npz"))]
 
 
@@ -79,7 +86,7 @@ def test_mapping_and_shard_selection(tmp_path):
         folder.mkdir(parents=True)
         (folder / "2020-01-01.npz").write_bytes(b"fixture")
         (folder / "unrelated.json").write_text("{}")
-    config = {"backtest": {"exchanges": ["binance"]}, "live": {"approved_coins": {"long": ["ETH"], "short": []}}}
+    config = {"backtest": {"exchanges": ["binance"], "start_date": "2020-01-01", "end_date": "2020-01-01"}, "live": {"approved_coins": {"long": ["ETH"], "short": []}}}
     result = prepare.select_shards(config, tmp_path / "ohlcv", tmp_path / "mapping")
     assert len(result) == 2
     assert {relative.parent.name for _, relative in result} == {"ETH_USDT:USDT", "BTC_USDT:USDT"}

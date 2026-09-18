@@ -357,3 +357,9 @@ Vor dem Optimizer-Start beschafft PBGui außerdem die erste Tageskerze für jede
 **Queue Settings** steuert lokalen Autostart, CPU-Overrides und PBGui-Marktdaten. Vast.ai besitzt fünf getrennte Sidebar-Bereiche: GPU & Offers, Rental & Automation, Hosts, Performance History und Account. Siehe [Vast.ai-Anleitung](48_vast_gpu.md#optimizer-settings).
 
 Die Queue-Spalte **Est. coin candles / candidate** schätzt die Datenmenge einer vollständigen Kandidatenbewertung aus der eingefrorenen Config schon vor dem Start. Warm-up und Datenverfügbarkeit sind nicht enthalten. Berechnung und History-Vergleich beschreibt [Vast.ai workload comparison](48_vast_gpu.md#config-workload-comparison).
+
+Datumsfelder im Optimizer überschreiben beim Tippen innerhalb eines vollständigen YYYY-MM-DD-Werts die vorhandenen Ziffern. Markierter Text und eingefügte Datumswerte lassen sich weiterhin normal ersetzen. Beim Übernehmen grafischer Fenster werden automatisch erzeugte Szenarionamen an die aktuelle Training-/Holdout-Rolle und die Daten angepasst. Nur Trainingsfenster erscheinen in den Optimizer-Szenarien; beide verteilten Holdouts bleiben im Validierungsplan erhalten.
+
+Parameterhilfe erscheint beim Überfahren des gepunktet markierten Feldtitels. Klicken, Fokussieren oder Bearbeiten eines Eingabefelds öffnet keine Parameterhilfe.
+
+Nach Änderungen an den visuellen Fenstern vor Save oder Save & Queue zuerst **Check & Apply windows** verwenden. PBGui weist nicht übernommene Fensterdaten/-rollen und aktive Fenster außerhalb der aktuellen Basisdaten zurück. Die Aufwandsschätzung der Queue beschreibt die übernommenen Trainingsszenarien, nicht den Generatorentwurf; Holdouts zählen nicht mit.

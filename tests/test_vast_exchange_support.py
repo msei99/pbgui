@@ -19,6 +19,13 @@ from setup.vast_gpu_benchmark.inception_cache import install
 from setup.vast_gpu_benchmark.cloud_worker import safe_path
 
 
+@pytest.fixture(autouse=True)
+def native_warmup(monkeypatch):
+    """Provide native warmup results without reading local runtime configuration."""
+    monkeypatch.setattr('pb8_config._call_helper', lambda operation, **payload:
+                        {'minutes': [0] * len(payload['configs'])})
+
+
 @pytest.mark.parametrize('exchange', SUPPORTED_EXCHANGES)
 def test_export_mapping_and_receiver_agree(tmp_path, exchange):
     """Export and both cache schemas preserve standard names and the correct quote."""
@@ -32,7 +39,7 @@ def test_export_mapping_and_receiver_agree(tmp_path, exchange):
     source = tmp_path / 'raw' / CCXT_EXCHANGES[exchange] / '1m' / symbol.replace('/', '_') / '2024-01-01.npy'
     source.parent.mkdir(parents=True)
     source.write_bytes(b'fixture')
-    config = {'backtest': {'exchanges': [exchange]}, 'live': {'approved_coins': {'long': ['BTC'], 'short': []}}}
+    config = {'backtest': {'exchanges': [exchange], 'start_date': '2024-01-01', 'end_date': '2024-01-01'}, 'live': {'approved_coins': {'long': ['BTC'], 'short': []}}}
     shards = select_shards(config, tmp_path / 'raw', tmp_path / 'mappings')
     assert len(shards) == 1 and shards[0][0] == source
     assert shards[0][1].parts[0] == exchange

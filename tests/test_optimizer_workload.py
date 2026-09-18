@@ -57,3 +57,18 @@ def test_snapshot_missing_and_escape(tmp_path):
     outside = tmp_path / 'outside.json'; outside.write_text('{}')
     (root / 'config.json').symlink_to(outside)
     assert estimate_snapshot(root / 'config.json', root) is None
+
+
+def test_six_2026_training_windows_exclude_two_holdouts():
+    """Six 32-day windows with four coins produce 1,105,920 candidate coin candles."""
+    from datetime import date, timedelta
+
+    value = config()
+    value['live']['approved_coins'] = {'long': ['SOL', 'DOGE', 'ADA', 'BNB'], 'short': []}
+    start = date(2026, 1, 6)
+    windows = [{'start_date': (start + timedelta(days=32*i)).isoformat(),
+                'end_date': (start + timedelta(days=32*i+31)).isoformat()} for i in range(8)]
+    value['backtest'].update(start_date='2026-01-01', end_date='2026-09-18',
+                            suite_enabled=True, scenarios=[w for i,w in enumerate(windows) if i not in (2,4)])
+    value['pbgui'] = {'scenario_template': {'holdout_scenarios': [windows[2], windows[4]]}}
+    assert estimate_coin_candles(value) == 1105920

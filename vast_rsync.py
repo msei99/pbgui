@@ -1,6 +1,7 @@
 """Resume cloud input archives over one owned, strictly authenticated SSH stream."""
 
 import ipaddress
+import gzip
 import json
 import os
 from pathlib import Path
@@ -83,7 +84,7 @@ def _attempt(connection, args, deadline, total, offset, report, *, statistics=No
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
             selector.register(process.stderr, selectors.EVENT_READ)
-            while selector.get_map():
+            while selector.get_map() or process.poll() is None:
                 now = time.monotonic()
                 if now >= deadline:
                     raise VastError('Rsync upload deadline reached; partial data retained')
@@ -251,15 +252,29 @@ def sync_files(connection, config_root: Path, *, timeout: int):
         payload = (json.dumps({name: safe_path(config_root, name).read_text()
                               for name in ('manifest.json', 'optimize.json')}).encode()
                    if action == 'prepare' else None)
+        if payload is not None:
+            compressed = gzip.compress(payload, compresslevel=1, mtime=0)
+            if len(compressed) < len(payload):
+                payload = compressed
         for attempt in range(3):
             try:
                 with tempfile.TemporaryFile() as stream:
                     if payload is not None:
+                        stream.write(len(payload).to_bytes(8, "big"))
                         stream.write(payload)
                     stream.seek(0)
+                    def metadata_progress():
+                        """Report bytes submitted to SSH separately from acknowledged input data."""
+                        remaining()
+                        if payload is not None:
+                            connection.store.update(identifier, upload_progress={
+                                'transport': 'rsync', 'mode': 'files', 'stage': 'preparing_worker',
+                                'metadata_total': len(payload),
+                                'metadata_submitted': min(len(payload), max(0, stream.tell() - 8))})
+                    metadata_progress()
                     return connection.command('PBGUI_WORKDIR=' + root + ' /usr/local/bin/python -c '
                                               + shlex.quote(helper.decode()) + ' ' + action,
-                                              stdin=stream, timeout=remaining())
+                                              stdin=stream, timeout=remaining(), progress=metadata_progress)
             except VastError as exc:
                 if exc.status == 422 or attempt == 2:
                     raise VastError('Worker input ' + action + ' failed after '

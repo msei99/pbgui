@@ -2260,7 +2260,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
-<script defer src="/app/js/pb8_parameter_help.js?v=2"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=3"></script>
 <link rel="stylesheet" href="/app/css/vast.css?v=9">
 </head>
 <body>
@@ -2762,9 +2762,10 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=15"></script>
+<script src="/app/js/date_overwrite.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
 <script src="/app/js/scenario_visual_editor.js?v=20"></script>
-<script src="/app/js/suite_editor.js?v=35"></script>
+<script src="/app/js/suite_editor.js?v=37"></script>
 <script src="/app/js/log_viewer_panel.js?v=47"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
@@ -4912,7 +4913,7 @@ state.limitAddForm = defaultLimitForm();
 function fieldDate2(id, label, value, tip, span) {
   var dateValue = value || '';
   var inputHtml = '<div style="position:relative">' +
-    '<input type="text" id="' + id + '" value="' + esc(dateValue) + '" data-prev="' + esc(dateValue) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
+    '<input type="text" data-date-overwrite="true" id="' + id + '" value="' + esc(dateValue) + '" data-prev="' + esc(dateValue) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
     '<button type="button" data-dp="' + id + '" onclick="window.__dp.show(\'' + id + '\',this)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
     '</div>';
   return fmtGroupSpan(id, label, inputHtml, tip, span || 1);
@@ -4929,7 +4930,7 @@ function fieldOptimizeStartDate2(id, label, value, tip, span) {
   var inputHtml = '<div>' +
     '<div style="display:flex;gap:3px;align-items:center">' +
       '<div style="position:relative;min-width:0;flex:1">' +
-        '<input type="text" id="' + id + '" value="' + esc(dateValue) + '" data-prev="' + esc(dateValue) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
+        '<input type="text" data-date-overwrite="true" id="' + id + '" value="' + esc(dateValue) + '" data-prev="' + esc(dateValue) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
         '<button type="button" data-dp="' + id + '" onclick="window.__dp.show(\'' + id + '\',this)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
       '</div>' +
       '<button type="button" class="act-btn opted-ohlcv-start-btn" style="padding:0 5px;white-space:nowrap" onclick="setOptimizeStartDateFromOhlcv(\'earliest\',this)" title="Set to the earliest selected market with OHLCV coverage" aria-label="Set earliest OHLCV start date">1st</button>' +
@@ -10119,6 +10120,9 @@ function collectEditorConfig(baseConfig, opts) {
   bot.long = longBot;
   bot.short = shortBot;
   var suite = typeof suiteCollect === 'function' ? suiteCollect() : { suite_enabled: false };
+  if (strict && optimizeEditorAdapter.isV8 && typeof suiteValidateAppliedWindows === 'function') {
+    suiteValidateAppliedWindows(suite, backtest);
+  }
   if (strict) {
     if (optimizeEditorAdapter.isV8) {
       if (!_optMarketStatusVerified) throw new Error('PB8 market identifiers have not been verified. Retry market loading before saving.');
@@ -13216,7 +13220,7 @@ async function saveEditor(andQueue) {
   }
   if (queueAfterSave && optimizeEditorAdapter.isV8 && configPayload.pbgui && configPayload.pbgui.execution === 'vast') {
     setPageEditorStatus('Checking cloud compatibility…', '');
-    if (!window.PBGuiVast || !(await window.PBGuiVast.validateConfig(configPayload))) {
+    if (!window.PBGuiVast || !(await window.PBGuiVast.validateConfig(configPayload, {forQueue: true}))) {
       throw new Error('Resolve the GPU compatibility errors before queueing.');
     }
   }
@@ -15278,6 +15282,6 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
 <script src="/app/js/vast_performance.js?v=2"></script>
-<script src="/app/js/vast.js?v=89"></script>
+<script src="/app/js/vast.js?v=91"></script>
 </body>
 </html>

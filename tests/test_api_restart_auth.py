@@ -179,7 +179,8 @@ def test_restart_overlay_follows_up_once_for_services_discovered_by_new_api() ->
     assert "remainingRestartRequested = true;" in source
     assert "fetch(apiBase + '/api/server-restart'" in source
     assert "attempts = 0;" in source
-    assert "reloadButton.id = 'pbgui-restart-reload';" in source
+    assert "closeButton.id = 'pbgui-restart-close';" in source
+    assert "pbgui-restart-reload" not in source
 
 
 def test_persistent_vps_monitor_is_an_allowlisted_managed_restart_target() -> None:
@@ -387,3 +388,20 @@ def test_guard_handover_blocks_api_restart(monkeypatch) -> None:
     blocked, reason = asyncio.run(PBApiServer._restart_block_state())
     assert blocked
     assert 'Vast deadline guard upgrade' in reason
+
+
+def test_restart_status_identifies_running_api_instance(monkeypatch):
+    """Identical serials do not conceal whether the old or replacement API responds."""
+    monkeypatch.setattr(PBApiServer, '_read_serial', lambda: 1)
+    monkeypatch.setattr(PBApiServer, '_refresh_restart_state', lambda: False)
+    monkeypatch.setattr(PBApiServer, '_runtime_service_restart_state', lambda: {})
+    monkeypatch.setattr(PBApiServer, '_api_instance_id', 'old-instance')
+    assert PBApiServer._restart_status_payload()['api_instance_id'] == 'old-instance'
+    monkeypatch.setattr(PBApiServer, '_api_instance_id', 'replacement-instance')
+    assert PBApiServer._restart_status_payload()['api_instance_id'] == 'replacement-instance'
+
+
+@pytest.fixture(autouse=True)
+def isolated_cloud_supervisor_discovery(monkeypatch):
+    """Existing API tests must not inspect actual user rental processes."""
+    monkeypatch.setattr(PBApiServer, '_vast_supervisor_restart_state', lambda: [])

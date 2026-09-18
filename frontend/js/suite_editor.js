@@ -1391,7 +1391,7 @@ function _suiteMountVisual(host) {
       if(!preview||!Array.isArray(preview.training_scenarios))throw new Error('The API did not return training scenarios. Restart the API and try again.');
       _suiteState.scenarioPreview=preview;
       _suiteState.scenarioPreviewContext=signature;
-      _suiteState.scenarioGeneratorDraft=Object.assign({},draft,{windows:windows});
+      _suiteState.scenarioGeneratorDraft=Object.assign({},draft,{windows:(preview.parameters && preview.parameters.windows) || windows});
       await _suiteApplyScenarioPreview();
       if(_suiteState.scenarioTemplate!==null && JSON.stringify(_suiteState.scenarios)===JSON.stringify(preview.training_scenarios)){
         var table=document.querySelector('#suite-container .suite-scenarios-table');
@@ -1412,4 +1412,32 @@ function suiteRefreshVisualContext() {
   _suiteState.scenarioPreview = null;
   _suiteState.scenarioRequestId++;
   _suiteMountVisual(host);
+}
+
+
+function suiteValidateAppliedWindows(suite, context) {
+  if (!suite.suite_enabled) return;
+  var draft = suite.scenario_generator || {};
+  if (!Array.isArray(draft.windows) || !draft.windows.length) return;
+  var template = suite.scenario_template || {};
+  var applied = (suite.scenarios || []).map(function(s) {
+    return {role:'training', start_date:s.start_date || context.start_date, end_date:s.end_date || context.end_date};
+  }).concat((template.holdout_scenarios || []).map(function(s) {
+    return {role:'holdout', start_date:s.start_date, end_date:s.end_date};
+  }));
+  function signature(windows) {
+    return JSON.stringify(windows.map(function(w) {
+      return [w.role, w.start_date, w.end_date].join('|');
+    }).sort());
+  }
+  if (signature(draft.windows) !== signature(applied)) {
+    throw new Error('The visual windows have not been applied to the saved scenarios. Click "Check & Apply windows" before saving or queueing.');
+  }
+  var isoDate = /^\d{4}-\d{2}-\d{2}$/;
+  if (applied.some(function(w) {
+    return (isoDate.test(context.start_date || '') && w.start_date < context.start_date) ||
+      (isoDate.test(context.end_date || '') && w.end_date > context.end_date);
+  })) {
+    throw new Error('Scenario windows are outside the current base dates. Adjust the windows and click "Check & Apply windows" before saving or queueing.');
+  }
 }

@@ -5,6 +5,8 @@ queue-v3 workers; neither Passivbot nor the installed worker needs replacement.
 """
 
 import importlib.util
+import gzip
+import io
 import json
 import os
 import re
@@ -94,6 +96,26 @@ def publish(worker):
     return result
 
 
+def read_metadata(stream):
+    """Read one bounded length-prefixed message without waiting for SSH stdin EOF."""
+    header = stream.read(8)
+    if len(header) != 8:
+        raise ValueError('Incomplete job metadata header')
+    size = int.from_bytes(header, 'big')
+    if not 0 < size <= 128 * 1024**2:
+        raise ValueError('Invalid job metadata size')
+    payload = stream.read(size)
+    if len(payload) != size:
+        raise ValueError('Incomplete job metadata')
+    # Accept the initial uncompressed framed protocol during rolling updates.
+    if payload.startswith(b'\x1f\x8b'):
+        with gzip.GzipFile(fileobj=io.BytesIO(payload)) as compressed:
+            payload = compressed.read(128 * 1024**2 + 1)
+        if len(payload) > 128 * 1024**2:
+            raise ValueError('Job metadata exceeds limit')
+    return json.loads(payload)
+
+
 def main():
     """Use the installed worker's path validation and job-specific environment."""
     import sys
@@ -103,10 +125,7 @@ def main():
     if not re.fullmatch(r'[0-9a-f]{32}', worker.ROOT.name):
         raise ValueError('Invalid job identity')
     if sys.argv[1:] == ['prepare']:
-        payload = sys.stdin.buffer.read(128 * 1024**2 + 1)
-        if len(payload) > 128 * 1024**2:
-            raise ValueError('Job metadata exceeds limit')
-        prepare(worker, json.loads(payload))
+        prepare(worker, read_metadata(sys.stdin.buffer))
     elif sys.argv[1:] == ['publish']:
         print(json.dumps(publish(worker)))
     else:

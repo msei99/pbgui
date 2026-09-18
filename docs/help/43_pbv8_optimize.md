@@ -357,3 +357,9 @@ Before optimizer launch, PBGui also fetches the authoritative first daily candle
 **Queue Settings** controls local autostart, CPU overrides and PBGui market data. Vast.ai has five independent sidebar areas: GPU & Offers, Rental & Automation, Hosts, Performance History and Account. See the [Vast.ai guide](48_vast_gpu.md#optimizer-settings).
 
 The queue column **Est. coin candles / candidate** estimates the full-candidate data volume from the frozen config before a run starts. It excludes warm-up and data availability. See [Vast.ai workload comparison](48_vast_gpu.md#config-workload-comparison) for the calculation and Performance History comparisons.
+
+Date fields in the optimizer overwrite existing digits when typing within a complete YYYY-MM-DD value; selected text and pasted dates can still be replaced normally. After applying graphical windows, automatically generated scenario names reflect the current training/holdout role and dates. Only training windows appear in optimizer scenarios; both distributed holdouts remain in the validation plan.
+
+Parameter help appears when hovering over the dotted field title. Clicking, focusing, or editing a field does not open parameter help.
+
+After changing visual windows, use **Check & Apply windows** before Save or Save & Queue. PBGui rejects unapplied window dates/roles and applied windows outside the current base dates. Queue workload estimates describe the applied training scenarios, not the generator draft; holdouts are excluded.

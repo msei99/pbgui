@@ -75,6 +75,8 @@ def select_shards(config: dict, market_root: Path, mapping_root: Path) -> list[t
     contexts, sources, errors = scenario_plan(config)
     if errors:
         raise ValueError('; '.join(item['path'] + ': ' + item['message'] for item in errors))
+    from vast_history import history_window
+    first_day, last_day = history_window(config, contexts)
     approved = config["live"]["approved_coins"]
     if not isinstance(approved, dict) or any(not isinstance(approved.get(side), list) for side in ("long", "short")):
         raise ValueError("Explicit approved coin lists are required")
@@ -114,11 +116,13 @@ def select_shards(config: dict, market_root: Path, mapping_root: Path) -> list[t
                 raise ValueError(f"Invalid market symbol mapping: {exchange}/{coin}")
             symbol = safe_component(symbol_value.replace("/", "_"))
             folder = market_root / CCXT_EXCHANGES[exchange] / "1m" / symbol
-            shards = sorted(path for path in folder.glob("*") if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.(npz|npy)", path.name))
+            shards = sorted(path for path in folder.glob("*")
+                            if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.(npz|npy)", path.name)
+                            and first_day <= path.stem <= last_day)
             consumers = [context['label'] for context in contexts if coin in context['coins'] and exchange in context['exchanges']]
             label = ', '.join(consumers) or ('BTC reference' if coin == 'BTC' else 'Shared suite dataset')
             if not shards:
-                raise ValueError(f"{label}: no local OHLCV files for {exchange}/{coin} ({symbol_value}). Download 1m history in Market Data before queueing.")
+                raise ValueError(f"{label}: no local OHLCV files for {exchange}/{coin} ({symbol_value}) in {first_day} through {last_day}, including warmup. Download 1m history in Market Data before queueing.")
             available.setdefault(coin, set()).add(exchange)
             for shard in shards:
                 destination = Path(exchange) / "1m" / symbol / shard.name

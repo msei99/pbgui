@@ -168,6 +168,7 @@ _RUNTIME_SYSTEMD_SERVICES = (
     {"service": "PBMonitorAgent", "label": "PBMonitorAgent", "unit": "pbgui-monitor-agent.service"},
 )
 _startup_serial: int = 0
+_api_instance_id = uuid4().hex
 _needs_restart: bool = False
 _runtime_restart_reasons: list[str] = []
 _sse_subscribers: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
@@ -188,6 +189,12 @@ def _refresh_restart_state() -> bool:
     global _needs_restart
     _needs_restart = _read_serial() != _startup_serial or bool(_runtime_restart_reasons)
     return _needs_restart
+
+
+def _vast_supervisor_restart_state() -> list[dict]:
+    """Discover stale local cloud controllers, including pre-versioned supervisors."""
+    from vast_supervisor_restart import stale_supervisors
+    return stale_supervisors(PBGDIR, _read_serial())
 
 
 def _runtime_service_restart_state() -> dict:
@@ -267,14 +274,17 @@ def _restart_status_payload() -> dict:
             "reason": "runtime settings changed" if _runtime_restart_reasons else "outdated code serial",
         })
     restart_services.extend(runtime_state.get("stale_services") or [])
+    vast_services = _vast_supervisor_restart_state()
+    restart_services.extend(vast_services)
     return {
         "needs_restart": bool(restart_services),
         "serial_restart_required": current_serial != _startup_serial,
         "runtime_restart_reasons": list(_runtime_restart_reasons),
         "startup_serial": _startup_serial,
+        "api_instance_id": _api_instance_id,
         "current_serial": current_serial,
         "api_restart_required": api_restart_required,
-        "service_restart_required": bool(runtime_state.get("stale_services")),
+        "service_restart_required": bool(runtime_state.get("stale_services") or vast_services),
         "restart_services": restart_services,
         "restart_inspection_error": str(runtime_state.get("inspection_error") or ""),
     }
@@ -416,6 +426,8 @@ def _queue_current_api_systemd_restart(service_units=(), *, monitor_handoff: boo
     """Queue stale daemon restarts followed by API from an external transient unit."""
 
     allowed_units = {str(item["unit"]) for item in _RUNTIME_SYSTEMD_SERVICES}
+    if any(str(unit).startswith('pbgui-vast-') for unit in service_units):
+        allowed_units.update(item['unit'] for item in _vast_supervisor_restart_state())
     ordered_units = []
     for raw_unit in service_units:
         unit = str(raw_unit or "")
@@ -1807,6 +1819,8 @@ async def server_restart(session: SessionToken = Depends(require_auth)):
         for item in _RUNTIME_SYSTEMD_SERVICES
         if str(item["unit"]) in requested_stale_units
     ]
+    stale_units.extend(sorted(unit for unit in requested_stale_units
+                              if unit.startswith('pbgui-vast-') and unit not in stale_units))
     restart_labels = [
         str(item.get("label") or item.get("service") or "")
         for item in restart_state.get("restart_services") or []
@@ -1890,6 +1904,7 @@ async def server_restart(session: SessionToken = Depends(require_auth)):
     return {
         "ok": True,
         "message": "Restarting PBGui services...",
+        "api_instance_id": _api_instance_id,
         "restart_services": restart_labels,
     }
 

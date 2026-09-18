@@ -259,3 +259,83 @@ def test_direct_sync_rejects_manifest_traversal(sync_transfer, path):
     (source / 'manifest.json').write_text(json.dumps(manifest))
     with pytest.raises((VastError, ValueError)):
         vast_rsync.sync_files(connection, source, timeout=20)
+
+
+def test_worker_preparation_finishes_without_stdin_eof(sync_transfer):
+    """An open SSH-like pipe must not stall preparation after the full message arrives."""
+    connection, source, remote, *_ = sync_transfer
+    prepare_input(source, [b'candles'])
+    metadata = json.dumps({name: (source / name).read_text()
+                           for name in ('manifest.json', 'optimize.json')}).encode()
+    helper = Path('setup/vast_gpu_benchmark/sync_input.py').read_text().replace(
+        '/work/pbgui/worker.py', str(remote / 'worker.py'))
+    root = remote / 'jobs' / connection.identifier
+    process = subprocess.Popen([sys.executable, '-c', helper, 'prepare'],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env={**os.environ, 'PBGUI_WORKDIR': str(root)})
+    try:
+        process.stdin.write(len(metadata).to_bytes(8, 'big') + metadata)
+        process.stdin.flush()
+        # Deliberately keep stdin open: the previous read-until-EOF implementation hangs here.
+        assert process.wait(timeout=5) == 0
+        assert (root / 'incoming/optimize.json').read_text() == (source / 'optimize.json').read_text()
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
+
+
+@pytest.mark.parametrize('framed', [b'', b'123', (0).to_bytes(8, 'big'),
+    (128 * 1024**2 + 1).to_bytes(8, 'big'), (5).to_bytes(8, 'big') + b'{}'])
+def test_metadata_frame_rejects_invalid_or_truncated_length(framed):
+    """Malformed metadata fails before preparing any remote files."""
+    import io
+    import runpy
+
+    helper = runpy.run_path('setup/vast_gpu_benchmark/sync_input.py')
+    with pytest.raises(ValueError):
+        helper['read_metadata'](io.BytesIO(framed))
+
+
+@pytest.mark.parametrize('owner', ['job', 'lease'])
+def test_metadata_progress_and_stop_reach_silent_ssh(sync_transfer, monkeypatch, owner):
+    """Real SSH polling reports consumed framed input and observes persisted stop."""
+    import time
+
+    connection, source, _, reports, *_ = sync_transfer
+    prepare_input(source, [b'candles'])
+    stopped = set()
+    connection.store.read = lambda identifier, *args: {'stop': identifier in stopped}
+    children = []
+    real_popen = subprocess.Popen
+
+    def spawn(args, **kwargs):
+        """Consume the frame locally, then stall without a worker acknowledgement."""
+        child = real_popen([sys.executable, '-c',
+            'import sys,time; s=sys.stdin.buffer; n=int.from_bytes(s.read(8),"big"); '
+            's.read(n); time.sleep(30)'], **kwargs)
+        children.append(child)
+        return child
+
+    def record(identifier, **values):
+        """Request stop only after actual child input consumption is reported."""
+        reports.append(values)
+        if values.get('upload_progress', {}).get('metadata_submitted', 0) > 0:
+            stopped.add(connection.identifier if owner == 'job' else connection.lease_id)
+
+    monkeypatch.setattr('vast_transfer.subprocess.Popen', spawn)
+    connection.store.update = record
+    connection.command = lambda *args, **kwargs: WorkerConnection.command(connection, *args, **kwargs)
+    started = time.monotonic()
+    with pytest.raises(VastError, match='cancelled'):
+        vast_rsync.sync_files(connection, source, timeout=15)
+    assert time.monotonic() - started < 8
+    progress = [r['upload_progress'] for r in reports if r.get('upload_progress', {}).get('stage') == 'preparing_worker']
+    assert progress[0]['metadata_submitted'] == 0
+    assert progress[-1]['metadata_submitted'] == progress[-1]['metadata_total'] > 0
+    assert len(children) == 1  # Stop is never retried as an SSH failure.
+    assert children[0].poll() is not None
+    assert not list(connection.directory.glob('rsync-input-*'))
