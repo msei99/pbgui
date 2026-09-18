@@ -204,3 +204,8 @@ Profit Sweep und Transfers erhalten den konfigurierten ASGI-Mount-Prefix in API-
 ### Nicht abgesendete Testtransfers
 
 Ein Prepared-Test wurde noch nicht abgesendet. **Cancel prepared test** schliesst ihn ab, ohne Geld zu senden oder zurueckzubuchen. Submitted/Unknown-Transfers muessen stattdessen abgeglichen werden. Abgelaufene, nicht abgesendete Hyperliquid-Vault-Signaturanfragen werden nach fuenf Minuten bei der Scheduler-Wiederherstellung oder der naechsten Live-Auswertung automatisch abgebrochen. Abgebrochene Tests bleiben im Verlauf und blockieren Live nicht mehr.
+
+
+### Hyperliquid-Kontomodus
+
+PBGui erkennt Standard / Manual, Unified Account und Portfolio Margin. Unified und Portfolio Margin verwenden gemeinsame Sicherheiten; getrennte Spot/Perps-Transfers und Profit Sweep werden nicht unterstützt. Für Profit Sweep in Hyperliquid den Account Type auf **Manual (Standard)** umstellen und PBGui aktualisieren. PBGui ändert den Kontomodus nicht. Vault-Transfers werden separat geprüft; ein Unified-Leader sperrt sie nicht automatisch.

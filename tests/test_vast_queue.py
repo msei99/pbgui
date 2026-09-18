@@ -304,3 +304,60 @@ def test_rent_without_jobs_starts_services_immediately(tmp_path, monkeypatch):
     assert second['id'] == first['id']
     assert first['awaiting_queue_start']
     assert queue.read()['paused']
+
+
+def test_deleted_worker_finishes_claimed_job_and_preserves_waiting_queue(queue):
+    """Release a disappeared lease even when its job controller has not returned."""
+    queue, worker = queue
+    claimed = worker_step(queue, worker, now=100)
+    queue.store.update(claimed, status='running', result_path='saved-local-snapshot')
+    queue.store.update(worker, rental_state='deletion_verified', rental_end_reason='provider_instance_missing')
+    assert worker_step(queue, worker, now=110) is None
+    assert queue.store.read(claimed)['status'] == 'failed'
+    assert queue.store.read(claimed)['result_path'] == 'saved-local-snapshot'
+    assert 'disappeared' in queue.store.read(claimed)['error']
+    assert queue.store.read('c'*32)['status'] == 'ready'
+    assert queue.store.read(worker)['active_job'] is None
+    assert queue.store.read(worker)['rental_state'] == 'deletion_verified'
+    assert queue.read()['paused']
+    assert worker_step(queue, worker, now=120) is None
+
+
+def test_deleted_worker_keeps_collected_results_recoverable(queue):
+    """An interrupted local import retains its final snapshot and retry metadata."""
+    queue, worker = queue
+    claimed = worker_step(queue, worker, now=100)
+    queue.store.update(claimed, status='collecting', final_collected=True)
+    queue.store.update(worker, rental_state='deletion_verified', rental_end_reason='provider_instance_missing')
+    worker_step(queue, worker, now=110)
+    job = queue.store.read(claimed)
+    assert job['final_collected'] and job['status'] == 'failed'
+    assert job['error'] == 'Raw results saved locally; result import needs retry'
+
+
+def test_guard_closes_missing_shared_rental_without_worker_controller(queue):
+    """The guard alone releases a lost shared lease and finishes its claimed job."""
+    from vast_job_runner import guard_step
+    queue, worker = queue
+    claimed = worker_step(queue, worker, now=100)
+    queue.store.update(worker, instance_id=123)
+    intent = {**queue.store.read(worker, 'intent.json'), 'label':'pbgui-vast-'+worker,
+              'accepted_at':0, 'deadline':10000}
+
+    class MissingProvider:
+        """A fresh successful empty account; no mutation method is supplied."""
+        def instances(self, *, fresh=False):
+            """Reject cached reads and never return an owned instance."""
+            assert fresh
+            return []
+
+    assert not guard_step(queue.store, worker, MissingProvider(), intent, '', now=200)
+    assert queue.store.read(claimed)['status'] not in {'failed', 'cancelled'}
+    assert guard_step(queue.store, worker, MissingProvider(), intent, '', now=210)
+    assert queue.store.read(worker)['rental_state'] == 'deletion_verified'
+    assert queue.store.read(claimed)['status'] == 'failed'
+    assert queue.read()['paused']
+    assert queue.store.read('c'*32)['status'] == 'ready'
+    # Re-running verification is idempotent and must not change the waiting job.
+    assert guard_step(queue.store, worker, MissingProvider(), intent, '', now=220)
+    assert queue.store.read('c'*32)['status'] == 'ready'

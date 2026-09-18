@@ -139,8 +139,15 @@ class UserKeyRevealRequest(BaseModel):
 
 
 class TestResult(BaseModel):
+    """Connection result with verified account mode and correctly labelled balance."""
+
     success: bool
     balance_futures: Optional[float] = None
+    balance_unified: Optional[str] = None
+    balance_spot: Optional[str] = None
+    account_mode: Optional[str] = None
+    account_mode_label: Optional[str] = None
+    guidance: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -1666,9 +1673,35 @@ def test_connection(
         if isinstance(balance_futures, (int, float)):
             result.balance_futures = float(balance_futures)
             result.success = True
+            if user.exchange == "hyperliquid" and not user.is_vault:
+                from profit_sweep_exchanges import hyperliquid_readonly_info, _account_mode, _spot_usdc_balance
+                from hyperliquid_account_mode import mode_presentation
+                # A failed mode read must never masquerade as a zero Futures balance.
+                result.balance_futures = None
+                mode = mode_presentation(_account_mode(hyperliquid_readonly_info(
+                    "userAbstraction", user=user.wallet_address)))
+                result.account_mode = mode["mode"]
+                result.account_mode_label = mode["label"]
+                result.guidance = mode["guidance"]
+                if mode["mode"] == "standard_manual":
+                    result.balance_futures = float(balance_futures)
+                    spot = _spot_usdc_balance(hyperliquid_readonly_info(
+                        "spotClearinghouseState", user=user.wallet_address))
+                    if spot is None or spot.get("total") is None:
+                        raise ValueError("Spot USDC balance unavailable; refresh and retry.")
+                    result.balance_spot = str(spot["total"])
+                elif mode["unsupported"]:
+                    spot = _spot_usdc_balance(hyperliquid_readonly_info(
+                        "spotClearinghouseState", user=user.wallet_address))
+                    if spot is None or spot.get("total") is None:
+                        raise ValueError("Unified USDC balance unavailable; refresh and retry.")
+                    result.balance_unified = str(spot["total"])
+                else:
+                    raise ValueError("Hyperliquid account mode could not be verified; refresh and retry.")
         else:
             result.error = str(balance_futures)
     except Exception as e:
+        result.success = False
         result.error = str(e)
     finally:
         exchange.close()

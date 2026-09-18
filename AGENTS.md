@@ -6,6 +6,16 @@
 2. **serial.txt** — If any file under `api/`, `PBApiServer.py`, or a module imported at API startup changed: increment `api/serial.txt` by 1 before finishing. This is mandatory for every final change set that touches API startup/runtime code so the UI can show the restart-required button. If you make more API/startup edits after an earlier serial bump in the same session, bump `api/serial.txt` again. Never tell the user to restart first because you forgot this bump.
 3. **Commit** — Always ask before committing or pushing. Never commit without explicit user confirmation.
 
+## Global PBGui Refresh and Navigation Rule
+
+This rule is mandatory everywhere in PBGui, across all existing and future pages, modules, views, tabs, panels, dialogs, and workflows. It is not limited to any feature, account type, or frontend implementation.
+
+- Keep displayed data and derived UI state current automatically whenever needed, including after actions, background changes, and returning to a view. Users must never need to request an update to see the current state.
+- Never use in-app Refresh buttons, icons, menu items, or equivalent manual refresh controls. Do not introduce them; replace existing ones with automatic updates when working on the affected UI.
+- A user-triggered browser refresh is the only manual refresh mechanism. It must load current data and restore the exact current location and navigation context throughout PBGui, including nested views, active tabs, selected entities, filters, sorting, and pagination where applicable. Never reset navigation to a home page, default tab, or overview merely because the browser was refreshed.
+- Automatic updates must also preserve the user's current location, selections, and in-progress edits rather than rebuilding or resetting the interface unnecessarily.
+- Persist only non-secret navigation state. If the current destination no longer exists or is no longer accessible, explain that and use the nearest valid context instead of silently resetting navigation.
+
 ## Project Architecture
 
 ### Stack

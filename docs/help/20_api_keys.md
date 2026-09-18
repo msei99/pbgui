@@ -243,3 +243,22 @@ PBGui automatically projects the active master-side TradFi profiles into its res
 ## Upstream reference
 
 - https://github.com/enarjord/passivbot
+
+
+### Hyperliquid account mode
+
+PBGui detects Standard / Manual, Unified Account, and Portfolio Margin. Unified and Portfolio Margin share collateral: separate Spot/Perps transfers and Profit Sweep are not supported. To use Profit Sweep, change Account Type to **Manual (Standard)** in Hyperliquid, then refresh PBGui. The account mode must be changed directly in Hyperliquid. Vault transfers are checked separately; a Unified leader does not automatically block them.
+
+Use **Test Connection** to refresh the detected account mode. Unified accounts show their shared USDC balance instead of a misleading zero Futures balance.
+
+#### Switch to Standard / Manual in Hyperliquid
+
+Use **Open Hyperliquid** in the account-mode notice. On [Hyperliquid](https://app.hyperliquid.xyz/portfolio), select the relevant account, open **Account Type**, and choose **Manual (Standard)**. Return to PBGui and click **Test Connection** to refresh the detected mode and balances.
+
+PBGui does not connect to browser wallets, request signatures, or submit account-mode changes from API Keys. Profit Sweep must be configured separately after the mode change.
+
+Standard / Manual Hyperliquid accounts display both Futures and Spot USDC balances. After **Test Connection**, expand **Transfer Spot ↔ Perps** to choose a direction and amount. **Max** uses the available transferable balance. Review and confirm each transfer. Save credential changes first. Confirmed transfers refresh the balances; uncertain results must be resolved through **Transfer history**, without submitting another transfer. Manual transfers do not change Profit Sweep accounting.
+
+The account list automatically refreshes usage when you return to its browser tab, updating **In Use** and the Delete button after a Run configuration is deleted. PB7 and PB8 instance folders both protect credentials from deletion.
+
+Transfer balances update automatically even while exchange confirmation is pending. PBGui periodically checks the history of already submitted manual transfers; it never resubmits them. The inline controls unlock once the existing operation is confirmed or failed.

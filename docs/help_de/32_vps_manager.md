@@ -239,3 +239,5 @@ PBGui-Branch-Wechsel nutzen dieselbe PBCluster-Service-Synchronisierung und dens
 ### API-Keys materialisieren
 - Verwende **System -> Cluster Sync**, um `api-keys.json` auf erreichbaren Nodes zu prüfen und zu materialisieren.
 - CMC-Pool-Credentials sind getrennte versiegelte Generationen. Sie werden unter **Services -> PBCoinData -> Pool** verwaltet und durch Cluster Sync materialisiert; es gibt keine CMC-Keys pro VPS.
+
+Die Swap-Prüfung vor dem Anwenden der Einstellungen unterstützt SSH-Schlüssel und verlangt kein zusätzliches VPS-Passwort. Auch PBGui- und PB8-Updates verwenden die eingerichtete SSH-Anmeldung; die vorgeschaltete Swap-Prüfung darf keine Passwortpflicht hinzufügen.

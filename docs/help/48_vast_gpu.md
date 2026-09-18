@@ -264,6 +264,8 @@ Without a downloaded optimizer log, the viewer opens **VastRunner.log**, the sha
 
 Start reports a conflict while the previous rental is stopping or awaiting cleanup. Waiting jobs retain Open log while a shared rental remains unresolved, allowing access to supervision and cleanup controls.
 
+The local rental supervisor also detects instances destroyed directly on Vast.ai. Two fresh successful absence checks at least ten seconds apart release the rental lock, end unfinished jobs on that rental and pause its queue; waiting jobs and local result snapshots are preserved. Provider errors reset confirmation. Stopped/offline instances still listed by Vast are not considered deleted. A changed ownership label requires inspection instead of assuming deletion. Newly created or ambiguous instances have a two-minute visibility grace period. No replacement rental is created by this check. The supervisor must be running; Resume supervision can restart it if it stopped.
+
 For ambiguous creation, cleanup waits up to two minutes from the attempt, then requires two fresh successful checks with no matching instance. This can release Start before the rental deadline. Provider errors and rate limits do not count as absence.
 
 Clicking Start immediately shows **Starting…** in the queue row while the request is pending. Cloud Start buttons are temporarily disabled to prevent duplicate requests.

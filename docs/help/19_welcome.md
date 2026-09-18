@@ -88,3 +88,5 @@ An empty password by itself is rejected. Every password or authentication-mode c
 - **Save Setup stays disabled**: log in first
 - **Browse does not work**: check authentication and server path permissions
 - **You only want to change the password**: use the **Password** sidebar action instead of editing setup fields
+
+Login and Save Setup accept one request at a time. Failed requests restore the controls so you can correct the input and retry.

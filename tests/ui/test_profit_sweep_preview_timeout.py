@@ -59,7 +59,7 @@ function requestJson(path, options) {
 @pytest.mark.parametrize("vault", [False, True])
 def test_balance_error_replaces_loading_and_recovers(vault):
     """Failure is visible in Exchange / Vault, and recovery removes the error."""
-    execute(function("renderAccountBalances") + "const vault=" + json.dumps(vault) + r"""
+    execute(function("detectedAccountMode") + function("renderAccountBalances") + "const vault=" + json.dumps(vault) + r"""
 const assert=require('assert');
 const nodes={};function byId(id){return nodes[id] ||= {};}
 const state={snapshot:null,previewError:'Rate limited <test>'};
@@ -107,6 +107,8 @@ const byId=()=>({value:selectedAsset});
 const isCurrentAccount=()=>true;
 function renderPreview(){}function renderAccountBalances(){}
 function renderPositions(){}function renderTestTransfers(){}function renderStatusCards(){}
+function renderOverview(){}
+function renderAccountMode(){}
 function scheduleAutomaticPreview(){throw new Error('Unexpected failed preview');}
 let requested;
 async function requestPreview(user,policy){requested=policy;return {snapshot:{}};}

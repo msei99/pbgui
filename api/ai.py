@@ -57,6 +57,7 @@ class ConversationCreateRequest(BaseModel):
     model: str = Field(default="", max_length=128)
     effort: str = Field(default="", max_length=64)
     context: dict | None = None
+    profile: str = Field(default="default", max_length=32)
 
 
 class TurnCreateRequest(BaseModel):
@@ -152,12 +153,23 @@ def main_page(request: Request, session: SessionToken = Depends(require_auth)) -
 
 
 @router.get("/status")
-async def status(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+async def status(session: SessionToken = Depends(require_auth), profile: str = "default") -> JSONResponse:
     """Return non-secret AI provider status."""
     try:
-        return _json(await get_ai_chat_service().status(_owner(session)))
+        return _json(await get_ai_chat_service().status(_owner(session), **({"profile": profile} if profile != "default" else {})))
     except Exception as exc:
         raise _provider_error("status", exc) from exc
+
+
+@router.get("/usage")
+async def provider_usage(provider: str, profile: str = "default", session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Return owner-scoped provider usage without credentials."""
+    try:
+        return _json(await get_ai_chat_service().usage(_owner(session), provider, profile))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _provider_error("usage", exc) from exc
 
 
 @router.get("/preferences")
@@ -209,51 +221,77 @@ async def disconnect_go(session: SessionToken = Depends(require_auth)) -> JSONRe
 
 
 @router.post("/providers/chatgpt/device-login")
-async def start_chatgpt_login(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+async def start_chatgpt_login(session: SessionToken = Depends(require_auth), profile: str = "default") -> JSONResponse:
     """Start the official ChatGPT device-code login flow."""
     try:
-        return _json(await get_ai_chat_service().start_codex_login(_owner(session)))
+        return _json(await get_ai_chat_service().start_codex_login(_owner(session), **({"profile": profile} if profile != "default" else {})))
     except Exception as exc:
         raise _provider_error("start_chatgpt_login", exc) from exc
 
 
 @router.post("/providers/chatgpt/browser-login")
-async def start_chatgpt_browser_login(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+async def start_chatgpt_browser_login(session: SessionToken = Depends(require_auth), profile: str = "default") -> JSONResponse:
     """Start the official ChatGPT browser OAuth flow."""
     try:
-        return _json(await get_ai_chat_service().start_codex_browser_login(_owner(session)))
+        return _json(await get_ai_chat_service().start_codex_browser_login(_owner(session), **({"profile": profile} if profile != "default" else {})))
     except Exception as exc:
         raise _provider_error("start_chatgpt_browser_login", exc) from exc
 
 
 @router.post("/providers/chatgpt/login-cancel")
-async def cancel_chatgpt_login(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+async def cancel_chatgpt_login(session: SessionToken = Depends(require_auth), profile: str = "default") -> JSONResponse:
     """Cancel a pending ChatGPT device login."""
     try:
-        await get_ai_chat_service().cancel_codex_login(_owner(session))
+        await get_ai_chat_service().cancel_codex_login(_owner(session), **({"profile": profile} if profile != "default" else {}))
         return _json({"success": True})
     except Exception as exc:
         raise _provider_error("cancel_chatgpt_login", exc) from exc
 
 
 @router.delete("/providers/chatgpt/connection")
-async def disconnect_chatgpt(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+async def disconnect_chatgpt(session: SessionToken = Depends(require_auth), profile: str = "default") -> JSONResponse:
     """Log the current user out from ChatGPT."""
     try:
-        await get_ai_chat_service().logout_codex(_owner(session))
+        await get_ai_chat_service().logout_codex(_owner(session), **({"profile": profile} if profile != "default" else {}))
         return _json({"success": True})
     except Exception as exc:
         raise _provider_error("disconnect_chatgpt", exc) from exc
+
+
+class ChatGPTProfileRequest(BaseModel):
+    """A non-secret profile label and optional existing owner-bound identifier."""
+    name: str = Field(min_length=1, max_length=80)
+    profile: str | None = Field(default=None, max_length=32)
+
+
+@router.post("/providers/chatgpt/profiles")
+async def save_chatgpt_profile(body: ChatGPTProfileRequest, session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Create or rename a profile without accepting any authentication material."""
+    try:
+        return _json(get_ai_chat_service().save_chatgpt_profile(_owner(session), body.name, body.profile))
+    except Exception as exc:
+        raise _provider_error("save_chatgpt_profile", exc) from exc
+
+
+@router.delete("/providers/chatgpt/profiles/{profile}")
+async def remove_chatgpt_profile(profile: str, session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Disconnect and remove only the selected owner's profile."""
+    try:
+        await get_ai_chat_service().remove_chatgpt_profile(_owner(session), profile)
+        return _json({"success": True})
+    except Exception as exc:
+        raise _provider_error("remove_chatgpt_profile", exc) from exc
 
 
 @router.get("/models")
 async def models(
     provider: str = Query(min_length=1, max_length=32),
     session: SessionToken = Depends(require_auth),
+    profile: str = "default",
 ) -> JSONResponse:
     """List account-visible models supported by one native adapter."""
     try:
-        return _json({"models": await get_ai_chat_service().models(_owner(session), provider)})
+        return _json({"models": await get_ai_chat_service().models(_owner(session), provider, **({"profile": profile} if profile != "default" else {}))})
     except Exception as exc:
         raise _provider_error("models", exc) from exc
 
@@ -293,7 +331,7 @@ async def create_conversation(
     """Create an owner-bound conversation before its first provider request."""
     try:
         conversation_id = await get_ai_chat_service().create_conversation(
-            _owner(session), body.provider, body.model, body.effort, body.context
+            _owner(session), body.provider, body.model, body.effort, body.context, **({"profile": body.profile} if body.profile != "default" else {})
         )
         return _json({"conversation_id": conversation_id}, status_code=201)
     except Exception as exc:

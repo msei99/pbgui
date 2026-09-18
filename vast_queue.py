@@ -170,7 +170,18 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
         worker = store.read(identifier)
         control = store.read(identifier, 'control.json')
         if worker['rental_state'] == 'deletion_verified':
-            store.update(identifier, status='completed')
+            missing = worker.get('rental_end_reason') == 'provider_instance_missing'
+            for job in store.list():
+                if job.get('lease_id') != identifier or job['status'] in TERMINAL or job['status'] == 'ready':
+                    continue
+                stopped = control['stop'] or store.read(job['id'], 'control.json')['stop']
+                message = ('Raw results saved locally; result import needs retry' if job.get('final_collected') else
+                           'Vast.ai instance disappeared; the last local snapshot remains available' if missing else
+                           'Rental ended; the last local snapshot remains available')
+                store.update(job['id'], status='cancelled' if stopped and not job.get('final_collected') else 'failed', error=message)
+            if missing and queue.read().get('worker_id') == identifier:
+                queue.update(paused=True)
+            store.update(identifier, status='failed' if missing else 'completed', active_job=None)
             return None
         active = worker.get('active_job')
         if not active:

@@ -62,7 +62,7 @@ def needs_target_key_refresh(record: dict, cached: dict) -> bool:
             and cached.get("target_key_checked") is not True)
 
 _ISSUE_MESSAGES = {
-    "unsupported_account_mode": "This account mode is not supported by the Standard/Manual transfer adapter.",
+    "unsupported_account_mode": "Profit Sweep is unavailable for Unified Account / Portfolio Margin. Switch Account Type to Manual (Standard) in Hyperliquid, then refresh PBGui.",
     "unsupported_exchange": "This exchange is not supported by the snapshot adapter.",
     "unsupported_asset": "The configured settlement asset is not supported.",
     "read_failed": "The exchange read failed or timed out.",

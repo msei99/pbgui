@@ -310,6 +310,7 @@
         /* Balance display */
         .balance-display {
             display: flex;
+            flex-wrap: wrap;
             gap: 24px;
             margin-top: 16px;
         }
@@ -321,6 +322,15 @@
             text-align: center;
             min-width: 200px;
         }
+        .balance-guidance {
+            flex-basis: 100%;
+            min-width: 0;
+            max-width: 100%;
+            text-align: left;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+        .balance-guidance a { color: #26a69a; }
         .balance-box .label {
             font-size: var(--fs-sm);
             color: #94a3b8;
@@ -1075,6 +1085,7 @@
     </div>
 
     <script src="/app/js/pbgui_dialogs.js?v=9"></script>
+    <script src="/app/js/internal_transfer_panel.js?v=2"></script>
     <script>
     // ── Config ──────────────────────────────────────────────
     // Browser authentication uses the same-origin HttpOnly session cookie.
@@ -1338,14 +1349,25 @@
         } catch (e) { /* non-critical — ignore */ }
     }
 
+    window.addEventListener("focus", () => {
+        const list = document.getElementById("userListView");
+        if (document.visibilityState === "visible" && list && list.style.display !== "none") loadUsers(true);
+    });
+
     // ── Load users ──────────────────────────────────────────
-    async function loadUsers() {
+    let usersRequestGeneration = 0;
+    async function loadUsers(quiet = false) {
+        const generation = ++usersRequestGeneration;
         const tbody = document.getElementById("userTableBody");
-        tbody.innerHTML = '<tr class="loading-row"><td colspan="6"><span class="spinner"></span> Loading users...</td></tr>';
-        document.getElementById("sb-count").textContent = "…";
+        if (!quiet) {
+            tbody.innerHTML = '<tr class="loading-row"><td colspan="6"><span class="spinner"></span> Loading users...</td></tr>';
+            document.getElementById("sb-count").textContent = "…";
+        }
 
         try {
-            currentUsers = await apiFetch("/");
+            const users = await apiFetch("/", {cache: "no-store"});
+            if (generation !== usersRequestGeneration) return;
+            currentUsers = users;
             renderUserTable();
             document.getElementById("sb-count").textContent = currentUsers.length + " users";
             const inUseCount = currentUsers.filter(u => u.in_use).length;
@@ -1358,6 +1380,7 @@
             }
             loadApiMeta();
         } catch (e) {
+            if (generation !== usersRequestGeneration) return;
             tbody.innerHTML = '<tr class="loading-row"><td colspan="6" style="color:#ef4444;">Failed to load: ' +
                 escapeHtml(e.message) + '</td></tr>';
             document.getElementById("sb-count").textContent = "Error";
@@ -2127,7 +2150,7 @@
     }
 
     // ── Test connection ─────────────────────────────────────
-    async function testConnection() {
+    async function testConnection(quiet = false) {
         const name = editMode === "edit" ? editingName : document.getElementById("editName").value.trim();
         if (!name) {
             showToast("Save the user first before testing", "warning");
@@ -2175,16 +2198,38 @@
             const display = document.getElementById("balanceDisplay");
             let html = "";
             if (result.success) {
-                html += '<div class="balance-box"><div class="label">Futures Balance</div>';
-                html += '<div class="value">' + (result.balance_futures !== null ? result.balance_futures.toFixed(2) : "N/A") + '</div></div>';
-                showToast("Connection successful!", "success");
+                html += '<div class="balance-box"><div class="label">' + escapeHtml(result.balance_unified != null ? 'Shared USDC Balance' : 'Futures Balance') + '</div>';
+                html += '<div class="value">' + (result.balance_unified != null ? escapeHtml(result.balance_unified) : result.balance_futures != null ? result.balance_futures.toFixed(2) : "N/A") + '</div></div>';
+                if (!quiet) showToast("Connection successful!", "success");
             } else {
                 html += '<div class="balance-box"><div class="label">Connection Test</div>';
                 html += '<div class="error">' + escapeHtml(result.error || "Unknown error") + '</div></div>';
                 showToast("Connection failed", "error");
             }
+            if (result.balance_spot != null) html += '<div class="balance-box"><div class="label">Spot Balance (USDC)</div><div class="value">' + escapeHtml(result.balance_spot) + '</div></div>';
+            if (result.account_mode_label) html += '<div class="balance-box"><div class="label">Account Type</div><div>' + escapeHtml(result.account_mode_label) + '</div></div>';
+            if (result.guidance) html += '<div class="balance-box balance-guidance">' + escapeHtml(result.guidance) + '<p><a href="https://app.hyperliquid.xyz/portfolio" target="_blank" rel="noopener noreferrer">Open Hyperliquid</a> → Account Type → Manual (Standard). Then run Test Connection again.</p></div>';
             display.innerHTML = html;
             display.style.display = "flex";
+            if (result.success && result.account_mode === 'standard_manual' && !formDirty && !document.getElementById('editIsVault').checked) {
+                window.PBGuiInternalTransferPanel.mount(display, {
+                    user: name,
+                    base: API_BASE.replace(/\/api-keys$/, '/profit-sweep'),
+                    signal: context.signal,
+                    isCurrent: () => isCurrentEditorRequest(context) && editingName === name && !formDirty && !saveInFlight,
+                    onBalances: preview => {
+                        const route = (preview.routes || []).find(item => item.id === 'spot_to_perp');
+                        if (!route) return;
+                        display.querySelectorAll('.balance-box').forEach(box => {
+                            const label = box.querySelector('.label'), value = box.querySelector('.value');
+                            if (!label || !value) return;
+                            if (label.textContent === 'Spot Balance (USDC)') value.textContent = route.source_balance;
+                            if (label.textContent === 'Futures Balance') value.textContent = route.destination_balance;
+                        });
+                    },
+                    onConfirmed: async () => { await testConnection(true); showToast('Transfer confirmed.', 'success'); }
+                });
+            }
         } catch (e) {
             if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             showToast("Test failed: " + e.message, "error");

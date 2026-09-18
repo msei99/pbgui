@@ -1448,25 +1448,32 @@
         }
 
         async function saveSetup() {
+            var button = document.getElementById("save-setup-btn");
+            if (button.disabled) return;
+            button.disabled = true;
             try {
-                var data = await fetchJson(API_ORIGIN + "/api/auth/setup", {
-                    method: "POST",
-                    headers: authHeaders(true),
-                    body: JSON.stringify({
-                        pb7dir: document.getElementById("pb7dir").value,
-                        pb7venv: document.getElementById("pb7venv").value,
-                        pb8dir: document.getElementById("pb8dir").value,
-                        pb8venv: document.getElementById("pb8venv").value,
-                        pbname: document.getElementById("pbname").value,
-                        role: document.getElementById("role").value
-                    })
-                });
-                render(data);
-                setBanner(data.message || "Setup saved.", "success");
-                focusSection("setup");
-            } catch (error) {
-                setBanner(error.message, "error");
-                focusSection("setup");
+                try {
+                    var data = await fetchJson(API_ORIGIN + "/api/auth/setup", {
+                        method: "POST",
+                        headers: authHeaders(true),
+                        body: JSON.stringify({
+                            pb7dir: document.getElementById("pb7dir").value,
+                            pb7venv: document.getElementById("pb7venv").value,
+                            pb8dir: document.getElementById("pb8dir").value,
+                            pb8venv: document.getElementById("pb8venv").value,
+                            pbname: document.getElementById("pbname").value,
+                            role: document.getElementById("role").value
+                        })
+                    });
+                    render(data);
+                    setBanner(data.message || "Setup saved.", "success");
+                    focusSection("setup");
+                } catch (error) {
+                    setBanner(error.message, "error");
+                    focusSection("setup");
+                }
+            } finally {
+                button.disabled = false;
             }
         }
 

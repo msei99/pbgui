@@ -199,7 +199,7 @@ def test_profit_sweep_test_transfer_roundtrip_uses_shared_safety_dialogs() -> No
 
     assert 'id="test-transfer" hidden>Test transfer</button>' in source
     assert "[hidden] { display: none !important; }" in source
-    assert "var supported = Boolean(user && capability.supported === true && !permissionBlocked)" in source
+    assert "var supported = Boolean(user && capability.supported === true && !permissionBlocked && !detectedAccountMode(user))" in source
     assert "Real-funds Vault test (default 5 USDC)" in source
     assert "'Leader Main Perps'" in source
     assert "Leader Main (Unified)" in source

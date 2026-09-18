@@ -1841,11 +1841,19 @@
       _aiDrawerLoading = true;
       var link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = _appPath('/app/css/ai_drawer.css?v=13');
+      link.href = _appPath('/app/css/ai_drawer.css?v=16');
       document.head.appendChild(link);
       function loadDrawerScript() {
+        if (!window.PBGuiAIUsage) {
+          var usage = document.createElement('script');
+          usage.src = _appPath('/app/js/ai_usage.js?v=1');
+          usage.onload = loadDrawerScript;
+          usage.onerror = function () { _aiDrawerLoading = false; };
+          document.head.appendChild(usage);
+          return;
+        }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=40');
+        script.src = _appPath('/app/js/ai_drawer.js?v=42');
         script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);

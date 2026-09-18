@@ -8387,12 +8387,14 @@
         if (selectedCoins.length > 0 && deleteBtn) {
           var label = selectedCoins.length === 1 ? 'Delete ' + (selectedCoinLabels[0] || '') : 'Delete ' + selectedCoins.length + ' coins';
           deleteBtn.textContent = label;
-          deleteBtn.disabled = false;
+          deleteBtn.disabled = inventoryMutationPending;
         } else if (deleteBtn) {
           deleteBtn.textContent = 'Delete selected';
           deleteBtn.disabled = true;
         }
 
+        var clearBtn = document.getElementById('btn-inventory-clear-dataset');
+        if (clearBtn) clearBtn.disabled = inventoryMutationPending;
         if (olderBtn) olderBtn.disabled = selectedCoins.length === 0;
 
         renderInventoryOlderPreview(viewState);
@@ -8746,46 +8748,58 @@
         }
       }
 
+      var inventoryMutationPending = false;
       async function runInventoryDeleteSelected() {
-        var list = getInventorySelectedCoins();
-        var listLabels = getInventoryCoinDisplayNames(list);
-        var payload = getCurrentInventoryViewState().payload || {};
-        var exchangeMeta = getExchangeMeta(uiState.contextExchange) || {};
-        if (!list.length) {
-          showToast('Select at least one coin first.', 'error');
-          return;
-        }
-        if (!(await showConfirmDialog({
-          title: list.length === 1 ? 'Delete selected coin' : 'Delete selected coins',
-          message: list.length === 1
-            ? 'Delete all local data for the selected coin?'
-            : 'Delete all local data for the selected coins?',
-          detail: String(exchangeMeta.label || uiState.contextExchange) + ' • ' + String(payload.view_label || getResolvedInventoryView()),
-          items: listLabels,
-          listLabel: list.length === 1 ? 'Selected coin' : 'Selected coins',
-          confirmText: list.length === 1 ? 'Delete coin' : 'Delete coins'
-        }))) return;
-
-        setInventoryBox('inventory-delete-feedback', 'Deleting selected coins…', 'info');
+        if (inventoryMutationPending) return;
+        inventoryMutationPending = true;
+        var exchange = uiState.contextExchange;
+        var view = getResolvedInventoryView();
+        var originalViewState = getCurrentInventoryViewState();
+        renderInventorySidebarActions();
         try {
-          var result = await fetchJson('/inventory/' + encodeURIComponent(uiState.contextExchange) + '/delete-selected', {
-            method: 'POST',
-            body: JSON.stringify({
-              view: getResolvedInventoryView(),
-              coins: list
-            })
-          });
-          if (!result.success) throw new Error(result.error || 'Failed to delete selected coins.');
-          showToast(result.message || 'Selected coins deleted.', 'success');
-          setInventoryBox('inventory-delete-feedback', result.message || 'Selected coins deleted.', 'info');
-          var viewState = getCurrentInventoryViewState();
-          viewState.selectedRowIds = [];
-          viewState.olderPreview = null;
-          await loadInventoryPanel(true);
-        } catch (error) {
-          var message = error && error.message ? error.message : 'Failed to delete selected coins.';
-          showToast(message, 'error');
-          setInventoryBox('inventory-delete-feedback', message, 'error');
+          var list = getInventorySelectedCoins();
+          var listLabels = getInventoryCoinDisplayNames(list);
+          var payload = getCurrentInventoryViewState().payload || {};
+          var exchangeMeta = getExchangeMeta(uiState.contextExchange) || {};
+          if (!list.length) {
+            showToast('Select at least one coin first.', 'error');
+            return;
+          }
+          if (!(await showConfirmDialog({
+            title: list.length === 1 ? 'Delete selected coin' : 'Delete selected coins',
+            message: list.length === 1
+              ? 'Delete all local data for the selected coin?'
+              : 'Delete all local data for the selected coins?',
+            detail: String(exchangeMeta.label || uiState.contextExchange) + ' • ' + String(payload.view_label || getResolvedInventoryView()),
+            items: listLabels,
+            listLabel: list.length === 1 ? 'Selected coin' : 'Selected coins',
+            confirmText: list.length === 1 ? 'Delete coin' : 'Delete coins'
+          }))) return;
+
+          setInventoryBox('inventory-delete-feedback', 'Deleting selected coins…', 'info');
+          try {
+            var result = await fetchJson('/inventory/' + encodeURIComponent(exchange) + '/delete-selected', {
+              method: 'POST',
+              body: JSON.stringify({
+                view: view,
+                coins: list
+              })
+            });
+            if (!result.success) throw new Error(result.error || 'Failed to delete selected coins.');
+            showToast(result.message || 'Selected coins deleted.', 'success');
+            setInventoryBox('inventory-delete-feedback', result.message || 'Selected coins deleted.', 'info');
+            var viewState = originalViewState;
+            viewState.selectedRowIds = [];
+            viewState.olderPreview = null;
+            if (uiState.contextExchange === exchange && getResolvedInventoryView() === view) await loadInventoryPanel(true);
+          } catch (error) {
+            var message = error && error.message ? error.message : 'Failed to delete selected coins.';
+            showToast(message, 'error');
+            setInventoryBox('inventory-delete-feedback', message, 'error');
+          }
+        } finally {
+          inventoryMutationPending = false;
+          renderInventorySidebarActions();
         }
       }
 
@@ -8848,33 +8862,44 @@
       }
 
       async function runInventoryClearDataset() {
-        var payload = getCurrentInventoryViewState().payload || {};
-        var label = String(payload.view_label || getResolvedInventoryView());
-        var exchangeMeta = getExchangeMeta(uiState.contextExchange) || {};
-        if (!(await showConfirmDialog({
-          title: 'Clear dataset',
-          message: 'Clear the entire ' + label + ' dataset?',
-          detail: String(exchangeMeta.label || uiState.contextExchange) + ' • This removes all local files in the current dataset view.',
-          confirmText: 'Clear dataset'
-        }))) return;
-
-        setInventoryBox('inventory-delete-feedback', 'Clearing dataset…', 'info');
+        if (inventoryMutationPending) return;
+        inventoryMutationPending = true;
+        var exchange = uiState.contextExchange;
+        var view = getResolvedInventoryView();
+        var originalViewState = getCurrentInventoryViewState();
+        renderInventorySidebarActions();
         try {
-          var result = await fetchJson('/inventory/' + encodeURIComponent(uiState.contextExchange) + '/clear-dataset', {
-            method: 'POST',
-            body: JSON.stringify({ view: getResolvedInventoryView() })
-          });
-          if (!result.success) throw new Error(result.error || 'Failed to clear dataset.');
-          showToast(result.message || 'Dataset cleared.', 'success');
-          setInventoryBox('inventory-delete-feedback', result.message || 'Dataset cleared.', 'info');
-          var viewState = getCurrentInventoryViewState();
-          viewState.selectedRowIds = [];
-          viewState.olderPreview = null;
-          await loadInventoryPanel(true);
-        } catch (error) {
-          var message = error && error.message ? error.message : 'Failed to clear dataset.';
-          showToast(message, 'error');
-          setInventoryBox('inventory-delete-feedback', message, 'error');
+          var payload = getCurrentInventoryViewState().payload || {};
+          var label = String(payload.view_label || getResolvedInventoryView());
+          var exchangeMeta = getExchangeMeta(uiState.contextExchange) || {};
+          if (!(await showConfirmDialog({
+            title: 'Clear dataset',
+            message: 'Clear the entire ' + label + ' dataset?',
+            detail: String(exchangeMeta.label || uiState.contextExchange) + ' • This removes all local files in the current dataset view.',
+            confirmText: 'Clear dataset'
+          }))) return;
+
+          setInventoryBox('inventory-delete-feedback', 'Clearing dataset…', 'info');
+          try {
+            var result = await fetchJson('/inventory/' + encodeURIComponent(exchange) + '/clear-dataset', {
+              method: 'POST',
+              body: JSON.stringify({ view: view })
+            });
+            if (!result.success) throw new Error(result.error || 'Failed to clear dataset.');
+            showToast(result.message || 'Dataset cleared.', 'success');
+            setInventoryBox('inventory-delete-feedback', result.message || 'Dataset cleared.', 'info');
+            var viewState = originalViewState;
+            viewState.selectedRowIds = [];
+            viewState.olderPreview = null;
+            if (uiState.contextExchange === exchange && getResolvedInventoryView() === view) await loadInventoryPanel(true);
+          } catch (error) {
+            var message = error && error.message ? error.message : 'Failed to clear dataset.';
+            showToast(message, 'error');
+            setInventoryBox('inventory-delete-feedback', message, 'error');
+          }
+        } finally {
+          inventoryMutationPending = false;
+          renderInventorySidebarActions();
         }
       }
 

@@ -8,8 +8,9 @@ import vps_manager_core as core
 from vps_manager_service import VPSManagerService
 
 
+@pytest.mark.parametrize("password", [None, "test-password"])
 @pytest.mark.parametrize("remote_swap,expected_apply", [("2.5G", True), ("2G", False), ("0", True)])
-def test_apply_rechecks_remote_swap_even_when_target_is_already_saved(remote_swap, expected_apply):
+def test_apply_rechecks_remote_swap_even_when_target_is_already_saved(remote_swap, expected_apply, password):
     """Retry a saved 2G target only when the active remote swap differs."""
     service = object.__new__(VPSManagerService)
     starts = []
@@ -23,13 +24,15 @@ def test_apply_rechecks_remote_swap_even_when_target_is_already_saved(remote_swa
         """Assert that inventory refresh cannot replace the inspected state."""
         lock = service._host_task_start_lock(vps.hostname)
         assert lock.locked()
+        assert vps.user_pw == password
         reads.append(True)
         return {"swap": remote_swap}
 
     vps.fetch_vps_info = read_swap
     service._require_vps = lambda host: vps
     service._store_session_secrets = lambda *args: None
-    service._require_user_password = lambda *args: "test-password"
+    service._require_user_password = lambda *args: pytest.fail("Swap probe must not require a password")
+    service._session_secret_value = lambda *args: password
     service._apply_vps_setup_form = lambda token, obj, form: setattr(obj, "swap", form["swap"])
     service._build_vps_config = lambda token, obj: {"swap": obj.swap}
     service._start_vps_config_apply = lambda *args, **kwargs: starts.append(kwargs) or {"started": True}
@@ -37,6 +40,7 @@ def test_apply_rechecks_remote_swap_even_when_target_is_already_saved(remote_swa
     result = service.save_vps_config("session", "test-vps", {"swap": "2G", "check_remote_swap": True})
 
     assert reads == [True]
+    assert vps.user_pw is None
     assert result["swap_changed"] is expected_apply
     assert result["remote_apply"]["started"] is expected_apply
     assert starts == ([{"apply_firewall": False, "apply_swap": True}] if expected_apply else [])

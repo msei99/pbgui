@@ -106,8 +106,8 @@ def test_ai_chat_uses_persistent_history_and_detached_turn_polling() -> None:
     assert "conversation.reasoning_summary" in HTML
     assert HTML.index('id="messages"') < HTML.index('id="chat-status-row"')
     assert "AbortController" not in HTML
-    assert "provider: $('provider-select').value" in HTML
-    assert "try { await loadModels(); }" in HTML
+    assert "provider: selectedProvider()" in HTML
+    assert "else await loadModels();" in HTML
     assert "await newChat(true); await loadModels();" not in HTML
     send_message = HTML.split("async function sendMessage", 1)[1].split("async function loadConversationSummary", 1)[0]
     assert "renderPendingMessage();" in send_message
@@ -128,4 +128,5 @@ def test_ai_chat_builds_model_specific_reasoning_variants() -> None:
     assert '<option value="medium">Medium</option>' not in HTML
     assert '<option value="high">High</option>' not in HTML
     assert "effort: effort" in HTML
-    assert "models/health-refresh" in HTML
+    assert 'id="refresh-health"' not in HTML
+    assert "await refreshStatus()" in HTML

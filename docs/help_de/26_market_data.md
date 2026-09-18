@@ -552,3 +552,5 @@ Wenn ein Build-Job kurz erscheint und wieder verschwindet:
 Wenn die Build-Coin-Liste leer ist:
 - Prüfen, ob Symbole gemappt sind und Status `ok` haben
 - Prüfen, ob Tiingo Ticker oder FX Ticker im Mapping gesetzt ist
+
+Inventar-Löschaktionen und Job-Aktionen verhindern doppelte Anfragen. Gelöscht wird der bestätigte Datensatz; nach einem Hyperliquid-Jobabbruch aktualisiert sich die laufende Liste automatisch. Fehler beim Einreihen eines Downloads zeigen die Ursache des Backends.

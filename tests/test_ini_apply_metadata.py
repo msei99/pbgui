@@ -338,7 +338,7 @@ def test_services_ui_uses_safe_apply_messages() -> None:
     """Server-provided apply text is rendered only through textContent."""
     source = Path("frontend/services_monitor.html").read_text(encoding="utf-8")
     post_block = source[source.index("function _post("):source.index("function _val(")]
-    assert "d.apply.message" in post_block
+    assert "data.apply.message" in post_block
     assert "textContent" not in post_block
     flash_block = source[source.index("function _flash("):source.index("/* ── Prices Overlay")]
     assert "el.textContent = text" in flash_block

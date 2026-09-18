@@ -653,7 +653,7 @@
         appendText(button, 'span', label, 'account-name');
         var detailRow = document.createElement('span');
         detailRow.className = 'account-detail-row';
-        appendText(detailRow, 'span', text(user.exchange, 'Unknown') + (user.is_vault ? ' / Vault' : ' / Standard'), 'account-meta');
+        appendText(detailRow, 'span', text(user.exchange, 'Unknown') + (user.is_vault ? ' / Vault' : user.exchange === 'hyperliquid' ? ' / ' + (user.detectedMode || 'Mode not checked') : ' / Standard'), 'account-meta');
         var badge = appendText(detailRow, 'span', user.operating_mode || 'disabled', 'mode-badge ' + modeClass(user.operating_mode));
         badge.setAttribute('aria-label', 'Mode ' + text(user.operating_mode, 'disabled'));
         button.appendChild(detailRow);
@@ -879,20 +879,38 @@
       appendText(wrapper, 'dd', value);
       parent.appendChild(wrapper);
     }
+    function detectedAccountMode(user) {
+      if (!user || user.is_vault || user.exchange !== 'hyperliquid') return null;
+      return state.preview && state.preview.account_mode || null;
+    }
+    function renderAccountMode(user) {
+      var mode = detectedAccountMode(user);
+      var operatingMode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
+      byId('enable-live').disabled = !!mode || !user || !state.schema || state.schema.live_available !== true || !['disabled', 'dry'].includes(operatingMode);
+      byId('enable-dry').disabled = !!mode || !user;
+      if (user && user.exchange === 'hyperliquid' && !user.is_vault) {
+        var verified = state.snapshot && state.snapshot.account && state.snapshot.account.mode === 'standard_manual';
+        user.detectedMode = mode ? mode.label : verified ? 'Standard / Manual' : 'Mode not checked';
+        byId('account-subtitle').textContent = user.exchange + ' ' + user.detectedMode;
+        renderAccounts();
+      }
+      if (liveActivations.get(state.selectedUser)?.pending) setAccountActionsEnabled(false);
+    }
     function renderOverview(user) {
       var values = byId('overview-values');
       var capability = user && user.capability ? user.capability : {};
       var simulation = statusState();
       values.replaceChildren();
       addKeyValue(values, 'Exchange', user ? user.exchange : '-');
-      addKeyValue(values, 'Account type', user && user.is_vault ? 'Vault' : 'Standard');
+      addKeyValue(values, 'Account type', user && user.is_vault ? 'Vault' : detectedAccountMode(user) ? detectedAccountMode(user).label : user && user.exchange === 'hyperliquid' && !(state.snapshot && state.snapshot.account) ? 'Mode not checked' : 'Standard / Manual');
       addKeyValue(values, 'Read data', capability.supported === false ? 'Unavailable' : 'Available');
       var writeCapability = state.writeCapability;
       var writeAvailable = writeCapability && writeCapability.writes_available === true;
       var operatingMode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
-      addKeyValue(values, 'Transfer capability', writeAvailable || operatingMode === 'live' || operatingMode === 'paused_unknown' ? 'Available' : writeCapability ? 'Unavailable' : 'Not checked');
+      addKeyValue(values, 'Transfer capability', detectedAccountMode(user) ? 'Unavailable' : writeAvailable || operatingMode === 'live' || operatingMode === 'paused_unknown' ? 'Available' : writeCapability ? 'Unavailable' : 'Not checked');
       addKeyValue(values, 'Transfer route', capabilityRoute(user, writeCapability));
       var unsupportedReason = writeCapability && writeCapability.reason ? writeCapability.reason : capability.reason;
+      if (detectedAccountMode(user)) unsupportedReason = detectedAccountMode(user).guidance;
       if (unsupportedReason) addKeyValue(values, 'Unavailable reason', unsupportedReason);
       addKeyValue(values, 'Last successful scan', formatTime(simulation.last_successful_scan_at));
       addKeyValue(values, 'Last account event', formatTime(simulation.last_event_at));
@@ -966,6 +984,15 @@
       byId('destination-balance-value').textContent = balances ? balanceText(destination) : missingBalance;
       byId('destination-balance-detail').textContent = permissionReason || (user.is_vault ? 'Configured Vault destination' : 'Internal transfer destination');
       byId('transferable-balance-value').textContent = balances && balances.max_transferable !== null && balances.max_transferable !== undefined ? text(balances.max_transferable) + (source && source.asset ? ' ' + source.asset : '') : balances ? 'Unavailable' : missingBalance;
+      if (detectedAccountMode(user)) {
+        byId('source-balance-label').textContent = 'Shared USDC balance';
+        var spot = state.snapshot && state.snapshot.account && state.snapshot.account.spot_usdc;
+        byId('source-balance-value').textContent = spot && spot.total != null ? spot.total + ' USDC' : 'Unavailable';
+        byId('source-balance-detail').textContent = detectedAccountMode(user).label;
+        byId('destination-balance-value').textContent = 'Shared collateral';
+        byId('destination-balance-detail').textContent = detectedAccountMode(user).guidance;
+        byId('transferable-balance-value').textContent = 'Not supported in this mode';
+      }
       if (user.is_vault) {
         var vault = state.snapshot && state.snapshot.vault;
         var vaultBalances = vault && vault.balances;
@@ -1000,11 +1027,12 @@
       var capability = user && user.capability ? user.capability : {};
       var transferPermissions = state.snapshot && state.snapshot.transfer_permissions;
       var permissionBlocked = Boolean(transferPermissions && transferPermissions.internal_transfer === false);
-      var supported = Boolean(user && capability.supported === true && !permissionBlocked);
+      var supported = Boolean(user && capability.supported === true && !permissionBlocked && !detectedAccountMode(user));
       var endpoints = testTransferEndpoints(user);
       action.hidden = !supported;
       action.disabled = !supported || state.testActionPending;
       if (!user) note.textContent = 'Select a supported standard account to inspect test-transfer availability.';
+      else if (detectedAccountMode(user)) note.textContent = detectedAccountMode(user).guidance;
       else if (permissionBlocked) note.textContent = text(transferPermissions.reason, 'Internal account transfer permission is unavailable.');
       else if (!supported) note.textContent = text(capability.reason, 'Test transfers are unavailable because this exchange has no supported Profit Sweep adapter.');
       else if (user.is_vault) note.textContent = 'Real-funds Vault test (default 5 USDC): smaller withdrawals are allowed, but Transfer back requires at least 5 USDC for the Vault deposit.';
@@ -1219,6 +1247,7 @@
       byId('enable-live').disabled = !user || !state.schema || state.schema.live_available !== true || !['disabled', 'dry'].includes(mode);
       byId('fund-account').hidden = !user || String(user.exchange || '').toLowerCase() !== 'hyperliquid' || user.is_vault !== true;
       if (liveActivations.get(state.selectedUser)?.pending) setAccountActionsEnabled(false);
+      renderAccountMode(user);
       capturePolicyBaseline();
     }
     function syncDryJournalDisclosure(mode) {
@@ -1902,6 +1931,8 @@
         renderPositions(user);
         renderTestTransfers(user);
         renderStatusCards();
+        renderOverview(user);
+        renderAccountMode(user);
       } catch (error) {
         if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) {
           console.error('Profit Sweep preview failed', error);

@@ -6,6 +6,9 @@
     conversations: [],
     current: '',
     providers: {},
+    profile: 'default',
+    usageTimer: null,
+    usageGeneration: 0,
     models: {},
     poll: null,
     pollGeneration: 0,
@@ -100,7 +103,19 @@
     var toolbar = el('div', 'pai-toolbar');
     var provider = el('select');
     provider.id = 'pai-provider';
-    provider.addEventListener('change', function () { state.selectionDirty = true; loadModels(); });
+    provider.addEventListener('change', function () {
+      var profile = selectedProfile();
+      if (selectedProvider() === 'chatgpt' && profile !== state.profile) {
+        stopPoll();
+        ++state.requestGeneration;
+        state.current = '';
+        state.profile = profile;
+        renderMessages([]);
+        renderHistory();
+      }
+      state.selectionDirty = true;
+      loadModels();
+    });
     toolbar.appendChild(provider);
     var model = el('select');
     model.id = 'pai-model';
@@ -120,6 +135,9 @@
     health.addEventListener('click', refreshHealth);
     toolbar.appendChild(health);
     root.appendChild(toolbar);
+    var usage = el('div', 'pai-usage');
+    usage.id = 'pai-usage';
+    root.appendChild(usage);
 
     var context = el('div', 'pai-context');
     var contextToggle = el('label', 'pai-context-toggle');
@@ -214,13 +232,36 @@
     renderContext(context);
   }
 
+  async function refreshUsage() {
+    var generation = ++state.usageGeneration;
+    if (state.usageTimer) clearTimeout(state.usageTimer);
+    state.usageTimer = null;
+    var container = root.querySelector('#pai-usage');
+    var provider = selectedProvider(), profile = selectedProfile();
+    container.textContent = 'Loading usage…';
+    if (!provider || !state.open) { container.textContent = ''; return; }
+    try {
+      var usage = await api('/usage?provider=' + encodeURIComponent(provider) + '&profile=' + encodeURIComponent(profile));
+      if (generation !== state.usageGeneration || !state.open || provider !== selectedProvider() || profile !== selectedProfile()) return;
+      window.PBGuiAIUsage.render(container, usage);
+    } catch (error) {
+      if (generation === state.usageGeneration) container.textContent = 'Usage currently unavailable';
+    } finally {
+      if (generation === state.usageGeneration && state.open) state.usageTimer = setTimeout(refreshUsage, 30000);
+    }
+  }
+
   function startContextWatch() {
     stopContextWatch();
     refreshLiveContext();
+    refreshUsage();
     state.contextTimer = window.setInterval(refreshLiveContext, 500);
   }
 
   function stopContextWatch() {
+    ++state.usageGeneration;
+    if (state.usageTimer) clearTimeout(state.usageTimer);
+    state.usageTimer = null;
     if (state.contextTimer) window.clearInterval(state.contextTimer);
     state.contextTimer = null;
   }
@@ -346,22 +387,45 @@
     });
   }
 
+  function selectedProvider() {
+    var value = root.querySelector('#pai-provider').value;
+    return value.startsWith('chatgpt:') ? 'chatgpt' : value;
+  }
+
+  function selectedProfile() {
+    var value = root.querySelector('#pai-provider').value;
+    return value.startsWith('chatgpt:') ? value.slice(8) : state.profile;
+  }
+
   function rebuildProviders(preferred, preferredModel) {
     var select = root.querySelector('#pai-provider');
     var current = preferred || select.value;
     select.textContent = '';
-    [['chatgpt', 'ChatGPT'], ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go']].forEach(function (provider) {
+    var chatgpt = state.providers.chatgpt || {};
+    (chatgpt.profiles || (chatgpt.connected ? [{id: 'default', name: 'Default'}] : [])).forEach(function (profile) {
+      var option = el('option', '', 'ChatGPT · ' + profile.name);
+      option.value = 'chatgpt:' + profile.id;
+      select.appendChild(option);
+    });
+    [ ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go']].forEach(function (provider) {
       if (!(state.providers[provider[0]] || {}).connected) return;
       var option = el('option', '', provider[1]);
       option.value = provider[0];
       select.appendChild(option);
     });
-    if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
+    if (current && !Array.from(select.options).some(function (option) { return option.value === current; })) {
+      var missing = el('option', '', 'Unavailable profile/provider');
+      missing.value = current;
+      select.appendChild(missing);
+    }
+    if (current) select.value = current;
     return loadModels(preferredModel);
   }
 
   async function loadModels(preferred) {
-    var provider = root.querySelector('#pai-provider').value;
+    var provider = selectedProvider();
+    var profile = selectedProfile();
+    refreshUsage();
     var select = root.querySelector('#pai-model');
     var current = preferred || select.value;
     var generation = ++state.modelGeneration;
@@ -382,8 +446,8 @@
       return;
     }
     try {
-      var data = await api('/models?provider=' + encodeURIComponent(provider));
-      if (generation !== state.modelGeneration || provider !== root.querySelector('#pai-provider').value) return;
+      var data = await api('/models?provider=' + encodeURIComponent(provider) + '&profile=' + encodeURIComponent(profile));
+      if (generation !== state.modelGeneration || provider !== selectedProvider() || profile !== selectedProfile()) return;
       select.textContent = '';
       (data.models || []).forEach(function (model) {
         state.models[model.id] = model;
@@ -404,7 +468,7 @@
       state.modelsLoading = false;
       setBusy(state.busy);
     } catch (error) {
-      if (generation !== state.modelGeneration || provider !== root.querySelector('#pai-provider').value) return;
+      if (generation !== state.modelGeneration || provider !== selectedProvider() || profile !== selectedProfile()) return;
       state.models = {};
       select.textContent = '';
       var unavailable = el('option', '', 'Models unavailable');
@@ -503,8 +567,10 @@
       retry.hidden = !conversation.last_error || !state.retryMessages[id] || conversation.busy;
       setStatus(conversation.busy ? (conversation.activity || 'Model is working...') : (conversation.last_error || ''), !!conversation.last_error);
       if (!state.selectionDirty) {
-        if (root.querySelector('#pai-provider').value !== conversation.provider) {
-          await rebuildProviders(conversation.provider, conversation.model);
+        state.profile = conversation.chatgpt_profile || 'default';
+        var providerValue = conversation.provider === 'chatgpt' ? 'chatgpt:' + state.profile : conversation.provider;
+        if (root.querySelector('#pai-provider').value !== providerValue) {
+          await rebuildProviders(providerValue, conversation.model);
         } else if (root.querySelector('#pai-model').value !== conversation.model) {
           await loadModels(conversation.model);
         }
@@ -963,7 +1029,8 @@
   }
 
   async function newConversation() {
-    var provider = root.querySelector('#pai-provider').value;
+    var provider = selectedProvider();
+    var profile = selectedProfile();
     var model = root.querySelector('#pai-model').value;
     if (!provider || !model) return;
     try {
@@ -971,7 +1038,7 @@
       var data = await api('/conversations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: provider, model: model, effort: root.querySelector('#pai-effort').value, context: context })
+        body: JSON.stringify({ provider: provider, profile: profile, model: model, effort: root.querySelector('#pai-effort').value, context: context })
       });
       state.selectionDirty = false;
       state.current = data.conversation_id;
@@ -1024,7 +1091,7 @@
           context: turnContext,
           effort: root.querySelector('#pai-effort').value,
           model: root.querySelector('#pai-model').value,
-          provider: root.querySelector('#pai-provider').value
+          provider: selectedProvider()
         })
       });
       state.selectionDirty = false;

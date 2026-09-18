@@ -135,3 +135,25 @@ Nachrichten und aktivierter Seitenkontext werden an den ausgewaehlten externen A
 - **Python-Analyse hat einen Timeout oder gekuerzte Ausgabe:** Kleinere Eingabedaten, eine einfachere Berechnung oder ein kompakteres JSON-Resultat anfordern.
 - **ChatGPT bleibt bei model is processing results:** Hoeherer Reasoning-Aufwand kann nach Abschluss des lokalen Tools deutlich laenger dauern. Falls sich das Warten nicht mehr lohnt, **Stop** waehlen oder einen neuen Chat mit Standard beziehungsweise einer niedrigeren vom Modell angebotenen Variante starten.
 - **No supported models:** Nach dem Verbinden aktualisieren und pruefen, ob das OpenCode-Konto aktuell Modelle im Zen- oder Go-Live-Katalog bereitstellt.
+
+Bei fehlgeschlagenen ChatGPT-Antworten unterscheidet PBGui erkannte Nutzungs-/Anfragelimits, Modellzugriff, Anmeldung, Kontextlimit, Verbindungsprobleme und Serverfehler. Unbekannte Ursachen werden ausdrücklich so angezeigt und belegen keine Free-Sperre. Anbietertexte werden zum Schutz sensibler Inhalte nicht ungefiltert ausgegeben.
+
+### Mehrere ChatGPT-Abos
+
+Unter **ChatGPT profile** lassen sich getrennte Anmeldungen für deinen PBGui-Benutzer verwalten. Die bisherige Anmeldung und ältere Chats gehören zu **Default**. Einen Profilnamen eingeben, **Add profile** wählen und das gewünschte Abo per Browser login oder Device code anmelden. Jedes Profil kann separat umbenannt, abgemeldet oder entfernt werden. Nach der Anmeldung Konto und Tarif prüfen: Im Browser kann noch das vorherige OpenAI-Konto angemeldet sein.
+
+Die Auswahl eines anderen Profils beginnt einen neuen Chat. Bestehende Chats behalten ihre Profilzuordnung, auch nach API-Neustart oder Browser-Refresh. ChatGPT-Chats zeigen den Profilnamen im Verlauf. Beim Entfernen eines Profils bleibt der Verlauf erhalten; diese Chats werden nicht auf ein anderes Abo umgeleitet. Ein ausgeschöpftes Limit löst niemals einen automatischen Kontowechsel aus.
+
+Konto, Tarif und verfügbare Nutzungsfenster aktualisieren sich für das ausgewählte Profil automatisch. Limits werden nur angezeigt, wenn OpenAI sie bereitstellt. Zugangsdaten bleiben in getrennten Profilverzeichnissen auf dem Server. In der Browser-URL stehen ausschließlich Profilkennungen und Navigationskontext. Pro PBGui-Benutzer sind bis zu 20 Profile möglich.
+
+Das obere **Provider**-Menü zeigt jedes ChatGPT-Profil separat als **ChatGPT · Profilname**. Die Auswahl synchronisiert das Profil in der Seitenleiste und die verfügbaren Modelle.
+
+Auch der kompakte AI-Seitenbereich zeigt jedes ChatGPT-Profil im Provider-Menü. Ein Profilwechsel beginnt einen separaten Chat.
+
+Nutzungslimits zeigen den verbleibenden Prozentsatz mit Balken pro gemeldetem Zeitfenster (monatlich, wöchentlich, täglich oder 5 Stunden) und den Rücksetzzeitpunkt. Das Zeitfenster ist keine verfügbare Rechenzeit.
+
+Wurde eine Anmeldung unterbrochen oder ging ihr Link nach dem Neuladen verloren, erneut Browser login oder Device code anklicken. PBGui beendet den eigenen vorherigen Anmeldeversuch und zeigt einen neuen Link.
+
+Der kompakte AI-Seitenbereich zeigt die Nutzung des ausgewählten Anbieters und ChatGPT-Profils und aktualisiert sie automatisch alle 30 Sekunden. OpenCode Go zeigt 5-Stunden-, Wochen- und Monatslimits mit Rücksetzdatum in beiden Chat-Ansichten. Das Zen-Guthaben ist weiterhin in der OpenCode-Konsole verfügbar.
+
+Beim Löschen eines Chats wird dessen laufender Antwortstatus bereinigt. Während der Prüfung eines Vorschlags bleiben andere Vorschläge sichtbar; ein Abbruch stellt die betreffende Karte wieder her.

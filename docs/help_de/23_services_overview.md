@@ -92,3 +92,5 @@ Werte besitzen bewusst keinen globalen INI-Watcher.
 - Ein Dienst zeigt einen roten Punkt, sollte aber laufen: das zugehörige Log im Log-Tab des Dienstes auf Fehler prüfen
 - **PBRun**-Listen wirken veraltet: zuerst prüfen, ob **PBCoinData** seine Mappings erfolgreich erstellt hat
 - Nach Konfigurationsänderung: betroffenen Dienst über den Restart-Button neu starten
+
+Während des Speicherns sind die Einstellungen gegen doppelte Anfragen gesperrt. Validierungsfehler nennen das betroffene Feld.

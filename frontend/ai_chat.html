@@ -58,12 +58,19 @@ button.danger { color: #fecaca; border-color: rgba(248,113,113,.35); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 .login-box { display: none; margin-top: 10px; padding: 10px; border-radius: 8px; background: #0b1320; border: 1px solid var(--border); }
 .login-box.visible { display: block; }
+#chatgpt-account, #chatgpt-limits { overflow-wrap: anywhere; }
+.usage-limit { display: grid; gap: 5px; margin: 8px 0; }
+.usage-limit strong { color: var(--text); font-size: 14px; }
+.usage-limit progress { width: 100%; height: 8px; appearance: none; border: none; border-radius: 4px; overflow: hidden; background: #26364d; }
+.usage-limit progress::-webkit-progress-bar { background: #26364d; }
+.usage-limit progress::-webkit-progress-value { background: #00c878; }
+.usage-limit progress::-moz-progress-bar { background: #00c878; }
 .login-code { margin: 7px 0; font: 700 20px/1.2 ui-monospace,SFMono-Regular,monospace; letter-spacing: .08em; color: #bfdbfe; }
 .login-link { color: var(--accent); word-break: break-all; }
 #chat-shell { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 #chat-toolbar { display: flex; align-items: center; gap: 9px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: rgba(17,26,40,.92); }
 #chat-toolbar label { color: var(--muted); font-size: 12px; }
-#provider-select { width: 145px; }
+#provider-select { width: auto; min-width: 180px; max-width: 320px; }
 #model-select { min-width: 180px; max-width: 330px; }
 #effort-select { width: 105px; }
 #toolbar-spacer { flex: 1; }
@@ -125,6 +132,17 @@ button:disabled { opacity: .45; cursor: not-allowed; }
         <span class="provider-name">ChatGPT</span>
         <span id="chatgpt-status" class="status">Checking</span>
       </div>
+      <label for="chatgpt-profile">ChatGPT profile</label>
+      <select id="chatgpt-profile" style="width:100%;margin:8px 0" aria-label="ChatGPT profile"></select>
+      <div id="chatgpt-account" class="provider-help"></div>
+      <div id="chatgpt-limits" class="provider-help"></div>
+      <input id="chatgpt-profile-name" maxlength="80" placeholder="Profile name" aria-label="Profile name" style="width:100%;box-sizing:border-box;margin:8px 0">
+      <div class="provider-actions">
+        <button id="chatgpt-profile-add">Add profile</button>
+        <button id="chatgpt-profile-rename">Rename</button>
+        <button id="chatgpt-profile-remove" class="danger">Remove</button>
+      </div>
+      <div class="provider-help">Each chat keeps its profile. Selecting another profile starts a new chat. Limits never switch accounts automatically.</div>
       <div class="provider-help">Browser login works when PBGui runs on this computer. Use Device code for a remote or headless PBGui host.</div>
       <div class="row">
         <button id="chatgpt-connect" class="primary">Browser login</button>
@@ -152,6 +170,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
       <div class="row" style="margin-top:7px">
         <a class="button-link" href="/api/ai/providers/opencode-go/subscribe" target="_blank" rel="noopener noreferrer">Get OpenCode Go</a>
       </div>
+      <div id="go-usage" class="provider-help"></div>
       <button id="go-disconnect" class="danger" hidden>Disconnect</button>
     </section>
 
@@ -170,7 +189,6 @@ button:disabled { opacity: .45; cursor: not-allowed; }
       <label id="effort-label" for="effort-select" hidden>Effort</label>
       <select id="effort-select" hidden disabled></select>
       <span id="toolbar-spacer"></span>
-      <button id="refresh-health">Check free models</button>
       <button id="clear-chat">New chat</button>
       <button id="delete-chat" class="danger" disabled>Delete</button>
     </div>
@@ -195,6 +213,7 @@ window.PBGUI_VERSION = "%%VERSION%%";
 window.PBGUI_SERIAL = "%%SERIAL%%";
 window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authenticated: true };
 </script>
+<script src="/app/js/ai_usage.js?v=1"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
@@ -209,6 +228,8 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     listGeneration: 0,
     proposalGeneration: 0,
     resolvingProposalIds: new Set(),
+    profile: new URL(window.location.href).searchParams.get("chatgpt_profile") || "default",
+    profiles: [],
     loginTimer: null,
     activityTimer: null,
     activityStartedAt: 0,
@@ -229,6 +250,9 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
   });
 
   async function api(path, options) {
+    if (path === '/status' || path.startsWith('/models?') || (path.startsWith('/providers/chatgpt/') && !path.includes('/profiles'))) {
+      path += (path.includes('?') ? '&' : '?') + 'profile=' + encodeURIComponent(state.profile);
+    }
     var response = await fetch(window.API_BASE + path, Object.assign({ credentials: 'same-origin' }, options || {}));
     var data = {};
     try { data = await response.json(); } catch (_) {}
@@ -278,6 +302,18 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     element.classList.toggle('error', !!error);
   }
 
+  var goUsageGeneration = 0;
+  async function refreshGoUsage(connected) {
+    var generation = ++goUsageGeneration;
+    if (!connected) { $('go-usage').textContent = ''; return; }
+    try {
+      var usage = await api('/usage?provider=opencode-go');
+      if (generation === goUsageGeneration) window.PBGuiAIUsage.render($('go-usage'), usage);
+    } catch (error) {
+      if (generation === goUsageGeneration) $('go-usage').textContent = 'Usage currently unavailable';
+    }
+  }
+
   async function refreshStatus() {
     var generation = ++state.statusGeneration;
     try {
@@ -285,14 +321,32 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       if (generation !== state.statusGeneration) return;
       state.providers = result.providers || {};
       var chatgpt = state.providers.chatgpt || {};
+      state.profiles = chatgpt.profiles || [{id:'default', name:'Default'}];
+      var profiles = $('chatgpt-profile');
+      profiles.replaceChildren();
+      state.profiles.forEach(function (item) {
+        var option = document.createElement('option'); option.value = item.id; option.textContent = item.name;
+        profiles.appendChild(option);
+      });
+      if (!state.profiles.some(function (item) {return item.id === state.profile;})) {
+        var missing = document.createElement('option');missing.value = state.profile;missing.textContent = 'Removed profile';profiles.appendChild(missing);
+      }
+      profiles.value = state.profile;
+      var currentProfile = state.profiles.find(function (item) {return item.id === state.profile;});
+      if (document.activeElement !== $('chatgpt-profile-name')) $('chatgpt-profile-name').value = currentProfile ? currentProfile.name : '';
+      $('chatgpt-account').textContent = chatgpt.email || '';
+      window.PBGuiAIUsage.render($('chatgpt-limits'), chatgpt);
+      $('chatgpt-profile-rename').disabled = !currentProfile || state.transitioning;
+      $('chatgpt-profile-remove').disabled = !currentProfile || state.transitioning;
       var go = state.providers['opencode-go'] || {};
       setProviderStatus('chatgpt', !!chatgpt.connected, chatgpt.connected ? ('Connected' + (chatgpt.plan ? ' · ' + chatgpt.plan : '')) : (chatgpt.available ? 'Not connected' : 'Runtime missing'), !chatgpt.available);
       setProviderStatus('go', !!go.connected, go.connected ? 'Connected' : 'Not connected', false);
-      $('chatgpt-connect').hidden = !!chatgpt.connected || !chatgpt.available;
-      $('chatgpt-device-connect').hidden = !!chatgpt.connected || !chatgpt.available;
+      $('chatgpt-connect').hidden = !currentProfile || !!chatgpt.connected || !chatgpt.available;
+      $('chatgpt-device-connect').hidden = !currentProfile || !!chatgpt.connected || !chatgpt.available;
       $('chatgpt-disconnect').hidden = !chatgpt.connected;
       $('go-connect-row').hidden = !!go.connected;
       $('go-disconnect').hidden = !go.connected;
+      refreshGoUsage(!!go.connected);
       await rebuildProviders();
       if ($('login-box').classList.contains('visible') && chatgpt.connected) {
         stopLoginPolling();
@@ -304,11 +358,27 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     }
   }
 
+  function providerValue(provider, profile) {
+    return provider === 'chatgpt' ? 'chatgpt:' + (profile || state.profile) : provider;
+  }
+
+  function selectedProvider() {
+    var value = $('provider-select').value;
+    return value.startsWith('chatgpt:') ? 'chatgpt' : value;
+  }
+
   async function rebuildProviders() {
     var select = $('provider-select');
     var current = select.value;
+    if (current.startsWith('chatgpt:')) current = providerValue('chatgpt');
     select.textContent = '';
-    [['chatgpt', 'ChatGPT'], ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go']].forEach(function (entry) {
+    state.profiles.forEach(function (profile) {
+      var option = document.createElement('option');
+      option.value = providerValue('chatgpt', profile.id);
+      option.textContent = 'ChatGPT · ' + profile.name;
+      select.appendChild(option);
+    });
+    [ ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go']].forEach(function (entry) {
       var info = state.providers[entry[0]] || {};
       if (!info.connected) return;
       var option = document.createElement('option');
@@ -317,12 +387,16 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       select.appendChild(option);
     });
     select.disabled = state.transitioning || !select.options.length;
-    if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
+    if (current && !Array.from(select.options).some(function (option) { return option.value === current; })) {
+      var unavailable = document.createElement('option');unavailable.value = current;unavailable.textContent = current + ' · Not connected';select.appendChild(unavailable);
+    }
+    if (current) select.value = current;
+    else if (state.profiles.some(function (profile) { return profile.id === state.profile; })) select.value = providerValue('chatgpt');
     await loadModels();
   }
 
   async function loadModels(preferredModel) {
-    var provider = $('provider-select').value;
+    var provider = selectedProvider();
     var generation = ++state.requestGeneration;
     var select = $('model-select');
     var current = preferredModel || select.value;
@@ -422,6 +496,10 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
 
   function setTransitioning(value) {
     state.transitioning = !!value;
+    $('chatgpt-profile').disabled = state.transitioning || state.loginDeadline > 0;
+    $('chatgpt-profile-add').disabled = state.transitioning || state.loginDeadline > 0;
+    $('chatgpt-profile-rename').disabled = state.transitioning || state.loginDeadline > 0;
+    $('chatgpt-profile-remove').disabled = state.transitioning || state.loginDeadline > 0;
     $('provider-select').disabled = state.transitioning || !$('provider-select').options.length;
     $('model-select').disabled = state.transitioning || !$('model-select').options.length;
     $('clear-chat').disabled = state.transitioning;
@@ -525,7 +603,8 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       var title = document.createElement('span');
       title.textContent = conversation.title || 'New chat';
       var meta = document.createElement('small');
-      meta.textContent = String(conversation.model || '') + (conversation.busy ? ' · working' : conversation.last_error ? ' · needs attention' : '');
+      var profile = state.profiles.find(function (item) {return item.id === (conversation.chatgpt_profile || 'default');});
+      meta.textContent = (conversation.provider === 'chatgpt' ? ((profile ? profile.name : 'Removed profile') + ' · ') : '') + String(conversation.model || '') + (conversation.busy ? ' · working' : conversation.last_error ? ' · needs attention' : '');
       button.appendChild(title);
       button.appendChild(meta);
       button.addEventListener('click', function () { loadConversation(conversation.conversation_id); });
@@ -584,14 +663,25 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     var generation = ++state.chatGeneration;
     stopActivityPolling();
     state.conversationId = conversationId;
+    rememberProfile();
     state.pendingMessage = '';
     renderConversationList();
     setTransitioning(true);
     try {
       var conversation = await api('/conversations/' + encodeURIComponent(conversationId));
       if (generation !== state.chatGeneration || conversationId !== state.conversationId) return;
-      if (Array.from($('provider-select').options).some(function (option) { return option.value === conversation.provider; })) {
-        $('provider-select').value = conversation.provider;
+      if (conversation.chatgpt_profile && state.profile !== conversation.chatgpt_profile) {
+        state.profile = conversation.chatgpt_profile;
+        rememberProfile();
+        await refreshStatus();
+        if (generation !== state.chatGeneration) return;
+      }
+      var conversationProvider = providerValue(conversation.provider, conversation.chatgpt_profile || 'default');
+      if (!Array.from($('provider-select').options).some(function (option) { return option.value === conversationProvider; })) {
+        var unavailable = document.createElement('option');unavailable.value = conversationProvider;unavailable.textContent = conversation.provider + ' · Not connected';$('provider-select').appendChild(unavailable);
+      }
+      if (Array.from($('provider-select').options).some(function (option) { return option.value === conversationProvider; })) {
+        $('provider-select').value = conversationProvider;
         await loadModels(conversation.model);
       }
       if (generation !== state.chatGeneration || conversationId !== state.conversationId) return;
@@ -615,7 +705,9 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       var result = await api('/conversations');
       if (generation !== state.listGeneration) return;
       state.conversations = result.conversations || [];
-      var selectedId = preferredId || state.conversationId;
+      var requestedConversation = new URL(window.location.href).searchParams.get('conversation');
+      if (!preferredId && requestedConversation === 'new') { await newChat(); return; }
+      var selectedId = preferredId || requestedConversation || state.conversationId;
       if (!state.conversations.some(function (item) { return item.conversation_id === selectedId; })) {
         selectedId = state.conversations.length ? state.conversations[0].conversation_id : '';
       }
@@ -756,7 +848,6 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     buttons.forEach(function (button) { button.disabled = true; });
     state.resolvingProposalIds.add(proposalId);
     card.hidden = true;
-    renderProposals([]);
     if (approve) {
       var approvalDetail = preview.action === 'python_analysis'
         ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
@@ -771,6 +862,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       });
       if (!confirmed) {
         state.resolvingProposalIds.delete(proposalId);
+        card.hidden = false;
         buttons.forEach(function (button) { button.disabled = false; });
         await reconcileProposals(conversationId);
         return;
@@ -819,7 +911,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
   async function sendMessage(retryMessage) {
     var message = String(retryMessage == null ? $('prompt').value : retryMessage).trim();
     if (!message || state.busy) return;
-    var provider = $('provider-select').value;
+    var provider = selectedProvider();
     var model = $('model-select').value;
     var effort = $('effort-select').value;
     var generation = state.chatGeneration;
@@ -835,10 +927,11 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
         var created = await api('/conversations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: provider, model: model, effort: effort })
+          body: JSON.stringify({ provider: provider, model: model, effort: effort, profile: state.profile })
         });
         if (generation !== state.chatGeneration) return;
         state.conversationId = created.conversation_id;
+        rememberProfile();
         state.retryMessages[state.conversationId] = state.retryMessages[retryKey];
         if (retryKey === '__new__') delete state.retryMessages[retryKey];
         await loadConversationSummary();
@@ -855,7 +948,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
           message: message,
           effort: $('effort-select').value,
           model: $('model-select').value,
-          provider: $('provider-select').value,
+          provider: selectedProvider(),
           context: window.PBGuiAI && typeof window.PBGuiAI.collectContext === 'function'
             ? window.PBGuiAI.collectContext()
             : null
@@ -888,6 +981,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     ++state.chatGeneration;
     stopActivityPolling();
     state.conversationId = '';
+    rememberProfile();
     state.busy = false;
     state.pendingMessage = '';
     delete state.retryMessages.__new__;
@@ -930,19 +1024,26 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
   }
 
   async function deleteCurrentConversation() {
-    if (!state.conversationId) return;
+    if (!state.conversationId || state.transitioning) return;
+    var conversationId = state.conversationId;
     var confirmed = await window.PBGuiDialogs.confirm({
       title: 'Delete AI chat',
       message: 'Delete this conversation and its history?',
       confirmText: 'Delete'
     });
     if (!confirmed) return;
-    var conversationId = state.conversationId;
+    if (conversationId !== state.conversationId) return;
     setTransitioning(true);
     try {
       await api('/conversations/' + encodeURIComponent(conversationId), { method: 'DELETE' });
       delete state.retryMessages[conversationId];
+      if (state.conversationId !== conversationId) return;
+      ++state.chatGeneration;
+      stopActivityPolling();
+      state.busy = false;
+      state.pendingMessage = '';
       state.conversationId = '';
+      rememberProfile();
       await loadConversations();
     } catch (error) { setNotice(error.message, true); }
     finally { setTransitioning(false); }
@@ -957,6 +1058,10 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
 
   function hideLoginBox() {
     $('login-box').classList.remove('visible');
+    $('chatgpt-profile').disabled = state.transitioning;
+    $('chatgpt-profile-add').disabled = state.transitioning;
+    $('chatgpt-profile-remove').disabled = state.transitioning;
+    $('chatgpt-profile-rename').disabled = state.transitioning;
     $('login-link').removeAttribute('href');
     $('login-link').textContent = '';
     $('login-code').textContent = '';
@@ -981,6 +1086,10 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
 
   async function startChatgptLogin(mode) {
     var generation = ++state.loginGeneration;
+    $('chatgpt-profile').disabled = true;
+    $('chatgpt-profile-add').disabled = true;
+    $('chatgpt-profile-remove').disabled = true;
+    $('chatgpt-profile-rename').disabled = true;
     $('chatgpt-connect').disabled = true;
     $('chatgpt-device-connect').disabled = true;
     try {
@@ -1003,9 +1112,56 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       if (generation === state.loginGeneration && !state.transitioning && !$('login-box').classList.contains('visible')) {
         $('chatgpt-connect').disabled = false;
         $('chatgpt-device-connect').disabled = false;
+        setTransitioning(false);
       }
     }
   }
+
+  function rememberProfile() {
+    var url = new URL(window.location.href);
+    url.searchParams.set('chatgpt_profile', state.profile);
+    url.searchParams.set('conversation', state.conversationId || 'new');
+    history.replaceState(null, '', url);
+  }
+
+  async function selectProfile(profile) {
+    ++state.statusGeneration; ++state.requestGeneration;
+    await newChat(true);
+    state.profile = profile; rememberProfile();
+    $('chatgpt-account').textContent = '';
+    $('chatgpt-limits').textContent = 'Loading usage…';
+    try { await refreshStatus(); }
+    finally { setTransitioning(false); }
+  }
+
+  $('chatgpt-profile').addEventListener('change', function () {
+    selectProfile($('chatgpt-profile').value).catch(function (error) {setNotice(error.message, true);});
+  });
+  async function saveProfile(create) {
+    var name = $('chatgpt-profile-name').value.trim();
+    if (!name) {setNotice('Enter a profile name.', true);return;}
+    setTransitioning(true);
+    try {
+      var result = await api('/providers/chatgpt/profiles', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,profile:create ? null : state.profile})});
+      if (create) await selectProfile(result.id);
+      else await refreshStatus();
+    } catch (error) {setNotice(error.message, true);}
+    finally {setTransitioning(false);}
+  }
+  $('chatgpt-profile-add').addEventListener('click', function () {saveProfile(true);});
+  $('chatgpt-profile-rename').addEventListener('click', function () {saveProfile(false);});
+  $('chatgpt-profile-remove').addEventListener('click', async function () {
+    var profile = state.profile;
+    var accepted = await window.PBGuiDialogs.confirm({title:'Remove ChatGPT profile',message:'Disconnect and remove this profile? Its conversation history remains, but cannot continue with another subscription automatically.',confirmText:'Remove profile'});
+    if (!accepted || profile !== state.profile) return;
+    setTransitioning(true);
+    try {
+      await api('/providers/chatgpt/profiles/' + encodeURIComponent(profile), {method:'DELETE'});
+      var remaining = state.profiles.filter(function (item) {return item.id !== profile;});
+      await selectProfile(remaining.length ? remaining[0].id : 'default');
+    } catch (error) {setNotice(error.message, true);}
+    finally {setTransitioning(false);}
+  });
 
   $('chatgpt-connect').addEventListener('click', function () {
     startChatgptLogin('browser');
@@ -1059,7 +1215,12 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
 
   $('provider-select').addEventListener('change', async function () {
     setTransitioning(true);
-    try { await loadModels(); }
+    try {
+      var value = $('provider-select').value;
+      if (value.startsWith('chatgpt:') && value.slice(8) !== state.profile) await selectProfile(value.slice(8));
+      else await loadModels();
+    }
+    catch (error) { setNotice(error.message, true); }
     finally { setTransitioning(false); }
   });
   $('model-select').addEventListener('change', async function () {
@@ -1076,14 +1237,17 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     var message = state.retryMessages[state.conversationId || '__new__'];
     if (message) sendMessage(message);
   });
-  $('refresh-health').addEventListener('click', async function () {
-    try { await api('/models/health-refresh', { method: 'POST' }); setNotice('Free-model health refresh queued.', false); }
-    catch (error) { setNotice(error.message, true); }
-  });
   $('prompt').addEventListener('keydown', function (event) {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); }
   });
+  var statusPolling = false;
+  var statusTimer = setInterval(async function () {
+    if (statusPolling || state.transitioning || state.busy || state.loginDeadline || document.visibilityState !== 'visible') return;
+    statusPolling = true;
+    try { await refreshStatus(); } finally { statusPolling = false; }
+  }, 30000);
   window.addEventListener('pagehide', function () {
+    clearInterval(statusTimer);
     stopLoginPolling();
     stopActivityPolling();
     hideLoginBox();

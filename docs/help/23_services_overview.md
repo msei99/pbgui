@@ -92,3 +92,5 @@ have no global INI watcher.
 - A service shows a red dot but should be running: check the corresponding log in the service's Log tab for errors
 - **PBRun** lists look stale: confirm **PBCoinData** built its mappings successfully first
 - After config change: restart the affected service via the Restart button
+
+Settings saves are locked while pending. Validation errors identify the affected field rather than displaying a generic object.

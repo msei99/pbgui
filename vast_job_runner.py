@@ -113,14 +113,37 @@ def rental_payload(intent: dict, registry_token: str = "") -> dict:
             "onstart": startup, "env": {"PBGUI_DEADLINE": str(intent["deadline"]), "PBGUI_JOB_ID": intent["id"], "PBGUI_MAX_DEADLINE": str(maximum_deadline(intent)), "PBGUI_HARD_DEADLINE": str(intent['accepted_at'] + 86400 if 'accepted_at' in intent else maximum_deadline(intent))}}
 
 
-def owned_instance(client: VastClient, intent: dict, *, fresh: bool = False) -> dict | None:
+def owned_instance(client: VastClient, intent: dict, *, fresh: bool = False,
+                   expected_id: int | None = None) -> dict | None:
     """Only a full unique ownership label permits remote changes."""
     rows = client.instances(fresh=True) if fresh else client.instances()
+    if expected_id is not None:
+        existing = [row for row in rows if row['id'] == expected_id]
+        if any(row.get('label') != intent['label'] for row in existing):
+            raise VastError("Rental instance still exists but its ownership label changed; cleanup needs inspection")
     matches = [row for row in rows if row.get("label") == intent["label"]]
     if len(matches) > 1:
         raise VastError("Duplicate cloud ownership label; cleanup needs inspection")
     return matches[0] if matches else None
 
+
+
+def finalize_verified_rental(store: JobStore, identifier: str, *, now: float) -> None:
+    """Finish local tracking after verified absence even if the job controller died."""
+    state = store.read(identifier)
+    if state['rental_state'] != 'deletion_verified':
+        return
+    if state.get('kind') == 'worker':
+        from vast_queue import CloudQueue, worker_step
+        worker_step(CloudQueue(store), identifier, now=now)
+    elif state['status'] not in {'completed', 'failed', 'cancelled'}:
+        collected = state.get('final_collected')
+        stopped = store.read(identifier, 'control.json')['stop']
+        message = ('Raw results saved locally; result import needs retry' if collected else
+                   'Vast.ai instance disappeared; the last local snapshot remains available'
+                   if state.get('rental_end_reason') == 'provider_instance_missing' else
+                   'Rental ended; the last local snapshot remains available')
+        store.update(identifier, status='cancelled' if stopped and not collected else 'failed', error=message)
 
 def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dict, registry_token: str,
                *, now: float | None = None) -> bool:
@@ -131,7 +154,11 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
     state = store.read(identifier)
     ending = bool(control["cleanup"] or (control["stop"] and ((state.get("kind") != "worker" and not state.get("uploaded")) or (state.get("kind") == "worker" and not state.get("active_job"))))) or now >= intent["deadline"]
     marker = directory / "attempt.json"
-    if not marker.exists() and not ending:
+    if state.get('rental_state') == 'deletion_verified':
+        finalize_verified_rental(store, identifier, now=now)
+        return True
+    observed = bool(state.get('provider_seen_at')) or state.get('rental_state') == 'active'
+    if not marker.exists() and not ending and not state.get('instance_id') and not observed:
         write_json(marker, {"attempted_at": now})
         # This marker must be durable before the sole paid Create request.
         try:
@@ -148,33 +175,53 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
         instance_id = positive_id(response.get("new_contract"))
         store.update(identifier, instance_id=instance_id)
         state = store.read(identifier)
-    row = owned_instance(client, intent, fresh=ending)
+    try:
+        # Each absence confirmation must come from a fresh, successful provider list.
+        row = owned_instance(client, intent, fresh=True, expected_id=state.get('instance_id'))
+    except Exception:
+        store.update(identifier, absent_checks=0)
+        raise
     if row:
         if state.get("instance_id") and row["id"] != state["instance_id"]:
+            store.update(identifier, absent_checks=0)
             raise VastError("Instance ID does not match the rental authorization")
         store.update(identifier, instance_id=row["id"], rental_state="destroy_pending" if ending else "active",
                      provider_status=str(row.get("actual_status") or "unknown")[:50], absent_checks=0, cleanup_error=None, creation_error=None,
+                     provider_seen_at=now, provider_checked_at=now,
                      **({'host_machine_id': row['machine_id']} if type(row.get('machine_id')) is int and row['machine_id'] > 0 else {}))
         if ending:
             client.request("DELETE", f"/instances/{positive_id(row['id'])}")
         return False
-    if ending:
+    # A confirmed creation may disappear before its first visible listing. Give
+    # provider propagation the same grace period as an ambiguous create response.
+    if ending or observed or state.get('instance_id') or marker.exists():
         # Allow a timed-out creation to settle before accepting fresh absence
         # checks. A provider error never counts as proof of absence.
         attempted_at = store.read(identifier, 'attempt.json')['attempted_at'] if marker.exists() else intent['accepted_at']
         settle_until = min(intent['deadline'], attempted_at + 120)
-        if marker.exists() and not state.get("instance_id") and now < settle_until:
+        if marker.exists() and (not state.get("instance_id") or (not ending and not observed)) and now < settle_until:
             store.update(identifier, cleanup_wait_until=settle_until, provider_checked_at=now,
                          cleanup_error=None)
             if not state.get('cleanup_wait_until'):
                 _log(SERVICE, f"Rental {identifier}: no instance found; awaiting ambiguous-create deadline "
                      f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(settle_until))}", level='INFO')
             return False
-        count = int(state.get("absent_checks", 0)) + 1
-        store.update(identifier, absent_checks=count, cleanup_error=None, cleanup_wait_until=None,
-                     provider_checked_at=now, rental_state="deletion_verified" if count >= 2 else "destroy_pending",
-                     provider_status="deleted" if count >= 2 else "not_found")
-        return count >= 2
+        count = int(state.get("absent_checks", 0))
+        if count and now - float(state.get('provider_checked_at') or 0) < 10:
+            return False
+        count += 1
+        verified = count >= 2
+        updates = dict(absent_checks=count, cleanup_error=None, cleanup_wait_until=None,
+                       provider_checked_at=now, rental_state="deletion_verified" if verified else
+                       "destroy_pending" if ending else state['rental_state'],
+                       provider_status="deleted" if verified else "not_found")
+        if verified and not ending:
+            updates['rental_end_reason'] = 'provider_instance_missing'
+            _log(SERVICE, "Rental " + identifier + ": Vast.ai confirmed the instance is absent; releasing rental lock", level="WARNING")
+        store.update(identifier, **updates)
+        if verified:
+            finalize_verified_rental(store, identifier, now=now)
+        return verified
     return False
 
 
@@ -265,10 +312,13 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
             if not lease_id:
                 store.control(identifier, "cleanup")
             return
-        if store.read(lease_id or identifier)["rental_state"] == "deletion_verified":
+        lease_state = store.read(lease_id or identifier)
+        if lease_state["rental_state"] == "deletion_verified":
             if state["status"] not in {"completed", "failed", "cancelled"}:
                 store.update(identifier, status="cancelled" if store.read(identifier, "control.json")["stop"] else "failed",
-                             error="Rental ended; the last local snapshot remains available")
+                             error=("Vast.ai instance disappeared; the last local snapshot remains available"
+                                    if lease_state.get('rental_end_reason') == 'provider_instance_missing'
+                                    else "Rental ended; the last local snapshot remains available"))
             return
         control = store.read(identifier, "control.json")
         if lease_id and store.read(lease_id, "control.json")["stop"]:

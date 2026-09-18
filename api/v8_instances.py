@@ -882,7 +882,10 @@ def _ensure_pb8_cluster_rollout_ready(identity: dict[str, Any]) -> None:
         status = json.loads(status_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         status = {}
-    finished_at = int(status.get("finished_at") or 0) if isinstance(status, dict) else 0
+    try:
+        finished_at = int(status.get("finished_at") or 0) if isinstance(status, dict) else 0
+    except (TypeError, ValueError, OverflowError):
+        finished_at = 0
     peers = status.get("peers") if isinstance(status, dict) else []
     peers_by_id = {
         str(item.get("node_id") or ""): item
@@ -893,16 +896,27 @@ def _ensure_pb8_cluster_rollout_ready(identity: dict[str, Any]) -> None:
     status_fresh = finished_at > 0 and abs(time.time() - finished_at) <= 120
     for node_id, node in sorted(required_nodes.items()):
         peer = peers_by_id.get(node_id, {})
-        if not status_fresh or peer.get("pb8_capability") is not True:
-            blockers.append(str(node.get("pbname") or node.get("hostname") or node_id))
+        host = str(node.get("pbname") or node.get("hostname") or node_id)
+        if not status_fresh:
+            blockers.append(f"{host}: Cluster sync status is missing or older than two minutes. "
+                            "Wait for the automatic sync; if this persists, check Cluster Sync.")
+        elif peer.get("ok") is False or peer.get("status") in {"error", "backoff", "config_error"}:
+            blockers.append(f"{host}: the last Cluster sync failed or is waiting to retry. "
+                            "PB8 support could not be verified. Check connectivity and Cluster Sync logs; "
+                            "an update is not necessarily required.")
+        elif peer.get("pb8_capability") is False:
+            blockers.append(f"{host}: the Cluster handshake reports no PB8 support. "
+                            "Update PBGui on this replica, then wait for automatic sync.")
+        elif peer.get("pb8_capability") is not True:
+            blockers.append(f"{host}: no PB8 capability confirmation is available yet. "
+                            "Wait for the automatic Cluster handshake; if this persists, check Cluster Sync.")
     if blockers:
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"PB8 Cluster rollout is not ready for {', '.join(blockers)}. "
-                f"Update all active Cluster state replicas and wait for fresh {PB8_OPERATION_CAPABILITY} handshakes."
-            ),
+            detail="PB8 changes are temporarily blocked because Cluster readiness cannot be confirmed. "
+                   + " ".join(blockers),
         )
+
 
 
 def _coerce_version(value: Any) -> int:

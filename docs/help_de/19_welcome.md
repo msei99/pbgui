@@ -88,3 +88,5 @@ Ein leeres Passwort allein wird abgelehnt. Jeder Passwort- oder Auth-Modus-Wechs
 - **Save Setup** bleibt deaktiviert: zuerst einloggen
 - **Browse** funktioniert nicht: Authentifizierung und Server-Pfadrechte pruefen
 - **Du willst nur das Passwort aendern**: die Sidebar-Aktion **Password** verwenden statt die Setup-Felder anzupassen
+
+Login und Save Setup verarbeiten jeweils nur eine Anfrage. Nach einem Fehler werden die Eingabefelder wieder freigegeben.

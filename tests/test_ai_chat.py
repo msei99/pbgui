@@ -2498,6 +2498,8 @@ def test_status_does_not_start_codex_without_existing_auth(tmp_path: Path, monke
             "available": True,
             "connected": False,
             "plan": "",
+            "profile": "default",
+            "profiles": [{"id": "default", "name": "Default"}],
         }
         await service.shutdown()
 

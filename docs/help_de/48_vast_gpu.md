@@ -269,6 +269,8 @@ Ohne heruntergeladenes Optimizer-Log öffnet der Viewer **VastRunner.log**, das 
 
 Start meldet einen Konflikt, solange die vorherige Miete beendet oder bereinigt wird. Wartende Jobs behalten Open log, solange eine gemeinsame Miete ungeklärt ist; dort bleiben Überwachung und Bereinigungsaktionen erreichbar.
 
+Die lokale Mietüberwachung erkennt auch direkt bei Vast.ai gelöschte Instanzen. Zwei frische erfolgreiche Abwesenheitsprüfungen im Abstand von mindestens zehn Sekunden lösen die Miet-Sperre, beenden unfertige Jobs dieser Miete und pausieren deren Queue. Wartende Jobs und lokale Ergebnissicherungen bleiben erhalten. Provider-Fehler setzen die Bestätigung zurück. Gestoppte/Offline-Instanzen, die Vast noch auflistet, gelten nicht als gelöscht. Bei geändertem Eigentumslabel ist eine Prüfung nötig; PBGui nimmt keine Löschung an. Neue oder unklar erstellte Instanzen erhalten zwei Minuten Wartezeit für die Sichtbarkeit. Diese Prüfung mietet keine Ersatzinstanz. Die Überwachung muss laufen; Resume supervision kann sie nach einem Ausfall erneut starten.
+
 Bei unklarer Erstellung wartet die Bereinigung bis zwei Minuten nach dem Versuch und verlangt danach zwei frische erfolgreiche Abfragen ohne passende Instanz. So kann Start vor dem Mietende freigegeben werden. Provider-Fehler und Rate-Limits zählen nicht als Abwesenheitsbestätigung.
 
 Nach Klick auf Start zeigt die Queue-Zeile sofort **Starting…**, solange die Anfrage läuft. Cloud-Startknöpfe sind währenddessen gegen doppelte Aufrufe gesperrt.

@@ -747,7 +747,7 @@
                       '&start_day=' + encodeURIComponent(sd) +
                       '&end_day=' + encodeURIComponent(today);
             fetch(url, {method: 'POST', credentials: 'same-origin', headers: jsonHeaders()})
-                .then(function(r) { return r.json(); })
+                .then(readQueueResponse)
                 .then(function(data) {
                     elBtnDlOvMissing.disabled = false;
                     elBtnDlOvMissing.textContent = '\u25bc Download missing';
@@ -782,7 +782,7 @@
                       '&coin=' + encodeURIComponent(COIN) +
                       '&month=' + encodeURIComponent(currentMonth);
             fetch(url, {method: 'POST', credentials: 'same-origin', headers: jsonHeaders()})
-                .then(function(r) { return r.json(); })
+                .then(readQueueResponse)
                 .then(function(data) {
                     elBtnDlL2book.disabled = false;
                     elBtnDlL2book.textContent = '\u25bc Download month';
@@ -798,6 +798,15 @@
                     showToast('Queue failed: ' + e.message, 'error');
                 });
         });
+    }
+
+    async function readQueueResponse(response) {
+        var data = await response.json().catch(function() { return {}; });
+        var detail = data.detail || data.error;
+        if (Array.isArray(detail)) detail = detail.map(function(item) { return (item.loc || []).join('.') + ': ' + (item.msg || 'Invalid value'); }).join('; ');
+        if (!response.ok || detail) throw new Error(typeof detail === 'string' ? detail : ('HTTP ' + response.status));
+        if (typeof data.job_id !== 'string' || !data.job_id) throw new Error('Queue response did not contain a job ID');
+        return data;
     }
 
     // ---------------------------------------------------------------- WebSocket

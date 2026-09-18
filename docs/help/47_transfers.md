@@ -58,3 +58,12 @@ For a Hyperliquid Vault, **Profit Sweep > Exchange / Vault > Fund account** open
 - **Unknown:** do not create another identical transfer. Use **Reconcile** for the existing operation.
 
 API calls and local assets preserve the configured ASGI mount prefix behind reverse proxies. Root-relative API URLs also support IPv6 access without reconstructing a malformed origin.
+
+
+### Hyperliquid account mode
+
+PBGui detects Standard / Manual, Unified Account, and Portfolio Margin. Unified and Portfolio Margin share collateral: separate Spot/Perps transfers and Profit Sweep are not supported. To use Profit Sweep, change Account Type to **Manual (Standard)** in Hyperliquid, then refresh PBGui. PBGui does not change the exchange account mode. Vault transfers are checked separately; a Unified leader does not automatically block them.
+
+**Max** fills the currently transferable amount for the selected route. Review and confirm the transfer separately; the full account balance may not be transferable.
+
+Balances and transfer history refresh automatically while this page is visible. Pending manual transfers are checked against exchange history periodically, without resubmission or a manual Refresh button.

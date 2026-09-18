@@ -806,6 +806,7 @@ def test_jobs_monitor_escapes_job_data_and_uses_delegated_actions() -> None:
         const expandedDownloaderJobs = new Set();
         const startingJobIds = new Set();
         const cancellingJobIds = new Set();
+        const pendingJobActions = new Set();
         const downloaderLogCache = new Map();
         function calculateProgress() { return 42; }
         function formatJobDuration() { return '1m 02s'; }

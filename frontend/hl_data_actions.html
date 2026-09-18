@@ -2066,29 +2066,44 @@
         if (modal) modal.classList.remove('active');
     }
 
+    var pendingJobActions = new Set();
+    function setJobActionBusy(id, busy) {
+        ROOT.querySelectorAll('[data-job]').forEach(function(button) {
+            if (button.getAttribute('data-job') === String(id) && ['cancel-job', 'retry-job', 'requeue-job'].includes(button.getAttribute('data-action'))) button.disabled = busy;
+        });
+    }
     async function cancelJob(id) {
+        if (pendingJobActions.has(String(id))) return;
+        pendingJobActions.add(String(id));
+        setJobActionBusy(id, true);
         try {
-            var resp = await fetch(API_BASE + '/jobs/cancel', authOptions({
-                method:'POST',
-                headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({ job_id: id, reason: 'user cancel' })
-            }));
-            if (!resp.ok) {
-                var detail = 'HTTP ' + resp.status;
-                try {
-                    var err = await resp.json();
-                    if (err && (err.detail || err.error)) detail = String(err.detail || err.error);
-                } catch(e) {}
-                throw new Error(detail);
+            try {
+                var resp = await fetch(API_BASE + '/jobs/cancel', authOptions({
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ job_id: id, reason: 'user cancel' })
+                }));
+                if (!resp.ok) {
+                    var detail = 'HTTP ' + resp.status;
+                    try {
+                        var err = await resp.json();
+                        if (err && (err.detail || err.error)) detail = String(err.detail || err.error);
+                    } catch(e) {}
+                    throw new Error(detail);
+                }
+                await Promise.all(['dl','build'].filter(function(ns) { return currentTab[ns] === 'running'; }).map(function(ns) { return loadRunning(ns); }));
+            } catch(e) {
+                var modal=$('modal'), title=$('modal-title'), body=$('modal-body');
+                if (modal && title && body) {
+                    title.textContent='Cancel failed';
+                    body.textContent='Failed to cancel job ' + id + ': ' + (e && e.message ? e.message : 'Unknown error');
+                    updateModalViewportHeight();
+                    modal.classList.add('active');
+                }
             }
-        } catch(e) {
-            var modal=$('modal'), title=$('modal-title'), body=$('modal-body');
-            if (modal && title && body) {
-                title.textContent='Cancel failed';
-                body.textContent='Failed to cancel job ' + id + ': ' + (e && e.message ? e.message : 'Unknown error');
-                updateModalViewportHeight();
-                modal.classList.add('active');
-            }
+        } finally {
+            pendingJobActions.delete(String(id));
+            setJobActionBusy(id, false);
         }
     }
     async function historyJobAction(id, action, suffix, method) {
@@ -2158,12 +2173,28 @@
         });
     }
     async function retryJob(id) {
-        if (!(await historyJobAction(id, 'Retry', '/retry', 'POST'))) return;
-        ['dl','build'].forEach(function(ns) { if(currentTab[ns]==='failed') loadHistoryTab(ns,'failed'); });
+        if (pendingJobActions.has(String(id))) return;
+        pendingJobActions.add(String(id));
+        setJobActionBusy(id, true);
+        try {
+            if (!(await historyJobAction(id, 'Retry', '/retry', 'POST'))) return;
+            ['dl','build'].forEach(function(ns) { if(currentTab[ns]==='failed') loadHistoryTab(ns,'failed'); });
+        } finally {
+            pendingJobActions.delete(String(id));
+            setJobActionBusy(id, false);
+        }
     }
     async function requeueJob(id) {
-        if (!(await historyJobAction(id, 'Requeue', '/requeue', 'POST'))) return;
-        ['dl','build'].forEach(function(ns) { if(currentTab[ns]==='done') loadHistoryTab(ns,'done'); });
+        if (pendingJobActions.has(String(id))) return;
+        pendingJobActions.add(String(id));
+        setJobActionBusy(id, true);
+        try {
+            if (!(await historyJobAction(id, 'Requeue', '/requeue', 'POST'))) return;
+            ['dl','build'].forEach(function(ns) { if(currentTab[ns]==='done') loadHistoryTab(ns,'done'); });
+        } finally {
+            pendingJobActions.delete(String(id));
+            setJobActionBusy(id, false);
+        }
     }
 
     function togExp(ns, jobId, btn) {

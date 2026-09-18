@@ -1178,16 +1178,22 @@
         });
       });
     };
-    el('sync-delete').onclick = function () {
-      if (!state.syncJobId) { setStatus('sync-status', 'Select a sync job to delete.', 'err'); return; }
-      confirmModal('Delete sync job', 'Delete this sync job?', 'This removes the schedule only. It does not change database rows.', true).then(function (ok) {
+    var syncDeletePending = false;
+    el('sync-delete').onclick = async function () {
+      if (syncDeletePending) return;
+      const jobId = state.syncJobId;
+      if (!jobId) { setStatus('sync-status', 'Select a sync job to delete.', 'err'); return; }
+      syncDeletePending = true;
+      el('sync-delete').disabled = true;
+      try {
+        const ok = await confirmModal('Delete sync job', 'Delete this sync job?', 'This removes the schedule only. It does not change database rows.', true);
         if (!ok) return;
-        apiFetch('/sync/jobs/' + encodeURIComponent(state.syncJobId), { method: 'DELETE' }).then(function (data) {
-          state.syncJobId = '';
-          closeSyncEditor(true);
-          loadSyncJobs().then(function () { setStatus('sync-status', data, 'ok'); });
-        }).catch(function (err) { setStatus('sync-status', err.message, 'err'); });
-      });
+        const data = await apiFetch('/sync/jobs/' + encodeURIComponent(jobId), { method: 'DELETE' });
+        if (state.syncJobId === jobId) { state.syncJobId = ''; closeSyncEditor(true); }
+        await loadSyncJobs();
+        setStatus('sync-status', data, 'ok');
+      } catch (err) { setStatus('sync-status', err.message, 'err'); }
+      finally { syncDeletePending = false; el('sync-delete').disabled = false; }
     };
 
     el('backup-refresh').onclick = loadBackups;

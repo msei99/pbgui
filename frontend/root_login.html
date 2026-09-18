@@ -174,8 +174,13 @@
             replaceTopLocation(target.toString());
         }
 
+        var loginSubmitting = false;
         async function submitLogin(event) {
             event.preventDefault();
+            if (loginSubmitting) return;
+            loginSubmitting = true;
+            var input = document.getElementById("password");
+            input.disabled = true;
             setBanner("");
 
             var password = document.getElementById("password").value;
@@ -189,6 +194,9 @@
                 redirectToWelcome();
             } catch (error) {
                 setBanner(error.message);
+                loginSubmitting = false;
+                input.disabled = false;
+                input.focus();
             }
         }
 

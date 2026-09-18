@@ -243,3 +243,22 @@ PBGui projiziert aktive TradFi-Profile auf Mastern automatisch in den reserviert
 ## Upstream-Referenz
 
 - https://github.com/enarjord/passivbot
+
+
+### Hyperliquid-Kontomodus
+
+PBGui erkennt Standard / Manual, Unified Account und Portfolio Margin. Unified und Portfolio Margin verwenden gemeinsame Sicherheiten; getrennte Spot/Perps-Transfers und Profit Sweep werden nicht unterstützt. Für Profit Sweep in Hyperliquid den Account Type auf **Manual (Standard)** umstellen und PBGui aktualisieren. Der Kontomodus muss direkt in Hyperliquid geändert werden. Vault-Transfers werden separat geprüft; ein Unified-Leader sperrt sie nicht automatisch.
+
+Mit **Test Connection** den erkannten Kontomodus aktualisieren. Unified-Konten zeigen das gemeinsame USDC-Guthaben statt eines irreführenden Futures-Guthabens von null.
+
+#### In Hyperliquid auf Standard / Manual umstellen
+
+Im Kontomodus-Hinweis **Open Hyperliquid** wählen. Auf [Hyperliquid](https://app.hyperliquid.xyz/portfolio) das betreffende Konto auswählen, **Account Type** öffnen und **Manual (Standard)** wählen. Anschließend in PBGui mit **Test Connection** den erkannten Modus und das Guthaben aktualisieren.
+
+API Keys verbindet keine Browser-Wallets, fragt keine Signaturen an und übermittelt keine Kontomodus-Änderungen. Profit Sweep muss nach der Umstellung separat konfiguriert werden.
+
+Hyperliquid-Konten im Modus Standard / Manual zeigen Futures- und Spot-USDC-Guthaben. Nach **Test Connection** unter **Transfer Spot ↔ Perps** Richtung und Betrag auswählen. **Max** übernimmt das verfügbare übertragbare Guthaben. Jeden Transfer prüfen und bestätigen; Änderungen an Zugangsdaten vorher speichern. Bestätigte Transfers aktualisieren die Guthaben. Unklare Ergebnisse über **Transfer history** klären, ohne erneut zu überweisen. Manuelle Transfers ändern die Profit-Sweep-Buchhaltung nicht.
+
+Die Kontoliste aktualisiert beim Zurückwechseln in ihren Browser-Tab automatisch den Status **In Use** und den Löschbutton, wenn eine Run-Konfiguration gelöscht wurde. Instanzordner sowohl von PB7 als auch PB8 schützen die Zugangsdaten vor dem Löschen.
+
+Transfer-Guthaben aktualisieren sich automatisch, auch solange die Börsenbestätigung aussteht. PBGui prüft die Historie bereits übermittelter manueller Transfers regelmäßig nach und sendet sie niemals erneut. Sobald der bestehende Vorgang bestätigt oder fehlgeschlagen ist, werden die Transferfelder wieder freigegeben.

@@ -130,3 +130,5 @@ Vor dem Ersetzen werden vorhandene Dateien gesichert. Prüfe vor dem Start die a
 3. Einen Sync Job vor dem Aktivieren des Zeitplans mit **Run Now** testen.
 4. Aktuelle Backups behalten, bis das geänderte Ziel geprüft wurde.
 5. Gleichzeitige Wartungsaktionen auf demselben Ziel vermeiden.
+
+Das Löschen eines Sync-Jobs bleibt bis zum Abschluss gesperrt und betrifft immer den Job, für den die Bestätigung geöffnet wurde.

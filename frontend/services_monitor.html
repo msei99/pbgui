@@ -3432,19 +3432,35 @@ window.PBGUI_NAV_CONFIG = {
     });
   };
 
-  function _post(ep, body, msgId, onSuccess) {
-    return fetch(API_BASE + ep, authOptions({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }))
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      var message = d && d.apply && d.apply.message ? String(d.apply.message) : 'Saved';
-      _flash(msgId, d.ok ? message : (d.detail || 'Error'), !d.ok);
-      if (d.ok && typeof onSuccess === 'function') onSuccess(d);
-    })
-    .catch(function (e) { _flash(msgId, 'Error: ' + e.message, true); });
+  var pendingSettingsPosts = new Set();
+  async function _post(ep, body, msgId, onSuccess) {
+    if (pendingSettingsPosts.has(msgId)) return;
+    pendingSettingsPosts.add(msgId);
+    var messageNode = document.getElementById(msgId);
+    var button = messageNode && messageNode.previousElementSibling;
+    if (button) button.disabled = true;
+    try {
+      var response = await fetch(API_BASE + ep, authOptions({
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      }));
+      var data = await response.json().catch(function () { return {}; });
+      if (!data || typeof data !== 'object') data = {};
+      if (!response.ok || !data.ok) {
+        var detail = data.detail || data.error;
+        if (Array.isArray(detail)) detail = detail.map(function (item) {
+          return (Array.isArray(item.loc) ? item.loc.slice(1).join('.') + ': ' : '') + (item.msg || 'Invalid value');
+        }).join('; ');
+        throw new Error(typeof detail === 'string' ? detail : ('HTTP ' + response.status));
+      }
+      _flash(msgId, data.apply && data.apply.message ? String(data.apply.message) : 'Saved', false);
+      if (typeof onSuccess === 'function') await onSuccess(data);
+    } catch (error) {
+      console.error('Settings save failed', error);
+      _flash(msgId, error.message, true);
+    } finally {
+      pendingSettingsPosts.delete(msgId);
+      if (button) button.disabled = false;
+    }
   }
 
   function _val(id) { var el = document.getElementById(id); return el ? el.value : ''; }

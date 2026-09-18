@@ -2592,3 +2592,41 @@ def test_cancel_test_route_checks_owner_and_claim(isolated_api):
     result=asyncio.run(profit_sweep_api.cancel_test_transfer('vault','cancel-api'))
     assert result['operation']['status']=='cancelled'
     assert result['operation']['can_cancel'] is False
+
+
+@pytest.mark.parametrize("mode", ["unified", "portfolio_margin"])
+def test_unsupported_hl_modes_are_readable_but_never_write_capable(isolated_api, monkeypatch, mode):
+    """Preview explains mode while execution stays fail closed and mode changes recover."""
+    snapshot = _normal_snapshot()
+    snapshot["complete"] = False
+    snapshot["account"]["mode"] = mode
+    snapshot["errors"] = [{"code": "unsupported_account_mode", "source": "userAbstraction"}]
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *args: snapshot)
+    preview = profit_sweep_api._top_up_preview_sync("alice")
+    assert preview["routes"] == []
+    assert "Manual (Standard)" in preview["blocked_reason"]
+    assert preview["account_mode"] == mode
+    sweep = profit_sweep_api._preview_sync("alice")
+    assert sweep["account_mode"]["unsupported"] is True
+    assert sweep["decision"]["committed"] is False
+    with pytest.raises(RuntimeError, match="Manual"):
+        profit_sweep_api._test_snapshot(_user("alice"), "USDC")
+    with pytest.raises(RuntimeError, match="incomplete"):
+        profit_sweep_api._require_live_snapshot(profit_sweep_api.default_policy(), snapshot)
+    snapshot["account_balances"] = {
+        "source": {"label": "Perps", "balance": "1000", "withdrawable": "500", "asset": "USDC"},
+        "destination": {"label": "Spot", "balance": "99.842907", "withdrawable": "99.842907", "asset": "USDC"},
+    }
+    snapshot["account"]["spot_usdc"] = {"total": "99.842907", "hold": "0"}
+    snapshot["account"]["mode"] = "standard_manual"
+    snapshot["complete"] = True
+    snapshot["errors"] = []
+    assert profit_sweep_api._top_up_preview_sync("alice")["routes"]
+    assert "account_mode" not in profit_sweep_api._preview_sync("alice")
+
+
+def test_mode_message_does_not_block_vault_or_other_exchanges():
+    """A Unified Vault leader and a Bybit Unified account are separate supported cases."""
+    from hyperliquid_account_mode import snapshot_mode
+    assert not snapshot_mode({"exchange": "hyperliquid", "account_kind": "vault", "leader": {"account_mode": "unified"}})["unsupported"]
+    assert not snapshot_mode({"exchange": "bybit", "account_kind": "normal", "account": {"mode": "unified"}})["unsupported"]

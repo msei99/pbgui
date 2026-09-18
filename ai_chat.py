@@ -393,6 +393,32 @@ class AICredentialStore:
         return key
 
 
+def _safe_codex_turn_error(error: object, status: str = "failed") -> str:
+    """Classify provider failures without exposing raw messages or credentials."""
+    error = error if isinstance(error, dict) else {}
+    info = error.get("codexErrorInfo")
+    code = info if isinstance(info, str) else " ".join(info) if isinstance(info, dict) else ""
+    message = str(error.get("message") or "")[:16000].lower()
+    normalized = (code + " " + str(error.get("code") or "") + " " + message).lower()
+    if any(word in normalized for word in ("usagelimit", "usage_limit", "usage limit", "quota", "credits exhausted", "weekly limit")):
+        return "ChatGPT usage limit reached. Check your account usage and reset time; Free accounts also have limits."
+    if any(word in normalized for word in ("ratelimit", "rate_limit", "rate limit", "too many requests")):
+        return "ChatGPT rate limit reached. Wait before sending another request."
+    if "model" in normalized and any(word in normalized for word in ("not supported", "not available", "not found", "access", "not allowed", "unavailable")):
+        return "The selected model is unavailable or not permitted for this ChatGPT account. Select another available model."
+    if any(word in normalized for word in ("unauthorized", "authentication", "token expired", "token_expired", "not authenticated")):
+        return "ChatGPT authentication failed. Reconnect your ChatGPT account."
+    if "contextwindowexceeded" in normalized or "context window" in normalized or "context_length" in normalized:
+        return "The ChatGPT conversation exceeds the model context limit. Start a new conversation."
+    if any(word in normalized for word in ("httpconnectionfailed", "streamdisconnected", "streamconnection", "network", "connection", "timeout", "timed out")):
+        return "The connection to ChatGPT failed or timed out. Try again when the connection is available."
+    if any(word in normalized for word in ("internalservererror", "server error", "service unavailable", "overloaded")):
+        return "ChatGPT encountered a temporary server error. Try again later."
+    if status == "interrupted":
+        return "The ChatGPT response was interrupted."
+    return "ChatGPT response failed without a recognized cause. This does not establish a Free-plan restriction."
+
+
 class CodexRuntime:
     """Small async JSON-RPC client for the official bundled Codex app-server."""
 
@@ -560,7 +586,29 @@ class CodexRuntime:
         account = result.get("account") if isinstance(result, dict) else None
         if not isinstance(account, dict) or account.get("type") != "chatgpt":
             return {"connected": False, "plan": ""}
-        return {"connected": True, "plan": str(account.get("planType") or "")}
+        return {"connected": True, "plan": str(account.get("planType") or ""), "email": str(account.get("email") or "")[:254]}
+
+    async def profile_limits(self) -> list[dict[str, int | float]]:
+        """Read only numeric usage windows; unavailable limits do not block login."""
+        cached = getattr(self, "_profile_limits_cache", (0, []))
+        if time.monotonic() - cached[0] < 30:
+            return cached[1]
+        windows = []
+        try:
+            result = await self.request("account/rateLimits/read", timeout=5)
+            limits = result.get("rateLimits") if isinstance(result, dict) else None
+            for key in ("primary", "secondary"):
+                window = limits.get(key) if isinstance(limits, dict) else None
+                if isinstance(window, dict):
+                    projected = {name: value for name in ("usedPercent", "windowDurationMins", "resetsAt")
+                                 if isinstance((value := window.get(name)), (int, float)) and not isinstance(value, bool)
+                                 and 0 <= value <= 10**12}
+                    if "usedPercent" in projected:
+                        windows.append(projected)
+        except Exception as exc:
+            _log(SERVICE, f"ChatGPT usage limits unavailable: {type(exc).__name__}", level="WARNING")
+        self._profile_limits_cache = (time.monotonic(), windows)
+        return windows
 
     async def start_device_login(self) -> dict[str, str]:
         """Start the official ChatGPT device-code login flow."""
@@ -746,6 +794,7 @@ class CodexRuntime:
             self.active_tool_cache = {}
             self.active_tool_result_digests = set()
             self.active_tool_no_progress_calls = 0
+            last_turn_error = None
             chunks: list[str] = []
             completed_messages: list[str] = []
             timeout_seconds = (
@@ -767,7 +816,9 @@ class CodexRuntime:
                     payload = event.get("params") if isinstance(event.get("params"), dict) else {}
                     if not self._matches_turn(payload, turn_id):
                         continue
-                    if method == "item/agentMessage/delta":
+                    if method == "error":
+                        last_turn_error = payload.get("error")
+                    elif method == "item/agentMessage/delta":
                         delta = payload.get("delta")
                         if isinstance(delta, str):
                             chunks.append(delta)
@@ -785,7 +836,8 @@ class CodexRuntime:
                         completed_turn = payload.get("turn")
                         status = completed_turn.get("status") if isinstance(completed_turn, dict) else ""
                         if status != "completed":
-                            raise AIChatError("ChatGPT response failed")
+                            error = completed_turn.get("error") if isinstance(completed_turn, dict) else None
+                            raise AIChatError(_safe_codex_turn_error(error or last_turn_error, status))
                         text = "".join(chunks).strip() or "\n".join(completed_messages).strip()
                         if not text:
                             raise AIChatError("ChatGPT returned an empty response")
@@ -914,6 +966,10 @@ class CodexRuntime:
                             }
                         )
                     continue
+                if message.get("method") == "account/login/completed":
+                    params = message.get("params")
+                    if isinstance(params, dict) and params.get("loginId") == self.login_id:
+                        self.login_id = None
                 if self.notifications.full():
                     with suppress(asyncio.QueueEmpty):
                         self.notifications.get_nowait()
@@ -927,6 +983,7 @@ class CodexRuntime:
             await self._terminate_process_group(process)
         finally:
             if self.process is process and process.returncode is not None:
+                self.login_id = None
                 for future in list(self.pending.values()):
                     if not future.done():
                         future.set_exception(AIChatError("ChatGPT runtime exited"))
@@ -1012,6 +1069,7 @@ class Conversation:
     reasoning_summary: str = ""
     activity_history: list[dict[str, Any]] = field(default_factory=list)
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
+    chatgpt_profile: str = "default"
 
 
 class AIChatService:
@@ -1079,7 +1137,73 @@ class AIChatService:
         self.provider_locks.clear()
         self.model_health.clear()
 
-    async def status(self, owner: str) -> dict[str, Any]:
+    def _profile_path(self, owner: str) -> Path:
+        """Resolve an owner-only, non-secret profile registry."""
+        if len(owner) != 32 or any(char not in "0123456789abcdef" for char in owner):
+            raise AIChatError("Invalid profile owner")
+        root = self.root / "profiles" / owner
+        ensure_private_directory_tree(self.root, root)
+        return root / "profiles.json"
+
+    def chatgpt_profiles(self, owner: str) -> list[dict[str, str]]:
+        """Read profile labels; legacy authentication belongs to Default."""
+        path = self._profile_path(owner)
+        with advisory_file_lock(path):
+            if path.is_symlink():
+                raise AIChatError("Invalid ChatGPT profile registry")
+            if not path.exists():
+                return [{"id": "default", "name": "Default"}]
+            try:
+                rows = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(rows, list) or len(rows) > 20:
+                    raise ValueError("Invalid profiles")
+                for row in rows:
+                    self._profile_key(owner, row["id"])
+                    if not isinstance(row.get("name"), str):
+                        raise ValueError("Invalid profile label")
+                return rows
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                _log(SERVICE, "Could not read ChatGPT profile registry", level="ERROR")
+                raise AIChatError("Could not read ChatGPT profiles") from exc
+
+    @staticmethod
+    def _profile_key(owner: str, profile: str = "default") -> str:
+        """Keep legacy keys stable and reject path components from clients."""
+        if profile != "default" and (len(profile) != 32 or any(c not in "0123456789abcdef" for c in profile)):
+            raise AIChatError("Invalid ChatGPT profile")
+        return owner if profile == "default" else owner + ":" + profile
+
+    def _require_profile(self, owner: str, profile: str) -> None:
+        """Enforce ownership without falling back to another subscription."""
+        self._profile_key(owner, profile)
+        if not any(item["id"] == profile for item in self.chatgpt_profiles(owner)):
+            raise AIChatError("ChatGPT profile was removed or does not belong to this user")
+
+    def save_chatgpt_profile(self, owner: str, name: str, profile: str | None = None) -> dict[str, str]:
+        """Create or rename profile metadata atomically without changing credentials."""
+        name = name.strip()
+        if not name or len(name) > 80 or any(ord(c) < 32 for c in name):
+            raise AIChatError("Enter a profile name of 1 to 80 characters")
+        path = self._profile_path(owner)
+        with advisory_file_lock(path):
+            rows = self.chatgpt_profiles(owner)
+            if profile is None:
+                if len(rows) >= 20:
+                    raise AIChatError("ChatGPT profile limit reached (20)")
+                row = {"id": uuid4().hex, "name": name}
+                rows.append(row)
+            else:
+                self._require_profile(owner, profile)
+                row = next(item for item in rows if item["id"] == profile)
+                row["name"] = name
+            atomic_write_private_text(path, json.dumps(rows, indent=4) + "\n")
+            return dict(row)
+
+    async def remove_chatgpt_profile(self, owner: str, profile: str) -> None:
+        """Remove the selected login and registry entry under one provider lock."""
+        await self.logout_codex(owner, profile, remove=True)
+
+    async def status(self, owner: str, profile: str = "default") -> dict[str, Any]:
         """Return non-secret provider availability and connection state."""
         self._ensure_reaper()
         self._ensure_health_monitor()
@@ -1087,21 +1211,69 @@ class AIChatService:
             self.health_requested.add(owner)
             self.health_wakeup.set()
         await self._close_idle_codex_runtimes()
+        profiles = self.chatgpt_profiles(owner)
+        selected_exists = any(item["id"] == profile for item in profiles)
         codex_available = CodexRuntime.available()
         codex_status = {"connected": False, "plan": ""}
-        if codex_available and (owner in self.codex or self._codex_auth_exists(owner)):
+        if selected_exists and codex_available and (self._profile_key(owner, profile) in self.codex or self._codex_auth_exists(owner, profile)):
             try:
-                codex_status = await self._codex_runtime(owner).account_status()
+                runtime = self._profile_runtime(owner, profile)
+                codex_status = await runtime.account_status()
+                if codex_status.get("connected") and hasattr(runtime, "profile_limits"):
+                    codex_status["limits"] = await runtime.profile_limits()
             except Exception as exc:
                 _log(SERVICE, f"ChatGPT status failed: {type(exc).__name__}", level="WARNING")
         return {
             "providers": {
-                "chatgpt": {"available": codex_available, **codex_status},
+                "chatgpt": {"available": codex_available, "profiles": profiles, "profile": profile, **codex_status},
                 "opencode-zen": {"available": True, "connected": self.credentials.configured(owner)},
                 "opencode-go": {"available": True, "connected": self.credentials.configured(owner)},
             },
             "capabilities": {"chat_only": False, "pbgui_tools": True},
         }
+
+    async def usage(self, owner: str, provider: str, profile: str = "default") -> dict[str, Any]:
+        """Read provider-reported usage only, without exposing credentials."""
+        if provider == "chatgpt":
+            status = await self.status(owner, profile)
+            info = status["providers"]["chatgpt"]
+            return {"provider": provider, "profile": profile, "email": info.get("email", ""),
+                    "limits": info.get("limits", []), "connected": info.get("connected", False)}
+        if provider not in {"opencode-go", "opencode-zen"}:
+            raise AIChatError("Unsupported provider")
+        result = {"provider": provider, "limits": []}
+        if not self.credentials.configured(owner):
+            return {**result, "message": "Connect OpenCode to view usage."}
+        if provider == "opencode-zen":
+            return {**result, "message": "Zen balance is available in the OpenCode console."}
+        key = self.credentials.load_go_key(owner)
+        session = await self._http_session()
+        try:
+            async with session.get(f"{_GO_BASE_URL}/usage", headers={"Authorization": f"Bearer {key}"},
+                                   allow_redirects=False, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                payload = await self._read_json_response(response, expected_status=200)
+            from datetime import datetime
+            import math
+            usage = payload.get("usage", {}) if isinstance(payload, dict) else {}
+            for name, minutes in (("rolling", 300), ("weekly", 10080), ("monthly", 43200)):
+                window = usage.get(name) if isinstance(usage, dict) else None
+                if not isinstance(window, dict):
+                    continue
+                percent = window.get("percent")
+                if isinstance(percent, bool) or not isinstance(percent, (int, float)) or not math.isfinite(percent):
+                    continue
+                item = {"usedPercent": max(0, min(100, percent)), "windowDurationMins": minutes}
+                reset = window.get("resetsAt")
+                if isinstance(reset, str):
+                    try:
+                        item["resetsAt"] = datetime.fromisoformat(reset.replace("Z", "+00:00")).timestamp()
+                    except (ValueError, OverflowError):
+                        pass
+                result["limits"].append(item)
+            return result
+        except Exception as exc:
+            _log(SERVICE, f"OpenCode usage unavailable: {type(exc).__name__}", level="WARNING")
+            return {**result, "message": "OpenCode usage currently unavailable."}
 
     async def connect_go(self, owner: str, api_key: str) -> None:
         """Verify and store one OpenCode Go subscription key."""
@@ -1139,45 +1311,70 @@ class AIChatService:
             finally:
                 self.provider_disconnecting.discard(state_key)
 
-    async def start_codex_login(self, owner: str) -> dict[str, str]:
+    async def start_codex_login(self, owner: str, profile: str = "default") -> dict[str, str]:
         """Start a ChatGPT device-code login."""
         async with self._provider_lock(owner, "chatgpt"):
+            self._require_profile(owner, profile)
+            if any(runtime.login_id and runtime.owner != owner for runtime in self.codex.values()):
+                raise AIChatError("Another PBGui user is signing in to ChatGPT. Try again when their login finishes.")
+            for runtime in list(self.codex.values()):
+                if runtime.owner == owner and runtime.login_id:
+                    await runtime.cancel_login()
             self._ensure_reaper()
             await self._close_idle_codex_runtimes()
-            return await self._codex_runtime(owner).start_device_login()
+            return await self._profile_runtime(owner, profile).start_device_login()
 
-    async def start_codex_browser_login(self, owner: str) -> dict[str, str]:
+    async def start_codex_browser_login(self, owner: str, profile: str = "default") -> dict[str, str]:
         """Start a ChatGPT browser OAuth login."""
         async with self._provider_lock(owner, "chatgpt"):
+            self._require_profile(owner, profile)
+            if any(runtime.login_id and runtime.owner != owner for runtime in self.codex.values()):
+                raise AIChatError("Another PBGui user is signing in to ChatGPT. Try again when their login finishes.")
+            for runtime in list(self.codex.values()):
+                if runtime.owner == owner and runtime.login_id:
+                    await runtime.cancel_login()
             self._ensure_reaper()
             await self._close_idle_codex_runtimes()
-            return await self._codex_runtime(owner).start_browser_login()
+            return await self._profile_runtime(owner, profile).start_browser_login()
 
-    async def cancel_codex_login(self, owner: str) -> None:
+    async def cancel_codex_login(self, owner: str, profile: str = "default") -> None:
         """Cancel a pending ChatGPT login."""
         async with self._provider_lock(owner, "chatgpt"):
-            await self._codex_runtime(owner).cancel_login()
+            await self._profile_runtime(owner, profile).cancel_login()
 
-    async def logout_codex(self, owner: str) -> None:
-        """Log the owner out from ChatGPT."""
-        key = (owner, "chatgpt")
-        async with self._provider_lock(*key):
-            self.provider_disconnecting.add(key)
-            try:
-                await self._cancel_provider(*key)
-                await self._codex_runtime(owner).logout()
-            finally:
-                self.provider_disconnecting.discard(key)
+    async def logout_codex(self, owner: str, profile: str = "default", *, remove: bool = False) -> None:
+        """Log out only the selected subscription, retaining its conversations."""
+        async with self._provider_lock(owner, "chatgpt"):
+            self._require_profile(owner, profile)
+            await self._ensure_owner_loaded(owner)
+            selected = [item for item in self.conversations.values()
+                        if item.owner == owner and item.provider == "chatgpt" and item.chatgpt_profile == profile]
+            for conversation in selected:
+                if conversation.busy:
+                    await self.cancel(owner, conversation.id)
+                await self._release_codex_thread(conversation)
+            runtime = self.codex.get(self._profile_key(owner, profile))
+            if runtime is None and self._codex_auth_exists(owner, profile):
+                runtime = self._profile_runtime(owner, profile)
+            if runtime is not None:
+                await runtime.logout()
+                await runtime.close()
+                self.codex.pop(self._profile_key(owner, profile), None)
+            if remove:
+                path = self._profile_path(owner)
+                with advisory_file_lock(path):
+                    rows = [item for item in self.chatgpt_profiles(owner) if item["id"] != profile]
+                    atomic_write_private_text(path, json.dumps(rows, indent=4) + "\n")
 
-    async def models(self, owner: str, provider: str) -> list[dict[str, Any]]:
+    async def models(self, owner: str, provider: str, profile: str = "default") -> list[dict[str, Any]]:
         """Return account-visible models supported by the native adapters."""
         if provider == "chatgpt":
             self._ensure_reaper()
             await self._close_idle_codex_runtimes()
-            status = await self._codex_runtime(owner).account_status()
+            status = await self._profile_runtime(owner, profile).account_status()
             if not status["connected"]:
                 raise AIChatError("ChatGPT is not connected")
-            return await self._codex_runtime(owner).models()
+            return await self._profile_runtime(owner, profile).models()
         if provider in _OPENCODE_PROVIDERS:
             if not self.credentials.configured(owner):
                 raise AIChatError("OpenCode is not connected")
@@ -1297,7 +1494,7 @@ class AIChatService:
                 if provider == "chatgpt":
                     self._ensure_reaper()
                     await self._close_idle_codex_runtimes()
-                    runtime = conversation.codex_runtime or self._codex_runtime(owner)
+                    runtime = conversation.codex_runtime or self._profile_runtime(owner, conversation.chatgpt_profile)
                     if conversation.codex_thread_id is None:
                         handoff = self._provider_handoff_prompt(conversation.messages, pending_user)
                         if handoff:
@@ -1450,8 +1647,8 @@ class AIChatService:
                     or getattr(runtime.process, "returncode", None) is not None
                 )
                 if runtime_stopped:
-                    if self.codex.get(owner) is runtime:
-                        self.codex.pop(owner, None)
+                    if self.codex.get(self._profile_key(owner, conversation.chatgpt_profile)) is runtime:
+                        self.codex.pop(self._profile_key(owner, conversation.chatgpt_profile), None)
                     if not runtime.closing:
                         await runtime.close()
                     await self._invalidate_runtime_conversations(runtime)
@@ -1578,7 +1775,7 @@ class AIChatService:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         elif conversation.provider == "chatgpt" and conversation.codex_thread_id:
-            await self._codex_runtime(owner).interrupt(conversation.codex_thread_id)
+            await (conversation.codex_runtime or self._profile_runtime(owner, conversation.chatgpt_profile)).interrupt(conversation.codex_thread_id)
         async with self.state_lock:
             if self.conversations.get(conversation.id) is conversation:
                 conversation.last_error = "Response stopped"
@@ -1599,7 +1796,7 @@ class AIChatService:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         if task is None and conversation.provider == "chatgpt" and conversation.codex_thread_id:
-            await self._codex_runtime(owner).interrupt(conversation.codex_thread_id)
+            await (conversation.codex_runtime or self._profile_runtime(owner, conversation.chatgpt_profile)).interrupt(conversation.codex_thread_id)
         await self._release_codex_thread(conversation)
         path = self._conversation_path(owner, conversation_id)
         with advisory_file_lock(self.conversation_lock_target):
@@ -1655,12 +1852,13 @@ class AIChatService:
         model: str,
         effort: str = "",
         context: dict[str, Any] | None = None,
+        profile: str = "default",
     ) -> str:
         """Create an owner-bound conversation before the first provider turn."""
         clean_effort = self._validate_effort(effort)
-        selected_model = await self._validate_provider_model(owner, provider, model)
+        selected_model = await self._validate_provider_model(owner, provider, model, **({"profile": profile} if profile != "default" else {}))
         self._validate_model_effort(selected_model, clean_effort)
-        conversation = await self._conversation(owner, provider, model, None)
+        conversation = await self._conversation(owner, provider, model, None, profile=profile)
         conversation.effort = clean_effort
         conversation.context = self._validate_page_context(context)
         self._persist_conversation(conversation)
@@ -1830,7 +2028,7 @@ class AIChatService:
         selected_model = None
         if provider_changed or model_changed or effort is not None:
             selected_model = await self._validate_provider_model(
-                owner, selected_provider, selected_model_id
+                owner, selected_provider, selected_model_id, **({"profile": existing.chatgpt_profile} if existing.chatgpt_profile != "default" else {})
             )
         clean_effort = self._validate_effort(effort) if effort is not None else ("" if provider_changed else None)
         if clean_effort is not None:
@@ -2310,6 +2508,7 @@ class AIChatService:
             "conversation_id": conversation.id,
             "title": conversation.title,
             "provider": conversation.provider,
+            "chatgpt_profile": conversation.chatgpt_profile,
             "model": conversation.model,
             "effort": conversation.effort,
             "created_at": conversation.created_at,
@@ -2359,6 +2558,7 @@ class AIChatService:
             "conversation_id": conversation.id,
             "owner": conversation.owner,
             "provider": conversation.provider,
+            "chatgpt_profile": conversation.chatgpt_profile,
             "model": conversation.model,
             "effort": conversation.effort,
             "messages": conversation.messages,
@@ -2400,6 +2600,7 @@ class AIChatService:
                         if len(raw) > 4 * 1024 * 1024:
                             continue
                         data = json.loads(raw.decode("utf-8"))
+                        self._profile_key(owner, str(data.get("chatgpt_profile") or "default"))
                         conversation = Conversation(
                             id=str(data.get("conversation_id") or ""),
                             owner=owner,
@@ -2410,6 +2611,7 @@ class AIChatService:
                             updated_at=float(data.get("updated_at") or time.time()),
                             created_at=float(data.get("created_at") or time.time()),
                             title=str(data.get("title") or "New chat")[:80],
+                            chatgpt_profile=str(data.get("chatgpt_profile") or "default"),
                             context=self._validate_page_context(data.get("context")),
                             activity_step=int(data.get("activity_step") or 0),
                             last_error=str(data.get("last_error") or "")[:500],
@@ -2568,13 +2770,13 @@ class AIChatService:
         return fallback
 
     async def _validate_provider_model(
-        self, owner: str, provider: str, model: str
+        self, owner: str, provider: str, model: str, profile: str = "default"
     ) -> dict[str, Any]:
         """Require a selected model currently advertised by the connected provider."""
         if not model:
             raise AIChatError("AI model is required")
         selected = next(
-            (item for item in await self.models(owner, provider) if item["id"] == model), None
+            (item for item in await self.models(owner, provider, **({"profile": profile} if profile != "default" else {})) if item["id"] == model), None
         )
         if selected is None:
             raise AIChatError("Selected AI model is unavailable")
@@ -3565,6 +3767,7 @@ class AIChatService:
         provider: str,
         model: str,
         conversation_id: str | None,
+        profile: str = "default",
     ) -> Conversation:
         """Resolve or create one owner-bound persistent conversation."""
         await self._ensure_owner_loaded(owner)
@@ -3583,7 +3786,10 @@ class AIChatService:
             if len(owner_conversations) >= _MAX_CONVERSATIONS_PER_OWNER:
                 raise AIChatError("Conversation history limit reached; delete an old chat")
             new_id = uuid4().hex
-            conversation = Conversation(new_id, owner, provider, model)
+            self._profile_key(owner, profile)
+            if provider == "chatgpt":
+                self._require_profile(owner, profile)
+            conversation = Conversation(new_id, owner, provider, model, chatgpt_profile=profile)
             self.conversations[new_id] = conversation
             self._persist_conversation(conversation)
         return conversation
@@ -3612,19 +3818,27 @@ class AIChatService:
         for conversation in expired:
             await self._release_codex_thread(conversation)
 
-    def _codex_runtime(self, owner: str) -> CodexRuntime:
+    def _profile_runtime(self, owner: str, profile: str) -> CodexRuntime:
+        """Route legacy/default calls compatibly while isolating additional profiles."""
+        return self._codex_runtime(owner) if profile == "default" else self._codex_runtime(owner, profile)
+
+    def _codex_runtime(self, owner: str, profile: str = "default") -> CodexRuntime:
         """Return or create one bounded owner-scoped Codex runtime."""
-        runtime = self.codex.get(owner)
+        self._require_profile(owner, profile)
+        key = self._profile_key(owner, profile)
+        runtime = self.codex.get(key)
         if runtime is None:
             if len(self.codex) >= _MAX_CODEX_RUNTIMES:
                 raise AIChatError("ChatGPT runtime capacity reached")
             root = self.root / "codex" / owner
+            if profile != "default":
+                root = root / "profiles" / profile
             ensure_private_directory_tree(self.root, root)
             runtime = CodexRuntime(owner, root)
             runtime.tool_handler = lambda params, selected=runtime: self._handle_codex_tool(
                 owner, selected, params
             )
-            self.codex[owner] = runtime
+            self.codex[key] = runtime
         return runtime
 
     async def _handle_codex_tool(
@@ -3800,7 +4014,7 @@ class AIChatService:
                     selected = [
                         conversation
                         for conversation in self.conversations.values()
-                        if conversation.owner == owner and conversation.codex_runtime is runtime
+                        if conversation.codex_runtime is runtime
                     ]
                     if any(
                         conversation.busy or conversation.id in self.active_tasks
@@ -4058,12 +4272,12 @@ class AIChatService:
         thread_id = conversation.codex_thread_id
         if conversation.provider != "chatgpt" or not thread_id:
             return
-        selected_runtime = runtime or conversation.codex_runtime or self.codex.get(conversation.owner)
+        selected_runtime = runtime or conversation.codex_runtime or self.codex.get(self._profile_key(conversation.owner, conversation.chatgpt_profile))
         if selected_runtime is not None:
             if not await selected_runtime.unsubscribe(thread_id):
                 selected_runtime.closing = True
-                if self.codex.get(conversation.owner) is selected_runtime:
-                    self.codex.pop(conversation.owner, None)
+                if self.codex.get(self._profile_key(conversation.owner, conversation.chatgpt_profile)) is selected_runtime:
+                    self.codex.pop(self._profile_key(conversation.owner, conversation.chatgpt_profile), None)
                 await selected_runtime.close()
                 await self._invalidate_runtime_conversations(selected_runtime)
         conversation.codex_thread_id = None
@@ -4093,9 +4307,13 @@ class AIChatService:
         """Group Zen and Go under their shared OpenCode credential boundary."""
         return owner, "opencode" if provider in _OPENCODE_PROVIDERS else provider
 
-    def _codex_auth_exists(self, owner: str) -> bool:
+    def _codex_auth_exists(self, owner: str, profile: str = "default") -> bool:
         """Check auth-file presence and enforce owner-only storage before runtime startup."""
-        path = self.root / "codex" / owner / "codex-home" / "auth.json"
+        self._require_profile(owner, profile)
+        root = self.root / "codex" / owner
+        if profile != "default":
+            root = root / "profiles" / profile
+        path = root / "codex-home" / "auth.json"
         if not path.is_file() or path.is_symlink():
             return False
         try:

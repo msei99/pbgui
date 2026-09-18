@@ -33,11 +33,11 @@ def execute(code):
 def test_history_action_errors_visible(action, failure):
     """A failed history mutation reports its error and never pretends to refresh success."""
     code = function('hl_data_actions.html','historyJobAction') + function('hl_data_actions.html',action)
-    code += function('hl_data_actions.html', 'setHistoryDeleteBusy')
+    code += function('hl_data_actions.html', 'setHistoryDeleteBusy') + function('hl_data_actions.html', 'setJobActionBusy')
     execute(code + f'const action={json.dumps(action)}, failure={json.dumps(failure)};' + r'''
 const assert=require('node:assert/strict'); const nodes={modal:{classList:{add:value=>nodes.shown=value}},'modal-title':{},'modal-body':{}};
 const $=id=>nodes[id],API_BASE='/api';const authOptions=x=>x;
-const deletingJobIds=new Set(),ROOT={isConnected:true,querySelectorAll:()=>[]};
+const pendingJobActions=new Set(),deletingJobIds=new Set(),ROOT={isConnected:true,querySelectorAll:()=>[]};
 const window={PBGuiDialogs:{confirm:async()=>true}};
 function updateModalViewportHeight(){};console.error=()=>{};
 const fetch=async()=>{if(failure==='network')throw new Error('offline');return {ok:false,status:500,json:async()=>({detail:'denied'})};};

@@ -94,3 +94,5 @@ Stop the instance before deleting. PBGui checks its exact local process even whe
 Delete publishes `DELETE_PB8_INSTANCE` before removing the local bundle. PB8 tombstones are separate from PB7 tombstones, so equal PB7 and PB8 instance names do not affect each other. Cluster Sync and PBRun consume the tombstone to stop and remove the PB8 deployment.
 
 JSON Import asks for confirmation before replacing the current editor values, including unsaved changes. Cancel keeps the editor draft and import text intact.
+
+When saving is blocked by Cluster readiness, the message distinguishes a failed connection, stale sync status, a missing handshake, and explicitly unsupported PB8 replication. Only an explicit lack of support calls for a PBGui update on the named replica. Automatic Cluster sync refreshes readiness; saving remains blocked until it is confirmed.

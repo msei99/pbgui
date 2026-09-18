@@ -204,3 +204,8 @@ Profit Sweep and Transfers preserve the configured ASGI mount prefix in API and 
 ### Unsubmitted test transfers
 
 A Prepared test has not been submitted yet. Use **Cancel prepared test** to close it without sending or reversing funds. Submitted/Unknown transfers must be reconciled instead. Expired unsubmitted Hyperliquid Vault signature requests are automatically cancelled after five minutes during scheduler recovery or the next Live evaluation. Cancelled tests remain in the history and no longer block Live evaluation.
+
+
+### Hyperliquid account mode
+
+PBGui detects Standard / Manual, Unified Account, and Portfolio Margin. Unified and Portfolio Margin share collateral: separate Spot/Perps transfers and Profit Sweep are not supported. To use Profit Sweep, change Account Type to **Manual (Standard)** in Hyperliquid, then refresh PBGui. PBGui does not change the exchange account mode. Vault transfers are checked separately; a Unified leader does not automatically block them.

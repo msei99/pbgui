@@ -9,7 +9,7 @@ from test_remaining_issue_regressions import ROOT, execute, function
 
 def test_stop_before_conversation_creation_invalidates_pending_send():
     """A late conversation ID cannot send the prompt after local Stop (#297)."""
-    execute(function('ai_chat.html', 'sendMessage') + function('ai_chat.html', 'stopCurrentTurn') + r'''
+    execute(function('ai_chat.html', 'selectedProvider') + function('ai_chat.html', 'sendMessage') + function('ai_chat.html', 'stopCurrentTurn') + r'''
 const assert=require('node:assert/strict');
 const nodes={prompt:{value:'hello'},'provider-select':{value:'test',selectedOptions:[{textContent:'Test'}]},'model-select':{value:'model'},'effort-select':{value:''},stop:{},'retry-turn':{}};
 const $=id=>nodes[id]; const state={conversationId:'',chatGeneration:1,retryMessages:{},busy:false};

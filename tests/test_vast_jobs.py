@@ -641,3 +641,119 @@ def test_interrupted_preparation_recovery(job, monkeypatch, owner_state):
     monkeypatch.setattr(vast_jobs.psutil, 'Process', Process)
     state = store.recover_interrupted_preparation(identifier)
     assert state['status'] == ('failed' if owner_state in {'dead', 'reused'} else 'preparing')
+
+
+def test_external_deletion_of_active_rental_is_detected(job):
+    """Two fresh spaced absences close an active rental without a cleanup request."""
+    store, identifier, intent = job
+    client = Provider([{'id': 123, 'label': intent['label'], 'actual_status': 'running'}])
+    assert not guard_step(store, identifier, client, intent, '', now=1100)
+    client.rows = []
+    assert not guard_step(store, identifier, client, intent, '', now=1110)
+    assert store.read(identifier)['rental_state'] == 'active'
+    assert not guard_step(store, identifier, client, intent, '', now=1111)
+    assert store.read(identifier)['absent_checks'] == 1
+    assert guard_step(store, identifier, client, intent, '', now=1120)
+    assert store.read(identifier)['status'] == 'failed'
+    assert store.read(identifier)['rental_end_reason'] == 'provider_instance_missing'
+    assert store.read(identifier)['rental_state'] == 'deletion_verified'
+    run_loop(store, identifier)
+    assert store.read(identifier)['status'] == 'failed'
+    assert 'disappeared' in store.read(identifier)['error']
+    assert client.calls == [('PUT', '/asks/42/')]
+    assert guard_step(store, identifier, client, intent, '', now=1130)
+    assert client.calls == [('PUT', '/asks/42/')]
+
+
+@pytest.mark.parametrize('status', ['running', 'stopped', 'exited', 'offline'])
+def test_reappearing_or_stopped_instance_resets_absence(job, status):
+    """An existing instance, even stopped, is not a deleted rental."""
+    store, identifier, intent = job
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    guard_step(store, identifier, client, intent, '', now=1100)
+    client.rows = []
+    guard_step(store, identifier, client, intent, '', now=1110)
+    client.rows = [{'id': 123, 'label': intent['label'], 'actual_status':status}]
+    assert not guard_step(store, identifier, client, intent, '', now=1120)
+    assert store.read(identifier)['absent_checks'] == 0
+    assert store.read(identifier)['rental_state'] == 'active'
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize('status', [401, 403, 429, 503])
+def test_provider_errors_require_two_new_absence_checks(job, status):
+    """Provider/auth failures cannot complete or bridge deletion confirmation."""
+    store, identifier, intent = job
+    client = Provider([{'id':123, 'label':intent['label']}])
+    guard_step(store, identifier, client, intent, '', now=1100)
+    client.rows = []
+    guard_step(store, identifier, client, intent, '', now=1110)
+
+    class Unavailable(Provider):
+        """An unavailable provider is never interpreted as an empty account."""
+        def instances(self, *, fresh=False):
+            """Require an uncached query and fail it explicitly."""
+            assert fresh
+            raise VastError('Provider unavailable', status)
+
+    with pytest.raises(VastError):
+        guard_step(store, identifier, Unavailable(), intent, '', now=1120)
+    assert store.read(identifier)['absent_checks'] == 0
+    assert store.read(identifier)['rental_state'] == 'active'
+    assert not guard_step(store, identifier, client, intent, '', now=1130)
+    assert guard_step(store, identifier, client, intent, '', now=1140)
+
+
+def test_changed_label_cannot_confirm_external_deletion(job):
+    """An instance still present by its ID must not release the rental lock."""
+    store, identifier, intent = job
+    client = Provider([{'id':123, 'label':intent['label']}])
+    guard_step(store, identifier, client, intent, '', now=1100)
+    client.rows = [{'id':123, 'label':'manually-renamed'}]
+    with pytest.raises(VastError, match='ownership label changed'):
+        guard_step(store, identifier, client, intent, '', now=1120)
+    assert store.read(identifier)['rental_state'] == 'active'
+    assert store.read(identifier)['absent_checks'] == 0
+    assert len(client.calls) == 1
+
+
+def test_confirmed_creation_gets_visibility_grace(job):
+    """Do not close a newly allocated instance before its provider listing appears."""
+    store, identifier, intent = job
+    client = Provider()
+    assert not guard_step(store, identifier, client, intent, '', now=1100)
+    assert not guard_step(store, identifier, client, intent, '', now=1110)
+    assert not store.read(identifier).get('absent_checks')
+    assert not guard_step(store, identifier, client, intent, '', now=1220)
+    assert guard_step(store, identifier, client, intent, '', now=1230)
+    assert len(client.calls) == 1
+
+
+def test_absence_confirmation_never_uses_cached_instance_list(job):
+    """A stale cached list cannot supply repeated absence confirmations."""
+    store, identifier, intent = job
+    client = Provider([{'id':123, 'label':intent['label']}])
+    guard_step(store, identifier, client, intent, '', now=1100)
+
+    class FreshOnly(Provider):
+        """The provider only permits forced fresh reads for confirmation."""
+        def instances(self, *, fresh=False):
+            """Expose absent data only after validating cache bypass."""
+            assert fresh
+            return []
+
+    assert not guard_step(store, identifier, FreshOnly(), intent, '', now=1110)
+    assert guard_step(store, identifier, FreshOnly(), intent, '', now=1120)
+
+
+def test_ambiguous_creation_absence_recovers_without_manual_cleanup(job):
+    """A timed-out creation can settle without another paid create or manual file removal."""
+    store, identifier, intent = job
+    client = Provider(fail=True)
+    with pytest.raises(VastError):
+        guard_step(store, identifier, client, intent, '', now=1100)
+    client.fail = False
+    assert not guard_step(store, identifier, client, intent, '', now=1110)
+    assert not guard_step(store, identifier, client, intent, '', now=1220)
+    assert guard_step(store, identifier, client, intent, '', now=1230)
+    assert client.calls == [('PUT', '/asks/42/')]

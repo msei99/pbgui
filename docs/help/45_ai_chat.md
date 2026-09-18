@@ -135,3 +135,25 @@ Messages and enabled page context are sent to the selected external provider. Co
 - **Python analysis timed out or output was truncated:** ask for a smaller input, a simpler calculation, or a more compact JSON result.
 - **ChatGPT remains on model is processing results:** higher reasoning effort can legitimately take much longer after the local tool has completed. Select **Stop** if the result is no longer worth waiting for, or start a new chat with Standard or a lower model-supported effort.
 - **No supported models:** refresh after connecting and confirm that the OpenCode account currently exposes models in the Zen or Go live catalog.
+
+ChatGPT failed responses distinguish recognized usage/rate limits, model access, authentication, context limits, connection problems and server errors. Unknown failures are identified as such; they do not establish a Free-plan restriction. Provider messages are classified rather than displayed verbatim to avoid exposing sensitive content.
+
+### Multiple ChatGPT subscriptions
+
+Use **ChatGPT profile** to manage separate logins for your PBGui user. The existing login and older chats belong to **Default**. Enter a profile name and choose **Add profile**, then use Browser login or Device code to sign in to that subscription. You can rename, disconnect, or remove each profile separately. Check the displayed account and plan after login; the browser may still be signed into your previous OpenAI account.
+
+Selecting another profile starts a new chat. Existing chats retain their profile, including after an API restart or browser reload. Each ChatGPT conversation shows its profile name in the history. Removing a profile retains conversation history but does not redirect those chats to another subscription. An exhausted allowance never triggers an automatic account switch.
+
+Account, plan, and available usage windows update automatically for the selected profile. Limits are shown only when OpenAI provides them. Credentials stay in isolated server-side profile directories. Only profile identifiers and navigation context appear in the browser URL. Up to 20 profiles can be managed per PBGui user.
+
+The top **Provider** menu lists each ChatGPT profile separately as **ChatGPT · profile name**. Selecting one also updates the sidebar profile and available models.
+
+The compact AI drawer also lists each ChatGPT profile in its Provider menu. Changing profiles starts a separate chat.
+
+Usage limits show the percentage remaining and a bar for each reported window (monthly, weekly, daily or 5-hour), plus its reset date. The window duration is not available compute time.
+
+If a login was interrupted or its link was lost after reloading, click Browser login or Device code again. PBGui cancels your previous pending attempt and displays a fresh link.
+
+The compact AI drawer shows usage for the selected provider and ChatGPT profile, updating automatically every 30 seconds. OpenCode Go reports 5-hour, weekly and monthly usage with reset dates in both chat interfaces. Zen balance remains available in the OpenCode console.
+
+Deleting a conversation clears its active response state. Reviewing one proposal leaves other pending proposals visible; cancelling review restores its card.

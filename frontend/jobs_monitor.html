@@ -617,6 +617,7 @@
         let expandedJobs = new Set();
         let expandedDownloaderJobs = new Set();
         let activeJobsSnapshot = [];
+        const pendingJobActions = new Set();
         const cancellingJobIds = new Set();
         const startingJobIds = new Set();
         const bulkDeleteStates = new Set();
@@ -976,9 +977,9 @@
                         <div class="job-actions">
                             <button class="btn btn-view" data-job-action="view" data-job-id="${jobIdAttr}">View</button>
                             <button class="btn btn-info" data-job-action="log" data-job-id="${jobIdAttr}">Log</button>
-                            ${isFailed ? `<button class="btn btn-secondary" data-job-action="retry" data-job-id="${jobIdAttr}">Retry</button>` : ''}
-                            ${isDone ? `<button class="btn btn-secondary" data-job-action="requeue" data-job-id="${jobIdAttr}">Requeue</button>` : ''}
-                            <button class="btn btn-danger" data-job-action="delete" data-job-id="${jobIdAttr}">Delete</button>
+                            ${isFailed ? `<button class="btn btn-secondary" data-job-action="retry" data-job-id="${jobIdAttr}" ${pendingJobActions.has(String(job.id || job.job_id)) ? 'disabled' : ''}>Retry</button>` : ''}
+                            ${isDone ? `<button class="btn btn-secondary" data-job-action="requeue" data-job-id="${jobIdAttr}" ${pendingJobActions.has(String(job.id || job.job_id)) ? 'disabled' : ''}>Requeue</button>` : ''}
+                            <button class="btn btn-danger" data-job-action="delete" data-job-id="${jobIdAttr}" ${pendingJobActions.has(String(job.id || job.job_id)) ? 'disabled' : ''}>Delete</button>
                         </div>
                     </div>
                     <div class="job-details">
@@ -1377,82 +1378,112 @@
             }
         }
 
+        function setJobActionBusy(jobId, busy) {
+            document.querySelectorAll('[data-job-id]').forEach(button => {
+                if (button.dataset.jobId === String(jobId) && ['delete', 'retry', 'requeue'].includes(button.dataset.jobAction)) button.disabled = busy;
+            });
+        }
+
         async function deleteJob(jobId) {
-            if (!(await showActionDialog({
-                title: 'Delete job',
-                message: `Delete job ${jobId}?`,
-                detail: 'This action cannot be undone.',
-                confirmText: 'Delete',
-                confirmClass: 'btn-danger'
-            }))) return;
-            
+            if (pendingJobActions.has(String(jobId))) return;
+            pendingJobActions.add(String(jobId));
+            setJobActionBusy(jobId, true);
             try {
-                const resp = await fetch(`${API_BASE}/jobs/${jobId}`, authOptions({
-                    method: 'DELETE'
-                }));
-                
-                if (resp.ok) {
-                    console.log(`Job ${jobId} deleted`);
-                    loadTab(currentTab); // Refresh current tab
-                } else {
-                    const err = await resp.json();
-                    await showActionNotice({ title: 'Delete failed', message: `Failed to delete: ${err.detail}` });
+                if (!(await showActionDialog({
+                    title: 'Delete job',
+                    message: `Delete job ${jobId}?`,
+                    detail: 'This action cannot be undone.',
+                    confirmText: 'Delete',
+                    confirmClass: 'btn-danger'
+                }))) return;
+
+                try {
+                    const resp = await fetch(`${API_BASE}/jobs/${jobId}`, authOptions({
+                        method: 'DELETE'
+                    }));
+
+                    if (resp.ok) {
+                        console.log(`Job ${jobId} deleted`);
+                        loadTab(currentTab); // Refresh current tab
+                    } else {
+                        const err = await resp.json().catch(() => ({}));
+                        await showActionNotice({ title: 'Delete failed', message: `Failed to delete: ${typeof err.detail === 'string' ? err.detail : ('HTTP ' + resp.status + ' ' + (resp.statusText || ''))}` });
+                    }
+                } catch (e) {
+                    console.error('Delete error:', e);
+                    await showActionNotice({ title: 'Delete failed', message: 'Failed to delete job' });
                 }
-            } catch (e) {
-                console.error('Delete error:', e);
-                await showActionNotice({ title: 'Delete failed', message: 'Failed to delete job' });
+            } finally {
+                pendingJobActions.delete(String(jobId));
+                setJobActionBusy(jobId, false);
             }
         }
 
         async function retryJob(jobId) {
-            if (!(await showActionDialog({
-                title: 'Retry failed job',
-                message: `Retry failed job ${jobId}?`,
-                confirmText: 'Retry',
-                confirmClass: 'btn-info'
-            }))) return;
-            
+            if (pendingJobActions.has(String(jobId))) return;
+            pendingJobActions.add(String(jobId));
+            setJobActionBusy(jobId, true);
             try {
-                const resp = await fetch(`${API_BASE}/jobs/${jobId}/retry`, authOptions({
-                    method: 'POST'
-                }));
-                
-                if (resp.ok) {
-                    console.log(`Job ${jobId} retried`);
-                    loadTab(currentTab); // Refresh current tab
-                } else {
-                    const err = await resp.json();
-                    await showActionNotice({ title: 'Retry failed', message: `Failed to retry: ${err.detail}` });
+                if (!(await showActionDialog({
+                    title: 'Retry failed job',
+                    message: `Retry failed job ${jobId}?`,
+                    confirmText: 'Retry',
+                    confirmClass: 'btn-info'
+                }))) return;
+
+                try {
+                    const resp = await fetch(`${API_BASE}/jobs/${jobId}/retry`, authOptions({
+                        method: 'POST'
+                    }));
+
+                    if (resp.ok) {
+                        console.log(`Job ${jobId} retried`);
+                        loadTab(currentTab); // Refresh current tab
+                    } else {
+                        const err = await resp.json().catch(() => ({}));
+                        await showActionNotice({ title: 'Retry failed', message: `Failed to retry: ${typeof err.detail === 'string' ? err.detail : ('HTTP ' + resp.status + ' ' + (resp.statusText || ''))}` });
+                    }
+                } catch (e) {
+                    console.error('Retry error:', e);
+                    await showActionNotice({ title: 'Retry failed', message: 'Failed to retry job' });
                 }
-            } catch (e) {
-                console.error('Retry error:', e);
-                await showActionNotice({ title: 'Retry failed', message: 'Failed to retry job' });
+            } finally {
+                pendingJobActions.delete(String(jobId));
+                setJobActionBusy(jobId, false);
             }
         }
 
         async function requeueJob(jobId) {
-            if (!(await showActionDialog({
-                title: 'Requeue job',
-                message: `Requeue job ${jobId}?`,
-                confirmText: 'Requeue',
-                confirmClass: 'btn-info'
-            }))) return;
-            
+            if (pendingJobActions.has(String(jobId))) return;
+            pendingJobActions.add(String(jobId));
+            setJobActionBusy(jobId, true);
             try {
-                const resp = await fetch(`${API_BASE}/jobs/${jobId}/requeue`, authOptions({
-                    method: 'POST'
-                }));
-                
-                if (resp.ok) {
-                    console.log(`Job ${jobId} requeued`);
-                    loadTab(currentTab); // Refresh current tab
-                } else {
-                    const err = await resp.json();
-                    await showActionNotice({ title: 'Requeue failed', message: `Failed to requeue: ${err.detail}` });
+                if (!(await showActionDialog({
+                    title: 'Requeue job',
+                    message: `Requeue job ${jobId}?`,
+                    confirmText: 'Requeue',
+                    confirmClass: 'btn-info'
+                }))) return;
+
+                try {
+                    const resp = await fetch(`${API_BASE}/jobs/${jobId}/requeue`, authOptions({
+                        method: 'POST'
+                    }));
+
+                    if (resp.ok) {
+                        console.log(`Job ${jobId} requeued`);
+                        loadTab(currentTab); // Refresh current tab
+                    } else {
+                        const err = await resp.json().catch(() => ({}));
+                        await showActionNotice({ title: 'Requeue failed', message: `Failed to requeue: ${typeof err.detail === 'string' ? err.detail : ('HTTP ' + resp.status + ' ' + (resp.statusText || ''))}` });
+                    }
+                } catch (e) {
+                    console.error('Requeue error:', e);
+                    await showActionNotice({ title: 'Requeue failed', message: 'Failed to requeue job' });
                 }
-            } catch (e) {
-                console.error('Requeue error:', e);
-                await showActionNotice({ title: 'Requeue failed', message: 'Failed to requeue job' });
+            } finally {
+                pendingJobActions.delete(String(jobId));
+                setJobActionBusy(jobId, false);
             }
         }
 

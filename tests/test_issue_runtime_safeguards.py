@@ -205,9 +205,11 @@ def test_hyperliquid_template_credentials_and_balance_test(monkeypatch, payload,
     client.fetch_balance.return_value = payload
     monkeypatch.setattr(exchange_module.ccxt, "hyperliquid", lambda: client)
     monkeypatch.setattr(api_keys, "_get_users", lambda: SimpleNamespace(find_user=lambda name: user))
+    monkeypatch.setattr("profit_sweep_exchanges.hyperliquid_readonly_info", lambda kind, **kwargs: "disabled" if kind == "userAbstraction" else {"balances": [{"coin": "USDC", "total": "99.842907", "hold": "0"}]})
     result = api_keys.test_connection("alice", override=None, session=None)
     assert result.success is True
     assert result.balance_futures == expected
+    assert result.balance_spot == (None if vault else "99.842907")
     assert client.walletAddress == "test-wallet"
     assert client.privateKey == "test-private"
     params = {"type": "swap"}
@@ -241,3 +243,28 @@ def test_non_hyperliquid_credentials_and_balance_are_unchanged(monkeypatch):
     assert exchange.fetch_balance("swap") == 123.5
     assert (client.apiKey, client.secret, client.password) == ("test-key", "test-secret", "test-pass")
     client.fetch_balance.assert_called_once_with(params={"type": "swap"})
+
+
+@pytest.mark.parametrize("mode", ["unifiedAccount", "portfolioMargin", "unknown"])
+def test_hyperliquid_connection_displays_mode_without_false_futures_zero(monkeypatch, mode):
+    """Shared collateral is labelled and unknown modes never pretend to be Standard."""
+    user = SimpleNamespace(name="alice", exchange="hyperliquid", key="key", secret="secret",
+                           wallet_address="test-wallet", private_key="test-private", is_vault=False)
+    client = Mock(options={})
+    client.fetch_balance.return_value = {"total": {"USDC": 0}}
+    monkeypatch.setattr(exchange_module.ccxt, "hyperliquid", lambda: client)
+    monkeypatch.setattr(api_keys, "_get_users", lambda: SimpleNamespace(find_user=lambda name: user))
+    def read(kind, **kwargs):
+        """Provide only synthetic mode and balance reads."""
+        return mode if kind == "userAbstraction" else {"balances": [{"coin": "USDC", "total": "99.842907", "hold": "0"}]}
+    monkeypatch.setattr("profit_sweep_exchanges.hyperliquid_readonly_info", read)
+    result = api_keys.test_connection("alice", override=None, session=None)
+    assert result.balance_futures is None
+    if mode == "unknown":
+        assert not result.success
+        assert "could not be verified" in result.error
+    else:
+        assert result.success
+        assert result.balance_unified == "99.842907"
+        assert "Manual (Standard)" in result.guidance
+    client.close.assert_called_once()

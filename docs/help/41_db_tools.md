@@ -130,3 +130,5 @@ Existing files are backed up before replacement. Preview the selected dashboards
 3. Test a sync job with **Run Now** before enabling its schedule.
 4. Keep recent backups until the changed target has been verified.
 5. Avoid simultaneous maintenance operations against the same target.
+
+Deleting a sync job locks the action until completion and always targets the job shown when confirmation began.

@@ -7213,8 +7213,12 @@ done"""
                 if any(_status_running(getattr(vps, name, None)) for name in ("init_status", "setup_status", "update_status")):
                     raise ValueError("A VPS task is still running. Wait for it to finish before applying changes.")
                 self._store_session_secrets(token, hostname, form)
-                vps.user_pw = self._require_user_password(token, hostname)
-                info = vps.fetch_vps_info()
+                # The read-only swap probe supports SSH keys; a password is optional.
+                vps.user_pw = self._session_secret_value(token, hostname, "user_pw") or None
+                try:
+                    info = vps.fetch_vps_info()
+                finally:
+                    vps.user_pw = None
                 if info.get("swap") not in SWAP_OPTIONS:
                     raise ValueError("The detected swap size is not supported by VPS Manager.")
                 previous_swap = info["swap"]

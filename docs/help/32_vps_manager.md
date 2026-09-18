@@ -239,3 +239,5 @@ PBGui branch switches use the same PBCluster service sync/restart handling as PB
 ### Materialize API keys
 - Use **System -> Cluster Sync** to preview and materialize `api-keys.json` on reachable nodes.
 - CMC pool credentials are separate sealed generations. Manage them under **Services -> PBCoinData -> Pool** and let Cluster Sync materialize them; there are no per-VPS CMC keys.
+
+The swap check before applying settings accepts SSH key authentication and does not require an extra VPS password. PBGui and PB8 updates likewise use the configured SSH authentication; the swap check must not introduce a password requirement.

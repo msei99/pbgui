@@ -14,6 +14,7 @@ DOCUMENTED_SCRIPT_DIRS = {
     "tools": "Developer audit and comparison tools intentionally report to stdout.",
 }
 PRINT_ALLOWLIST = {
+    "setup/vast_gpu_benchmark/sync_input.py": "Remote input-sync helper returns a JSON manifest on stdout to its caller.",
     "setup/vast_gpu_benchmark/cloud_worker.py": "Remote worker stdout is the machine-readable SSH control protocol.",
     "setup/vast_gpu_benchmark/prepare.py": "Isolated benchmark preparation CLI reports its export path.",
     "setup/vast_gpu_benchmark/export_metric_contract.py": "CLI exports the machine-readable PB8 metric contract.",
@@ -80,7 +81,7 @@ HUMAN_LOG_SERVICE_MODULES = {
     "hyperliquid_aws.py", "tradfi_sync.py", "api/live.py",
 }
 TIER_3_SERVICES = {
-    "AIChat",
+    "AIChat", "OptimizerWorkload",
     "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI",
     "BalanceCalc", "BitgetUTA", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",
@@ -124,7 +125,7 @@ def _append_open_calls(tree):
         mode = node.args[positional_index] if len(node.args) > positional_index else next(
             (keyword.value for keyword in node.keywords if keyword.arg == "mode"), None
         )
-        if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and "a" in mode.value:
+        if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and "a" in mode.value and set(mode.value) <= set("abt+"):
             yield node
 
 
@@ -318,3 +319,9 @@ def test_embedded_source_is_a_reviewed_protocol_exception():
         isinstance(node, ast.Call) and _call_name(node.func) in {"print", "builtins.print"}
         for node in ast.walk(tree)
     )
+
+
+def test_append_detector_distinguishes_archive_members_from_file_modes():
+    """A ZIP member name containing 'a' is not an append mode; real appends remain detected."""
+    tree = ast.parse("archive.open('candles.npy')\npath.open('ab')\nopen('file', 'a+')")
+    assert [node.lineno for node in _append_open_calls(tree)] == [2, 3]

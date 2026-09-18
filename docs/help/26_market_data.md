@@ -552,3 +552,5 @@ If a build job appears briefly and disappears:
 If Build coin list is empty:
 - Ensure symbols are mapped and status is `ok`
 - Ensure Tiingo ticker or FX ticker exists in mapping
+
+Inventory deletion and job actions reject duplicate clicks while pending. Deletion keeps the dataset selected at confirmation; cancelling a Hyperliquid job updates the running list automatically. Download queue failures display the backend reason.

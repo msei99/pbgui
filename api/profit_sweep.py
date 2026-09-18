@@ -37,6 +37,7 @@ from profit_sweep_transfers import (
     transfer_capability,
     verify_browser_signature,
 )
+from hyperliquid_account_mode import snapshot_mode, UnsupportedAccountMode
 from User import Users
 
 
@@ -568,6 +569,8 @@ def _test_snapshot(user: Any, asset: str) -> tuple[dict[str, Any], dict[str, Any
 
     now_ms = int(time.time() * 1000)
     snapshot = collect_readonly_snapshot(user, max(0, now_ms - 300_000), now_ms, 30.0, asset)
+    if snapshot_mode(snapshot)["unsupported"]:
+        raise UnsupportedAccountMode(snapshot)
     _require_live_snapshot(default_policy(), snapshot)
     capability = transfer_capability(user, snapshot)
     if not capability.get("supported") or not capability.get("writes_available"):
@@ -1189,12 +1192,18 @@ def _recent_manual_transfer_conflict(user_name: str, route: str, amount: str) ->
 def _top_up_preview_sync(user_name: str, selected_route: str = "") -> dict[str, Any]:
     """Build a secret-free read-only preview for every supported internal route."""
 
-    user, snapshot, routes = _manual_transfer_snapshot(user_name)
+    try:
+        user, snapshot, routes = _manual_transfer_snapshot(user_name)
+    except UnsupportedAccountMode as exc:
+        mode = snapshot_mode(exc.snapshot)
+        return {"user_name": user_name, "account_type": mode["label"],
+                "account_mode": mode["mode"], "routes": [], "route": None,
+                "blocked_reason": mode["guidance"], "read_only": True}
     selected = next((item for item in routes if item["id"] == selected_route), routes[0])
     vault = snapshot.get("vault") if isinstance(snapshot.get("vault"), dict) else {}
     vault_balances = vault.get("balances") if isinstance(vault.get("balances"), dict) else {}
     leader = snapshot.get("leader") if isinstance(snapshot.get("leader"), dict) else {}
-    account_mode = str(leader.get("account_mode") or "") if snapshot.get("account_kind") == "vault" else ""
+    account_mode = str(leader.get("account_mode") or "") if snapshot.get("account_kind") == "vault" else str((snapshot.get("account") or {}).get("mode") or "")
     raw_positions = vault.get("positions") if isinstance(vault.get("positions"), list) else []
     positions = []
     for item in raw_positions[:100]:
@@ -1222,7 +1231,7 @@ def _top_up_preview_sync(user_name: str, selected_route: str = "") -> dict[str, 
         "account_mode": account_mode or None,
         "route_note": (
             "Leader uses Main Unified: Main Perps and Main Spot share one balance, so no transfer between them is available."
-            if account_mode in {"unified", "portfolio_margin"}
+            if snapshot.get("account_kind") == "vault" and account_mode in {"unified", "portfolio_margin"}
             else None
         ),
         "routes": routes,
@@ -1709,6 +1718,16 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
         lookback = int(policy.get("maximum_history_age") or 86_400)
         since_ms, until_ms = max(0, now_ms - lookback * 1000), now_ms
     snapshot = collect_readonly_snapshot(user, since_ms, until_ms, 30.0, policy["asset"])
+    mode = snapshot_mode(snapshot)
+    if mode["unsupported"]:
+        return {
+            "policy": {"user_name": user_name, "policy": policy},
+            "decision": {"reason": "unsupported_account_mode", "state_kind": preview_state_kind,
+                         "committed": False},
+            "snapshot": snapshot, "account_mode": mode,
+            "read_only": True, "saved_policy": saved is not None,
+            "next_scheduled_check_at": None,
+        }
     if not snapshot.get("complete"):
         messages = ", ".join(str(item.get("code") or "read_error") for item in snapshot.get("errors", []))
         raise RuntimeError(f"Exchange snapshot incomplete: {messages or 'unknown'}")
@@ -2104,6 +2123,24 @@ async def notify_income(user_name: str) -> None:
         wake.set()
 
 
+async def _reconcile_pending_manual_transfers() -> None:
+    """Refresh already submitted manual transfers without ever submitting a new one."""
+    operations = await _run_owned_thread(_store().list_unresolved_transfer_operations)
+    for operation in operations:
+        if operation["state"] not in {"submitting", "unknown"}:
+            continue
+        try:
+            await _run_account_operation(
+                operation["user_name"], _reconcile_manual_operation_sync, operation
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log(SERVICE, f"Manual transfer reconciliation deferred: {type(exc).__name__}",
+                 level="WARNING", user=operation["user_name"],
+                 meta={"operation": "manual_transfer_recovery"})
+
+
 async def _scheduler_loop() -> None:
     """Recover durable intents, then run bounded Dry and Live evaluations."""
 
@@ -2124,6 +2161,7 @@ async def _scheduler_loop() -> None:
     while not _STOPPING:
         wait_seconds = 30
         try:
+            await _reconcile_pending_manual_transfers()
             now = int(time.time())
             due: list[tuple[str, str]] = []
             for record in await _run_owned_thread(_store().list_policies):
