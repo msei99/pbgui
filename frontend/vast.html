@@ -50,14 +50,16 @@
     <h2>Rental &amp; Automation</h2>
     <p class="muted">Defaults for future rentals and jobs. Control the running rental in Queue.</p>
     <form id="rental-form"><div class="fields">
-      <label><span data-tip="Maximum duration of the shared rental. PBGui deletes the instance at the deadline.">Maximum rental hours</span><input id="job-hours" type="number" min="0.25" max="24" step="0.25" value="1" required></label>
-      <label><span data-tip="Shared rental budget estimate, including reserved transfers. This is not a provider spending cap.">Budget target (USD)</span><input id="job-budget" type="number" min="0.1" max="100" step="0.1" value="1" required></label>
+      <label><span data-tip="Maximum simultaneous GPU rentals. With Auto rent & start enabled, waiting prepared jobs receive GPUs automatically up to this limit. Starting and closing rentals count toward the limit. Lowering the limit does not stop running jobs.">Max concurrent GPUs</span><input id="max-rentals" type="number" min="1" max="16" step="1" value="1" required></label>
+      <label><span data-tip="After one explicit save confirmation, automatically rent and start prepared Vast queue jobs. Pause stops new rentals and dispatches; End rentals disables this option and cleans up all rentals.">Auto rent &amp; start</span><select id="auto-rent"><option value="false">Off</option><option value="true">On</option></select></label>
+      <label><span data-tip="Maximum duration of each GPU rental. PBGui deletes the instance at the deadline.">Maximum rental hours</span><input id="job-hours" type="number" min="0.25" max="24" step="0.25" value="1" required></label>
+      <label><span data-tip="Budget estimate per GPU rental, including reserved transfers. This is not a provider spending cap.">Budget per GPU (USD)</span><input id="job-budget" type="number" min="0.1" max="100" step="0.1" value="1" required></label>
       <label><span data-tip="Delete the rented instance when the queue is idle to avoid ongoing costs.">When idle</span><select id="worker-idle"><option value="300">Delete after 5 minutes</option><option value="0">Delete immediately</option></select></label>
     </div><h3>Stop on stagnation</h3><div class="fields">
       <label><span data-tip="Optional early stop from the exact Pareto front, checked after each result snapshot. Applies when a job first starts. Supports up to three objectives.">Stop on stagnation</span><select id="convergence-enabled"><option value="false">Off</option><option value="true">On</option></select></label>
       <label><span data-tip="Exact evaluations before establishing the fixed comparison scale and beginning stagnation detection.">Minimum exact evaluations</span><input id="convergence-min" type="number" min="256" max="10000000" step="1" value="512" required></label>
       <label><span data-tip="Additional exact evaluations without a significant improvement before collecting the final result.">Patience (exact evaluations)</span><input id="convergence-patience" type="number" min="128" max="10000000" step="1" value="512" required></label>
-      <label><span data-tip="Relative improvement in normalized Pareto hypervolume needed to reset patience. Several small improvements accumulate against the last accepted improvement.">Improvement tolerance (%)</span><input id="convergence-tolerance" type="number" min="0.001" max="10" step="0.001" value="0.1" required></label>
+      <label><span data-tip="Relative improvement in normalized Pareto hypervolume needed to reset patience. Several small improvements accumulate against the last accepted improvement.">Improvement tolerance (%)</span><input id="convergence-tolerance" type="number" min="0.001" max="10" step="0.001" value="0.25" required></label>
     </div><button type="submit" id="save-rental-preferences">Save rental &amp; automation</button></form>
   </section>
   <section id="vast-hosts-filter" class="card" hidden>

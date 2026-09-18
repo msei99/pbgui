@@ -211,6 +211,35 @@ class JobStore:
             self.update(identifier, status="cancelled")
         return self.read(identifier)
 
+    def reset_unstarted_for_replacement(self, identifier: str, lease_id: str) -> dict:
+        """Release an unstarted immutable snapshot after its old lease is gone."""
+        identifier = job_id(identifier)
+        lease_id = job_id(lease_id)
+        directory = self.directory(identifier)
+        with advisory_file_lock(directory / ".state-lock"):
+            state = self.read(identifier)
+            if state.get('lease_id') != lease_id:
+                raise VastError('Replacement lease no longer owns this job', 409)
+            if (state.get('final_collected') or state.get('result_path') or
+                    int(state.get('exact_completed') or 0) > 0 or int(state.get('downloaded_bytes') or 0) > 0):
+                raise VastError('Optimizer results already exist; requeue this job explicitly', 409)
+            for key in (
+                'lease_id', 'dispatch_at', 'setup_started_at', 'worker_ready', 'hardware',
+                'uploaded', 'upload_progress', 'upload_attempts', 'upload_recovery_since',
+                'upload_retry_at', 'upload_retry_failures', 'upload_retry_bytes', 'started_at',
+                'stop_reason', 'completion_reason', 'throughput', 'runtime_metrics',
+                'exact_queue', 'convergence', 'finished_at', 'elapsed_seconds', 'exit_code',
+            ):
+                state.pop(key, None)
+            state.update(status='ready', rental_state='none', exact_completed=0,
+                         gpu_candidates=0, error=None, generation=int(state.get('generation', 0)) + 1,
+                         updated_at=time.time())
+            write_json(directory / 'state.json', state)
+        with advisory_file_lock(directory / '.control-lock'):
+            write_json(directory / 'control.json', {'stop': False, 'cleanup': False})
+        _log(SERVICE, f"{identifier}: released for replacement GPU after verified rental cleanup", level='INFO')
+        return state
+
     def recover_interrupted_preparation(self, identifier: str) -> dict:
         """Expose retry when the process owning an unfinished snapshot has exited."""
         with advisory_file_lock(self.directory(identifier) / ".state-lock"):
@@ -346,13 +375,23 @@ class JobStore:
                 raise VastError("Offer CPU allocation is below the requested worker count", 422)
             if state["status"] != "ready" or self.read(identifier, "control.json")["stop"]:
                 raise VastError("Prepare a fresh job before starting", 409)
-            if any(row["id"] != identifier and row["rental_state"] not in ("none", "deletion_verified") for row in self.list()):
+            active = [row for row in self.list() if row['id'] != identifier
+                      and row['rental_state'] not in ('none', 'deletion_verified')]
+            from vast_queue import CloudQueue
+            from vast_pool import pool_limit
+            queue_state = CloudQueue(self).read()
+            limit = pool_limit(queue_state) if queue_state.get('pool_enabled') and state.get('kind') == 'worker' else 1
+            if len(active) >= limit:
                 raise VastError("Finish the existing rental and cleanup first", 409)
             from vast_image import require_public_image
             require_public_image(IMAGE)
             secrets = VastCredentialStore(self.root).secrets()
+            if (queue_state.get('pool_enabled') and state.get('kind') == 'worker'
+                    and (queue_state.get('pool_authorization') or {}).get('credential_generation') != secrets['generation']):
+                raise VastError('Vast credentials changed; start the GPU pool again to authorize this account', 422)
             account = VastClient(secrets["api_key"]).account()
-            if account["balance_usd"] is None or account["balance_usd"] < budget:
+            committed = sum(row.get('budget_usd', 0) for row in active)
+            if account["balance_usd"] is None or account["balance_usd"] < budget + committed:
                 raise VastError("The account needs at least the selected job budget in rental credit", 409)
             inbound = number(offer.get("download_gb_usd"))
             outbound = number(offer.get("upload_gb_usd"))

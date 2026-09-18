@@ -3,6 +3,20 @@
 
 .vast-component .offer-secondary{margin-top:4px;white-space:normal;max-width:270px}.vast-component .offer-compatible{color:#86efac}.vast-component .offer-incompatible{color:#fbbf24}.vast-component .offer-details td{background:var(--bg)}.vast-component .offer-detail-grid{display:flex;flex-wrap:wrap;gap:24px;white-space:normal}.vast-component .offer-toggle{flex-direction:row;align-items:center;gap:8px}.vast-component .offer-toggle input{width:auto}
 
+.queue-gpu-overview{margin:0 0 var(--sp-sm);padding:var(--sp-sm);border:1px solid var(--border);border-radius:var(--radius,6px);background:var(--bg2)}
+.queue-gpu-summary{display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-xs);color:var(--text-dim);font-size:var(--fs-xs)}
+.queue-gpu-summary strong{color:var(--text);font-size:var(--fs-sm)}
+.queue-gpu-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:var(--sp-xs)}
+.queue-gpu-card{min-width:0;padding:var(--sp-sm);border:1px solid var(--border);border-radius:var(--radius,6px);background:var(--bg)}
+.queue-gpu-card-head{display:flex;align-items:center;gap:var(--sp-xs);min-width:0}
+.queue-gpu-name{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.queue-gpu-instance,.queue-gpu-phase{padding:1px 6px;border-radius:999px;background:var(--bg3);color:var(--text-dim);font-size:var(--fs-xs);white-space:nowrap}
+.queue-gpu-job{margin-top:var(--sp-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:var(--fs-sm)}
+.queue-gpu-progress{margin-top:2px;color:var(--text-dim);font-size:var(--fs-xs);font-variant-numeric:tabular-nums;white-space:normal}
+.queue-gpu-actions{display:flex;justify-content:flex-end;gap:var(--sp-xs);margin-top:var(--sp-xs)}
+.queue-gpu-actions button{min-height:24px;padding:2px 8px;font-size:var(--fs-xs)}
+.queue-gpu-error{color:var(--danger,#f87171)}
+
 /* Allow the host navigation labels to wrap at the shared sidebar minimum width. */
 #vast-sidebar-controls .sb-btn { height:auto; min-height:var(--btn-h); white-space:normal; padding-block:var(--sp-xs); }
 #vast-rental-actions { margin-top:var(--sp-sm); }

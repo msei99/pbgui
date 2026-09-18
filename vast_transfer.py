@@ -7,6 +7,7 @@ import threading
 import gzip
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -229,6 +230,42 @@ class WorkerConnection:
             return value
         except ValueError:
             raise VastError("Invalid worker response") from None
+
+    def convergence_snapshot(self) -> list[list[float]]:
+        """Read only bounded feasible Pareto objectives after full backups stop."""
+        script = (
+            'import json,math,pathlib\n'
+            'root=pathlib.Path(' + repr(self.remote_root) + ')/"output"\n'
+            'files=list(root.glob("optimize_results/*/pareto/*.json"))\n'
+            'assert len(files)<=100000\n'
+            'points=[]; dims=None\n'
+            'for path in files:\n'
+            ' assert not path.is_symlink() and path.stat().st_size<=4*1024*1024\n'
+            ' metrics=json.loads(path.read_text()).get("metrics",{})\n'
+            ' violation=float(metrics["constraint_violation"])\n'
+            ' if not math.isfinite(violation) or violation>0 or metrics.get("liquidated"): continue\n'
+            ' values=[float(value) for value in metrics["unpenalized_objectives"]]\n'
+            ' assert 1<=len(values)<=3 and all(math.isfinite(value) for value in values)\n'
+            ' dims=len(values) if dims is None else dims; assert len(values)==dims\n'
+            ' points.append(values)\n'
+            'print(json.dumps({"points":points},allow_nan=False))\n'
+        )
+        raw = self.command('/usr/local/bin/python -c ' + shlex.quote(script), timeout=60,
+                           max_output=16 * 1024 * 1024)
+        try:
+            payload = json.loads(raw)
+            points = payload['points']
+            if (not isinstance(payload, dict) or set(payload) != {'points'} or not isinstance(points, list)
+                    or len(points) > 100_000):
+                raise ValueError('invalid')
+            dimensions = len(points[0]) if points else None
+            if any(not isinstance(point, list) or not 1 <= len(point) <= 3 or len(point) != dimensions
+                   or any(type(value) not in (int, float) or not math.isfinite(value) for value in point)
+                   for point in points):
+                raise ValueError('invalid')
+            return [[float(value) for value in point] for point in points]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            raise VastError('Invalid convergence snapshot from worker') from None
 
     def upload(self, timeout: int) -> None:
         """Transfer only data missing from the shared content-addressed worker cache."""

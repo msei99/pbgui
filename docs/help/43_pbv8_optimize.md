@@ -368,3 +368,5 @@ Green lines also mark the start of the first window and the end of the last wind
 For Sweep Cycles, **Generate windows** also copies the current general **Starting balance** into the generator and generated preview.
 
 The pinned Vast GPU worker supports HSL for ema_anchor and trailing_martingale. HSL settings are preserved during cloud export; native GPU configuration checks still apply.
+
+Set **Max concurrent GPUs** and enable **Auto rent & start** under **Rental & Automation** to run prepared queued jobs concurrently on separate Vast GPUs (default 1). After the explicit save confirmation, **Save & Queue** needs no per-job Start action. Budgets and deadlines apply per rental. See the [GPU pool guide](48_vast_gpu.md#gpu-pool-and-shared-rentals) for pause, cleanup and replacement behavior.

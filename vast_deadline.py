@@ -52,7 +52,7 @@ def request_deadline(queue, identifier: str, expected: float, minutes: int) -> d
     if type(minutes) is not int or not 1 <= abs(minutes) <= 1440:
         raise VastError('Choose a deadline adjustment between 1 and 1,440 minutes', 422)
     with advisory_file_lock(queue.root / '.queue-lock'), advisory_file_lock(queue.store.directory(identifier) / '.deadline-lock'):
-        worker = queue.worker()
+        worker = queue.worker_for(identifier)
         if not worker or worker['id'] != identifier or worker.get('rental_state') != 'active':
             raise VastError('This rental is no longer active', 409)
         control = queue.store.read(identifier, 'control.json')
@@ -86,7 +86,7 @@ def request_transfer_reserve(queue, identifier: str, expected: float, reserve: f
     if any(type(value) not in (int, float) or not math.isfinite(value) for value in (expected, reserve)) or not .05 <= reserve <= 100:
         raise VastError('Choose a valid transfer reserve', 422)
     with advisory_file_lock(queue.root / '.queue-lock'), advisory_file_lock(queue.store.directory(identifier) / '.deadline-lock'):
-        worker = queue.worker()
+        worker = queue.worker_for(identifier)
         if not worker or worker['id'] != identifier or worker.get('rental_state') != 'active':
             raise VastError('This rental is no longer active', 409)
         if worker.get('deadline_protocol') != 2:
@@ -124,7 +124,7 @@ def request_budget(queue, identifier: str, expected: float, budget: float) -> di
     if any(type(value) not in (int, float) or not math.isfinite(value) for value in (expected, budget)) or not .1 <= budget <= 100:
         raise VastError('Choose a valid budget target', 422)
     with advisory_file_lock(queue.root / '.queue-lock'), advisory_file_lock(queue.store.directory(identifier) / '.deadline-lock'):
-        worker = queue.worker()
+        worker = queue.worker_for(identifier)
         if not worker or worker['id'] != identifier or worker.get('rental_state') != 'active':
             raise VastError('This rental is no longer active', 409)
         if worker.get('deadline_protocol') != 2:

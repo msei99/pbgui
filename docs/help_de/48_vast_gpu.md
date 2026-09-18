@@ -171,12 +171,18 @@ werden die alten Regeln nicht übernommen. Datenverfügbarkeit/Export und native
 Runtime-/Geräteprüfungen folgen zusätzlich. Eine erfolgreiche Konfigurationsprüfung
 garantiert deshalb noch keinen erfolgreichen GPU-Lauf.
 
-## Eine Miete für mehrere Jobs
+## GPU-Pool und gemeinsame Mieten
+
+Unter **Rental & Automation** lässt sich **Max concurrent GPUs** einstellen (Standard **1**, maximal **16**). Damit nicht jeder Queue-Job von Hand gestartet werden muss, **Auto rent & start** auf **On** stellen und speichern. Die Bestätigung genehmigt ausdrücklich die Budgetziele pro Miete und für alle gleichzeitigen Mieten. Danach reicht **Save & Queue**: Sobald die Eingabevorbereitung fertig ist, mietet PBGui bis zum gespeicherten Limit und startet pro GPU einen Optimizer. Passende freie GPUs werden zuerst wiederverwendet. Aufbauende und noch nicht nachweislich gelöschte Mieten zählen zum Limit. **Auto rent & start** funktioniert auch mit Limit 1.
+
+Stunden, Budget und Leerlaufregel gelten **pro GPU-Miete**. Die Einstellungen zeigen die Summe der gleichzeitig geltenden Budgetziele. Dies ist kein Gesamtbudget über die Laufzeit des Pools: Solange der Pool aktiv ist und vorbereitete Jobs warten, kann er nach Ende einer Miete Ersatz-GPUs mieten. Neue Angebote müssen die genehmigten Anforderungen und Host-Sperren erfüllen. Ohne passendes Angebot zeigt die Queue den Grund und versucht es automatisch erneut.
+
+**Pause queue** verhindert neue Zuteilungen und Mieten; laufende Jobs und Leerlaufbereinigung bleiben aktiv. Werden automatische Einstellungen während der Pause gespeichert, ändern sich die Limits, ohne die Queue fortzusetzen. Jede aktive GPU erscheint in der Queue als kompakte Karte mit Instanz, Job, Phase und laufendem Upload- oder Optimizer-Fortschritt. Beim Upload werden die gemessene Rate und, sofern verfügbar, deren Sättigung gegenüber der vom Provider angegebenen Host-Download-Bandbreite gezeigt. Die Mietaktionen gelten jeweils nur für diese Karte. **Replace GPU** beendet nur diese Miete und lässt die automatische Planung aktiv; PBGui wartet auf die bestätigte Löschung beim Provider, bevor die Pool-Kapazität ersetzt wird. Eingaben ohne Optimizer-Ergebnis werden automatisch wieder in die Queue gestellt. Bereits vorhandene Ergebnisse bleiben erhalten und müssen ausdrücklich mit Requeue neu gestartet werden. Wird die Automatik über die Einstellung ausgeschaltet, pausiert die Zuteilung und es entstehen keine neuen Mieten; eine laufende Miete wird dabei nicht beendet. Ein niedriger gespeichertes Limit beendet ebenfalls keine bestehende Miete. Der Scheduler wird nach einem API-Neustart wiederhergestellt. Logs, Deadline und Budget eines Jobs gehören immer zu seiner eigenen GPU.
 
 Benötigt ein später hinzugefügter Job mehr Transferreserve, kann ein Worker mit aktuellem Budget-Control-Guard ungenutzte Mietzeit innerhalb desselben genehmigten Budgets in Transferreserve umschichten. PBGui startet den Job erst nach Bestätigung der verkürzten Deadline durch den Worker. Während einer ausstehenden Anpassung greift keine Leerlaufbereinigung. Bei älteren Guards oder unzureichendem Restbudget zeigt PBGui einen Hinweis zur manuellen Anpassung von **Transfer reserve/Budget**. Unbestätigte Reserven werden nicht ausgegeben und das Budget wird nicht automatisch erhöht.
 
-Unter **Rental & Automation** maximale Stunden, Budgetziel und Leerlaufregel zusammen mit den GPU-Anforderungen speichern. **Start** in der Jobzeile mietet direkt mit diesen gespeicherten Vorgaben, ohne weitere Bestätigung, und sucht ein aktuelles passendes Angebot.
-PBGui mietet einmal, richtet verifiziertes SSH ein und arbeitet die Jobs
+Unter **Rental & Automation** maximale Stunden, Budgetziel und Leerlaufregel zusammen mit den GPU-Anforderungen speichern. **Start** in der Jobzeile mietet direkt mit diesen gespeicherten Vorgaben, und sucht ein aktuelles passendes Angebot.
+Im Einzelmietmodus mietet PBGui einmal, richtet verifiziertes SSH ein und arbeitet die Jobs
 nacheinander auf derselben GPU ab. Ergebnisse werden jeweils vor dem nächsten
 Start lokal gesichert und importiert. Die CPU-Parallelität pro Lauf kommt aus
 der jeweiligen Optimizer-Konfiguration.
@@ -188,7 +194,7 @@ Ergebnisverzeichnisse. Jobs mit zu hohem CPU-Bedarf oder unzureichender
 Transferreserve bleiben mit Begründung wartend.
 
 Mietfrist und Budget gelten für die gesamte Miete und werden durch Folgeläufe
-nicht zurückgesetzt. Es gibt keine stillen Ersatzmieten. Budget oberhalb der
+nicht zurückgesetzt. Ersatzmieten erfolgen nur mit ausdrücklich gestartetem automatischem Pool. Budget oberhalb der
 maximalen Mietkosten steht für weitere Job-Transfers zur Verfügung.
 
 ## Anzeige und Steuerung
@@ -202,9 +208,9 @@ in PB8 Results/Paretos importiert; der genaue lokale Pfad wird angezeigt.
 - **Stop & collect** beendet den gewählten Job und sichert Ergebnisse. Bei aktiver
   Queue kann danach der nächste Job dieselbe GPU verwenden.
 - **Pause queue** verhindert Folgestarts; der aktuelle Lauf geht weiter.
-- **Start queue** setzt die Abarbeitung auf dem vorhandenen Worker fort.
-- **End rental** pausiert die Cloud-Queue, beendet/sichert den aktuellen Lauf und
-  löscht den Worker. Noch wartende Jobs bleiben erhalten.
+- **Start queue** auf der Karte einer reservierten GPU gibt nur diese manuelle Reservierung für die Abarbeitung frei.
+- **End rental** auf einer manuellen GPU-Karte beendet/sichert deren aktiven Job und löscht diesen Worker.
+- **Replace GPU** auf einer automatisch verwalteten Karte beendet nur diese Miete. Die Pool-Planung bleibt aktiv und stellt die Kapazität nach bestätigter Bereinigung wieder her.
 - **Resume supervision** stellt die Überwachung derselben Miete nach einem
   Controller-/Host-Ausfall wieder her, ohne eine Ersatzinstanz zu mieten.
 
@@ -306,13 +312,13 @@ benötigt Billing-Leserechte. Die Abfrage wird fünf Minuten zwischengespeichert
 blockiert die Statusabfrage nicht. Pending bedeutet, dass noch kein Kostenposten
 gemeldet wurde, nicht dass die Miete kostenlos ist.
 
-Während der Optimierung werden geprüfte Ergebnissnapshots nach der ersten exakten Auswertung etwa jede Minute innerhalb des Transferlimits veröffentlicht. Results und Pareto Explorer im Joblog öffnen diesen Zwischenstand. Die abschließende Übertragung aktualisiert denselben Eintrag.
+Während der Optimierung werden geprüfte Ergebnissnapshots nach der ersten exakten Auswertung etwa jede Minute innerhalb des Transferlimits veröffentlicht. Results und Pareto Explorer im Joblog öffnen diesen Zwischenstand. Sobald die kumulierten Zwischenarchive 1 GiB erreichen, lädt PBGui keine weiteren vollständigen Zwischenarchive herunter, führt eine aktivierte Stagnationsprüfung aber mit einem begrenzten reinen Pareto-Metrik-Snapshot über die verifizierte Worker-Verbindung fort. Die abschließende Übertragung aktualisiert denselben Eintrag.
 
 ### Stopp bei ausbleibender Verbesserung
 
 Neue PB8-Konfigurationen verwenden beim ersten Wechsel auf Vast **20.000 exakte Auswertungen**, sofern das Iterationsfeld noch nicht bearbeitet wurde. Gespeicherte Konfigurationen und ausdrücklich eingestellte Werte bleiben erhalten. Dies ist eine Obergrenze; die aktivierte Sättigungserkennung kann früher stoppen, garantiert dies aber nicht.
 
-Setup bietet einen optionalen vorzeitigen Stopp (standardmäßig aus). Vorgaben: mindestens 512 exakte Auswertungen, danach 512 weitere Auswertungen Geduld und 0,1 % Verbesserungstoleranz. Jeder Job übernimmt die Einstellungen beim Start; Änderungen beeinflussen laufende Jobs nicht.
+Setup bietet einen optionalen vorzeitigen Stopp (standardmäßig aus). Vorgaben: mindestens 512 exakte Auswertungen, danach 512 weitere Auswertungen Geduld und 0,25 % Verbesserungstoleranz. Jeder Job übernimmt die Einstellungen beim Start; Änderungen beeinflussen laufende Jobs nicht.
 
 Nach dem Minimum bewertet PBGui die zulässige exakte Pareto-Front anhand des normalisierten Hypervolumens. Skala und Referenz werden mit der ersten Front festgelegt und bleiben unverändert. Unterstützt werden ein bis drei bereits zur Minimierung vorzeichenkorrigierte Ziele, einschließlich PB8-Suite-Auswertungen. Relative Verbesserungen über der Toleranz setzen das Geduldsfenster zurück; kleinere Verbesserungen summieren sich gegenüber dem zuletzt akzeptierten Stand. Proxy-Zahlen und verstrichene Minuten verbrauchen keine Geduld. Fehlende, ungültige, nicht unterstützte oder ausschließlich unzulässige Snapshots unterbrechen die Erkennung und starten das Beobachtungsfenster neu.
 
@@ -324,7 +330,9 @@ Die Live-Auslastung wird etwa alle 15 Sekunden über die bestehende SSH-Verbindu
 
 Neue Cloud-Jobs verwenden automatisch die gemessene CPU-Quote, auf ganze Worker abgerundet (mindestens einer), für n_cpus und gpu.exact_workers. Eine Quote von 9,6 ergibt neun Worker, auch wenn das Angebot zehn Kerne nennt. Die Quell-Config bleibt erhalten; eine getrennte geprüfte Ausführungskopie wird übertragen. Laufende Pools werden nicht umgestellt. Lokale Backtests aus Cloud-Ergebnissen entfernen den nur im Container gültigen HLCV-Pfad und verwenden lokale Daten, auch für Holdout-Zeiträume.
 
-Stop & collect zeigt sofort **Stopping…**, danach **Stop requested**, bis die Überwachung **Collecting results…** meldet. Nach der Sicherung startet der nächste geeignete Queue-Job.
+Stop & collect verlangt zuerst eine Bestätigung für den gewählten Optimizer. Nach der Bestätigung erscheint sofort **Stopping…**, danach **Stop requested**, bis die Überwachung **Collecting results…** meldet. Nach der Sicherung startet der nächste geeignete Queue-Job.
+
+Jede GPU-Karte bietet **Log** für die detaillierte Live-Ansicht des zugeordneten Jobs und **Results** für dessen verknüpftes Optimizer-Ergebnis. Results bleibt mit einer Hover-Erklärung deaktiviert, bis ein verifizierter Ergebnissnapshot vorliegt. **Replace GPU** verlangt eine Bestätigung, da diese Aktion den zugeordneten Optimizer stoppt, seine aktuellen Ergebnisse einsammelt, die Miete beendet und Auto rent & start nach bestätigter Bereinigung die Pool-Kapazität wiederherstellen lässt.
 
 Uploads behalten per Prüfsumme bestätigte 8-MiB-Teilstücke bei SSH-Abbrüchen. Nur fehlende Teile werden erneut übertragen; vor dem Einrichten wird das gesamte Archiv geprüft. Wiederverbindungen erscheinen im Upload-Status.
 
@@ -362,3 +370,5 @@ Der Restart-Knopf in der Navigation erkennt auch veraltete lokale Vast-Run- und 
 Beim Upload zeigt **Transferring job metadata** die komprimierten Konfigurations-/Manifest-Bytes an, die an SSH übergeben wurden. Das bestätigt noch keinen Empfang beim Worker. Die Synchronisation der Kursdateien beginnt nach dessen Bestätigung der Metadatenvorbereitung.
 
 **Stop & collect** bricht auch einen Upload ab, der auf die Metadatenbestätigung wartet. Die Transfer-Steuerung prüft Stop-Anforderungen weiter, während SSH oder rsync keine Ausgabe liefert – auch nach dem Schließen der Ausgabekanäle bis zum tatsächlichen Prozessende. Vor dem Optimierungsstart gibt es keine Optimierungsergebnisse abzuholen; der Job wechselt auf **Cancelled**. Für eine pausierte Miete gelten weiterhin die bestehende Leerlaufbereinigung und Deadline.
+
+Gueltige Pareto-Fronten mit mehr als 1.000 Ergebnissen werden weiterhin auf Stagnation geprueft; alle zulaessigen Punkte gehen in die exakte Hypervolumenberechnung ein.

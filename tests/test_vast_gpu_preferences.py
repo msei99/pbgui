@@ -53,6 +53,19 @@ def test_preferences_persist_without_offer_id(tmp_path, monkeypatch):
     assert 'offer_id' not in saved
 
 
+def test_startup_restores_enabled_pool_supervisor(tmp_path, monkeypatch):
+    """API restart relaunches the durable scheduler for authorized automation."""
+    queue = CloudQueue(JobStore(tmp_path/'vast'))
+    queue.update(pool_enabled=True)
+    calls = []
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
+    monkeypatch.setattr('vast_pool.launch_pool', lambda target: calls.append(target.root))
+    monkeypatch.setattr(vast, '_PERFORMANCE_COLLECTOR', SimpleNamespace())
+    monkeypatch.setattr(vast, '_PREPARATION_EXECUTOR', SimpleNamespace())
+    vast.startup()
+    assert calls == [queue.root]
+
+
 def test_start_uses_current_matching_offer_not_preview(rental):
     """A replacement host of the same type is chosen from fresh offers at start."""
     _, rows, calls = rental

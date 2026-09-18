@@ -160,6 +160,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - Apply this to every issue, including batch closures and release cleanup; a bare “fixed” or release link is insufficient.
 
 ### Release Workflow
+- A release is not complete until the issues actually fixed by that release have been handled on GitHub. After publishing, identify the corresponding issues from the release notes and changes, add a substantive resolution comment (cause, implemented fix, release/commit links, validation and any material limitations), close each fully resolved issue, and verify its final state. Do this as part of the user's release request without waiting for a reminder or asking again. Do not close partially resolved or unverified issues; explain what remains. Follow the Closing Issues rules above for every closure.
 - Steps in `RELEASING.md`.
 - Per release: bump `pbgui_purefunc.py` `PBGUI_VERSION`, move `releases/unreleased.md` notes into a dedicated `releases/vX.YY.md` file, keep `CHANGELOG.md` index updated.
 - Per release: bump `api/serial.txt` so the UI makes the restart requirement visible for already running processes. Treat the serial bump as a normal release-prep step; do not rely on remembering it ad hoc.

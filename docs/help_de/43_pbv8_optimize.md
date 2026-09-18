@@ -368,3 +368,5 @@ Gruene Linien markieren auch den Beginn des ersten und das Ende des letzten Fens
 Bei Sweep Cycles uebernimmt **Generate windows** auch die aktuelle allgemeine **Starting balance** in den Generator und die erzeugte Vorschau.
 
 Der festgelegte Vast-GPU-Worker unterstuetzt HSL fuer ema_anchor und trailing_martingale. HSL-Einstellungen bleiben beim Cloud-Export erhalten; die nativen GPU-Konfigurationspruefungen gelten weiterhin.
+
+Mit **Max concurrent GPUs** und **Auto rent & start** unter **Rental & Automation** laufen vorbereitete Queue-Jobs parallel auf getrennten Vast-GPUs (Standard 1). Nach der ausdrücklichen Bestätigung beim Speichern reicht **Save & Queue**; pro Job ist kein Start nötig. Budget und Deadline gelten pro Miete. Verhalten bei Pause, Bereinigung und Ersatzmieten steht im [GPU-Pool-Guide](48_vast_gpu.md#gpu-pool-und-gemeinsame-mieten).

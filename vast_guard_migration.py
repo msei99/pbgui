@@ -30,7 +30,7 @@ def apply_migrated_deadline(queue, identifier, intent, request):
         _ACTIVE_OPERATIONS += 1
     try:
         connection = upgrade_guard(queue.store, identifier, intent)
-        worker = queue.worker()
+        worker = queue.worker_for(identifier)
         control = queue.store.read(identifier, 'control.json')
         if (not worker or worker['id'] != identifier or worker.get('rental_state') != 'active'
                 or control.get('stop') or control.get('cleanup')):

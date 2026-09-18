@@ -425,8 +425,8 @@ def test_worker_action_lock_survives_rerender_and_failure(cloud_page):
     assert page.locator('#end-worker').inner_text() == 'End rental'
 
 
-def test_validation_retry_preserves_save_and_fail_closed_queue(cloud_page):
-    """Retry validates the current draft, without allowing unvalidated queue entries."""
+def test_validation_retry_preserves_save_and_keeps_queue_action_responsive(cloud_page):
+    """Retry validates the current draft while queue clicks remain responsive and revalidate."""
     page, _, _, overrides, held = cloud_page
     overrides['/api/vast/validate-config'] = (502, '<html>bad gateway</html>', {})
     page.select_option('#opted-execution', 'vast')
@@ -434,7 +434,7 @@ def test_validation_retry_preserves_save_and_fail_closed_queue(cloud_page):
     retry = page.get_by_role('button', name='Retry validation')
     retry.wait_for()
     assert page.locator('#btn-editor-save').is_enabled()
-    assert page.locator('#btn-editor-save-queue').is_disabled()
+    assert page.locator('#btn-editor-save-queue').is_enabled()
     assert 'HTTP 502' in page.locator('#opted-vast-validation').inner_text()
     overrides['/api/vast/validate-config'] = 'hold'
     retry.click()
@@ -584,7 +584,7 @@ def test_rent_now_and_queue_release_use_selected_offer(cloud_page):
     page, data, calls, overrides, held = cloud_page
     page.add_init_script("""document.addEventListener('DOMContentLoaded',()=>{
       const box=document.createElement('div');box.id='queue-rental';
-      box.innerHTML='<span id="queue-rental-status"></span><button id="queue-end-rental">End rental</button>';
+      box.innerHTML='<span id="queue-rental-status"></span><div id="queue-worker-cards"></div>';
       document.body.prepend(box);
     });""")
     data['worker'] = None
@@ -602,16 +602,17 @@ def test_rent_now_and_queue_release_use_selected_offer(cloud_page):
     assert payload['offer_id'] == 1
     assert payload['preferences']['max_price'] == .15
     assert page.locator('#rent-offer').is_disabled()
-    data['worker'] = dict(id='lease-a', rental_state='active', gpu_name='RTX 3090', instance_id=123,
+    lease_id = 'd' * 32
+    data['worker'] = dict(id=lease_id, rental_state='active', gpu_name='RTX 3090', instance_id=123,
                           status='reserved', price_hour_usd=.15, deadline=2000000000, awaiting_queue_start=True)
     data['queue']['paused'] = True
     held.pop().fulfill(json=data['worker'])
-    page.wait_for_function("document.querySelector('#queue-rental-status').textContent.includes('Reserved for queue start')")
+    page.wait_for_function("document.querySelector('#queue-rental-status').textContent.includes('1 / 1 rentals')")
     assert page.locator('#rent-offer').is_disabled()
-    assert 'instance 123' in page.locator('#queue-rental-status').inner_text()
-    page.locator('#queue-end-rental').click()
+    assert 'instance 123' in page.locator('#queue-worker-cards').inner_text()
+    page.get_by_role('button', name='End rental').click()
     page.wait_for_timeout(100)
-    assert any(method == 'POST' and url.endswith('/queue/end') for method, url in calls)
+    assert any(method == 'POST' and url.endswith('/queue/workers/' + lease_id + '/end') for method, url in calls)
 
 
 def test_rent_failure_is_visible_beside_button(cloud_page):
@@ -1038,7 +1039,7 @@ def test_cloud_validation_names_scenarios_and_displays_field_paths_safely(cloud_
     assert message in box.inner_text()
     assert 'Cloud configuration needs attention (1)' in box.inner_text()
     assert box.locator('img').count() == 0
-    assert page.locator('#btn-editor-save-queue').is_disabled()
+    assert page.locator('#btn-editor-save-queue').is_enabled()
     assert page.locator('#btn-editor-save').is_enabled()
 
 

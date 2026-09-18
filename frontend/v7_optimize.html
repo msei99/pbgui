@@ -2261,7 +2261,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script defer src="/app/js/pb8_parameter_help.js?v=3"></script>
-<link rel="stylesheet" href="/app/css/vast.css?v=9">
+<link rel="stylesheet" href="/app/css/vast.css?v=10">
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -2472,7 +2472,10 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
         <button class="act-btn" onclick="selectAllQueue()" title="Select all visible rows">Select All</button>
         <button class="act-btn" onclick="deselectAllQueue()" title="Deselect all">Deselect</button>
       </div>
-      <div id="queue-rental" class="panel-toolbar" hidden><span id="queue-rental-status"></span><span style="flex:1"></span><button id="queue-start-rental" class="btn" type="button">Start queue</button><button id="queue-end-rental" class="btn" type="button">End rental</button></div>
+      <section id="queue-rental" class="queue-gpu-overview" aria-label="GPU rentals" hidden>
+        <div id="queue-rental-status" class="queue-gpu-summary"></div>
+        <div id="queue-worker-cards" class="queue-gpu-grid"></div>
+      </section>
       <div id="queue-list-wrap">
         <table class="tbl">
           <thead id="queue-thead">
@@ -11445,14 +11448,16 @@ function deselectAllConfigs() {
 }
 
 function selectAllQueue() {
-  state.queue.forEach(function(item) {
+  var queueItems = state.queue.concat(window.PBGuiVast ? window.PBGuiVast.queueItems() : []);
+  queueItems.forEach(function(item) {
     state.selectedQueue.add(item.filename);
   });
   renderQueue();
 }
 
 function deselectAllQueue() {
-  state.queue.forEach(function(item) {
+  var queueItems = state.queue.concat(window.PBGuiVast ? window.PBGuiVast.queueItems() : []);
+  queueItems.forEach(function(item) {
     state.selectedQueue.delete(item.filename);
   });
   renderQueue();
@@ -11600,7 +11605,8 @@ function renderQueue() {
 }
 
 function updateQueueSelectionUi() {
-  pruneSelectionSet('selectedQueue', state.queue.map(function(item) { return item.filename; }));
+  var queueItems = state.queue.concat(window.PBGuiVast ? window.PBGuiVast.queueItems() : []);
+  pruneSelectionSet('selectedQueue', queueItems.map(function(item) { return item.filename; }));
   var selectedCount = state.selectedQueue.size;
   el('queue-selection-summary').textContent = selectedCount
     ? selectedCount + ' queue item' + (selectedCount === 1 ? '' : 's') + ' selected.'
@@ -13162,7 +13168,7 @@ function setOptimizeEditorSaving(saving, andQueue) {
       button.setAttribute('aria-busy', 'true');
       if (id.endsWith('-queue') === !!andQueue) button.textContent = andQueue ? 'Saving & queueing…' : 'Saving…';
     } else {
-      button.disabled = button.dataset.queueBlocked === 'true';
+      button.disabled = false;
       button.removeAttribute('aria-busy');
       if (Object.prototype.hasOwnProperty.call(button.dataset, 'idleLabel')) {
         button.textContent = button.dataset.idleLabel;
@@ -13917,11 +13923,26 @@ async function deleteSelectedQueue() {
     message: 'Delete ' + selected.length + ' selected queue item(s)?',
     confirmText: 'Delete'
   }))) return;
-  await apiFetch('/queue/delete', {
-    method: 'POST',
-    body: JSON.stringify({ filenames: selected })
-  });
-  removeQueueItemsFromState(selected);
+  var cloudKeys = new Set((window.PBGuiVast ? window.PBGuiVast.queueItems() : []).map(function(item) {
+    return item.filename;
+  }));
+  var localSelected = selected.filter(function(key) { return !cloudKeys.has(key); });
+  var cloudSelected = selected.filter(function(key) { return cloudKeys.has(key); });
+  if (localSelected.length) {
+    await apiFetch('/queue/delete', {
+      method: 'POST',
+      body: JSON.stringify({ filenames: localSelected })
+    });
+    removeQueueItemsFromState(localSelected);
+  }
+  if (cloudSelected.length) {
+    if (!window.PBGuiVast || typeof window.PBGuiVast.deleteQueueItems !== 'function') {
+      throw new Error('Vast.ai queue deletion is unavailable. Reload this page and try again.');
+    }
+    await window.PBGuiVast.deleteQueueItems(cloudSelected);
+  }
+  selected.forEach(function(key) { state.selectedQueue.delete(key); });
+  renderQueue();
   toast('Selected queue items deleted.', 'ok');
 }
 
@@ -15275,6 +15296,6 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
 <script src="/app/js/vast_performance.js?v=2"></script>
-<script src="/app/js/vast.js?v=91"></script>
+<script src="/app/js/vast.js?v=102"></script>
 </body>
 </html>

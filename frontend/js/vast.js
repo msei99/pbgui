@@ -20,6 +20,7 @@
     if (!leaving) host.textContent = 'Cloud controls could not load. Check the API restart indicator and reload this page.';
     return;
   } finally { clearTimeout(bootstrapTimer); }
+  let workers = [];
   let worker = null, queueState = {}, selectedOffer = null, renting = false;
   let hostBlockBusy = false, offerRows = [];
   let hostProfiles = new Map(), hostGeneration = 0;
@@ -72,6 +73,7 @@
   const requeuingJobs = new Set();
   const stoppingJobs = new Map();
   const deletingJobs = new Set();
+  const workerActions = new Map();
   let workerAction = null;
   function stopPhase(job) {
     if (!job || ['completed','cancelled','failed'].includes(job.status)) return null;
@@ -405,10 +407,10 @@
   }
 
   const preferenceFields = {gpu_name:'gpu-model', max_price:'max-price', min_vram:'min-vram',
-    min_ram:'min-ram', min_cpu:'min-cpu', min_tflops:'min-tflops', disk_gb:'disk', verified_only:'verified', hours:'job-hours', budget:'job-budget', idle_seconds:'worker-idle', convergence_enabled:'convergence-enabled', convergence_min_exact:'convergence-min', convergence_patience:'convergence-patience', convergence_tolerance_pct:'convergence-tolerance'};
+    min_ram:'min-ram', min_cpu:'min-cpu', min_tflops:'min-tflops', disk_gb:'disk', verified_only:'verified', hours:'job-hours', budget:'job-budget', idle_seconds:'worker-idle', max_rentals:'max-rentals', auto_rent:'auto-rent', convergence_enabled:'convergence-enabled', convergence_min_exact:'convergence-min', convergence_patience:'convergence-patience', convergence_tolerance_pct:'convergence-tolerance'};
   const preferenceGroups = {
     offers: ['gpu_name','max_price','min_vram','min_ram','min_cpu','min_tflops','disk_gb','verified_only'],
-    rental: ['hours','budget','idle_seconds','convergence_enabled','convergence_min_exact','convergence_patience','convergence_tolerance_pct']
+    rental: ['hours','budget','idle_seconds','max_rentals','auto_rent','convergence_enabled','convergence_min_exact','convergence_patience','convergence_tolerance_pct']
   };
   const preferenceEdits = {};
   let preferenceSavePending = false;
@@ -417,9 +419,9 @@
     ['input','change'].forEach(event => el(id).addEventListener(event, () => { preferenceEdits[key]++; }));
   });
   function applyPreferences(data, keys, editSnapshot) {
-    data = {min_tflops:0, convergence_enabled:false, convergence_min_exact:512, convergence_patience:512, convergence_tolerance_pct:0.1, ...data};
+    data = {max_rentals:1, auto_rent:false, min_tflops:0, convergence_enabled:false, convergence_min_exact:512, convergence_patience:512, convergence_tolerance_pct:0.25, ...data};
     savedPreferences = {...data};
-    el('saved-rental-policy').textContent = 'Saved rental limits: up to ' + data.hours + ' hours · budget target $' + fmt(data.budget, 2) + ' · ' + (data.idle_seconds ? 'delete after 5 idle minutes' : 'delete immediately when idle') + '. Change these in Rental & Automation.';
+    el('saved-rental-policy').textContent = 'Saved rental limits: auto rent & start ' + (data.auto_rent ? 'on' : 'off') + ' · up to ' + data.max_rentals + ' concurrent GPUs · maximum simultaneous budget targets $' + fmt(data.max_rentals * data.budget, 2) + ' · per GPU: up to ' + data.hours + ' hours · budget target $' + fmt(data.budget, 2) + ' · ' + (data.idle_seconds ? 'delete after 5 idle minutes' : 'delete immediately when idle') + '. Change these in Rental & Automation.';
     (keys || Object.keys(preferenceFields)).forEach(key => {
       if (!editSnapshot || preferenceEdits[key] === editSnapshot[key]) el(preferenceFields[key]).value = data[key] == null ? '' : String(data[key]);
     });
@@ -437,12 +439,28 @@
     const keys = preferenceGroups[group], values = {}, edits = {...preferenceEdits};
     keys.forEach(key => {
       const value = el(preferenceFields[key]).value;
-      values[key] = key === 'gpu_name' ? value.trim() : ['verified_only','convergence_enabled'].includes(key) ? value === 'true' : Number(value);
+      values[key] = key === 'gpu_name' ? value.trim() : ['verified_only','auto_rent','convergence_enabled'].includes(key) ? value === 'true' : Number(value);
     });
+    if (group === 'rental' && values.auto_rent) {
+      if (!window.PBGuiDialogs?.confirm) { message('Rental confirmation unavailable. Reload this page.', true); return; }
+      const accepted = await window.PBGuiDialogs.confirm({
+        title:'Enable auto rent & start',
+        message:'Automatically rent and start prepared Vast queue jobs using up to ' + values.max_rentals + ' GPUs? The budget target is $' + fmt(values.budget,2) + ' per rental (up to $' + fmt(values.max_rentals * values.budget,2) + ' simultaneously), for at most ' + values.hours + ' hours per rental. Replacement rentals may start while queued jobs remain. Pause prevents new rentals; End rentals disables automation and cleans up all rentals.',
+        confirmText:'Enable auto rent & start'
+      });
+      if (!accepted || disposed) return;
+    }
     setPreferenceSaving(true);
     try {
       const data = await request('/gpu-preferences', {method:'PATCH', body:JSON.stringify(values)});
-      if (!disposed) { applyPreferences(data, keys, edits); message(group === 'offers' ? 'GPU requirements saved. No GPU has been rented.' : 'Rental and automation defaults saved. The running rental is unchanged.', false); }
+      if (!disposed) {
+        applyPreferences(data, keys, edits);
+        if (group === 'rental') await refreshJobs();
+        const savedMessage = group === 'offers' ? 'GPU requirements saved. No GPU has been rented.'
+          : data.auto_rent ? 'Auto rent & start enabled. Prepared queue jobs will rent and start automatically.'
+          : 'Auto rent & start disabled. No new GPUs will be rented; active rentals continue until cleanup.';
+        message(savedMessage, false);
+      }
     } catch (error) { if (!disposed) message(error.message, true); }
     finally { if (!disposed) setPreferenceSaving(false); }
   }
@@ -456,16 +474,108 @@
 
   function selectedJob() { return jobRows.find(row => row.id === selectedJobId); }
 
-  function workerActivity() {
-    const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
-    let text = active ? worker.gpu_name + ' · ' + (worker.rental_state === 'creation_pending' ? 'provisioning (instance not confirmed)' : worker.status) + ' · $' + fmt(worker.price_hour_usd, 4) + '/hour · rental: ' + worker.rental_state + ' · deadline: ' + new Date(worker.deadline * 1000).toLocaleString() + (worker.idle_since ? ' · idle deletion: ' + new Date((worker.idle_since + worker.idle_seconds) * 1000).toLocaleTimeString() : '') : 'No active GPU rental.' + (worker ? ' Last rental: ' + worker.rental_state + '.' : '') + ' GPU requirements are configured in GPU & Offers; a matching offer is selected at queue start.';
-    if (active && worker.cleanup_wait_until) {
-      text = 'Cleanup: no instance found · waiting until ' + new Date(worker.cleanup_wait_until * 1000).toLocaleTimeString()
-        + ' · last checked ' + new Date(worker.provider_checked_at * 1000).toLocaleTimeString();
+  function uploadProgressMetrics(job) {
+    const upload = job?.upload_progress || {};
+    const rawTotal = Number(upload.total || job?.transfer_input_bytes || job?.input_bytes || 0);
+    const total = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : 0;
+    const rsync = upload.transport === 'rsync';
+    const directFiles = rsync && upload.mode === 'files';
+    const rawSent = rsync ? upload.transferred_bytes : upload.bytes;
+    const sentValue = Number(rawSent);
+    const sent = rawSent == null || !Number.isFinite(sentValue) ? null : Math.max(0, sentValue);
+    const checkingCache = upload.stage === 'checking_cache';
+    const filesTotal = Number(upload.files_total), filesChecked = Number(upload.files_checked);
+    const fileProgress = checkingCache && Number.isInteger(filesTotal) && filesTotal >= 0
+      && Number.isInteger(filesChecked) && filesChecked >= 0 && filesChecked <= filesTotal;
+    const percent = checkingCache ? (fileProgress && filesTotal > 0 ? 100 * filesChecked / filesTotal : 0)
+      : total > 0 && sent != null ? Math.min(100, 100 * sent / total) : 0;
+    return {
+      upload, total, rsync, directFiles, sent, checkingCache, filesTotal, filesChecked, fileProgress, percent,
+      measured: Number(upload.bytes_per_second), network: Number(job?.rental?.offer?.inet_down_mbps)
+    };
+  }
+
+  function compactJobProgress(job) {
+    if (!job) return 'waiting / cleanup';
+    const phase = {
+      preparing:'Preparing input', ready:'Waiting to start', provisioning:'Preparing worker',
+      uploading:'Uploading input', running:'Running', collecting:'Collecting results',
+      completed:'Complete', failed:'Failed', cancelled:'Cancelled'
+    }[job.status] || job.status || 'Waiting';
+    if (job.status === 'provisioning' && job.image_progress) {
+      const image = job.image_progress;
+      if (image.total > 0) {
+        if (image.ready === image.total) return 'Starting worker';
+        if (image.downloaded === image.total) return 'Extracting worker image';
+        return 'Downloading worker image' + (Number.isFinite(image.download_percent) ? ' · ' + fmt(image.download_percent, 1) + '%' : '');
+      }
     }
-    else if (active && worker.instance_id) {
-      text = worker.gpu_name + ' · instance ' + worker.instance_id + ' · '
-        + (worker.provider_status || worker.status) + ' · $' + fmt(worker.price_hour_usd, 4) + '/hour';
+    if (job.status === 'uploading') {
+      const {upload, total, sent, checkingCache, filesTotal, filesChecked, fileProgress, percent, measured, network} = uploadProgressMetrics(job);
+      const label = ({
+        preparing_files:'Preparing file synchronization', preparing_worker:'Transferring job metadata',
+        checking_cache:'Checking cached input data', packing:'Preparing transfer archive',
+        installing:'Installing input data', verifying:'Verifying input data',
+        reconnecting:'Waiting to retry upload', synchronized:'Input synchronized'
+      })[upload.stage] || phase;
+      const parts = [label];
+      if (checkingCache && fileProgress && filesTotal > 0) {
+        parts.push(filesChecked.toLocaleString() + ' / ' + filesTotal.toLocaleString() + ' files · ' + fmt(percent, 1) + '%');
+      } else if (upload.stage === 'preparing_worker' && Number(upload.metadata_total) > 0) {
+        const submitted = Math.min(Number(upload.metadata_total), Math.max(0, Number(upload.metadata_submitted) || 0));
+        parts.push(fmt(submitted / 1e6, 1) + ' / ' + fmt(Number(upload.metadata_total) / 1e6, 1) + ' MB · ' + fmt(100 * submitted / Number(upload.metadata_total), 1) + '%');
+      } else if (total > 0 && sent != null) {
+        parts.push(fmt(sent / 1e6, 1) + ' / ' + fmt(total / 1e6, 1) + ' MB · ' + fmt(percent, 1) + '%');
+      }
+      if (Number.isFinite(measured) && measured > 0) {
+        const measuredMbps = measured * 8 / 1e6;
+        parts.push(fmt(measuredMbps, 1) + ' Mbps');
+        if (Number.isFinite(network) && network > 0) {
+          const saturation = Math.max(0, 100 * measuredMbps / network);
+          parts.push(fmt(saturation, saturation < 1 ? 2 : saturation < 10 ? 1 : 0) + '% of host bandwidth');
+        }
+      }
+      else if (sent != null && sent > 0 && upload.stage === 'reconnecting') parts.push(fmt(sent / 1e6, 1) + ' MB retained');
+      return parts.join(' · ');
+    }
+    if (!['running', 'collecting', 'completed'].includes(job.status)) return phase;
+    const exact = Number(job.exact_completed) || 0;
+    const target = Number(job.iterations) || 0;
+    const proxy = Number(job.gpu_candidates) || 0;
+    const progress = target > 0 ? 100 * exact / target : null;
+    const parts = [phase];
+    if (target > 0) parts.push(exact.toLocaleString() + ' / ' + target.toLocaleString() + ' exact');
+    if (proxy > 0 || exact > 0) parts.push(proxy.toLocaleString() + ' proxy' + (progress == null ? '' : ' (' + fmt(progress, 1) + '%)'));
+    const throughput = job.throughput || {};
+    const sampleAge = Number.isFinite(throughput.sampled_at) ? Date.now() / 1000 - throughput.sampled_at : Infinity;
+    if (sampleAge <= 90 && Number.isFinite(throughput.proxy_per_minute)) {
+      parts.push(throughput.proxy_per_minute.toLocaleString(undefined, {maximumFractionDigits:1}) + ' proxy/min');
+    }
+    return parts.join(' · ');
+  }
+
+  function workerActivity(rental) {
+    if (!rental && typeof workers !== 'undefined' && (workers.length > 1 || queueState.pool_authorization)) {
+      const limit = queueState.pool_authorization?.settings?.max_rentals || savedPreferences?.max_rentals || 1;
+      return 'GPU pool: ' + workers.length + ' / ' + limit + ' rentals · ' + (queueState.paused ? 'paused' : queueState.pool_enabled ? 'automatic scheduling enabled' : 'stopped')
+        + (queueState.pool_error ? ' · ' + queueState.pool_error : '')
+        + workers.map(item => {
+          const job = jobRows.find(row => row.id === item.active_job)
+            || jobRows.find(row => row.lease_id === item.id && ['provisioning', 'uploading', 'running', 'collecting'].includes(row.status));
+          return '\n' + (item.gpu_name || 'GPU') + ' · instance ' + (item.instance_id || 'pending') + ' · '
+            + (job ? job.config_name + ' · ' + compactJobProgress(job) : 'waiting / cleanup');
+        }).join('');
+    }
+    const currentWorker = rental || worker;
+    const active = currentWorker && !['none', 'deletion_verified'].includes(currentWorker.rental_state);
+    let text = active ? currentWorker.gpu_name + ' · ' + (currentWorker.rental_state === 'creation_pending' ? 'provisioning (instance not confirmed)' : currentWorker.status) + ' · $' + fmt(currentWorker.price_hour_usd, 4) + '/hour · rental: ' + currentWorker.rental_state + ' · deadline: ' + new Date(currentWorker.deadline * 1000).toLocaleString() + (currentWorker.idle_since ? ' · idle deletion: ' + new Date((currentWorker.idle_since + currentWorker.idle_seconds) * 1000).toLocaleTimeString() : '') : 'No active GPU rental.' + (currentWorker ? ' Last rental: ' + currentWorker.rental_state + '.' : '') + ' GPU requirements are configured in GPU & Offers; a matching offer is selected at queue start.';
+    if (active && currentWorker.cleanup_wait_until) {
+      text = 'Cleanup: no instance found · waiting until ' + new Date(currentWorker.cleanup_wait_until * 1000).toLocaleTimeString()
+        + ' · last checked ' + new Date(currentWorker.provider_checked_at * 1000).toLocaleTimeString();
+    }
+    else if (active && currentWorker.instance_id) {
+      text = currentWorker.gpu_name + ' · instance ' + currentWorker.instance_id + ' · '
+        + (currentWorker.provider_status || currentWorker.status) + ' · $' + fmt(currentWorker.price_hour_usd, 4) + '/hour';
     }
     return text;
   }
@@ -473,25 +583,26 @@
   function renderJob() {
     renderHostBlocks();
     const job = selectedJob();
-    const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
+    const active = (worker && !['none', 'deletion_verified'].includes(worker.rental_state)) || queueState.pool_enabled;
     el('rent-offer').disabled = !selectedOffer || active || renting || startingQueue || !!workerAction || !supervision;
     el('rent-offer').textContent = renting ? 'Renting…' : 'Rent';
-    el('settings-rental-status').textContent = workerActivity() + (active && worker.awaiting_queue_start ? (queueState.paused ? ' · Reserved for queue start' : ' · Queue started — waiting for input preparation') : '');
+    el('settings-rental-status').textContent = workerActivity() + (active && worker && worker.awaiting_queue_start ? (queueState.paused ? ' · Reserved for queue start' : ' · Queue started — waiting for input preparation') : '');
     const settingsEndRental = el('settings-end-rental');
     if (settingsEndRental) {
-      settingsEndRental.hidden = !active;
+      settingsEndRental.hidden = !active || !!queueState.pool_authorization;
       settingsEndRental.disabled = !!workerAction || renting || startingQueue;
-      settingsEndRental.textContent = workerAction === 'end' ? 'Ending rental…' : 'End rental';
+      settingsEndRental.textContent = workerAction === 'end' ? 'Ending rental…' : (queueState.pool_authorization ? 'End rentals' : 'End rental');
     }
     el('start-job').hidden = !job || job.status !== 'ready';
     el('start-job').disabled = !!workerAction || renting || startingQueue || !job || job.status !== 'ready' || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || !supervision;
     el('requeue-job').hidden = !job || !['failed','cancelled'].includes(job.status) || !job.can_delete;
     el('requeue-job').disabled = !!job && (requeuingJobs.has(job.id) || deletingJobs.has(job.id));
     el('requeue-job').textContent = job && requeuingJobs.has(job.id) ? 'Preparing…' : 'Requeue';
-    const labels = {pause:'Pause queue', resume:'Start queue', end:'End rental', recover:'Resume supervision'};
+    const labels = {pause:'Pause queue', resume:'Start queue', end:queueState.pool_authorization ? 'End rentals' : 'End rental', recover:'Resume supervision'};
     const pendingLabels = {pause:'Pausing…', resume:'Resuming…', end:'Ending rental…', recover:'Resuming supervision…'};
     Object.keys(labels).forEach(action => {
       const button = el(action + '-worker');
+      if (['resume','end'].includes(action)) button.hidden = !!queueState.pool_authorization;
       button.disabled = !active || !!workerAction || startingQueue;
       button.textContent = workerAction === action ? pendingLabels[action] : labels[action];
     });
@@ -503,25 +614,88 @@
     el('job-results').hidden = !job || !job.result_path;
   }
 
+  function openCloudResults(job) {
+    if (!job?.result_path || typeof openLogPanelResults !== 'function') return;
+    selectedJobId = job.id;
+    if (window.state) window.state.logResultName = job.result_path.split('/').pop() || job.config_name;
+    openLogPanelResults();
+  }
+
   function renderQueueOverview() {
     const banner = el('queue-rental');
     if (banner) {
-      banner.hidden = false;
-      const active = worker && !['none', 'deletion_verified'].includes(worker.rental_state);
-      el('queue-rental-status').textContent = workerActivity() + (active && worker.awaiting_queue_start ? (queueState.paused ? ' · Reserved for queue start' : ' · Queue started — waiting for input preparation') : '');
-      const start = el('queue-start-rental');
-      if (start) {
-        start.hidden = !active;
-        start.disabled = !queueState.paused || !!workerAction || renting || startingQueue;
-        start.textContent = startingQueue || workerAction === 'resume' ? 'Starting…' : 'Start queue';
+      const active = workers.filter(item => !['none', 'deletion_verified'].includes(item.rental_state));
+      const limit = queueState.pool_authorization?.settings?.max_rentals || savedPreferences?.max_rentals || 1;
+      const summary = el('queue-rental-status');
+      summary.replaceChildren();
+      const title = document.createElement('strong'); title.textContent = 'GPU pool'; summary.appendChild(title);
+      const state = document.createElement('span');
+      state.textContent = active.length + ' / ' + limit + ' rentals · ' + (queueState.paused ? 'paused' : queueState.pool_enabled ? 'automatic scheduling' : 'manual');
+      summary.appendChild(state);
+      if (queueState.pool_error) {
+        const error = document.createElement('span'); error.className = 'queue-gpu-error'; error.textContent = queueState.pool_error; summary.appendChild(error);
       }
-      const end = el('queue-end-rental');
-      end.hidden = !active; end.disabled = !!workerAction || renting || startingQueue;
-      end.textContent = workerAction === 'end' ? 'Ending rental…' : 'End rental';
+      const cards = el('queue-worker-cards'); cards.replaceChildren();
+      active.forEach(item => {
+        const job = jobRows.find(row => row.id === item.active_job)
+          || jobRows.find(row => row.lease_id === item.id && ['provisioning','uploading','running','collecting'].includes(row.status));
+        const card = document.createElement('article'); card.className = 'queue-gpu-card';
+        const head = document.createElement('div'); head.className = 'queue-gpu-card-head';
+        const name = document.createElement('span'); name.className = 'queue-gpu-name'; name.textContent = item.gpu_name || 'GPU'; head.appendChild(name);
+        const instance = document.createElement('span'); instance.className = 'queue-gpu-instance'; instance.textContent = 'instance ' + (item.instance_id || 'pending'); head.appendChild(instance);
+        const phase = document.createElement('span'); phase.className = 'queue-gpu-phase'; phase.textContent = job ? ({provisioning:'Provisioning',uploading:'Upload',running:'Running',collecting:'Collecting'}[job.status] || job.status) : (item.status || 'Idle'); head.appendChild(phase);
+        card.appendChild(head);
+        const jobName = document.createElement('div'); jobName.className = 'queue-gpu-job'; jobName.textContent = job?.config_name || 'Waiting for a queued job'; card.appendChild(jobName);
+        const progress = document.createElement('div'); progress.className = 'queue-gpu-progress'; progress.textContent = job ? compactJobProgress(job) : 'No active optimizer';
+        if (job?.status === 'uploading' && Number(job.rental?.offer?.inet_down_mbps) > 0) progress.title = 'Upload saturation compares the measured transfer rate with the provider-advertised host download bandwidth.';
+        card.appendChild(progress);
+        const actions = document.createElement('div'); actions.className = 'queue-gpu-actions';
+        const pending = workerActions.get(item.id);
+        const log = document.createElement('button'); log.type = 'button'; log.className = 'act-btn'; log.textContent = 'Log';
+        log.title = job ? 'Open the detailed job log' : 'No optimizer is assigned to this GPU'; log.disabled = !job;
+        log.addEventListener('click', () => openCloudLog(job)); actions.appendChild(log);
+        const results = document.createElement('button'); results.type = 'button'; results.className = 'act-btn'; results.textContent = 'Results';
+        results.title = job?.result_path ? 'Open this optimizer result' : 'Results become available after the first verified result snapshot';
+        results.dataset.tip = results.title; results.disabled = !job?.result_path;
+        results.addEventListener('click', () => openCloudResults(job)); actions.appendChild(results);
+        if (item.awaiting_queue_start) {
+          const start = document.createElement('button'); start.type = 'button'; start.className = 'act-btn'; start.textContent = pending === 'start' ? 'Starting…' : 'Start queue'; start.disabled = !!pending; start.addEventListener('click', () => runWorkerAction(item, 'start')); actions.appendChild(start);
+        }
+        const autoReplace = !!(queueState.pool_enabled && (queueState.gpu_preferences?.auto_rent || savedPreferences?.auto_rent));
+        const end = document.createElement('button'); end.type = 'button'; end.className = 'act-btn';
+        end.textContent = pending ? (pending === 'replace' ? 'Replacing…' : 'Ending…') : (autoReplace ? 'Replace GPU' : 'End rental');
+        end.title = autoReplace ? 'End this rental. After provider cleanup is verified, Auto rent & start restores the pool capacity. Unstarted input is returned to the queue.' : 'End only this GPU rental.';
+        end.disabled = !!pending; end.addEventListener('click', () => runWorkerAction(item, autoReplace ? 'replace' : 'end')); actions.appendChild(end);
+        card.appendChild(actions); cards.appendChild(card);
+      });
+      banner.hidden = !active.length && !queueState.pool_enabled;
     }
     if (window.state) window.state.cloudQueueCount = jobRows.length;
     if (typeof renderQueueMaybeDeferred === 'function') renderQueueMaybeDeferred();
     else if (typeof updateMetaCounts === 'function') updateMetaCounts();
+  }
+
+  async function runWorkerAction(item, action) {
+    if (disposed || workerActions.has(item.id)) return;
+    if (action === 'replace') {
+      if (!window.PBGuiDialogs?.confirm) { message('GPU replacement confirmation unavailable. Reload this page.', true); return; }
+      const job = jobRows.find(row => row.id === item.active_job)
+        || jobRows.find(row => row.lease_id === item.id && ['provisioning','uploading','running','collecting'].includes(row.status));
+      const accepted = await window.PBGuiDialogs.confirm({
+        title:'Replace GPU?',
+        message:'End ' + (item.gpu_name || 'this GPU') + ' instance ' + (item.instance_id || 'pending')
+          + (job ? ' running "' + job.config_name + '"' : '')
+          + '? Current results will be collected. After verified cleanup, Auto rent & start may rent a replacement GPU.',
+        confirmText:'Replace GPU'
+      });
+      if (!accepted || disposed || workerActions.has(item.id)) return;
+    }
+    workerActions.set(item.id, action); renderQueueOverview();
+    try {
+      await request('/queue/workers/' + encodeURIComponent(item.id) + '/' + action, {method:'POST'});
+      if (!disposed) { message(''); await refreshJobs(); }
+    } catch (error) { if (!disposed) message(error.message, true); }
+    finally { workerActions.delete(item.id); if (!disposed) renderQueueOverview(); }
   }
 
   async function refreshJobs(preferred) {
@@ -533,7 +707,7 @@
       const previousResults = new Map(jobRows.map(job => [job.id, [job.result_path, job.last_backup_at, job.result_partial].join('|')]));
       const resultsChanged = data.jobs.some(job => job.result_path && previousResults.get(job.id) !==
         [job.result_path, job.last_backup_at, job.result_partial].join('|'));
-      jobRows = data.jobs; worker = data.worker; queueState = data.queue; supervision = data.supervision_available;
+      jobRows = data.jobs; workers = data.workers || (data.worker && !['none','deletion_verified'].includes(data.worker.rental_state) ? [data.worker] : []); worker = workers[0] || data.worker; queueState = data.queue; supervision = data.supervision_available;
       for (const id of stoppingJobs.keys()) {
         const row = jobRows.find(item => item.id === id);
         if (!row || ['completed','failed','cancelled'].includes(row.status)) stoppingJobs.delete(id);
@@ -563,7 +737,10 @@
       const button = el(id);
       if (!button) return;
       button.dataset.queueBlocked = String(blocked);
-      button.disabled = blocked || !!window.state?.editorSaving;
+      // Queue clicks perform their own authoritative validation. Keep the action
+      // available while background validation is pending or reports issues so a
+      // click always produces visible progress or a concrete error.
+      button.disabled = !!window.state?.editorSaving;
     });
   }
   function applyCloudAlternative(action, index) {
@@ -974,6 +1151,7 @@
   function renderCloudDashboard(job) {
     if (!window.state || window.state.cloudLogId !== job.id) return;
     if (typeof renderOptimizeLogDashboard !== 'function') return;
+    const rentalWorker = typeof workers !== 'undefined' ? workers.find(item => item.id === job.lease_id) : worker;
     const uploadPhase = job.status === 'uploading' ? {preparing_files:'Preparing file synchronization', preparing_worker:'Transferring job metadata', checking_cache:'Checking cache', packing:'Preparing transfer archive', installing:'Installing input data', verifying:'Verifying input data', reconnecting:'Waiting to retry upload'}[job.upload_progress?.stage] : null;
     renderOptimizeLogDashboard({name:job.config_name, phase:stopPhase(job) || uploadPhase || job.status,
       progress:{exact_evaluations:job.exact_completed || 0,target_exact_evaluations:job.iterations,
@@ -982,7 +1160,7 @@
       process:{started_at:job.started_at ? new Date(job.started_at*1000).toISOString() : null},
       queue:{running:jobRows.filter(row => ['running','provisioning','uploading','collecting'].includes(row.status)).length,
         queued:jobRows.filter(row => row.status==='ready').length,error:jobRows.filter(row => row.status==='failed').length},
-      log:{last_error:(worker && worker.creation_error) || job.error || job.log_error || job.cleanup_error || (worker && worker.cleanup_error) || '',last_line:workerActivity(),
+      log:{last_error:(rentalWorker && rentalWorker.creation_error) || job.error || job.log_error || job.cleanup_error || (rentalWorker && rentalWorker.cleanup_error) || '',last_line:workerActivity(rentalWorker),
         updated_at:job.updated_at ? new Date(job.updated_at*1000).toISOString() : null}});
     if (job.elapsed_seconds != null && ['completed','cancelled','failed'].includes(job.status)) {
       el('optlog-elapsed').textContent = formatDurationCompact(job.elapsed_seconds);
@@ -998,7 +1176,7 @@
     el('convergence-help').dataset.tip = 'First collect at least ' + (config.convergence_min_exact || 512) +
       ' exact CPU evaluations. Then stop and collect after ' + (config.convergence_patience || 512) +
       ' further exact evaluations without a Pareto hypervolume improvement greater than ' +
-      (config.convergence_tolerance_pct ?? 0.1) +
+      (config.convergence_tolerance_pct ?? 0.25) +
       '%. Hypervolume measures the feasible front across all configured objectives on a fixed scale, not just the number of results. Small gains accumulate against the last accepted baseline. Checked after verified snapshots (normally about a minute plus transfer time). Zero means a baseline or significant improvement was recorded. This is not overall run progress.';
     el('cloud-convergence').hidden = !config.convergence_enabled;
     el('convergence-sample').hidden = !config.convergence_enabled;
@@ -1048,7 +1226,7 @@
       const phase = !hasLayers ? 'Preparing worker' : imageProgress.ready === imageProgress.total ? 'Starting worker'
         : imageProgress.downloaded === imageProgress.total ? 'Extracting worker image' : 'Downloading worker image';
       const now = Date.now() / 1000;
-      const started = job.dispatch_at || (worker && worker.id === job.lease_id ? worker.started_at : null);
+      const started = job.dispatch_at || (rentalWorker && rentalWorker.id === job.lease_id ? rentalWorker.started_at : null);
       const elapsed = started ? Math.max(0, Math.floor(now - started)) : null;
       const fetched = Number(job.provider_log_fetched_at);
       const age = fetched > 0 ? Math.max(0, Math.floor(now - fetched)) : null;
@@ -1070,23 +1248,14 @@
       delete el('optlog-progress-label').dataset.tip;
     }
     if (job.status === 'uploading') {
-      const upload = job.upload_progress || {}, total = upload.total || job.transfer_input_bytes || job.input_bytes || 0;
-      const rsync = upload.transport === 'rsync';
-      const directFiles = rsync && upload.mode === 'files';
+      const {upload, total, rsync, directFiles, sent, checkingCache, filesTotal, filesChecked, fileProgress, percent, measured, network} = uploadProgressMetrics(job);
       const verified = upload.bytes === total && total > 0;
-      const sent = rsync ? upload.transferred_bytes : upload.bytes;
-      const checkingCache = upload.stage === 'checking_cache';
-      const filesTotal = Number(upload.files_total), filesChecked = Number(upload.files_checked);
-      const fileProgress = checkingCache && Number.isInteger(filesTotal) && filesTotal >= 0 && Number.isInteger(filesChecked) && filesChecked >= 0 && filesChecked <= filesTotal;
-      const percent = checkingCache ? (fileProgress && filesTotal > 0 ? 100 * filesChecked / filesTotal : 0)
-        : total && sent != null ? Math.min(100, 100 * sent / total) : 0;
       const stageLabel = {preparing_files:'Preparing file synchronization', preparing_worker:'Transferring job metadata', checking_cache:'Checking cached input data', packing:'Preparing transfer archive', installing:'Installing input data', synchronized:'Input files synchronized'}[upload.stage];
       const retrySeconds = Math.max(0, Math.ceil((job.upload_retry_at || 0) - Date.now()/1000));
       const label = upload.stage === 'verifying' ? 'Verifying input data' : upload.stage === 'reconnecting' ?
         (job.upload_retry_at ? 'Upload retry in ' + retrySeconds + 's (partial data retained)' :
           rsync ? 'Reconnecting upload (partial data retained)' : 'Reconnecting upload (verified chunks retained)') : directFiles ? 'Synchronizing input files' : 'Uploading input';
       let eta = '', speed = '';
-      const measured = Number(upload.bytes_per_second), network = Number(job.rental?.offer?.inet_down_mbps);
       const transferring = !stageLabel && upload.stage !== 'verifying' && upload.stage !== 'reconnecting';
       if (transferring) {
         if (Number.isFinite(measured) && measured > 0) speed = (directFiles ? ' · Rsync: ' : ' · Upload: ') + fmt(measured * 8 / 1e6, 1) + ' Mbps';
@@ -1118,11 +1287,11 @@
       if (directFiles && !metadata) el('optlog-progress-label').dataset.tip = 'Rsync synchronizes individual immutable files over one SSH connection. Content-hash filenames and file sizes identify reusable data without reading it again. Partial files are retained separately and completed transfers are checked by rsync before publication. Progress reflects logical file bytes processed by rsync, not measured network traffic. The total includes reusable files, so remaining-time estimates can overstate the transfer. Host-rate remaining is theoretical. 1 byte = 8 bits.';
       el('optlog-activity').textContent = detail;
     }
-    const rentalLog = worker && worker.has_provider_log && !['none','deletion_verified'].includes(worker.rental_state)
-      && (job.lease_id === worker.id || (!job.lease_id && ['preparing','ready'].includes(job.status)));
+    const rentalLog = rentalWorker && rentalWorker.has_provider_log && !['none','deletion_verified'].includes(rentalWorker.rental_state)
+      && (job.lease_id === rentalWorker.id || (!job.lease_id && ['preparing','ready'].includes(job.status)));
     const optimizerLog = job.has_log ? 'optimizes_v8/vast_' + job.id + '.log'
       : job.has_provider_log ? 'optimizes_v8/vast_' + job.id + '_provider.log'
-      : rentalLog ? 'optimizes_v8/vast_' + worker.id + '_provider.log' : '';
+      : rentalLog ? 'optimizes_v8/vast_' + rentalWorker.id + '_provider.log' : '';
     if (!optimizerLog) {
       el('log-waiting').textContent = ({
         preparing:'Preparing local input data. No worker log exists yet.',
@@ -1152,7 +1321,7 @@
   }
 
   function cloudQueueItems() {
-    return jobRows.map(job => ({cloudJob:job, name:job.config_name,
+    return jobRows.map(job => ({cloudJob:job, filename:'vast:' + job.id, name:job.config_name,
       status:({ready:'queued',completed:'complete',failed:'error'})[job.status] || job.status,
       exchange:job.exchange || '', created:job.created_at ? new Date(job.created_at * 1000).toISOString() : ''}));
   }
@@ -1160,6 +1329,8 @@
   function cloudQueueRow(item) {
     const job = item.cloudJob, row = document.createElement('tr');
     row.dataset.cloudId = job.id;
+    row.dataset.filename = item.filename;
+    if (window.state?.selectedQueue?.has(item.filename)) row.classList.add('selected');
     ['', item.name, item.exchange || '—', item.status,
       item.created ? new Date(item.created).toLocaleString() : '', 'Vast.ai'].forEach((value, index) => {
       const cell = document.createElement('td');
@@ -1235,11 +1406,7 @@
       if (!window.PBGuiDialogs || !window.PBGuiDialogs.confirm) throw new Error('Delete confirmation unavailable. Reload this page.');
       if (!await window.PBGuiDialogs.confirm({title:'Delete queue item',
         message:'Delete "' + job.config_name + '" from the queue?', confirmText:'Delete'})) return;
-      if (disposed) return;
-      await request('/jobs/' + encodeURIComponent(job.id), {method:'DELETE'});
-      if (disposed) return;
-      if (window.state && window.state.cloudLogId === job.id) closeLog();
-      await refreshJobs();
+      await deleteCloudQueueItems(['vast:' + job.id]);
     } catch (error) { if (!disposed) message(error.message, true); }
     finally {
       deletingJobs.delete(job.id);
@@ -1247,8 +1414,31 @@
     }
   }
 
+  async function deleteCloudQueueItems(queueKeys) {
+    if (disposed) return;
+    const requested = new Set(Array.isArray(queueKeys) ? queueKeys : []);
+    const jobs = jobRows.filter(job => requested.has('vast:' + job.id));
+    if (jobs.length !== requested.size || jobs.some(job => !job.can_delete)) {
+      throw new Error('One or more selected Vast.ai jobs cannot be deleted in their current state.');
+    }
+    jobs.forEach(job => deletingJobs.add(job.id));
+    renderJob(); renderQueueOverview();
+    try {
+      for (const job of jobs) {
+        if (disposed) return;
+        await request('/jobs/' + encodeURIComponent(job.id), {method:'DELETE'});
+        if (window.state && window.state.cloudLogId === job.id) closeLog();
+      }
+      if (!disposed) await refreshJobs();
+    } finally {
+      jobs.forEach(job => deletingJobs.delete(job.id));
+      if (!disposed) { renderJob(); renderQueueOverview(); }
+    }
+  }
+
   window.PBGuiVast = {
     closeLog,
+    deleteQueueItems: deleteCloudQueueItems,
     queueItems: cloudQueueItems,
     queueRow: cloudQueueRow,
     scheduleValidation,
@@ -1354,6 +1544,12 @@
   el('requeue-job').addEventListener('click', () => requeueCloudJob(selectedJob()));
   async function startCloudQueue(job) {
     if (renting || startingQueue || workerAction || disposed || !supervision || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || (job && deletingJobs.has(job.id))) return;
+    if (((savedPreferences?.max_rentals || 1) > 1 || queueState.pool_authorization) && !(await window.PBGuiDialogs.confirm({
+      title:'Start GPU pool',
+      message:'Automatically rent up to ' + savedPreferences.max_rentals + ' GPUs for queued jobs, with a budget target of $' + fmt(savedPreferences.budget,2) + ' per rental (up to $' + fmt(savedPreferences.max_rentals * savedPreferences.budget,2) + ' simultaneously)? Each rental lasts at most ' + savedPreferences.hours + ' hours. Replacement rentals may be started while jobs remain queued. Pause queue prevents new rentals; End rentals stops the pool.',
+      confirmText:'Start GPU pool'
+    }))) return;
+    if (disposed || startingQueue) return;
     startingQueue = true;
     startingJobId = job && job.id;
     document.querySelectorAll('tr[data-cloud-id]').forEach(row => {
@@ -1408,12 +1604,19 @@
     finally { renting=false; if (!disposed) { renderJob(); renderQueueOverview(); } }
   });
   el('settings-end-rental')?.addEventListener('click', () => el('end-worker')?.click());
-  if (el('queue-start-rental')) el('queue-start-rental').addEventListener('click', () => el('resume-worker').click());
-  if (el('queue-end-rental')) el('queue-end-rental').addEventListener('click', () => el('end-worker').click());
   el('start-job').addEventListener('click', () => startCloudQueue(selectedJob()));
   ['stop', 'recover'].forEach(action => el(action + '-job').addEventListener('click', async () => {
     const job = selectedJob(); if (!job) return;
     if (action === 'stop' && stopPhase(job)) return;
+    if (action === 'stop') {
+      if (!window.PBGuiDialogs?.confirm) { message('Stop confirmation unavailable. Reload this page.', true); return; }
+      const accepted = await window.PBGuiDialogs.confirm({
+        title:'Stop optimizer?',
+        message:'Stop "' + job.config_name + '" and collect its current results? The optimizer cannot continue after this action.',
+        confirmText:'Stop & collect'
+      });
+      if (!accepted || disposed || selectedJobId !== job.id || stopPhase(job)) return;
+    }
     const repaint = () => { if (!disposed) { renderJob(); renderCloudDashboard(job); renderQueueOverview(); } };
     if (action === 'stop') { stoppingJobs.set(job.id, 'Stopping…'); repaint(); }
     el(action + '-job').disabled = true;
@@ -1431,10 +1634,17 @@
   }));
   ['pause', 'resume', 'end', 'recover'].forEach(action => el(action + '-worker').addEventListener('click', async () => {
     if (disposed || renting || workerAction || startingQueue) return;
+    if (action === 'resume' && savedPreferences && ((savedPreferences.max_rentals || 1) > 1 || queueState.pool_authorization)) {
+      await startCloudQueue(); return;
+    }
     workerAction = action; renderJob(); renderQueueOverview();
     message(el(action + '-worker').textContent);
     try {
-      await request('/queue/' + action, {method:'POST'});
+      const autoRentEdit = preferenceEdits.auto_rent;
+      const updated = await request('/queue/' + action, {method:'POST'});
+      if (action === 'end' && updated.gpu_preferences) {
+        applyPreferences(updated.gpu_preferences, ['auto_rent'], {auto_rent:autoRentEdit});
+      }
       if (!disposed) { message(''); await refreshJobs(); }
     } catch (error) { if (!disposed) message(error.message, true); }
     finally {

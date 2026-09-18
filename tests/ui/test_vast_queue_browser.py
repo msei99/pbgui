@@ -17,7 +17,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
     starts = []
     release_start = threading.Event()
     release_stop = threading.Event()
-    preferences = {'gpu_name':'','max_price':.5,'min_vram':12,'min_ram':16,'min_cpu':4,'disk_gb':40,'verified_only':True,'hours':1,'budget':1,'idle_seconds':300}
+    preferences = {'gpu_name':'','max_price':.5,'min_vram':12,'min_ram':16,'min_cpu':4,'disk_gb':40,'verified_only':True,'hours':1,'budget':1,'idle_seconds':300,'max_rentals':1,'auto_rent':False}
     class Handler(BaseHTTPRequestHandler):
         """Serve repository assets and fake authenticated cloud API responses."""
         def log_message(self, *args):
@@ -31,7 +31,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 content_type = 'text/html'
                 data = '''<html><head><meta charset="UTF-8"><link rel="stylesheet" href="/app/css/vast.css"></head><body>
                 <section id="settings"><div id="vast-queue-host"></div><div id="vast-offer-parking" hidden></div></section>
-                <section id="queue"><table><tbody id="queue-tbody"></tbody></table></section><div id="log-panel" hidden><button id="mock-log-close">Close</button><div id="vast-jobs-host" class="vast-component"></div></div>
+                <section id="queue"><span id="queue-selection-summary"></span><table><tbody id="queue-tbody"></tbody></table></section><div id="log-panel" hidden><button id="mock-log-close">Close</button><div id="vast-jobs-host" class="vast-component"></div></div>
                 <section id="editor"><select id="opted-execution"><option value="local">Local</option><option value="vast">Vast</option></select>
                 <p id="opted-vast-worker"></p><div id="opted-vast-validation" hidden></div>
                 <button id="btn-cloud-save-queue">Save and Queue</button><button id="btn-editor-save">Save</button>
@@ -137,7 +137,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 page.wait_for_function("document.getElementById('opted-vast-validation').getAttribute('aria-busy') === 'false'")
                 assert page.evaluate("originalIssue === document.querySelector('.cloud-issue-title')")
                 assert page.evaluate("originalHeight === document.getElementById('opted-vast-validation').getBoundingClientRect().height")
-                assert page.locator('#btn-cloud-save-queue').is_disabled()
+                assert page.locator('#btn-cloud-save-queue').is_enabled()
                 assert page.locator('#btn-editor-save').is_enabled()
                 assert page.locator('#opted-scoring-panel .cloud-invalid').count() == 1
                 assert not page.evaluate("PBGuiVast.metricAllowed('gain_strategy_eq')")
@@ -215,6 +215,19 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert preferences['convergence_patience'] == 768
                 assert preferences['gpu_name'] == '3090'
                 assert 'offer_id' not in preferences
+                page.evaluate("window.PBGuiDialogs = {confirm: async options => { window.autoRentConfirmation = options; return true; }}")
+                page.locator('#max-rentals').fill('3')
+                page.locator('#auto-rent').select_option('true')
+                page.locator('#save-rental-preferences').click()
+                page.wait_for_function("!document.getElementById('save-rental-preferences').disabled")
+                assert preferences['auto_rent'] is True
+                assert preferences['max_rentals'] == 3
+                assert 'up to $3.00 simultaneously' in page.evaluate('autoRentConfirmation.message')
+                page.locator('#auto-rent').select_option('false')
+                page.locator('#max-rentals').fill('1')
+                page.locator('#save-rental-preferences').click()
+                page.wait_for_function("!document.getElementById('save-rental-preferences').disabled")
+                assert preferences['auto_rent'] is False
                 page.evaluate("PBGuiVast.queue('queued-config',{optimize:{iters:512,n_cpus:4}})")
                 assert page.locator('#settings #vast-jobs').count() == 0
                 assert page.locator('#cloud-job-details').is_hidden()
@@ -224,27 +237,45 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                         exchange:'binance',status:'queued',created:'2026-09-13'}],selectedQueue:new Set()});
                     window.optimizeEditorAdapter = {isV8:true};
                     window.renderQueueTableHead = () => {};
+                    window.renderEmpty = () => {};
                     window.sortQueueItems = items => items;
                     window.escapeHtml = value => String(value || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
                     window.formatExchange = value => value;
                     window.formatIso = value => value;
-                    window.updateQueueStatus = window.updateQueueSelectionUi = window.updateMetaCounts = () => {};
+                    window.updateQueueStatus = window.updateMetaCounts = () => {};
                 }""")
                 source = (ROOT/'frontend/v7_optimize.html').read_text()
                 start = source.index('function renderQueue() {')
                 end = source.index('\n}\n', start) + 2
+                page.add_script_tag(content=source[start:end])
+                start = source.index('function pruneSelectionSet(')
+                end = source.index('\nfunction selectAllConfigs()', start)
+                page.add_script_tag(content=source[start:end])
+                start = source.index('function updateQueueSelectionUi() {')
+                end = source.index('\nfunction updateQueueStatus()', start)
+                page.add_script_tag(content=source[start:end])
+                start = source.index('async function deleteSelectedQueue() {')
+                end = source.index('\nasync function deleteQueueItem(', start)
                 page.add_script_tag(content=source[start:end])
                 page.evaluate('window.renderQueueMaybeDeferred = () => renderQueue()')
                 page.evaluate('renderQueue()')
                 assert page.locator('#queue-tbody tr').count() == 2
                 assert page.locator('#queue-tbody tr').first.locator('td').nth(5).inner_text() == 'Local'
                 row = page.locator('#queue-tbody tr').nth(1)
+                cloud_key = 'vast:' + 'a'*32
+                assert row.get_attribute('data-filename') == cloud_key
                 assert row.locator('td').nth(1).inner_text() == 'queued-config'
                 assert row.locator('td').nth(3).inner_text() == 'queued'
                 assert row.locator('td').nth(5).inner_text() == 'Vast.ai'
                 assert row.locator('button[title="Open log"]').count() == 0
                 assert row.locator('button[title="Stop"]').count() == 0
                 assert row.locator('button[title="Delete queue item"]').count() == 1
+                page.evaluate("initRowSelection('queue-tbody', 'selectedQueue', 'data-filename', null, null)")
+                page.locator('#queue-tbody tr').first.locator('td').nth(1).click()
+                row.locator('td').nth(1).click()
+                assert set(page.evaluate('Array.from(state.selectedQueue)')) == {'local-job', cloud_key}
+                page.evaluate('renderQueue()')
+                assert page.locator('#queue-tbody tr.selected').count() == 2
                 page.evaluate("""() => {
                     const item = PBGuiVast.queueItems()[0];
                     item.cloudJob.status = 'failed';
@@ -320,9 +351,25 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                     PBGuiVast.queueItems()[0].cloudJob.status = 'running';
                     PBGuiVast.openEditor({});
                 }""")
+                jobs[0]['status'] = 'running'
                 assert page.locator('#stop-job').is_enabled()
                 page.evaluate('renderQueue()')
                 row.locator('button[title="Open log"]').click()
+                page.evaluate("""() => {
+                    window.stopDecision = false;
+                    window.stopConfirmation = null;
+                    window.PBGuiDialogs.confirm = async options => {
+                        window.stopConfirmation = options;
+                        return window.stopDecision;
+                    };
+                }""")
+                page.locator('#stop-job').click()
+                page.wait_for_function('window.stopConfirmation !== null')
+                assert page.evaluate('stopConfirmation.title') == 'Stop optimizer?'
+                assert page.evaluate('stopConfirmation.confirmText') == 'Stop & collect'
+                assert not any(call.endswith('/stop') for call in calls)
+                assert page.locator('#stop-job').inner_text() == 'Stop & collect'
+                page.evaluate('window.stopDecision = true; window.stopConfirmation = null')
                 page.locator('#stop-job').click()
                 assert page.locator('#stop-job').inner_text() == 'Stopping…'
                 assert page.locator('#stop-job').is_disabled()
@@ -332,8 +379,28 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert page.locator('#stop-job').is_disabled()
                 assert row.locator('td').nth(3).inner_text() == 'Stop requested'
                 page.evaluate('window.PBGuiDialogs.confirm = async () => true')
-                row.locator('button[title="Delete queue item"]').click()
+                page.evaluate("""() => {
+                    const cloudKey = PBGuiVast.queueItems()[0].filename;
+                    state.selectedQueue = new Set(['local-job', cloudKey]);
+                    window.bulkLocalDelete = null;
+                    window.apiFetch = async (path, options) => {
+                        bulkLocalDelete = {path, body:JSON.parse(options.body)};
+                        return {deleted:true};
+                    };
+                    window.removeQueueItemsFromState = filenames => {
+                        const removed = new Set(filenames);
+                        state.queue = state.queue.filter(item => !removed.has(item.filename));
+                        removed.forEach(filename => state.selectedQueue.delete(filename));
+                    };
+                    window.toast = () => {};
+                }""")
+                page.evaluate('deleteSelectedQueue()')
                 page.wait_for_function('state.cloudQueueCount === 0')
+                assert page.evaluate('bulkLocalDelete') == {
+                    'path':'/queue/delete', 'body':{'filenames':['local-job']}
+                }
+                assert '/api/vast/jobs/' + 'b'*32 in calls
+                assert page.evaluate('state.selectedQueue.size') == 0
                 assert '/api/vast/jobs/' + 'a'*32 + '/requeue' in calls
                 assert not errors
                 page.screenshot(path=str(tmp_path/'vast-queue.png'),full_page=True)
@@ -449,7 +516,7 @@ def test_convergence_dashboard_progress_and_completion():
                 const jobRows = [], worker = null, billingLease = null, billingSnapshot = null;
                 const fmt = (value, digits) => Number(value).toFixed(digits);
                 const renderOptimizeLogDashboard = () => {}, renderRentalDetails = () => {};
-            ''' + 'const stoppingJobs = new Map();' + source[source.index('  function stopPhase(job)'):source.index('  let startingQueue')] + source[source.index('  function workerActivity()'):source.index('  function renderJob()')] + function)
+            ''' + 'const stoppingJobs = new Map();' + source[source.index('  function stopPhase(job)'):source.index('  let startingQueue')] + source[source.index('  function workerActivity(rental)'):source.index('  function renderJob()')] + function)
             page.evaluate('''() => {
                 window.job = {id:'test',status:'running',exact_completed:700,
                     convergence_config:{convergence_enabled:true,convergence_patience:512},
@@ -465,6 +532,8 @@ def test_convergence_dashboard_progress_and_completion():
             assert 'last sample' in page.locator('#cloud-exact-queue').inner_text()
             page.evaluate('job.convergence.checked_exact=688; renderCloudDashboard(job)')
             assert '12 newer results' in page.locator('#convergence-sample').inner_text()
+            assert '0.25%' in page.locator('#convergence-help').get_attribute('data-tip')
+            page.evaluate('job.convergence_config.convergence_tolerance_pct=0.1; renderCloudDashboard(job)')
             assert '0.1%' in page.locator('#convergence-help').get_attribute('data-tip')
             assert '1.00 / 4.00 GiB' in page.locator('#cloud-ram-util').inner_text()
             page.evaluate('job.runtime_metrics.sampled_at-=60; renderCloudDashboard(job)')
@@ -514,5 +583,77 @@ def test_vast_result_snapshots_trigger_refresh_without_local_runs():
             page.evaluate('data.jobs[0].last_backup_at=160; refreshJobs()')
             page.evaluate('data.jobs[0].result_partial=false; refreshJobs()')
             assert page.evaluate('refreshes') == [True, True, True]
+        finally:
+            browser.close()
+
+
+def test_pool_summary_and_explicit_start_consent():
+    """Display all leases and gate pool activation behind the aggregate budget consent."""
+    playwright = pytest.importorskip('playwright.sync_api')
+    source = (ROOT / 'frontend/js/vast.js').read_text()
+    activity = source[source.index('  function uploadProgressMetrics(job)'):source.index('  function renderJob()')]
+    overview = source[source.index('  function openCloudResults(job)'):source.index('  async function refreshJobs(preferred)')]
+    start = source[source.index('  async function startCloudQueue(job)'):source.index("  el('rent-offer').addEventListener")]
+    with playwright.sync_playwright() as runner:
+        browser = runner.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.set_content('''<p id="message"></p><section id="queue-rental">
+                <div id="queue-rental-status"></div><div id="queue-worker-cards"></div></section>''')
+            page.add_script_tag(content='''
+                let workers=[{id:'a',gpu_name:'GPU A',instance_id:101,status:'running',active_job:'job-a'},
+                             {id:'b',gpu_name:'GPU B',instance_id:102,status:'provisioning',active_job:'job-b'}];
+                let worker=workers[0], jobRows=[
+                    {id:'job-a',config_name:'First optimizer',status:'running',result_path:'/results/first',exact_completed:7568,iterations:20000,
+                     gpu_candidates:969728,throughput:{sampled_at:Date.now()/1000,proxy_per_minute:25600}},
+                    {id:'job-b',config_name:'Second optimizer',status:'provisioning',
+                     image_progress:{total:10,downloaded:4,ready:3,download_percent:42.5}},
+                    {id:'job-c',config_name:'Uploading optimizer',status:'uploading',input_bytes:54100000,rental:{offer:{inet_down_mbps:1374}},
+                     upload_progress:{stage:'sending',bytes:2300000,total:54100000,bytes_per_second:50000}},
+                    {id:'job-d',config_name:'Rsync optimizer',status:'uploading',input_bytes:191600000,rental:{offer:{inet_down_mbps:63}},
+                     upload_progress:{stage:'sending',transport:'rsync',mode:'files',bytes:0,transferred_bytes:70000000,total:191600000,bytes_per_second:650000}}
+                ];
+                let queueState={pool_enabled:true,pool_authorization:{settings:{max_rentals:3}}};
+                let savedPreferences={max_rentals:3,auto_rent:true,budget:2,hours:1};
+                let renting=false,startingQueue=false,workerAction=null,disposed=false,supervision=true,startingJobId=null;
+                const deletingJobs=new Set(), workerActions=new Map(), fmt=(n,d)=>Number(n).toFixed(d);
+                const el=id=>document.getElementById(id), renderJob=()=>{}, refreshJobs=async()=>{}, message=()=>{};
+                const renderQueueMaybeDeferred=()=>{}, openCloudLog=job=>{window.openedLog=job.id};
+                const openLogPanelResults=()=>{window.openedResults=window.state.logResultName}; window.state={};
+                window.sent=[],window.accept=false,window.confirmation=null;
+                const request=async(...args)=>{sent.push(args)};
+                window.PBGuiDialogs={confirm:async options=>{window.confirmation=options;return window.accept}};
+            ''' + activity + overview + start)
+            assert '2 / 3 rentals' in page.evaluate('workerActivity()')
+            assert 'First optimizer' in page.evaluate('workerActivity()')
+            assert '7,568 / 20,000 exact' in page.evaluate('workerActivity()')
+            assert '969,728 proxy (37.8%)' in page.evaluate('workerActivity()')
+            assert '25,600 proxy/min' in page.evaluate('workerActivity()')
+            assert '102' in page.evaluate('workerActivity()')
+            assert 'Downloading worker image · 42.5%' in page.evaluate('workerActivity()')
+            assert page.evaluate("compactJobProgress(jobRows[2])") == 'Uploading input · 2.3 / 54.1 MB · 4.3% · 0.4 Mbps · 0.03% of host bandwidth'
+            assert page.evaluate("compactJobProgress(jobRows[3])") == 'Uploading input · 70.0 / 191.6 MB · 36.5% · 5.2 Mbps · 8.3% of host bandwidth'
+            page.evaluate('renderQueueOverview()')
+            assert page.locator('.queue-gpu-card').count() == 2
+            first_card = page.locator('.queue-gpu-card').first
+            first_card.get_by_role('button', name='Log').click()
+            assert page.evaluate('openedLog') == 'job-a'
+            first_card.get_by_role('button', name='Results').click()
+            assert page.evaluate('openedResults') == 'first'
+            assert page.locator('.queue-gpu-card').nth(1).get_by_role('button', name='Results').is_disabled()
+            first_card.get_by_role('button', name='Replace GPU').click()
+            page.wait_for_function("confirmation?.title === 'Replace GPU?'")
+            assert page.evaluate('sent.length') == 0
+            page.evaluate('window.accept=true')
+            page.locator('.queue-gpu-card').first.get_by_role('button', name='Replace GPU').click()
+            page.wait_for_function('sent.length === 1')
+            assert page.evaluate("sent[0][0]") == '/queue/workers/a/replace'
+            page.evaluate('sent.length=0; window.accept=false; window.confirmation=null')
+            page.evaluate('startCloudQueue()')
+            assert page.evaluate('sent.length') == 0
+            assert '$6.00' in page.evaluate('confirmation.message')
+            page.evaluate('window.accept=true; startCloudQueue()')
+            assert page.evaluate('sent.length') == 1
+            assert page.evaluate('JSON.parse(sent[0][1].body).accept_rental_and_cleanup')
         finally:
             browser.close()

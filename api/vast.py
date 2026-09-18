@@ -57,6 +57,14 @@ def startup() -> None:
                 _PREPARATION_EXECUTOR = None
                 raise
             _PERFORMANCE_COLLECTOR = collector
+    queue = CloudQueue()
+    if queue.read().get('pool_enabled'):
+        try:
+            from vast_pool import launch_pool
+            launch_pool(queue)
+        except VastError as exc:
+            queue.update(pool_error=str(exc), paused=True)
+            _log(SERVICE, 'Automatic GPU pool could not be restored: ' + str(exc), level='WARNING')
 
 
 async def shutdown() -> None:
@@ -147,10 +155,12 @@ class RentalPreferences(GpuPreferences):
     hours: float = Field(default=1, ge=.25, le=24)
     budget: float = Field(default=1, ge=.1, le=100)
     idle_seconds: Literal[0, 300] = 300
+    max_rentals: int = Field(default=1, ge=1, le=16, strict=True)
+    auto_rent: bool = False
     convergence_enabled: bool = False
     convergence_min_exact: int = Field(default=512, ge=256, le=10_000_000)
     convergence_patience: int = Field(default=512, ge=128, le=10_000_000)
-    convergence_tolerance_pct: float = Field(default=0.1, gt=0, le=10)
+    convergence_tolerance_pct: float = Field(default=0.25, gt=0, le=10)
 
 
 class StartJobRequest(BaseModel):
@@ -185,7 +195,7 @@ def save_gpu_preferences(body: RentalPreferences, session: SessionToken = Depend
     try:
         values = body.model_dump()
         values['gpu_name'] = values['gpu_name'].strip()
-        CloudQueue().update(gpu_preferences=values)
+        _apply_gpu_preferences(CloudQueue(), values)
         return values
     except VastError as exc:
         raise _error(exc) from None
@@ -201,13 +211,27 @@ def patch_gpu_preferences(body: RentalPreferences, session: SessionToken = Depen
             stored = queue.read().get('gpu_preferences', {})
             values = RentalPreferences.model_validate({**stored, **body.model_dump(exclude_unset=True)}).model_dump()
             values['gpu_name'] = values['gpu_name'].strip()
-            queue.update(gpu_preferences=values)
+            _apply_gpu_preferences(queue, values)
         return values
     except VastError as exc:
         raise _error(exc) from None
     except (ValueError, TypeError):
         _log(SERVICE, "Invalid stored GPU preferences during partial save", level="ERROR")
         raise HTTPException(status_code=422, detail="Stored GPU preferences are invalid; save valid settings before retrying.") from None
+
+
+def _apply_gpu_preferences(queue: CloudQueue, values: dict) -> None:
+    """Persist settings and explicitly enable or disable automatic paid rentals."""
+    ensure_private_directory(queue.root)
+    with advisory_file_lock(queue.root / '.queue-lock'):
+        previous = queue.read().get('gpu_preferences', {})
+        was_automatic = previous.get('auto_rent') is True
+        if values.get('auto_rent'):
+            from vast_pool import authorize_pool
+            authorize_pool(queue, values, resume=not was_automatic)
+        elif was_automatic:
+            queue.update(pool_enabled=False, paused=True, pool_authorization=None, pool_error=None)
+        queue.update(gpu_preferences=values)
 
 
 def _error(exc: VastError) -> HTTPException:
@@ -452,6 +476,11 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
     try:
         queue = CloudQueue()
         worker = queue.worker()
+        workers = queue.workers()
+        for item in workers:
+            path = CLOUD_LOG_ROOT / ('vast_' + job_id(item['id']) + '_provider.log')
+            item['has_provider_log'] = path.is_file() and not path.is_symlink()
+        worker_by_id = {item['id']: item for item in workers}
         if worker:
             provider_log = CLOUD_LOG_ROOT / ('vast_' + job_id(worker['id']) + '_provider.log')
             worker = dict(worker, has_provider_log=provider_log.is_file() and not provider_log.is_symlink())
@@ -483,7 +512,7 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
             if 'estimated_coin_candles' not in row:
                 estimate = estimate_snapshot(queue.store.directory(row['id']) / 'input/optimize.json', queue.store.root)
             row = dict(row, estimated_coin_candles=estimate, exchange=', '.join(queue.store.exchanges(row)),
-                       has_log=log.is_file() and not log.is_symlink(), can_delete=can_remove_job(row, worker))
+                       has_log=log.is_file() and not log.is_symlink(), can_delete=can_remove_job(row, worker_by_id.get(row.get('lease_id'), worker)))
             control_exists = (queue.store.directory(row['id']) / 'control.json').exists()
             row['stop_requested'] = bool(queue.store.read(row['id'], 'control.json').get('stop')) if control_exists else False
             row['has_provider_log'] = provider_log.is_file() and not provider_log.is_symlink()
@@ -517,7 +546,7 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
                     _log(SERVICE, 'Optimizer throughput snapshot unavailable', level='WARNING')
             rows.append(row)
         return {"jobs": rows[:100],
-                "worker": worker, "queue": queue.read(), "supervision_available": services_available()}
+                "worker": worker, "workers": workers, "queue": queue.read(), "supervision_available": services_available()}
     except VastError as exc:
         raise _error(exc) from None
 
@@ -620,7 +649,7 @@ def requeue_job(identifier: str, session: SessionToken = Depends(require_auth)) 
             replacement_id = source.get('requeued_as')
             if replacement_id:
                 return queue.store.read(job_id(replacement_id))
-            if source.get('deleted_at') or source.get('status') not in {'failed', 'cancelled'} or not can_remove_job(source, queue.worker()):
+            if source.get('deleted_at') or source.get('status') not in {'failed', 'cancelled'} or not can_remove_job(source, queue.worker_for(source.get('lease_id'))):
                 raise VastError('Only inactive failed or cancelled jobs can be requeued', 409)
             replacement = _prepare_job(PrepareJobRequest(config_name=source['config_name'],
                 iterations=source['iterations'], workers=4 if source.get('auto_cpu_workers') else source['workers'], use_adg=bool(source.get('use_adg'))), requeue_from=identifier)
@@ -638,6 +667,15 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
         queue = CloudQueue()
         if not body.accept_rental_and_cleanup:
             raise VastError("Confirm the shared rental and automatic cleanup first", 422)
+        if body.use_saved_settings and not body.rent_only:
+            stored = queue.read().get('gpu_preferences', {})
+            try:
+                saved = RentalPreferences.model_validate(stored)
+            except ValueError:
+                raise VastError('Save valid GPU requirements and rental limits in Settings', 422) from None
+            if saved.max_rentals > 1 or queue.read().get('pool_authorization'):
+                from vast_pool import authorize_pool
+                return authorize_pool(queue, saved.model_dump())
         current = queue.worker()
         if current and current['rental_state'] not in ('none', 'deletion_verified'):
             control = queue.store.read(current['id'], 'control.json')
@@ -766,6 +804,15 @@ def adjust_budget(body: BudgetRequest, session: SessionToken = Depends(require_a
     except VastError as exc:
         raise _error(exc) from None
 
+
+
+@router.post('/queue/workers/{identifier}/{action}', status_code=202)
+def worker_action(identifier: str, action: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """Control one durable rental while leaving the rest of the GPU pool running."""
+    try:
+        return CloudQueue().worker_action(identifier, action)
+    except VastError as exc:
+        raise _error(exc) from None
 
 
 @router.post("/queue/{action}")

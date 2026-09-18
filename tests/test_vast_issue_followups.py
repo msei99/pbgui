@@ -112,6 +112,52 @@ def test_log_failure_is_separate_from_job_failure(queue):
     assert queue.store.read('b'*32)['status'] == 'ready'
 
 
+def test_lightweight_convergence_snapshot_is_bounded_and_validated():
+    """Only finite one-to-three-axis objective rows cross the SSH boundary."""
+    connection = object.__new__(WorkerConnection)
+    connection.remote_root = '/work/pbgui/jobs/' + 'a'*32
+    calls = []
+    connection.command = lambda command, **kwargs: (calls.append((command, kwargs)) or
+        json.dumps({'points':[[1, 2, 3], [.5, 2.5, 1.5]]}).encode())
+
+    assert connection.convergence_snapshot() == [[1.0, 2.0, 3.0], [.5, 2.5, 1.5]]
+    assert calls[0][1] == {'timeout':60, 'max_output':16 * 1024 * 1024}
+    assert '/work/pbgui/jobs/' + 'a'*32 in shlex.split(calls[0][0])[-1]
+
+    connection.command = lambda *args, **kwargs: b'{"points":[[1,true]]}'
+    with pytest.raises(VastError, match='Invalid convergence snapshot'):
+        connection.convergence_snapshot()
+
+
+def test_runner_uses_lightweight_front_after_archive_budget(queue, monkeypatch):
+    """The 1 GiB backup cap switches convergence to metrics-only SSH reads."""
+    identifier = 'a' * 32
+    queue.store.update(identifier, uploaded=True, worker_ready=True, started_at=100,
+        status='running', downloaded_bytes=1024**3,
+        convergence_config={'convergence_enabled':True, 'convergence_min_exact':512,
+                            'convergence_patience':512, 'convergence_tolerance_pct':.25})
+    monkeypatch.setattr(runner, 'validate_intent', lambda value, _: value)
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(time=lambda:1000, sleep=lambda _:None))
+    monkeypatch.setattr(runner, 'VastCredentialStore', lambda _:SimpleNamespace(secrets=lambda:{'api_key':'fake'}))
+    monkeypatch.setattr(runner, 'VastClient', lambda _:object())
+    monkeypatch.setattr(runner, 'owned_instance', lambda *a:{'id':7, 'actual_status':'running'})
+    monkeypatch.setattr(runner, 'sync_optimizer_log', lambda *a:None)
+    monkeypatch.setattr('vast_runtime_metrics.sample_metrics', lambda *a:None)
+
+    class Reached(BaseException):
+        """Stop the controller after proving the lightweight branch was reached."""
+
+    remote = SimpleNamespace(bootstrap=lambda _:None,
+        operation=lambda action:{'started':True, 'finished':False, 'exact_completed':1200,
+                                 'gpu_candidates':10000} if action == 'status' else {},
+        collect=lambda *a, **kw: pytest.fail('full partial archive must remain capped'),
+        convergence_snapshot=lambda: (_ for _ in ()).throw(Reached()))
+    monkeypatch.setattr(runner, 'WorkerConnection', lambda *a, **kw:remote)
+
+    with pytest.raises(Reached):
+        runner.run_loop(queue.store, identifier)
+
+
 def test_log_failure_cannot_prevent_final_collection(queue, monkeypatch):
     """Issue 353: even persistent telemetry failures leave result collection reachable."""
     identifier = 'a'*32

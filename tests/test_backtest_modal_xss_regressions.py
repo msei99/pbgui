@@ -33,6 +33,7 @@ def test_stored_balances_and_dates_cannot_create_modal_markup(name, balance, exp
     """Real modal functions produce only expected elements for hostile values in attributes."""
     root = Path(__file__).resolve().parents[1]
     source = (root / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    date_input_source = (root / "frontend" / "js" / "date_overwrite.js").read_text(encoding="utf-8")
     names = [name, "backtestDialogDateInputHtml", "esc", "escAttr", "normalizeArchiveMarketDataPath",
              "archiveConfigUsesPbguiMarketData", "archiveRetestDefaultDays"]
     functions = "\n".join(re.search(r"^function " + function + r"\(.*?^}", source, re.M | re.S).group() for function in names)
@@ -42,10 +43,12 @@ def test_stored_balances_and_dates_cannot_create_modal_markup(name, balance, exp
 const cfg = CONFIG;
 let body = null;
 const errors = [];
+const window = globalThis;
 const document = {createElement() { return {
   textContent: '',
   get innerHTML() { return this.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-}; }};
+}; }, addEventListener() {}};
+DATE_INPUT
 function getSelectedResults() { return ['a', 'b']; }
 function getSelectedArchiveResults() { return ['a', 'b']; }
 function getSelectedLegacyResults() { return ['a', 'b']; }
@@ -62,7 +65,7 @@ setImmediate(() => {
   if (errors.length || !body) throw new Error(JSON.stringify(errors));
   process.stdout.write(JSON.stringify(body));
 });
-""".replace("CONFIG", json.dumps(cfg)).replace("FUNCTIONS", functions).replace(
+""".replace("CONFIG", json.dumps(cfg)).replace("DATE_INPUT", date_input_source).replace("FUNCTIONS", functions).replace(
         "CALL", f"{name}([{{name:'test',config:cfg}}]);" if name == "showInitialBacktestQueueDraftModal" else f"{name}();"
     )
     result = subprocess.run(["node", "-e", script], cwd=root, text=True, capture_output=True, timeout=10, check=False)

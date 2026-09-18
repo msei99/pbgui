@@ -37,7 +37,7 @@ def test_final_snapshot_checked_without_rewriting_stop_reason(job, monkeypatch, 
     row = runner.finalize_collected_results(store, identifier)
     assert row['exact_completed'] == 1100
     assert row['completion_reason'] == reason
-    assert row['status'] == ('completed' if reason == 'convergence' else 'cancelled')
+    assert row['status'] == ('cancelled' if reason == 'requested' else 'completed')
     assessment = row['convergence'].pop('final')
     assert row['convergence'] == history
     assert assessment['checked_exact'] == 1100

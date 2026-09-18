@@ -277,14 +277,15 @@ def finalize_collected_results(store: JobStore, identifier: str) -> dict:
     reason = state.get('stop_reason')
     historical_convergence = reason == 'convergence' or (
         reason is None and bool(state.get('convergence', {}).get('stop_requested')))
-    converged = historical_convergence and finished.get('cancelled') and finished.get('exit_code') in (0, -2, 130)
+    automatic_reason = 'convergence' if historical_convergence else reason if reason == 'rental_deadline' else None
+    automatic_stop = automatic_reason is not None and finished.get('cancelled') and finished.get('exit_code') in (0, -2, 130)
     status = 'cancelled' if finished.get('cancelled') else 'completed' if finished.get('exit_code') == 0 else 'failed'
-    if converged:
+    if automatic_stop:
         status = 'completed'
     store.update(identifier, **imported, exact_completed=imported.get('evaluations', state.get('exact_completed', 0)))
     observe(store, identifier, final=True)
     return store.update(identifier, status=status, error=None, exit_code=finished.get('exit_code'),
-                        completion_reason='convergence' if converged else reason if reason != 'convergence' else None,
+                        completion_reason=automatic_reason if automatic_stop else reason if reason != 'convergence' else None,
                         elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
 
 
@@ -424,10 +425,17 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 store.update(identifier, status="collecting")
                 connection.collect(True, timeout=max(1, min(180, int(remaining - 15))))
                 continue
-            if time.time() - last_backup >= 60 and progress.get("exact_completed", 0) > 0 and state.get("downloaded_bytes", 0) < 1024**3:
-                connection.collect(False, timeout=max(1, min(60, int(remaining - 180))))
-                store.update(identifier, **import_results(store, identifier, partial=True))
-                observe(store, identifier)
+            if time.time() - last_backup >= 60 and progress.get("exact_completed", 0) > 0:
+                if state.get("downloaded_bytes", 0) < 1024**3:
+                    connection.collect(False, timeout=max(1, min(60, int(remaining - 180))))
+                    store.update(identifier, **import_results(store, identifier, partial=True))
+                    observe(store, identifier)
+                elif (store.read(identifier).get('convergence_config') or {}).get('convergence_enabled'):
+                    from vast_convergence import observe_points
+                    points = connection.convergence_snapshot()
+                    observe_points(store, identifier, points, progress.get('exact_completed', 0))
+                    store.update(identifier, last_convergence_snapshot_at=time.time(),
+                                 convergence_snapshot_source='remote_pareto')
                 last_backup = time.time()
         except Exception as exc:
             safe_error = str(exc) if isinstance(exc, VastError) else "Worker operation failed; reconnecting"

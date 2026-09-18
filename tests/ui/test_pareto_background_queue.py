@@ -72,3 +72,33 @@ def test_explorer_accepts_next_validation_while_first_batch_is_pending():
             assert page.url == 'http://queue.test/'
         finally:
             browser.close()
+
+
+def test_full_scan_unavailable_until_binary_is_present():
+    """Missing cloud binaries cannot trigger scans and availability follows result metadata."""
+    playwright = pytest.importorskip('playwright.sync_api')
+    root = Path(__file__).resolve().parents[2]
+    source = (root / 'frontend/v7_pareto_explorer.html').read_text()
+    handlers = source[source.index('  function syncAllResultsAvailability()'):source.index('  function loadParetoOnlyFromSidebar()')]
+    with playwright.sync_playwright() as runner:
+        browser = runner.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.set_content('<button id="btn-load-all-results">Scan all_results</button>')
+            page.add_script_tag(content='''
+                const el = id => document.getElementById(id);
+                const state = {session:{result:{has_all_results:false}},fullLoadPending:false};
+            ''' + handlers)
+            page.evaluate('syncAllResultsAvailability()')
+            button = page.locator('#btn-load-all-results')
+            assert button.is_disabled()
+            assert 'Vast.ai' in button.get_attribute('title')
+            assert 'finished' in button.get_attribute('title')
+            page.evaluate('loadAllResultsFromSidebar()')
+            assert page.evaluate('state.fullLoadPending') is False
+            page.evaluate('state.session.result.has_all_results = true; syncAllResultsAvailability()')
+            assert button.is_enabled()
+            page.evaluate('state.fullLoadPending = true; syncAllResultsAvailability()')
+            assert button.is_disabled()
+        finally:
+            browser.close()

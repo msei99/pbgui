@@ -1129,7 +1129,7 @@ input[type="range"]::-moz-range-thumb {
         <div class="muted-line" role="status" aria-live="polite" data-backtest-queue-status></div>
         <button class="sb-btn" id="btn-pin-strategy-baseline">Pin Explorer Baseline</button>
         <button class="sb-btn" id="btn-open-strategy-explorer">🔍 Strategy Explorer</button>
-        <button class="sb-btn" id="btn-load-all-results">📂 Scan all_results</button>
+        <button class="sb-btn" id="btn-load-all-results" disabled title="Checking availability of all_results.bin…">📂 Scan all_results</button>
         <button class="sb-btn" id="btn-load-pareto-only" style="display:none;">↩ Show Passivbot Paretos</button>
       </div>
     </div>
@@ -2843,7 +2843,18 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     loadPlayground({ followBestMatch: true }).catch(function() {});
   }
 
+  function syncAllResultsAvailability() {
+    var result = state.session && state.session.result;
+    var available = !!(result && result.has_all_results);
+    var button = el('btn-load-all-results');
+    button.disabled = state.fullLoadPending || !available;
+    button.title = available ? 'Scan the complete result history.'
+      : 'all_results.bin is not available yet. For Vast.ai optimizations, scanning is available only after optimization has finished and results have been downloaded.';
+    return available;
+  }
+
   function loadAllResultsFromSidebar() {
+    if (!syncAllResultsAvailability() || state.fullLoadPending) return;
     if (!state.resultPath) {
       pushMessage('error', 'No result path is available yet.');
       return;
@@ -2881,7 +2892,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     state.allResultsLoaded = false;
     state.viewRange = null;
     state.pendingViewRange = null;
-    el('btn-load-all-results').disabled = false;
+    syncAllResultsAvailability();
     el('btn-load-all-results').textContent = '📂 Scan all_results';
     el('mode-chip').textContent = 'Switching to fast mode...';
     el('mode-chip').className = 'status-chip warn';
@@ -3902,6 +3913,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function renderSession(data) {
     state.session = data || null;
+    syncAllResultsAvailability();
     syncStrategyExplorerActions();
     var result = data && data.result ? data.result : null;
     var valid = !!(data && data.result_valid);
@@ -4592,7 +4604,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       applyDeepTabUi(state.deepTab, false);
     }
     state.fullLoadPending = false;
-    el('btn-load-all-results').disabled = false;
+    syncAllResultsAvailability();
     el('btn-load-all-results').textContent = '📂 Scan all_results';
     renderSession(Object.assign({}, sessionLike));
     if (state.allResultsLoaded) updateFullLoadPhase('complete', 'Server-side refresh pipeline completed.');
@@ -4713,7 +4725,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       state.fullLoadPending = false;
       state.fullLoadJobId = '';
       clearFullLoadPoll();
-      el('btn-load-all-results').disabled = false;
+      syncAllResultsAvailability();
       el('btn-load-all-results').textContent = '📂 Scan all_results';
       stopFullLoadProgressAnimation();
       pushMessage('error', 'Load failed: ' + err.message);

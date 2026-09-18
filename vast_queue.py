@@ -75,6 +75,18 @@ class CloudQueue:
         identifier = self.read().get('worker_id')
         return self.store.read(identifier) if identifier else None
 
+    def workers(self, *, active_only: bool = True) -> list[dict]:
+        """Discover durable rentals, including legacy workers and pending cleanup."""
+        return [row for row in self.store.list() if row.get('kind') == 'worker'
+                and (not active_only or row.get('rental_state') not in ('none', 'deletion_verified'))]
+
+    def worker_for(self, identifier: str | None) -> dict | None:
+        """Resolve a job's actual rental instead of the last selected worker."""
+        if not identifier:
+            return self.worker()
+        row = self.store.read(job_id(identifier))
+        return row if row.get('kind') == 'worker' or self.read().get('worker_id') == identifier else None
+
     def set_host_block(self, machine_id: int, blocked: bool) -> list[int]:
         """Atomically change one exclusion without overwriting concurrent edits."""
         machine_id = positive_id(machine_id)
@@ -97,14 +109,19 @@ class CloudQueue:
         return sorted((row for row in self.store.list() if row.get('kind') != 'worker' and row['status'] == 'ready'),
                       key=lambda row: (row.get('created_at', 0), row['id']))
 
-    def start(self, offer: dict, hours: float, budget: float, idle_seconds: int, *, manual: bool = False) -> dict:
+    def start(self, offer: dict, hours: float, budget: float, idle_seconds: int, *, manual: bool = False,
+              pool_authorization_id: str | None = None) -> dict:
         """Rent once for the queue; duplicate starts return the existing worker."""
         if idle_seconds not in (0, 300):
             raise VastError('Choose immediate cleanup or five minutes idle', 422)
         ensure_private_directory(self.root)
         with advisory_file_lock(self.root / '.queue-lock'):
             current = self.worker()
-            if current and current['rental_state'] not in ('none', 'deletion_verified'):
+            if pool_authorization_id is not None:
+                from vast_pool import rental_needed
+                if not rental_needed(self, pool_authorization_id):
+                    raise VastError('GPU pool capacity or queue authorization changed', 409)
+            elif current and current['rental_state'] not in ('none', 'deletion_verified'):
                 return current
             if not offer_host_allowed(offer, blocked_machine_ids(self.read())):
                 raise VastError('GPU host is blocked or its machine ID is unavailable; refresh offers', 409)
@@ -132,7 +149,7 @@ class CloudQueue:
             row = self.store.read(identifier)
             if row.get('deleted_at'):
                 return {'id': identifier, 'deleted': True}
-            if not can_remove_job(row, self.worker()):
+            if not can_remove_job(row, self.worker_for(row.get('lease_id'))):
                 raise VastError('Stop the job and finish collection/cleanup before deleting it', 409)
             changes = {'deleted_at': time.time()}
             if row['status'] == 'ready':
@@ -142,24 +159,65 @@ class CloudQueue:
 
     def action(self, action: str) -> dict:
         """Control queue scheduling without implicitly creating a replacement GPU."""
-        if action not in {'pause', 'resume', 'end', 'recover'}:
-            raise VastError('Invalid cloud queue action', 422)
-        worker = self.worker()
-        if action in {'pause', 'resume'}:
-            self.update(paused=action == 'pause')
-        if action == 'resume' and worker and worker['rental_state'] not in ('none', 'deletion_verified'):
-            # A manual Rent deliberately keeps the worker reserved.  Starting
-            # the queue must always release that gate, even if a previous start
-            # request had already changed only the queue's paused flag.
-            self.store.update(worker['id'], awaiting_queue_start=False)
-        if action == 'end':
-            self.update(paused=True)
-            if worker and worker['rental_state'] not in ('none', 'deletion_verified'):
-                self.store.control(worker['id'], 'stop')
-        if action in {'resume', 'recover', 'end'} and worker and worker['rental_state'] not in ('none', 'deletion_verified'):
-            self.store.launch_service(worker['id'], 'guard')
-            self.store.launch_service(worker['id'], 'run')
-        return self.read()
+        with advisory_file_lock(self.root / '.queue-lock'):
+            if action not in {'pause', 'resume', 'end', 'recover'}:
+                raise VastError('Invalid cloud queue action', 422)
+            workers = self.workers()
+            if action in {'pause', 'resume'}:
+                self.update(paused=action == 'pause')
+            if action == 'resume':
+                # A manual Rent deliberately keeps the worker reserved.  Starting
+                # the queue must always release that gate, even if a previous start
+                # request had already changed only the queue's paused flag.
+                for worker in workers:
+                    self.store.update(worker['id'], awaiting_queue_start=False)
+            if action == 'end':
+                state = self.read()
+                preferences = dict(state.get('gpu_preferences') or {})
+                preferences['auto_rent'] = False
+                self.update(paused=True, pool_enabled=False, pool_authorization=None,
+                            pool_error=None, gpu_preferences=preferences)
+                for worker in workers:
+                    self.store.control(worker['id'], 'stop')
+            if action in {'resume', 'recover', 'end'}:
+                for worker in workers:
+                    self.store.launch_service(worker['id'], 'guard')
+                    self.store.launch_service(worker['id'], 'run')
+            if action in {'resume', 'recover'} and self.read().get('pool_enabled'):
+                from vast_pool import launch_pool
+                launch_pool(self)
+            return self.read()
+
+    def worker_action(self, identifier: str, action: str) -> dict:
+        """Start or release exactly one rental without changing unrelated GPUs."""
+        identifier = job_id(identifier)
+        if action not in {'start', 'end', 'replace'}:
+            raise VastError('Invalid GPU action', 422)
+        with advisory_file_lock(self.root / '.queue-lock'):
+            worker = self.worker_for(identifier)
+            if not worker or worker.get('rental_state') in ('none', 'deletion_verified'):
+                raise VastError('GPU rental is no longer active', 409)
+            state = self.read()
+            if action == 'start':
+                self.store.update(identifier, awaiting_queue_start=False, idle_since=None)
+                # Legacy manual rental used the pool-wide pause as its start gate.
+                if worker.get('awaiting_queue_start') and len(self.workers()) == 1:
+                    self.update(paused=False)
+            else:
+                replacing = action == 'replace'
+                preferences = state.get('gpu_preferences') or {}
+                if replacing and not (state.get('pool_enabled') and preferences.get('auto_rent')):
+                    raise VastError('Enable Auto rent & start before replacing a GPU automatically', 409)
+                active_job = worker.get('active_job')
+                self.store.update(identifier, replacement_requested=replacing,
+                                  replacement_job=active_job if replacing else None)
+                self.store.control(identifier, 'stop')
+            self.store.launch_service(identifier, 'guard')
+            self.store.launch_service(identifier, 'run')
+            if action == 'replace' and state.get('pool_enabled'):
+                from vast_pool import launch_pool
+                launch_pool(self)
+            return self.store.read(identifier)
 
 
 def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None) -> str | None:
@@ -171,6 +229,15 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
         control = store.read(identifier, 'control.json')
         if worker['rental_state'] == 'deletion_verified':
             missing = worker.get('rental_end_reason') == 'provider_instance_missing'
+            replacement_job = worker.get('replacement_job') if worker.get('replacement_requested') else None
+            if replacement_job:
+                replacement = store.read(job_id(replacement_job))
+                if replacement.get('lease_id') == identifier and not replacement.get('final_collected'):
+                    try:
+                        store.reset_unstarted_for_replacement(replacement_job, identifier)
+                    except VastError:
+                        # Any existing result remains available and requires an explicit requeue.
+                        store.update(replacement_job, error='GPU replaced; existing optimizer progress was preserved. Requeue explicitly to start a fresh run.')
             for job in store.list():
                 if job.get('lease_id') != identifier or job['status'] in TERMINAL or job['status'] == 'ready':
                     continue
@@ -179,9 +246,10 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
                            'Vast.ai instance disappeared; the last local snapshot remains available' if missing else
                            'Rental ended; the last local snapshot remains available')
                 store.update(job['id'], status='cancelled' if stopped and not job.get('final_collected') else 'failed', error=message)
-            if missing and queue.read().get('worker_id') == identifier:
+            if missing and not queue.read().get('pool_enabled'):
                 queue.update(paused=True)
-            store.update(identifier, status='failed' if missing else 'completed', active_job=None)
+            store.update(identifier, status='failed' if missing else 'completed', active_job=None,
+                         replacement_requested=False, replacement_job=None)
             return None
         active = worker.get('active_job')
         if not active:
