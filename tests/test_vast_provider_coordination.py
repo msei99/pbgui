@@ -3,6 +3,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 import urllib.error
+import urllib.parse
 
 import pytest
 
@@ -33,7 +34,7 @@ def test_valid_cache_remains_readable_during_backoff(monkeypatch):
     def request(self, method, path, body=None):
         """Cache one listing, then rate-limit an independent provider operation."""
         calls.append(path)
-        if path != '/instances/':
+        if path != provider.INSTANCE_LIST_PATH:
             raise provider.VastRateLimit(120, request_sent=True)
         return {'instances': [{'id': 1}]}
     monkeypatch.setattr(provider.VastClient, '_request', request)
@@ -70,6 +71,74 @@ def test_instances_share_cache_but_cleanup_reads_are_fresh(monkeypatch):
     provider.VastClient('test-key').request('DELETE', '/instances/1')
     provider.VastClient('test-key').instances()
     assert len(calls) == 5
+
+
+def test_instances_follow_every_official_v1_page(monkeypatch):
+    """The retired v0 list is never used and a cursor cannot hide active rentals."""
+    calls = []
+
+    def request(self, method, path, body=None):
+        """Return two deterministic provider pages."""
+        calls.append((method, path, dict(body or {})))
+        if body and body.get('after_token') == 'next-page':
+            return {'instances': [{'id': 2}], 'next_token': None}
+        return {'instances': [{'id': 1}], 'next_token': 'next-page'}
+
+    monkeypatch.setattr(provider.VastClient, '_request', request)
+
+    assert provider.VastClient('test-key').instances(fresh=True) == [{'id': 1}, {'id': 2}]
+    assert [call[1] for call in calls] == [provider.INSTANCE_LIST_PATH, provider.INSTANCE_LIST_PATH]
+    assert calls[1][2]['after_token'] == 'next-page'
+
+
+def test_v1_instance_query_uses_root_api_url_and_encoded_filters(monkeypatch):
+    """The v1 path must not be appended below the legacy v0 API root."""
+    requests = []
+
+    class Response:
+        """Return one bounded provider page."""
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit):
+            return b'{"instances": [], "next_token": null}'
+
+    class Opener:
+        """Capture the complete request without network access."""
+        def open(self, request, timeout):
+            requests.append(request)
+            return Response()
+
+    monkeypatch.setattr(provider.urllib.request, 'build_opener', lambda *_: Opener())
+    result = provider.VastClient('test-key')._request(
+        'GET',
+        provider.INSTANCE_LIST_PATH,
+        {'select_filters': {}, 'order_by': [{'col': 'id', 'dir': 'asc'}], 'limit': 25},
+    )
+
+    assert result['instances'] == []
+    parsed = urllib.parse.urlsplit(requests[0].full_url)
+    assert parsed.path == '/api/v1/instances/'
+    assert '/api/v0/' not in parsed.path
+    query = urllib.parse.parse_qs(parsed.query)
+    assert json.loads(query['select_filters'][0]) == {}
+    assert json.loads(query['order_by'][0]) == [{'col': 'id', 'dir': 'asc'}]
+    assert query['limit'] == ['25']
+
+
+def test_instances_reject_repeated_v1_cursor(monkeypatch):
+    """A broken provider cursor cannot turn one listing into an unbounded loop."""
+    monkeypatch.setattr(
+        provider.VastClient,
+        '_request',
+        lambda *_args, **_kwargs: {'instances': [], 'next_token': 'same-page'},
+    )
+
+    with pytest.raises(provider.VastError, match='cursor'):
+        provider.VastClient('test-key').instances(fresh=True)
 
 
 def test_shared_backoff_honors_retry_after_and_resets(monkeypatch):

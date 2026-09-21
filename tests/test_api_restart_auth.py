@@ -81,6 +81,7 @@ def test_runtime_service_restart_state_detects_only_active_stale_daemons(monkeyp
         {"pid": 10, "create_time": 1.0, "service": "PBRun"},
         {"pid": 11, "create_time": 2.0, "service": "PBData"},
         {"pid": 12, "create_time": 3.0, "service": "Market Data worker"},
+        {"pid": 13, "create_time": 4.0, "service": "VastPool"},
     ]
     monkeypatch.setattr(PBApiServer, "_read_serial", lambda: 2052)
     monkeypatch.setattr(PBApiServer, "_vps_monitor", None)
@@ -93,14 +94,16 @@ def test_runtime_service_restart_state_detects_only_active_stale_daemons(monkeyp
                 {"service": "PBRun", "code_serial": "2052"},
                 {"service": "PBData", "code_serial": "2051"},
                 {"service": "Market Data worker", "code_serial": "2051"},
+                {"service": "VastPool", "code_serial": "2050"},
             ],
         },
     )
 
     state = PBApiServer._runtime_service_restart_state()
 
-    assert [item["service"] for item in state["stale_services"]] == ["PBData"]
-    assert state["stale_services"][0]["unit"] == "pbgui-pbdata.service"
+    assert [item["service"] for item in state["stale_services"]] == ["VastPool", "PBData"]
+    assert state["stale_services"][0]["unit"] == "pbgui-vast-pool.service"
+    assert state["stale_services"][1]["unit"] == "pbgui-pbdata.service"
 
 
 def test_server_status_includes_stale_managed_daemons(monkeypatch) -> None:
@@ -189,6 +192,14 @@ def test_persistent_vps_monitor_is_an_allowlisted_managed_restart_target() -> No
     units = {str(item["unit"]) for item in PBApiServer._RUNTIME_SYSTEMD_SERVICES}
 
     assert "pbgui-vps-monitor.service" in units
+
+
+def test_vast_pool_is_an_allowlisted_managed_restart_target() -> None:
+    """The scheduler reloads changed rental code without ending active rentals."""
+
+    units = {str(item["unit"]) for item in PBApiServer._RUNTIME_SYSTEMD_SERVICES}
+
+    assert "pbgui-vast-pool.service" in units
 
 
 def test_missing_release_capability_marks_only_persistent_monitor_stale(monkeypatch) -> None:

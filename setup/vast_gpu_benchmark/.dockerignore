@@ -1,3 +1,5 @@
 *
 !Dockerfile
+!Dockerfile.worker
+!cloud_worker.py
 !run.py

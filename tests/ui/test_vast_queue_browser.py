@@ -515,16 +515,33 @@ def test_convergence_dashboard_progress_and_completion():
                 window.state = {cloudLogId:'test'};
                 const jobRows = [], worker = null, billingLease = null, billingSnapshot = null;
                 const fmt = (value, digits) => Number(value).toFixed(digits);
-                const renderOptimizeLogDashboard = () => {}, renderRentalDetails = () => {};
+                const renderOptimizeLogDashboard = status => { window.lastDashboard = status; }, renderRentalDetails = () => {};
+                window.logViewerOpens = 0;
+                window.logViewerFiles = 0;
+                window.openLogPanel = (id, name, options) => {
+                    window.openedObservedLog = {id, name, options};
+                    state.cloudLogId = id;
+                    state.logFile = options.hasLog ? 'optimizes_v8/vast_' + id + '.log' : '';
+                };
+                window.ensureLogViewer = () => ({
+                    open: () => { window.logViewerOpens += 1; },
+                    setHost: () => {},
+                    setFile: () => { window.logViewerFiles += 1; }
+                });
             ''' + 'const stoppingJobs = new Map();' + source[source.index('  function stopPhase(job)'):source.index('  let startingQueue')] + source[source.index('  function workerActivity(rental)'):source.index('  function renderJob()')] + function)
             page.evaluate('''() => {
-                window.job = {id:'test',status:'running',exact_completed:700,
+                window.job = {id:'test',status:'running',has_log:true,exact_completed:700,
                     convergence_config:{convergence_enabled:true,convergence_patience:512},
                     convergence:{phase:'tracking',last_improvement_exact:512,stalled_exact:188}};
                 renderCloudDashboard(job);
             }''')
-            page.evaluate("job.runtime_metrics={available:true,sampled_at:Date.now()/1000,gpu_percent:75,cpu_percent:25,ram_used_bytes:1073741824,ram_total_bytes:4294967296,vram_used_bytes:2147483648,vram_total_bytes:25769803776}; renderCloudDashboard(job)")
+            assert page.evaluate('window.logViewerOpens') == 1
+            assert page.evaluate('window.logViewerFiles') == 1
+            page.evaluate("job.runtime_metrics={available:true,sampled_at:Date.now()/1000,gpu_percent:75,gpu_power_watts:89.5,gpu_power_limit_watts:170,cpu_percent:25,ram_used_bytes:1073741824,ram_total_bytes:4294967296,vram_used_bytes:2147483648,vram_total_bytes:25769803776}; renderCloudDashboard(job)")
+            assert page.evaluate('window.logViewerOpens') == 2
+            assert page.evaluate('window.logViewerFiles') == 1
             assert page.locator('#cloud-gpu-util').inner_text() == '75.0%'
+            assert page.locator('#cloud-gpu-power').inner_text() == '90 / 170 W'
             assert page.locator('#cloud-cpu-util').inner_text() == '25.0%'
             page.evaluate('job.exact_queue={outstanding:16,sampled_at:Date.now()/1000}; renderCloudDashboard(job)')
             assert page.locator('#cloud-exact-queue').inner_text() == '16'
@@ -538,6 +555,7 @@ def test_convergence_dashboard_progress_and_completion():
             assert '1.00 / 4.00 GiB' in page.locator('#cloud-ram-util').inner_text()
             page.evaluate('job.runtime_metrics.sampled_at-=60; renderCloudDashboard(job)')
             assert page.locator('#cloud-gpu-util').inner_text() == '—'
+            assert page.locator('#cloud-gpu-power').inner_text() == '—'
             assert page.locator('#convergence-since').inner_text() == '188 exact evaluations'
             assert page.locator('#convergence-progress').inner_text() == '188 / 512 exact evaluations'
             assert page.locator('#convergence-bar').evaluate('node => node.value') == pytest.approx(188/512*100)
@@ -550,6 +568,32 @@ def test_convergence_dashboard_progress_and_completion():
             assert page.locator('#convergence-progress').inner_text() == '0 / 512 exact evaluations'
             page.evaluate('job.convergence_config.convergence_enabled=false; renderCloudDashboard(job)')
             assert page.locator('#cloud-convergence').evaluate('node => node.hidden')
+            page.evaluate('''() => {
+                state.cloudLogId = 'worker-observed';
+                state.logFile = '';
+                renderObservedOptimizer({
+                    id:'worker-observed',
+                    observed_optimizer:{running:true,name:'perf-halving',activity:'Suite scenario 7/7',exact_completed:0,gpu_candidates:8192,sampled_at:Date.now()/1000},
+                    runtime_metrics:{available:true,sampled_at:Date.now()/1000,gpu_percent:100,gpu_power_watts:57,gpu_power_limit_watts:120}
+                });
+            }''')
+            assert page.evaluate('lastDashboard.name') == 'perf-halving'
+            assert page.evaluate('lastDashboard.phase') == 'running'
+            assert page.evaluate('lastDashboard.progress.proxy_evaluations') == 8192
+            assert page.locator('#optlog-activity').inner_text() == 'Suite scenario 7/7'
+            assert page.locator('#cloud-gpu-util').inner_text() == '100.0%'
+            assert page.locator('#cloud-gpu-power').inner_text() == '57 / 120 W'
+            assert page.locator('#stop-job').is_disabled()
+            assert page.evaluate("state.logFile") == 'optimizes_v8/vast_worker-observed.log'
+            assert page.evaluate("currentObservedOptimizer({observed_optimizer:{running:true,sampled_at:Date.now()/1000-46}})") is None
+            page.evaluate('''openObservedOptimizer({
+                id:'worker-observed',
+                observed_optimizer:{running:true,name:'perf-halving',activity:'Suite scenario 7/7',sampled_at:Date.now()/1000},
+                runtime_metrics:{}
+            })''')
+            assert page.evaluate('openedObservedLog.id') == 'worker-observed'
+            assert page.evaluate('openedObservedLog.name') == 'perf-halving'
+            assert page.evaluate('openedObservedLog.options.hasLog') is True
         finally:
             browser.close()
 
@@ -632,7 +676,7 @@ def test_pool_summary_and_explicit_start_consent():
             assert '102' in page.evaluate('workerActivity()')
             assert 'Downloading worker image · 42.5%' in page.evaluate('workerActivity()')
             assert page.evaluate("compactJobProgress(jobRows[2])") == 'Uploading input · 2.3 / 54.1 MB · 4.3% · 0.4 Mbps · 0.03% of host bandwidth'
-            assert page.evaluate("compactJobProgress(jobRows[3])") == 'Uploading input · 70.0 / 191.6 MB · 36.5% · 5.2 Mbps · 8.3% of host bandwidth'
+            assert page.evaluate("compactJobProgress(jobRows[3])") == 'Checking and synchronizing GPU input cache · 70.0 / 191.6 MB compared'
             page.evaluate('renderQueueOverview()')
             assert page.locator('.queue-gpu-card').count() == 2
             first_card = page.locator('.queue-gpu-card').first
@@ -641,6 +685,9 @@ def test_pool_summary_and_explicit_start_consent():
             first_card.get_by_role('button', name='Results').click()
             assert page.evaluate('openedResults') == 'first'
             assert page.locator('.queue-gpu-card').nth(1).get_by_role('button', name='Results').is_disabled()
+            page.evaluate("queueState.paused=true; jobRows.push({id:'queued',config_name:'Queued optimizer',status:'ready'}); renderQueueOverview()")
+            assert page.locator('.queue-pool-state').inner_text() == 'Paused'
+            assert page.get_by_role('button', name='Resume auto start').is_visible()
             first_card.get_by_role('button', name='Replace GPU').click()
             page.wait_for_function("confirmation?.title === 'Replace GPU?'")
             assert page.evaluate('sent.length') == 0
@@ -649,7 +696,7 @@ def test_pool_summary_and_explicit_start_consent():
             page.wait_for_function('sent.length === 1')
             assert page.evaluate("sent[0][0]") == '/queue/workers/a/replace'
             page.evaluate('sent.length=0; window.accept=false; window.confirmation=null')
-            page.evaluate('startCloudQueue()')
+            page.get_by_role('button', name='Resume auto start').click()
             assert page.evaluate('sent.length') == 0
             assert '$6.00' in page.evaluate('confirmation.message')
             page.evaluate('window.accept=true; startCloudQueue()')

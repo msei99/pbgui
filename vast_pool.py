@@ -150,6 +150,8 @@ def launch_pool(queue: CloudQueue) -> None:
             active = subprocess.run(['systemctl', '--user', 'is-active', '--quiet', unit],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
             if active.returncode == 0:
+                if queue.read().get('pool_error') is not None:
+                    queue.update(pool_error=None)
                 return
             result = subprocess.run(['systemd-run', '--user', '--collect', '--unit', unit,
                 '--property=Restart=on-failure', '--property=RestartSec=10', '--property=UMask=0077',
@@ -161,32 +163,37 @@ def launch_pool(queue: CloudQueue) -> None:
             raise VastError('GPU pool supervisor could not be started', 503) from None
         if result.returncode:
             raise VastError('GPU pool supervisor could not be started', 503)
+        if queue.read().get('pool_error') is not None:
+            queue.update(pool_error=None)
 
 
 def main() -> None:
     """Own the scheduler lock and terminate promptly on systemd shutdown signals."""
+    from credential_process_registry import ProcessCapabilityHeartbeat
+
     os.umask(0o077)
     queue = CloudQueue()
     ensure_private_directory(queue.root)
     stopping = Event()
     signal.signal(signal.SIGTERM, lambda *_: stopping.set())
     signal.signal(signal.SIGINT, lambda *_: stopping.set())
-    with os.fdopen(os.open(queue.root / 'pool.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'r+') as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return
-        while not stopping.is_set():
-            delay = 5
+    with ProcessCapabilityHeartbeat(PROJECT, SERVICE):
+        with os.fdopen(os.open(queue.root / 'pool.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'r+') as lock:
             try:
-                pool_step(queue)
-            except Exception as exc:
-                message = str(exc) if isinstance(exc, VastError) else 'GPU pool scheduling failed; automatic retry pending'
-                _log(SERVICE, message, level='WARNING')
-                fatal = not isinstance(exc, VastError) or exc.status in (400, 401, 403, 404, 422)
-                queue.update(pool_error=message, **({'paused': True} if fatal else {}))
-                delay = 60
-            stopping.wait(delay)
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            while not stopping.is_set():
+                delay = 5
+                try:
+                    pool_step(queue)
+                except Exception as exc:
+                    message = str(exc) if isinstance(exc, VastError) else 'GPU pool scheduling failed; automatic retry pending'
+                    _log(SERVICE, message, level='WARNING')
+                    fatal = not isinstance(exc, VastError) or exc.status in (400, 401, 403, 404, 422)
+                    queue.update(pool_error=message, **({'paused': True} if fatal else {}))
+                    delay = 60
+                stopping.wait(delay)
 
 
 if __name__ == '__main__':

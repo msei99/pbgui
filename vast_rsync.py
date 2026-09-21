@@ -240,18 +240,27 @@ def sync_files(connection, config_root: Path, *, timeout: int):
             raise VastError('Rsync synchronization deadline reached; partial files retained')
         return seconds
 
-    def report(count, rate=0, stage='sending'):
-        """Persist sender work; skipped-file savings are known at completion."""
+    def report(count, rate=0, stage='sending', **final_statistics):
+        """Persist logical rsync work; actual network bytes are known at completion."""
         connection.store.update(identifier, upload_progress={
             'transport': 'rsync', 'mode': 'files', 'stage': stage,
             'bytes': 0, 'transferred_bytes': count, 'total': total,
-            'bytes_per_second': rate})
+            'bytes_per_second': rate, **final_statistics})
 
     def worker_step(action):
         """Retry idempotent remote preparation/publication without spending an upload attempt."""
-        payload = (json.dumps({name: safe_path(config_root, name).read_text()
-                              for name in ('manifest.json', 'optimize.json')}).encode()
-                   if action == 'prepare' else None)
+        if action == 'prepare':
+            metadata = {
+                name: safe_path(config_root, name).read_text()
+                for name in ('manifest.json', 'optimize.json')
+            }
+            state = connection.store.read(identifier)
+            reusable_job = state.get('snapshot_source_id') or state.get('requeue_from')
+            if reusable_job is not None:
+                metadata['_reuse_job_id'] = job_id(reusable_job)
+            payload = json.dumps(metadata).encode()
+        else:
+            payload = None
         if payload is not None:
             compressed = gzip.compress(payload, compresslevel=1, mtime=0)
             if len(compressed) < len(payload):
@@ -285,40 +294,59 @@ def sync_files(connection, config_root: Path, *, timeout: int):
 
     connection.store.update(identifier, upload_progress={
         'transport': 'rsync', 'mode': 'files', 'stage': 'preparing_files'})
+    entries = {}
+    seen = {'manifest.json', 'optimize.json'}
+    for item in manifest['files']:
+        remaining()
+        key, size = item['sha256'], item['bytes']
+        if (not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}', key)
+                or type(size) is not int or size < 0 or item['path'] in seen):
+            raise VastError('Invalid rsync data manifest', 422)
+        seen.add(item['path'])
+        name = 'rsync-data/' + key
+        if name in entries:
+            if entries[name][1] != size:
+                raise VastError('Conflicting rsync data identity', 422)
+        else:
+            entries[name] = (item['path'], size)
+    total = sum(size for _, size in entries.values())
+    if total > 12 * 1024**3:
+        raise VastError('Input files exceed the transfer limit', 422)
+    worker_step('prepare')
+    connection.store.update(identifier, upload_progress={
+        'transport': 'rsync', 'mode': 'files', 'stage': 'checking_cache',
+        'bytes': 0, 'transferred_bytes': 0, 'total': total, 'bytes_per_second': 0})
+    try:
+        cache_status = json.loads(worker_step('cache-complete'))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise VastError('Invalid worker cache status', 422) from None
+    if cache_status == {'complete': True}:
+        statistics = {'total_bytes': total, 'changed_bytes': 0, 'literal_bytes': 0,
+                      'sent_bytes': 0, 'reused_bytes': total}
+        connection.store.update(identifier, transfer_input_bytes=0)
+        report(total, stage='installing', network_bytes=0, changed_bytes=0, reused_bytes=total)
+        worker_step('publish')
+        report(total, stage='synchronized', network_bytes=0, changed_bytes=0, reused_bytes=total)
+        connection.store.update(identifier, sync_statistics=statistics)
+        return
+    if cache_status != {'complete': False}:
+        raise VastError('Invalid worker cache status', 422)
+
     with tempfile.TemporaryDirectory(prefix='rsync-input-', dir=connection.directory) as temporary:
         source = Path(temporary)
-        entries = {}
-        seen = {'manifest.json', 'optimize.json'}
-        for item in manifest['files']:
+        input_directory = connection.store.prepared_input_directory(identifier)
+        for name, (relative, size) in entries.items():
             remaining()
-            key, size = item['sha256'], item['bytes']
-            if (not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}', key)
-                    or type(size) is not int or size < 0 or item['path'] in seen):
-                raise VastError('Invalid rsync data manifest', 422)
-            seen.add(item['path'])
             # execution-input contains only CPU-adjusted config/manifest;
             # frozen OHLCV files remain in the original prepared input tree.
-            original = safe_path(connection.directory / 'input', item['path'])
+            original = safe_path(input_directory, relative)
             if not original.is_file() or original.stat().st_size != size:
                 raise VastError('Prepared input file is missing or changed', 422)
-            name = 'rsync-data/' + key
-            if name in entries:
-                if entries[name][1] != size:
-                    raise VastError('Conflicting rsync data identity', 422)
-            else:
-                entries[name] = (original, size)
-        total = sum(size for _, size in entries.values())
-        if total > 12 * 1024**3:
-            raise VastError('Input files exceed the transfer limit', 422)
-        # Hardlinks create a cheap sender view, retaining timestamps without
-        # copying or re-reading the large immutable prepared dataset.
-        for name, (original, _) in entries.items():
             target = source / name
             target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.link(original, target)
         file_list = source / 'files.list'
         file_list.write_bytes(b''.join(name.encode() + b'\0' for name in entries))
-        worker_step('prepare')
         connection.store.update(identifier, transfer_input_bytes=total)
 
         host = '[' + connection.host + ']' if ':' in connection.host else connection.host
@@ -350,10 +378,17 @@ def sync_files(connection, config_root: Path, *, timeout: int):
                                 + '); partial files retained', 422 if permanent else 502)
             report(0, stage='reconnecting')
             human_log(SERVICE, 'Rsync connection interrupted; reusing completed and partial input files', level='WARNING')
-        report(total, stage='installing')
+        changed_bytes = statistics.get('changed_bytes')
+        reused_bytes = max(0, total - changed_bytes) if changed_bytes is not None else None
+        final_statistics = {
+            'network_bytes': sent_bytes,
+            'changed_bytes': changed_bytes,
+            'reused_bytes': reused_bytes,
+        }
+        report(total, stage='installing', **final_statistics)
         worker_step('publish')
-        report(total, stage='synchronized')
+        report(total, stage='synchronized', **final_statistics)
         connection.store.update(identifier, transfer_input_bytes=sent_bytes, sync_statistics={
-            'total_bytes': total, 'changed_bytes': statistics.get('changed_bytes'),
+            'total_bytes': total, 'changed_bytes': changed_bytes,
             'literal_bytes': statistics.get('literal_bytes'), 'sent_bytes': sent_bytes,
-            'reused_bytes': max(0, total - statistics['changed_bytes']) if 'changed_bytes' in statistics else None})
+            'reused_bytes': reused_bytes})

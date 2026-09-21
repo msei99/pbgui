@@ -146,6 +146,14 @@ def cache_missing() -> dict:
     return {'missing': sorted(set(missing))}
 
 
+def install_cached_file(path: Path, cached: Path, size: int, checksum: str) -> None:
+    """Hard-link one verified immutable blob into a job without copying its bytes."""
+    if cached.is_symlink() or not cached.is_file() or cached.stat().st_size != size or file_hash(cached) != checksum:
+        raise ValueError('Required data cache entry is missing or corrupt')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.link(cached, path)
+
+
 def install() -> dict:
     """Unpack a bounded input archive into a fresh staging directory."""
     marker = ROOT / "input-ready.json"
@@ -182,11 +190,8 @@ def install() -> dict:
             cache_root.mkdir(exist_ok=True)
             cached = safe_path(cache_root, key)
             if not path.exists():
-                if not cached.is_file():
-                    raise ValueError('Required data cache entry is missing')
-                path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(cached, path)
-            if path.stat().st_size != item["bytes"] or file_hash(path) != key:
+                install_cached_file(path, cached, item["bytes"], key)
+            elif path.stat().st_size != item["bytes"] or file_hash(path) != key:
                 raise ValueError("Data checksum mismatch")
             if not cached.exists():
                 temporary_blob = cache_root / (key + '.tmp')

@@ -17,21 +17,46 @@ def test_cpu_execution_copy_preserves_original_and_manifest(tmp_path, monkeypatc
     directory = store.root / 'jobs' / identifier
     source = directory / 'input'
     source.mkdir(parents=True)
-    config = {'optimize': {'n_cpus': 4, 'gpu': {'exact_workers': 4}, 'iters': 200000}, 'bot': {'unchanged': True}}
+    old_identifier = 'b'*32
+    config = {'optimize': {'n_cpus': 4, 'gpu': {'exact_workers': 4}, 'iters': 200000},
+              'backtest': {'ohlcv_source_dir': '/work/pbgui/jobs/' + old_identifier + '/input/ohlcv'},
+              'bot': {'unchanged': True}}
     write_json(source / 'optimize.json', config)
-    write_json(source / 'manifest.json', {'config_sha256': digest(source / 'optimize.json'), 'files': [], 'source_config_sha256': 'original'})
-    write_json(directory / 'state.json', {'id':identifier, 'auto_cpu_workers': True, 'cpu_allocation_resolved': True, 'workers': 9})
+    files = [{'path': 'ohlcv/binance/1m/BTC_USDT/2026-01-01.npz', 'bytes': 12, 'sha256': '1' * 64}]
+    write_json(source / 'manifest.json', {'config_sha256': digest(source / 'optimize.json'), 'files': files, 'source_config_sha256': 'original'})
+    write_json(directory / 'state.json', {'id':identifier, 'auto_cpu_workers': True, 'cpu_allocation_resolved': True,
+                                          'workers': 9, 'hardware': {'gpu': 'Test GPU', 'vram_bytes': 12 * 1024**3}})
     before = (source / 'optimize.json').read_bytes()
     target = execution_input(store, identifier)
     actual = json.loads((target / 'optimize.json').read_text())
     assert actual['optimize']['n_cpus'] == actual['optimize']['gpu']['exact_workers'] == 9
+    assert actual['backtest']['ohlcv_source_dir'] == '/work/pbgui/jobs/' + identifier + '/input/ohlcv'
     assert actual['optimize']['iters'] == 200000
     assert actual['bot'] == config['bot']
     assert (source / 'optimize.json').read_bytes() == before
     manifest = json.loads((target / 'manifest.json').read_text())
     assert manifest['config_sha256'] == digest(target / 'optimize.json')
     assert manifest['source_config_sha256'] == 'original'
+    assert manifest['gpu_tuning']['automatic']['max_dispatch_candidate_bars'] == 1_000_000_000
+    assert store.read(identifier)['gpu_tuning']['gpu_name'] == 'Test GPU'
     assert execution_input(store, identifier) == target
+    stale = json.loads((target / 'optimize.json').read_text())
+    stale['backtest']['ohlcv_source_dir'] = '/work/pbgui/jobs/' + old_identifier + '/input/ohlcv'
+    write_json(target / 'optimize.json', stale)
+    stale_manifest = json.loads((target / 'manifest.json').read_text())
+    stale_manifest['config_sha256'] = digest(target / 'optimize.json')
+    write_json(target / 'manifest.json', stale_manifest)
+    assert execution_input(store, identifier) == target
+    repaired = json.loads((target / 'optimize.json').read_text())
+    assert repaired['backtest']['ohlcv_source_dir'] == '/work/pbgui/jobs/' + identifier + '/input/ohlcv'
+    first_profile = manifest['execution_gpu_profile']
+    store.update(identifier, hardware={'gpu': 'Replacement GPU', 'vram_bytes': 24 * 1024**3})
+    assert execution_input(store, identifier) == target
+    replacement = json.loads((target / 'manifest.json').read_text())
+    replacement_config = json.loads((target / 'optimize.json').read_text())
+    assert replacement['execution_gpu_profile'] != first_profile
+    assert replacement_config['optimize']['gpu']['max_dispatch_candidate_bars'] == 2_000_000_000
+    assert (source / 'optimize.json').read_bytes() == before
 
 
 @pytest.mark.parametrize('path,cleared', [('/work/pbgui/jobs/'+'a'*32+'/input/dataset', True),
@@ -83,9 +108,11 @@ def test_runner_caps_workers_before_upload(tmp_path, monkeypatch):
     import time
     import vast_job_runner as runner
     import vast_jobs
+    import vast_provisioning_log
     from vast_provider import VastError
     monkeypatch.setattr(runner, '_log', lambda *a, **kw: None)
     monkeypatch.setattr(vast_jobs, '_log', lambda *a, **kw: None)
+    monkeypatch.setattr(vast_provisioning_log, 'collect_provisioning_log', lambda *a, **kw: None)
     store = JobStore(tmp_path)
     identifier = 'a' * 32
     directory = tmp_path / 'jobs' / identifier

@@ -26,6 +26,13 @@
   let hostProfiles = new Map(), hostGeneration = 0;
 
   const el = id => document.getElementById(id);
+  function idlePolicyLabel(seconds) {
+    const value = Number(seconds);
+    if (value < 0) return 'keep idle GPUs until their rental deadline';
+    if (!value) return 'delete immediately when idle';
+    if (value >= 3600 && value % 3600 === 0) return 'delete after ' + (value / 3600) + ' idle hour' + (value === 3600 ? '' : 's');
+    return 'delete after ' + (value / 60) + ' idle minutes';
+  }
   const settingsSidebar = el('vast-sidebar-controls');
   if (settingsSidebar) {
     settingsSidebar.appendChild(el('vast-settings-nav'));
@@ -79,6 +86,11 @@
     if (!job || ['completed','cancelled','failed'].includes(job.status)) return null;
     if (job.status === 'collecting') return 'Collecting results…';
     return stoppingJobs.get(job.id) || (job.stop_requested ? 'Stop requested' : null);
+  }
+  function currentObservedOptimizer(item) {
+    const observed = item?.observed_optimizer;
+    const sampledAt = Number(observed?.sampled_at);
+    return observed?.running && Number.isFinite(sampledAt) && Date.now() / 1000 - sampledAt <= 45 ? observed : null;
   }
   let startingQueue = false;
   let startingJobId = null;
@@ -421,7 +433,7 @@
   function applyPreferences(data, keys, editSnapshot) {
     data = {max_rentals:1, auto_rent:false, min_tflops:0, convergence_enabled:false, convergence_min_exact:512, convergence_patience:512, convergence_tolerance_pct:0.25, ...data};
     savedPreferences = {...data};
-    el('saved-rental-policy').textContent = 'Saved rental limits: auto rent & start ' + (data.auto_rent ? 'on' : 'off') + ' · up to ' + data.max_rentals + ' concurrent GPUs · maximum simultaneous budget targets $' + fmt(data.max_rentals * data.budget, 2) + ' · per GPU: up to ' + data.hours + ' hours · budget target $' + fmt(data.budget, 2) + ' · ' + (data.idle_seconds ? 'delete after 5 idle minutes' : 'delete immediately when idle') + '. Change these in Rental & Automation.';
+    el('saved-rental-policy').textContent = 'Saved rental limits: auto rent & start ' + (data.auto_rent ? 'on' : 'off') + ' · up to ' + data.max_rentals + ' concurrent GPUs · maximum simultaneous budget targets $' + fmt(data.max_rentals * data.budget, 2) + ' · per GPU: up to ' + data.hours + ' hours · budget target $' + fmt(data.budget, 2) + ' · ' + idlePolicyLabel(data.idle_seconds) + '. Change these in Rental & Automation.';
     (keys || Object.keys(preferenceFields)).forEach(key => {
       if (!editSnapshot || preferenceEdits[key] === editSnapshot[key]) el(preferenceFields[key]).value = data[key] == null ? '' : String(data[key]);
     });
@@ -489,10 +501,29 @@
       && Number.isInteger(filesChecked) && filesChecked >= 0 && filesChecked <= filesTotal;
     const percent = checkingCache ? (fileProgress && filesTotal > 0 ? 100 * filesChecked / filesTotal : 0)
       : total > 0 && sent != null ? Math.min(100, 100 * sent / total) : 0;
+    const networkBytesValue = Number(upload.network_bytes ?? job?.sync_statistics?.sent_bytes);
+    const networkBytes = Number.isFinite(networkBytesValue) && networkBytesValue >= 0 ? networkBytesValue : null;
+    const reusedBytesValue = Number(upload.reused_bytes ?? job?.sync_statistics?.reused_bytes);
+    const reusedBytes = Number.isFinite(reusedBytesValue) && reusedBytesValue >= 0 ? reusedBytesValue : null;
     return {
       upload, total, rsync, directFiles, sent, checkingCache, filesTotal, filesChecked, fileProgress, percent,
-      measured: Number(upload.bytes_per_second), network: Number(job?.rental?.offer?.inet_down_mbps)
+      networkBytes, reusedBytes, measured: Number(upload.bytes_per_second), network: Number(job?.rental?.offer?.inet_down_mbps)
     };
+  }
+
+  function directFileSyncText(metrics, complete=false) {
+    const {total, sent, networkBytes, reusedBytes} = metrics;
+    if (complete && networkBytes != null) {
+      const parts = ['Cached input ready'];
+      if (reusedBytes != null) parts.push(fmt(reusedBytes / 1e6, 1) + ' MB reused');
+      parts.push(fmt(networkBytes / 1e6, 1) + ' MB sent');
+      return parts.join(' · ');
+    }
+    const parts = ['Checking and synchronizing GPU input cache'];
+    if (total > 0) {
+      parts.push(fmt((sent || 0) / 1e6, 1) + ' / ' + fmt(total / 1e6, 1) + ' MB compared');
+    }
+    return parts.join(' · ');
   }
 
   function compactJobProgress(job) {
@@ -511,13 +542,17 @@
       }
     }
     if (job.status === 'uploading') {
-      const {upload, total, sent, checkingCache, filesTotal, filesChecked, fileProgress, percent, measured, network} = uploadProgressMetrics(job);
+      const metrics = uploadProgressMetrics(job);
+      const {upload, total, directFiles, sent, checkingCache, filesTotal, filesChecked, fileProgress, percent, measured, network} = metrics;
       const label = ({
         preparing_files:'Preparing file synchronization', preparing_worker:'Transferring job metadata',
         checking_cache:'Checking cached input data', packing:'Preparing transfer archive',
         installing:'Installing input data', verifying:'Verifying input data',
         reconnecting:'Waiting to retry upload', synchronized:'Input synchronized'
       })[upload.stage] || phase;
+      if (directFiles && !['preparing_files', 'preparing_worker', 'reconnecting'].includes(upload.stage)) {
+        return directFileSyncText(metrics, ['installing', 'synchronized'].includes(upload.stage));
+      }
       const parts = [label];
       if (checkingCache && fileProgress && filesTotal > 0) {
         parts.push(filesChecked.toLocaleString() + ' / ' + filesTotal.toLocaleString() + ' files · ' + fmt(percent, 1) + '%');
@@ -580,6 +615,22 @@
     return text;
   }
 
+  function jobActivity(job, rental) {
+    if (job?.observed_optimizer?.activity) return job.observed_optimizer.activity;
+    const labels = {completed:'Job completed', cancelled:'Job cancelled', failed:'Job failed'};
+    if (labels[job?.status]) {
+      const updated = Number(job.updated_at);
+      return labels[job.status] + (Number.isFinite(updated) ? ' · ' + new Date(updated * 1000).toLocaleString() : '');
+    }
+    return workerActivity(rental);
+  }
+
+  function jobLastError(job, rental) {
+    const ownError = job?.error || job?.log_error || job?.cleanup_error || '';
+    if (['completed', 'cancelled', 'failed'].includes(job?.status)) return ownError;
+    return (rental && (rental.creation_error || rental.cleanup_error)) || ownError;
+  }
+
   function renderJob() {
     renderHostBlocks();
     const job = selectedJob();
@@ -629,31 +680,82 @@
       const summary = el('queue-rental-status');
       summary.replaceChildren();
       const title = document.createElement('strong'); title.textContent = 'GPU pool'; summary.appendChild(title);
+      const capacity = document.createElement('span');
+      capacity.textContent = active.length + ' / ' + limit + ' rentals';
+      summary.appendChild(capacity);
       const state = document.createElement('span');
-      state.textContent = active.length + ' / ' + limit + ' rentals · ' + (queueState.paused ? 'paused' : queueState.pool_enabled ? 'automatic scheduling' : 'manual');
+      state.className = 'queue-pool-state' + (queueState.paused ? ' is-paused' : '');
+      state.textContent = queueState.paused ? 'Paused' : queueState.pool_enabled ? 'Automatic scheduling' : 'Manual';
       summary.appendChild(state);
       if (queueState.pool_error) {
         const error = document.createElement('span'); error.className = 'queue-gpu-error'; error.textContent = queueState.pool_error; summary.appendChild(error);
+      }
+      const waiting = jobRows.some(row => row.status === 'ready');
+      if (queueState.paused && queueState.pool_enabled && waiting) {
+        const resume = document.createElement('button');
+        resume.type = 'button'; resume.className = 'act-btn queue-pool-resume';
+        resume.textContent = startingQueue ? 'Resuming…' : 'Resume auto start';
+        resume.title = 'Resume the authorized GPU pool and automatically start queued jobs';
+        resume.disabled = startingQueue || !!workerAction || !supervision;
+        resume.addEventListener('click', () => startCloudQueue());
+        summary.appendChild(resume);
       }
       const cards = el('queue-worker-cards'); cards.replaceChildren();
       active.forEach(item => {
         const job = jobRows.find(row => row.id === item.active_job)
           || jobRows.find(row => row.lease_id === item.id && ['provisioning','uploading','running','collecting'].includes(row.status));
+        const observed = !job ? currentObservedOptimizer(item) : null;
         const card = document.createElement('article'); card.className = 'queue-gpu-card';
         const head = document.createElement('div'); head.className = 'queue-gpu-card-head';
         const name = document.createElement('span'); name.className = 'queue-gpu-name'; name.textContent = item.gpu_name || 'GPU'; head.appendChild(name);
         const instance = document.createElement('span'); instance.className = 'queue-gpu-instance'; instance.textContent = 'instance ' + (item.instance_id || 'pending'); head.appendChild(instance);
-        const phase = document.createElement('span'); phase.className = 'queue-gpu-phase'; phase.textContent = job ? ({provisioning:'Provisioning',uploading:'Upload',running:'Running',collecting:'Collecting'}[job.status] || job.status) : (item.status || 'Idle'); head.appendChild(phase);
+        const phase = document.createElement('span'); phase.className = 'queue-gpu-phase';
+        const directInputCache = job?.status === 'uploading' && job.upload_progress?.transport === 'rsync' && job.upload_progress?.mode === 'files';
+        phase.textContent = job ? (directInputCache ? 'Input cache' : ({provisioning:'Provisioning',uploading:'Upload',running:'Running',collecting:'Collecting'}[job.status] || job.status)) : observed ? 'Observed run' : (item.status || 'Idle');
+        head.appendChild(phase);
         card.appendChild(head);
-        const jobName = document.createElement('div'); jobName.className = 'queue-gpu-job'; jobName.textContent = job?.config_name || 'Waiting for a queued job'; card.appendChild(jobName);
-        const progress = document.createElement('div'); progress.className = 'queue-gpu-progress'; progress.textContent = job ? compactJobProgress(job) : 'No active optimizer';
+        const jobName = document.createElement('div'); jobName.className = 'queue-gpu-job'; jobName.textContent = job?.config_name || observed?.name || 'Waiting for a queued job'; card.appendChild(jobName);
+        const progress = document.createElement('div'); progress.className = 'queue-gpu-progress';
+        if (job) progress.textContent = compactJobProgress(job);
+        else if (observed) {
+          const metrics = item.runtime_metrics || {};
+          const parts = [observed.activity || 'Optimizer process detected'];
+          if (Number.isFinite(Number(metrics.gpu_percent))) parts.push(fmt(Number(metrics.gpu_percent), 0) + '% GPU');
+          if (Number.isFinite(Number(metrics.gpu_power_watts)) && Number.isFinite(Number(metrics.gpu_power_limit_watts))) {
+            parts.push(fmt(Number(metrics.gpu_power_watts), 0) + ' / ' + fmt(Number(metrics.gpu_power_limit_watts), 0) + ' W');
+          }
+          progress.textContent = parts.join(' · ');
+        }
+        else if (item.idle_since) {
+          if (Number(item.idle_seconds) < 0) progress.textContent = 'Idle · retained until rental deadline · uploaded data and worker cache stay available';
+          else {
+            const remaining = Math.max(0, Number(item.idle_since) + Number(item.idle_seconds ?? -1) - Date.now() / 1000);
+            progress.textContent = 'Idle · retained for ' + duration(remaining) + ' · uploaded data and worker cache stay available';
+          }
+        } else progress.textContent = 'No active optimizer';
         if (job?.status === 'uploading' && Number(job.rental?.offer?.inet_down_mbps) > 0) progress.title = 'Upload saturation compares the measured transfer rate with the provider-advertised host download bandwidth.';
         card.appendChild(progress);
+        if (job?.gpu_tuning) {
+          const tuning = document.createElement('div'); tuning.className = 'queue-gpu-tuning';
+          const automatic = job.gpu_tuning.automatic || {};
+          const details = [];
+          if (Number.isFinite(Number(automatic.max_dispatch_candidate_bars))) {
+            details.push(fmt(Number(automatic.max_dispatch_candidate_bars) / 1e9, 2) + 'B dispatch bars');
+          }
+          if (Number.isFinite(Number(automatic.population_size))) details.push('population ' + Number(automatic.population_size).toLocaleString());
+          if (Number.isFinite(Number(job.gpu_tuning.cpu_workers))) details.push(Number(job.gpu_tuning.cpu_workers).toLocaleString() + ' exact workers');
+          tuning.textContent = (Object.keys(automatic).length ? 'Auto tuned' : 'Execution settings') + (details.length ? ' · ' + details.join(' · ') : ' · explicit GPU values preserved');
+          tuning.title = 'Resolved from the rented GPU and frozen optimizer workload. Explicitly configured values are preserved.';
+          card.appendChild(tuning);
+        }
         const actions = document.createElement('div'); actions.className = 'queue-gpu-actions';
         const pending = workerActions.get(item.id);
         const log = document.createElement('button'); log.type = 'button'; log.className = 'act-btn'; log.textContent = 'Log';
-        log.title = job ? 'Open the detailed job log' : 'No optimizer is assigned to this GPU'; log.disabled = !job;
-        log.addEventListener('click', () => openCloudLog(job)); actions.appendChild(log);
+        log.title = job ? 'Open the detailed job log' : observed ? 'Open the observed optimizer log' : 'No optimizer is assigned to this GPU'; log.disabled = !job && !observed;
+        log.addEventListener('click', () => {
+          if (job) openCloudLog(job);
+          else if (observed) openObservedOptimizer(item);
+        }); actions.appendChild(log);
         const results = document.createElement('button'); results.type = 'button'; results.className = 'act-btn'; results.textContent = 'Results';
         results.title = job?.result_path ? 'Open this optimizer result' : 'Results become available after the first verified result snapshot';
         results.dataset.tip = results.title; results.disabled = !job?.result_path;
@@ -721,6 +823,10 @@
       renderJob();
       const displayed = jobRows.find(row => window.state && row.id === window.state.cloudLogId);
       if (displayed) renderCloudDashboard(displayed);
+      else {
+        const observedWorker = workers.find(item => window.state && item.id === window.state.cloudLogId && currentObservedOptimizer(item));
+        if (observedWorker) renderObservedOptimizer(observedWorker);
+      }
       renderQueueOverview();
       if (resultsChanged && typeof refreshLiveResultsDuringRun === 'function') await refreshLiveResultsDuringRun(true);
     } catch (error) { if (!disposed && current === jobGeneration) message(error.message, true); }
@@ -1121,6 +1227,8 @@
     const memory = (used, total) => fresh && Number.isFinite(used) && total > 0 ?
       fmt(used/1073741824, 2) + ' / ' + fmt(total/1073741824, 2) + ' GiB · ' + fmt(100*used/total, 1) + '%' : '—';
     el('cloud-gpu-util').textContent = percent(sample.gpu_percent);
+    el('cloud-gpu-power').textContent = fresh && Number.isFinite(sample.gpu_power_watts) && Number.isFinite(sample.gpu_power_limit_watts) ?
+      fmt(sample.gpu_power_watts, 0) + ' / ' + fmt(sample.gpu_power_limit_watts, 0) + ' W' : '—';
     el('cloud-cpu-util').textContent = percent(sample.cpu_percent);
     el('cloud-ram-util').textContent = memory(sample.ram_used_bytes, sample.ram_total_bytes);
     el('cloud-vram-util').textContent = memory(sample.vram_used_bytes, sample.vram_total_bytes);
@@ -1152,7 +1260,10 @@
     if (!window.state || window.state.cloudLogId !== job.id) return;
     if (typeof renderOptimizeLogDashboard !== 'function') return;
     const rentalWorker = typeof workers !== 'undefined' ? workers.find(item => item.id === job.lease_id) : worker;
-    const uploadPhase = job.status === 'uploading' ? {preparing_files:'Preparing file synchronization', preparing_worker:'Transferring job metadata', checking_cache:'Checking cache', packing:'Preparing transfer archive', installing:'Installing input data', verifying:'Verifying input data', reconnecting:'Waiting to retry upload'}[job.upload_progress?.stage] : null;
+    const directInputCache = job.status === 'uploading' && job.upload_progress?.transport === 'rsync' && job.upload_progress?.mode === 'files';
+    const uploadPhase = job.status === 'uploading' ? (directInputCache
+      ? ({preparing_worker:'Transferring job metadata', installing:'Publishing cached input', synchronized:'Cached input ready', reconnecting:'Waiting to retry input sync'}[job.upload_progress?.stage] || 'Checking GPU input cache')
+      : {preparing_files:'Preparing file synchronization', preparing_worker:'Transferring job metadata', checking_cache:'Checking cache', packing:'Preparing transfer archive', installing:'Installing input data', verifying:'Verifying input data', reconnecting:'Waiting to retry upload'}[job.upload_progress?.stage]) : null;
     renderOptimizeLogDashboard({name:job.config_name, phase:stopPhase(job) || uploadPhase || job.status,
       progress:{exact_evaluations:job.exact_completed || 0,target_exact_evaluations:job.iterations,
         proxy_evaluations:job.gpu_candidates || 0,percent:job.iterations ? 100*(job.exact_completed || 0)/job.iterations : 0},
@@ -1160,7 +1271,7 @@
       process:{started_at:job.started_at ? new Date(job.started_at*1000).toISOString() : null},
       queue:{running:jobRows.filter(row => ['running','provisioning','uploading','collecting'].includes(row.status)).length,
         queued:jobRows.filter(row => row.status==='ready').length,error:jobRows.filter(row => row.status==='failed').length},
-      log:{last_error:(rentalWorker && rentalWorker.creation_error) || job.error || job.log_error || job.cleanup_error || (rentalWorker && rentalWorker.cleanup_error) || '',last_line:workerActivity(rentalWorker),
+      log:{last_error:jobLastError(job, rentalWorker),last_line:jobActivity(job, rentalWorker),
         updated_at:job.updated_at ? new Date(job.updated_at*1000).toISOString() : null}});
     if (job.elapsed_seconds != null && ['completed','cancelled','failed'].includes(job.status)) {
       el('optlog-elapsed').textContent = formatDurationCompact(job.elapsed_seconds);
@@ -1248,7 +1359,8 @@
       delete el('optlog-progress-label').dataset.tip;
     }
     if (job.status === 'uploading') {
-      const {upload, total, rsync, directFiles, sent, checkingCache, filesTotal, filesChecked, fileProgress, percent, measured, network} = uploadProgressMetrics(job);
+      const metrics = uploadProgressMetrics(job);
+      const {upload, total, rsync, directFiles, sent, checkingCache, filesTotal, filesChecked, fileProgress, percent, measured, network} = metrics;
       const verified = upload.bytes === total && total > 0;
       const stageLabel = {preparing_files:'Preparing file synchronization', preparing_worker:'Transferring job metadata', checking_cache:'Checking cached input data', packing:'Preparing transfer archive', installing:'Installing input data', synchronized:'Input files synchronized'}[upload.stage];
       const retrySeconds = Math.max(0, Math.ceil((job.upload_retry_at || 0) - Date.now()/1000));
@@ -1276,7 +1388,9 @@
       const cacheDetail = fileProgress ? 'Checking cached input data · ' + filesChecked.toLocaleString('en-US') + ' / ' + filesTotal.toLocaleString('en-US') + ' files checked (' + fmt(percent, 1) + '%)' : '';
       const metadata = upload.stage === 'preparing_worker';
       const metadataDetail = metadata ? 'Job metadata · ' + fmt(Number(upload.metadata_submitted || 0) / 1e6, 2) + ' / ' + fmt(Number(upload.metadata_total || 0) / 1e6, 2) + ' MB submitted to SSH · waiting for worker acknowledgement' : '';
-      const detail = metadataDetail || cacheDetail || stageLabel || label + ' · ' + (sent != null ? fmt(sent / 1e6, 1) + ' / ' : '') + fmt(total / 1e6, 1) + ' MB'
+      const directDetail = directFiles && !metadata && upload.stage !== 'reconnecting'
+        ? directFileSyncText(metrics, ['installing', 'synchronized'].includes(upload.stage)) : '';
+      const detail = metadataDetail || cacheDetail || directDetail || stageLabel || label + ' · ' + (sent != null ? fmt(sent / 1e6, 1) + ' / ' : '') + fmt(total / 1e6, 1) + ' MB'
         + (sent != null ? (directFiles ? ' processed (' : rsync && !verified ? ' transferred (' : ' verified (') + fmt(percent, 1) + '%)' : '')
         + (upload.in_flight_bytes > 0 ? ' · current block: ' + fmt(upload.in_flight_bytes / 1e6, 2) + ' MB received' : '')
         + speed + eta;
@@ -1284,7 +1398,7 @@
       el('optlog-progress-label').textContent = detail;
       el('optlog-progress-label').dataset.tip = metadata ? 'Compressed config and file manifest submitted to the local SSH process. This is not confirmation of remote receipt. Input candle transfer starts after worker acknowledgement.' : checkingCache ? 'Cache checking counts files acknowledged by the worker, before input transfer begins. Each confirmed page updates the counter; this is not uploaded bytes.' : 'Progress counts checksum-verified blocks. Current block bytes are acknowledged by the receiver and may be retried. Speed is verified data per second during this attempt. Remaining time uses remaining verified bytes divided by measured speed and excludes final verification/install. The theoretical remaining time uses the rented host download Mbps and is shown alongside the measured estimate. 1 byte = 8 bits. Local uplink, network route, SSH overhead and retries can limit throughput; the reached percentage alone does not prove an inaccurate host claim.';
       if (rsync && !metadata) el('optlog-progress-label').dataset.tip = 'Rsync resumes the partial archive over one SSH connection. Progress and estimated speed come from rsync, excluding the retained prefix; buffered data may still be in transit. The complete archive is SHA256-verified before installation. Remaining time excludes this final check and installation. Host-rate remaining uses advertised download Mbps and is theoretical; local uplink and routing also limit speed. 1 byte = 8 bits.';
-      if (directFiles && !metadata) el('optlog-progress-label').dataset.tip = 'Rsync synchronizes individual immutable files over one SSH connection. Content-hash filenames and file sizes identify reusable data without reading it again. Partial files are retained separately and completed transfers are checked by rsync before publication. Progress reflects logical file bytes processed by rsync, not measured network traffic. The total includes reusable files, so remaining-time estimates can overstate the transfer. Host-rate remaining is theoretical. 1 byte = 8 bits.';
+      if (directFiles && !metadata) el('optlog-progress-label').dataset.tip = 'Rsync compares immutable content-hash files with the GPU cache and sends only missing data. While synchronization runs, the bar shows logical data compared, not network traffic. After rsync finishes, PBGui shows its actual sent and reused byte totals.';
       el('optlog-activity').textContent = detail;
     }
     const rentalLog = rentalWorker && rentalWorker.has_provider_log && !['none','deletion_verified'].includes(rentalWorker.rental_state)
@@ -1302,13 +1416,62 @@
         cancelled:'No log file was collected for this cancelled job.'
       })[job.status] || 'Waiting for this run’s log output.';
     }
-    if (optimizerLog && window.state.logFile !== optimizerLog && typeof ensureLogViewer === 'function') {
+    if (optimizerLog && typeof ensureLogViewer === 'function') {
       el('log-waiting').hidden = true;
       el('log-viewer-target').hidden = false;
-      const viewer = ensureLogViewer(); viewer.open(); viewer.setHost('local');
-      window.state.logFile = optimizerLog;
-      viewer.setFile(optimizerLog);
+      const viewer = ensureLogViewer(); viewer.open();
+      if (window.state.logFile !== optimizerLog) {
+        viewer.setHost('local');
+        window.state.logFile = optimizerLog;
+        viewer.setFile(optimizerLog);
+      }
     }
+  }
+
+  function observedOptimizerJob(item) {
+    const observed = currentObservedOptimizer(item) || {};
+    return {
+      id:item.id,
+      config_name:observed.name || 'Observed optimizer',
+      status:'running',
+      iterations:0,
+      exact_completed:Number(observed.exact_completed) || 0,
+      gpu_candidates:Number(observed.gpu_candidates) || 0,
+      workers:null,
+      auto_cpu_workers:true,
+      cpu_allocation_resolved:false,
+      runtime_metrics:item.runtime_metrics || {},
+      exact_queue:{},
+      throughput:null,
+      convergence_config:{convergence_enabled:false},
+      convergence:{},
+      observed_optimizer:observed,
+      rental:item,
+      lease_id:null,
+      has_log:true,
+      has_provider_log:false,
+      result_path:null,
+      updated_at:observed.sampled_at || null
+    };
+  }
+
+  function renderObservedOptimizer(item) {
+    const observed = currentObservedOptimizer(item);
+    if (!window.state || window.state.cloudLogId !== item?.id || !observed) return;
+    renderCloudDashboard(observedOptimizerJob(item));
+    el('optlog-activity').textContent = observed.activity || 'Optimizer process detected';
+    el('stop-job').disabled = true;
+    el('recover-job').disabled = true;
+    el('requeue-job').hidden = true;
+    el('start-job').hidden = true;
+    el('job-results').hidden = true;
+  }
+
+  function openObservedOptimizer(item) {
+    const observed = currentObservedOptimizer(item);
+    if (!observed || typeof openLogPanel !== 'function') return;
+    openLogPanel(item.id, observed.name || 'Observed optimizer', {cloud:true,hasLog:true});
+    renderObservedOptimizer(item);
   }
 
   function openCloudLog(job) {
@@ -1354,7 +1517,19 @@
           if (!determinate) fill.classList.add('is-indeterminate');
           track.appendChild(fill);
           const label = document.createElement('span'); label.className = 'cloud-prepare-progress-label';
-          label.textContent = progress.stage === 'compressing' ? 'Compressing input archive…' : determinate
+          if (progress.stage === 'compressing') {
+            const rate = progress.bytes_per_second == null ? NaN : Number(progress.bytes_per_second);
+            const eta = progress.eta_seconds == null ? NaN : Number(progress.eta_seconds);
+            label.textContent = determinate
+              ? 'Compressing input archive · ' + fmt(completed / 1e6, 1) + ' / ' + fmt(total / 1e6, 1) + ' MB · ' + Math.round(percent) + '%'
+              : 'Compressing input archive…';
+            if (Number.isFinite(rate) && rate > 0) label.textContent += ' · ' + fmt(rate / 1e6, 1) + ' MB/s';
+            if (Number.isFinite(eta) && eta >= 0) {
+              const seconds = Math.ceil(eta);
+              label.textContent += ' · ~' + (seconds >= 3600 ? Math.floor(seconds / 3600) + 'h ' : '')
+                + (seconds >= 60 ? Math.floor(seconds % 3600 / 60) + 'm ' : '') + seconds % 60 + 's remaining';
+            }
+          } else label.textContent = determinate
             ? fmt(completed / 1e6, 1) + ' / ' + fmt(total / 1e6, 1) + ' MB · ' + Math.round(percent) + '%'
             : 'Selecting input files…';
           if (Number.isFinite(filesTotal) && filesTotal > 0) label.textContent += ' · ' + (Number.isFinite(filesCompleted) ? Math.max(0, filesCompleted) : 0) + ' / ' + filesTotal + ' files';

@@ -50,7 +50,7 @@ class CloudQueue:
         """Read the private queue control record without following links."""
         path = self.root / 'queue.json'
         if not path.exists() and not path.is_symlink():
-            return {'worker_id': None, 'selected_offer': None, 'paused': False, 'idle_seconds': 300}
+            return {'worker_id': None, 'selected_offer': None, 'paused': False, 'idle_seconds': -1}
         try:
             value = json.loads(read_regular_file_nofollow(path, self.root))
             if not isinstance(value, dict):
@@ -112,8 +112,8 @@ class CloudQueue:
     def start(self, offer: dict, hours: float, budget: float, idle_seconds: int, *, manual: bool = False,
               pool_authorization_id: str | None = None) -> dict:
         """Rent once for the queue; duplicate starts return the existing worker."""
-        if idle_seconds not in (0, 300):
-            raise VastError('Choose immediate cleanup or five minutes idle', 422)
+        if idle_seconds not in (-1, 0, 300, 1800, 3600):
+            raise VastError('Choose deadline retention, immediate cleanup or an idle retention period', 422)
         ensure_private_directory(self.root)
         with advisory_file_lock(self.root / '.queue-lock'):
             current = self.worker()
@@ -315,7 +315,8 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
         if idle_since is None:
             idle_since = now
         store.update(identifier, status='paused' if state.get('paused') else 'idle', idle_since=idle_since)
-        if now - idle_since >= worker.get('idle_seconds', 300):
+        idle_seconds = worker.get('idle_seconds', -1)
+        if idle_seconds >= 0 and now - idle_since >= idle_seconds:
             store.control(identifier, 'cleanup')
         return None
 
@@ -324,6 +325,7 @@ def worker_loop(store: JobStore, identifier: str) -> None:
     """Reuse one supervised instance across sequential isolated optimizer jobs."""
     from vast_job_runner import run_loop
     queue = CloudQueue(store)
+    last_idle_observation = 0.0
     while True:
         next_job = worker_step(queue, identifier)
         worker = store.read(identifier)
@@ -335,6 +337,28 @@ def worker_loop(store: JobStore, identifier: str) -> None:
             if result['status'] == 'failed' and not result.get('final_collected'):
                 queue.update(paused=True)
         else:
+            if worker.get('instance_id') and time.time() - last_idle_observation >= 15:
+                from vast_credentials import VastCredentialStore
+                from vast_job_runner import owned_instance
+                from vast_provider import VastClient
+                from vast_runtime_metrics import observe_optimizer, sample_metrics
+                from vast_transfer import WorkerConnection
+                try:
+                    intent = store.read(identifier, 'intent.json')
+                    client = VastClient(VastCredentialStore(store.root).secrets()['api_key'])
+                    row = owned_instance(client, intent)
+                    if row is not None and row.get('actual_status') == 'running':
+                        connection = WorkerConnection(store, identifier, row)
+                        connection.bootstrap(client)
+                        observation = observe_optimizer(connection, store, identifier)
+                        if observation is not None:
+                            sample_metrics(connection, store, identifier)
+                except Exception:
+                    import traceback
+                    from logging_helpers import human_log
+                    human_log(SERVICE, 'Idle GPU optimizer observation temporarily unavailable', level='WARNING',
+                              meta={'traceback': traceback.format_exc()})
+                last_idle_observation = time.time()
             if worker.get('instance_id') and worker.get('awaiting_queue_start'):
                 from vast_credentials import VastCredentialStore
                 from vast_provider import VastClient

@@ -37,7 +37,7 @@ You can change host and port on the **PBAPIServer Details** page (`System → Se
 
 When upgrading an existing systemd installation that does not yet have `pbgui-vps-monitor.service`, the next Restart after the migration code is active performs a one-time migration. PBGui installs the unit without changing optional service state, stops the old API-owned monitor, verifies the daemon RPC endpoint, and only then starts the API again. This first handoff reconnects the existing SSH sessions once; later API restarts leave them connected. If code was replaced while the old API process was still running, the restart overlay loads the new API first, detects any additional outdated services reported only by that new process, and performs one automatic follow-up restart before reloading the page.
 
-The nav bar shows an orange **Restart** button when the API or an active PBCluster, PBRun, PBData, PBCoinData, or PBMonitorAgent process still runs an older `api/serial.txt` value. The confirmation lists affected services. Detached bots, backtests, optimizations, and Market Data jobs are not restarted.
+The nav bar shows an orange **Restart** button when the API or an active PBCluster, PBRun, PBData, PBCoinData, PBMonitorAgent, or Vast GPU Pool process still runs an older `api/serial.txt` value. The confirmation lists affected services. Restarting the Vast GPU Pool reloads only its local rental scheduler; existing Vast rentals, uploads, and optimizer processes continue. Detached bots, backtests, optimizations, and Market Data jobs are not restarted.
 
 ## WebSocket endpoints
 

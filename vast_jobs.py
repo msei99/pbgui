@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
-from secure_files import atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow
+from secure_files import atomic_write_private_bytes, atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow
 from vast_credentials import VastCredentialStore
 from vast_provider import VastClient, VastError, number, positive_id
 
@@ -26,17 +27,20 @@ from vast_exchanges import SUPPORTED_EXCHANGES
 
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
-IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc"
+IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:b67111ebcc0d0c55c57c0b27ad8d2017c8577061a47a4b7909936bd4215c0fc4"
 # Existing immutable rental intents must remain recoverable after a wrapper update.
 SUPPORTED_RENTAL_IMAGES = (
     IMAGE,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88",
 )
-REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
+REVISION = "69227b75e808f8ce1f4b8949350b3311916bd377"
 from vast_config_validation import METRICS, validate_cloud_config
 
 TERMINAL = {"completed", "cancelled", "failed"}
+MAX_JOB_RECORD_BYTES = 16 * 1024 * 1024
+MAX_INPUT_MANIFEST_BYTES = 1024**3
 
 
 def job_id(value: str) -> str:
@@ -62,6 +66,68 @@ def digest(path: Path) -> str:
 def write_json(path: Path, value: dict) -> None:
     """Atomically publish a private non-secret state or manifest."""
     atomic_write_private_text(path, json.dumps(value, indent=4, allow_nan=False) + "\n")
+
+
+class _ProgressReader:
+    """Count source bytes consumed by tarfile without buffering whole inputs."""
+
+    def __init__(self, stream, advance) -> None:
+        self.stream = stream
+        self.advance = advance
+
+    def read(self, size: int = -1) -> bytes:
+        """Forward one bounded read and publish its consumed byte count."""
+        value = self.stream.read(size)
+        if value:
+            self.advance(len(value))
+        return value
+
+
+def _write_input_archive(folder: Path, relative_files: list[Path], target: Path, progress) -> None:
+    """Write the existing gzip-tar format while reporting actual source consumption."""
+    members = [Path('optimize.json'), Path('manifest.json'),
+               *(Path('ohlcv') / relative for relative in relative_files)]
+    sizes = [safe.stat().st_size for relative in members
+             for safe in [folder / relative]]
+    total = sum(sizes)
+    completed = 0
+    files_completed = 0
+    started = time.monotonic()
+    last_report = started
+
+    def report(*, force: bool = False) -> None:
+        """Rate-limit persistent progress while retaining a final exact sample."""
+        nonlocal last_report
+        now = time.monotonic()
+        if not force and now - last_report < 0.5:
+            return
+        elapsed = max(0, now - started)
+        rate = completed / elapsed if completed > 0 and elapsed > 0 else 0
+        progress({'stage': 'compressing', 'files_completed': files_completed,
+                  'files_total': len(members), 'bytes_completed': completed,
+                  'bytes_total': total, 'bytes_per_second': rate,
+                  'elapsed_seconds': elapsed,
+                  'eta_seconds': (total - completed) / rate if rate > 0 else None})
+        last_report = now
+
+    def advance(count: int) -> None:
+        """Account for bytes only after tarfile has consumed them."""
+        nonlocal completed
+        completed += count
+        report()
+
+    report(force=True)
+    with tarfile.open(target, 'w:gz') as archive:
+        for relative, size in zip(members, sizes):
+            source = folder / relative
+            info = archive.gettarinfo(str(source), arcname=str(Path('input') / relative))
+            if not info.isfile() or info.size != size:
+                raise VastError('Prepared input changed before compression', 409)
+            with source.open('rb') as stream:
+                archive.addfile(info, _ProgressReader(stream, advance))
+            files_completed += 1
+            report()
+    report(force=True)
 
 
 def native_job_config(source: dict, iterations: int, workers: int, use_adg: bool) -> dict:
@@ -101,7 +167,7 @@ def native_job_config(source: dict, iterations: int, workers: int, use_adg: bool
     live["user"] = "vast_optimizer"
     bt.update(ohlcv_source_dir="/work/pbgui/input/ohlcv", hlcvs_data_dir=None, base_dir="backtests")
     opt.update(backend="gpu", iters=iterations, n_cpus=workers)
-    opt.setdefault("gpu", {}).update(exact_workers=workers, auto_lean_parallelism=False)
+    opt.setdefault("gpu", {}).update(exact_workers=workers)
     return config
 
 
@@ -136,7 +202,8 @@ class JobStore:
             raise VastError("Invalid job record", 422)
         path = self.directory(identifier) / filename
         try:
-            if path.stat().st_size > 16 * 1024 * 1024:
+            maximum = MAX_INPUT_MANIFEST_BYTES if filename == "input/manifest.json" else MAX_JOB_RECORD_BYTES
+            if path.stat().st_size > maximum:
                 raise ValueError("oversized")
             value = json.loads(read_regular_file_nofollow(path, self.root))
             if not isinstance(value, dict):
@@ -197,6 +264,24 @@ class JobStore:
                     result.append(exchange)
         return result
 
+    def prepared_input_directory(self, identifier: str) -> Path:
+        """Resolve an immutable snapshot reference without duplicating its file tree."""
+        current = job_id(identifier)
+        seen = set()
+        for _ in range(8):
+            if current in seen:
+                raise VastError("Prepared input snapshot reference is cyclic", 422)
+            seen.add(current)
+            state = self.read(current)
+            source = state.get("snapshot_source_id")
+            if source is None:
+                path = self.directory(current) / "input"
+                if not path.is_dir() or path.is_symlink():
+                    raise VastError("Prepared input snapshot is unavailable", 409)
+                return path
+            current = job_id(source)
+        raise VastError("Prepared input snapshot reference is too deep", 422)
+
     def control(self, identifier: str, action: str) -> dict:
         """Request stop or cleanup without directly signalling unrelated processes."""
         if action not in ("stop", "cleanup"):
@@ -228,7 +313,7 @@ class JobStore:
                 'uploaded', 'upload_progress', 'upload_attempts', 'upload_recovery_since',
                 'upload_retry_at', 'upload_retry_failures', 'upload_retry_bytes', 'started_at',
                 'stop_reason', 'completion_reason', 'throughput', 'runtime_metrics',
-                'exact_queue', 'convergence', 'finished_at', 'elapsed_seconds', 'exit_code',
+                'exact_queue', 'convergence', 'gpu_tuning', 'finished_at', 'elapsed_seconds', 'exit_code',
             ):
                 state.pop(key, None)
             state.update(status='ready', rental_state='none', exact_completed=0,
@@ -335,12 +420,12 @@ class JobStore:
                     })
                     last_progress_update = time.monotonic()
             write_json(folder / "manifest.json", manifest)
-            self.update(identifier, input_progress={
-                "stage": "compressing", "files_completed": len(shards), "files_total": len(shards),
-                "bytes_completed": total_bytes, "bytes_total": total_bytes,
-            })
-            with tarfile.open(directory / "input.tar.gz", "w:gz") as archive:
-                archive.add(folder, arcname="input", recursive=True)
+            def compression_progress(value: dict) -> None:
+                """Persist bounded archive progress for automatic Queue polling."""
+                self.update(identifier, input_progress=value)
+
+            _write_input_archive(folder, [relative for _, relative in shards],
+                                 directory / 'input.tar.gz', compression_progress)
             (directory / "input.tar.gz").chmod(0o600)
             write_json(directory / "intent.json", {"id": identifier, "image": IMAGE, "pb8_revision": REVISION,
                        "results_root": str(results_root.resolve()), "bundle_sha256": digest(directory / "input.tar.gz"),
@@ -352,6 +437,77 @@ class JobStore:
                                })
         except Exception:
             self.update(identifier, status="failed", error="Input preparation failed; no instance rented")
+            raise
+
+    def clone_prepared(self, source_id: str, name: str, source_sha256: str, results_root: Path,
+                       iterations: int, workers: int, use_adg: bool) -> dict | None:
+        """Reference an unchanged failed snapshot without walking its market-data files."""
+        from pb8_config import load_pb8_config
+
+        source_id = job_id(source_id)
+        source = self.read(source_id)
+        try:
+            intent = self.read(source_id, "intent.json")
+        except VastError:
+            return None
+        source_directory = self.directory(source_id)
+        archive = source_directory / "input.tar.gz"
+        optimize_path = source_directory / "input/optimize.json"
+        manifest_path = source_directory / "input/manifest.json"
+        if (source.get("status") not in {"failed", "cancelled"}
+                or (source.get("input_progress") or {}).get("stage") != "complete"
+                or intent.get("image") != IMAGE or intent.get("pb8_revision") != REVISION
+                or intent.get("source_config_sha256") != source_sha256
+                or source.get("iterations") != iterations or bool(source.get("use_adg")) != bool(use_adg)
+                or any(not path.is_file() or path.is_symlink() for path in (archive, optimize_path, manifest_path))):
+            return None
+        try:
+            prepared = load_pb8_config(optimize_path)
+            optimize = prepared.get("optimize") if isinstance(prepared, dict) else None
+            if not isinstance(optimize, dict) or optimize.get("iters") != iterations or optimize.get("n_cpus") != workers:
+                return None
+            expected_bytes = int(intent["bundle_bytes"])
+            expected_digest = str(intent["bundle_sha256"])
+            if expected_bytes <= 0 or not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+                return None
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+        identifier = self.create_preparation(name, iterations, workers, use_adg, requeue_from=source_id)["id"]
+        target_directory = self.directory(identifier)
+        try:
+            input_directory = ensure_private_directory(target_directory / "input")
+            manifest = self.read(source_id, "input/manifest.json")
+            atomic_write_private_bytes(input_directory / "optimize.json", read_regular_file_nofollow(optimize_path, self.root))
+            write_json(input_directory / "manifest.json", manifest)
+
+            files = manifest.get("files")
+            if not isinstance(files, list):
+                raise VastError("Prepared cloud input manifest is invalid", 422)
+            source_stat = archive.stat(follow_symlinks=False)
+            if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_size != expected_bytes:
+                raise VastError("Prepared cloud input snapshot changed; rebuilding is required", 409)
+            os.link(archive, target_directory / "input.tar.gz")
+            (target_directory / "input.tar.gz").chmod(0o600)
+            write_json(target_directory / "intent.json", {
+                "id": identifier, "image": IMAGE, "pb8_revision": REVISION,
+                "results_root": str(results_root.resolve()), "bundle_sha256": expected_digest,
+                "bundle_bytes": expected_bytes, "source_config_sha256": source_sha256,
+            })
+            progress = source.get("input_progress") or {}
+            return self.update(
+                identifier, status="ready", input_bytes=expected_bytes, use_adg=use_adg,
+                snapshot_source_id=source.get("snapshot_source_id") or source_id,
+                exchanges=list(source.get("exchanges") or []), sweep_enabled=bool(source.get("sweep_enabled")),
+                input_progress={
+                    "stage": "complete", "files_completed": int(progress.get("files_total", 0)),
+                    "files_total": int(progress.get("files_total", 0)),
+                    "bytes_completed": int(progress.get("bytes_total", 0)),
+                    "bytes_total": int(progress.get("bytes_total", 0)),
+                },
+            )
+        except Exception:
+            self.update(identifier, status="failed", error="Prepared input snapshot reuse failed; requeue to rebuild")
             raise
 
     def start(self, identifier: str, offer: dict, hours: float, budget: float) -> dict:

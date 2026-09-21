@@ -17,7 +17,8 @@ def test_log_viewer_close_4001_is_terminal_and_redirects() -> None:
     """A rejected shared viewer socket must never reconnect, even if reopened."""
 
     source = LOG_VIEWER.read_text(encoding="utf-8")
-    open_method = re.search(r"    open\(\).*", source).group(0)
+    open_start = source.index("    open()  {")
+    open_method = source[open_start:source.index("    close() {", open_start)]
     connect_start = source.index("    _connect() {")
     connect_method = source[connect_start:source.index("    _disconnect() {", connect_start)]
     script = textwrap.dedent(
@@ -68,6 +69,51 @@ def test_log_viewer_close_4001_is_terminal_and_redirects() -> None:
         assert.equal(timers, 0);
         panel.open();
         assert.equal(sockets.length, 1);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
+def test_log_viewer_open_reconnects_only_when_socket_is_disconnected() -> None:
+    """Repeated dashboard renders must reconnect a dead viewer without replacing a live socket."""
+
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    open_start = source.index("    open()  {")
+    open_method = source[open_start:source.index("    close() {", open_start)]
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        class FakeWebSocket {{
+          static CONNECTING = 0;
+          static OPEN = 1;
+          static CLOSED = 3;
+        }}
+        globalThis.WebSocket = FakeWebSocket;
+        class Panel {{
+        {open_method}
+          _watchTailLayout() {{}}
+          _connect() {{
+            this.connects += 1;
+            this._ws = {{readyState: FakeWebSocket.CONNECTING}};
+          }}
+        }}
+        const panel = Object.create(Panel.prototype);
+        panel._closed = true;
+        panel._authExpired = false;
+        panel._ws = null;
+        panel.connects = 0;
+
+        panel.open();
+        assert.equal(panel.connects, 1);
+        panel.open();
+        assert.equal(panel.connects, 1);
+        panel._ws.readyState = FakeWebSocket.OPEN;
+        panel.open();
+        assert.equal(panel.connects, 1);
+        panel._ws.readyState = FakeWebSocket.CLOSED;
+        panel.open();
+        assert.equal(panel.connects, 2);
         """
     )
     result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
@@ -658,8 +704,8 @@ def test_every_log_viewer_asset_reference_uses_current_cache_version() -> None:
         references.extend((path, match.group(0)) for match in re.finditer(r"log_viewer_panel\.js\?v=\d+", source))
 
     assert references
-    assert all(reference.endswith("?v=47") for _path, reference in references), references
-    assert "log_viewer_panel.js?v=47" in NAV.read_text(encoding="utf-8")
+    assert all(reference.endswith("?v=48") for _path, reference in references), references
+    assert "log_viewer_panel.js?v=48" in NAV.read_text(encoding="utf-8")
 
 
 def test_api_keys_local_viewer_disables_vps_state_transport() -> None:

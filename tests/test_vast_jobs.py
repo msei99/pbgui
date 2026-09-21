@@ -3,16 +3,102 @@ import copy
 import io
 import json
 import tarfile
+from pathlib import Path
 
 import msgpack
 import pytest
 
 from secure_files import ensure_private_directory
-from vast_jobs import JobStore, IMAGE, REVISION, native_job_config, write_json, digest
+from vast_jobs import JobStore, IMAGE, REVISION, native_job_config, write_json, digest, _write_input_archive
 from vast_job_runner import guard_step, run_loop, validate_intent
 from vast_provider import VastError
 from vast_transfer import extract_results, import_results, fetch_host_key_result
 from setup.vast_gpu_benchmark.cloud_worker import safe_path
+
+
+def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch):
+    """An unchanged provider-failed job references its immutable snapshot immediately."""
+    store = JobStore(tmp_path / "vast")
+    source = store.create_preparation("same", 20_000, 4, False)
+    directory = store.directory(source["id"])
+    input_directory = ensure_private_directory(directory / "input")
+    (input_directory / "optimize.json").write_text("{}")
+    shard = input_directory / "ohlcv/binance/BTC/2026-01-01.npy"
+    shard.parent.mkdir(parents=True)
+    shard.write_bytes(b"immutable candle shard")
+    write_json(input_directory / "manifest.json", {
+        "schema_version": 1,
+        "config_sha256": digest(input_directory / "optimize.json"),
+        "files": [{
+            "path": "ohlcv/binance/BTC/2026-01-01.npy",
+            "bytes": shard.stat().st_size,
+            "sha256": digest(shard),
+        }],
+    })
+    archive = directory / "input.tar.gz"
+    archive.write_bytes(b"immutable prepared archive")
+    archive.chmod(0o600)
+    write_json(directory / "intent.json", {
+        "id": source["id"], "image": IMAGE, "pb8_revision": REVISION,
+        "results_root": str(tmp_path / "old-results"), "bundle_sha256": digest(archive),
+        "bundle_bytes": archive.stat().st_size, "source_config_sha256": "same-hash",
+    })
+    store.update(source["id"], status="failed", use_adg=False, sweep_enabled=True,
+                 exchanges=["binance"], input_progress={
+                     "stage": "complete", "files_completed": 7, "files_total": 7,
+                     "bytes_completed": 1234, "bytes_total": 1234,
+                 })
+    monkeypatch.setattr("pb8_config.load_pb8_config", lambda _path: {
+        "optimize": {"iters": 20_000, "n_cpus": 4},
+    })
+
+    row = store.clone_prepared(source["id"], "same", "same-hash", tmp_path / "new-results",
+                               20_000, 4, False)
+
+    assert row is not None and row["status"] == "ready"
+    assert row["requeue_from"] == source["id"]
+    assert row["input_progress"] == {
+        "stage": "complete", "files_completed": 7, "files_total": 7,
+        "bytes_completed": 1234, "bytes_total": 1234,
+    }
+    target = store.directory(row["id"]) / "input.tar.gz"
+    assert target.read_bytes() == archive.read_bytes()
+    assert target.stat().st_ino == archive.stat().st_ino
+    cloned_config = store.directory(row["id"]) / "input/optimize.json"
+    assert cloned_config.read_bytes() == (input_directory / "optimize.json").read_bytes()
+    assert digest(cloned_config) == store.read(row["id"], "input/manifest.json")["config_sha256"]
+    cloned_shard = store.directory(row["id"]) / "input/ohlcv/binance/BTC/2026-01-01.npy"
+    assert not cloned_shard.exists()
+    assert store.prepared_input_directory(row["id"]) / "ohlcv/binance/BTC/2026-01-01.npy" == shard
+    assert row["snapshot_source_id"] == source["id"]
+    assert store.read(row["id"], "intent.json")["results_root"] == str((tmp_path / "new-results").resolve())
+
+
+def test_clone_prepared_rejects_changed_config_without_creating_job(tmp_path, monkeypatch):
+    """Snapshot reuse falls back before creating state when the saved config changed."""
+    store = JobStore(tmp_path / "vast")
+    source = store.create_preparation("same", 20_000, 4, False)
+    directory = store.directory(source["id"])
+    input_directory = ensure_private_directory(directory / "input")
+    (input_directory / "optimize.json").write_text("{}")
+    write_json(input_directory / "manifest.json", {"files": []})
+    archive = directory / "input.tar.gz"
+    archive.write_bytes(b"archive")
+    write_json(directory / "intent.json", {
+        "id": source["id"], "image": IMAGE, "pb8_revision": REVISION,
+        "bundle_sha256": digest(archive), "bundle_bytes": archive.stat().st_size,
+        "source_config_sha256": "old-hash",
+    })
+    store.update(source["id"], status="failed", use_adg=False,
+                 input_progress={"stage": "complete"})
+    monkeypatch.setattr("pb8_config.load_pb8_config", lambda _path: {
+        "optimize": {"iters": 20_000, "n_cpus": 4},
+    })
+    before = {path.name for path in (store.root / "jobs").iterdir()}
+
+    assert store.clone_prepared(source["id"], "same", "new-hash", tmp_path / "results",
+                                20_000, 4, False) is None
+    assert {path.name for path in (store.root / "jobs").iterdir()} == before
 
 
 @pytest.mark.parametrize('reason,improved', [('rental_deadline', False), ('requested', True), ('convergence', True)])
@@ -70,6 +156,52 @@ def test_invalid_final_convergence_keeps_results_and_reports_unavailable(job, mo
     assert not store.read(identifier, 'control.json')['stop']
 
 
+def test_requested_stop_with_empty_result_binary_is_cancelled(job, monkeypatch):
+    """A stop before the first exact result is not misreported as an import failure."""
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final = store.directory(identifier) / 'final-results'
+    result = final / 'optimize_results/run'
+    result.mkdir(parents=True)
+    (result / 'all_results.bin').write_bytes(b'')
+    write_json(final / 'finished.json', {
+        'exit_code': -15, 'cancelled': True, 'wall_seconds': 120, 'finished_at': 1234,
+    })
+    store.update(identifier, final_collected=True, stop_reason='requested')
+    monkeypatch.setattr(runner, 'import_results', lambda *args: pytest.fail('empty result must not be imported'))
+
+    row = runner.finalize_collected_results(store, identifier)
+
+    assert row['status'] == 'cancelled'
+    assert row['error'] is None
+    assert row['exit_code'] == -15
+    assert row['completion_reason'] == 'requested'
+    assert row['elapsed_seconds'] == 120
+
+
+def test_startup_recovery_repairs_legacy_empty_result_failure(job):
+    """Startup migration repairs a previously persisted false import failure."""
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final = store.directory(identifier) / 'final-results'
+    result = final / 'optimize_results/run'
+    result.mkdir(parents=True)
+    (result / 'all_results.bin').write_bytes(b'')
+    write_json(final / 'finished.json', {
+        'exit_code': -15, 'cancelled': True, 'wall_seconds': 120, 'finished_at': 1234,
+    })
+    store.update(identifier, status='failed', final_collected=True, stop_reason='requested',
+                 error='Raw results saved locally; result import needs retry')
+
+    assert runner.recover_cancelled_empty_results(store) == 1
+    assert runner.recover_cancelled_empty_results(store) == 0
+    row = store.read(identifier)
+    assert row['status'] == 'cancelled'
+    assert row['error'] is None
+    assert row['completion_reason'] == 'requested'
+    assert row['exit_code'] == -15
+
+
 @pytest.fixture
 def job(tmp_path):
     """Create an authorized fake job without touching real account state."""
@@ -94,6 +226,41 @@ def test_create_preparation_publishes_pending_job_before_snapshot_work(tmp_path)
     assert state['config_name'] == 'cloud-test'
     assert state['input_progress']['stage'] == 'selecting'
     assert store.read(state['id'], 'control.json') == {'stop': False, 'cleanup': False}
+
+
+def test_large_input_manifest_keeps_control_record_limit(tmp_path):
+    """Large shard manifests remain readable without widening mutable state records."""
+    store = JobStore(tmp_path / 'vast')
+    identifier = 'a' * 32
+    directory = ensure_private_directory(store.root / 'jobs' / identifier)
+    ensure_private_directory(directory / 'input')
+    manifest_padding = 'x' * (65 * 1024 * 1024)
+    write_json(directory / 'input/manifest.json', {'files': [], 'padding': manifest_padding})
+    assert len(store.read(identifier, 'input/manifest.json')['padding']) == len(manifest_padding)
+    control_padding = 'x' * (17 * 1024 * 1024)
+    write_json(directory / 'state.json', {'id': identifier, 'padding': control_padding})
+    with pytest.raises(VastError, match='record cannot be read'):
+        store.read(identifier)
+
+
+def test_input_archive_reports_consumed_bytes_and_eta(tmp_path):
+    """Compression progress follows bytes actually read and produces the same input layout."""
+    source = ensure_private_directory(tmp_path / 'input')
+    ensure_private_directory(source / 'ohlcv/binance')
+    (source / 'optimize.json').write_text('{}')
+    (source / 'manifest.json').write_text('{"files":[]}')
+    payload = b'candles' * 200_000
+    (source / 'ohlcv/binance/BTC.npy').write_bytes(payload)
+    samples = []
+    target = tmp_path / 'input.tar.gz'
+    _write_input_archive(source, [Path('binance/BTC.npy')], target, samples.append)
+    assert samples[0]['bytes_completed'] == 0
+    assert samples[-1]['bytes_completed'] == samples[-1]['bytes_total']
+    assert samples[-1]['files_completed'] == samples[-1]['files_total'] == 3
+    assert samples[-1]['bytes_per_second'] > 0
+    assert samples[-1]['eta_seconds'] == 0
+    with tarfile.open(target, 'r:gz') as archive:
+        assert archive.extractfile('input/ohlcv/binance/BTC.npy').read() == payload
 
 
 class Provider:
@@ -208,7 +375,9 @@ def test_slow_image_loading_does_not_consume_worker_setup_timeout(job, monkeypat
     monkeypatch.setattr(runner, 'VastClient', lambda _: object())
     rows = iter([{'id':123, 'actual_status':'loading'}, {'id':123, 'actual_status':'running'}])
     monkeypatch.setattr(runner, 'owned_instance', lambda *_: next(rows))
-    monkeypatch.setattr(vast_provisioning_log, 'collect_provisioning_log', lambda *a: None)
+    provisioning_log_calls = []
+    monkeypatch.setattr(vast_provisioning_log, 'collect_provisioning_log',
+                        lambda *args: provisioning_log_calls.append(args))
     class ReachedBootstrap(BaseException):
         """Exit the simulated controller at the newly reached SSH step."""
     def bootstrap(_):
@@ -220,6 +389,8 @@ def test_slow_image_loading_does_not_consume_worker_setup_timeout(job, monkeypat
     assert store.read(identifier)['setup_started_at'] == 2006
     assert store.read(identifier)['status'] == 'provisioning'
     assert store.read(identifier, 'intent.json')['deadline'] == 5000
+    assert len(provisioning_log_calls) == 1
+    assert provisioning_log_calls[0][3] == 123
 
 
 def test_worker_setup_timeout_still_applies_after_running(job, monkeypatch):

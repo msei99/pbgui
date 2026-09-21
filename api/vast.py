@@ -58,6 +58,8 @@ def startup() -> None:
                 raise
             _PERFORMANCE_COLLECTOR = collector
     queue = CloudQueue()
+    from vast_job_runner import recover_cancelled_empty_results
+    recover_cancelled_empty_results(queue.store)
     if queue.read().get('pool_enabled'):
         try:
             from vast_pool import launch_pool
@@ -154,7 +156,7 @@ class RentalPreferences(GpuPreferences):
     """Persist the shared rental limits alongside marketplace requirements."""
     hours: float = Field(default=1, ge=.25, le=24)
     budget: float = Field(default=1, ge=.1, le=100)
-    idle_seconds: Literal[0, 300] = 300
+    idle_seconds: Literal[-1, 0, 300, 1800, 3600] = -1
     max_rentals: int = Field(default=1, ge=1, le=16, strict=True)
     auto_rent: bool = False
     convergence_enabled: bool = False
@@ -173,7 +175,7 @@ class StartJobRequest(BaseModel):
     hours: float = Field(default=1, ge=.25, le=24)
     budget: float = Field(default=1, ge=.1, le=100)
     accept_rental_and_cleanup: bool = False
-    idle_seconds: int = Field(default=300, ge=0, le=300)
+    idle_seconds: Literal[-1, 0, 300, 1800, 3600] = -1
 
 
 @router.get("/gpu-preferences")
@@ -487,21 +489,30 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
         rows = []
         rentals = {}
         stored = queue.store.list()
+        active_job_ids = {
+            item.get('active_job') for item in workers if item.get('active_job')
+        }
         replacements = {}
         for candidate in stored:  # Store order is newest first; keep the latest attempt.
             if candidate.get('requeue_from') and not candidate.get('deleted_at'):
                 replacements.setdefault(candidate['requeue_from'], candidate)
         for row in stored:
-            if row.get('kind') == 'worker' or row.get('deleted_at'):
+            # A running optimizer remains reachable even if stale local state
+            # incorrectly carries a deletion timestamp.  The worker ownership is
+            # authoritative until worker_step releases active_job.
+            if row.get('kind') == 'worker' or (
+                row.get('deleted_at') and row.get('id') not in active_job_ids
+            ):
                 continue
             if row.get('status') == 'preparing' and row.get('preparation_owner'):
                 row = queue.store.recover_interrupted_preparation(row['id'])
             replacement = replacements.get(row['id'])
-            if replacement and replacement.get('status') != 'failed':
+            if replacement and replacement.get('status') not in {'failed', 'cancelled'}:
                 continue
-            if row.get('requeue_from') and row.get('status') == 'failed':
+            if row.get('requeue_from') and row.get('status') in {'failed', 'cancelled'}:
                 latest = replacements.get(row['requeue_from'])
-                if latest and latest['id'] != row['id'] and latest.get('status') != 'failed':
+                if (latest and latest['id'] != row['id']
+                        and latest.get('status') not in {'failed', 'cancelled'}):
                     continue
                 original = next((item for item in stored if item['id'] == row['requeue_from']), None)
                 if original and not original.get('deleted_at'):
@@ -627,8 +638,14 @@ def _prepare_job(body: PrepareJobRequest, *, requeue_from: str | None = None) ->
             original_hash = digest(path)
             config = load_pb8_config(path)
         root = Path(__file__).resolve().parents[1]
-        return JobStore().prepare(name, config, original_hash, root / "data/ohlcv", root / "data/coindata",
-                                  _results_root(), body.iterations, body.workers, body.use_adg, requeue_from=requeue_from)
+        store = JobStore()
+        if requeue_from is not None:
+            reused = store.clone_prepared(requeue_from, name, original_hash, _results_root(),
+                                          body.iterations, body.workers, body.use_adg)
+            if reused is not None:
+                return reused
+        return store.prepare(name, config, original_hash, root / "data/ohlcv", root / "data/coindata",
+                             _results_root(), body.iterations, body.workers, body.use_adg, requeue_from=requeue_from)
     except HTTPException:
         raise
     except VastError as exc:
@@ -648,16 +665,33 @@ def requeue_job(identifier: str, session: SessionToken = Depends(require_auth)) 
             source = queue.store.read(identifier)
             replacement_id = source.get('requeued_as')
             if replacement_id:
-                return queue.store.read(job_id(replacement_id))
+                replacement = queue.store.read(job_id(replacement_id))
+                _resume_auto_pool_after_requeue(queue)
+                return replacement
             if source.get('deleted_at') or source.get('status') not in {'failed', 'cancelled'} or not can_remove_job(source, queue.worker_for(source.get('lease_id'))):
                 raise VastError('Only inactive failed or cancelled jobs can be requeued', 409)
             replacement = _prepare_job(PrepareJobRequest(config_name=source['config_name'],
                 iterations=source['iterations'], workers=4 if source.get('auto_cpu_workers') else source['workers'], use_adg=bool(source.get('use_adg'))), requeue_from=identifier)
             queue.store.update(identifier, requeued_as=replacement['id'])
             queue.remove_job(identifier)
+            _resume_auto_pool_after_requeue(queue)
             return replacement
     except VastError as exc:
         raise _error(exc) from None
+
+
+def _resume_auto_pool_after_requeue(queue: CloudQueue) -> None:
+    """Treat explicit Requeue as resume consent for an authorized automatic pool."""
+    state = queue.read()
+    authorization = state.get('pool_authorization') or {}
+    settings = authorization.get('settings') or {}
+    if not (state.get('paused') and state.get('pool_enabled') and settings.get('auto_rent') is True):
+        return
+    try:
+        queue.action('resume')
+    except VastError as exc:
+        queue.update(paused=True, pool_error=str(exc))
+        _log(SERVICE, 'Requeued job is ready, but automatic GPU scheduling could not resume: ' + str(exc), level='WARNING')
 
 
 @router.post("/queue/start", status_code=202)

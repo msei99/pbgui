@@ -13,19 +13,25 @@ from vast_jobs import job_id
 LOG_ROOT = Path(__file__).resolve().parent / 'data/logs/optimizes_v8'
 
 
-def collect_provisioning_log(store, identifier, client, instance_id):
-    """Fetch at most once a minute; errors cannot interrupt rental supervision."""
+def collect_provisioning_log(store, identifier, client, instance_id, *, retry_waiting=False):
+    """Fetch at most once a minute, except once when a waiting worker becomes ready."""
     identifier = job_id(identifier)
     state = store.read(identifier)
     now = time.time()
-    if now - state.get('provider_log_checked_at', 0) < 60:
+    path = ensure_private_directory(LOG_ROOT) / f'vast_{identifier}_provider.log'
+    waiting_snapshot = False
+    if retry_waiting and path.is_file() and not path.is_symlink():
+        try:
+            waiting_snapshot = 'waiting for provider logs' in path.read_text()
+        except OSError:
+            waiting_snapshot = False
+    if now - state.get('provider_log_checked_at', 0) < 60 and not waiting_snapshot:
         return
     store.update(identifier, provider_log_checked_at=now)
     try:
         text = _download_log(client, instance_id, daemon=True)
         if _missing_log(text):
             text = _download_log(client, instance_id, daemon=False)
-        path = ensure_private_directory(LOG_ROOT) / f'vast_{identifier}_provider.log'
         if _missing_log(text):
             # Keep the last useful snapshot, including snapshots from older code.
             if path.is_file() and not path.is_symlink() and not _missing_log(path.read_text()):

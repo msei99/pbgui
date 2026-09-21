@@ -2261,7 +2261,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script defer src="/app/js/pb8_parameter_help.js?v=3"></script>
-<link rel="stylesheet" href="/app/css/vast.css?v=10">
+<link rel="stylesheet" href="/app/css/vast.css?v=12">
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -2769,7 +2769,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
 <script src="/app/js/scenario_visual_editor.js?v=21"></script>
 <script src="/app/js/suite_editor.js?v=40"></script>
-<script src="/app/js/log_viewer_panel.js?v=47"></script>
+<script src="/app/js/log_viewer_panel.js?v=48"></script>
 <script src="/app/js/pbgui_dialogs.js?v=9"></script>
 <script>
 var API_BASE = "%%API_BASE%%";
@@ -9487,7 +9487,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       + '<div class="form-row cols-8 gpu-desktop-headings" style="margin-bottom:var(--sp-xs)"><div class="muted-line" style="grid-column:span 4;font-weight:600">Automatic sizing</div><div class="muted-line" style="grid-column:span 4;font-weight:600">Exact validation &amp; checkpointing</div></div>'
       + '<div class="form-row cols-8">'
         + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Automatic sizing</div>'
-        + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-auto-lean"' + (gpu.auto_lean_parallelism === false ? '' : ' checked') + '><label for="opted-gpu-auto-lean"><span data-tip="Apple M3 only: allow PB8 to select its lean-kernel population and dispatch envelope when sizing fields remain automatic. This option does not tune NVIDIA CUDA.">auto_lean_parallelism</span></label></div></div>'
+        + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-auto-lean"' + (gpu.auto_lean_parallelism === false ? '' : ' checked') + '><label for="opted-gpu-auto-lean"><span data-tip="Allow PB8 to scale CUDA population, dispatch size, Exact validations and drift evidence together, or apply Apple M3 tuning, when sizing fields remain automatic.">auto_lean_parallelism</span></label></div></div>'
         + fieldNumber2('opted-gpu-population-size', 'population_size', gpu.population_size == null ? '' : gpu.population_size, 1, 'Blank keeps PB8 automatic sizing.', 1, optimizeGpuAutoPlaceholder('population_size'))
         + fieldNumber2('opted-gpu-batch-size', 'batch_size', gpu.batch_size == null ? '' : gpu.batch_size, 1, 'Blank keeps PB8 automatic dispatch sizing.', 1, optimizeGpuAutoPlaceholder('batch_size'))
         + fieldNumber2('opted-gpu-max-dispatch-bars', 'max_dispatch_candidate_bars', gpu.max_dispatch_candidate_bars == null ? '' : gpu.max_dispatch_candidate_bars, 1000000, 'Blank keeps PB8 automatic candidate-bar dispatch limits.', 1, optimizeGpuAutoPlaceholder('max_dispatch_candidate_bars'))
@@ -15296,6 +15296,6 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=2"></script>
 <script src="/app/js/vast_performance.js?v=2"></script>
-<script src="/app/js/vast.js?v=102"></script>
+<script src="/app/js/vast.js?v=113"></script>
 </body>
 </html>

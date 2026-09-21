@@ -6,6 +6,7 @@ import pytest
 import vast_job_runner as runner
 from vast_jobs import JobStore, IMAGE, REVISION, digest, write_json
 from vast_provider import VastError
+from pb8_config import PB8RuntimeBusyError
 
 
 class UploadFinished(BaseException):
@@ -107,6 +108,22 @@ def test_new_transfer_progress_renews_recovery_window(recovery):
     clock[0] += 11
     with pytest.raises(VastError, match='15 minutes'):
         runner.schedule_upload_retry(store, identifier, error, 5000)
+
+
+def test_local_pb8_update_lock_retries_without_discarding_upload(recovery):
+    """A temporary local PB8 update lock cannot fail an otherwise resumable cloud upload."""
+    store, identifier, clock, _ = recovery
+    store.update(identifier, upload_progress={"transferred_bytes": 137_000_000, "total": 2_400_000_000})
+
+    runner.schedule_upload_retry(
+        store, identifier, PB8RuntimeBusyError("PB8 is being installed or updated"), 5000
+    )
+
+    state = store.read(identifier)
+    assert state["status"] == "uploading"
+    assert state["upload_retry_bytes"] == 137_000_000
+    assert state["upload_retry_at"] == clock[0] + 15
+    assert "retrying" in state["error"]
 
 
 def test_retry_state_survives_controller_restart(recovery):

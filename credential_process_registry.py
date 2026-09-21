@@ -30,6 +30,7 @@ RELEVANT_PROCESS_SCRIPTS = {
     "PBCoinData.py": "PBCoinData",
     "PBData.py": "PBData",
     "PBRun.py": "PBRun",
+    "vast_pool.py": "VastPool",
     "task_worker.py": "Market Data worker",
     "tradfi_sync.py": "TradFi Sync",
     "hyperliquid_best_1m.py": "Market Data TradFi job",

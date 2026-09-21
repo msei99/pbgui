@@ -520,7 +520,7 @@ def test_delete_and_requeue_locks_survive_row_replacement(cloud_page):
 
 
 def test_integrated_dashboard_job_switch_and_billing_failure(cloud_page):
-    """Queue log selection exposes telemetry without duplicate hidden legacy controls."""
+    """Terminal job details retain their own state and last successful billing sample."""
     page, data, _, overrides, held = cloud_page
     job = data['jobs'][0]
     job['error'] = 'Example worker error'
@@ -530,7 +530,7 @@ def test_integrated_dashboard_job_switch_and_billing_failure(cloud_page):
     page.wait_for_function("PBGuiVast.queueItems()[0].cloudJob.error === 'Example worker error'")
     page.locator('[title="Open log"]').click()
     assert page.locator('#cloud-job-details').is_visible()
-    assert page.locator('#activity').inner_text().startswith('RTX 3090 · instance 123')
+    assert page.locator('#activity').inner_text() == 'Job failed'
     assert page.locator('#progress').inner_text() == '120/1000'
     assert page.locator('#last-error').inner_text() == 'Example worker error'
     assert 'vast_' + job['id'] + '.log' in page.locator('#log-viewer-target').inner_text()
@@ -655,6 +655,21 @@ def test_preparing_queue_row_shows_input_progress(cloud_page):
     progress = row.get_by_role('progressbar', name='Preparing cloud input data', exact=True)
     assert progress.get_attribute('aria-valuenow') == '25'
     assert '25.0 / 100.0 MB · 25% · 12 / 48 files' in row.inner_text()
+
+
+def test_preparing_queue_row_shows_compression_rate_and_eta(cloud_page):
+    """Archive compression reports useful progress instead of a static completed file count."""
+    page, data, _, _, _ = cloud_page
+    job = data['jobs'][0]
+    job.update(status='preparing', input_progress=dict(
+        stage='compressing', bytes_completed=40_000_000, bytes_total=100_000_000,
+        bytes_per_second=2_000_000, eta_seconds=30,
+        files_completed=20, files_total=50))
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    row = page.locator('tr[data-cloud-id="' + job['id'] + '"]')
+    assert row.get_by_role('progressbar', name='Preparing cloud input data', exact=True).get_attribute('aria-valuenow') == '40'
+    assert 'Compressing input archive · 40.0 / 100.0 MB · 40% · 2.0 MB/s · ~30s remaining · 20 / 50 files' in row.inner_text()
 
 
 @pytest.mark.parametrize('phase', ['preparing', 'ready', 'provisioning', 'uploading', 'running', 'collecting', 'completed', 'failed'])
@@ -857,7 +872,7 @@ def test_requeue_acknowledges_click_before_poll_or_redraw(cloud_page):
 
 
 def test_direct_file_sync_progress_survives_reopen(cloud_page):
-    """Direct synchronization stays distinct from cache scans and archive uploads."""
+    """Direct synchronization identifies cache comparison without claiming network bytes."""
     page, data, _, _, _ = cloud_page
     data['jobs'][0].update(status='uploading', upload_progress=dict(
         transport='rsync', mode='files', stage='sending', bytes=0,
@@ -867,11 +882,26 @@ def test_direct_file_sync_progress_survives_reopen(cloud_page):
         page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
         page.locator('[title="Open log"]').click()
         label = page.locator('#optlog-progress-label').inner_text()
-        assert 'Synchronizing input files' in label
-        assert '50.0 / 100.0 MB processed (50.0%)' in label
-        assert 'Rsync: 8.0 Mbps' in label
+        assert 'Checking and synchronizing GPU input cache' in label
+        assert '50.0 / 100.0 MB compared' in label
+        assert 'Rsync:' not in label
         assert 'files checked' not in label and 'verified' not in label
-        assert 'not measured network traffic' in page.locator('#optlog-progress-label').get_attribute('data-tip')
+        assert 'logical data compared, not network traffic' in page.locator('#optlog-progress-label').get_attribute('data-tip')
+
+
+def test_direct_sync_completion_reports_reuse_and_actual_network_bytes(cloud_page):
+    """A warm GPU cache reports reused data separately from bytes actually sent."""
+    page, data, _, _, _ = cloud_page
+    data['jobs'][0].update(status='uploading', upload_progress=dict(
+        transport='rsync', mode='files', stage='synchronized', bytes=0,
+        transferred_bytes=2_446_300_000, total=2_446_300_000,
+        network_bytes=3_200_000, reused_bytes=2_446_300_000))
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    assert page.locator('#phase').inner_text() == 'Cached input ready'
+    assert page.locator('#optlog-progress-label').inner_text() == (
+        'Cached input ready · 2446.3 MB reused · 3.2 MB sent')
 
 
 def test_host_management_uses_existing_optimizer_sidebar(cloud_page):

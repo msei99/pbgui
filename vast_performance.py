@@ -307,7 +307,9 @@ def collect_run(store, history, row, log_root, stop=None):
         'setup_started_at', 'finished_at', 'elapsed_seconds', 'stop_reason', 'deleted_at')}
     run.update(captured_at=now, source_generation=row.get('generation'), workload=workload,
                hardware={key: offer.get(key) for key in HARDWARE}, workers=row.get('workers'),
-               cpu_allocation_resolved=row.get('cpu_allocation_resolved', False))
+               cpu_allocation_resolved=row.get('cpu_allocation_resolved', False),
+               gpu_tuning=copy.deepcopy(row.get('gpu_tuning'))
+                   if isinstance(row.get('gpu_tuning'), dict) else None)
     if row.get('status') in TERMINAL:
         run['ended_at'] = row.get('finished_at') or (prior or {}).get('ended_at') or row.get('updated_at')
     start = row.get('setup_started_at')

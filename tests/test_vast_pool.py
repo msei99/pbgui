@@ -346,6 +346,7 @@ def test_supervisor_start_failure_restores_previous_pool_state(queue, monkeypatc
 def test_supervisor_launch_is_idempotent_and_independent(tmp_path, monkeypatch, already_active):
     """One user service owns scheduling independently of the API process."""
     queue = CloudQueue(JobStore(tmp_path / 'vast'))
+    queue.update(pool_error='stale supervisor failure')
     monkeypatch.setattr(pool, 'PROJECT', tmp_path)
     calls = []
     def run(argv, **kwargs):
@@ -354,6 +355,7 @@ def test_supervisor_launch_is_idempotent_and_independent(tmp_path, monkeypatch, 
         return SimpleNamespace(returncode=0 if already_active or argv[0] == 'systemd-run' else 3)
     monkeypatch.setattr(pool.subprocess, 'run', run)
     pool.launch_pool(queue)
+    assert queue.read()['pool_error'] is None
     assert len(calls) == (1 if already_active else 2)
     if not already_active:
         assert '--unit' in calls[-1] and 'pbgui-vast-pool' in calls[-1]

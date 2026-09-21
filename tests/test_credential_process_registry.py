@@ -19,6 +19,12 @@ def test_pbdata_is_a_managed_runtime_serial_reporter() -> None:
     assert registry.RELEVANT_PROCESS_SCRIPTS["PBData.py"] == "PBData"
 
 
+def test_vast_pool_is_a_managed_runtime_serial_reporter() -> None:
+    """The persistent GPU scheduler must expose stale imported rental code."""
+
+    assert registry.RELEVANT_PROCESS_SCRIPTS["vast_pool.py"] == "VastPool"
+
+
 SERVICES = (
     "PBApiServer",
     "PBCluster",
@@ -170,6 +176,18 @@ def test_process_detection_accepts_only_validated_root_script_paths(tmp_path: Pa
     assert registry._service_for_process(tmp_path, ["python", str(tmp_path / "PBApiServer.py")]) == "PBApiServer"
     assert registry._service_for_process(tmp_path, ["python", "/tmp/PBApiServer.py"]) == ""
     assert registry._service_for_process(tmp_path, ["python", "not-a-service.py"]) == ""
+
+
+def test_process_detection_recognizes_validated_vast_pool(tmp_path: Path) -> None:
+    """Only the scheduler script in the PBGui root is classified as VastPool."""
+
+    (tmp_path / "vast_pool.py").write_text("", encoding="utf-8")
+
+    assert registry._service_for_process(
+        tmp_path,
+        ["python", str(tmp_path / "vast_pool.py")],
+    ) == "VastPool"
+    assert registry._service_for_process(tmp_path, ["python", "/tmp/vast_pool.py"]) == ""
 
 
 def test_process_detection_recognizes_validated_uvicorn_api_app(tmp_path: Path) -> None:

@@ -161,6 +161,7 @@ _VPS_MONITOR_SYSTEMD_UNIT = "pbgui-vps-monitor.service"
 _SYSTEMD_RESTART_WATCHDOG_SECONDS = 300
 _RUNTIME_SYSTEMD_SERVICES = (
     {"service": "VPSMonitor", "label": "VPS Monitor", "unit": _VPS_MONITOR_SYSTEMD_UNIT},
+    {"service": "VastPool", "label": "Vast GPU Pool", "unit": "pbgui-vast-pool.service"},
     {"service": "PBCluster", "label": "PBCluster", "unit": "pbgui-pbcluster.service"},
     {"service": "PBRun", "label": "PBRun", "unit": "pbgui-pbrun.service"},
     {"service": "PBData", "label": "PBData", "unit": "pbgui-pbdata.service"},

@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import sys
 import time
+import traceback
 
 import psutil
 
@@ -26,9 +27,12 @@ UPLOAD_FINISH_RESERVE_SECONDS = 180
 
 def schedule_upload_retry(store: JobStore, identifier: str, exc: Exception, deadline: float) -> None:
     """Persist a bounded recovery window, retaining resumable transfer state."""
-    if not isinstance(exc, VastError):
+    from pb8_config import PB8RuntimeBusyError
+
+    runtime_busy = isinstance(exc, PB8RuntimeBusyError)
+    if not runtime_busy and not isinstance(exc, VastError):
         raise VastError('Input upload failed unexpectedly; inspect the local worker log', 422) from None
-    if exc.status != 502:
+    if isinstance(exc, VastError) and exc.status != 502:
         raise exc
     reason = str(exc)
     # These diagnoses cannot recover by waiting and must never bypass validation.
@@ -36,7 +40,7 @@ def schedule_upload_retry(store: JobStore, identifier: str, exc: Exception, dead
             'host key verification failed', 'remote disk full', 'no space left',
             'invalid ', 'checksum', 'exceeds the permitted')):
         raise VastError(reason, 422) from None
-    transient = any(token in reason.lower() for token in ('timed out', 'timeout',
+    transient = runtime_busy or any(token in reason.lower() for token in ('timed out', 'timeout',
         'connection', 'interrupted', 'reconnecting', 'stalled', 'hostname resolution',
         'authentication or permission denied'))
     if not transient:
@@ -268,11 +272,43 @@ def optimizer_started_at(connection) -> float:
     return float(value)
 
 
+def recover_cancelled_empty_results(store: JobStore) -> int:
+    """Repair legacy requested stops that failed only while importing an empty result."""
+    recovered = 0
+    for state in store.list():
+        if not (state.get('status') == 'failed'
+                and state.get('final_collected') is True
+                and state.get('stop_reason') == 'requested'
+                and state.get('error') == 'Raw results saved locally; result import needs retry'):
+            continue
+        identifier = state.get('id')
+        if not isinstance(identifier, str):
+            continue
+        final = store.directory(identifier) / 'final-results'
+        try:
+            finished = json.loads((final / 'finished.json').read_text())
+            binaries = list((final / 'optimize_results').glob('*/all_results.bin'))
+            empty_result = (len(binaries) == 1 and binaries[0].is_file()
+                            and not binaries[0].is_symlink() and binaries[0].stat().st_size == 0)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if not (finished.get('cancelled') is True
+                and empty_result):
+            continue
+        store.update(identifier, status='cancelled', error=None,
+                     exit_code=finished.get('exit_code'), completion_reason='requested',
+                     elapsed_seconds=finished.get('wall_seconds'),
+                     finished_at=finished.get('finished_at'))
+        recovered += 1
+        _log(SERVICE, f'{identifier}: recovered requested stop with no exact results', level='INFO')
+    return recovered
+
+
 def finalize_collected_results(store: JobStore, identifier: str) -> dict:
     """Publish final results and assess their front without rewriting the stop cause."""
     from vast_convergence import observe
-    imported = import_results(store, identifier)
-    finished = json.loads((store.directory(identifier) / 'final-results/finished.json').read_text())
+    final = store.directory(identifier) / 'final-results'
+    finished = json.loads((final / 'finished.json').read_text())
     state = store.read(identifier)
     reason = state.get('stop_reason')
     historical_convergence = reason == 'convergence' or (
@@ -282,6 +318,12 @@ def finalize_collected_results(store: JobStore, identifier: str) -> dict:
     status = 'cancelled' if finished.get('cancelled') else 'completed' if finished.get('exit_code') == 0 else 'failed'
     if automatic_stop:
         status = 'completed'
+    binaries = list((final / 'optimize_results').glob('*/all_results.bin'))
+    if status == 'cancelled' and len(binaries) == 1 and binaries[0].is_file() and binaries[0].stat().st_size == 0:
+        return store.update(identifier, status='cancelled', error=None,
+                            exit_code=finished.get('exit_code'), completion_reason=reason,
+                            elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
+    imported = import_results(store, identifier)
     store.update(identifier, **imported, exact_completed=imported.get('evaluations', state.get('exact_completed', 0)))
     observe(store, identifier, final=True)
     return store.update(identifier, status=status, error=None, exit_code=finished.get('exit_code'),
@@ -357,12 +399,16 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 continue
         try:
             client = VastClient(VastCredentialStore(store.root).secrets()["api_key"])
+            from vast_provisioning_log import collect_provisioning_log
             row = owned_instance(client, intent)
             if row is not None and row.get("actual_status") == "running" and state.get("setup_started_at") is None:
                 state = store.update(identifier, setup_started_at=time.time())
                 _log(SERVICE, f"{identifier}: instance running; verifying SSH identity and preparing worker", level="INFO")
-            if row is not None and not state.get('worker_ready'):
-                from vast_provisioning_log import collect_provisioning_log
+            # During image loading the daemon log drives the progress display.
+            # Once running, bootstrap owns Vast's single request_logs result
+            # slot so a daemon-log request cannot replace its host-key log.
+            if (row is not None and row.get("actual_status") != "running"
+                    and not state.get('uploaded')):
                 collect_provisioning_log(store, identifier, client, row['id'])
             if row is None or row.get("actual_status") != "running":
                 time.sleep(5)
@@ -383,7 +429,10 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                         hardware.get('cpu_cores'), intent.get('offer', {}).get('cpu_cores')), cpu_allocation_resolved=True)
                 if not state.get('auto_cpu_workers') and (hardware.get("cpu_cores") or 0) < state["workers"]:
                     raise VastError("Actual CPU quota is below the requested worker count", 422)
-                store.update(identifier, worker_ready=True, hardware=hardware, status="uploading", error=None)
+                state = store.update(identifier, worker_ready=True, hardware=hardware, status="uploading", error=None)
+                collect_provisioning_log(
+                    store, identifier, client, row['id'], retry_waiting=True
+                )
             if control["stop"] and not state.get("uploaded"):
                 store.update(identifier, status="cancelled")
                 if not lease_id:
@@ -439,7 +488,8 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 last_backup = time.time()
         except Exception as exc:
             safe_error = str(exc) if isinstance(exc, VastError) else "Worker operation failed; reconnecting"
-            _log(SERVICE, safe_error, level="WARNING")
+            _log(SERVICE, safe_error, level="WARNING",
+                 meta=None if isinstance(exc, VastError) else {'traceback': traceback.format_exc()})
             current = store.read(identifier)
             if current.get('worker_ready') and not current.get('uploaded'):
                 stopped = any(store.read(owner, 'control.json').get(key)

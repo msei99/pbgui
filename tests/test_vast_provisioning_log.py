@@ -104,6 +104,30 @@ def test_missing_daemon_log_falls_back_without_losing_snapshot(tmp_path, monkeyp
         assert 'No such file' not in result
 
 
+def test_waiting_snapshot_retries_when_worker_becomes_ready(tmp_path, monkeypatch):
+    """Worker readiness retries a placeholder without refetching a useful snapshot."""
+    identifier = 'a' * 32
+    path = tmp_path / f'vast_{identifier}_provider.log'
+    path.write_text('2026-09-20T10:45:38 [INFO] Instance 123: waiting for provider logs; automatic retry in 60 seconds.\n')
+    state = {'provider_log_checked_at': 1000}
+    store = SimpleNamespace(read=lambda _: state, update=lambda _, **kw: state.update(kw))
+    calls = []
+    monkeypatch.setattr(logs, 'LOG_ROOT', tmp_path)
+    monkeypatch.setattr(logs.time, 'time', lambda: 1010)
+    monkeypatch.setattr(logs, '_download_log', lambda *_args, **kwargs:
+                        calls.append(kwargs['daemon']) or 'Container ready\n')
+    logs.collect_provisioning_log(
+        store, identifier, object(), 123, retry_waiting=True
+    )
+    assert calls == [True]
+    assert path.read_text() == 'Container ready\n'
+
+    logs.collect_provisioning_log(
+        store, identifier, object(), 123, retry_waiting=True
+    )
+    assert calls == [True]
+
+
 def test_layer_progress_deduplicates_and_distinguishes_download_from_ready():
     """Mixed provider timestamps and repeated events retain distinct layer states."""
     progress = logs.image_layer_progress('''aaaaaaaaaaaa: Pulling fs layer

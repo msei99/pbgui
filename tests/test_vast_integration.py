@@ -224,6 +224,23 @@ def test_upstream_http_error_does_not_echo_body(monkeypatch):
     assert NoRedirect().redirect_request(None,None,302,'',{},'https://attacker.invalid') is None
 
 
+@pytest.mark.parametrize(('path', 'message'), [
+    ('/asks/123/', 'offer is no longer available'),
+    ('/instances/123/', 'resource is no longer available'),
+])
+def test_http_410_names_the_failed_resource(monkeypatch, path, message):
+    """A consumed offer and an unavailable instance must not share one diagnosis."""
+    class Opener:
+        """Return an isolated gone response."""
+        def open(self, request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 410, 'secret-body', {}, None)
+
+    monkeypatch.setattr('urllib.request.build_opener', lambda *_: Opener())
+
+    with pytest.raises(VastError, match=message):
+        VastClient('sensitive').request('GET', path)
+
+
 def test_all_routes_require_authentication(client):
     """No account, secret, marketplace or page route is public."""
     _,_,app=client
@@ -353,6 +370,9 @@ def test_start_uses_persisted_rental_settings(client, monkeypatch, tmp_path):
     assert searches[0]['min_duration'] == 10800
     assert 'hours' not in searches[0]
     assert http.post('/api/vast/gpu-preferences', json={'hours':0}).status_code == 422
+    retained = http.post('/api/vast/gpu-preferences', json={'idle_seconds':-1})
+    assert retained.status_code == 200
+    assert retained.json()['idle_seconds'] == -1
     assert http.post('/api/vast/gpu-preferences', json={'idle_seconds':12}).status_code == 422
 
 
@@ -384,7 +404,40 @@ def test_requeue_is_idempotent_under_concurrent_requests(tmp_path, monkeypatch):
     assert store.read(identifier)['deleted_at']
 
 
-@pytest.mark.parametrize('status,visible', [('preparing','b'), ('ready','b'), ('failed','a')])
+@pytest.mark.parametrize('auto_rent,expected_resumed', [(True, True), (False, False)])
+def test_requeue_resumes_only_authorized_auto_pool(tmp_path, monkeypatch, auto_rent, expected_resumed):
+    """Explicit retry resumes paid scheduling only under the saved automatic authorization."""
+    from vast_jobs import JobStore, write_json
+    from vast_queue import CloudQueue
+    from secure_files import ensure_private_directory
+    store = JobStore(tmp_path / 'jobs-root')
+    identifier = 'a' * 32
+    directory = ensure_private_directory(store.root / 'jobs' / identifier)
+    write_json(directory / 'state.json', {'id':identifier, 'status':'failed', 'rental_state':'none',
+               'config_name':'test', 'iterations':512, 'workers':4})
+    queue = CloudQueue(store)
+    queue.update(paused=True, pool_enabled=True, pool_error=None,
+                 pool_authorization={'id':'c' * 32, 'settings':{'auto_rent':auto_rent}})
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
+
+    def prepare(body, *, requeue_from=None):
+        """Create one isolated ready replacement."""
+        replacement = 'b' * 32
+        target = ensure_private_directory(store.root / 'jobs' / replacement)
+        write_json(target / 'state.json', {'id':replacement, 'status':'ready', 'rental_state':'none'})
+        return store.read(replacement)
+
+    launches = []
+    monkeypatch.setattr(vast, '_prepare_job', prepare)
+    monkeypatch.setattr('vast_pool.launch_pool', lambda value: launches.append(value))
+    assert vast.requeue_job(identifier, object())['id'] == 'b' * 32
+    assert queue.read()['paused'] is not expected_resumed
+    assert bool(launches) is expected_resumed
+
+
+@pytest.mark.parametrize('status,visible', [
+    ('preparing', 'b'), ('ready', 'b'), ('failed', 'a'), ('cancelled', 'a'),
+])
 def test_requeue_list_has_one_visible_entry(tmp_path, monkeypatch, status, visible):
     """Polling during replacement preparation must never expose duplicate entries."""
     from vast_jobs import JobStore, write_json
@@ -398,6 +451,57 @@ def test_requeue_list_has_one_visible_entry(tmp_path, monkeypatch, status, visib
     monkeypatch.setattr(vast, 'CloudQueue', lambda: CloudQueue(store))
     monkeypatch.setattr(vast, 'services_available', lambda: False)
     assert [row['id'] for row in vast.jobs(Response(), None)['jobs']] == [visible*32]
+
+
+def test_cancelled_requeue_does_not_hide_running_predecessor(tmp_path, monkeypatch):
+    """A cancelled retry must not disconnect an active job from its GPU card."""
+    from vast_jobs import JobStore, write_json
+    from vast_queue import CloudQueue
+    from secure_files import ensure_private_directory
+    from fastapi import Response
+    store = JobStore(tmp_path / 'queue')
+    states = [
+        dict(id='a'*32, status='running', created_at=1, lease_id='c'*32),
+        dict(id='b'*32, status='cancelled', created_at=2, requeue_from='a'*32),
+        dict(id='c'*32, status='running', created_at=0, kind='worker',
+             rental_state='active', active_job='a'*32),
+    ]
+    for state in states:
+        directory = ensure_private_directory(store.root / 'jobs' / state['id'])
+        write_json(directory / 'state.json', {'rental_state': 'none', **state})
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: CloudQueue(store))
+    monkeypatch.setattr(vast, 'services_available', lambda: False)
+    monkeypatch.setattr(vast, '_rental_details', lambda job_store, lease: {'offer': {}})
+    result = vast.jobs(Response(), None)
+    assert [row['id'] for row in result['jobs']] == ['a'*32]
+    assert result['workers'][0]['active_job'] == 'a'*32
+
+
+def test_deleted_marker_does_not_hide_worker_owned_optimizer(tmp_path, monkeypatch):
+    """Worker ownership keeps a running optimizer visible after stale deletion state."""
+    from vast_jobs import JobStore, write_json
+    from vast_queue import CloudQueue
+    from secure_files import ensure_private_directory
+    from fastapi import Response
+
+    store = JobStore(tmp_path / 'queue')
+    states = [
+        dict(id='a'*32, status='running', created_at=1, lease_id='c'*32,
+             deleted_at=2),
+        dict(id='c'*32, status='running', created_at=0, kind='worker',
+             rental_state='active', active_job='a'*32),
+    ]
+    for state in states:
+        directory = ensure_private_directory(store.root / 'jobs' / state['id'])
+        write_json(directory / 'state.json', {'rental_state': 'none', **state})
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: CloudQueue(store))
+    monkeypatch.setattr(vast, 'services_available', lambda: False)
+    monkeypatch.setattr(vast, '_rental_details', lambda job_store, lease: {'offer': {}})
+
+    result = vast.jobs(Response(), None)
+
+    assert [row['id'] for row in result['jobs']] == ['a'*32]
+    assert result['jobs'][0]['can_delete'] is False
 
 
 def test_rental_details_use_saved_offer_and_exclude_credentials(tmp_path):
@@ -617,7 +721,11 @@ def test_performance_collector_lifecycle_is_owned_and_idempotent(monkeypatch, tm
     import asyncio
     import vast_performance
     from vast_jobs import JobStore
+    from vast_queue import CloudQueue
     stopped = []
+    async def inline_to_thread(function, *args, **kwargs):
+        """Keep this isolated lifecycle test independent of a process thread pool."""
+        return function(*args, **kwargs)
     class Collector:
         """Track ownership without starting a real background thread."""
         def __init__(self, *args):
@@ -635,9 +743,16 @@ def test_performance_collector_lifecycle_is_owned_and_idempotent(monkeypatch, tm
     monkeypatch.setattr(vast, '_PREPARATION_EXECUTOR', None)
     monkeypatch.setattr(vast, '_PERFORMANCE_COLLECTOR', None)
     monkeypatch.setattr(vast_performance, 'PerformanceCollector', Collector)
-    monkeypatch.setattr(vast, 'JobStore', lambda: JobStore(tmp_path))
+    monkeypatch.setattr(vast.asyncio, 'to_thread', inline_to_thread)
+    store = JobStore(tmp_path)
+    monkeypatch.setattr(vast, 'JobStore', lambda: store)
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: CloudQueue(store))
     vast.startup(); vast.startup()
-    asyncio.run(vast.shutdown()); asyncio.run(vast.shutdown())
+    async def shutdown_twice():
+        """Exercise idempotence inside the API's single event-loop lifecycle."""
+        await vast.shutdown()
+        await vast.shutdown()
+    asyncio.run(shutdown_twice())
     assert stopped == ['start', 'stop', 'join']
     assert vast._PREPARATION_EXECUTOR is None
     assert vast._PERFORMANCE_COLLECTOR is None

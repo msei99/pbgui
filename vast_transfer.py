@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import threading
 import gzip
+import hashlib
 import ipaddress
 import json
 import math
@@ -301,7 +302,7 @@ class WorkerConnection:
                             archive.add(config_root / name, arcname='input/' + name, recursive=False)
                         for item in manifest['files']:
                             if item['sha256'] in missing:
-                                source = safe_path(self.directory / 'input', item['path'])
+                                source = safe_path(self.store.prepared_input_directory(self.identifier), item['path'])
                                 archive.add(source, arcname='input/' + item['path'], recursive=False)
             temporary.chmod(0o600)
             os.replace(temporary, delta)
@@ -509,7 +510,8 @@ class WorkerConnection:
                     raise VastError('Public market cache expired; prepare fresh input before starting', 422)
                 relative = 'caches/' + exchange + '/markets.json'
                 expected = next((entry for entry in manifest['files'] if entry['path'] == relative), None)
-                if expected is None or digest(self.directory / 'input' / relative) != expected['sha256']:
+                source_input = self.store.prepared_input_directory(self.identifier)
+                if expected is None or digest(source_input / relative) != expected['sha256']:
                     raise VastError('Public market cache is missing or changed', 422)
             # The immutable image starts PB8 from output/. Keep source freshness:
             # extraction/copy time must never make an old market snapshot fresh.
@@ -617,8 +619,9 @@ def allocated_cpu_workers(quota, rented_quota) -> int:
 
 
 def execution_input(store: JobStore, identifier: str) -> Path:
-    """Prepare an atomic CPU-adjusted execution copy, preserving the source snapshot."""
+    """Prepare a hardware-adjusted execution copy, preserving the source snapshot."""
     from pb8_config import load_pb8_config, save_prepared_pb8_config
+    from vast_gpu_tuning import resolve_gpu_settings
     directory = store.directory(identifier)
     row = store.read(identifier)
     source = directory / 'input'
@@ -626,28 +629,46 @@ def execution_input(store: JobStore, identifier: str) -> Path:
         return source
     if not row.get('cpu_allocation_resolved') or type(row.get('workers')) is not int or row['workers'] < 1:
         raise VastError('CPU allocation has not been measured', 422)
+    remote_ohlcv = '/work/pbgui/jobs/' + identifier + '/input/ohlcv'
     target = directory / 'execution-input'
     with advisory_file_lock(directory / '.execution-lock'):
         if target.is_symlink():
             raise VastError('Invalid execution input', 422)
-        if target.exists():
-            manifest = json.loads((target / 'manifest.json').read_text())
-            if manifest.get('execution_workers') != row['workers'] or digest(target / 'optimize.json') != manifest['config_sha256']:
-                raise VastError('Execution input changed after preparation', 422)
-            return target
-        manifest = store.read(identifier, 'input/manifest.json')
-        if digest(source / 'optimize.json') != manifest['config_sha256']:
+        source_manifest = store.read(identifier, 'input/manifest.json')
+        if digest(source / 'optimize.json') != source_manifest['config_sha256']:
             raise VastError('Source config changed before execution', 422)
         config = load_pb8_config(source / 'optimize.json')
+        config['backtest']['ohlcv_source_dir'] = remote_ohlcv
         config['optimize']['n_cpus'] = row['workers']
         config['optimize'].setdefault('gpu', {})['exact_workers'] = row['workers']
+        intent_owner = row.get('lease_id') or identifier
+        intent_path = store.directory(intent_owner) / 'intent.json'
+        intent = store.read(intent_owner, 'intent.json') if intent_path.is_file() else {}
+        tuning = resolve_gpu_settings(
+            config,
+            row,
+            intent.get('offer') or {},
+        )
+        if target.exists():
+            manifest = json.loads((target / 'manifest.json').read_text())
+            target_config = load_pb8_config(target / 'optimize.json')
+            if digest(target / 'optimize.json') != manifest.get('config_sha256'):
+                raise VastError('Execution input changed after preparation', 422)
+            if (manifest.get('execution_workers') == row['workers']
+                    and manifest.get('execution_gpu_profile') == tuning['fingerprint']
+                    and target_config.get('backtest', {}).get('ohlcv_source_dir') == remote_ohlcv):
+                store.update(identifier, gpu_tuning=manifest.get('gpu_tuning') or tuning)
+                return target
+            shutil.rmtree(target)
         with tempfile.TemporaryDirectory(dir=directory) as temporary:
             stage = Path(temporary) / 'execution'
             stage.mkdir(mode=0o700)
             save_prepared_pb8_config(config, stage / 'optimize.json')
-            manifest.update(config_sha256=digest(stage / 'optimize.json'), execution_workers=row['workers'])
-            write_json(stage / 'manifest.json', manifest)
+            source_manifest.update(config_sha256=digest(stage / 'optimize.json'), execution_workers=row['workers'],
+                                   execution_gpu_profile=tuning['fingerprint'], gpu_tuning=tuning)
+            write_json(stage / 'manifest.json', source_manifest)
             os.replace(stage, target)
+        store.update(identifier, gpu_tuning=tuning)
     return target
 
 

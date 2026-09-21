@@ -217,6 +217,21 @@ def test_collector_phase_snapshots_do_not_manufacture_utilization(bundle, tmp_pa
     assert history.series(row['id'])['telemetry'] == samples
 
 
+def test_collector_retains_applied_gpu_tuning_profile(bundle, tmp_path):
+    """History binds measured throughput to the immutable execution profile."""
+    store, create = bundle
+    row = create()
+    tuning = {'schema_version': 1, 'automatic': {'population_size': 8192},
+              'fingerprint': 'f' * 64}
+    store.update(row['id'], gpu_tuning=tuning)
+    history = performance.PerformanceHistory(store.root)
+    result = performance.collect_run(
+        store, history, store.read(row['id']), tmp_path / 'missing-logs'
+    )
+    assert result['gpu_tuning'] == tuning
+    assert history.get(row['id'])['gpu_tuning'] == tuning
+
+
 def test_bad_legacy_config_keeps_measurements_but_never_verified_identity(bundle, tmp_path, monkeypatch):
     """A broken config loader must not discard useful historical counters."""
     store, create = bundle

@@ -384,6 +384,32 @@ def test_gpu_log_status_parses_exact_dispatch_halving_and_completion() -> None:
     assert parsed["halving"]["full_history"] == 1024
 
 
+def test_gpu_log_status_parses_current_pb8_temporal_replay() -> None:
+    """PB8 suite replay context and bar progress remain visible in PBGui."""
+    parsed = optimize_v8._parse_optimize_log_status(
+        "2026-09-21T10:00:00Z INFO GPU temporal replay progress | "
+        "suite_pass=2/7 scenarios=train_02 exchange=combined history=50.0% "
+        "replay=12 candidates=4096 bars=250000/1000000 elapsed=40.0s\n"
+    )
+
+    assert parsed["backend"] == "gpu"
+    assert parsed["stage"] == "proxy_replay"
+    assert parsed["replay"] == {
+        "state": "progress",
+        "id": 12,
+        "candidates": 4096,
+        "bars_completed": 250000,
+        "bars_total": 1000000,
+        "elapsed_seconds": 40.0,
+        "eta_seconds": 120.0,
+        "suite_pass": 2,
+        "suite_passes": 7,
+        "scenarios": "train_02",
+        "exchange": "combined",
+        "history_percent": 50.0,
+    }
+
+
 @pytest.mark.parametrize(
     ("section", "key", "value", "expected_field"),
     [

@@ -17,7 +17,10 @@ import urllib.parse
 import urllib.request
 
 SERVICE = "Vast"
-BASE_URL = "https://console.vast.ai/api/v0"
+API_ROOT = "https://console.vast.ai"
+BASE_URL = API_ROOT + "/api/v0"
+INSTANCE_LIST_PATH = "/api/v1/instances/"
+MAX_INSTANCE_ROWS = 10_000
 COORDINATION_ROOT = Path(__file__).resolve().parent / "data/vast/provider"
 INSTANCE_TTL = 15
 REFERRAL_URL = "https://cloud.vast.ai/?ref_id=522435"
@@ -115,14 +118,14 @@ class VastClient:
             if state.get('account') != fingerprint:
                 state = {'account': fingerprint}
             now = time.time()
-            listing = method == 'GET' and path == '/instances/'
+            listing = method == 'GET' and path == INSTANCE_LIST_PATH
             if listing and not fresh and 0 <= now - state.get('instances_at', 0) < INSTANCE_TTL and 'instances' in state:
                 return {'instances': state['instances']}
             remaining = state.get('retry_at', 0) - now
             if remaining > 0:
                 raise VastRateLimit(remaining, request_sent=False)
             try:
-                result = self._request(method, path, body)
+                result = self._instance_pages() if listing else self._request(method, path, body)
             except VastRateLimit as exc:
                 failures = min(int(state.get('failures', 0)) + 1, 5)
                 delay = max(exc.retry_after, min(300, 30 * 2 ** (failures - 1)))
@@ -145,7 +148,17 @@ class VastClient:
         """Call a fixed provider path, masking all upstream error payloads."""
         if not path.startswith("/") or ".." in path or any(c in path for c in "?#\\\r\n"):
             raise VastError("Invalid Vast endpoint", 422)
-        endpoint = BASE_URL + path
+        endpoint = (API_ROOT if path == INSTANCE_LIST_PATH else BASE_URL) + path
+        if method == 'GET' and path == INSTANCE_LIST_PATH:
+            params = body or {}
+            if set(params) - {'select_filters', 'order_by', 'limit', 'after_token'}:
+                raise VastError("Invalid Vast instance-list query", 422)
+            encoded = {
+                key: json.dumps(value, separators=(',', ':')) if isinstance(value, (dict, list)) else str(value)
+                for key, value in params.items()
+            }
+            endpoint += '?' + urllib.parse.urlencode(encoded)
+            body = None
         if method == 'GET' and path == '/charges/' and body is not None:
             endpoint += '?' + urllib.parse.urlencode(body)
             body = None
@@ -167,7 +180,8 @@ class VastClient:
                 401: "Vast rejected the API key",
                 403: "Vast key lacks permission for this operation",
                 404: "Vast resource is no longer available",
-                410: "Vast offer is no longer available",
+                410: ("Vast offer is no longer available" if path.startswith('/asks/')
+                      else "Vast resource is no longer available"),
                 429: "Vast rate limit reached; try again shortly",
             }
             message = messages.get(exc.code, "Vast request failed")
@@ -177,6 +191,31 @@ class VastClient:
         if not isinstance(result, dict) or result.get("success") is False:
             raise VastError("Vast did not confirm this operation")
         return result
+
+    def _instance_pages(self) -> dict:
+        """Read every official v1 instance page under one coordinated request."""
+        params = {
+            'select_filters': {},
+            'order_by': [{'col': 'id', 'dir': 'asc'}],
+            'limit': 25,
+        }
+        rows = []
+        cursors = set()
+        while True:
+            result = self._request('GET', INSTANCE_LIST_PATH, params)
+            page = result.get('instances')
+            if not isinstance(page, list):
+                raise VastError("Vast returned an invalid instance list")
+            rows.extend(page)
+            if len(rows) > MAX_INSTANCE_ROWS:
+                raise VastError("Vast instance listing exceeded the row limit")
+            token = result.get('next_token')
+            if not token:
+                return {'instances': rows}
+            if not isinstance(token, str) or not token or len(token) > 4096 or token in cursors:
+                raise VastError("Vast returned an invalid instance cursor")
+            cursors.add(token)
+            params['after_token'] = token
 
     def account(self) -> dict:
         """Expose balance and account ID only, never email, sid or SSH material."""
@@ -294,7 +333,8 @@ class VastClient:
 
     def instances(self, *, fresh: bool = False) -> list[dict]:
         """Return validated instance records to server-side ownership checks only."""
-        rows = (self.request("GET", "/instances/", fresh=True) if fresh else self.request("GET", "/instances/")).get("instances")
+        rows = (self.request("GET", INSTANCE_LIST_PATH, fresh=True)
+                if fresh else self.request("GET", INSTANCE_LIST_PATH)).get("instances")
         if not isinstance(rows, list) or any(not isinstance(r, dict) or type(r.get("id")) is not int for r in rows):
             raise VastError("Vast returned an invalid instance list")
         return rows

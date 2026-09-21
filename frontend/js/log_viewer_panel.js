@@ -667,7 +667,14 @@ class LogViewerPanel {
         this._tailObserver.observe(terminal);
     }
 
-    open()  { this._closed = false; this._watchTailLayout(); if (!this._authExpired) this._connect(); }
+    open()  {
+        this._closed = false;
+        this._watchTailLayout();
+        if (this._authExpired) return;
+        if (this._ws && (this._ws.readyState === WebSocket.OPEN ||
+                         this._ws.readyState === WebSocket.CONNECTING)) return;
+        this._connect();
+    }
     close() {
         this._closed = true;
         if (this._tailTimer) clearInterval(this._tailTimer);

@@ -39,7 +39,8 @@ def sync_transfer(tmp_path, monkeypatch):
         remote_root='/work/pbgui/jobs/' + 'a'*32, host='8.8.8.8', port=22,
         identity_directory=tmp_path)
     connection.store = SimpleNamespace(read=lambda *args: controls,
-        update=lambda identifier, **values: reports.append(values))
+        update=lambda identifier, **values: reports.append(values),
+        prepared_input_directory=lambda _identifier: source)
 
     def command(value, *, stdin=None, **kwargs):
         """Execute the actual compatibility helper, translating only remote paths."""
@@ -88,7 +89,7 @@ def prepare_input(source, contents, config='{"cpu":1}'):
 
 def test_direct_sync_reuses_data_across_jobs_and_updates_same_size_changes(sync_transfer):
     """Unchanged content sends zero bytes despite newer timestamps; changed hashes send."""
-    connection, source, remote, reports, *_ = sync_transfer
+    connection, source, remote, reports, controls, _throttle, _commands = sync_transfer
     content = [os.urandom(100000), os.urandom(80000)]
     manifest = prepare_input(source, content)
     vast_rsync.sync_files(connection, source, timeout=20)
@@ -97,12 +98,21 @@ def test_direct_sync_reuses_data_across_jobs_and_updates_same_size_changes(sync_
     assert (published / manifest['files'][0]['path']).stat().st_ino == (remote / 'rsync-data' / manifest['files'][0]['sha256']).stat().st_ino
     assert reports[-1]['sync_statistics']['changed_bytes'] == 180000
     assert not list(connection.directory.glob('upload.tar.gz'))
+    controls['snapshot_source_id'] = connection.identifier
     connection.identifier = 'c'*32
     connection.remote_root = '/work/pbgui/jobs/' + connection.identifier
     prepare_input(source, content, config='{"cpu":2}')
     vast_rsync.sync_files(connection, source, timeout=20)
     assert reports[-1]['sync_statistics']['changed_bytes'] == 0
     assert reports[-1]['sync_statistics']['reused_bytes'] == 180000
+    assert (remote / 'jobs' / connection.identifier / 'input/ohlcv').is_symlink()
+    assert (remote / 'jobs' / connection.identifier / 'input/ohlcv').resolve() == (
+        remote / 'jobs' / ('a' * 32) / 'input/ohlcv'
+    )
+    completed = [row['upload_progress'] for row in reports
+                 if row.get('upload_progress', {}).get('stage') == 'synchronized'][-1]
+    assert completed['network_bytes'] == reports[-1]['sync_statistics']['sent_bytes']
+    assert completed['reused_bytes'] == 180000
     assert json.loads((remote / 'jobs' / connection.identifier / 'input/optimize.json').read_text()) == {'cpu': 2}
     # Same file length but different content must get a new identity and transfer.
     connection.identifier = 'd'*32
@@ -289,7 +299,7 @@ def test_worker_preparation_finishes_without_stdin_eof(sync_transfer):
 
 
 @pytest.mark.parametrize('framed', [b'', b'123', (0).to_bytes(8, 'big'),
-    (128 * 1024**2 + 1).to_bytes(8, 'big'), (5).to_bytes(8, 'big') + b'{}'])
+    (1024**3 + 1).to_bytes(8, 'big'), (5).to_bytes(8, 'big') + b'{}'])
 def test_metadata_frame_rejects_invalid_or_truncated_length(framed):
     """Malformed metadata fails before preparing any remote files."""
     import io

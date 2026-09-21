@@ -83,6 +83,8 @@ not user configurations, course data or credentials.
 
 For Cloud **Auto** CPU mode, **Min CPU cores** is the rental requirement. Set it to 16 or 32 here when that capacity is required. The CPU count in a local optimizer config does not override this minimum; the cloud execution copy uses the measured allocation, capped by the rented CPU quota. Legacy jobs with an explicit fixed CPU requirement still enforce that count.
 
+PBGui resolves the complete coordinated CUDA profile after the rented worker reports its actual hardware. With `auto_lean_parallelism` enabled and sizing fields empty, PBGui selects 2,048 candidates up to 8 GB VRAM, 4,096 below 11.5 GB, and 8,192 for general cards from 11.5 GB. A card from 15 GB with at least 500 GB/s memory bandwidth and 25 TFLOPS uses 16,384; a card from 20 GB with at least 600 GB/s and 25 TFLOPS uses 24,576. Missing throughput data never promotes a card on VRAM alone. Exact validations, drift probes and the drift window scale proportionally from 16/8/256 at 2,048 candidates through 192/96/3,072 at 24,576. PBGui keeps the complete selected population in one candidate dispatch and derives its candidate-bar envelope from the largest active scenario. PB8 launches one CUDA thread per candidate. Live RTX 3060 measurements established the 8,192 profile for 12 GB cards; a real 41-coin RTX 3090 comparison measured total-generation throughput increasing from 40.71 candidates/s at 12,288 to 58.09 candidates/s at 24,576 while using 2.62 GB VRAM. Native PB8 dispatch and temporal-replay messages provide intermediate progress where supported. PBGui writes every resolved value into the verified execution copy before upload. This preserves the default ratio of 128 screened proxy candidates per Exact validation. The worker only retains safe standalone fallbacks; it does not choose the profile for a PBGui Vast job. Disable automatic parallelism or enter sizing values to retain manual tuning. The source config and prepared snapshot remain unchanged. The GPU card in Queue shows the applied automatic values. A replacement GPU creates a new hardware profile before upload, so settings from the previous card are not reused.
+
 Manual **Rent** uses the selected offer's GPU type, hardware, disk size, verification status and displayed price. Editing search filters after selecting a row does not replace that offer's specifications. Rental hours and budget still come from the rental controls; availability and limits are checked again before renting.
 
 In the editor, choose only **Execution → Vast.ai GPU** or **Local**.
@@ -174,7 +176,7 @@ Set **Max concurrent GPUs** in **Rental & Automation** (default **1**, maximum *
 
 Hours, budget and idle cleanup apply **per GPU rental**. The settings show the combined simultaneous budget targets. This is not a lifetime pool spending cap: while the pool is enabled and prepared jobs are waiting, it may rent replacement GPUs after earlier rentals end. Fresh offers must still satisfy your saved requirements and host exclusions. If none matches, the queue shows the reason and retries automatically.
 
-**Pause queue** stops new dispatches and rentals; running jobs continue and idle cleanup still applies. Saving automatic settings while paused updates the limits without resuming the queue. Each active GPU is shown as a compact Queue card with its instance, job, phase and live upload or optimizer progress. Upload progress includes measured throughput and its saturation relative to the provider-advertised host download bandwidth when that value is available. Rental controls are per card. **Replace GPU** ends only that rental while keeping automatic scheduling enabled; PBGui waits for verified provider deletion before restoring pool capacity. Input that never produced optimizer results returns to the queue automatically. Existing optimizer results are preserved and require an explicit Requeue rather than being overwritten. Switching automation off by saving the setting pauses dispatch and prevents new rentals but does not terminate a running rental. Saving a lower GPU limit never terminates existing rentals. The scheduler is restored after an API restart. Each job's log, deadline and budget controls refer to its own GPU.
+**Pause queue** stops new dispatches and rentals; running jobs continue and idle cleanup still applies. A paused pool is shown prominently above the Queue, where **Resume auto start** resumes the authorized pool for waiting jobs. Saving automatic settings while paused updates the limits without resuming the queue. Each active GPU is shown as a compact Queue card with its instance, job, phase and live upload or optimizer progress. Upload progress includes measured throughput and its saturation relative to the provider-advertised host download bandwidth when that value is available. Rental controls are per card. **Replace GPU** ends only that rental while keeping automatic scheduling enabled; PBGui waits for verified provider deletion before restoring pool capacity. Input that never produced optimizer results returns to the queue automatically. Existing optimizer results are preserved and require an explicit Requeue rather than being overwritten. Switching automation off by saving the setting pauses dispatch and prevents new rentals but does not terminate a running rental. Saving a lower GPU limit never terminates existing rentals. The scheduler is restored after an API restart. Each job's log, deadline and budget controls refer to its own GPU.
 
 When a later job needs more transfer allowance, a worker with the current budget-control guard can automatically move unused rental time into transfer reserve within the same authorized budget. PBGui waits for the worker to confirm the shorter deadline before dispatching the job. A pending adjustment prevents idle cleanup. Older guards or insufficient remaining budget show a reason to adjust **Transfer reserve/Budget** manually; PBGui does not spend an unconfirmed allowance or increase the budget automatically.
 
@@ -209,8 +211,11 @@ sweep metadata are imported into PB8 Results/Paretos; the exact path is shown.
 - **Resume supervision** recovers the existing worker after a controller/host
   interruption without creating a replacement rental.
 
-When no eligible work remains, the worker is deleted immediately or after the
-selected five-minute idle period. New eligible work cancels that countdown.
+When no eligible work remains, the worker is kept until its rental deadline by
+default so uploaded data and the worker cache remain available for follow-up runs.
+Immediate cleanup and 5-minute, 30-minute or 1-hour idle periods remain selectable.
+The GPU card shows the active retention policy and remaining time. New eligible
+work cancels a running countdown.
 A paused queue also follows the idle cleanup policy. Confirm **deletion_verified**;
 merely stopping a Vast instance can leave disk storage billable.
 
@@ -266,7 +271,7 @@ Failed cloud jobs retain **Open log** even without a downloaded log file, so the
 
 Without a downloaded optimizer log, the viewer opens **VastRunner.log**, the shared local supervision log containing provisioning and rate-limit failures. It may contain messages for other cloud jobs. Once available, the viewer switches to the job’s optimizer log.
 
-**Requeue** on an inactive failed/cancelled cloud job prepares a replacement using the saved configuration and the previous evaluation/worker settings. The old entry is removed only after successful preparation; its artifacts remain stored. Requeue does not rent a GPU; Start controls execution.
+**Requeue** on an inactive failed/cancelled cloud job prepares a replacement using the saved configuration and the previous evaluation/worker settings. The old entry is removed only after successful preparation; its artifacts remain stored. Input preparation shows separate copy and archive-compression progress; compression includes processed MB, percentage, measured rate and estimated remaining time. If an authorized **Auto rent & start** pool was paused by the failed attempt, this explicit Requeue resumes it and the replacement starts automatically. Without automatic authorization, Start controls execution.
 
 Start reports a conflict while the previous rental is stopping or awaiting cleanup. Waiting jobs retain Open log while a shared rental remains unresolved, allowing access to supervision and cleanup controls.
 
@@ -276,17 +281,17 @@ For ambiguous creation, cleanup waits up to two minutes from the attempt, then r
 
 Clicking Start immediately shows **Starting…** in the queue row while the request is pending. Cloud Start buttons are temporarily disabled to prevent duplicate requests.
 
-The job log window offers **Requeue** for inactive failed/cancelled jobs and **Start** for ready jobs. Requeue keeps the window open on the replacement job; it does not start a rental.
+The job log window offers **Requeue** for inactive failed/cancelled jobs and **Start** for ready jobs. Requeue keeps the window open on the replacement job and resumes an already authorized **Auto rent & start** pool.
 
 **Stop & collect** is disabled before a job starts and after it finishes. It is available during provisioning, upload, execution, and collection.
 
 During Requeue the queue displays only the preparing replacement. If preparation fails, the original remains available for retry.
 
-During provisioning, PBGui retrieves the Vast image-pull log at most once per minute and shows it in the existing viewer. The optimizer log takes precedence when available. The file sidebar has a bounded width; activity/error text wraps.
+During provisioning, PBGui retrieves the Vast image-pull log at most once per minute and shows it in the existing viewer. If Vast initially has no log, PBGui retries the waiting placeholder once as soon as the worker connection is verified. The optimizer log takes precedence when available. The file sidebar has a bounded width; activity/error text wraps.
 
 Image loading is bounded by the rental deadline. The separate 15-minute worker setup timer starts only once Vast reports the container running. SSH identity is verified through a public host-key record in that rental's container log. The original spending/deletion deadline is never extended by setup or retries.
 
-After a job failure, the queue pauses; the configured idle cleanup still applies. Once Vast confirms deletion, that instance cannot be resumed. Requeue prepares another attempt, and Start requires a new rental if the previous one has already been deleted.
+After a job failure, the queue pauses; the configured idle cleanup still applies. Once Vast confirms deletion, that instance cannot be resumed. Requeue prepares another attempt and resumes an authorized automatic pool. Without **Auto rent & start**, Start is required for a new rental.
 
 If the extra provisioning log is not yet available, PBGui tries the container log. Empty or missing-file responses retain the last useful snapshot; without one, the viewer shows that it is waiting for provider logs.
 
@@ -322,13 +327,15 @@ Final collection also checks the final Pareto snapshot, using the verified impor
 
 The open Results/Paretos list refreshes when the next ten-second job poll discovers a newly published snapshot (normally about 60 seconds plus up to 10 seconds and transfer time). Elapsed measures optimizer runtime, excluding provisioning and upload; it freezes at the reported runtime when finished.
 
-Live utilization is sampled approximately every 15 seconds over the existing SSH connection. CPU use is relative to effective container CPU capacity and needs two samples. RAM includes container cache; VRAM and GPU activity come from nvidia-smi. Values older than 45 seconds or unavailable readings are shown as a dash, not as zero.
+Live utilization is sampled approximately every 15 seconds over the existing SSH connection. CPU use is relative to effective container CPU capacity and needs two samples. RAM includes container cache; VRAM, GPU activity, current board power and its configured power limit come from nvidia-smi. Current and maximum watts appear below GPU utilization. Values older than 45 seconds or unavailable readings are shown as a dash, not as zero.
 
 New cloud jobs automatically use the measured CPU quota, rounded down to whole workers (minimum one), for both n_cpus and gpu.exact_workers. For example, a measured quota of 9.6 uses nine workers, even if the offer advertises ten cores. The source config remains intact; a separately verified execution copy is uploaded. Existing running pools are not resized. Local backtests from cloud results clear the container-only HLCV path and use local data, including for holdout dates.
 
 Stop & collect first asks you to confirm the selected optimizer. After confirmation it immediately shows **Stopping…**, then **Stop requested** until the supervisor starts **Collecting results…**. The next eligible queued job starts after collection.
 
 Each GPU card provides **Log** for the assigned job's detailed live view and **Results** for its linked optimizer result. Results stays disabled, with a hover explanation, until a verified result snapshot exists. **Replace GPU** requires confirmation because it stops the assigned optimizer, collects its current results, ends that rental and lets Auto rent & start restore pool capacity after verified cleanup.
+
+If an optimizer was started directly inside a retained PBGui worker, the card labels it **Observed run**. Its **Log** action opens a read-only detail view for that detected process, including current activity, GPU utilization, power and the mirrored optimizer log. Detection also covers the normal PB8 command form that passes `optimize.json` relative to the optimizer process's working directory. Queue lifecycle actions remain disabled because PBGui observes that process without claiming control over it. An observation older than 45 seconds is no longer shown as running, even when remote observation is temporarily unavailable.
 
 Uploads retain checksum-verified 8 MiB chunks across SSH interruptions. Only missing chunks are sent again; the complete archive is verified before installation. Reconnecting is shown in upload progress.
 

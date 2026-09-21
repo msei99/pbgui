@@ -174,6 +174,16 @@ _OPT_LOG_GPU_DISPATCH_RE = re.compile(
     r"GPU proxy dispatch progress\s*\|\s*strategy=(?P<strategy>\S+)\s+chunks=(?P<chunks_done>\d+)/(?P<chunks_total>\d+)\s+candidates=(?P<candidates_done>\d+)/(?P<candidates_total>\d+)\s+elapsed=(?P<elapsed>[0-9.]+)s\s+eta=(?P<eta>[0-9.]+)s",
     re.IGNORECASE,
 )
+_OPT_LOG_GPU_REPLAY_RE = re.compile(
+    r"GPU temporal replay\s+(?P<state>start|progress|complete)\s*\|\s*"
+    r"(?:suite_pass=(?P<pass_done>\d+)/(?P<pass_total>\d+)\s+"
+    r"scenarios=(?P<scenarios>\S+)\s+exchange=(?P<exchange>\S+)\s+"
+    r"history=(?P<history>[0-9.]+)%\s+)?"
+    r"replay=(?P<replay>\d+)\s+candidates=(?P<candidates>\d+)\s+"
+    r"bars=(?P<bars_done>\d+)/(?P<bars_total>\d+)\s+"
+    r"elapsed=(?P<elapsed>[0-9.]+)s",
+    re.IGNORECASE,
+)
 _OPT_LOG_GPU_HALVING_RE = re.compile(
     r"GPU successive halving\s*\|\s*gen=(?P<generation>\d+)\s+rungs=(?P<rungs>\S+)\s+full_history=(?P<full_done>\d+)/(?P<full_total>\d+)",
     re.IGNORECASE,
@@ -4280,6 +4290,7 @@ def _parse_optimize_log_status(text: str) -> dict:
         "exact_evaluations": None,
         "exact_inflight": None,
         "dispatch": {},
+        "replay": {},
         "halving": {},
     }
     for raw_line in text.splitlines():
@@ -4344,6 +4355,45 @@ def _parse_optimize_log_status(text: str) -> dict:
                 "candidates_total": int(dispatch.group("candidates_total")),
                 "elapsed_seconds": float(dispatch.group("elapsed")),
                 "eta_seconds": float(dispatch.group("eta")),
+            }
+        replay = _OPT_LOG_GPU_REPLAY_RE.search(message)
+        if replay:
+            elapsed = float(replay.group("elapsed"))
+            bars_completed = int(replay.group("bars_done"))
+            bars_total = int(replay.group("bars_total"))
+            eta = (
+                elapsed * max(0, bars_total - bars_completed) / bars_completed
+                if bars_completed > 0 and bars_completed < bars_total
+                else 0.0 if bars_completed >= bars_total else None
+            )
+            summary.update(
+                backend="gpu",
+                algorithm="nsga2",
+                phase="optimizing",
+                stage="proxy_replay",
+            )
+            summary["replay"] = {
+                "state": replay.group("state").lower(),
+                "id": int(replay.group("replay")),
+                "candidates": int(replay.group("candidates")),
+                "bars_completed": bars_completed,
+                "bars_total": bars_total,
+                "elapsed_seconds": elapsed,
+                "eta_seconds": eta,
+                "suite_pass": (
+                    int(replay.group("pass_done"))
+                    if replay.group("pass_done") else None
+                ),
+                "suite_passes": (
+                    int(replay.group("pass_total"))
+                    if replay.group("pass_total") else None
+                ),
+                "scenarios": replay.group("scenarios"),
+                "exchange": replay.group("exchange"),
+                "history_percent": (
+                    float(replay.group("history"))
+                    if replay.group("history") else None
+                ),
             }
         halving = _OPT_LOG_GPU_HALVING_RE.search(message)
         if halving:
@@ -4626,6 +4676,7 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
             "target_exact_evaluations": target if backend == "gpu" else None,
             "exact_inflight": log_summary["exact_inflight"],
             "dispatch": log_summary["dispatch"],
+            "replay": log_summary["replay"],
             "halving": log_summary["halving"],
         },
         "runtime": {
