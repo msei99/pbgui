@@ -187,6 +187,7 @@ This project is indexed by GitNexus as **pbgui** (22089 symbols, 123344 relation
 ## Always Do
 
 - **MUST run impact analysis before editing.** Use `impact({target: "symbolName", direction: "upstream"})` (MCP) or `node .gitnexus/run.cjs impact "symbolName" --direction upstream --repo .` (CLI fallback); report callers, processes, and risk. Never substitute grep for graph analysis.
+  - **Frequency exception (cost control):** run impact analysis ONCE per task, covering all symbols the task will touch. Re-run it only when the task scope changes or an edit reaches a different subsystem than analyzed. Do not re-run it after every single file edit within the same analyzed scope.
 - **MUST analyze graph changes before committing.** Use `detect_changes({scope: "all"})` (MCP) or `node .gitnexus/run.cjs detect-changes --scope all --repo .` (CLI fallback). `partial: true` or `truncated: true` is not a clean check — a zero means unseen, not unaffected; re-run it. For regression review: `detect_changes({scope: "compare", base_ref: "main"})` or `node .gitnexus/run.cjs detect-changes --scope compare --base-ref "main" --repo .`.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
 - **MUST treat `risk: UNKNOWN` as unresolved, not as low.** An empty caller set is not evidence the symbol is unused — it can also mean the callers are not resolvable by the index (plain-object property access, dynamic dispatch, cross-language calls). `impact` pairs `UNKNOWN` with a `riskNote` saying so. Confirm with a text search before treating the symbol as safe to change or delete; do not proceed on the strength of a zero.
@@ -196,7 +197,7 @@ This project is indexed by GitNexus as **pbgui** (22089 symbols, 123344 relation
 
 ## Never Do
 
-- NEVER edit a function, class, or method before MCP/CLI impact analysis.
+- NEVER edit a function, class, or method before MCP/CLI impact analysis (once per task scope is sufficient — see the frequency exception above).
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis, and never read `UNKNOWN` as an all-clear — it means the walk could not answer, which is the one verdict that requires confirming by other means.
 - NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
 - NEVER commit before MCP/CLI graph change analysis.

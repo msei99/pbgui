@@ -239,6 +239,59 @@ def test_remove_waiting_job_prevents_claim_and_preserves_artifacts(queue):
     assert worker_step(queue, worker, now=100) == 'c' * 32
 
 
+def test_purge_job_history_removes_complete_retry_lineage_and_performance(queue):
+    """Explicit deletion removes every retry attempt and its retained measurements."""
+    from vast_performance import PerformanceHistory
+    queue, _ = queue
+    original = 'b' * 32
+    retry = 'd' * 32
+    directory = ensure_private_directory(queue.store.root / 'jobs' / retry)
+    write_json(directory / 'state.json', {'id': retry, 'kind': 'job', 'status': 'failed',
+               'rental_state': 'none', 'requeue_from': original, 'created_at': 4})
+    history = PerformanceHistory(queue.store.root)
+    for identifier in (original, retry):
+        history.record({'id': identifier, 'captured_at': 100, 'source_generation': 1,
+                        'workload': {'fingerprint': identifier}, 'hardware': {}}, [], None)
+
+    result = queue.purge_job_history(retry)
+
+    assert result['purged_ids'] == [original, retry]
+    assert not (queue.store.root / 'jobs' / original).exists()
+    assert not (queue.store.root / 'jobs' / retry).exists()
+    assert history.get(original) is None
+    assert history.get(retry) is None
+
+
+def test_purge_job_history_rejects_lineage_with_active_attempt(queue):
+    """History deletion validates the complete retry lineage before changing any attempt."""
+    from vast_provider import VastError
+    queue, _ = queue
+    original = 'b' * 32
+    retry = 'd' * 32
+    directory = ensure_private_directory(queue.store.root / 'jobs' / retry)
+    write_json(directory / 'state.json', {'id': retry, 'kind': 'job', 'status': 'running',
+               'rental_state': 'none', 'requeue_from': original, 'created_at': 4})
+
+    with pytest.raises(VastError, match='Stop every retry attempt'):
+        queue.purge_job_history(original)
+
+    assert queue.store.directory(original).exists()
+    assert queue.store.directory(retry).exists()
+    assert not queue.store.read(original).get('deleted_at')
+
+
+def test_purge_job_histories_batches_independent_jobs(queue):
+    """Bulk deletion scans and removes independent queue entries together."""
+    queue, _ = queue
+
+    result = queue.purge_job_histories(['b' * 32, 'c' * 32])
+
+    assert result['requested_ids'] == ['b' * 32, 'c' * 32]
+    assert result['purged_ids'] == ['b' * 32, 'c' * 32]
+    assert not (queue.store.root / 'jobs' / ('b' * 32)).exists()
+    assert not (queue.store.root / 'jobs' / ('c' * 32)).exists()
+
+
 def test_remove_claimed_job_is_rejected(queue):
     """A scheduler claim cannot be hidden by a subsequent deletion request."""
     from vast_provider import VastError

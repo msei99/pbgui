@@ -268,6 +268,18 @@ class PerformanceHistory:
         return {kind: [json.loads(row['payload']) for row in rows if row['kind'] == kind]
                 for kind in ('counter', 'telemetry')}
 
+    def delete_runs(self, identifiers):
+        """Delete aggregate and sampled performance history for validated run IDs."""
+        values = sorted({job_id(identifier) for identifier in identifiers})
+        if not values:
+            return 0
+        placeholders = ','.join('?' for _ in values)
+        with self.connection() as db:
+            removed = db.execute(
+                f'DELETE FROM runs WHERE id IN ({placeholders})', values).rowcount
+            db.execute(f'DELETE FROM samples WHERE run_id IN ({placeholders})', values)
+        return removed
+
 
 def collect_run(store, history, row, log_root, stop=None):
     """Snapshot a job from local immutable inputs and already synchronized logs only."""

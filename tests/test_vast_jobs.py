@@ -2,6 +2,7 @@
 import copy
 import io
 import json
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -14,6 +15,28 @@ from vast_job_runner import guard_step, run_loop, validate_intent
 from vast_provider import VastError
 from vast_transfer import extract_results, import_results, fetch_host_key_result
 from setup.vast_gpu_benchmark.cloud_worker import safe_path
+
+
+def test_list_skips_job_directory_removed_during_scan(tmp_path, monkeypatch):
+    """A concurrent permanent deletion does not fail the complete queue snapshot."""
+    store = JobStore(tmp_path / "vast")
+    surviving = 'a' * 32
+    disappearing = 'b' * 32
+    for identifier in (surviving, disappearing):
+        directory = ensure_private_directory(store.root / 'jobs' / identifier)
+        write_json(directory / 'state.json', {'id': identifier, 'status': 'failed'})
+    original_read = store.read
+
+    def read_with_delete(identifier, filename='state.json'):
+        """Model a directory disappearing between enumeration and record read."""
+        if identifier == disappearing:
+            shutil.rmtree(store.root / 'jobs' / identifier)
+            raise VastError('Cloud job record cannot be read', 500)
+        return original_read(identifier, filename)
+
+    monkeypatch.setattr(store, 'read', read_with_delete)
+
+    assert [row['id'] for row in store.list()] == [surviving]
 
 
 def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch):

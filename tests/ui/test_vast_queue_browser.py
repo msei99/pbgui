@@ -99,6 +99,10 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 data = {'id':('b' if jobs else 'a')*32,'config_name':payload['config_name'],'status':'ready','rental_state':'none',
                         'iterations':payload['iterations'],'workers':payload['workers'],'input_bytes':100,'has_log':False,'can_delete':True}
                 jobs.append(data)
+            elif self.path == '/api/vast/jobs/delete':
+                removed = set(payload['ids'])
+                jobs[:] = [job for job in jobs if job['id'] not in removed]
+                data = {'deleted':True, 'purged_ids':sorted(removed)}
             else:
                 self.send_error(404); return
             self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers()
@@ -399,7 +403,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert page.evaluate('bulkLocalDelete') == {
                     'path':'/queue/delete', 'body':{'filenames':['local-job']}
                 }
-                assert '/api/vast/jobs/' + 'b'*32 in calls
+                assert calls.count('/api/vast/jobs/delete') == 1
                 assert page.evaluate('state.selectedQueue.size') == 0
                 assert '/api/vast/jobs/' + 'a'*32 + '/requeue' in calls
                 assert not errors
@@ -610,7 +614,7 @@ def test_vast_result_snapshots_trigger_refresh_without_local_runs():
             page.set_content('<div id="supervision-status"></div>')
             page.add_script_tag(content='''
                 const el = id => document.getElementById(id);
-                let jobGeneration=0, disposed=false, jobRows=[], worker=null, queueState={}, supervision=false, selectedJobId=null;
+                let jobGeneration=0, disposed=false, jobRows=[], workers=[], worker=null, queueState={}, supervision=false, selectedJobId=null;
                 const stoppingJobs = new Map();
                 let data={jobs:[{id:'test'}]};
                 const request=async () => structuredClone(data);

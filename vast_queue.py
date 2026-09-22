@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -156,6 +157,56 @@ class CloudQueue:
                 changes['status'] = 'cancelled'
             self.store.update(identifier, **changes)
             return {'id': identifier, 'deleted': True}
+
+    def purge_job_history(self, identifier: str) -> dict:
+        """Permanently remove an inactive job's complete retry lineage and history."""
+        result = self.purge_job_histories([identifier])
+        return {'id': result['requested_ids'][0], 'deleted': True,
+                'purged_ids': result['purged_ids']}
+
+    def purge_job_histories(self, identifiers: list[str]) -> dict:
+        """Permanently remove multiple inactive retry lineages in one transaction."""
+        requested = list(dict.fromkeys(job_id(identifier) for identifier in identifiers))
+        if not requested:
+            raise VastError('Choose at least one cloud job to delete', 422)
+        with advisory_file_lock(self.root / '.queue-lock'):
+            rows = self.store.list()
+            by_id = {row['id']: row for row in rows}
+            if any(identifier not in by_id or by_id[identifier].get('kind') == 'worker'
+                   for identifier in requested):
+                raise VastError('Cloud job not found', 404)
+            lineage = set(requested)
+            changed = True
+            while changed:
+                changed = False
+                for row in rows:
+                    parent = row.get('requeue_from')
+                    if row.get('kind') != 'worker' and (row['id'] in lineage or parent in lineage):
+                        before = len(lineage)
+                        lineage.add(row['id'])
+                        if parent in by_id and by_id[parent].get('kind') != 'worker':
+                            lineage.add(parent)
+                        changed = changed or len(lineage) != before
+            for job_identifier in lineage:
+                row = by_id[job_identifier]
+                if not can_remove_job(row, self.worker_for(row.get('lease_id'))):
+                    raise VastError('Stop every retry attempt and finish collection/cleanup before deleting its history', 409)
+            deleted_at = time.time()
+            for job_identifier in lineage:
+                row = by_id[job_identifier]
+                changes = {'deleted_at': deleted_at}
+                if row['status'] == 'ready':
+                    changes['status'] = 'cancelled'
+                self.store.update(job_identifier, **changes)
+            from vast_performance import PerformanceHistory
+            PerformanceHistory(self.root).delete_runs(lineage)
+            for job_identifier in lineage:
+                directory = self.store.directory(job_identifier)
+                try:
+                    shutil.rmtree(directory)
+                except OSError as exc:
+                    raise VastError('Cloud job history could not be removed completely', 500) from exc
+            return {'requested_ids': requested, 'deleted': True, 'purged_ids': sorted(lineage)}
 
     def action(self, action: str) -> dict:
         """Control queue scheduling without implicitly creating a replacement GPU."""

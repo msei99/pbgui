@@ -12,6 +12,13 @@ def test_creation_and_validation_use_same_image():
     assert IMAGE == PROFILE_IMAGE
 
 
+def test_current_image_has_offline_layer_sizes():
+    """The active immutable image keeps byte-weighted pull progress available."""
+    from vast_image_layers import IMAGE_LAYERS
+    assert IMAGE in IMAGE_LAYERS
+    assert len(IMAGE_LAYERS[IMAGE]) == 38
+
+
 @pytest.mark.parametrize('image', SUPPORTED_RENTAL_IMAGES)
 def test_known_image_keeps_intent_and_creation_image(job, image):
     """Recovery and creation retain the exact previously authorized image."""

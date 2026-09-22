@@ -337,6 +337,8 @@ Die Knöpfe **− / +** neben **Budget / deadline** fordern Änderungen um jewei
 
 Im GPU-Log kann `chunks=2/2 candidates=1024/1024` mehrfach erscheinen: Im Suite-Modus wird derselbe Kandidatenblock für jedes Szenario separat geprüft. `eta=0` gilt nur für diesen Dispatch, nicht für die gesamte Optimierung. Exact-/Pareto-Ergebnisse erscheinen erst nach den CPU-Prüfungen der ausgewählten Kandidaten. Daher kann die erste Suite-Runde bereits GPU-Aktivität zeigen, obwohl noch keine exakten Ergebnisse vorliegen.
 
+Lange CPU-Exact-Populationen und Auswertungen von Startkonfigurationen melden nach jeweils fünf Minuten ohne andere Ausgabe einen Fortschrittsstatus. Er enthält abgeschlossene, ausstehende und gestartete Arbeit, Laufzeit, Durchsatz und eine Restzeitschätzung, sobald mindestens eine Auswertung abgeschlossen ist. Davor bleibt die Restzeit unbekannt, statt eine Dauer zu erfinden.
+
 Die GPU-Laufzeit mit mehreren Coins muss nicht linear mit der Coin-Anzahl steigen. Für einen Hostvergleich sollten aufgewärmte Proxy-Profile mit denselben Coins, Szenarien und Kandidatenzahlen verwendet werden: `kernel_execution` trennt die GPU-Berechnung von Kompilierung und Datentransfer. Eine ausgelastete GPU allein belegt keine normale Hostleistung.
 
 Nur der alte Übertragungsweg ohne rsync führt noch eine Cache-Prüfung aus. Sie zeigt die vom Worker bestätigte Anzahl geprüfter Dateien und einen eigenen Prozentwert vor Beginn der Datenübertragung. Der Zähler bleibt beim erneuten Öffnen des Logs erhalten und ist vom Uploadfortschritt getrennt.

@@ -27,10 +27,11 @@ from vast_exchanges import SUPPORTED_EXCHANGES
 
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
-IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:b67111ebcc0d0c55c57c0b27ad8d2017c8577061a47a4b7909936bd4215c0fc4"
+IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:bc330893bef1864065dc21835faac725e551383c3455ad4c5908a6713417268e"
 # Existing immutable rental intents must remain recoverable after a wrapper update.
 SUPPORTED_RENTAL_IMAGES = (
     IMAGE,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:b67111ebcc0d0c55c57c0b27ad8d2017c8577061a47a4b7909936bd4215c0fc4",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88",
@@ -241,7 +242,16 @@ class JobStore:
             return []
         if folder.is_symlink():
             raise VastError("Invalid cloud jobs directory", 500)
-        rows = [self.read(p.name) for p in folder.iterdir() if p.is_dir() and re.fullmatch(r"[0-9a-f]{32}", p.name)]
+        rows = []
+        for path in folder.iterdir():
+            if not path.is_dir() or not re.fullmatch(r"[0-9a-f]{32}", path.name):
+                continue
+            try:
+                rows.append(self.read(path.name))
+            except VastError:
+                if not path.exists():
+                    continue
+                raise
         return sorted(rows, key=lambda row: row.get("created_at", 0), reverse=True)
 
     def exchanges(self, row: dict) -> list[str]:

@@ -10,7 +10,7 @@ def test_manifest_weighted_progress_preserves_rolling_tail():
     from vast_image_layers import IMAGE_LAYERS
     image, sizes = next(iter(IMAGE_LAYERS.items()))
     progress = logs.image_layer_progress('ea381c80ad7f: Download complete\n02a27392fe49: Already exists', image=image)
-    assert progress['total'] == 27
+    assert progress['total'] == len(sizes)
     assert progress['completed_bytes'] == 820822233 + 250
     assert progress['total_bytes'] == sum(sizes.values())
     assert progress['download_percent'] == pytest.approx(100 * (820822233 + 250) / sum(sizes.values()))

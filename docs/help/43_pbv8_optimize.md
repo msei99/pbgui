@@ -337,6 +337,8 @@ The **− / +** buttons beside **Budget / deadline** request 30-minute changes f
 
 GPU logs may repeat `chunks=2/2 candidates=1024/1024`: in Suite mode a candidate batch is screened separately for each scenario. `eta=0` refers to that dispatch, not the whole optimization. Exact/Pareto results arrive after the selected candidates complete their CPU evaluations; the first suite pass can therefore show GPU activity before any exact results.
 
+Long CPU exact populations and starting-config evaluations emit a progress heartbeat after every five-minute quiet interval. It reports completed, pending and submitted work, elapsed time, throughput and an ETA when at least one evaluation has completed; before that, ETA remains unknown instead of inventing a duration.
+
 Multicoin GPU runtime need not scale linearly with coin count. Compare warm proxy profiles with the same coin set, scenarios and candidate count: `kernel_execution` isolates GPU computation from compilation and data transfer. A busy GPU alone does not establish normal host performance.
 
 Only the legacy fallback performs cache checking. It shows acknowledged files out of the total and its own percentage before byte transfer starts. This counter is retained when reopening the log; it is separate from upload progress.

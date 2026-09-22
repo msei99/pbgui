@@ -805,6 +805,13 @@
     try {
       const data = await request('/jobs');
       if (disposed || current !== jobGeneration) return;
+      const previousPollError = el('queue-message');
+      if (previousPollError && previousPollError.dataset.jobPollError === previousPollError.textContent) {
+        delete previousPollError.dataset.jobPollError;
+        message('');
+      } else if (previousPollError) {
+        delete previousPollError.dataset.jobPollError;
+      }
       const selected = preferred || selectedJobId;
       const previousResults = new Map(jobRows.map(job => [job.id, [job.result_path, job.last_backup_at, job.result_partial].join('|')]));
       const resultsChanged = data.jobs.some(job => job.result_path && previousResults.get(job.id) !==
@@ -829,7 +836,13 @@
       }
       renderQueueOverview();
       if (resultsChanged && typeof refreshLiveResultsDuringRun === 'function') await refreshLiveResultsDuringRun(true);
-    } catch (error) { if (!disposed && current === jobGeneration) message(error.message, true); }
+    } catch (error) {
+      if (!disposed && current === jobGeneration) {
+        message(error.message, true);
+        const pollError = el('queue-message');
+        if (pollError) pollError.dataset.jobPollError = error.message;
+      }
+    }
   }
 
   async function pollJobs() {
@@ -1599,11 +1612,9 @@
     jobs.forEach(job => deletingJobs.add(job.id));
     renderJob(); renderQueueOverview();
     try {
-      for (const job of jobs) {
-        if (disposed) return;
-        await request('/jobs/' + encodeURIComponent(job.id), {method:'DELETE'});
-        if (window.state && window.state.cloudLogId === job.id) closeLog();
-      }
+      if (disposed) return;
+      await request('/jobs/delete', {method:'POST', body:JSON.stringify({ids:jobs.map(job => job.id)})});
+      if (window.state && jobs.some(job => window.state.cloudLogId === job.id)) closeLog();
       if (!disposed) await refreshJobs();
     } finally {
       jobs.forEach(job => deletingJobs.delete(job.id));

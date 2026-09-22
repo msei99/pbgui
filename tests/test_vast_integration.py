@@ -312,7 +312,7 @@ def test_unsaved_config_validation_is_pinned_and_read_only(client, monkeypatch):
 
 
 def test_cloud_delete_and_log_metadata(client, monkeypatch, tmp_path):
-    """The API hides deleted entries and reports actual local log availability."""
+    """The API permanently deletes entries and their local optimizer logs."""
     from secure_files import ensure_private_directory
     from vast_jobs import JobStore, write_json
     from vast_queue import CloudQueue
@@ -337,7 +337,7 @@ def test_cloud_delete_and_log_metadata(client, monkeypatch, tmp_path):
     assert http.get('/api/vast/jobs').json()['jobs'][0]['has_log'] is True
     assert http.delete('/api/vast/jobs/' + identifier).status_code == 200
     assert http.get('/api/vast/jobs').json()['jobs'] == []
-    assert (logs / f'vast_{identifier}.log').exists()
+    assert not (logs / f'vast_{identifier}.log').exists()
 
 
 def test_start_uses_persisted_rental_settings(client, monkeypatch, tmp_path):

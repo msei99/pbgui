@@ -906,9 +906,36 @@ def cleanup_job(identifier: str, session: SessionToken = Depends(require_auth)) 
 
 @router.delete("/jobs/{identifier}")
 def delete_job(identifier: str, session: SessionToken = Depends(require_auth)) -> dict:
-    """Remove an inactive cloud queue entry, preserving its stored artifacts."""
+    """Permanently remove an inactive cloud job, its retry lineage and local history."""
     try:
-        return CloudQueue().remove_job(identifier)
+        result = CloudQueue().purge_job_history(identifier)
+        for job_identifier in result['purged_ids']:
+            for suffix in ('.log', '_provider.log'):
+                path = CLOUD_LOG_ROOT / f'vast_{job_identifier}{suffix}'
+                if path.is_file() or path.is_symlink():
+                    path.unlink(missing_ok=True)
+        return result
+    except VastError as exc:
+        raise _error(exc) from None
+
+
+class DeleteJobsRequest(BaseModel):
+    """Bound a single permanent cloud-history deletion request."""
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1, max_length=100)
+
+
+@router.post("/jobs/delete")
+def delete_jobs(body: DeleteJobsRequest, session: SessionToken = Depends(require_auth)) -> dict:
+    """Permanently remove multiple inactive cloud retry lineages in one batch."""
+    try:
+        result = CloudQueue().purge_job_histories(body.ids)
+        for job_identifier in result['purged_ids']:
+            for suffix in ('.log', '_provider.log'):
+                path = CLOUD_LOG_ROOT / f'vast_{job_identifier}{suffix}'
+                if path.is_file() or path.is_symlink():
+                    path.unlink(missing_ok=True)
+        return result
     except VastError as exc:
         raise _error(exc) from None
 

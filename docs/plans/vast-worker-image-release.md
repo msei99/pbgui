@@ -112,3 +112,22 @@ was explicitly approved by the user. Anonymous manifest access and its SHA256
 were verified after publication; the manifest config digest matches the reviewed
 local image ID. PBGui now pins this digest for new rentals and retains queue-v1
 and queue-v2 digests for recovery and cleanup of existing rentals.
+
+## Published HSL and optimizer-heartbeat overlay (2026-09-22)
+
+- Public tag: `ghcr.io/msei99/pbgui-pb8-worker:69227b7-hsl-heartbeat-v1`.
+- Manifest: `sha256:bc330893bef1864065dc21835faac725e551383c3455ad4c5908a6713417268e`.
+- Local image ID: `sha256:0e3ed6c61e90a35f16a162ec87fe20f2b5634511f0e0bccb292310b21d115b6e`.
+- Compatibility revision: `69227b75e808f8ce1f4b8949350b3311916bd377`.
+- Heartbeat source commit: `9c160f05913283fa3cd4e9198d83f0ce26ec3640` (Passivbot PR #1801).
+
+The image derives from the published disabled-HSL specialization at
+`sha256:b67111ebcc0d0c55c57c0b27ad8d2017c8577061a47a4b7909936bd4215c0fc4`.
+It overlays only the shared asynchronous optimizer helper, PyMOO and DEAP callers, and optimizer
+entrypoint. SHA256 checks confirmed that the GPU backend and MPS kernel files remain byte-identical
+to the HSL image. A network-disabled container check verified the compatibility marker, Python
+syntax and five-minute heartbeat contract. Anonymous manifest access was verified after publishing.
+
+PBGui pins the new digest only for new rentals and keeps every prior digest allowlisted for cleanup
+and recovery. Existing containers are not modified or restarted. No paid Vast instance was rented
+for this publication.
