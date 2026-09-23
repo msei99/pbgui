@@ -89,6 +89,8 @@ Sidebar actions:
 | **Reboot Master** | Restart the local server |
 | **Install or Update rustup** | Install or refresh the Rust toolchain |
 
+The **Monitor** section shows **Hyperliquid Account Request Limit** above the bot table. Master lists all saved Hyperliquid accounts; each VPS lists accounts assigned to its PB8 instances, including stopped bots. PBGui queries `userRateLimit` once per unique wallet every five minutes, even when several bots use that wallet. **nRequestsUsed**, **nRequestsCap**, remaining requests, and sample time describe the cumulative address action quota; they are not the IP REST weight limit. A failed read keeps the last successful sample marked **Stale**. The browser receives cached values and does not create additional Hyperliquid requests. Click an account row to open its 24-hour **Used** and **Cap** history in the same chart window as CPU and memory. Successful five-minute samples are stored on the Master and remain available after an API restart; gaps indicate missed samples. History begins with the first sample after this feature is installed.
+
 The **Master** content area also contains:
 - a live status grid for CoinData / last command state
 - **PBGui Branch Management** for branch or commit switches

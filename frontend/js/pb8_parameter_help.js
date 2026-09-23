@@ -31,6 +31,8 @@
     "f-hedge-mode": "live.hedge_mode",
     "f-hsl-accept-incomplete": "live.hsl_accept_incomplete_history",
     "f-hsl-cooldown-policy": "live.hsl_position_during_cooldown_policy",
+    "f-hsl-engine": "live.hsl_engine",
+    "f-hsl-grace": "live.hsl_unavailable_grace_seconds",
     "f-hsl-signal-mode": "live.hsl_signal_mode",
     "f-inactive-ttl": "live.inactive_coin_candle_ttl_minutes",
     "f-leverage": "live.leverage",

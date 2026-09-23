@@ -20,6 +20,8 @@ Die Long/Short-JSON-Felder folgen dem installierten PB8-Schema. Die Preis-EMA-Sp
 `live.risk_input_max_attempts` erscheint unter **Additional Parameters**, wenn die installierte Laufzeit dieses Feld liefert (Standard: 10). Es begrenzt fehlgeschlagene Wiederherstellungsversuche für Risikodaten pro Wiederherstellungsphase. Nach Ausschöpfen stoppt der Bot ohne vollständige Neustartschleife; nach erfolgreicher Wiederherstellung wird der normale Handel fortgesetzt. Die HSL-Schwellenwerte bleiben davon unabhängig.
 
 
+Unter **Advanced Settings → Modes & Policies** waehlt `live.hsl_engine` zwischen `legacy` (Standard) und dem experimentellen HSL-Modus `revised`. Der Wert gilt erst nach einem Bot-Neustart; `revised` erfordert eine passende Konfiguration und eine aktualisierte PB8-Laufzeit auf dem Zielhost. `live.hsl_unavailable_grace_seconds` bestimmt im Legacy-HSL die ununterbrochene Zeit ohne Signal vor der Notfall-Verlustpruefung (Standard 120 Sekunden; 0 bedeutet sofortige Pruefung). Die Felder erscheinen, wenn die installierte PB8-Laufzeit die Parameter meldet.
+
 ## Run-Liste
 
 Unter **PBv8 -> Run** werden Configs aus `data/run_v8` angezeigt. PB7 und PB8 verwenden dieselbe responsive Run-Listenansicht mit Sidebar-Suche und Statusfiltern. Die Tabelle zeigt die aktive PB8-Strategie, Exchange-User, Zielhost, Config- und laufende Version, Exposure-Uebersicht, bestaetigte Laufzeit-Hosts, Notiz und PBCluster-Sollzustand. Strategy ist sortierbar und Teil der Listensuche.

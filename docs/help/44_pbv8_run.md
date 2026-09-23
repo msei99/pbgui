@@ -20,6 +20,8 @@ The Long/Short JSON fields follow the installed PB8 schema. Trailing Martingale 
 `live.risk_input_max_attempts` is available under **Additional Parameters** when supplied by the installed runtime (default: 10). It limits failed risk-input recovery attempts per recovery episode. Exhaustion stops the bot without entering its full restart loop; successful recovery resumes normal trading. This setting does not change the HSL thresholds.
 
 
+In **Advanced Settings → Modes & Policies**, `live.hsl_engine` selects `legacy` (default) or the experimental `revised` HSL engine. It is a startup-only selector: use `revised` only with an engine-compatible configuration and an updated PB8 runtime on the target host. `live.hsl_unavailable_grace_seconds` sets the continuous signal-unavailability period for the legacy HSL emergency loss evaluation (default 120 seconds; 0 means immediate evaluation). These controls appear when the installed PB8 runtime reports the corresponding parameters.
+
 ## Run List
 
 Open **PBv8 -> Run** to view configs stored below `data/run_v8`. PB7 and PB8 use the same responsive Run-list layout with sidebar search and status filters. The table shows the active PB8 strategy, exchange user, target host, config and running versions, exposure summary, confirmed running hosts, note, and PBCluster desired state. Strategy is sortable and included in list search.

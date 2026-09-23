@@ -112,6 +112,8 @@ Wenn PB8 nicht installiert ist, wird **Install PB8** als gefüllte blaue Aktion 
 
 ---
 
+Im Bereich **Monitor** steht **Hyperliquid Account Request Limit** oberhalb der Bot-Tabelle. Master zeigt alle gespeicherten Hyperliquid-Konten, ein VPS die Konten seiner zugewiesenen PB8-Instanzen, auch wenn ein Bot gestoppt ist. PBGui fragt `userRateLimit` alle fünf Minuten einmal je eindeutiger Wallet-Adresse ab, auch wenn mehrere Bots dieselbe Adresse verwenden. **nRequestsUsed**, **nRequestsCap**, verbleibende Requests und Messzeit beziehen sich auf das kumulative adressbezogene Aktionslimit, nicht auf das REST-Gewichtslimit der IP. Bei einem Abfragefehler bleibt der letzte erfolgreiche Wert mit **Stale** gekennzeichnet. Die Browseranzeige liest nur den Cache und erzeugt keine zusätzlichen Hyperliquid-Abfragen. Ein Klick auf eine Kontozeile öffnet den 24-Stunden-Verlauf für **Used** und **Cap** im selben Diagrammfenster wie CPU und Memory. Erfolgreiche Messungen werden auf dem Master gespeichert und bleiben nach einem API-Neustart erhalten; Lücken zeigen ausgefallene Messungen. Der Verlauf beginnt mit der ersten Messung nach Installation dieser Funktion.
+
 ## VPS-Verwaltung
 
 Klick auf eine VPS-Karte in der linken Leiste öffnet die Detailansicht des jeweiligen VPS.

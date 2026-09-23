@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import traceback
 import uuid
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from api.auth import SessionToken, authenticate_websocket, require_auth
 from api.vps import get_bot_log_matches
+from file_lock import advisory_file_lock
+from secure_files import atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow
 from logging_helpers import human_log as _log
 from vps_manager_service import UnknownHostKeyError, VPSManagerService
 
@@ -27,6 +31,13 @@ _CLUSTER_ONBOARD_TASKS: dict[str, asyncio.Task[dict[str, object]]] = {}
 _CLUSTER_ONBOARD_JOBS: dict[str, dict[str, object]] = {}
 _CLUSTER_ONBOARD_ACTIVE: dict[str, str] = {}
 _CLUSTER_ONBOARD_JOB_TTL_SECONDS = 3600
+_HL_RATE_LIMIT_INTERVAL_SECONDS = 300
+_HL_RATE_LIMIT_HISTORY_SECONDS = 24 * 60 * 60
+_HL_RATE_LIMIT_HISTORY_DIR = Path(__file__).resolve().parent.parent / "data" / "vpsmanager" / "hl_rate_limit_history"
+_HL_RATE_LIMIT_HISTORY_FILE = _HL_RATE_LIMIT_HISTORY_DIR / "samples.json"
+_HL_WALLET_PATTERN = re.compile(r"0x[0-9a-fA-F]{40}\Z")
+_hl_rate_limit_task: asyncio.Task[None] | None = None
+_hl_rate_limit_accounts: dict[str, dict[str, object]] = {}
 
 
 class ExistingVpsImportRequest(BaseModel):
@@ -78,12 +89,23 @@ def get_service_instance() -> VPSManagerService:
 
 def startup() -> None:
     """Prepare an existing VPS Manager service for a new API lifespan."""
+    global _hl_rate_limit_task
     if _service is not None:
         _service.prepare_startup()
+    if _hl_rate_limit_task is None or _hl_rate_limit_task.done():
+        _hl_rate_limit_task = asyncio.get_running_loop().create_task(
+            _poll_hl_rate_limits(), name="vps-manager-hl-rate-limits"
+        )
 
 
 async def shutdown() -> None:
-    """Join API-owned deploy controllers while leaving Ansible processes alive."""
+    """Join API-owned deploy controllers and Hyperliquid polling."""
+    global _hl_rate_limit_task
+    task = _hl_rate_limit_task
+    _hl_rate_limit_task = None
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     tasks = list(_CLUSTER_ONBOARD_TASKS.values())
     for task in tasks:
         task.cancel()
@@ -92,6 +114,182 @@ async def shutdown() -> None:
     _CLUSTER_ONBOARD_TASKS.clear()
     if _service is not None:
         await asyncio.to_thread(_service.shutdown)
+
+
+def _configured_hl_wallets() -> dict[str, list[str]]:
+    """Group saved Hyperliquid account names by validated public wallet address."""
+    from User import Users
+
+    wallets: dict[str, list[str]] = {}
+    for user in Users():
+        if str(getattr(user, "exchange", "") or "").lower() != "hyperliquid":
+            continue
+        address = str(getattr(user, "wallet_address", "") or "").strip()
+        if not _HL_WALLET_PATTERN.fullmatch(address):
+            continue
+        wallets.setdefault(address.lower(), []).append(str(user.name))
+    return {address: sorted(set(names)) for address, names in wallets.items()}
+
+
+
+def _read_hl_rate_limit_history() -> dict[str, list[list[int]]]:
+    """Read account samples from the private on-disk history."""
+    if not _HL_RATE_LIMIT_HISTORY_FILE.exists():
+        return {}
+    raw = read_regular_file_nofollow(_HL_RATE_LIMIT_HISTORY_FILE, _HL_RATE_LIMIT_HISTORY_DIR)
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid Hyperliquid rate-limit history")
+    return payload
+
+
+def _append_hl_rate_limit_sample(address: str, sampled_at: int, used: int, cap: int) -> None:
+    """Persist one sample per wallet, pruning old samples under a process lock."""
+    ensure_private_directory(_HL_RATE_LIMIT_HISTORY_DIR)
+    with advisory_file_lock(_HL_RATE_LIMIT_HISTORY_FILE):
+        history = _read_hl_rate_limit_history()
+        cutoff = sampled_at - _HL_RATE_LIMIT_HISTORY_SECONDS
+        history = {
+            wallet: [sample for sample in samples
+                     if isinstance(sample, list) and len(sample) == 3
+                     and isinstance(sample[0], int) and sample[0] >= cutoff][-300:]
+            for wallet, samples in history.items()
+            if _HL_WALLET_PATTERN.fullmatch(wallet) and isinstance(samples, list)
+        }
+        points = history.setdefault(address, [])
+        points[:] = [sample for sample in points if sample[0] != sampled_at]
+        points.append([sampled_at, used, cap])
+        points.sort(key=lambda sample: sample[0])
+        history[address] = points[-300:]
+        atomic_write_private_text(_HL_RATE_LIMIT_HISTORY_FILE, json.dumps(history, indent=4))
+
+
+def _get_hl_rate_limit_history(address: str) -> list[dict[str, int]]:
+    """Return recent counter samples for one validated wallet."""
+    ensure_private_directory(_HL_RATE_LIMIT_HISTORY_DIR)
+    with advisory_file_lock(_HL_RATE_LIMIT_HISTORY_FILE):
+        history = _read_hl_rate_limit_history()
+    cutoff = int(time.time()) - _HL_RATE_LIMIT_HISTORY_SECONDS
+    samples = history.get(address, [])
+    if not isinstance(samples, list):
+        raise ValueError("Invalid Hyperliquid rate-limit account history")
+    return [
+        {"sampled_at": sample[0], "used": sample[1], "cap": sample[2]}
+        for sample in samples
+        if isinstance(sample, list) and len(sample) == 3
+        and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in sample)
+        and sample[0] >= cutoff
+    ]
+
+
+async def _poll_hl_rate_limits() -> None:
+    """Sample each unique account at most once per five-minute cycle."""
+    global _hl_rate_limit_accounts
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while True:
+            cycle_started = time.monotonic()
+            try:
+                wallets = await asyncio.to_thread(_configured_hl_wallets)
+            except Exception as exc:
+                _log(SERVICE, f"Hyperliquid account inventory failed: {type(exc).__name__}", level="WARNING")
+                wallets = None
+            if wallets is not None:
+                try:
+                    from api.v8_instances import _list_instances
+
+                    instances = await asyncio.to_thread(_list_instances)
+                    hosts_by_user: dict[str, set[str]] = {}
+                    for instance in instances:
+                        host = str(instance.get("enabled_on") or "").strip()
+                        user = str(instance.get("user") or "").strip()
+                        if user and host and host != "disabled" and instance.get("status") != "tombstoned":
+                            hosts_by_user.setdefault(user, set()).add(host)
+                except Exception as exc:
+                    _log(SERVICE, f"PB8 account host inventory failed: {type(exc).__name__}", level="WARNING")
+                    hosts_by_user = None
+                previous = _hl_rate_limit_accounts
+                _hl_rate_limit_accounts = {
+                    address: {
+                        **previous.get(address, {}),
+                        "users": names,
+                        "hosts": (
+                            sorted({host for name in names for host in hosts_by_user.get(name, set())})
+                            if hosts_by_user is not None else list(previous.get(address, {}).get("hosts") or [])
+                        ),
+                    }
+                    for address, names in wallets.items()
+                }
+                for index, (address, names) in enumerate(wallets.items()):
+                    if index:
+                        await asyncio.sleep(3.0)  # 20 IP weight per query; leave room for trading traffic.
+                    prior = _hl_rate_limit_accounts.get(address, {})
+                    try:
+                        response = await client.post(
+                            "https://api.hyperliquid.xyz/info",
+                            json={"type": "userRateLimit", "user": address},
+                        )
+                        response.raise_for_status()
+                        payload = response.json()
+                        if not isinstance(payload, dict):
+                            raise ValueError("Unexpected userRateLimit response")
+                        used = payload.get("nRequestsUsed")
+                        cap = payload.get("nRequestsCap")
+                        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (used, cap)):
+                            raise ValueError("Invalid userRateLimit counters")
+                        entry: dict[str, object] = {
+                            "users": names,
+                            "hosts": _hl_rate_limit_accounts[address]["hosts"],
+                            "used": used,
+                            "cap": cap,
+                            "sampled_at": int(time.time()),
+                            "state": "ok",
+                        }
+                        try:
+                            await asyncio.to_thread(_append_hl_rate_limit_sample, address, entry["sampled_at"], used, cap)
+                        except (OSError, ValueError, RuntimeError) as exc:
+                            _log(SERVICE, f"Hyperliquid rate-limit history write failed: {type(exc).__name__}", level="WARNING")
+                    except (httpx.HTTPError, ValueError) as exc:
+                        _log(SERVICE, f"Hyperliquid userRateLimit read failed: {type(exc).__name__}", level="WARNING")
+                        entry = {**prior, "users": names, "state": "stale" if "sampled_at" in prior else "unavailable"}
+                    _hl_rate_limit_accounts = {**_hl_rate_limit_accounts, address: entry}
+            await asyncio.sleep(max(1.0, _HL_RATE_LIMIT_INTERVAL_SECONDS - (time.monotonic() - cycle_started)))
+
+
+@router.get("/user-rate-limits")
+def get_hl_user_rate_limits(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Return cached address-limit counters without triggering exchange traffic."""
+    del session
+    accounts = sorted(_hl_rate_limit_accounts.values(), key=lambda item: item.get("users") or [])
+    return JSONResponse(
+        content={"accounts": accounts, "interval_seconds": _HL_RATE_LIMIT_INTERVAL_SECONDS},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/user-rate-limits/history/{user_name}")
+def get_hl_user_rate_limit_history(
+    user_name: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Return one account's stored history without exposing its wallet address."""
+    del session
+    if not user_name or user_name in {".", ".."} or any(char in user_name for char in ("/", "\\", "\x00")) or any(ord(char) < 32 for char in user_name):
+        raise HTTPException(status_code=400, detail="Invalid account name")
+    wallets = _configured_hl_wallets()
+    address = next((wallet for wallet, names in wallets.items() if user_name in names), None)
+    if address is None:
+        raise HTTPException(status_code=404, detail="Hyperliquid account not found")
+    try:
+        points = _get_hl_rate_limit_history(address)
+    except (OSError, ValueError, RuntimeError) as exc:
+        _log(SERVICE, f"Hyperliquid rate-limit history read failed: {type(exc).__name__}", level="WARNING")
+        raise HTTPException(status_code=500, detail="Account history unavailable") from exc
+    return JSONResponse(
+        content={"account": user_name, "source": "Hyperliquid userRateLimit", "window_seconds": _HL_RATE_LIMIT_HISTORY_SECONDS,
+                 "step_seconds": _HL_RATE_LIMIT_INTERVAL_SECONDS, "samples": points},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def _public_cluster_onboard_job(job: dict[str, object]) -> dict[str, object]:
