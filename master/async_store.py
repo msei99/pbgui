@@ -142,7 +142,36 @@ class VPSStore:
         self.changed.set()
 
     def update_instances(self, hostname: str, data: list[dict]):
-        """Update bot instance data for a host."""
+        """Update bot metadata without discarding fresh live process metrics."""
+        stream = self.streams.get(hostname) or {}
+        last_update = float(stream.get("last_update") or 0)
+        live_fresh = (
+            stream.get("active") is True
+            and not stream.get("stale")
+            and last_update > 0
+            and time.time() - last_update <= 15
+        )
+        if live_fresh:
+            previous = {
+                (str(item.get("p") or "7"), str(item.get("u") or item.get("name") or "")): item
+                for item in self.instances.get(hostname, [])
+            }
+            for item in data:
+                old = previous.get((str(item.get("p") or "7"), str(item.get("u") or item.get("name") or "")))
+                if not old or "cpu_60s_window" not in old:
+                    continue
+                old_start = float(old.get("st") or 0)
+                new_start = float(item.get("st") or 0)
+                if old_start > 0 and new_start > 0 and old_start != new_start:
+                    continue
+                for key in ("c", "cpu_60s", "cpu_60s_window"):
+                    if key in old:
+                        item[key] = old[key]
+                old_memory = old.get("m")
+                new_memory = item.get("m")
+                if isinstance(old_memory, list) and isinstance(new_memory, list) and len(old_memory) >= 10 and len(new_memory) >= 10:
+                    new_memory[0] = old_memory[0]
+                    new_memory[9] = old_memory[9]
         self.instances[hostname] = data
         self.changed.set()
 

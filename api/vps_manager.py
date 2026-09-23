@@ -195,28 +195,55 @@ async def _poll_hl_rate_limits() -> None:
                 _log(SERVICE, f"Hyperliquid account inventory failed: {type(exc).__name__}", level="WARNING")
                 wallets = None
             if wallets is not None:
+                hosts_by_user: dict[str, set[str]] = {}
+                bots_by_user: dict[str, set[tuple[str, str, str]]] = {}
+                inventories_complete = True
                 try:
                     from api.v8_instances import _list_instances
 
                     instances = await asyncio.to_thread(_list_instances)
-                    hosts_by_user: dict[str, set[str]] = {}
                     for instance in instances:
                         host = str(instance.get("enabled_on") or "").strip()
                         user = str(instance.get("user") or "").strip()
                         if user and host and host != "disabled" and instance.get("status") != "tombstoned":
                             hosts_by_user.setdefault(user, set()).add(host)
+                            name = str(instance.get("name") or "").strip()
+                            if name:
+                                bots_by_user.setdefault(user, set()).add((name, host, "8"))
                 except Exception as exc:
                     _log(SERVICE, f"PB8 account host inventory failed: {type(exc).__name__}", level="WARNING")
-                    hosts_by_user = None
+                    inventories_complete = False
+                try:
+                    from api.v7_instances import _load_local_instances
+
+                    instances = await asyncio.to_thread(_load_local_instances)
+                    for instance in instances:
+                        host = str(instance.get("enabled_on") or "").strip()
+                        user = str(instance.get("user") or "").strip()
+                        if user and host and host != "disabled":
+                            hosts_by_user.setdefault(user, set()).add(host)
+                            name = str(instance.get("name") or "").strip()
+                            if name:
+                                bots_by_user.setdefault(user, set()).add((name, host, "7"))
+                except Exception as exc:
+                    _log(SERVICE, f"PB7 account host inventory failed: {type(exc).__name__}", level="WARNING")
+                    inventories_complete = False
                 previous = _hl_rate_limit_accounts
                 _hl_rate_limit_accounts = {
                     address: {
                         **previous.get(address, {}),
                         "users": names,
-                        "hosts": (
-                            sorted({host for name in names for host in hosts_by_user.get(name, set())})
-                            if hosts_by_user is not None else list(previous.get(address, {}).get("hosts") or [])
+                        "hosts": sorted(
+                            {host for name in names for host in hosts_by_user.get(name, set())}
+                            | (set(previous.get(address, {}).get("hosts") or []) if not inventories_complete else set())
                         ),
+                        "bots": [{"name": bot, "host": host, "pb_version": version} for bot, host, version in sorted(
+                            {pair for name in names for pair in bots_by_user.get(name, set())}
+                            | ({(str(item.get("name") or ""), str(item.get("host") or ""), str(item.get("pb_version") or ""))
+                                for item in previous.get(address, {}).get("bots") or []
+                                if isinstance(item, dict) and item.get("name") and item.get("host")}
+                               if not inventories_complete else set())
+                        )],
                     }
                     for address, names in wallets.items()
                 }
@@ -240,6 +267,7 @@ async def _poll_hl_rate_limits() -> None:
                         entry: dict[str, object] = {
                             "users": names,
                             "hosts": _hl_rate_limit_accounts[address]["hosts"],
+                            "bots": _hl_rate_limit_accounts[address]["bots"],
                             "used": used,
                             "cap": cap,
                             "sampled_at": int(time.time()),
@@ -251,7 +279,8 @@ async def _poll_hl_rate_limits() -> None:
                             _log(SERVICE, f"Hyperliquid rate-limit history write failed: {type(exc).__name__}", level="WARNING")
                     except (httpx.HTTPError, ValueError) as exc:
                         _log(SERVICE, f"Hyperliquid userRateLimit read failed: {type(exc).__name__}", level="WARNING")
-                        entry = {**prior, "users": names, "state": "stale" if "sampled_at" in prior else "unavailable"}
+                        entry = {**prior, "users": names, "bots": _hl_rate_limit_accounts[address]["bots"],
+                                 "state": "stale" if "sampled_at" in prior else "unavailable"}
                     _hl_rate_limit_accounts = {**_hl_rate_limit_accounts, address: entry}
             await asyncio.sleep(max(1.0, _HL_RATE_LIMIT_INTERVAL_SECONDS - (time.monotonic() - cycle_started)))
 

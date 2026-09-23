@@ -968,6 +968,16 @@
       filter: brightness(1.08);
     }
 
+    .hl-limit-history {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+    }
+
+    .hl-limit-history .field-help {
+      font-weight: 400;
+    }
+
     .cpu-chart-meta {
       display: flex;
       flex-wrap: wrap;
@@ -12932,7 +12942,8 @@
     }
 
     var BOT_COLUMNS = [
-      { label: 'Name',              field: 'name',                  width: '21%', type: 'str' },
+      { label: 'Name',              field: 'name',                  width: '20%', type: 'str' },
+      { label: 'HL Limit',          field: 'hl_limit',              width: '8%',  type: 'num' },
       { label: 'CPU',               field: 'cpu',                   width: '10%', type: 'num' },
       { label: 'Memory',            field: 'memory_mb',             width: '7%',  type: 'num' },
       { label: 'Swap',              field: 'swap_mb',               width: '7%',  type: 'num' },
@@ -12960,12 +12971,68 @@
       var m = s.dir === 'asc' ? 1 : -1;
       var t = col.type;
       return items.slice().sort(function(a, b) {
-        var va = a[s.field], vb = b[s.field];
+        var va = s.field === 'hl_limit' ? _hlLimitSortValue(a) : a[s.field];
+        var vb = s.field === 'hl_limit' ? _hlLimitSortValue(b) : b[s.field];
         if (va == null) va = t === 'num' ? 0 : '';
         if (vb == null) vb = t === 'num' ? 0 : '';
         if (t === 'num') return (Number(va) - Number(vb)) * m;
         return String(va).localeCompare(String(vb)) * m;
       });
+    }
+
+    function _hlAccountForBot(item, pbVersion) {
+      if (!item || !item.name) return null;
+      const name = String(item.name || '');
+      const version = String(pbVersion || item.pb_version || '7');
+      const host = String(item.server || store.hostname || '');
+      const accounts = ((store.hlRateLimits || {}).accounts || []);
+      const matches = accounts.filter(function (account) {
+        return Array.isArray(account.bots) && account.bots.some(function (bot) {
+          return String(bot.name || '') === name && String(bot.host || '') === host
+            && (!bot.pb_version || String(bot.pb_version) === version);
+        });
+      });
+      if (matches.length === 1) return matches[0];
+      const nameMatches = accounts.filter(function (account) {
+        return Array.isArray(account.bots) && account.bots.some(function (bot) {
+          return String(bot.name || '') === name
+            && (!bot.pb_version || String(bot.pb_version) === version);
+        });
+      });
+      if (nameMatches.length === 1) return nameMatches[0];
+      const userMatches = accounts.filter(function (account) {
+        return Array.isArray(account.users) && account.users.includes(name);
+      });
+      return userMatches.length === 1 ? userMatches[0] : null;
+    }
+
+    function _hlLimitSortValue(item) {
+      const account = _hlAccountForBot(item);
+      const used = Number(account && account.used);
+      const cap = Number(account && account.cap);
+      return account && Number.isFinite(used) && Number.isFinite(cap) && cap > 0 ? used / cap : -1;
+    }
+
+    function _hlLimitCell(item, host, pbVersion) {
+      const account = _hlAccountForBot(item, pbVersion);
+      if (!account) return { html: `<span class='field-help'>—</span>`, sig: 'no-hl-account' };
+      const historyUser = String((account.users || [])[0] || '');
+      const used = Number(account.used);
+      const cap = Number(account.cap);
+      const hasSample = Number.isFinite(used) && Number.isFinite(cap) && cap > 0 && !!account.sampled_at;
+      const percent = hasSample ? used / cap * 100 : 0;
+      const stale = hasSample && (account.state !== 'ok' || Date.now() / 1000 - Number(account.sampled_at) > 600);
+      const tone = !hasSample || stale ? 'warning' : (used >= cap ? 'error' : (percent >= 90 ? 'warning' : 'ok'));
+      const status = !hasSample ? 'Unavailable' : (stale ? 'Stale' : (used >= cap ? 'Limit reached' : (percent >= 90 ? 'Near limit' : 'Available')));
+      const value = hasSample ? percent.toFixed(0) + '%' : status;
+      const counters = hasSample ? used.toLocaleString() + ' / ' + cap.toLocaleString() : 'Waiting for sample';
+      const sampled = account.sampled_at ? new Date(Number(account.sampled_at) * 1000).toLocaleString() : 'n/a';
+      const title = 'nRequestsUsed: ' + (hasSample ? used.toLocaleString() : 'n/a')
+        + ' | nRequestsCap: ' + (hasSample ? cap.toLocaleString() : 'n/a')
+        + ' | Remaining: ' + (hasSample ? Math.max(0, cap - used).toLocaleString() : 'n/a')
+        + ' | ' + status + ' | Sampled: ' + sampled + ' | Click for 24-hour history';
+      const html = `<button class='table-button cpu-clickable hl-limit-history' type='button' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(historyUser)}' data-history-metric='hl_requests' title='${escAttr(title)}'><span class='tag ${tone}'>${esc(value)}</span><span class='field-help'>${esc(counters)}</span></button>`;
+      return { html: html, sig: [historyUser, String(account.sampled_at || ''), String(used), String(cap), String(account.state || ''), stale ? 'stale' : 'fresh'].join('|') };
     }
 
     function _cpuTag(v) {
@@ -13030,6 +13097,7 @@
           html: `<div><button class='tag table-button' type='button' style='cursor:pointer;color:var(--accent);background:rgba(93,196,255,0.12)' data-vps-action='open-bot-log' data-host='${escAttr(host)}' data-bot='${escAttr(item.name || '')}' data-pb-version='${escAttr(pbVersion)}' title='Open bot log'>${esc(item.name || '-')}</button></div><div class='field-help' title='Bot start time'>${esc(item.start_time || '-')}</div>`,
           sig: [host, pbVersion, String(item.name || ''), String(item.start_time || '')].join('|')
         },
+        hl_limit: _hlLimitCell(item, host, pbVersion),
         cpu: {
           html: `<div><span class='cpu-clickable' data-cpu-history-host='${escAttr(host)}' data-cpu-history-bot='${escAttr(historyName)}'>${_cpuTag(item.cpu)}</span><div class='field-help'>${esc(_cpuSubline(item))}</div></div>`,
           sig: [String(Number(item.cpu) || 0), String(Number(item.cpu_60s) || 0), String(Number(item.cpu_60s_window) || 0), item.cpu_60s_confirmed ? '1' : '0'].join('|')
@@ -13124,40 +13192,11 @@
         </div>`;
     }
 
-    function renderHlAccountLimits(monitor, isMaster) {
-      const names = new Set([].concat(monitor.v8 || [], monitor.v8_running || []).map(function (item) {
-        return String((item || {}).name || '');
-      }).filter(Boolean));
-      const accounts = ((store.hlRateLimits || {}).accounts || []).filter(function (account) {
-        return Array.isArray(account.users) && (isMaster
-          || (Array.isArray(account.hosts) && account.hosts.includes(store.hostname))
-          || account.users.some(function (name) { return names.has(String(name)); }));
-      });
-      if (!accounts.length) return '';
-      const rows = accounts.map(function (account) {
-        const accountNames = account.users.filter(function (name) { return isMaster || names.has(String(name)); });
-        const label = accountNames.length ? accountNames.join(', ') : account.users.join(', ');
-        const used = Number(account.used);
-        const cap = Number(account.cap);
-        const hasSample = Number.isFinite(used) && Number.isFinite(cap) && cap > 0 && !!account.sampled_at;
-        const percent = hasSample ? used / cap * 100 : 0;
-        const stale = hasSample && (account.state !== 'ok' || Date.now() / 1000 - Number(account.sampled_at) > 600);
-        const tone = !hasSample || stale ? 'warning' : (used >= cap ? 'error' : (percent >= 90 ? 'warning' : 'ok'));
-        const stateText = !hasSample ? 'Unavailable' : (stale ? 'Stale' : (used >= cap ? 'Limit reached' : (percent >= 90 ? 'Near limit' : 'Available')));
-        const sampled = account.sampled_at ? new Date(Number(account.sampled_at) * 1000).toLocaleTimeString() : '-';
-        const historyUser = String(account.users[0] || '');
-        return `<tr class='cpu-clickable' data-history-host='${escAttr(store.hostname || 'master')}' data-history-metric='hl_requests' data-history-bot='${escAttr(historyUser)}' title='Show 24-hour account request history'><td>${esc(label)}</td><td>${hasSample ? esc(used.toLocaleString()) : '-'}</td><td>${hasSample ? esc(cap.toLocaleString()) : '-'}</td><td>${hasSample ? esc(Math.max(0, cap - used).toLocaleString()) : '-'}</td><td><span class='tag ${tone}'>${esc(stateText)}</span></td><td>${esc(sampled)}</td></tr>`;
-      }).join('');
-      return `<div class='stack'>
-        <div class='panel-title' style='font-size:var(--fs-sm)'>Hyperliquid Account Request Limit</div>
-        <div class='field-help'>Address action quota, sampled every 5 minutes. Shared by bots using the same wallet. Click an account for 24-hour history.</div>
-        <div class='table-wrap'><table class='table-small'><thead><tr><th>Account</th><th>nRequestsUsed</th><th>nRequestsCap</th><th>Remaining</th><th>Status</th><th>Sampled</th></tr></thead><tbody>${rows}</tbody></table></div>
-      </div>`;
-    }
-
     function updateHlAccountLimitsPanel() {
       const monitor = (store.detail && store.detail.monitor) || {};
-      setHtmlIfChanged('hl-account-limits-live', renderHlAccountLimits(monitor, store.view === 'master'));
+      const rows = [].concat(monitor.v7 || [], monitor.v8 || []);
+      if (store.view === 'master') _liveUpdateServiceRows('master-monitor-live', rows);
+      else if (store.view === 'vps') _liveUpdateServiceRows('vps-monitor-live', rows);
     }
 
     function refreshOpenHlRateLimitHistory() {
@@ -13260,7 +13299,6 @@
         <div class='panel'>
           <div class='panel-body'>
             ${metrics}
-            <div id='hl-account-limits-live'>${renderHlAccountLimits(monitor, isMaster)}</div>
             <div class='stack'>
               <div>${runtimeContent}</div>
             </div>

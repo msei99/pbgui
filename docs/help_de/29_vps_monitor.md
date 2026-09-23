@@ -37,6 +37,8 @@ data/monitor_agent/collector_status.json
 
 Snapshot-JSON-Dateien werden atomar ersetzt. Der NDJSON-Stream nutzt die von PBGui verwaltete, Byte-basierte Aufbewahrung und Rotation. Dadurch bleibt die Plattenbelegung begrenzt, während Leser dem Stream weiter folgen können.
 
+Solange die Live-Telemetrie frisch ist, behält ein Instanz-Snapshot die aktuellen CPU-, RAM- und Swap-Werte desselben Botlaufs bei. So bleiben Grenzwert-Alarme zwischen Live-Samples stabil. Ohne eigene `[monitor]`-Einstellungen liegen die PB7-Bot-Grenzwerte für CPU-Warnung und -Fehler bei 15 % und 20 %; der RAM-Fehlergrenzwert bleibt bei 500 MB.
+
 ## Agent-Gesundheit
 
 Jede Host-Karte zeigt **Monitor Agent: OK, Stale, Missing, Error oder Unknown** und nennt als Quelle immer `monitor-agent cache`.
