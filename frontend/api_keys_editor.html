@@ -826,6 +826,14 @@
                 </div>
             </div>
 
+            <div id="hlRateLimitInline" class="balance-display" style="display:none; margin-bottom:12px;" aria-live="polite">
+                <div class="balance-box">
+                    <div class="label">Hyperliquid Account Request Limit <span style="color:#94a3b8;">(saved wallet)</span></div>
+                    <div id="hlRateLimitInlineValue" class="value">Loading…</div>
+                    <div id="hlRateLimitInlineMeta" style="color:#94a3b8; font-size:var(--fs-xs);"></div>
+                </div>
+            </div>
+
             <!-- Balance display (after test) -->
             <div id="balanceDisplay" class="balance-display" style="display:none;"></div>
 
@@ -1584,10 +1592,37 @@
             editMode = "edit";
             editingName = name;
             showEditPanel(user);
+            if (user.exchange === "hyperliquid") loadHlRateLimitForEditor(context, name);
         } catch (e) {
             if (!isCurrentEditorRequest(context) || e.name === "AbortError") return;
             history.replaceState(null, "", location.pathname + location.search);
             showToast("Failed to load user: " + e.message, "error");
+        }
+    }
+
+    async function loadHlRateLimitForEditor(context, name) {
+        const box = document.getElementById("hlRateLimitInline");
+        const value = document.getElementById("hlRateLimitInlineValue");
+        const meta = document.getElementById("hlRateLimitInlineMeta");
+        box.style.display = "flex";
+        value.textContent = "Loading…";
+        meta.textContent = "One live read from Hyperliquid";
+        try {
+            const base = API_BASE.replace(/\/api-keys$/, "/vps-manager");
+            const response = await fetch(base + "/user-rate-limits/live/" + encodeURIComponent(name), {
+                credentials: "same-origin", cache: "no-store", signal: context.signal,
+            });
+            const result = await response.json();
+            if (!isCurrentEditorRequest(context) || editingName !== name) return;
+            if (!response.ok) throw new Error(result.detail || "Account limit unavailable");
+            const format = number => new Intl.NumberFormat().format(number);
+            value.textContent = "Used " + format(result.used) + " / Cap " + format(result.cap);
+            meta.textContent = "Remaining " + format(result.remaining) + " · "
+                + new Date(result.sampled_at * 1000).toLocaleString();
+        } catch (error) {
+            if (!isCurrentEditorRequest(context) || error.name === "AbortError") return;
+            value.textContent = "Unavailable";
+            meta.textContent = error.message;
         }
     }
 
@@ -1629,6 +1664,7 @@
         document.getElementById("editPanel").style.display = "block";
         document.getElementById("userListView").style.display = "none";
         document.getElementById("balanceDisplay").style.display = "none";
+        document.getElementById("hlRateLimitInline").style.display = "none";
         document.getElementById("btnTest").disabled = false;
         document.getElementById("btnTest").textContent = "Test Connection";
         document.getElementById("btnHLExpiryInline").disabled = false;
@@ -1719,6 +1755,7 @@
         document.getElementById("standardFields").style.display = isHL ? "none" : "";
         document.getElementById("hlFields").style.display = isHL ? "" : "none";
         document.getElementById("hlExpiryInline").style.display = isHL && editMode === "edit" ? "flex" : "none";
+        document.getElementById("hlRateLimitInline").style.display = isHL && editMode === "edit" ? "flex" : "none";
         document.getElementById("bybitExpiryInline").style.display = isBybit && editMode === "edit" ? "flex" : "none";
         document.getElementById("passphraseGroup").style.display = needsPassphrase ? "" : "none";
     }

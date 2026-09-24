@@ -989,6 +989,36 @@
       flex: 0 0 auto;
     }
 
+    #hlCreditPurchasePanel[hidden] { display: none !important; }
+
+    #hlCreditPurchasePanel {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: 10px;
+      padding: 10px 0 14px;
+    }
+
+    #hlCreditPurchasePanel label {
+      display: grid;
+      gap: 5px;
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+
+    #hlCreditAmount {
+      width: 135px;
+      height: 34px;
+      padding: 0 9px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg2);
+      color: var(--text);
+    }
+
+    #hlCreditCost { color: var(--text-dim); font-size: 12px; padding-bottom: 9px; }
+    #hlCreditStatus { width: 100%; color: var(--text-dim); font-size: 12px; }
+
     #cpuHistoryBody {
       flex: 1 1 auto;
       min-height: 0;
@@ -2992,6 +3022,14 @@
       </div>
       <div class='cpu-history-body'>
         <div id='cpuHistoryMeta'></div>
+        <div id='hlCreditPurchasePanel' hidden>
+          <label for='hlCreditAmount'>Request credits to buy
+            <input id='hlCreditAmount' type='number' min='1' max='100000' step='1' inputmode='numeric' placeholder='e.g. 6000'>
+          </label>
+          <span id='hlCreditCost'>Enter a whole number from 1 to 100,000.</span>
+          <button id='hlCreditBuyButton' class='btn' type='button' disabled>Buy credits</button>
+          <span id='hlCreditStatus' role='status' aria-live='polite'></span>
+        </div>
         <div id='cpuHistoryBody'></div>
       </div>
     </div>
@@ -3054,6 +3092,7 @@
   </div>
 
   <script src='/app/js/log_viewer_panel.js?v=48'></script>
+  <script src='/app/js/pbgui_dialogs.js?v=9'></script>
   <script>
     const API_BASE = "%%API_BASE%%";
     const WS_BASE = "%%WS_BASE%%";
@@ -11968,6 +12007,7 @@
       document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
       document.getElementById('cpuHistorySubtitle').textContent = metricHistoryLoadingSubtitle(metric);
       document.getElementById('cpuHistoryMeta').innerHTML = '';
+      document.getElementById('hlCreditPurchasePanel').hidden = metric !== 'hl_requests';
       document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Loading...</div>';
     }
 
@@ -12006,12 +12046,74 @@
     let cpuHistoryRequestGeneration = 0;
     let cpuHistoryAbortController = null;
     const metricHistoryCache = {};
+    let hlCreditPurchasePending = false;
+
+    function updateHlCreditCost() {
+      const input = document.getElementById('hlCreditAmount');
+      const raw = input.value.trim();
+      const valid = /^[1-9]\d*$/.test(raw) && Number(raw) <= 100000;
+      document.getElementById('hlCreditCost').textContent = valid
+        ? 'Cost: ' + (Number(raw) * 0.0005).toFixed(4) + ' USDC from Perps balance'
+        : 'Enter a whole number from 1 to 100,000.';
+      document.getElementById('hlCreditBuyButton').disabled = hlCreditPurchasePending || !valid;
+      return valid ? Number(raw) : null;
+    }
+
+    async function buyHlRequestCredits() {
+      if (hlCreditPurchasePending || !cpuHistoryLastPayload || cpuHistoryLastPayload.metric !== 'hl_requests') return;
+      const credits = updateHlCreditCost();
+      if (credits === null) return;
+      const account = cpuHistoryLastPayload.botName;
+      const cost = (credits * 0.0005).toFixed(4);
+      if (!window.PBGuiDialogs || typeof window.PBGuiDialogs.confirm !== 'function') {
+        document.getElementById('hlCreditStatus').textContent = 'Confirmation dialog unavailable. Reload the page.';
+        return;
+      }
+      const confirmed = await window.PBGuiDialogs.confirm({
+        title: 'Buy Hyperliquid request credits',
+        message: 'Buy ' + credits.toLocaleString() + ' request credits for ' + account + '?',
+        detail: 'Hyperliquid charges ' + cost + ' USDC from this account’s Perps balance. This is a one-time purchase.',
+        confirmText: 'Buy for ' + cost + ' USDC'
+      });
+      if (!confirmed || !cpuHistoryLastPayload || cpuHistoryLastPayload.metric !== 'hl_requests'
+          || cpuHistoryLastPayload.botName !== account || updateHlCreditCost() !== credits) return;
+      hlCreditPurchasePending = true;
+      updateHlCreditCost();
+      document.getElementById('hlCreditStatus').textContent = 'Submitting purchase to Hyperliquid…';
+      try {
+        const response = await fetch(API_BASE + '/user-rate-limits/credits', {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_name: account, credits: credits })
+        });
+        const data = await response.json().catch(function () { return {}; });
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Purchase request failed');
+        if (cpuHistoryLastPayload && cpuHistoryLastPayload.metric === 'hl_requests' && cpuHistoryLastPayload.botName === account) {
+          document.getElementById('hlCreditStatus').textContent = data.verified
+            ? 'Purchased ' + credits.toLocaleString() + ' credits for ' + data.cost_usdc + ' USDC.'
+            : 'Purchase accepted. Current account limit could not be verified yet.';
+          refreshOpenHlRateLimitHistory(true);
+        }
+        fetchHlAccountLimits();
+      } catch (error) {
+        if (cpuHistoryLastPayload && cpuHistoryLastPayload.metric === 'hl_requests' && cpuHistoryLastPayload.botName === account) {
+          document.getElementById('hlCreditStatus').textContent = error.message || 'Purchase status unknown. Check the account before trying again.';
+        }
+      } finally {
+        hlCreditPurchasePending = false;
+        updateHlCreditCost();
+      }
+    }
+
+    document.getElementById('hlCreditAmount').addEventListener('input', updateHlCreditCost);
+    document.getElementById('hlCreditBuyButton').addEventListener('click', buyHlRequestCredits);
 
     function renderMetricHistoryPayload(payload, host, bot, metric) {
       const points = metricHistorySeriesPoints(metric, payload);
       cpuHistoryLastPayload = { data: payload, host: host, botName: bot, metric: metric };
       document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
       document.getElementById('cpuHistorySubtitle').textContent = metricHistorySubtitle(metric, payload);
+      document.getElementById('hlCreditPurchasePanel').hidden = metric !== 'hl_requests';
       document.getElementById('cpuHistoryMeta').innerHTML = metric === 'hl_requests'
         ? renderHlRateLimitHistoryMeta(payload) : renderCpuHistoryMeta(payload, points, metric);
       document.getElementById('cpuHistoryBody').innerHTML = metric === 'hl_requests'
@@ -12093,6 +12195,9 @@
       const requestMetric = metric === 'pnl_fills' ? 'pnl' : metric;
       const bot = String(botName || '').trim();
       if (!host) return;
+      if (metric === 'hl_requests' && (!cpuHistoryLastPayload || cpuHistoryLastPayload.botName !== bot)) {
+        document.getElementById('hlCreditStatus').textContent = '';
+      }
       const cacheKey = host + '::' + requestMetric + '::' + bot;
       const generation = ++cpuHistoryRequestGeneration;
       if (cpuHistoryAbortController) cpuHistoryAbortController.abort();
@@ -13199,7 +13304,7 @@
       else if (store.view === 'vps') _liveUpdateServiceRows('vps-monitor-live', rows);
     }
 
-    function refreshOpenHlRateLimitHistory() {
+    function refreshOpenHlRateLimitHistory(force) {
       const current = cpuHistoryLastPayload;
       const overlay = document.getElementById('cpuHistoryOverlay');
       if (!current || current.metric !== 'hl_requests' || !overlay || !overlay.classList.contains('visible')) return;
@@ -13208,7 +13313,7 @@
       });
       const samples = Array.isArray(current.data && current.data.samples) ? current.data.samples : [];
       const lastSample = samples.length ? Number(samples[samples.length - 1].sampled_at) : 0;
-      if (!account || Number(account.sampled_at || 0) <= lastSample) return;
+      if (!force && (!account || Number(account.sampled_at || 0) <= lastSample)) return;
       const generation = ++cpuHistoryRequestGeneration;
       if (cpuHistoryAbortController) cpuHistoryAbortController.abort();
       cpuHistoryAbortController = new AbortController();

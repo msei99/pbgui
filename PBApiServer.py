@@ -329,6 +329,7 @@ async def _restart_block_state() -> tuple[bool, str]:
     from api.db_tools import restart_block_reason as db_tools_restart_block_reason
     from api.dashboard import restart_block_reason as dashboard_restart_block_reason
     from api.pareto_explorer import restart_block_reason as pareto_restart_block_reason
+    from api.vps_manager import restart_block_reason as vps_manager_restart_block_reason
     from vast_guard_migration import restart_block_reason as vast_guard_restart_block_reason
 
     local_reasons = [
@@ -339,6 +340,7 @@ async def _restart_block_state() -> tuple[bool, str]:
             cluster_restart_block_reason(),
             coin_data_restart_block_reason(),
             pareto_restart_block_reason(),
+            vps_manager_restart_block_reason(),
             vast_guard_restart_block_reason(),
             profit_sweep_restart_block_reason(),
             ai_restart_block_reason(),

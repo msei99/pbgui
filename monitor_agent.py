@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import threading
@@ -35,6 +36,7 @@ SCHEMA_VERSION = 1
 LIVE_INTERVAL_SECONDS = 1.0
 STATUS_INTERVAL_SECONDS = 5.0
 INSTANCE_INTERVAL_SECONDS = 30.0
+HL_RATE_LIMIT_INTERVAL_SECONDS = 300.0
 HOST_META_INTERVAL_SECONDS = 10.0
 LEGACY_CRON_CACHE_SECONDS = 3600.0
 SERVICE_INTERVAL_SECONDS = 60.0
@@ -55,6 +57,9 @@ def _pbgui_dir() -> Path:
 PBGDIR = _pbgui_dir()
 DATA_DIR = PBGDIR / "data" / "monitor_agent"
 _STATUS_LOCK = threading.Lock()
+_HL_RATE_LIMIT_LOCK = threading.Lock()
+_HL_RATE_LIMITS_BY_USER: dict[str, dict[str, int]] = {}
+_HL_WALLET_PATTERN = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 _SERVICE_RESTART_HISTORY: dict[str, list[float]] = {}
 _LEGACY_CRON_CACHE: tuple[tuple[int, int, int], float, int] | None = None
 
@@ -373,6 +378,58 @@ def _collector_status_snapshot(loop_state: dict[str, dict[str, Any]]) -> dict[st
         return {name: dict(payload) for name, payload in loop_state.items()}
 
 
+def _run_hl_rate_limits() -> None:
+    """Sample one address per running local Hyperliquid bot wallet."""
+    import httpx
+    from User import Users
+
+    snapshot = _read_json(DATA_DIR / "instance_snapshot.json", {})
+    generated_at = snapshot.get("generated_at") if isinstance(snapshot, dict) else None
+    fresh = type(generated_at) in {int, float} and 0 <= time.time() - generated_at <= 90
+    rows = (snapshot.get("v7") or []) + (snapshot.get("v8") or []) if fresh else []
+    user_names = {str(row.get("user") or "").strip() for row in rows
+                  if isinstance(row, dict) and row.get("running") is True and row.get("user")}
+    if not user_names:
+        with _HL_RATE_LIMIT_LOCK:
+            _HL_RATE_LIMITS_BY_USER.clear()
+        return
+    users = Users()
+    by_wallet: dict[str, list[str]] = {}
+    for name in sorted(user_names):
+        user = users.find_user(name)
+        if user is None or str(getattr(user, "exchange", "") or "").lower() != "hyperliquid":
+            continue
+        address = str(getattr(user, "wallet_address", "") or "").strip()
+        if _HL_WALLET_PATTERN.fullmatch(address):
+            by_wallet.setdefault(address.lower(), []).append(name)
+    next_samples: dict[str, dict[str, int]] = {}
+    with _HL_RATE_LIMIT_LOCK:
+        previous = dict(_HL_RATE_LIMITS_BY_USER)
+    for index, (address, names) in enumerate(by_wallet.items()):
+        if index:
+            time.sleep(3.0)
+        try:
+            response = httpx.post("https://api.hyperliquid.xyz/info",
+                                  json={"type": "userRateLimit", "user": address}, timeout=10.0)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid userRateLimit response")
+            used, cap = payload.get("nRequestsUsed"), payload.get("nRequestsCap")
+            if any(type(value) is not int or value < 0 for value in (used, cap)):
+                raise ValueError("Invalid userRateLimit counters")
+            sample = {"used": used, "cap": cap, "sampled_at": int(time.time())}
+        except (httpx.HTTPError, ValueError) as exc:
+            _log(SERVICE, f"Hyperliquid VPS rate-limit sample failed: {type(exc).__name__}", level="WARNING")
+            sample = next((previous[name] for name in names if name in previous), None)
+        if sample is not None:
+            for name in names:
+                next_samples[name] = sample
+    with _HL_RATE_LIMIT_LOCK:
+        _HL_RATE_LIMITS_BY_USER.clear()
+        _HL_RATE_LIMITS_BY_USER.update(next_samples)
+
+
 def _run_instance_snapshot() -> None:
     """Write the current instance snapshot cache."""
 
@@ -393,6 +450,14 @@ def _run_instance_snapshot() -> None:
     payload["schema_version"] = SCHEMA_VERSION
     payload["generated_at"] = now
     payload["source"] = "monitor-agent"
+    with _HL_RATE_LIMIT_LOCK:
+        samples = dict(_HL_RATE_LIMITS_BY_USER)
+    for field in ("v7", "v8"):
+        for row in payload.get(field) or []:
+            if isinstance(row, dict) and row.get("running") is True:
+                sample = samples.get(str(row.get("user") or ""))
+                if sample is not None:
+                    row["hl_rate_limit"] = dict(sample)
     if isinstance(payload.get("cache"), dict):
         _atomic_write_json(cache_path, payload["cache"])
     _atomic_write_json(DATA_DIR / "instance_snapshot.json", payload)
@@ -909,6 +974,7 @@ def run() -> None:
     loop_state = {
         "live_metrics": {"interval": LIVE_INTERVAL_SECONDS, "last_ok": 0, "last_error": ""},
         "instances": {"interval": INSTANCE_INTERVAL_SECONDS, "last_ok": 0, "last_error": ""},
+        "hl_rate_limits": {"interval": HL_RATE_LIMIT_INTERVAL_SECONDS, "last_ok": 0, "last_error": ""},
         "host_meta": {"interval": HOST_META_INTERVAL_SECONDS, "last_ok": 0, "last_error": ""},
         "services": {"interval": SERVICE_INTERVAL_SECONDS, "last_ok": 0, "last_error": ""},
         "package_status": {"interval": PACKAGE_INTERVAL_SECONDS, "last_ok": 0, "last_error": ""},
@@ -926,6 +992,7 @@ def run() -> None:
     _log(SERVICE, "Monitor agent started", level="INFO")
     for name, interval, callback in (
         ("instances", INSTANCE_INTERVAL_SECONDS, _run_instance_snapshot),
+        ("hl_rate_limits", HL_RATE_LIMIT_INTERVAL_SECONDS, _run_hl_rate_limits),
         ("host_meta", HOST_META_INTERVAL_SECONDS, _run_host_meta),
         ("services", SERVICE_INTERVAL_SECONDS, _run_service_status),
         ("package_status", PACKAGE_INTERVAL_SECONDS, _run_package_status),

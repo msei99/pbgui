@@ -632,6 +632,7 @@
       { page: 'dashboards',           icon: '&#128202;', label: 'Dashboards'        },
       { page: 'info_coin_data',       icon: '&#129689;', label: 'Coin Data'         },
       { page: 'info_market_data_fastapi', icon: '&#128187;', label: 'Market Data' },
+      { page: 'info_hl_limits',         icon: '&#128200;', label: 'Hyperliquid Limits' },
       { page: 'info_balance_calc',    icon: '&#128176;', label: 'Balance Calculator'},
       { page: 'info_ai_chat',         icon: '&#10024;',  label: 'AI Chat'           },
       { page: 'help',                 icon: '&#10067;',  label: 'Help'              }
@@ -1567,6 +1568,7 @@
     'dashboards':        '/api/dashboard/main_page',
     'info_coin_data':    '/api/coin-data/main_page',
     'info_market_data_fastapi': '/api/market-data/main_page',
+    'info_hl_limits':  '/api/vps-manager/hyperliquid-limits/main_page',
     'info_ai_chat':      '/api/ai/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
     'system_profit_sweep': '/api/profit-sweep/main_page',
@@ -1597,6 +1599,7 @@
     'dashboards':                  '33_dashboard',
     'info_coin_data':              '27_coin_data',
     'info_market_data_fastapi':    '26_market_data',
+    'info_hl_limits':             '49_hyperliquid_limits',
     'info_ai_chat':                 '45_ai_chat',
     'system_api_keys':             '20_api_keys',
     'system_profit_sweep':          '46_profit_sweep',

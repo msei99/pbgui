@@ -94,6 +94,8 @@ Both buttons use the **currently typed credentials** from the form — not just 
 - **Check Expiry** (HL / Bybit) — result is preview-only; not persisted until you click Save
 - **Test Connection** — tests the connection live; also uses unsaved credentials
 
+Opening a saved Hyperliquid user also reads its **Account Request Limit** once and displays Used, Cap, remaining requests, and sample time next to the connection test. This read uses the saved public wallet address even if form fields contain unsaved edits. It needs no running bot and does not start periodic history; the cross-VPS overview is under **Information → Hyperliquid Limits**.
+
 Unsaved Hyperliquid private keys used by **Check Expiry** are sent only in an authenticated POST request body. They are never added to the request URL; checks without an unsaved override continue to use the stored key.
 
 Editing the account while a connection or inline expiry check is running discards the stale result but always restores the action button. A completed older request cannot unlock a newer check using the same button.

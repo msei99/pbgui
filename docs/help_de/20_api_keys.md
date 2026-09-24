@@ -94,6 +94,8 @@ Beide Buttons verwenden die **aktuell eingegebenen Credentials** aus dem Formula
 - **Check Expiry** (HL / Bybit) — Ergebnis ist eine Vorschau; erst nach Save persistent
 - **Test Connection** — testet die Verbindung live; verwendet ebenfalls ungespeicherte Credentials
 
+Beim Öffnen eines gespeicherten Hyperliquid-Users wird sein **Account Request Limit** einmalig abgefragt. Neben dem Verbindungstest stehen Used, Cap, verbleibende Requests und Messzeit. Die Abfrage verwendet die gespeicherte öffentliche Wallet-Adresse, auch wenn im Formular ungespeicherte Änderungen stehen. Ein laufender Bot ist nicht nötig und es wird keine periodische History gestartet. Die VPS-übergreifende Übersicht steht unter **Information → Hyperliquid Limits**.
+
 Ungespeicherte Hyperliquid Private Keys fuer **Check Expiry** werden ausschliesslich im Body eines authentifizierten POST-Requests uebertragen. Sie werden nie an die Request-URL angehaengt; Pruefungen ohne ungespeicherten Override verwenden weiterhin den gespeicherten Key.
 
 Wird der Account waehrend eines Verbindungs- oder Inline-Ablaufchecks bearbeitet, wird das veraltete Ergebnis verworfen, der Aktionsbutton aber immer wieder freigegeben. Ein abgeschlossener aelterer Request kann keinen neueren Check desselben Buttons entsperren.

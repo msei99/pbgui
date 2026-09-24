@@ -2137,10 +2137,12 @@ def _config_meta(config_dir):
     cfg_path = os.path.join(config_dir, 'config.json')
     cfg = _read_json(cfg_path)
     pbgui = cfg.get('pbgui', {}) if isinstance(cfg, dict) else {}
+    live = cfg.get('live', {}) if isinstance(cfg, dict) else {}
     return {
         'version': pbgui.get('version', 0),
         'enabled_on': pbgui.get('enabled_on', 'disabled'),
         'dynamic_ignore': bool(pbgui.get('dynamic_ignore')),
+        'user': str(live.get('user') or '') if isinstance(live, dict) else '',
     }
 
 def _is_pb8_config(config_dir):
@@ -2814,11 +2816,14 @@ except Exception as exc:
 for name, cfg_dir in sorted(running.items()):
     cache_key = '7:' + name
     # config version + enabled_on + dynamic_ignore
-    version = 0; enabled_on = 'disabled'; dynamic_ignore = False
+    version = 0; enabled_on = 'disabled'; dynamic_ignore = False; live_user = ''
     cf = os.path.join(cfg_dir, 'config.json')
     if os.path.isfile(cf):
         try:
-            pbgui = json.load(open(cf)).get('pbgui', {})
+            config = json.load(open(cf))
+            pbgui = config.get('pbgui', {})
+            live = config.get('live', {})
+            live_user = str(live.get('user') or '') if isinstance(live, dict) else ''
             version = pbgui.get('version', 0)
             enabled_on = pbgui.get('enabled_on', 'disabled')
             dynamic_ignore = bool(pbgui.get('dynamic_ignore'))
@@ -2834,6 +2839,7 @@ for name, cfg_dir in sorted(running.items()):
     v7.append({
         'name': name,
         'running': True,
+        'user': live_user,
         'cv': version,
         'eo': enabled_on,
         'rv': rv,
@@ -3012,6 +3018,7 @@ for name, process_info in sorted(running_v8.items()):
     v8.append({
         'name': name,
         'running': True,
+        'user': meta.get('user', ''),
         'cv': version,
         'eo': meta.get('enabled_on', 'disabled'),
         'rv': version,
