@@ -307,6 +307,25 @@
         }
         .expander-content.open { display: block; }
 
+        #accountBalanceRow { align-items: flex-start; }
+        #accountBalanceRow #balanceDisplay { margin-top: 0; }
+        #hlRateLimitInline[hidden],
+        #hlCreditPurchasePanel[hidden], #hlCreditPurchaseForm[hidden], #hlCreditVaultNote[hidden] { display: none; }
+        .hl-wallet-purchase {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: end;
+            gap: 6px 10px;
+            margin-top: 8px;
+            font-size: var(--fs-xs);
+        }
+        .hl-wallet-purchase label { margin: 0; }
+        .hl-wallet-purchase input { width: 95px; }
+        .hl-wallet-purchase .btn { width: auto; }
+        #hlCreditCost, #hlCreditVaultNote { color: #94a3b8; }
+        #hlCreditStatus { display: block; margin-top: 6px; color: #94a3b8; font-size: var(--fs-xs); }
+        #hlCreditStatus:empty { display: none; }
+
         /* Balance display */
         .balance-display {
             display: flex;
@@ -786,7 +805,7 @@
             <!-- Hyperliquid fields -->
             <div class="form-grid" id="hlFields" style="display:none;">
                 <div class="form-group">
-                    <label>Wallet Address</label>
+                    <label for="editWallet">Wallet Address</label>
                     <input type="text" id="editWallet" />
                 </div>
                 <div class="form-group" style="grid-column: span 2;">
@@ -826,16 +845,25 @@
                 </div>
             </div>
 
-            <div id="hlRateLimitInline" class="balance-display" style="display:none; margin-bottom:12px;" aria-live="polite">
-                <div class="balance-box">
+            <!-- Account balance and Hyperliquid limit cards -->
+            <div id="accountBalanceRow" class="balance-display">
+                <div id="balanceDisplay" class="balance-display" style="display:none;"></div>
+                <div id="hlRateLimitInline" class="balance-box" hidden aria-live="polite">
                     <div class="label">Hyperliquid Account Request Limit <span style="color:#94a3b8;">(saved wallet)</span></div>
                     <div id="hlRateLimitInlineValue" class="value">Loading…</div>
                     <div id="hlRateLimitInlineMeta" style="color:#94a3b8; font-size:var(--fs-xs);"></div>
+                    <div id="hlCreditPurchasePanel" class="hl-wallet-purchase" hidden>
+                        <span id="hlCreditVaultNote" hidden>Credit purchase is available for saved main accounts only.</span>
+                        <div id="hlCreditPurchaseForm" class="hl-wallet-purchase" hidden>
+                            <label for="hlCreditAmount">Request credits</label>
+                            <input id="hlCreditAmount" type="number" min="1" max="100000" step="1" inputmode="numeric" placeholder="e.g. 6000" />
+                            <span id="hlCreditCost">Enter 1–100,000 credits.</span>
+                            <button id="hlCreditBuyButton" class="btn btn-sm btn-secondary" type="button" disabled>Buy credits</button>
+                        </div>
+                    </div>
+                    <span id="hlCreditStatus" role="status" aria-live="polite"></span>
                 </div>
             </div>
-
-            <!-- Balance display (after test) -->
-            <div id="balanceDisplay" class="balance-display" style="display:none;"></div>
 
             <div class="form-actions">
                 <button class="btn btn-danger" id="btnDelete" onclick="deleteUser()" style="display:none;">Delete</button>
@@ -1128,6 +1156,10 @@
     let sortDir = 1;           // 1 = asc, -1 = desc
     let filterText = "";
     let formDirty = false;
+    let hlLimitLastSample = null;
+    let hlLimitSavedIsVault = false;
+    let hlCreditPurchasePending = false;
+    let hlCreditPurchaseLocked = false;
 
     // ── URL param persistence ────────────────────────────────
     function restoreUrlParams() {
@@ -1193,14 +1225,18 @@
             }
         });
         // Dirty-tracking: any input/change inside the edit panel marks it dirty
-        document.getElementById("editPanel").addEventListener("input", () => {
+        document.getElementById("editPanel").addEventListener("input", (event) => {
+            if (event.target.closest("#hlCreditPurchasePanel")) return;
             formDirty = true;
             advanceEditorGeneration();
         });
-        document.getElementById("editPanel").addEventListener("change", () => {
+        document.getElementById("editPanel").addEventListener("change", (event) => {
+            if (event.target.closest("#hlCreditPurchasePanel")) return;
             formDirty = true;
             advanceEditorGeneration();
         });
+        document.getElementById("hlCreditAmount").addEventListener("input", updateHlCreditCost);
+        document.getElementById("hlCreditBuyButton").addEventListener("click", buyHlRequestCredits);
         document.getElementById("editKey").addEventListener("input", function() {
             delete this.dataset.revealed;
         });
@@ -1600,13 +1636,53 @@
         }
     }
 
+    function formatHlRequestCount(value) {
+        return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, "'");
+    }
+
+    function updateHlCreditCost() {
+        const raw = document.getElementById("hlCreditAmount").value.trim();
+        const valid = /^[1-9]\d*$/.test(raw) && Number(raw) <= 100000;
+        document.getElementById("hlCreditCost").textContent = valid
+            ? "Cost: " + (Number(raw) * 0.0005).toFixed(4) + " USDC from Perps balance"
+            : "Enter 1–100,000 credits.";
+        document.getElementById("hlCreditBuyButton").disabled = !valid || hlCreditPurchasePending
+            || hlCreditPurchaseLocked || document.getElementById("hlCreditPurchasePanel").hidden
+            || hlLimitSavedIsVault;
+        return valid ? Number(raw) : null;
+    }
+
+    function refreshHlCreditOffer() {
+        const originalExchange = document.getElementById("editExchange").dataset.originalExchange;
+        const show = editMode === "edit" && editingName
+            && document.getElementById("editExchange").value === "hyperliquid"
+            && originalExchange === "hyperliquid" && hlLimitLastSample
+            && hlLimitLastSample.used >= hlLimitLastSample.cap && !hlCreditPurchaseLocked;
+        document.getElementById("hlCreditPurchasePanel").hidden = !show;
+        document.getElementById("hlCreditPurchaseForm").hidden = !show || hlLimitSavedIsVault;
+        document.getElementById("hlCreditVaultNote").hidden = !show || !hlLimitSavedIsVault;
+        updateHlCreditCost();
+    }
+
+    function renderHlRateLimitForEditor(result) {
+        if (![result.used, result.cap, result.remaining, result.sampled_at].every(
+            number => Number.isSafeInteger(number) && number >= 0
+        )) throw new Error("Invalid account limit response");
+        hlLimitLastSample = { used: result.used, cap: result.cap };
+        document.getElementById("hlRateLimitInlineValue").textContent = "Used "
+            + formatHlRequestCount(result.used) + " / Cap " + formatHlRequestCount(result.cap);
+        document.getElementById("hlRateLimitInlineMeta").textContent = "Remaining "
+            + formatHlRequestCount(result.remaining) + " · " + new Date(result.sampled_at * 1000).toLocaleString();
+        refreshHlCreditOffer();
+    }
+
     async function loadHlRateLimitForEditor(context, name) {
-        const box = document.getElementById("hlRateLimitInline");
         const value = document.getElementById("hlRateLimitInlineValue");
         const meta = document.getElementById("hlRateLimitInlineMeta");
-        box.style.display = "flex";
         value.textContent = "Loading…";
-        meta.textContent = "One live read from Hyperliquid";
+        meta.textContent = "Saved wallet · one live read";
+        hlLimitLastSample = null;
+        refreshHlCreditOffer();
         try {
             const base = API_BASE.replace(/\/api-keys$/, "/vps-manager");
             const response = await fetch(base + "/user-rate-limits/live/" + encodeURIComponent(name), {
@@ -1615,14 +1691,68 @@
             const result = await response.json();
             if (!isCurrentEditorRequest(context) || editingName !== name) return;
             if (!response.ok) throw new Error(result.detail || "Account limit unavailable");
-            const format = number => new Intl.NumberFormat().format(number);
-            value.textContent = "Used " + format(result.used) + " / Cap " + format(result.cap);
-            meta.textContent = "Remaining " + format(result.remaining) + " · "
-                + new Date(result.sampled_at * 1000).toLocaleString();
+            renderHlRateLimitForEditor(result);
         } catch (error) {
             if (!isCurrentEditorRequest(context) || error.name === "AbortError") return;
-            value.textContent = "Unavailable";
+            value.textContent = "Request limit unavailable";
             meta.textContent = error.message;
+            hlLimitLastSample = null;
+            refreshHlCreditOffer();
+        }
+    }
+
+    async function buyHlRequestCredits() {
+        if (hlCreditPurchasePending || hlCreditPurchaseLocked || hlLimitSavedIsVault
+            || document.getElementById("hlCreditPurchasePanel").hidden
+            || !hlLimitLastSample || hlLimitLastSample.used < hlLimitLastSample.cap) return;
+        const credits = updateHlCreditCost();
+        const account = editingName;
+        const context = captureEditorRequest(account);
+        if (credits === null || !account || !context) return;
+        const cost = (credits * 0.0005).toFixed(4);
+        if (!window.PBGuiDialogs || typeof window.PBGuiDialogs.confirm !== "function") {
+            document.getElementById("hlCreditStatus").textContent = "Confirmation dialog unavailable.";
+            return;
+        }
+        const confirmed = await window.PBGuiDialogs.confirm({
+            title: "Buy Hyperliquid request credits",
+            message: "Buy " + formatHlRequestCount(credits) + " request credits for " + account + "?",
+            detail: "Hyperliquid charges " + cost + " USDC from this saved main account’s Perps balance. This is a one-time purchase.",
+            confirmText: "Buy for " + cost + " USDC",
+        });
+        if (!confirmed || !isCurrentEditorRequest(context) || editingName !== account
+            || updateHlCreditCost() !== credits || hlLimitSavedIsVault
+            || document.getElementById("hlCreditPurchasePanel").hidden
+            || !hlLimitLastSample || hlLimitLastSample.used < hlLimitLastSample.cap) return;
+        hlCreditPurchasePending = true;
+        updateHlCreditCost();
+        document.getElementById("hlCreditStatus").textContent = "Submitting purchase to Hyperliquid…";
+        try {
+            const base = API_BASE.replace(/\/api-keys$/, "/vps-manager");
+            const response = await fetch(base + "/user-rate-limits/credits", {
+                method: "POST", credentials: "same-origin", cache: "no-store",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ user_name: account, credits }),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!isCurrentEditorRequest(context) || editingName !== account) return;
+            if (!response.ok) throw new Error(result.detail || "Purchase request failed");
+            hlCreditPurchaseLocked = true;
+            document.getElementById("hlCreditStatus").textContent = result.verified
+                ? "Purchased " + formatHlRequestCount(credits) + " credits for " + result.cost_usdc + " USDC."
+                : "Purchase accepted. Current account limit could not be verified yet.";
+            if (result.verified) renderHlRateLimitForEditor({
+                used: result.used, cap: result.cap,
+                remaining: Math.max(0, result.cap - result.used), sampled_at: result.sampled_at,
+            });
+        } catch (error) {
+            if (!isCurrentEditorRequest(context) || editingName !== account) return;
+            hlCreditPurchaseLocked = true;
+            document.getElementById("hlCreditStatus").textContent = (error.message || "Purchase status unknown")
+                + " Check the account limit before purchasing again.";
+        } finally {
+            hlCreditPurchasePending = false;
+            refreshHlCreditOffer();
         }
     }
 
@@ -1664,7 +1794,13 @@
         document.getElementById("editPanel").style.display = "block";
         document.getElementById("userListView").style.display = "none";
         document.getElementById("balanceDisplay").style.display = "none";
-        document.getElementById("hlRateLimitInline").style.display = "none";
+        hlLimitSavedIsVault = Boolean(user.is_vault);
+        hlLimitLastSample = null;
+        hlCreditPurchaseLocked = false;
+        document.getElementById("hlCreditAmount").value = "";
+        document.getElementById("hlCreditStatus").textContent = "";
+        document.getElementById("hlRateLimitInline").hidden = true;
+        document.getElementById("hlCreditPurchasePanel").hidden = true;
         document.getElementById("btnTest").disabled = false;
         document.getElementById("btnTest").textContent = "Test Connection";
         document.getElementById("btnHLExpiryInline").disabled = false;
@@ -1755,7 +1891,9 @@
         document.getElementById("standardFields").style.display = isHL ? "none" : "";
         document.getElementById("hlFields").style.display = isHL ? "" : "none";
         document.getElementById("hlExpiryInline").style.display = isHL && editMode === "edit" ? "flex" : "none";
-        document.getElementById("hlRateLimitInline").style.display = isHL && editMode === "edit" ? "flex" : "none";
+        const showHlLimit = isHL && editMode === "edit" && originalExchange === "hyperliquid";
+        document.getElementById("hlRateLimitInline").hidden = !showHlLimit;
+        refreshHlCreditOffer();
         document.getElementById("bybitExpiryInline").style.display = isBybit && editMode === "edit" ? "flex" : "none";
         document.getElementById("passphraseGroup").style.display = needsPassphrase ? "" : "none";
     }

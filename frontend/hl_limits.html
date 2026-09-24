@@ -57,7 +57,7 @@
     const PBGUI_VERSION = "%%VERSION%%";
     const PBGUI_SERIAL = "%%SERIAL%%";
     const state = { accounts: [], selected: new URLSearchParams(location.search).get('account') || '', filter: new URLSearchParams(location.search).get('filter') || '', generation: 0, historyGeneration: 0, lastSignature: '', historySample: 0 };
-    const nf = new Intl.NumberFormat();
+    const formatRequestCount = value => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, "'");
     const $ = id => document.getElementById(id);
     $('filter').value = state.filter;
     function timeLabel(seconds) { return Number.isInteger(seconds) && seconds > 0 ? new Date(seconds * 1000).toLocaleString() : '—'; }
@@ -99,10 +99,10 @@
         cell(tr, bots.length ? bots.map(bot => (bot.pb_version === '8' ? 'PB8 ' : 'PB7 ') + bot.name + ' · ' + bot.host).join('; ') : '—', bots.length ? '' : 'muted');
         const used = Number.isInteger(item.used) ? item.used : null;
         const cap = Number.isInteger(item.cap) ? item.cap : null;
-        cell(tr, used === null ? '—' : nf.format(used));
-        cell(tr, cap === null ? '—' : nf.format(cap));
+        cell(tr, used === null ? '—' : formatRequestCount(used));
+        cell(tr, cap === null ? '—' : formatRequestCount(cap));
         const remaining = used === null || cap === null ? null : Math.max(0, cap - used);
-        cell(tr, remaining === null ? '—' : nf.format(remaining), remaining === 0 ? 'negative' : 'positive');
+        cell(tr, remaining === null ? '—' : formatRequestCount(remaining), remaining === 0 ? 'negative' : 'positive');
         cell(tr, used === null || cap === null || cap === 0 ? '—' : (100 * used / cap).toFixed(1) + '%', used !== null && cap !== null && used >= cap ? 'negative' : '');
         cell(tr, timeLabel(item.sampled_at));
         const status = item.source === 'purchase' ? 'Purchase check' : item.state === 'on_demand' ? 'One-time key read' : bots.length ? (item.state === 'ok' ? 'Live on VPS' : item.state === 'stale' ? 'Stale VPS sample' : 'Waiting for VPS sample') : 'Not sampled';
@@ -144,7 +144,7 @@
       for (const fraction of [0, .5, 1]) {
         const y = bottom - (bottom - top) * fraction;
         svgNode('line', {x1:left, y1:y, x2:right, y2:y, stroke:'#2d3748'});
-        const label = svgNode('text', {x:4, y:y+4}); label.textContent = nf.format(Math.round(max * fraction));
+        const label = svgNode('text', {x:4, y:y+4}); label.textContent = formatRequestCount(Math.round(max * fraction));
       }
       for (const [field, color] of [['cap','#f6ad55'], ['used','#63b3ed']]) {
         const points = valid.map(p => {

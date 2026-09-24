@@ -94,7 +94,7 @@ Both buttons use the **currently typed credentials** from the form — not just 
 - **Check Expiry** (HL / Bybit) — result is preview-only; not persisted until you click Save
 - **Test Connection** — tests the connection live; also uses unsaved credentials
 
-Opening a saved Hyperliquid user also reads its **Account Request Limit** once and displays Used, Cap, remaining requests, and sample time next to the connection test. This read uses the saved public wallet address even if form fields contain unsaved edits. It needs no running bot and does not start periodic history; the cross-VPS overview is under **Information → Hyperliquid Limits**.
+Opening a saved Hyperliquid user also reads its **Account Request Limit** once. The limit appears in a card beside Futures Balance, with Used, Cap, remaining requests, and sample time. Request counters use apostrophes for thousands (for example, `2'209'548`). When a saved main account has exhausted its request cap, a credit amount and its Perps USDC cost appear in the limit card, followed by a one-time purchase confirmation. Vault entries show the main-account restriction instead of a purchase button. This read uses the saved public wallet address even if form fields contain unsaved edits. It needs no running bot and does not start periodic history; the cross-VPS overview is under **Information → Hyperliquid Limits**.
 
 Unsaved Hyperliquid private keys used by **Check Expiry** are sent only in an authenticated POST request body. They are never added to the request URL; checks without an unsaved override continue to use the stored key.
 

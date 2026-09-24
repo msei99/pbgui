@@ -19,6 +19,7 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any
+from urllib.request import Request, urlopen
 
 from cmc_pool import CmcPoolClient
 from credential_store import CredentialStore
@@ -380,7 +381,6 @@ def _collector_status_snapshot(loop_state: dict[str, dict[str, Any]]) -> dict[st
 
 def _run_hl_rate_limits() -> None:
     """Sample one address per running local Hyperliquid bot wallet."""
-    import httpx
     from User import Users
 
     snapshot = _read_json(DATA_DIR / "instance_snapshot.json", {})
@@ -409,17 +409,24 @@ def _run_hl_rate_limits() -> None:
         if index:
             time.sleep(3.0)
         try:
-            response = httpx.post("https://api.hyperliquid.xyz/info",
-                                  json={"type": "userRateLimit", "user": address}, timeout=10.0)
-            response.raise_for_status()
-            payload = response.json()
+            request = Request(
+                "https://api.hyperliquid.xyz/info",
+                data=json.dumps({"type": "userRateLimit", "user": address}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=10.0) as response:
+                raw_payload = response.read(65537)
+            if len(raw_payload) > 65536:
+                raise ValueError("Oversized userRateLimit response")
+            payload = json.loads(raw_payload)
             if not isinstance(payload, dict):
                 raise ValueError("Invalid userRateLimit response")
             used, cap = payload.get("nRequestsUsed"), payload.get("nRequestsCap")
             if any(type(value) is not int or value < 0 for value in (used, cap)):
                 raise ValueError("Invalid userRateLimit counters")
             sample = {"used": used, "cap": cap, "sampled_at": int(time.time())}
-        except (httpx.HTTPError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             _log(SERVICE, f"Hyperliquid VPS rate-limit sample failed: {type(exc).__name__}", level="WARNING")
             sample = next((previous[name] for name in names if name in previous), None)
         if sample is not None:

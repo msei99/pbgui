@@ -12048,6 +12048,10 @@
     const metricHistoryCache = {};
     let hlCreditPurchasePending = false;
 
+    function formatHlRequestCount(value) {
+      return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, "'");
+    }
+
     function updateHlCreditCost() {
       const input = document.getElementById('hlCreditAmount');
       const raw = input.value.trim();
@@ -12071,7 +12075,7 @@
       }
       const confirmed = await window.PBGuiDialogs.confirm({
         title: 'Buy Hyperliquid request credits',
-        message: 'Buy ' + credits.toLocaleString() + ' request credits for ' + account + '?',
+        message: 'Buy ' + formatHlRequestCount(credits) + ' request credits for ' + account + '?',
         detail: 'Hyperliquid charges ' + cost + ' USDC from this account’s Perps balance. This is a one-time purchase.',
         confirmText: 'Buy for ' + cost + ' USDC'
       });
@@ -12090,7 +12094,7 @@
         if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Purchase request failed');
         if (cpuHistoryLastPayload && cpuHistoryLastPayload.metric === 'hl_requests' && cpuHistoryLastPayload.botName === account) {
           document.getElementById('hlCreditStatus').textContent = data.verified
-            ? 'Purchased ' + credits.toLocaleString() + ' credits for ' + data.cost_usdc + ' USDC.'
+            ? 'Purchased ' + formatHlRequestCount(credits) + ' credits for ' + data.cost_usdc + ' USDC.'
             : 'Purchase accepted. Current account limit could not be verified yet.';
           refreshOpenHlRateLimitHistory(true);
         }
@@ -12128,9 +12132,9 @@
       const cap = Number(latest.cap);
       const remaining = Math.max(0, cap - used);
       return `<div class='cpu-chart-meta'>`
-        + cpuChartPill('Used', used.toLocaleString())
-        + cpuChartPill('Cap', cap.toLocaleString())
-        + cpuChartPill('Remaining', remaining.toLocaleString())
+        + cpuChartPill('Used', formatHlRequestCount(used))
+        + cpuChartPill('Cap', formatHlRequestCount(cap))
+        + cpuChartPill('Remaining', formatHlRequestCount(remaining))
         + cpuChartPill('Usage', cap > 0 ? (used / cap * 100).toFixed(1) + '%' : 'n/a')
         + cpuChartPill('Last sample', new Date(Number(latest.sampled_at) * 1000).toLocaleString())
         + cpuChartPill('Samples', String(samples.length)) + `</div>`;
@@ -12164,11 +12168,11 @@
         const value = ceiling * step / 4;
         const yy = y(value).toFixed(1);
         return `<line x1='${pad.left}' y1='${yy}' x2='${width - pad.right}' y2='${yy}' stroke='rgba(255,255,255,0.08)'/>`
-          + `<text x='${pad.left - 8}' y='${Number(yy) + 4}' text-anchor='end' fill='rgba(255,255,255,0.55)' font-size='11'>${esc(Math.round(value).toLocaleString())}</text>`;
+          + `<text x='${pad.left - 8}' y='${Number(yy) + 4}' text-anchor='end' fill='rgba(255,255,255,0.55)' font-size='11'>${esc(formatHlRequestCount(Math.round(value)))}</text>`;
       }).join('');
       const markers = samples.map(function (sample) {
         const label = new Date(Number(sample.sampled_at) * 1000).toLocaleString()
-          + ' | Used ' + Number(sample.used).toLocaleString() + ' / Cap ' + Number(sample.cap).toLocaleString();
+          + ' | Used ' + formatHlRequestCount(Number(sample.used)) + ' / Cap ' + formatHlRequestCount(Number(sample.cap));
         return `<circle cx='${x(sample).toFixed(1)}' cy='${y(sample.cap).toFixed(1)}' r='3' fill='rgba(244,185,66,0.9)'><title>${esc(label)}</title></circle>`
           + `<circle cx='${x(sample).toFixed(1)}' cy='${y(sample.used).toFixed(1)}' r='3' fill='rgba(93,196,255,0.95)'><title>${esc(label)}</title></circle>`;
       }).join('');
@@ -13130,11 +13134,11 @@
       const tone = !hasSample || stale ? 'warning' : (used >= cap ? 'error' : (percent >= 90 ? 'warning' : 'ok'));
       const status = !hasSample ? 'Unavailable' : (stale ? 'Stale' : (used >= cap ? 'Limit reached' : (percent >= 90 ? 'Near limit' : 'Available')));
       const value = hasSample ? percent.toFixed(0) + '%' : status;
-      const counters = hasSample ? used.toLocaleString() + ' / ' + cap.toLocaleString() : 'Waiting for sample';
+      const counters = hasSample ? formatHlRequestCount(used) + ' / ' + formatHlRequestCount(cap) : 'Waiting for sample';
       const sampled = account.sampled_at ? new Date(Number(account.sampled_at) * 1000).toLocaleString() : 'n/a';
-      const title = 'nRequestsUsed: ' + (hasSample ? used.toLocaleString() : 'n/a')
-        + ' | nRequestsCap: ' + (hasSample ? cap.toLocaleString() : 'n/a')
-        + ' | Remaining: ' + (hasSample ? Math.max(0, cap - used).toLocaleString() : 'n/a')
+      const title = 'nRequestsUsed: ' + (hasSample ? formatHlRequestCount(used) : 'n/a')
+        + ' | nRequestsCap: ' + (hasSample ? formatHlRequestCount(cap) : 'n/a')
+        + ' | Remaining: ' + (hasSample ? formatHlRequestCount(Math.max(0, cap - used)) : 'n/a')
         + ' | ' + status + ' | Sampled: ' + sampled + ' | Click for 24-hour history';
       const html = `<button class='table-button cpu-clickable hl-limit-history' type='button' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(historyUser)}' data-history-metric='hl_requests' title='${escAttr(title)}'><span class='tag ${tone}'>${esc(value)}</span><span class='field-help'>${esc(counters)}</span></button>`;
       return { html: html, sig: [historyUser, String(account.sampled_at || ''), String(used), String(cap), String(account.state || ''), stale ? 'stale' : 'fresh'].join('|') };

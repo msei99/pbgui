@@ -27,7 +27,6 @@ class FakeUsers:
 def test_vps_agent_samples_only_running_wallet_once(monkeypatch):
     """Two local bots sharing a wallet generate one Hyperliquid info request."""
     import User
-    import httpx
 
     snapshot = {"generated_at": monitor_agent.time.time(),
                 "v7": [{"name": "bot_a", "user": "hl_one", "running": True}],
@@ -39,21 +38,26 @@ def test_vps_agent_samples_only_running_wallet_once(monkeypatch):
     calls = []
 
     class Response:
-        """Provide a valid exchange info response."""
+        """Provide a valid exchange info response as a context manager."""
 
-        def raise_for_status(self):
-            """Accept the fake response."""
+        def __enter__(self):
+            """Return the fake response."""
+            return self
 
-        def json(self):
+        def __exit__(self, *args):
+            """Close the fake response."""
+            return False
+
+        def read(self, limit):
             """Return counters in the official field names."""
-            return {"nRequestsUsed": 80, "nRequestsCap": 100}
+            return b'{"nRequestsUsed":80,"nRequestsCap":100}'
 
-    def post(url, *, json, timeout):
+    def open_request(request, *, timeout):
         """Capture the one address read."""
-        calls.append((url, json, timeout))
+        calls.append((request.full_url, json.loads(request.data), timeout))
         return Response()
 
-    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(monitor_agent, "urlopen", open_request)
     monitor_agent._run_hl_rate_limits()
     assert len(calls) == 1
     assert calls[0][1] == {"type": "userRateLimit", "user": ADDRESS}
@@ -63,24 +67,21 @@ def test_vps_agent_samples_only_running_wallet_once(monkeypatch):
 
 def test_vps_agent_does_not_poll_without_running_bot(monkeypatch):
     """An unused account generates no background Hyperliquid request."""
-    import httpx
-
     monkeypatch.setattr(monitor_agent, "_read_json", lambda *args: {"generated_at": monitor_agent.time.time(), "v7": [], "v8": []})
     monkeypatch.setattr(monitor_agent, "_HL_RATE_LIMITS_BY_USER", {"old": {"used": 1}})
-    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: pytest.fail("Unexpected exchange request"))
+    monkeypatch.setattr(monitor_agent, "urlopen", lambda *args, **kwargs: pytest.fail("Unexpected exchange request"))
     monitor_agent._run_hl_rate_limits()
     assert monitor_agent._HL_RATE_LIMITS_BY_USER == {}
 
 
 def test_vps_agent_ignores_stale_bot_snapshot(monkeypatch):
     """A stopped collector cannot keep generating exchange reads from old bot data."""
-    import httpx
 
     snapshot = {"generated_at": monitor_agent.time.time() - 200,
                 "v8": [{"name": "old", "user": "hl_one", "running": True}]}
     monkeypatch.setattr(monitor_agent, "_read_json", lambda *args: snapshot)
     monkeypatch.setattr(monitor_agent, "_HL_RATE_LIMITS_BY_USER", {})
-    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: pytest.fail("Unexpected exchange request"))
+    monkeypatch.setattr(monitor_agent, "urlopen", lambda *args, **kwargs: pytest.fail("Unexpected exchange request"))
     monitor_agent._run_hl_rate_limits()
     assert monitor_agent._HL_RATE_LIMITS_BY_USER == {}
 
