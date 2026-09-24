@@ -394,9 +394,22 @@ def _run_hl_rate_limits() -> None:
             _HL_RATE_LIMITS_BY_USER.clear()
         return
     users = Users()
+    users_by_name = {name: users.find_user(name) for name in user_names}
+    if any(user is None for user in users_by_name.values()):
+        # PB8-only VPS hosts have no PB7 api-keys.json; Cluster Sync projects
+        # the same account records into the local PB8 installation instead.
+        pb8_directory = str(pbgui_purefunc.pb8dir() or "").strip()
+        if pb8_directory:
+            pb8_api_keys = Path(pb8_directory) / "api-keys.json"
+            if pb8_api_keys.is_file() and pb8_api_keys != Path(users.api7_path):
+                users.api7_path = str(pb8_api_keys)
+                users.load()
+                for name, user in users_by_name.items():
+                    if user is None:
+                        users_by_name[name] = users.find_user(name)
     by_wallet: dict[str, list[str]] = {}
     for name in sorted(user_names):
-        user = users.find_user(name)
+        user = users_by_name[name]
         if user is None or str(getattr(user, "exchange", "") or "").lower() != "hyperliquid":
             continue
         address = str(getattr(user, "wallet_address", "") or "").strip()

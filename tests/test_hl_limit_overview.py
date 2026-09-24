@@ -65,6 +65,65 @@ def test_vps_agent_samples_only_running_wallet_once(monkeypatch):
     assert monitor_agent._HL_RATE_LIMITS_BY_USER["hl_two"]["cap"] == 100
 
 
+def test_vps_agent_uses_pb8_projection_without_pb7(monkeypatch, tmp_path):
+    """A PB8-only VPS resolves running wallets from its projected API keys."""
+    import User
+
+    class Pb8OnlyUsers:
+        """Model an empty PB7 account file and a populated PB8 projection."""
+
+        def __init__(self):
+            self.api7_path = "/api-keys.json"
+            self.loaded_pb8 = False
+
+        def load(self):
+            """Record the PB8 projection load without opening credentials."""
+            self.loaded_pb8 = True
+
+        def find_user(self, name):
+            """Expose the saved account only after loading the PB8 projection."""
+            if self.loaded_pb8 and name in {"hl_one", "hl_two"}:
+                return SimpleNamespace(exchange="hyperliquid", wallet_address=ADDRESS)
+            return None
+
+    class Response:
+        """Return a small valid Hyperliquid response."""
+
+        def __enter__(self):
+            """Return the fake response."""
+            return self
+
+        def __exit__(self, *args):
+            """Close the fake response."""
+            return False
+
+        def read(self, limit):
+            """Return valid counters."""
+            return b'{"nRequestsUsed":80,"nRequestsCap":100}'
+
+    pb8_keys = tmp_path / "api-keys.json"
+    pb8_keys.write_text("{}")
+    snapshot = {"generated_at": monitor_agent.time.time(),
+                "v8": [{"name": "bot_a", "user": "hl_one", "running": True},
+                       {"name": "bot_b", "user": "hl_two", "running": True}]}
+    monkeypatch.setattr(User, "Users", Pb8OnlyUsers)
+    monkeypatch.setattr(monitor_agent.pbgui_purefunc, "pb8dir", lambda: str(tmp_path))
+    monkeypatch.setattr(monitor_agent, "_read_json", lambda *args: snapshot)
+    monkeypatch.setattr(monitor_agent, "_HL_RATE_LIMITS_BY_USER", {})
+    calls = []
+
+    def open_request(request, *, timeout):
+        """Count one request for both bots sharing the wallet."""
+        calls.append(json.loads(request.data))
+        return Response()
+
+    monkeypatch.setattr(monitor_agent, "urlopen", open_request)
+    monitor_agent._run_hl_rate_limits()
+    assert calls == [{"type": "userRateLimit", "user": ADDRESS}]
+    assert monitor_agent._HL_RATE_LIMITS_BY_USER["hl_one"]["used"] == 80
+    assert monitor_agent._HL_RATE_LIMITS_BY_USER["hl_two"]["cap"] == 100
+
+
 def test_vps_agent_does_not_poll_without_running_bot(monkeypatch):
     """An unused account generates no background Hyperliquid request."""
     monkeypatch.setattr(monitor_agent, "_read_json", lambda *args: {"generated_at": monitor_agent.time.time(), "v7": [], "v8": []})
