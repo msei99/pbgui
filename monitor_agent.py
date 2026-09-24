@@ -36,6 +36,7 @@ LIVE_INTERVAL_SECONDS = 1.0
 STATUS_INTERVAL_SECONDS = 5.0
 INSTANCE_INTERVAL_SECONDS = 30.0
 HOST_META_INTERVAL_SECONDS = 10.0
+LEGACY_CRON_CACHE_SECONDS = 3600.0
 SERVICE_INTERVAL_SECONDS = 60.0
 PACKAGE_INTERVAL_SECONDS = 3600.0
 HISTORY_SECONDS = 62.0
@@ -55,6 +56,7 @@ PBGDIR = _pbgui_dir()
 DATA_DIR = PBGDIR / "data" / "monitor_agent"
 _STATUS_LOCK = threading.Lock()
 _SERVICE_RESTART_HISTORY: dict[str, list[float]] = {}
+_LEGACY_CRON_CACHE: tuple[tuple[int, int, int], float, int] | None = None
 
 PBGUI_SERVICES = {
     "PBCluster": ("pbgui-pbcluster.service", "data/pid/pbcluster.pid", "pbcluster.py"),
@@ -399,12 +401,37 @@ def _run_instance_snapshot() -> None:
 def _run_host_meta() -> None:
     """Write the current host metadata cache."""
 
+    global _LEGACY_CRON_CACHE
+    cron_dir = Path('/var/spool/cron/crontabs')
+    try:
+        cron_stat = cron_dir.stat()
+        cron_signature = (cron_stat.st_dev, cron_stat.st_ino, cron_stat.st_mtime_ns)
+    except OSError:
+        cron_signature = None
+    now = time.monotonic()
+    extra_env: dict[str, str] = {'PBGUI_SKIP_CREDENTIAL_METADATA': '1'}
+    if (_LEGACY_CRON_CACHE is not None and cron_signature is not None
+            and _LEGACY_CRON_CACHE[0] == cron_signature
+            and now - _LEGACY_CRON_CACHE[1] < LEGACY_CRON_CACHE_SECONDS):
+        extra_env['PBGUI_CACHED_LEGACY_CRON_COUNT'] = str(_LEGACY_CRON_CACHE[2])
     script = _embedded_monitor_script("HOST_META_SCRIPT").replace("__PBGDIR__", str(PBGDIR))
     payload = _run_shell_script(
         script,
-        env=_script_env({"PBGUI_SKIP_CREDENTIAL_METADATA": "1"}),
+        env=_script_env(extra_env),
         timeout=20,
     ) or {}
+    migration = payload.get('systemd_migration')
+    if isinstance(migration, dict) and cron_signature is not None:
+        cron_count = migration.get('legacy_cron_count')
+        try:
+            current_stat = cron_dir.stat()
+            current_signature = (current_stat.st_dev, current_stat.st_ino, current_stat.st_mtime_ns)
+        except OSError:
+            current_signature = None
+        if (type(cron_count) is int and cron_count >= 0
+                and current_signature == cron_signature
+                and 'PBGUI_CACHED_LEGACY_CRON_COUNT' not in extra_env):
+            _LEGACY_CRON_CACHE = (cron_signature, time.monotonic(), cron_count)
     now = time.time()
     payload.pop("coinmarketcap" + "_api_key", None)
     payload.update(_local_credential_capability())

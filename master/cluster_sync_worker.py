@@ -1871,6 +1871,12 @@ class SshClusterPeerClient:
             port = 22
         key = ensure_cluster_ssh_key(self.cluster_root)
         private_key = str(key.get("private_key_path") or "")
+        # Keep one authenticated transport per peer for repeated sync commands.
+        # The key directory is owner-only and the short hash keeps the Unix
+        # socket path below the platform limit without exposing peer metadata.
+        peer_key = f"{user}@{host}:{port}:{private_key}:{key.get('fingerprint', '')}"
+        control_name = hashlib.sha256(peer_key.encode("utf-8")).hexdigest()[:24]
+        control_path = Path(str(key["key_dir"])) / f"cm-{control_name}"
         command = str(command_text or "")
         if str(peer.get("cluster_ssh_mode") or "forced").strip().lower() == "direct":
             command = _remote_cluster_command(str(peer.get("remote_pbgui_dir") or "software/pbgui"), local_node_id, command)
@@ -1880,6 +1886,11 @@ class SshClusterPeerClient:
             "-o", "IdentitiesOnly=yes",
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=yes",
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPersist=300",
+            "-o", f"ControlPath={control_path}",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=3",
             "-o", f"ConnectTimeout={self.connect_timeout}",
             "-p", str(port),
             target,
