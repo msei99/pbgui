@@ -1575,6 +1575,7 @@ class TestVpsManagerFrontendLogic:
         }
         function renderServiceRows() { return ''; }
         function renderRunningPb7Fallback() { return ''; }
+        function renderHlAccountLimits() { return ''; }
         """
         assertions = """
         const metric = { free_mb: 1, used_mb: 2, total_mb: 3, usage_pct: 4, usage_60s_peak: 5, usage_60s_window: 60 };
