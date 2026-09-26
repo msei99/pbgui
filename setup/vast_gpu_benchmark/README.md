@@ -8,16 +8,21 @@ The current integration is in **PB8 Optimize**, with Cloud setup in Queue and GP
 selection in the editor. Multiple jobs share one rental and cached market data.
 See the [user guide](../../docs/help/48_vast_gpu.md).
 
-Public image: `ghcr.io/msei99/pbgui-pb8-worker:ee2b7d4-queue-v3` (includes rsync).
+Active public image: `ghcr.io/msei99/pbgui-pb8-worker:903ed11-upstream-calibration-v1`
+(pinned by manifest digest in PBGui). It contains official `enarjord/passivbot`
+commit `903ed11153ce82d1b6760604eaa3a553309a752a`.
+Build the pinned base with `Dockerfile`, then the single worker image with
+`Dockerfile.calibration`; see the [release review](../../docs/plans/vast-worker-image-release.md).
+
 PBGui pins its manifest digest; no registry token is needed to download it.
 The [image release review](../../docs/plans/vast-worker-image-release.md) records
-content/license checks and anonymous access validation. `Dockerfile.worker`
-provides a public runtime foundation for later wrapper updates; normal users do
+content/license checks and anonymous access validation. The same image runs
+ordinary rentals and GPU calibration; normal users do
 not build or publish images. Publishing a new version is a maintainer release
 operation, not part of creating a queue job.
 
-The older `Dockerfile` and rental/template helpers below describe the original
-benchmark setup. They are not the live queue's lifecycle controller.
+The base `Dockerfile` also retains historical benchmark tooling. The
+rental/template helpers below are not the live queue's lifecycle controller.
 
 ## Current workload
 

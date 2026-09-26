@@ -246,8 +246,8 @@ MONITOR_DEFAULTS = {
     "mem_error_v7": 500.0,
     "swap_warning_v7": 250.0,
     "swap_error_v7": 500.0,
-    "cpu_warning_v7": 10.0,
-    "cpu_error_v7": 15.0,
+    "cpu_warning_v7": 15.0,
+    "cpu_error_v7": 20.0,
     "error_warning_v7": 100.0,
     "error_error_v7": 250.0,
     "traceback_warning_v7": 100.0,
@@ -2137,10 +2137,12 @@ def _config_meta(config_dir):
     cfg_path = os.path.join(config_dir, 'config.json')
     cfg = _read_json(cfg_path)
     pbgui = cfg.get('pbgui', {}) if isinstance(cfg, dict) else {}
+    live = cfg.get('live', {}) if isinstance(cfg, dict) else {}
     return {
         'version': pbgui.get('version', 0),
         'enabled_on': pbgui.get('enabled_on', 'disabled'),
         'dynamic_ignore': bool(pbgui.get('dynamic_ignore')),
+        'user': str(live.get('user') or '') if isinstance(live, dict) else '',
     }
 
 def _is_pb8_config(config_dir):
@@ -2814,11 +2816,14 @@ except Exception as exc:
 for name, cfg_dir in sorted(running.items()):
     cache_key = '7:' + name
     # config version + enabled_on + dynamic_ignore
-    version = 0; enabled_on = 'disabled'; dynamic_ignore = False
+    version = 0; enabled_on = 'disabled'; dynamic_ignore = False; live_user = ''
     cf = os.path.join(cfg_dir, 'config.json')
     if os.path.isfile(cf):
         try:
-            pbgui = json.load(open(cf)).get('pbgui', {})
+            config = json.load(open(cf))
+            pbgui = config.get('pbgui', {})
+            live = config.get('live', {})
+            live_user = str(live.get('user') or '') if isinstance(live, dict) else ''
             version = pbgui.get('version', 0)
             enabled_on = pbgui.get('enabled_on', 'disabled')
             dynamic_ignore = bool(pbgui.get('dynamic_ignore'))
@@ -2834,6 +2839,7 @@ for name, cfg_dir in sorted(running.items()):
     v7.append({
         'name': name,
         'running': True,
+        'user': live_user,
         'cv': version,
         'eo': enabled_on,
         'rv': rv,
@@ -3012,6 +3018,7 @@ for name, process_info in sorted(running_v8.items()):
     v8.append({
         'name': name,
         'running': True,
+        'user': meta.get('user', ''),
         'cv': version,
         'eo': meta.get('enabled_on', 'disabled'),
         'rv': version,
@@ -3481,6 +3488,13 @@ def collect_legacy_cron_lines(pbgui_dir):
     return [line for line in (res.stdout or '').splitlines() if any(token in line for token in tokens) or line.strip() == '#Ansible: pbgui']
 
 
+def collect_legacy_cron_count(pbgui_dir):
+    cached = os.environ.get('PBGUI_CACHED_LEGACY_CRON_COUNT')
+    if cached is not None and cached.isdecimal():
+        return int(cached)
+    return len(collect_legacy_cron_lines(pbgui_dir))
+
+
 def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configured, credential_active):
     pbgui_path = Path(pbgui_dir)
     python_bin = pbgui_path.parent / 'venv_pbgui' / 'bin' / 'python'
@@ -3507,7 +3521,7 @@ def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configure
     units_inactive = [item for item in required_units if item.get('active') != 'active']
     units_ready = bool(required_units) and not units_missing and not units_not_enabled and not units_inactive
     legacy_processes = collect_legacy_pbgui_processes(str(pbgui_path)) if pbgui_path.exists() else []
-    legacy_cron_lines = collect_legacy_cron_lines(str(pbgui_path))
+    legacy_cron_count = collect_legacy_cron_count(str(pbgui_path))
     start_sh_exists = (pbgui_path / 'start.sh').exists()
     blockers = []
     if not pbgui_path.is_dir():
@@ -3523,7 +3537,7 @@ def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configure
         and user_manager_ok
         and units_ready
         and not legacy_processes
-        and not legacy_cron_lines
+        and not legacy_cron_count
         and not start_sh_exists
     )
     state = 'complete' if migration_complete else ('blocked' if blockers else 'needed')
@@ -3536,7 +3550,7 @@ def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configure
         'required_units': required_units,
         'units': units,
         'legacy_process_count': len(legacy_processes),
-        'legacy_cron_count': len(legacy_cron_lines),
+        'legacy_cron_count': legacy_cron_count,
         'legacy_start_sh_exists': start_sh_exists,
         'systemd_user_manager': user_manager_ok,
         'systemd_user_manager_detail': user_manager_detail,

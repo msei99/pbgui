@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hyperliquid Limits - PBGui</title>
+  <style>
+    :root { --bg:#0e1117; --bg2:#1a202c; --border:#2d3748; --text:#e2e8f0; --dim:#94a3b8; --accent:#63b3ed; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:14px 'Segoe UI',system-ui,sans-serif; }
+    #page-body { height:calc(100vh - 52px); overflow:auto; padding:24px; }
+    main { max-width:1480px; margin:0 auto; }
+    h1 { margin:0 0 6px; font-size:23px; }
+    p { margin:0 0 18px; color:var(--dim); }
+    .summary { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px; }
+    .pill { border:1px solid var(--border); border-radius:16px; padding:6px 11px; background:var(--bg2); }
+    .toolbar { display:flex; gap:12px; align-items:center; margin-bottom:12px; }
+    .toolbar input { min-width:260px; max-width:480px; width:100%; padding:8px 10px; color:var(--text); background:var(--bg2); border:1px solid var(--border); border-radius:5px; }
+    .status { color:var(--dim); font-size:12px; }
+    .table-wrap { overflow:auto; border:1px solid var(--border); border-radius:8px; }
+    table { width:100%; border-collapse:collapse; min-width:900px; }
+    th { text-align:left; position:sticky; top:0; z-index:1; background:var(--bg2); border-bottom:2px solid var(--border); padding:10px; white-space:nowrap; }
+    td { padding:11px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+    tbody tr { cursor:pointer; }
+    tbody tr:hover td { background:#202b3a; }
+    tbody tr.is-selected td { background:rgba(77,166,255,.12); }
+    tbody tr.is-selected td:first-child { border-left:3px solid var(--accent); padding-left:7px; }
+    .name { font-weight:700; color:#fafafa; }
+    .sub { color:var(--dim); font-size:12px; margin-top:3px; }
+    .negative { color:#fc8181; font-weight:700; }
+    .positive { color:#68d391; }
+    .pending { color:#f6ad55; }
+    .muted { color:var(--dim); }
+    #detail { margin-top:18px; padding:16px; border:1px solid var(--border); border-radius:8px; background:#121b27; }
+    #detail h2 { margin:0 0 4px; font-size:17px; }
+    #detail p { margin-bottom:12px; }
+    #chart { width:100%; height:220px; display:block; background:#0e1117; border-radius:6px; }
+    #chart text { fill:var(--dim); font:12px system-ui,sans-serif; }
+    .legend { display:flex; gap:18px; color:var(--dim); font-size:12px; margin-top:8px; }
+    .legend span::before { content:'● '; }
+    .legend .used { color:#63b3ed; } .legend .cap { color:#f6ad55; }
+    @media(max-width:700px) { #page-body { padding:12px; } .toolbar { display:block; } .status { display:block; margin-top:7px; } }
+  </style>
+</head>
+<body>
+  <nav id="topnav"></nav>
+  <div id="page-body"><main>
+    <h1>Hyperliquid Limits</h1>
+    <p>One row per wallet. Running bots are sampled by their VPS every five minutes. Opening a saved Hyperliquid API key performs one live read for that account.</p>
+    <div id="summary" class="summary"></div>
+    <div class="toolbar"><input id="filter" type="search" placeholder="Filter account, bot, or VPS" aria-label="Filter accounts"><span id="status" class="status">Loading…</span></div>
+    <div class="table-wrap"><table><thead><tr><th>Account</th><th>Running bots / VPS</th><th>Used</th><th>Cap</th><th>Remaining</th><th>Usage</th><th>Last sample</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
+    <section id="detail" hidden><h2 id="detail-title"></h2><p id="detail-meta"></p><svg id="chart" viewBox="0 0 900 220" preserveAspectRatio="none" role="img" aria-label="24-hour Hyperliquid request limit history"></svg><div class="legend"><span class="used">Used</span><span class="cap">Cap</span></div></section>
+  </main></div>
+  <script>
+    const API_BASE = "%%API_BASE%%";
+    const PBGUI_VERSION = "%%VERSION%%";
+    const PBGUI_SERIAL = "%%SERIAL%%";
+    const state = { accounts: [], selected: new URLSearchParams(location.search).get('account') || '', filter: new URLSearchParams(location.search).get('filter') || '', generation: 0, historyGeneration: 0, lastSignature: '', historySample: 0 };
+    const formatRequestCount = value => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, "'");
+    const $ = id => document.getElementById(id);
+    $('filter').value = state.filter;
+    function timeLabel(seconds) { return Number.isInteger(seconds) && seconds > 0 ? new Date(seconds * 1000).toLocaleString() : '—'; }
+    function setUrl() {
+      const url = new URL(location.href);
+      if (state.selected) url.searchParams.set('account', state.selected); else url.searchParams.delete('account');
+      if (state.filter) url.searchParams.set('filter', state.filter); else url.searchParams.delete('filter');
+      history.replaceState(null, '', url.pathname + url.search);
+    }
+    function cell(row, text, className) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (className) td.className = className;
+      row.appendChild(td);
+      return td;
+    }
+    function makePill(label) { const span = document.createElement('span'); span.className = 'pill'; span.textContent = label; return span; }
+    function render() {
+      const accounts = state.accounts;
+      const active = accounts.filter(item => Array.isArray(item.bots) && item.bots.length).length;
+      $('summary').replaceChildren(makePill(accounts.length + ' wallets'), makePill(active + ' with running bots'), makePill((accounts.length - active) + ' without running bots'));
+      const body = $('rows');
+      const fragment = document.createDocumentFragment();
+      let shown = 0;
+      for (const item of accounts) {
+        const users = Array.isArray(item.users) ? item.users.map(String) : [];
+        const bots = Array.isArray(item.bots) ? item.bots : [];
+        const hosts = Array.isArray(item.hosts) ? item.hosts : [];
+        const account = users[0] || '';
+        const haystack = [users.join(' '), bots.map(bot => bot.name).join(' '), hosts.join(' ')].join(' ').toLowerCase();
+        if (state.filter && !haystack.includes(state.filter.toLowerCase())) continue;
+        shown++;
+        const tr = document.createElement('tr');
+        tr.tabIndex = 0;
+        tr.className = account === state.selected ? 'is-selected' : '';
+        tr.setAttribute('aria-label', 'Show ' + account + ' request history');
+        const names = cell(tr, users.join(', ') || 'Unknown', 'name');
+        const note = document.createElement('div'); note.className = 'sub'; note.textContent = bots.length ? 'Shared wallet' : 'No running bot'; names.appendChild(note);
+        cell(tr, bots.length ? bots.map(bot => (bot.pb_version === '8' ? 'PB8 ' : 'PB7 ') + bot.name + ' · ' + bot.host).join('; ') : '—', bots.length ? '' : 'muted');
+        const used = Number.isInteger(item.used) ? item.used : null;
+        const cap = Number.isInteger(item.cap) ? item.cap : null;
+        cell(tr, used === null ? '—' : formatRequestCount(used));
+        cell(tr, cap === null ? '—' : formatRequestCount(cap));
+        const remaining = used === null || cap === null ? null : Math.max(0, cap - used);
+        cell(tr, remaining === null ? '—' : formatRequestCount(remaining), remaining === 0 ? 'negative' : 'positive');
+        cell(tr, used === null || cap === null || cap === 0 ? '—' : (100 * used / cap).toFixed(1) + '%', used !== null && cap !== null && used >= cap ? 'negative' : '');
+        cell(tr, timeLabel(item.sampled_at));
+        const status = item.source === 'purchase' ? 'Purchase check' : item.state === 'on_demand' ? 'One-time key read' : bots.length ? (item.state === 'ok' ? 'Live on VPS' : item.state === 'stale' ? 'Stale VPS sample' : 'Waiting for VPS sample') : 'Not sampled';
+        cell(tr, status, item.state === 'ok' ? 'positive' : item.state === 'idle' || item.state === 'on_demand' ? 'muted' : 'pending');
+        tr.addEventListener('click', () => select(account));
+        tr.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(account); } });
+        fragment.appendChild(tr);
+      }
+      if (!shown) { const tr = document.createElement('tr'); const td = cell(tr, accounts.length ? 'No matching accounts.' : 'No saved Hyperliquid wallets found.'); td.colSpan = 8; fragment.appendChild(tr); }
+      body.replaceChildren(fragment);
+      const selected = accounts.find(item => Array.isArray(item.users) && item.users.includes(state.selected));
+      if (state.selected && !selected) { $('status').textContent = 'Selected account is no longer available.'; state.selected = ''; setUrl(); }
+      const detail = $('detail');
+      detail.hidden = !selected;
+      if (selected) {
+        $('detail-title').textContent = state.selected + ' · 24-hour request history';
+        if (!Array.isArray(selected.bots) || !selected.bots.length) {
+          $('detail-title').textContent = state.selected + ' · account limit';
+          $('detail-meta').textContent = 'No running bot. Open this account in API Keys for a one-time live read; history is collected only while a bot runs.';
+          $('chart').replaceChildren();
+        } else if (Number(selected.sampled_at || 0) > state.historySample) loadHistory(state.selected);
+      }
+    }
+    function select(account) {
+      state.selected = state.selected === account ? '' : account;
+      state.historySample = 0;
+      state.historyGeneration++;
+      setUrl();
+      render();
+    }
+    function plot(samples) {
+      const svg = $('chart'); svg.replaceChildren();
+      const valid = samples.filter(p => Number.isInteger(p.sampled_at) && Number.isInteger(p.used) && Number.isInteger(p.cap));
+      if (!valid.length) { $('detail-meta').textContent = 'No samples yet.'; return; }
+      const left = 52, right = 884, top = 16, bottom = 188;
+      const first = valid[0].sampled_at, last = valid[valid.length - 1].sampled_at;
+      const max = Math.max(1, ...valid.map(p => Math.max(p.used, p.cap)));
+      const svgNode = (tag, attrs) => { const node = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value)); svg.appendChild(node); return node; };
+      for (const fraction of [0, .5, 1]) {
+        const y = bottom - (bottom - top) * fraction;
+        svgNode('line', {x1:left, y1:y, x2:right, y2:y, stroke:'#2d3748'});
+        const label = svgNode('text', {x:4, y:y+4}); label.textContent = formatRequestCount(Math.round(max * fraction));
+      }
+      for (const [field, color] of [['cap','#f6ad55'], ['used','#63b3ed']]) {
+        const points = valid.map(p => {
+          const x = left + (right-left) * (last === first ? .5 : (p.sampled_at-first)/(last-first));
+          const y = bottom - (bottom-top) * p[field]/max;
+          return x.toFixed(1)+','+y.toFixed(1);
+        }).join(' ');
+        svgNode('polyline', {points, fill:'none', stroke:color, 'stroke-width':3});
+      }
+      for (const [x, value] of [[left, first], [right, last]]) { const label = svgNode('text', {x, y:212, 'text-anchor':x === left ? 'start' : 'end'}); label.textContent = timeLabel(value); }
+      $('detail-meta').textContent = valid.length + ' samples · ' + timeLabel(first) + ' to ' + timeLabel(last);
+    }
+    async function loadHistory(account) {
+      const generation = ++state.historyGeneration;
+      $('detail-meta').textContent = 'Loading history…';
+      try {
+        const response = await fetch(API_BASE + '/user-rate-limits/history/' + encodeURIComponent(account), { credentials:'same-origin', cache:'no-store' });
+        if (!response.ok) throw new Error('History unavailable');
+        const payload = await response.json();
+        if (generation !== state.historyGeneration || state.selected !== account) return;
+        const samples = Array.isArray(payload.samples) ? payload.samples : [];
+        state.historySample = samples.length ? samples[samples.length - 1].sampled_at : Date.now()/1000;
+        plot(samples);
+      } catch (error) { if (generation === state.historyGeneration) $('detail-meta').textContent = error.message; }
+    }
+    async function load() {
+      const generation = ++state.generation;
+      try {
+        const response = await fetch(API_BASE + '/user-rate-limits', {credentials:'same-origin', cache:'no-store'});
+        if (!response.ok) throw new Error('Account limits unavailable');
+        const payload = await response.json();
+        if (generation !== state.generation) return;
+        const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+        state.accounts = accounts.sort((a,b) => {
+          const activeA = Array.isArray(a.bots) && a.bots.length ? 0 : 1;
+          const activeB = Array.isArray(b.bots) && b.bots.length ? 0 : 1;
+          return activeA-activeB || String((a.users||[])[0]||'').localeCompare(String((b.users||[])[0]||''));
+        });
+        $('status').textContent = 'Automatic update every 30 seconds · Hyperliquid userRateLimit';
+        const signature = JSON.stringify(state.accounts);
+        if (signature !== state.lastSignature) { state.lastSignature = signature; render(); }
+      } catch (error) { if (generation === state.generation) $('status').textContent = error.message; }
+    }
+    $('filter').addEventListener('input', event => { state.filter = event.target.value; setUrl(); render(); });
+    window.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+    window.setInterval(() => { if (!document.hidden) load(); }, 30000);
+    load();
+    window.PBGUI_NAV_CONFIG = { subtitle:'HYPERLIQUID LIMITS', current:'info_hl_limits', authenticated:true, apiBase:API_BASE, version:PBGUI_VERSION, serial:PBGUI_SERIAL };
+  </script>
+  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+</body>
+</html>

@@ -2260,8 +2260,8 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
-<script defer src="/app/js/pb8_parameter_help.js?v=3"></script>
-<link rel="stylesheet" href="/app/css/vast.css?v=12">
+<script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
+<link rel="stylesheet" href="/app/css/vast.css?v=19">
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -2769,8 +2769,8 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
 <script src="/app/js/scenario_visual_editor.js?v=21"></script>
 <script src="/app/js/suite_editor.js?v=40"></script>
-<script src="/app/js/log_viewer_panel.js?v=48"></script>
-<script src="/app/js/pbgui_dialogs.js?v=9"></script>
+<script src="/app/js/log_viewer_panel.js?v=50"></script>
+<script src="/app/js/pbgui_dialogs.js?v=10"></script>
 <script>
 var API_BASE = "%%API_BASE%%";
 var BASE_PREFIX = "%%BASE_PREFIX%%";
@@ -2950,6 +2950,7 @@ var METRIC_PILL_LABELS = {
 };
 var PARETO_SUMMARY_ORDER = Object.keys(METRIC_PILL_LABELS);
 var PARETO_COLUMNS_STORAGE_KEY = 'pbgui.optimize.' + optimizeEditorAdapter.version + '.pareto_columns';
+var PARETO_SELECTION_STORAGE_KEY = 'pbgui.optimize.' + optimizeEditorAdapter.version + '.pareto_selection';
 
 function el(id) {
   return document.getElementById(id);
@@ -5011,13 +5012,32 @@ function fieldNumber(id, label, value, step, tip) {
     '</div>', tip);
 }
 
-function fieldNumber2(id, label, value, step, tip, span, placeholder) {
+function stepNullablePositiveInteger(id, direction) {
+  var input = el(id);
+  if (!input) return;
+  var value = Number(input.value);
+  if (direction < 0) {
+    input.value = input.value === '' || !Number.isFinite(value) || value <= 1
+      ? '' : String(Math.ceil(value) - 1);
+  } else {
+    input.value = input.value === '' || !Number.isFinite(value) || value < 1
+      ? '1' : String(Math.floor(value) + 1);
+  }
+}
+
+function fieldNumber2(id, label, value, step, tip, span, placeholder, nullableAuto) {
   var rendered = esc(String(value == null ? '' : value));
+  var minusAction = nullableAuto
+    ? "stepNullablePositiveInteger('" + id + "', -1)"
+    : "var i=document.getElementById('" + id + "');i.value=+(+i.value-" + step + ").toFixed(10)";
+  var plusAction = nullableAuto
+    ? "stepNullablePositiveInteger('" + id + "', 1)"
+    : "var i=document.getElementById('" + id + "');i.value=+(+i.value+" + step + ").toFixed(10)";
   return fmtGroupSpan(id, label,
     '<div class="num-stepper">' +
-    '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'' + id + '\');i.value=+(+i.value-' + step + ').toFixed(10)">−</button>' +
+    '<button type="button" class="stepper-btn" onclick="' + minusAction + '">−</button>' +
     '<input type="number" id="' + id + '" value="' + rendered + '" step="' + step + '"' + (placeholder ? ' placeholder="' + esc(placeholder) + '"' : '') + '>' +
-    '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'' + id + '\');i.value=+(+i.value+' + step + ').toFixed(10)">+</button>' +
+    '<button type="button" class="stepper-btn" onclick="' + plusAction + '">+</button>' +
     '</div>', tip, span || 1);
 }
 
@@ -7695,6 +7715,7 @@ function optimizeGpuDefaults() {
 }
 
 function optimizeGpuAutoPlaceholder(key) {
+  if (el('opted-execution')?.value === 'vast') return 'auto after rent';
   var capability = optimizeBackendContractItem('gpu');
   var defaults = capability && capability.effective_defaults && typeof capability.effective_defaults === 'object'
     ? capability.effective_defaults
@@ -7782,11 +7803,13 @@ function collectOptimizeGpuSettings(optimize, strict) {
     ? deepClone(gpu.successive_halving)
     : {};
   halving.enabled = !!el('opted-gpu-halving-enabled').checked;
-  halving.history_fractions = parseOptimizeGpuFractions(el('opted-gpu-halving-fractions').value, strict);
-  halving.survival_fraction = toNumberOr(el('opted-gpu-halving-survival').value, 0.5);
-  halving.min_survivors = nullablePositiveInteger('opted-gpu-halving-min-survivors', 'GPU min_survivors') || 64;
-  if (strict && (halving.survival_fraction <= 0 || halving.survival_fraction > 1)) {
-    throw new Error('GPU successive-halving survival_fraction must be within (0, 1].');
+  if (halving.enabled) {
+    halving.history_fractions = parseOptimizeGpuFractions(el('opted-gpu-halving-fractions').value, strict);
+    halving.survival_fraction = toNumberOr(el('opted-gpu-halving-survival').value, 0.5);
+    halving.min_survivors = nullablePositiveInteger('opted-gpu-halving-min-survivors', 'GPU min_survivors') || 64;
+    if (strict && (halving.survival_fraction <= 0 || halving.survival_fraction > 1)) {
+      throw new Error('GPU successive-halving survival_fraction must be within (0, 1].');
+    }
   }
   if (supports('successive_halving')) gpu.successive_halving = halving;
   optimize.gpu = gpu;
@@ -7821,6 +7844,7 @@ function populateOptimizeGpuSettings(optimize) {
   el('opted-gpu-auto-lean').checked = gpu.auto_lean_parallelism !== false;
   el('opted-gpu-halving-enabled').checked = !!halving.enabled;
   el('opted-gpu-halving-fractions').value = (halving.history_fractions || [0.25, 0.5, 1.0]).join(', ');
+  updateOptimizeGpuHalvingFields();
 }
 
 function resetOptimizeGpuSettings() {
@@ -7849,6 +7873,7 @@ function resetOptimizeGpuSettings() {
   if (el('opted-gpu-auto-lean')) el('opted-gpu-auto-lean').checked = defaults.auto_lean_parallelism !== false;
   if (el('opted-gpu-halving-enabled')) el('opted-gpu-halving-enabled').checked = !!halving.enabled;
   if (el('opted-gpu-halving-fractions')) el('opted-gpu-halving-fractions').value = (halving.history_fractions || [0.25, 0.5, 1.0]).join(', ');
+  updateOptimizeGpuHalvingFields();
   scheduleStructuredEditorSync();
 }
 
@@ -8237,11 +8262,26 @@ function getCurrentOptimizePymooMinimumPopulationSize(visibility) {
   return optimizeReferenceDirectionCount(objectiveCount, nPartitions);
 }
 
+function updateOptimizeGpuHalvingFields() {
+  var toggle = el('opted-gpu-halving-enabled');
+  var cloud = el('opted-execution')?.value === 'vast';
+  var showOption = !cloud || !!toggle?.checked;
+  ['opted-gpu-halving-heading', 'opted-gpu-halving-mobile-heading', 'opted-gpu-halving-switch'].forEach(function(id) {
+    var node = el(id);
+    if (node) node.style.display = showOption ? '' : 'none';
+  });
+  var fields = el('opted-gpu-halving-fields');
+  if (fields) fields.style.display = toggle?.checked && !cloud ? 'contents' : 'none';
+  var note = el('opted-gpu-halving-cloud-note');
+  if (note) note.style.display = cloud && toggle?.checked ? '' : 'none';
+}
+
 function updateOptimizeBackendSections() {
   var visibility = optimizeSectionVisibility();
   var pymooSection = el('optimize-pymoo-section');
   var deapSection = el('optimize-deap-section');
   var gpuSection = el('optimize-gpu-section');
+  var gpuRuntimeLabel = el('opted-gpu-runtime-label');
   var gpuWarning = el('opted-gpu-runtime-warning');
   var nsga3Section = el('optimize-pymoo-nsga3-section');
   var effectiveLabel = el('opted-pymoo-effective-algorithm');
@@ -8254,15 +8294,28 @@ function updateOptimizeBackendSections() {
   var refDirMode = el('opted-pymoo-ref-dir-npartitions-mode');
   var refDirInput = el('opted-pymoo-ref-dir-npartitions');
   var refDirAutoInput = el('opted-pymoo-ref-dir-npartitions-auto');
+  if (gpuRuntimeLabel) {
+    var cloudGpu = el('opted-execution')?.value === 'vast';
+    gpuRuntimeLabel.hidden = cloudGpu;
+    if (!cloudGpu) gpuRuntimeLabel.textContent = optimizeGpuRuntimeLabel(optimizeBackendContractItem('gpu'));
+  }
+  if (el('opted-execution')) {
+    [
+      ['opted-gpu-population-size', 'population_size'],
+      ['opted-gpu-batch-size', 'batch_size'],
+      ['opted-gpu-max-dispatch-bars', 'max_dispatch_candidate_bars']
+    ].forEach(function(pair) { if (el(pair[0])) el(pair[0]).placeholder = optimizeGpuAutoPlaceholder(pair[1]); });
+  }
   var populationModeChanged = false;
   var populationValueAdjusted = false;
   if (pymooSection) pymooSection.style.display = visibility.showPymoo ? '' : 'none';
   if (deapSection) deapSection.style.display = visibility.showDeap ? '' : 'none';
   if (gpuSection) gpuSection.style.display = visibility.showGpu ? '' : 'none';
+  updateOptimizeGpuHalvingFields();
   if (gpuWarning) {
     var capability = optimizeBackendContractItem('gpu');
     gpuWarning.textContent = optimizeBackendUnavailableMessage(capability);
-    gpuWarning.style.display = visibility.showGpu && capability && capability.available === false ? '' : 'none';
+    gpuWarning.style.display = visibility.showGpu && capability && capability.available === false && el('opted-execution')?.value !== 'vast' ? '' : 'none';
   }
   if (nsga3Section) nsga3Section.style.display = visibility.showNsga3 ? '' : 'none';
   if (effectiveLabel) effectiveLabel.value = formatOptimizeEffectiveAlgorithmLabel(visibility);
@@ -9432,11 +9485,6 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
           .replace('<select id="opted-strategy-kind"', '<select id="opted-strategy-kind" data-current-strategy="' + escapeHtml(live.strategy_kind || strategyOptions[0] || '') + '" onchange="changeOptimizeStrategyKind(this.value)"')
         + '</div>'
       : '')
-    + (optimizeEditorAdapter.isV8 ? '<div class="expander open"><div class="expander-header">Execution</div><div class="expander-body">'
-      + '<div class="form-row cols-8">'
-      + fieldSelect2('opted-execution', 'Run on', [{value:'local',label:'Local'}, {value:'vast',label:'Vast.ai GPU · shared queue worker'}], (config.pbgui || {}).execution === 'vast' ? 'vast' : 'local', false, 'Choose where queued optimizer jobs run. GPU requirements are in GPU &amp; Offers; rental controls and jobs are in Queue. Queued cloud jobs share the rented GPU.', 3)
-        .replace('<select id="opted-execution"', '<select id="opted-execution" onchange="window.PBGuiVast && window.PBGuiVast.updateEditor();scheduleStructuredEditorSync()"')
-      + '</div><div id="opted-vast-validation" role="status" aria-live="polite" hidden></div></div></div>' : '')
     + '<div id="suite-container"></div>'
 
     + '<div class="expander' + (normalizeScoringEntries(optimize.scoring).length ? ' open' : '') + '" id="exp-opt-scoring">'
@@ -9476,39 +9524,52 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       + '</div>'
     + '</div>'
 
+    + '<div class="section-title">Execution &amp; optimizer backend</div>'
+    + (optimizeEditorAdapter.isV8 ? '<div class="form-row cols-8">'
+      + fieldSelect2('opted-execution', 'Run on', [{value:'local',label:'Local'}, {value:'vast',label:'Vast.ai GPU · shared queue worker'}], (config.pbgui || {}).execution === 'vast' ? 'vast' : 'local', false, 'Choose where queued optimizer jobs run. GPU requirements are in GPU &amp; Offers; rental controls and jobs are in Queue. Queued cloud jobs share the rented GPU.', 3)
+        .replace('<select id="opted-execution"', '<select id="opted-execution" onchange="window.PBGuiVast && window.PBGuiVast.updateEditor();scheduleStructuredEditorSync()"')
+      + '</div>' : '')
+
+
     + '<div class="form-row cols-8">'
-      + fieldSelect2('opted-opt-backend', 'backend', getOptimizeBackendOptions(optimize.backend), backendValue, false, 'Optimizer backend resolved directly from ' + optimizeEditorAdapter.label + '. Pymoo is the current default backend.', 2)
+      + fieldSelect2('opted-opt-backend', 'backend', getOptimizeBackendOptions(optimize.backend), backendValue, false, 'Vast.ai runs use the GPU backend. Local runs use the configured backend default.', 2)
     + '</div>'
 
     + '<div id="optimize-gpu-section" style="display:' + (backendValue === 'gpu' ? '' : 'none') + '">'
       + '<div id="opted-gpu-runtime-warning" class="notice warning" style="display:' + (gpuCapability && gpuCapability.available === false ? '' : 'none') + ';margin-bottom:var(--sp-sm)">' + escapeHtml(optimizeBackendUnavailableMessage(gpuCapability)) + '</div>'
-      + '<div style="display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-sm)"><b>GPU optimization</b><button type="button" class="tiny-btn" onclick="resetOptimizeGpuSettings()">Reset GPU defaults</button></div>'
-      + '<div class="muted-line" style="margin-bottom:var(--sp-sm)">' + escapeHtml(optimizeGpuRuntimeLabel(gpuCapability)) + '</div>'
-      + '<div class="form-row cols-8 gpu-desktop-headings" style="margin-bottom:var(--sp-xs)"><div class="muted-line" style="grid-column:span 4;font-weight:600">Automatic sizing</div><div class="muted-line" style="grid-column:span 4;font-weight:600">Exact validation &amp; checkpointing</div></div>'
+      + '<div style="display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-sm)"><b>GPU optimization</b><button id="opted-gpu-apply-measured" type="button" class="tiny-btn" hidden disabled>Apply measured suggestion</button><button type="button" class="tiny-btn" onclick="resetOptimizeGpuSettings()">Reset GPU defaults</button></div>'
+      + '<div id="opted-gpu-runtime-label" class="muted-line" style="margin-bottom:var(--sp-sm)"' + ((config.pbgui || {}).execution === 'vast' ? ' hidden' : '') + '>' + escapeHtml(optimizeGpuRuntimeLabel(gpuCapability)) + '</div>'
+      + '<div id="opted-gpu-recommendation" class="muted-line" role="status" aria-live="polite" hidden></div>'
+      + '<div id="opted-gpu-dispatch-preview" class="muted-line" hidden></div>'
+      + '<div class="form-row cols-8 gpu-desktop-headings" style="margin-bottom:var(--sp-xs)"><div class="muted-line" style="grid-column:span 4;font-weight:600">Population &amp; dispatch</div><div class="muted-line" style="grid-column:span 4;font-weight:600">Exact validation &amp; checkpointing</div></div>'
       + '<div class="form-row cols-8">'
-        + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Automatic sizing</div>'
-        + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-auto-lean"' + (gpu.auto_lean_parallelism === false ? '' : ' checked') + '><label for="opted-gpu-auto-lean"><span data-tip="Allow PB8 to scale CUDA population, dispatch size, Exact validations and drift evidence together, or apply Apple M3 tuning, when sizing fields remain automatic.">auto_lean_parallelism</span></label></div></div>'
-        + fieldNumber2('opted-gpu-population-size', 'population_size', gpu.population_size == null ? '' : gpu.population_size, 1, 'Blank keeps PB8 automatic sizing.', 1, optimizeGpuAutoPlaceholder('population_size'))
-        + fieldNumber2('opted-gpu-batch-size', 'batch_size', gpu.batch_size == null ? '' : gpu.batch_size, 1, 'Blank keeps PB8 automatic dispatch sizing.', 1, optimizeGpuAutoPlaceholder('batch_size'))
-        + fieldNumber2('opted-gpu-max-dispatch-bars', 'max_dispatch_candidate_bars', gpu.max_dispatch_candidate_bars == null ? '' : gpu.max_dispatch_candidate_bars, 1000000, 'Blank keeps PB8 automatic candidate-bar dispatch limits.', 1, optimizeGpuAutoPlaceholder('max_dispatch_candidate_bars'))
+        + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Population &amp; dispatch</div>'
+        + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-auto-lean"' + (gpu.auto_lean_parallelism === false ? '' : ' checked') + '><label for="opted-gpu-auto-lean"><span data-tip="With empty sizing fields, PBGui selects a profile after renting and measuring the GPU.">auto_lean_parallelism</span></label></div></div>'
+        + fieldNumber2('opted-gpu-population-size', 'population_size', gpu.population_size == null ? '' : gpu.population_size, 1, 'Optional override. Leave blank for PBGui to choose after GPU rental.', 1, optimizeGpuAutoPlaceholder('population_size'), true)
+        + fieldNumber2('opted-gpu-batch-size', 'batch_size', gpu.batch_size == null ? '' : gpu.batch_size, 1, 'Optional override. Leave blank for PBGui to choose after GPU rental.', 1, optimizeGpuAutoPlaceholder('batch_size'), true)
+        + fieldNumber2('opted-gpu-max-dispatch-bars', 'max_dispatch_candidate_bars', gpu.max_dispatch_candidate_bars == null ? '' : gpu.max_dispatch_candidate_bars, 1, 'Optional override. Leave blank for PBGui to choose after GPU rental.', 1, optimizeGpuAutoPlaceholder('max_dispatch_candidate_bars'), true)
         + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Exact validation &amp; checkpointing</div>'
         + fieldNumber2('opted-gpu-exact-workers', 'exact_workers', gpu.exact_workers == null ? 0 : gpu.exact_workers, 1, 'Zero inherits optimize.n_cpus for exact Rust validation.', 1)
         + fieldNumber2('opted-gpu-max-pending-exact', 'max_pending_exact', gpu.max_pending_exact == null ? 0 : gpu.max_pending_exact, 1, 'Zero lets PB8 derive the pending exact-validation limit.', 1)
         + fieldNumber2('opted-gpu-validate-generation', 'validate_per_generation', gpu.validate_per_generation == null ? 8 : gpu.validate_per_generation, 1, 'Exact Rust validations submitted per GPU generation.', 1)
         + fieldNumber2('opted-gpu-checkpoint-seconds', 'checkpoint_interval_seconds', gpu.checkpoint_interval_seconds == null ? 5 : gpu.checkpoint_interval_seconds, 0.5, 'Seconds between durable GPU checkpoints.', 1)
       + '</div>'
-      + '<div class="form-row cols-8 gpu-desktop-headings" style="margin-bottom:var(--sp-xs)"><div class="muted-line" style="grid-column:span 4;font-weight:600">Drift safety</div><div class="muted-line" style="grid-column:span 4;font-weight:600">Successive halving</div></div>'
+      + (optimizeEditorAdapter.isV8 ? '<div id="opted-vast-validation" role="status" aria-live="polite" hidden></div>' : '')
+      + '<div class="form-row cols-8 gpu-desktop-headings" style="margin-bottom:var(--sp-xs)"><div class="muted-line" style="grid-column:span 4;font-weight:600">Drift safety</div><div id="opted-gpu-halving-heading" class="muted-line" style="grid-column:span 4;font-weight:600"><span data-tip="Changes how candidates are screened through history; not GPU sizing or memory.">Optional search method (not GPU sizing)</span></div></div>'
       + '<div class="form-row cols-8">'
         + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Drift safety</div>'
         + fieldNumber2('opted-gpu-drift-probes', 'drift_probes', gpu.drift_probes == null ? 4 : gpu.drift_probes, 1, 'Proxy drift probes per validation batch.', 1)
         + fieldNumber2('opted-gpu-drift-window', 'drift_window', gpu.drift_window == null ? 128 : gpu.drift_window, 1, 'Rolling proxy drift sample window.', 1)
         + fieldNumber2('opted-gpu-drift-min-samples', 'drift_min_samples', gpu.drift_min_samples == null ? 32 : gpu.drift_min_samples, 1, 'Minimum samples before drift halt decisions.', 1)
         + fieldNumber2('opted-gpu-drift-halt', 'drift_halt', gpu.drift_halt == null ? 0.6 : gpu.drift_halt, 0.01, 'Constraint agreement threshold; also the rank threshold when drift_rank_halt is blank.', 1)
-        + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Successive halving</div>'
-        + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-halving-enabled"' + (gpuHalving.enabled ? ' checked' : '') + '><label for="opted-gpu-halving-enabled"><span data-tip="Only supported for non-suite single-coin Trailing Martingale optimization.">enabled</span></label></div></div>'
-        + fieldText2('opted-gpu-halving-fractions', 'history_fractions', Array.isArray(gpuHalving.history_fractions) ? gpuHalving.history_fractions.join(', ') : '0.25, 0.5, 1.0', true, '0.25, 0.5, 1.0', 'Strictly increasing fractions ending at 1.0.', 1)
-        + fieldNumber2('opted-gpu-halving-survival', 'survival_fraction', gpuHalving.survival_fraction == null ? 0.5 : gpuHalving.survival_fraction, 0.05, 'Candidate share retained at each partial-history rung.', 1)
-        + fieldNumber2('opted-gpu-halving-min-survivors', 'min_survivors', gpuHalving.min_survivors == null ? 64 : gpuHalving.min_survivors, 1, 'Minimum candidates retained for the next rung.', 1)
+        + '<div id="opted-gpu-halving-mobile-heading" class="gpu-mobile-heading muted-line" style="font-weight:600">Optional search method (not GPU sizing)</div>'
+        + '<div id="opted-gpu-halving-switch" class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-halving-enabled" onchange="updateOptimizeGpuHalvingFields()"' + (gpuHalving.enabled ? ' checked' : '') + '><label for="opted-gpu-halving-enabled"><span data-tip="Not available on Vast.ai. Locally supported only for non-suite single-coin Trailing Martingale optimization.">Use staged history</span></label></div></div>'
+        + '<div id="opted-gpu-halving-cloud-note" class="muted-line" style="display:none;grid-column:span 3">Not available for Vast.ai jobs. Turn it off to queue.</div>'
+        + '<div id="opted-gpu-halving-fields" style="display:contents">'
+        + fieldText2('opted-gpu-halving-fractions', 'History stages', Array.isArray(gpuHalving.history_fractions) ? gpuHalving.history_fractions.join(', ') : '0.25, 0.5, 1.0', true, '0.25, 0.5, 1.0', 'Fractions of backtest history: 0.25 means 25%, 1 means all data; end at 1.', 1)
+        + fieldNumber2('opted-gpu-halving-survival', 'Keep per stage', gpuHalving.survival_fraction == null ? 0.5 : gpuHalving.survival_fraction, 0.05, 'Candidate share retained at each partial-history rung.', 1)
+        + fieldNumber2('opted-gpu-halving-min-survivors', 'Minimum survivors', gpuHalving.min_survivors == null ? 64 : gpuHalving.min_survivors, 1, 'Minimum candidates retained for the next rung.', 1)
+        + '</div>'
       + '</div>'
       + '<div class="form-row cols-8">'
         + (Object.prototype.hasOwnProperty.call(optimizeGpuDefaults(), 'drift_rank_halt') ? fieldNumber2('opted-gpu-drift-rank-halt', 'drift_rank_halt', gpu.drift_rank_halt == null ? '' : gpu.drift_rank_halt, 0.01, 'Blank inherits drift_halt. Otherwise set a rank threshold in (0, 1] independently of constraint agreement. Custom values require Local execution with the current pinned Vast worker.', 2, 'Inherit drift_halt') : '')
@@ -12157,6 +12218,43 @@ function renderParetos() {
   updateMetaCounts();
 }
 
+function paretoSelectionRunId() {
+  var result = (state.results || []).find(function(item) { return item.path === state.selectedResultPath; });
+  return result ? String(result.result || '') : '';
+}
+
+function readParetoSelectionHistory() {
+  try {
+    var value = JSON.parse(window.sessionStorage.getItem(PARETO_SELECTION_STORAGE_KEY) || '[]');
+    return Array.isArray(value) ? value.filter(function(item) {
+      return item && typeof item.id === 'string' && Array.isArray(item.names);
+    }).slice(-20) : [];
+  } catch (_) { return []; }
+}
+
+function persistParetoSelection() {
+  if (!state.paretos.length) return;
+  var runId = paretoSelectionRunId();
+  if (!runId) return;
+  var names = state.paretos.filter(function(item) { return state.selectedParetos.has(item.path); })
+    .map(function(item) { return String(item.name || ''); }).filter(Boolean);
+  var history = readParetoSelectionHistory();
+  var previous = history.find(function(item) { return item.id === runId; });
+  if (previous && JSON.stringify(previous.names) === JSON.stringify(names)) return;
+  history = history.filter(function(item) { return item.id !== runId; });
+  history.push({ id: runId, names: names.slice(0, 1000) });
+  try { window.sessionStorage.setItem(PARETO_SELECTION_STORAGE_KEY, JSON.stringify(history.slice(-20))); } catch (_) {}
+}
+
+function restoreParetoSelection() {
+  if (state.selectedParetos.size || !state.paretos.length) return;
+  var runId = paretoSelectionRunId();
+  var stored = readParetoSelectionHistory().find(function(item) { return item.id === runId; });
+  if (!stored) return;
+  var names = new Set(stored.names.map(String));
+  state.paretos.forEach(function(item) { if (names.has(String(item.name || ''))) state.selectedParetos.add(item.path); });
+}
+
 function updateParetoSelectionUi() {
   pruneSelectionSet('selectedParetos', state.paretos.map(function(item) { return item.path; }));
   syncSelectedParetoScenarios();
@@ -12172,6 +12270,7 @@ function updateParetoSelectionUi() {
   el('holdout-validation-mode').disabled = selectedCount === 0;
   el('btn-seed-selected-paretos').disabled = selectedCount === 0;
   el('btn-seed-whole-result').disabled = !state.selectedResultPath;
+  persistParetoSelection();
 }
 
 function clearParetoSelection() {
@@ -12368,23 +12467,25 @@ window.addEventListener('pbgui:ai-action-completed', function(event) {
 
 window.addEventListener('pbgui:ai-ui-action', function(event) {
   var action = event && event.detail && typeof event.detail === 'object' ? event.detail : {};
-  if (action.type !== 'optimize.select_paretos' || !optimizeEditorAdapter.isV8) return;
+  if (action.type !== 'optimize.select_paretos') return;
   var target = action.target && typeof action.target === 'object' ? action.target : {};
   var payload = action.payload && typeof action.payload === 'object' ? action.payload : {};
   if (target.version !== optimizeEditorAdapter.version || state.panel !== 'paretos') return;
   if (target.run_name && target.run_name !== state.selectedResultName) return;
+  var selectedRun = (state.results || []).find(function(item) { return item.path === state.selectedResultPath; });
+  if (target.result_id && (!selectedRun || String(selectedRun.result || '') !== target.result_id)) return;
   var names = Array.isArray(payload.candidate_names) ? payload.candidate_names.map(String) : [];
   if (!names.length) return;
   var pathsByName = new Map(state.paretos.map(function(item) { return [String(item.name || ''), item.path]; }));
   var missing = names.filter(function(name) { return !pathsByName.has(name); });
-  event.preventDefault();
   if (missing.length) {
-    toast('PBGui AI selection could not find ' + missing.length + ' Pareto candidate(s) in this result.', 'warn');
+    action.browser_error = { message: 'PBGui AI selection could not find ' + missing.length + ' Pareto candidate(s) in this result.' };
     return;
   }
   if (payload.mode !== 'add') clearParetoSelection();
   names.forEach(function(name) { state.selectedParetos.add(pathsByName.get(name)); });
   renderParetos();
+  event.preventDefault();
   toast('PBGui AI selected ' + names.length + ' Pareto candidate' + (names.length === 1 ? '' : 's') + '.', 'ok');
 });
 
@@ -13770,6 +13871,7 @@ async function loadParetos(path, name) {
   if (loadSeq !== state.paretoLoadSeq || requestPath !== state.selectedResultPath) return;
   state.paretos = data.paretos || [];
   applyParetoMeta(data.meta || {});
+  restoreParetoSelection();
   renderParetos();
 }
 
@@ -15156,8 +15258,7 @@ init().catch(handleError);
     helpLangEN.classList.add('active');
     helpLangDE.classList.remove('active');
     _topicCache = {};
-    helpSel = 0;
-    loadHelpIndex('optimize');
+    loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || ('optimize'));
   });
   helpLangDE.addEventListener('click', function() {
     if (helpLang === 'DE') return;
@@ -15165,8 +15266,7 @@ init().catch(handleError);
     helpLangDE.classList.add('active');
     helpLangEN.classList.remove('active');
     _topicCache = {};
-    helpSel = 0;
-    loadHelpIndex('optimize');
+    loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || ('optimize'));
   });
   document.getElementById('help-close').addEventListener('click', function() { helpOvl.classList.remove('visible'); });
   document.addEventListener('keydown', function(event) {
@@ -15237,7 +15337,7 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
     var runIdentity = String(state.selectedResultName);
     if (selectedRun.pareto_count != null) runIdentity += ' | paretos=' + String(selectedRun.pareto_count);
     if (selectedRun.modified) runIdentity += ' | modified=' + String(selectedRun.modified);
-    entities.push({ kind: 'optimizer_run', version: optimizeEditorAdapter.version, name: runIdentity });
+    entities.push({ kind: 'optimizer_run', version: optimizeEditorAdapter.version, name: runIdentity, result_id: String(selectedRun.result || '') });
   }
   if (state.panel === 'paretos' && state.selectedParetos && state.selectedParetos.size) {
     Array.from(state.selectedParetos).slice(0, Math.max(0, 8 - entities.length)).forEach(function (path) {
@@ -15290,12 +15390,12 @@ window.PBGUI_NAV_CONFIG = {
   serial: PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/shared_help_overlay.js?v=7"></script>
+<script src="/app/js/shared_help_overlay.js?v=8"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 
-<script src="/app/js/backtest_queue_actions.js?v=2"></script>
+<script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=2"></script>
-<script src="/app/js/vast.js?v=115"></script>
+<script src="/app/js/vast.js?v=146"></script>
 </body>
 </html>

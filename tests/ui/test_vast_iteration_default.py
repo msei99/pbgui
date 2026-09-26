@@ -13,13 +13,15 @@ def test_new_vast_iteration_default_preserves_explicit_values():
     update = cloud[cloud.index('    updateEditor: function () {'):cloud.index('    closeEditor:')]
     script = '''
 const assert = require('node:assert/strict');
-let fields, input;
+let fields, input, backendRow;
 const state = {};
 const optimizeEditorAdapter = {isV8:true};
 const apiFetch = async () => ({});
 const el = id => fields[id];
 function openEditorWithConfig() {
-  fields = {'opted-execution':{value:'local'}, 'opted-iters':{
+  backendRow = {style:{}};
+  fields = {'opted-execution':{value:'local'},
+    'opted-opt-backend':{value:'pymoo',options:[{value:'gpu'}],disabled:false,dispatchEvent:()=>{},closest:()=>backendRow}, 'opted-iters':{
     value:'200000', dataset:{}, addEventListener:(name, fn)=>{input=fn;}
   }};
 }
@@ -29,8 +31,12 @@ function scheduleValidation() {}
   await openNewConfig();
   controller.updateEditor();
   assert.equal(fields['opted-iters'].value, '200000');
+  assert.equal(backendRow.style.display, '');
   fields['opted-execution'].value = 'vast';
   controller.updateEditor();
+  assert.equal(fields['opted-opt-backend'].value, 'gpu');
+  assert.equal(fields['opted-opt-backend'].disabled, true);
+  assert.equal(backendRow.style.display, 'none');
   assert.equal(fields['opted-iters'].value, '20000');
   fields['opted-iters'].value = '12345';
   controller.updateEditor();

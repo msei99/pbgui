@@ -15,7 +15,7 @@ import psutil
 
 from logging_helpers import human_log as _log
 from vast_credentials import VastCredentialStore
-from vast_jobs import SUPPORTED_RENTAL_IMAGES, REVISION, PROJECT, JobStore, digest, job_id, write_json
+from vast_jobs import SUPPORTED_RENTAL_IMAGES, SUPPORTED_RENTAL_IMAGE_REVISIONS, PROJECT, JobStore, digest, job_id, write_json
 from vast_provider import VastRateLimit, VastClient, VastError, positive_id
 from vast_transfer import WorkerConnection, import_results
 
@@ -42,6 +42,7 @@ def schedule_upload_retry(store: JobStore, identifier: str, exc: Exception, dead
         raise VastError(reason, 422) from None
     transient = runtime_busy or any(token in reason.lower() for token in ('timed out', 'timeout',
         'connection', 'interrupted', 'reconnecting', 'stalled', 'hostname resolution',
+        'remote rsync or ssh operation failed',
         'authentication or permission denied'))
     if not transient:
         raise VastError(reason, 422) from None
@@ -93,7 +94,9 @@ def sync_optimizer_log(connection, store: JobStore, identifier: str) -> None:
 
 def validate_intent(intent: dict, identifier: str) -> dict:
     """Validate persisted authorization before provider or process operations."""
-    if intent.get("id") != job_id(identifier) or intent.get("image") not in SUPPORTED_RENTAL_IMAGES or intent.get("pb8_revision") != REVISION:
+    if (intent.get("id") != job_id(identifier)
+            or not isinstance(intent.get("image"), str)
+            or intent.get("pb8_revision") != SUPPORTED_RENTAL_IMAGE_REVISIONS.get(intent.get("image"))):
         raise VastError("Invalid cloud rental intent")
     if intent.get("label") != "pbgui-vast-" + identifier:
         raise VastError("Invalid cloud rental ownership")
@@ -134,6 +137,16 @@ def owned_instance(client: VastClient, intent: dict, *, fresh: bool = False,
     return matches[0] if matches else None
 
 
+def uncreated_rental_message(state: dict) -> str | None:
+    """Explain a rejected/ambiguous create only after Vast confirmed absence."""
+    creation_error = state.get('creation_error')
+    never_observed = not state.get('instance_id') and not state.get('provider_seen_at')
+    if not (isinstance(creation_error, str) and creation_error and never_observed):
+        return None
+    return ('Rental was not created: ' + creation_error
+            + '. Vast confirms no instance exists; refresh offers and select another host.')
+
+
 
 def finalize_verified_rental(store: JobStore, identifier: str, *, now: float) -> None:
     """Finish local tracking after verified absence even if the job controller died."""
@@ -146,7 +159,9 @@ def finalize_verified_rental(store: JobStore, identifier: str, *, now: float) ->
     elif state['status'] not in {'completed', 'failed', 'cancelled'}:
         collected = state.get('final_collected')
         stopped = store.read(identifier, 'control.json')['stop']
+        creation_message = uncreated_rental_message(state)
         message = ('Raw results saved locally; result import needs retry' if collected else
+                   creation_message if creation_message else
                    'Vast.ai instance disappeared; the last local snapshot remains available'
                    if state.get('rental_end_reason') == 'provider_instance_missing' else
                    'Rental ended; the last local snapshot remains available')
@@ -222,7 +237,10 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
                        provider_checked_at=now, rental_state="deletion_verified" if verified else
                        "destroy_pending" if ending else state['rental_state'],
                        provider_status="deleted" if verified else "not_found")
-        if verified and not ending:
+        if verified and uncreated_rental_message(state):
+            updates['rental_end_reason'] = 'provider_creation_failed'
+            _log(SERVICE, "Rental " + identifier + ": Vast.ai confirmed no instance was created; releasing rental lock", level="WARNING")
+        elif verified and not ending:
             updates['rental_end_reason'] = 'provider_instance_missing'
             _log(SERVICE, "Rental " + identifier + ": Vast.ai confirmed the instance is absent; releasing rental lock", level="WARNING")
         store.update(identifier, **updates)
@@ -310,6 +328,23 @@ def finalize_collected_results(store: JobStore, identifier: str) -> dict:
     final = store.directory(identifier) / 'final-results'
     finished = json.loads((final / 'finished.json').read_text())
     state = store.read(identifier)
+    if state.get('kind') == 'calibration':
+        try:
+            from vast_calibration import finalize_calibration_result
+            candidate = finalize_calibration_result(store, identifier)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            _log(SERVICE, f'{identifier}: invalid GPU calibration evidence: {exc}', level='WARNING')
+            return store.update(
+                identifier, status='cancelled' if finished.get('cancelled') else 'failed',
+                error='GPU calibration did not produce valid reusable evidence',
+                exit_code=finished.get('exit_code'), elapsed_seconds=finished.get('wall_seconds'),
+                finished_at=finished.get('finished_at'),
+            )
+        return store.update(
+            identifier, status='completed', error=None, exit_code=finished.get('exit_code'),
+            elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'),
+            calibration_profile_candidate=candidate,
+        )
     reason = state.get('stop_reason')
     historical_convergence = reason == 'convergence' or (
         reason is None and bool(state.get('convergence', {}).get('stop_requested')))
@@ -361,8 +396,10 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
         lease_state = store.read(lease_id or identifier)
         if lease_state["rental_state"] == "deletion_verified":
             if state["status"] not in {"completed", "failed", "cancelled"}:
+                creation_message = uncreated_rental_message(lease_state)
                 store.update(identifier, status="cancelled" if store.read(identifier, "control.json")["stop"] else "failed",
-                             error=("Vast.ai instance disappeared; the last local snapshot remains available"
+                             error=(creation_message if creation_message else
+                                    "Vast.ai instance disappeared; the last local snapshot remains available"
                                     if lease_state.get('rental_end_reason') == 'provider_instance_missing'
                                     else "Rental ended; the last local snapshot remains available"))
             return
@@ -421,7 +458,7 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
             if not state.get("worker_ready"):
                 hardware = connection.operation("health", timeout=min(60, int(remaining)))
                 guard = hardware.get("guard") or {}
-                if hardware.get("revision") != REVISION or guard.get("instance_id") != row["id"] or guard.get("job_id") != (lease_id or identifier) or guard.get("deadline") != intent["deadline"]:
+                if hardware.get("revision") != intent["pb8_revision"] or guard.get("instance_id") != row["id"] or guard.get("job_id") != (lease_id or identifier) or guard.get("deadline") != intent["deadline"]:
                     raise VastError("Worker identity or independent deadline guard mismatch", 422)
                 if state.get('auto_cpu_workers'):
                     from vast_transfer import allocated_cpu_workers
@@ -430,6 +467,14 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 if not state.get('auto_cpu_workers') and (hardware.get("cpu_cores") or 0) < state["workers"]:
                     raise VastError("Actual CPU quota is below the requested worker count", 422)
                 state = store.update(identifier, worker_ready=True, hardware=hardware, status="uploading", error=None)
+                from vast_runtime_metrics import sample_metrics
+                sample_metrics(connection, store, identifier)
+                state = store.read(identifier)
+                if state.get('kind') == 'calibration' and state.get('calibration_watch_preferences'):
+                    minimum = state['calibration_watch_preferences'].get('min_power_watts', 0)
+                    measured = (state.get('runtime_metrics') or {}).get('gpu_power_limit_watts')
+                    if minimum and (measured is None or measured < minimum):
+                        raise VastError('Measured GPU power limit does not meet the waiting test minimum', 422)
                 collect_provisioning_log(
                     store, identifier, client, row['id'], retry_waiting=True
                 )
@@ -447,6 +492,8 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 store.update(identifier, uploaded=True, error=None, upload_recovery_since=None,
                              upload_retry_at=None, upload_retry_failures=0, upload_retry_bytes=0)
             progress = connection.operation("status")
+            if state.get('kind') == 'calibration' and isinstance(progress.get('calibration'), dict):
+                state = store.update(identifier, calibration_result=progress['calibration'])
             if not progress.get("started"):
                 connection.start()
             elif not state.get('started_at'):

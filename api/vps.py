@@ -828,24 +828,40 @@ async def _push_local_log_loop(ws: WebSocket, get_sub):
             if not new_lines:
                 continue
             new_lines = new_lines[-MAX_REMOTE_LOG_LINES:]
+            replaced = bool(sub.replacement_pending)
+            sub.replacement_pending = False
             filter_state = getattr(sub, "_filter_state", None)
             if isinstance(filter_state, _LocalLogFilterState):
-                records, source_start = await asyncio.to_thread(
-                    _filter_local_log_delta, filter_state, new_lines,
-                )
-                msg: dict = {
-                    "type": "local_log_filtered_lines",
-                    "file": sub.name,
-                    "records": records,
-                    "source_start": source_start,
-                    "source_end": filter_state.next_line_no - 1,
-                    "match_count": filter_state.match_count,
-                }
+                if replaced:
+                    config = (filter_state.mode, filter_state.values, filter_state.context)
+                    filter_state, records = await asyncio.to_thread(
+                        _initialize_local_filter, new_lines, filter_state.limit, config,
+                    )
+                    sub._filter_state = filter_state
+                    msg = {
+                        "type": "local_logs_filtered", "file": sub.name,
+                        "records": records, "streaming": True,
+                        "source_start": 1, "source_end": len(new_lines),
+                        "match_count": filter_state.match_count,
+                    }
+                else:
+                    records, source_start = await asyncio.to_thread(
+                        _filter_local_log_delta, filter_state, new_lines,
+                    )
+                    msg = {
+                        "type": "local_log_filtered_lines",
+                        "file": sub.name,
+                        "records": records,
+                        "source_start": source_start,
+                        "source_end": filter_state.next_line_no - 1,
+                        "match_count": filter_state.match_count,
+                    }
             else:
                 msg = {
                     "type": "local_log_lines",
                     "file": sub.name,
                     "lines": new_lines,
+                    "replace": replaced,
                 }
             if sub.sid is not None:
                 msg["sid"] = sub.sid

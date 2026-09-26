@@ -552,12 +552,14 @@ class LocalLogSub:
     sid: Optional[str] = None
     identity: Optional[tuple[int, int]] = None
     partial: bytes = field(default=b"", repr=False)
+    replacement_pending: bool = False
 
     def reset_cursor(self) -> None:
         """Clear all descriptor-derived state when a subscription stops or resets."""
         self.pos = 0
         self.identity = None
         self.partial = b""
+        self.replacement_pending = False
 
 
 class AsyncLogStreamer:
@@ -1034,12 +1036,25 @@ class AsyncLogStreamer:
                 with sub.file.open("rb") as handle:
                     stat_result = os.fstat(handle.fileno())
                     identity = (stat_result.st_dev, stat_result.st_ino)
+                    replaced = False
                     if sub.identity != identity:
                         sub.reset_cursor()
                         sub.identity = identity
+                        sub.replacement_pending = True
+                        replaced = True
                     elif stat_result.st_size < sub.pos:
                         sub.pos = 0
                         sub.partial = b""
+                        sub.replacement_pending = True
+                        replaced = True
+
+                    if replaced and stat_result.st_size > read_limit:
+                        # Atomic rewrites contain the complete old history.
+                        # Start at the new tail, not byte zero, or the UI
+                        # briefly displays stale lines before catching up.
+                        handle.seek(stat_result.st_size - read_limit)
+                        handle.readline()  # Drop an incomplete first line.
+                        sub.pos = handle.tell()
 
                     available = stat_result.st_size - sub.pos
                     if available <= 0:

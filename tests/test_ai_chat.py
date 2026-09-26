@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,15 +15,36 @@ from ai_chat import (
     AICredentialStore,
     AIChatError,
     AIChatService,
-    _COMPARE_KEEP_SOURCE_RISK,
-    _COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE,
     _GO_FALLBACK_MODELS,
     _MAX_CAPABILITY_ROUNDS,
     _MAX_HISTORY_CHARS,
     _MAX_PROVIDER_HANDOFF_CHARS,
+    _agent_rules,
     _go_instructions,
+    _tools_for_openrouter_connection,
     owner_key,
 )
+
+
+def test_jev_tool_only_visible_with_connected_openrouter() -> None:
+    """Filter Jev from every provider tool format while retaining other tools."""
+    jev = "propose_jev_optimizer_analysis"
+    catalogs = [
+        [{"type": "namespace", "name": "pbgui", "tools": [
+            {"name": jev}, {"name": "list_optimizer_runs"},
+        ]}],
+        [{"type": "function", "function": {"name": jev}},
+         {"type": "function", "function": {"name": "list_optimizer_runs"}}],
+        [{"type": "function", "name": jev},
+         {"type": "function", "name": "list_optimizer_runs"}],
+        [{"name": jev}, {"name": "list_optimizer_runs"}],
+    ]
+    for tools in catalogs:
+        assert _tools_for_openrouter_connection(tools, True) == tools
+        filtered = _tools_for_openrouter_connection(tools, False)
+        assert jev not in json.dumps(filtered)
+        assert "list_optimizer_runs" in json.dumps(filtered)
+        assert jev in json.dumps(tools)
 
 
 def test_owner_key_is_stable_and_opaque() -> None:
@@ -907,6 +929,24 @@ def test_persistent_conversation_history_reloads_owner_safe_messages(tmp_path: P
     asyncio.run(scenario())
 
 
+def test_chatgpt_speed_survives_conversation_reload(tmp_path: Path) -> None:
+    """The selected speed should remain visible after restarting the AI service."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        first = AIChatService(tmp_path / "ai")
+        conversation = await first._conversation(owner, "chatgpt", "gpt-6-sol", None)
+        conversation.service_tier = "priority"
+        first._persist_conversation(conversation)
+        await first.shutdown()
+
+        second = AIChatService(tmp_path / "ai")
+        snapshot = await second.get_conversation(owner, conversation.id)
+        assert snapshot["service_tier"] == "priority"
+        await second.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_generic_page_ui_action_is_captured_and_restored(tmp_path: Path) -> None:
     """Typed page actions should remain pending until an advertising page handles them."""
     async def scenario() -> None:
@@ -1015,6 +1055,7 @@ def test_chatgpt_conversation_reuses_runtime_for_later_turns(
         owner = "a" * 32
         service = AIChatService(tmp_path / "ai")
         conversation = await service._conversation(owner, "chatgpt", "model", None)
+        conversation.service_tier = "priority"
         calls = []
 
         class FakeRuntime:
@@ -1027,8 +1068,8 @@ def test_chatgpt_conversation_reuses_runtime_for_later_turns(
                 calls.append(("start", model))
                 return "thread-1"
 
-            async def chat(self, thread_id, message, model, effort):
-                calls.append(("chat", thread_id, message))
+            async def chat(self, thread_id, message, model, effort, service_tier=""):
+                calls.append(("chat", thread_id, message, service_tier))
                 return "answer"
 
         runtime = FakeRuntime()
@@ -1041,13 +1082,156 @@ def test_chatgpt_conversation_reuses_runtime_for_later_turns(
 
         assert calls == [
             ("start", "model"),
-            ("chat", "thread-1", "First"),
-            ("chat", "thread-1", "Second"),
+            ("chat", "thread-1", "First", "priority"),
+            ("chat", "thread-1", "Second", "priority"),
         ]
         assert (await service.get_conversation(owner, conversation.id))["messages"][-1] == {
             "role": "assistant",
             "content": "answer",
         }
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_chatgpt_rebuilds_tools_when_openrouter_connection_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persistent ChatGPT conversation must refresh Jev tools and model instructions."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation(owner, "chatgpt", "model", None)
+        connected = False
+        rules = "First agent guidance"
+        catalogs = []
+        thread_calls = []
+        thread_messages = []
+        unsubscribed = []
+
+        class FakeCapabilities:
+            """Expose a Jev proposal and one always-available read tool."""
+
+            @staticmethod
+            def codex_dynamic_tools():
+                return [{"type": "namespace", "name": "pbgui", "tools": [
+                    {"name": "propose_jev_optimizer_analysis"},
+                    {"name": "list_optimizer_runs"},
+                ]}]
+
+            @staticmethod
+            async def list_proposals(_owner, _conversation_id):
+                return []
+
+        class FakeRuntime:
+            """Record each ephemeral thread's offered tools."""
+
+            process = object()
+            closing = False
+
+            async def start_thread(self, model, tools):
+                catalogs.append(tools)
+                return f"thread-{len(catalogs)}"
+
+            async def chat(self, thread_id, message, model, effort, service_tier=""):
+                thread_calls.append(thread_id)
+                thread_messages.append(message)
+                return "Done"
+
+            async def unsubscribe(self, thread_id):
+                unsubscribed.append(thread_id)
+                return True
+
+        service.capabilities = FakeCapabilities()
+        monkeypatch.setattr(
+            service.credentials, "openrouter_configured", lambda selected: connected
+        )
+        monkeypatch.setattr("ai_chat._agent_rules", lambda: rules)
+        monkeypatch.setattr(service, "_codex_runtime", lambda selected: FakeRuntime())
+        monkeypatch.setattr(service, "_ensure_reaper", lambda: None)
+        monkeypatch.setattr(service, "_close_idle_codex_runtimes", lambda: asyncio.sleep(0))
+
+        await service.chat(owner, "chatgpt", "model", "First", conversation.id)
+        connected = True
+        await service.chat(owner, "chatgpt", "model", "Second", conversation.id)
+        rules = "Updated agent guidance"
+        await service.chat(owner, "chatgpt", "model", "Third", conversation.id)
+        connected = False
+        await service.chat(owner, "chatgpt", "model", "Fourth", conversation.id)
+        conversation.codex_instructions_digest = ""  # Existing thread created before digest tracking.
+        await service.chat(owner, "chatgpt", "model", "Fifth", conversation.id)
+
+        assert thread_calls == ["thread-1", "thread-2", "thread-3", "thread-4", "thread-5"]
+        assert unsubscribed == ["thread-1", "thread-2", "thread-3", "thread-4"]
+        assert "User: First" in thread_messages[1]
+        assert "Assistant: Done" in thread_messages[1]
+        assert "User: Fourth" in thread_messages[4]
+        assert "propose_jev_optimizer_analysis" not in json.dumps(catalogs[0])
+        assert "propose_jev_optimizer_analysis" in json.dumps(catalogs[1])
+        assert "propose_jev_optimizer_analysis" in json.dumps(catalogs[2])
+        assert "propose_jev_optimizer_analysis" not in json.dumps(catalogs[3])
+        assert "propose_jev_optimizer_analysis" not in json.dumps(catalogs[4])
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_chatgpt_plain_text_clarification_gets_one_model_driven_ui_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model gets one chance to turn its own unanswered question into clickable choices."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation(owner, "chatgpt", "model", None)
+        messages = []
+
+        class FakeCapabilities:
+            """Expose the normal UI clarification tool without selecting any answer."""
+
+            @staticmethod
+            def codex_dynamic_tools():
+                return [{"type": "namespace", "name": "pbgui", "tools": [
+                    {"name": "present_user_choices"},
+                ]}]
+
+            @staticmethod
+            async def list_proposals(_owner, _conversation_id):
+                return []
+
+        class FakeRuntime:
+            """Simulate a text question followed by a model-authored UI action."""
+
+            process = object()
+            closing = False
+
+            async def start_thread(self, model, tools):
+                return "thread-1"
+
+            async def chat(self, thread_id, message, model, effort, service_tier=""):
+                messages.append(message)
+                if len(messages) == 1:
+                    return "Which risk preference matters most?"
+                conversation.ui_actions.append({
+                    "action_id": "choice-1", "type": "chat.quick_replies",
+                    "payload": {"question": "Which risk preference matters most?", "choices": [
+                        {"label": "Lower drawdown", "value": "Prioritize lower drawdown."},
+                        {"label": "Higher return", "value": "Prioritize higher return."},
+                    ]},
+                })
+                return "Choose the priority below."
+
+        service.capabilities = FakeCapabilities()
+        monkeypatch.setattr(service, "_codex_runtime", lambda selected: FakeRuntime())
+        monkeypatch.setattr(service, "_ensure_reaper", lambda: None)
+        monkeypatch.setattr(service, "_close_idle_codex_runtimes", lambda: asyncio.sleep(0))
+
+        result = await service.chat(owner, "chatgpt", "model", "Which should I backtest?", conversation.id)
+
+        assert len(messages) == 2
+        assert "clarification presentation check" in messages[1]
+        assert conversation.ui_actions[-1]["payload"]["choices"][0]["label"] == "Lower drawdown"
+        assert result["reply"] == "Choose the priority below."
         await service.shutdown()
 
     asyncio.run(scenario())
@@ -1083,7 +1267,7 @@ def test_chatgpt_action_promise_gets_one_corrective_tool_turn(
             async def start_thread(self, model, tools):
                 return "thread-1"
 
-            async def chat(self, thread_id, message, model, effort):
+            async def chat(self, thread_id, message, model, effort, service_tier=""):
                 calls.append(message)
                 if len(calls) == 1:
                     return "Ich öffne jetzt Results und erstelle danach den Vorschlag."
@@ -1132,7 +1316,7 @@ def test_idle_codex_runtime_keeps_persistent_conversations(
         class FakeRuntime:
             """Idle runtime whose process can be closed deterministically."""
 
-            last_used = 0.0
+            last_used = -1_000_000.0
             active_turn_id = None
             closing = False
             closed = False
@@ -1174,7 +1358,7 @@ def test_stopped_codex_runtime_keeps_failed_turn_retryable(
             process = object()
             closing = False
 
-            async def chat(self, thread_id, message, model, effort):
+            async def chat(self, thread_id, message, model, effort, service_tier=""):
                 self.process = None
                 self.closing = True
                 raise AIChatError("ChatGPT runtime stopped")
@@ -1182,6 +1366,9 @@ def test_stopped_codex_runtime_keeps_failed_turn_retryable(
         runtime = FakeRuntime()
         conversation.codex_thread_id = "thread-1"
         conversation.codex_runtime = runtime
+        conversation.codex_instructions_digest = hashlib.sha256(
+            _agent_rules().encode("utf-8")
+        ).hexdigest()
         service.codex[owner] = runtime
         monkeypatch.setattr(service, "_ensure_reaper", lambda: None)
         monkeypatch.setattr(service, "_close_idle_codex_runtimes", lambda: asyncio.sleep(0))
@@ -1332,7 +1519,7 @@ def test_detached_turn_can_switch_providers_without_losing_history(tmp_path: Pat
                 captured["thread_model"] = model
                 return "thread-1"
 
-            async def chat(self, thread_id, message, model, effort):
+            async def chat(self, thread_id, message, model, effort, service_tier=""):
                 captured["chatgpt_message"] = message
                 return "ChatGPT answer"
 
@@ -1726,32 +1913,42 @@ def test_ai_drawer_preferences_are_private_persistent_merged_and_bounded(tmp_pat
         "drawer_width": 460,
         "drawer_open": False,
         "drawer_pinned": False,
+        "jev_max_cost_usd": 0.01,
     }
     assert service.save_preferences(owner, 612) == {
         "drawer_width": 612,
         "drawer_open": False,
         "drawer_pinned": False,
+        "jev_max_cost_usd": 0.01,
     }
     assert service.save_preferences(owner, drawer_open=True, drawer_pinned=True) == {
         "drawer_width": 612,
         "drawer_open": True,
         "drawer_pinned": True,
+        "jev_max_cost_usd": 0.01,
     }
     assert AIChatService(tmp_path / "ai").get_preferences(owner) == {
         "drawer_width": 612,
         "drawer_open": True,
         "drawer_pinned": True,
+        "jev_max_cost_usd": 0.01,
     }
     assert service.save_preferences(owner, 4000) == {
         "drawer_width": 4000,
         "drawer_open": True,
         "drawer_pinned": True,
+        "jev_max_cost_usd": 0.01,
     }
     assert service.save_preferences(owner, drawer_open=False) == {
         "drawer_width": 4000,
         "drawer_open": False,
         "drawer_pinned": True,
+        "jev_max_cost_usd": 0.01,
     }
+    assert service.save_preferences(owner, jev_max_cost_usd=0.002)["jev_max_cost_usd"] == 0.002
+    assert AIChatService(tmp_path / "ai").get_preferences(owner)["jev_max_cost_usd"] == 0.002
+    with pytest.raises(AIChatError, match="Jev USD budget"):
+        service.save_preferences(owner, jev_max_cost_usd=0)
     with pytest.raises(AIChatError, match="browser range"):
         service.save_preferences(owner, 100_001)
     with pytest.raises(AIChatError, match="No AI preferences"):
@@ -1842,158 +2039,82 @@ def test_action_requests_receive_extended_bounded_capability_rounds() -> None:
     assert "Never propose workspace Python merely because a routine status question" in _go_instructions(
         "kimi-k3", tools_enabled=True
     )
+    rules = _go_instructions("kimi-k3", tools_enabled=True)
+    assert "TypeSafe describes Jev as a System One model" in rules
+    assert "Choose the method based on the user's question" in rules
+    assert "Prefer the native complete-run ranking tool" not in rules
 
 
-def test_vague_comparison_setup_uses_local_clarification_without_provider(
+def test_ambiguous_comparison_reaches_model_instead_of_fixed_backend_question(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """A vague comparison confirmation should produce choices without a slow model turn."""
+    """The tool-capable model should decide whether and how to clarify any ambiguous task."""
     async def scenario() -> None:
         service = AIChatService(tmp_path / "ai")
-
-        async def fake_models(provider):
-            return [{
-                "id": "grok-4.6",
-                "protocol": "responses",
-                "tools": True,
-                "reasoning_variants": [],
-            }]
-
-        monkeypatch.setattr(service, "_go_models", fake_models)
-        monkeypatch.setattr(
-            service.credentials,
-            "load_go_key",
-            lambda owner: (_ for _ in ()).throw(AssertionError("provider must not be called")),
-        )
-        conversation = await service._conversation("a" * 32, "opencode-go", "grok-4.6", None)
-        history = [
-            {"role": "assistant", "content": "I can set up a fair comparison if you want."},
-            {"role": "user", "content": "yes setup the compare"},
-        ]
-
-        reply = await service._go_chat(
-            "a" * 32,
-            "grok-4.6",
-            history,
-            "opencode-go",
-            conversation.id,
-            "",
-        )
-        snapshot = await service.get_conversation("a" * 32, conversation.id)
-
-        assert reply == "Which comparison should PBGui set up? PB7 and PB8 remain separate runtimes."
-        assert snapshot["ui_actions"][0]["type"] == "chat.quick_replies"
-        choices = snapshot["ui_actions"][0]["payload"]["choices"]
-        assert [item["label"] for item in choices] == [
-            "PB7 trailing vs PB8 martingale",
-            "PB8 martingale vs PB8 grid",
-            "Custom comparison",
-        ]
-        assert "Do not substitute PB8 trailing_grid_v7" in choices[0]["value"]
-        assert service._comparison_setup_clarification([
-            {"role": "user", "content": "setup compare configs alpha and beta with TWEL 1.0"}
-        ]) is None
-        await service.shutdown()
-
-    asyncio.run(scenario())
-
-
-def test_cross_version_comparison_scope_asks_risk_without_provider(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A real PB7/PB8 scope should retain both generations before risk alignment."""
-    async def scenario() -> None:
-        service = AIChatService(tmp_path / "ai")
+        seen = []
 
         async def fake_models(provider):
             return [{"id": "grok-4.6", "protocol": "responses", "tools": True, "reasoning_variants": []}]
 
+        async def fake_response(*args):
+            seen.append(args)
+            return "Model response"
+
         monkeypatch.setattr(service, "_go_models", fake_models)
-        monkeypatch.setattr(
-            service.credentials,
-            "load_go_key",
-            lambda owner: (_ for _ in ()).throw(AssertionError("provider must not be called")),
-        )
+        monkeypatch.setattr(service.credentials, "load_go_key", lambda owner: "sk-test")
+        monkeypatch.setattr(service, "_go_responses_agent", fake_response)
         conversation = await service._conversation("a" * 32, "opencode-go", "grok-4.6", None)
+        history = [
+            {"role": "assistant", "content": "I can set up a comparison."},
+            {"role": "user", "content": "yes setup the compare"},
+        ]
 
         reply = await service._go_chat(
-            "a" * 32,
-            "grok-4.6",
-            [{"role": "user", "content": _COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE}],
-            "opencode-go",
-            conversation.id,
-            "",
+            "a" * 32, "grok-4.6", history, "opencode-go", conversation.id, ""
         )
-        snapshot = await service.get_conversation("a" * 32, conversation.id)
 
-        assert reply.startswith("For the real PB7 trailing vs PB8 trailing_martingale comparison")
-        assert [item["label"] for item in snapshot["ui_actions"][0]["payload"]["choices"]] == [
-            "Keep source risk",
-            "Normalize risk",
-            "Custom values",
-        ]
+        assert reply == "Model response"
+        assert seen[0][5] == history
+        assert not (await service.get_conversation("a" * 32, conversation.id))["ui_actions"]
+        assert "Call `present_user_choices`" in _go_instructions("grok-4.6", tools_enabled=True)
         await service.shutdown()
 
     asyncio.run(scenario())
 
 
-def test_cross_version_risk_choice_lists_real_pb7_sources_without_provider(
+def test_new_turn_dismisses_pending_model_clarification(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """A risk choice should list real PB7 sources rather than PB8 compatibility configs."""
+    """Any accepted user answer should clear the old question without browser acknowledgement."""
     async def scenario() -> None:
+        owner = "a" * 32
         service = AIChatService(tmp_path / "ai")
-
-        async def fake_models(provider):
-            return [{
-                "id": "grok-4.6",
-                "protocol": "responses",
-                "tools": True,
-                "reasoning_variants": [],
-            }]
-
-        monkeypatch.setattr(service, "_go_models", fake_models)
-        monkeypatch.setattr(
-            service.credentials,
-            "load_go_key",
-            lambda owner: (_ for _ in ()).throw(AssertionError("provider must not be called")),
-        )
-        monkeypatch.setattr(
-            service.capabilities,
-            "_list_optimizer_configs",
-            lambda args: {
-                "version": "v7",
-                "configs": [{"name": "HYPE_v7"}, {"name": "HYPE_v7_safe"}],
-                "returned": 2,
+        service.credentials.save_go_key(owner, "sk-test-0123456789abcdef")
+        conversation = await service._conversation(owner, "opencode-go", "model", None)
+        await service._capture_ui_action(owner, conversation.id, {
+            "ui_action": {
+                "type": "chat.quick_replies",
+                "target": {"page_key": "ai_chat"},
+                "payload": {
+                    "question": "Which goal matters most?",
+                    "choices": [
+                        {"label": "Stability", "value": "Stability matters most."},
+                        {"label": "Profit", "value": "Profit matters most."},
+                    ],
+                },
             },
-        )
-        conversation = await service._conversation("a" * 32, "opencode-go", "grok-4.6", None)
-        history = [
-            {"role": "user", "content": _COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE},
-            {"role": "assistant", "content": "How should risk align?"},
-            {"role": "user", "content": _COMPARE_KEEP_SOURCE_RISK},
-        ]
+        })
+        assert len((await service.get_conversation(owner, conversation.id))["ui_actions"]) == 1
 
-        reply = await service._go_chat(
-            "a" * 32,
-            "grok-4.6",
-            history,
-            "opencode-go",
-            conversation.id,
-            "",
-        )
-        snapshot = await service.get_conversation("a" * 32, conversation.id)
+        async def fake_go_chat(*args):
+            return "Understood"
 
-        assert reply == "Which PB7 optimizer config should PBGui use as the real V7 trailing source?"
-        choices = snapshot["ui_actions"][0]["payload"]["choices"]
-        assert [item["label"] for item in choices] == [
-            "HYPE_v7",
-            "HYPE_v7_safe",
-            "Choose another config",
-        ]
-        assert "real PB7 trailing source" in choices[0]["value"]
-        assert "never convert it to PB8 trailing_grid_v7" in choices[0]["value"]
-        assert "PB7 mutation, queueing, and starting remain manual" in choices[0]["value"]
+        monkeypatch.setattr(service, "_go_chat", fake_go_chat)
+        await service.start_turn(owner, conversation.id, "My own answer: prioritize drawdown")
+        queued = await service.get_conversation(owner, conversation.id)
+        assert queued["ui_actions"] == []
+        await service.active_tasks[conversation.id]
+        assert (await service.get_conversation(owner, conversation.id))["messages"][-1]["content"] == "Understood"
         await service.shutdown()
 
     asyncio.run(scenario())
@@ -2096,11 +2217,17 @@ def test_codex_models_preserve_dynamic_reasoning_variants(tmp_path: Path, monkey
 
         async def fake_request(method, params=None, timeout=30):
             assert method == "model/list"
+            assert params["limit"] == 100
+            if params.get("cursor") == "next":
+                return {"data": [{"model": "gpt-6-sol", "displayName": "GPT-6 Sol"}]}
             return {
+                "nextCursor": "next",
                 "data": [
                     {
                         "model": "gpt-test",
                         "displayName": "GPT Test",
+                        "serviceTiers": [{"id": "priority", "name": "Fast", "description": "Uses more credits"}],
+                        "defaultServiceTier": "priority",
                         "supportedReasoningEfforts": [
                             {"reasoningEffort": "minimal", "description": "Quick"},
                             {"reasoningEffort": "ultra", "description": "Deep"},
@@ -2121,8 +2248,25 @@ def test_codex_models_preserve_dynamic_reasoning_variants(tmp_path: Path, monkey
         ]
         assert models[0]["reasoning_variants"][2]["description"] == "Custom"
         assert models[0]["default_effort"] == "ultra"
+        assert [model["id"] for model in models] == ["gpt-test", "gpt-6-sol"]
+        assert models[0]["service_tiers"] == [
+            {"id": "priority", "label": "Fast", "description": "Uses more credits"}
+        ]
+        assert models[0]["default_service_tier"] == "priority"
 
     asyncio.run(scenario())
+
+
+def test_chatgpt_speed_requires_advertised_tier() -> None:
+    """Fast speed must be catalog-backed and unavailable on unrelated providers."""
+    model = {"service_tiers": [{"id": "priority", "label": "Fast"}]}
+    AIChatService._validate_model_service_tier(model, "chatgpt", "")
+    AIChatService._validate_model_service_tier(model, "chatgpt", "default")
+    AIChatService._validate_model_service_tier(model, "chatgpt", "priority")
+    with pytest.raises(AIChatError, match="does not support this speed"):
+        AIChatService._validate_model_service_tier(model, "chatgpt", "ultrafast")
+    with pytest.raises(AIChatError, match="only available for ChatGPT"):
+        AIChatService._validate_model_service_tier(model, "openrouter", "priority")
 
 
 def test_codex_turn_sends_exact_selected_effort(tmp_path: Path, monkeypatch) -> None:
@@ -2150,10 +2294,13 @@ def test_codex_turn_sends_exact_selected_effort(tmp_path: Path, monkeypatch) -> 
             return {"turn": {"id": "turn-1"}}
 
         monkeypatch.setattr(runtime, "request", fake_request)
-        reply = await runtime.chat("thread-1", "Hello", "gpt-test", "ultra")
+        reply = await runtime.chat("thread-1", "Hello", "gpt-test", "ultra", "priority")
 
         assert reply == "answer"
         assert captured["effort"] == "ultra"
+        assert captured["serviceTierForTurn"] == "priority"
+        await runtime.chat("thread-1", "Standard speed", "gpt-test", "", "default")
+        assert captured["serviceTierForTurn"] == "default"
 
     asyncio.run(scenario())
 

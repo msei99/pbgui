@@ -33,7 +33,9 @@ ChatGPT uses the official Codex login included with PBGui.
 For a remote or headless PBGui host, select **Device code** instead. Device login requires device-code authorization to be enabled in the ChatGPT security settings and asks you to enter the displayed one-time code.
 
 PBGui does not use an OpenAI Platform API key for this connection. Available models and limits depend on the connected ChatGPT account.
-The model picker is loaded dynamically from Codex `model/list`; PBGui does not maintain a fixed ChatGPT model list.
+The model picker loads every visible text model from all pages of Codex `model/list`; PBGui does not maintain a fixed ChatGPT model list. Availability still depends on the connected account.
+
+When Codex advertises a speed tier, use **Speed** in AI Chat or the AI drawer. **Model default** follows the model catalog, **Standard** requests standard speed, and **Fast** requests the advertised faster tier for that turn. The choice is saved with the conversation and can be changed before another message. Fast uses more ChatGPT credits; PBGui only shows tiers advertised for the selected model.
 
 ## OpenCode Zen and Go
 
@@ -48,13 +50,74 @@ The OpenCode provider card includes **Get OpenCode Go**, which opens the subscri
 
 PBGui supports both catalogs across Responses, Chat Completions, and Messages endpoints. Available IDs come from the live Zen/Go catalogs; names, protocol, costs, and limits come from OpenCode's live model metadata. Free models are detected from zero cost, shown first, and labeled **Free**. New models appear automatically when they use a supported protocol, while removed models disappear. Contributor models that may use prompts and responses for training are marked explicitly.
 
-**Check free models** queues a serial background availability check. The latest owner-specific status is shown beside models without disabling manual retries. Training-opt-in models are never probed automatically.
+PBGui checks free-model availability automatically in the background and shows the latest owner-specific status beside each model. Training-opt-in models are never probed automatically.
 
 PBGui capability tools are supported across OpenCode Chat Completions, OpenAI Responses, and Anthropic Messages using each protocol's native tool-call contract. PBGui enables them only when the live model metadata advertises tool-call support. Tool-capable choices are labeled **PBGui tools**; models that explicitly lack it remain labeled **Chat only**.
 
 Models with advertised reasoning variants show an **Effort** selector. **Standard** sends no override and keeps the provider default. All other choices come from the selected model in provider order, so names vary and may include values such as `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, or provider-specific names. PBGui does not add a fixed variant list.
 
 Models labeled **Chat only** cannot inspect installed Passivbot documentation, source, or current PBGui data. They receive no capability rules or tool names and answer directly from general knowledge. Select a model labeled **PBGui tools** when the answer requires local or installed-runtime evidence. Responses and Messages models can now carry installed version, documentation, and source results back through their native function-result formats without exposing unrestricted filesystem access.
+
+## OpenRouter and Jev
+
+You can also stay in a normal ChatGPT or OpenCode conversation and ask, “Use Jev to analyze the Pareto candidates in this Optimize result. Prioritize low drawdown and stable returns; explain the ten candidates to backtest.” The assistant resolves the exact optimizer run and creates a **Jev analysis** proposal showing the exact outbound Jev requests, run, question, and USD budget. Review and approve it in PBGui. Only then does PBGui call Jev; the normal assistant receives Jev's result and explains it. The Jev decision may mark Pareto rows but does not queue backtests. The drawer shows when Jev is unavailable because this PBGui account has no connected OpenRouter key. When an OpenRouter key is connected, the assistant may also suggest a reviewable Jev proposal when you did not name Jev. Only your approval starts a billable Jev request. A stated maximum number of candidates is carried into the proposal; otherwise Jev’s own yes/no decisions determine which candidates are marked.
+
+Set **Jev preflight budget per analysis (USD)** in the OpenRouter card on the full AI Chat page. The default is $0.01. Before any Jev request, PBGui fetches the pinned model's current OpenRouter price and checks the entire serialized request using a conservative token bound. If pricing is unavailable, output tokens become billable, or the estimate exceeds the configured budget, PBGui sends no Jev request. This guard is an estimate, not a provider-reported charge; the OpenRouter usage display continues to show only provider-reported key values.
+
+
+Connect an OpenRouter API key in the OpenRouter card on the full AI Chat page. PBGui verifies it with OpenRouter and stores it in a separate owner-only server file. The key is cleared from the browser input and never returned by the AI API. OpenRouter bills Jev requests to that account.
+
+The OpenRouter card and AI drawer show the API key’s daily, weekly, and monthly USD spend and its configured spending limit, as reported by OpenRouter. These are key-level values, not workspace totals. **View full usage on OpenRouter** opens the provider’s Activity page for requests, tokens, and complete account activity. PBGui updates the displayed values automatically while the page or drawer is open.
+
+Select **OpenRouter** and **Jev 1.13 · Structured decisions** in the AI drawer. On a PB7 or PB8 Optimize page, open a completed result and leave **Include page context** enabled. Ask about the Pareto candidates in that result, for example, “Which ten Pareto candidates should I backtest first?” You can also name one exact result in the question if you are on another page. When more than one run matches, PBGui asks you to choose one.
+
+TypeSafe describes [Jev](https://docs.typesafe.ai/concepts/system-one) as a System One model that evaluates supplied text or JSON and returns typed answers and probabilities rather than generated explanations. PBGui identifies the exact selected Optimize run even if several runs share a display name. PBGui reads every Pareto candidate and all numeric PB8 metric columns locally. It sends Jev small, bounded batches containing up to 24 distinct metric columns per candidate plus compact profiles calculated from the remaining columns. Every candidate is assessed, but Jev does not receive every raw metric value. PBGui packs the candidates into context-safe requests of at most 30 KB each. It does not impose a separate total-byte budget: before any billable Jev call, it checks the complete planned analysis against the configured USD limit using current OpenRouter pricing. A question that exceeds the USD limit or Jev context is rejected without sending candidate data. PBGui marks the candidates chosen by Jev's yes/no decisions, respecting a maximum if the question states one, and names the highest-priority candidate as its backtest champion. For PB7 it uses the metrics projected by its Pareto summary. A displayed priority probability is not a probability of profitable live trading or out-of-sample success. Jev does not queue backtests or change configs; use the existing Optimize controls to review and queue the marked candidates.
+
+
+Jev can also make a typed choice from your own data. Put **Options:** on a separate line, then list 2–20 numbered alternatives with their relevant facts. For example:
+
+```text
+Which hosting plan better fits a low-cost, reliable backtest worker?
+Options:
+1. Plan A: 12 GB VRAM, $0.20/hour, 96% reliability
+2. Plan B: 16 GB VRAM, $0.32/hour, 99% reliability
+```
+
+The answer shows Jev's chosen option, provider-reported confidence, and probabilities. The listed facts are supplied by you; PBGui does not invent missing details. To compare managed results, ask “Which recent PBGui backtest results best balance drawdown and return?” Jev reads up to ten recent results per PB7/PB8 version, including their projected metrics. These comparisons only read data and do not select or queue anything.
+
+For a simple yes/no or ordered rating, use a text template:
+
+```text
+Data:
+GPU is unavailable for two days; CPU backtests still run.
+Yes/No: Are all backtests blocked?
+```
+
+For a rating, replace the last line with `Score: How severe is the disruption?` and add `Levels:` followed by 2–10 numbered descriptions from least to most severe.
+
+For other typed decisions, send a `jev` JSON block containing your own `state` and `questions`. Jev supports `choice`, `score` (ordered levels), and `noul` (yes probability), including several questions in one request. Without `sources`, this sends only the data you put in the block. Example:
+
+```jev
+{"state":{"worker":"GPU is unavailable for two days; CPU backtests still run"},"questions":{"blocked":{"type":"noul","instructions":"Are backtests completely blocked?"},"impact":{"type":"score","instructions":"How severe is the disruption?","criteria":["No impact","Some work delayed","All validation stopped"]}}}
+```
+
+To use other PBGui data, name 1–4 supported read or analysis capabilities in `sources`. PBGui fetches the selected data, shows the **complete request that will go to OpenRouter** (including your state and the PBGui results), and sends it only after you select **Send to OpenRouter**. Cancel discards the preview. The request is limited to 24 KB. For example, compare recent PB8 backtest summaries:
+
+```jev
+{"state":{"goal":"Prefer lower drawdown over maximum profit"},"sources":[{"name":"recent","tool":"list_backtests","args":{"version":"v8","limit":5}}],"questions":{"low_risk":{"type":"noul","instructions":"Do the backtests in state.pbgui.recent support a low-risk validation candidate?"}}}
+```
+
+Available sources are the capabilities currently marked `read` or `analyze` in PBGui’s capability catalog, including optimizer runs and Pareto analyses, backtests, configs, dashboards, drafts, help, and installation summaries. Use their exact capability names and arguments. These queries do not queue jobs or change configurations. The earlier Optimize Pareto and recent-backtest prompts still work directly. Do not put credentials or secrets in your own `state`.
+
+### Example questions
+
+With a completed Optimize result open and **Include page context** enabled, you can copy one of these questions into the AI drawer:
+
+- **Conservative:** “Assess the compact profiles derived from every Pareto candidate and all available metrics. Favor low worst drawdown and steady risk-adjusted return over maximum gain. Mark ten candidates for separate holdout backtests.”
+- **Balanced:** “Which ten Pareto candidates should I validate next? Weigh drawdown, Sortino, and return together, and put the strongest overall backtest priority first.”
+- **Across scenarios:** “If this result has metrics for individual scenarios, prefer candidates that perform consistently across them over candidates strong in only one window. Mark ten for validation backtests.”
+
+Each question evaluates one selected Optimize run and marks up to ten Pareto rows. The answer ranks backtest priorities from training metrics; the separate holdout backtests determine how those candidates perform on unseen periods.
 
 ## Action approval
 
@@ -66,13 +129,13 @@ PBGui also inventories currently visible non-sensitive controls such as buttons,
 
 After the user confirms approval or rejection, the proposal card disappears immediately while PBGui executes the server-side decision. A visible applying/rejecting status replaces it; if the request fails, the card returns with its controls enabled so the action can be reviewed or retried safely.
 
-The drawer keeps the confirmed visible message snapshot while a turn or approved-action continuation is busy. Large page context is sent only with the active provider request and is not retained inside durable user-message text, so history trimming cannot remove the visible question and proposal answer during a follow-up. A proposal being approved is hidden by its ID until the final server state arrives and cannot reappear as a second clickable Review card because of a stale poll.
+The drawer keeps the confirmed visible message snapshot while a turn or approved-action continuation is busy. Polling updates messages, page-context chips, and usage values only when their displayed content changes. Large page context is sent only with the active provider request and is not retained inside durable user-message text, so history trimming cannot remove the visible question and proposal answer during a follow-up. A proposal being approved is hidden by its ID until the final server state arrives and cannot reappear as a second clickable Review card because of a stale poll.
 
 Unambiguous reversible commands such as showing the only available log, closing a visible log window, or explicitly clicking one uniquely named visible control use a local browser fast path. PBGui performs the action immediately, records the user request and completion in the owner-bound conversation, and does not contact the selected AI provider. Ambiguous, analytical, or mutating requests continue through the normal model and approval flow.
 
 The global drawer keeps its width, open/closed state, and pin mode in owner-scoped server preferences. The pin button switches between the default overlay and a side-by-side layout that shrinks PBGui so the drawer no longer covers the active page; mobile always uses the full-width overlay. The drawer reopens automatically after ordinary PBGui page navigation when it was open before navigation, while an explicit collapse remains closed. Width dragging uses a temporary browser-wide shield so Dashboard iframe widgets cannot steal mouse events, and a delayed initial preference response cannot reset a drag already in progress.
 
-"Stable" has a canonical meaning for optimizer selection: a smooth rising strategy-equity curve with low choppiness and exponential-fit error, shallow drawdowns, short underwater/recovery periods, and strong Sharpe/Sortino. "Stable with good profit" uses the balanced preset with stability at 60% and profit at 40%, so it does not require a clarification. When a genuinely conflicting goal, missing hard limit, or unresolved resource does require clarification, PBGui presents 2-5 clickable quick replies instead of a questionnaire. Zero strict matches never authorize automatic threshold relaxation: complete-run alternatives are returned separately and require one of those confirmations before they may be selected or queued.
+For an unclear request, the tool-capable assistant first checks available PBGui facts and then decides whether a missing user preference would materially change the result. If so, the model itself writes one focused question and 2–5 relevant clickable answers in the user’s language. PBGui adds **Write your own answer…** as the final option in the full chat and the drawer. Clicking it focuses the message box so you can answer freely. The choices become clickable when the current model turn has finished; one click then starts the next turn. An accepted answer removes the pending question and continues the same conversation. The model decides whether missing preferences could change a recommendation and, if so, formulates its own clarification. It should explain the metrics and trade-offs it actually uses without silently imposing fixed weights. Zero strict matches never authorize automatic threshold relaxation: complete-run alternatives remain separate and require your choice before selection or queueing.
 
 When the agent proposes a PB8 save/queue action, a Pareto candidate-by-exchange backtest matrix, Sweep Holdout/full-timerange validation, dashboard creation/editing, or Python analysis, PBGui displays an approval card in both the full page and drawer. For Python, the card shows the exact code, sanitized input, input summary, and payload digest. After approval, PBGui persists the bounded analysis status, output, and diagnostics in the conversation before starting the optional model summary; the complete result remains available in Action History. One Pareto proposal may bind up to 1000 candidates and 1000 resulting backtest jobs. Backtest proposals show every candidate, validation mode, total job count, and whether queue autostart may begin immediately. Dashboard proposals may use a template or a free semantic layout with 1-10 rows, 1-2 columns, widget placement, users, periods, chart modes, widget options, heights, and Orders-to-Positions links. Existing dashboards can be read and changed cell by cell while preserving unrelated settings; approval fails if the dashboard changed after review. **Review & approve** opens the shared PBGui confirmation dialog; only that exact owner-, conversation-, and digest-bound payload can run. Rejecting or closing the dialog changes nothing. PBGui refreshes pending proposals from the server whenever a conversation is restored and after every approval or rejection, so an expired or already resolved card is not treated as current. A timeout in the optional model follow-up after successful approval is shown as a non-error completion note and never removes the analysis result, changes, or rolls back the executed action.
 
@@ -90,7 +153,9 @@ The key is cleared from the browser after the connection attempt. PBGui never di
 
 ## Conversations
 
-Conversations and completed messages are stored in owner-only server-side history. The full AI Chat page and global drawer use the same conversation list. Selecting a history item restores its messages, last-used provider, model, reasoning effort, running state, error, and pending proposals. Sending a follow-up keeps that confirmed transcript visible while the new pending prompt is added. Provider, model, and effort can be changed freely between turns without creating a new conversation; when a new stateful provider thread is required, PBGui supplies a bounded transcript so the selected model can continue from the existing context. **New chat** explicitly prepares another conversation without deleting older history. **Delete**, **Rewind**, and proposal approval use the shared PBGui dialog, which the global drawer loads on every page where it opens. Delete removes only the selected conversation. The global AI button in the top navigation opens a collapsible right-side drawer on every authenticated top-level PBGui page; the full page remains available for provider setup and larger sessions.
+PBGui automatically deletes conversations that have had no activity for 30 days when history is opened or a new chat is created. Each owner can keep up to 100 conversations; creating another chat removes the oldest inactive one. A running response is never removed. If the selected conversation has expired, PBGui selects the nearest available chat and explains the change. **Delete** still removes a selected chat immediately.
+
+Conversations and completed messages are stored in owner-only server-side history. The full AI Chat page and global drawer use the same conversation list. Selecting a history item restores its messages, last-used provider, model, reasoning effort, running state, error, and pending proposals. Sending a follow-up keeps that confirmed transcript visible while the new pending prompt is added. Provider, model, and effort can be changed freely between turns without creating a new conversation; when a new stateful provider thread is required, PBGui supplies a bounded transcript so the selected model can continue from the existing context. **New chat** prepares another conversation; at capacity the retention rule may remove the oldest inactive one. **Delete**, **Rewind**, and proposal approval use the shared PBGui dialog, which the global drawer loads on every page where it opens. Delete removes only the selected conversation. The global AI button in the top navigation opens a collapsible right-side drawer on every authenticated top-level PBGui page; the full page remains available for provider setup and larger sessions.
 
 On desktop, drag the drawer's left edge to resize it from its compact usable width up to the complete browser viewport. PBGui stores the width as an owner-only server-side preference and restores it on other pages and later sessions. A smaller browser window temporarily clamps the saved width to the available viewport. Mobile layout remains full-width regardless of the saved desktop width.
 

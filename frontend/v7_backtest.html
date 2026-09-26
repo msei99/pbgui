@@ -724,7 +724,7 @@ textarea.json-invalid:focus {
 <link rel="stylesheet" href="/app/css/backtest_shell.css?v=5">
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script src="/app/js/date_overwrite.js?v=2"></script>
-<script defer src="/app/js/pb8_parameter_help.js?v=3"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
 </head>
 <body>
 
@@ -1087,7 +1087,7 @@ textarea.json-invalid:focus {
 <script src="/app/js/editor_shared.js?v=15"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=4"></script>
-<script src="/app/js/pbgui_dialogs.js?v=9"></script>
+<script src="/app/js/pbgui_dialogs.js?v=10"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -11117,8 +11117,8 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
   });
 })();
 </script>
-<script src="/app/js/log_viewer_panel.js?v=48"></script>
-<script src="/app/js/shared_help_overlay.js?v=7"></script>
+<script src="/app/js/log_viewer_panel.js?v=50"></script>
+<script src="/app/js/shared_help_overlay.js?v=8"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- ── Sidebar resize ──────────────────────────── -->
@@ -11328,12 +11328,12 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
   helpLangEN.addEventListener('click', function() {
     if (helpLang === 'EN') return;
     helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active');
-    _topicCache = {}; helpSel = 0; loadHelpIndex('backtest');
+    _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || ('backtest'));
   });
   helpLangDE.addEventListener('click', function() {
     if (helpLang === 'DE') return;
     helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active');
-    _topicCache = {}; helpSel = 0; loadHelpIndex('backtest');
+    _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || ('backtest'));
   });
   document.getElementById('help-close').addEventListener('click', function() { helpOvl.classList.remove('visible'); });
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape') helpOvl.classList.remove('visible'); });

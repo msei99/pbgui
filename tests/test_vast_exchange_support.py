@@ -11,7 +11,7 @@ import pytest
 
 from vast_exchanges import CCXT_EXCHANGES, SUPPORTED_EXCHANGES, quote_currency
 from vast_config_validation import validate_cloud_config
-from vast_inception import required_markets, fetch_inception, bitget_first_candles, CACHE_FILES
+from vast_inception import required_markets, CACHE_FILES
 from vast_market_cache import fetch_markets, stage_public_markets
 from vast_provider import VastError
 from setup.vast_gpu_benchmark.prepare import select_shards
@@ -56,27 +56,20 @@ def test_export_mapping_and_receiver_agree(tmp_path, exchange):
 
 
 @pytest.mark.parametrize('exchange', SUPPORTED_EXCHANGES)
-def test_public_metadata_client_and_staging(tmp_path, monkeypatch, exchange):
-    """Use the correct futures client and execute real cache staging in a temp folder."""
-    import ccxt.async_support as ccxt
-    closed = []
-
-    class Client:
-        """Offline market client used by the production fetcher."""
-        def __init__(self, options):
-            """Accept a bounded metadata request configuration."""
-            assert options['timeout'] == 30000
-
-        async def load_markets(self, reload):
-            """Return synthetic public linear-perpetual metadata."""
-            return {'BTC': {'swap': True}}
-
-        async def close(self):
-            """Track deterministic client cleanup."""
-            closed.append(True)
-
-    monkeypatch.setattr(ccxt, CCXT_EXCHANGES[exchange], Client)
-    assert set(asyncio.run(fetch_markets([exchange]))) == {exchange}
+def test_local_public_metadata_staging(tmp_path, monkeypatch, exchange):
+    """Each venue stages local linear perpetual metadata without a CCXT client."""
+    root = tmp_path / 'coindata'
+    source = root / exchange / 'ccxt_markets.json'
+    source.parent.mkdir(parents=True)
+    quote = quote_currency(exchange)
+    symbol = f'BTC/{quote}:{quote}'
+    source.write_text(json.dumps({
+        symbol: {'symbol': symbol, 'quote': quote, 'swap': True, 'linear': True},
+        'BTC/USD': {'symbol': 'BTC/USD', 'quote': 'USD', 'swap': False, 'linear': False},
+    }))
+    monkeypatch.setattr('vast_market_cache.MARKET_ROOT', root)
+    snapshots = asyncio.run(fetch_markets([exchange]))
+    assert list(snapshots[exchange]['markets']) == [symbol]
 
     def command(value, stdin, **kwargs):
         """Run only the generated staging program against pytest's temporary root."""
@@ -85,72 +78,7 @@ def test_public_metadata_client_and_staging(tmp_path, monkeypatch, exchange):
     connection = SimpleNamespace(identifier='test', remote_root=str(tmp_path), command=command,
         store=SimpleNamespace(read=lambda _: {'exchanges': [exchange]}))
     stage_public_markets(connection)
-    assert json.loads((tmp_path / 'output/caches' / exchange / 'markets.json').read_text())['BTC']['swap']
-    assert closed == [True, True]
-
-
-@pytest.mark.parametrize('exchange,timeframe,since', [
-    ('okx', '1M', 1514764800000), ('hyperliquid', '1w', 1609459200000),
-    ('kucoin', '1d', 1514764800000)])
-def test_inception_request_matches_pinned_worker(monkeypatch, exchange, timeframe, since):
-    """New venues keep PB8's listing-history horizons and KuCoin end bound."""
-    import ccxt.async_support as ccxt
-    calls, closed = [], []
-
-    class Client:
-        """Offline client recording the exact request contract."""
-        def __init__(self, options):
-            """Accept production constructor settings."""
-
-        def milliseconds(self):
-            """Return a stable test clock."""
-            return 1700000000000
-
-        async def fetch_ohlcv(self, symbol, **kwargs):
-            """Return an authoritative synthetic listing candle."""
-            calls.append(kwargs)
-            return [[1600041600000, 1, 1, 1, 1, 1]]
-
-        async def close(self):
-            """Record resource release."""
-            closed.append(True)
-
-    monkeypatch.setattr(ccxt, CCXT_EXCHANGES[exchange], Client)
-    result = asyncio.run(fetch_inception({exchange: {'BTC': 'BTC/USDT:USDT'}}))
-    expected = {'since': since, 'timeframe': timeframe}
-    if exchange == 'kucoin':
-        expected.update(limit=1, params={'to': 1700000000000})
-    assert calls == [expected] and closed == [True]
-    assert result['files'][CACHE_FILES[1]] == {'BTC': {exchange: 1600041600000}}
-
-
-@pytest.mark.parametrize('stuck', [False, True])
-def test_bitget_backward_history_and_daily_refinement(stuck):
-    """Find older listing months; never accept a server ignoring backward pagination."""
-    month = 30 * 86400000
-    listing = 1600041600000
-
-    class Client:
-        """Monthly history server capped to one candle per page."""
-        def milliseconds(self):
-            """Use a fixed clock beyond the listing date."""
-            return listing + 4 * month
-
-        async def fetch_ohlcv(self, symbol, timeframe, params):
-            """Model until semantics and a distinct exact daily listing time."""
-            if timeframe == '1d':
-                return [[listing + 86400000, 1, 1, 1, 1, 1]]
-            until = params.get('until', listing + 2 * month)
-            if stuck:
-                return [[listing + 2 * month, 1, 1, 1, 1, 1]]
-            available = [stamp for stamp in (listing, listing + month, listing + 2 * month) if stamp <= until]
-            return [[max(available), 1, 1, 1, 1, 1]] if available else []
-
-    if stuck:
-        with pytest.raises(VastError, match='did not advance'):
-            asyncio.run(bitget_first_candles(Client(), 'BTC/USDT:USDT'))
-    else:
-        assert asyncio.run(bitget_first_candles(Client(), 'BTC/USDT:USDT'))[0][0] == listing + 86400000
+    assert json.loads((tmp_path / 'output/caches' / exchange / 'markets.json').read_text()) == snapshots[exchange]['markets']
 
 
 def test_validation_identifies_exchange_and_each_scenario():

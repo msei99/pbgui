@@ -34,12 +34,18 @@
   async function refresh() {
     const generation = ++refreshGeneration;
     try {
-      const [queue, settings] = await Promise.all([request('/queue'), request('/settings')]);
+      const [queue, settings, batches] = await Promise.all([request('/queue'), request('/settings'), version() === 'v8' ? request('/queue/batches') : Promise.resolve({batches:[]})]);
       if (generation !== refreshGeneration) return;
       const items = queue.items || [];
       const pending = items.filter(item => ['queued','running','starting'].includes(item.status)).length;
       nodes('[data-backtest-open-queue]').forEach(node => { node.textContent = 'Open Queue (' + pending + ')'; });
       nodes('[data-backtest-autostart]').forEach(node => { node.textContent = settings.autostart ? 'Autostart ON — queued jobs may start automatically' : 'Autostart OFF — start jobs from the queue'; });
+      const latest = (batches.batches || [])[0];
+      if (latest && latest.status === 'running') message(latest.confirmed + ' / ' + latest.total + ' jobs queued by PBGui server');
+      else if (latest && latest.status === 'queued') message('Backend queue batch waiting · ' + latest.total + ' jobs');
+      else if (latest && latest.status === 'error') message('Backend queue stopped: ' + latest.error);
+      else if (latest && latest.status === 'complete') message(latest.total + ' / ' + latest.total + ' jobs queued by PBGui server');
+
     } catch (error) {
       if (generation === refreshGeneration) nodes('[data-backtest-autostart]').forEach(node => { node.textContent = 'Queue status unavailable: ' + error.message; });
     }
@@ -78,6 +84,15 @@
           group.id = groups.get(group.id);
         }
       });
+      if (version() === 'v8') {
+        const prepared = items.map((item, index) => ({...item, operation_id:operations.get(version() + ':' + keys[index])}));
+        const batch = await request('/queue/batches', {items:prepared});
+        if (batch.status === 'error') {
+          throw new Error(batch.error + ' Submit again after checking the queue.');
+        }
+        message(batch.confirmed + ' / ' + batch.total + ' jobs queued by PBGui server');
+        return {added:batch.confirmed, queued:batch.total - batch.confirmed, batch_id:batch.batch_id};
+      }
       let added = 0, skipped = 0;
       // Retain operation IDs after errors: a retry must not duplicate an accepted POST.
       for (const [index, item] of items.entries()) {
@@ -113,6 +128,7 @@
       else window.location.href = target;
     }));
     refresh();
+    if (typeof window.setInterval === 'function') window.setInterval(refresh, 5000);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, {once:true}); else init();
 }());

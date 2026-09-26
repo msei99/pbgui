@@ -68,8 +68,9 @@ def rental_needed(queue: CloudQueue, authorization_id: str) -> bool:
 
 def select_offer(queue: CloudQueue, settings: dict) -> dict:
     """Recheck fresh provider offers against saved requirements and active exclusions."""
-    keys = ('gpu_name', 'max_price', 'min_vram', 'min_ram', 'min_cpu', 'min_tflops', 'disk_gb', 'verified_only')
-    preferences = {k: settings[k] for k in keys}
+    keys = ('gpu_name', 'max_price', 'min_vram', 'min_ram', 'min_cpu', 'min_tflops',
+            'min_power_watts', 'min_reliability_pct', 'disk_gb', 'verified_only')
+    preferences = {k: settings.get(k, 0) if k in ('min_power_watts', 'min_reliability_pct') else settings[k] for k in keys}
     waiting = queue.waiting()
     preferences['min_cpu'] = max(preferences['min_cpu'], max(
         (1 if row.get('auto_cpu_workers') else row['workers'] for row in waiting), default=1))
@@ -87,6 +88,8 @@ def select_offer(queue: CloudQueue, settings: dict) -> dict:
                and (r.get('ram_gb') or 0) >= preferences['min_ram']
                and (r.get('cpu_cores') or 0) >= preferences['min_cpu']
                and (r.get('tflops') or 0) >= preferences['min_tflops']
+               and (r.get('gpu_max_power_watts') or 0) >= preferences['min_power_watts']
+               and (r.get('reliability') or 0) * 100 >= preferences['min_reliability_pct']
                and (r.get('disk_gb') or 0) >= preferences['disk_gb']
                and (not preferences['verified_only'] or r.get('verified') is True)]
     if not matches:
@@ -99,6 +102,9 @@ def pool_step(queue: CloudQueue) -> dict | None:
     ensure_private_directory(queue.root)
     with advisory_file_lock(queue.root / '.pool-tick-lock'):
         state = queue.read()
+        if state.get('calibration_watch'):
+            from vast_calibration_watch import watch_step
+            return watch_step(queue)
         authorization = state.get('pool_authorization') or {}
         identifier = authorization.get('id')
         if not identifier or not rental_needed(queue, job_id(identifier)):
@@ -109,11 +115,12 @@ def pool_step(queue: CloudQueue) -> dict | None:
         result = queue.start(offer, settings['hours'], settings['budget'], settings['idle_seconds'],
                              pool_authorization_id=identifier)
         queue.update(pool_error=None)
-        return result
-
+    return result
 
 def authorize_pool(queue: CloudQueue, settings: dict, *, resume: bool = True) -> dict:
     """Record explicit start consent without changing existing rental limits."""
+    if queue.read().get('calibration_watch'):
+        raise VastError('Cancel the waiting performance test before enabling automatic GPU rentals', 409)
     if not services_available():
         raise VastError('A working user systemd service manager and OpenSSH are required', 409)
     credentials = VastCredentialStore(queue.root).metadata()
@@ -125,6 +132,8 @@ def authorize_pool(queue: CloudQueue, settings: dict, *, resume: bool = True) ->
     ensure_private_directory(queue.root)
     with advisory_file_lock(queue.root / '.queue-lock'):
         previous = queue.read()
+        if previous.get('calibration_watch'):
+            raise VastError('Cancel the waiting performance test before enabling automatic GPU rentals', 409)
         paused = False if resume else bool(previous.get('paused'))
         queue.update(pool_authorization=authorization, pool_enabled=True, pool_error=None, paused=paused)
         try:

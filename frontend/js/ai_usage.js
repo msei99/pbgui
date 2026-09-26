@@ -27,5 +27,59 @@
       var note = document.createElement('div'); note.textContent = data.message || 'Usage limits currently unavailable'; container.appendChild(note);
     }
   }
-  window.PBGuiAIUsage = {render: render};
+  function renderOpenRouter(container, data) {
+    container.replaceChildren();
+    if (!data.connected) {
+      container.textContent = 'Connect OpenRouter to view key usage.';
+      return;
+    }
+    var title = document.createElement('div');
+    title.className = 'openrouter-usage-title';
+    title.textContent = 'API key spend (USD)';
+    container.appendChild(title);
+    var spend = data.spend || {};
+    if (Object.keys(spend).length) {
+      var cards = document.createElement('div');
+      cards.className = 'openrouter-usage-cards';
+      [['daily', 'Today'], ['weekly', 'This week'], ['monthly', 'This month']].forEach(function (entry) {
+        var card = document.createElement('div');
+        card.className = 'openrouter-usage-card';
+        var label = document.createElement('span');
+        label.textContent = entry[1];
+        var value = document.createElement('strong');
+        var amount = spend[entry[0]];
+        value.textContent = typeof amount === 'number' && Number.isFinite(amount)
+          ? '$' + new Intl.NumberFormat('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6}).format(amount)
+          : '—';
+        card.append(label, value);
+        cards.appendChild(card);
+      });
+      container.appendChild(cards);
+    }
+    var limit = document.createElement('div');
+    limit.className = 'openrouter-usage-note';
+    if (typeof data.key_limit_usd === 'number' && Number.isFinite(data.key_limit_usd)) {
+      var format = function (value) { return '$' + new Intl.NumberFormat('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 4}).format(value); };
+      limit.textContent = 'Key limit: ' + format(data.key_limit_usd)
+        + (typeof data.key_limit_remaining_usd === 'number' && Number.isFinite(data.key_limit_remaining_usd)
+          ? ' · ' + format(data.key_limit_remaining_usd) + ' remaining' : '')
+        + (['daily', 'weekly', 'monthly'].includes(data.key_limit_reset) ? ' · resets ' + data.key_limit_reset : '');
+    } else {
+      limit.textContent = 'No key spending limit reported.';
+    }
+    if (!data.message) container.appendChild(limit);
+    if (data.message) {
+      var note = document.createElement('div');
+      note.className = 'openrouter-usage-note';
+      note.textContent = data.message;
+      container.appendChild(note);
+    }
+    var link = document.createElement('a');
+    link.href = 'https://openrouter.ai/activity';
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'View full usage on OpenRouter ↗';
+    container.appendChild(link);
+  }
+  window.PBGuiAIUsage = {render: render, renderOpenRouter: renderOpenRouter};
 }());

@@ -957,7 +957,7 @@ tr.row-inactive td { opacity: 0.45; }
 </div><!-- /#main-content -->
 </div><!-- /#page-body -->
 
-<script src="/app/js/log_viewer_panel.js?v=48"></script>
+<script src="/app/js/log_viewer_panel.js?v=50"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    VPS Monitor — WebSocket-powered real-time dashboard
@@ -2905,8 +2905,8 @@ initMetricTooltipHandlers();
       .catch(function() { helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>'; });
   }
   helpFilter.addEventListener('input', renderToc);
-  helpLangEN.addEventListener('click', function() { if (helpLang === 'EN') return; helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active'); _topicCache = {}; helpSel = 0; loadHelpIndex('vps_monitor'); });
-  helpLangDE.addEventListener('click', function() { if (helpLang === 'DE') return; helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active'); _topicCache = {}; helpSel = 0; loadHelpIndex('vps_monitor'); });
+  helpLangEN.addEventListener('click', function() { if (helpLang === 'EN') return; helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active'); _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || ('vps_monitor')); });
+  helpLangDE.addEventListener('click', function() { if (helpLang === 'DE') return; helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active'); _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || ('vps_monitor')); });
   document.getElementById('help-close').addEventListener('click', function() { helpOvl.classList.remove('visible'); });
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape') helpOvl.classList.remove('visible'); });
   (function() {
@@ -2945,7 +2945,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/shared_help_overlay.js?v=7"></script>
+<script src="/app/js/shared_help_overlay.js?v=8"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <script>
 document.addEventListener('click', handleMonitorAction);

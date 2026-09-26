@@ -147,10 +147,12 @@ def test_profit_sweep_uses_cookie_only_api_contract() -> None:
         "Authorization",
         "Bearer",
         "localStorage",
-        "sessionStorage",
         "document.cookie",
     ):
         assert forbidden not in source
+    assert "window.sessionStorage.setItem(NAVIGATION_KEY, JSON.stringify({" in source
+    assert "user: state.selectedUser" in source
+    assert "tab: selectedTab ? selectedTab.dataset.tab : 'overview'" in source
 
     for endpoint in (
         "requestJson('/schema')",
@@ -327,8 +329,6 @@ def test_profit_sweep_live_actions_and_dry_labels_are_explicit() -> None:
         "Enable Dry",
         "Disable",
         "Reset baseline",
-        "Refresh journal",
-        "Refresh intents",
         "Enable Live",
         "Reconcile",
         "Logs",
@@ -499,7 +499,10 @@ def test_profit_sweep_has_one_listener_per_live_action_and_dirty_save() -> None:
     source = _source()
 
     assert source.count("byId('enable-live').addEventListener('click', enableLive)") == 1
-    assert source.count("byId('refresh-intents').addEventListener('click', refreshIntents)") == 1
+    assert "refreshSelectedAccountData();" in source
+    assert 'id="refresh-intents"' not in source
+    assert 'id="refresh-journal"' not in source
+    assert 'id="overview-refresh-now"' not in source
     assert 'id="save-policy" hidden>Save changes</button>' in source
     assert "function updatePolicyDirty()" in source
     assert "byId('save-policy').hidden = !dirty || !state.selectedUser" in source
@@ -560,7 +563,7 @@ def test_intent_refresh_preserves_policy_drafts_and_unsaved_policy_actions_are_d
     selected = source.split("function renderSelectedAccount()", 1)[1].split("function syncDryJournalDisclosure", 1)[0]
     reconcile = source.split("async function reconcileIntent(operationId)", 1)[1].split("async function refreshTestTransfersAfterAction", 1)[0]
     reset = source.split("async function resetBaseline()", 1)[1].split("async function deletePolicy", 1)[0]
-    refresh = source.split("async function refreshIntents()", 1)[1].split("function showTab", 1)[0]
+    refresh = source.split("async function refreshSelectedAccountData()", 1)[1].split("function showTab", 1)[0]
 
     assert "byId('delete-policy').disabled = !user || !state.record" in selected
     assert "byId('reset-baseline').disabled = !user || !state.record" in selected
@@ -572,3 +575,105 @@ def test_intent_refresh_preserves_policy_drafts_and_unsaved_policy_actions_are_d
     assert reconcile.count("renderIntents();") == 2
     assert "renderSelectedAccount();" not in refresh
     assert "renderIntents();" in refresh
+    assert "loadIntentsForAccount(userName, generation, signal)" in refresh
+
+
+def test_automatic_account_data_update_renders_new_intent_without_losing_draft() -> None:
+    """Apply background intent changes while a policy draft stays editable."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for the isolated frontend update test")
+    source = _source()
+    action = "async function refreshSelectedAccountData()" + source.split(
+        "async function refreshSelectedAccountData()", 1
+    )[1].split("function showTab", 1)[0]
+    script = r"""
+const assert = require('node:assert/strict');
+const state = {
+  selectedUser:'bybit_CPT2', accountGeneration:1, accountDataRefreshGeneration:null,
+  accountController:new AbortController(), policyBaseline:'saved',
+  record:{policy_fingerprint:'old', policy:{operating_mode:'live'}},
+  journal:[], intents:[{operation_id:'old'}], testOperations:[],
+  users:[{name:'bybit_CPT2'}], schema:{live_available:true},
+  testActionPending:false
+};
+const document = {hidden:false};
+const rendered = {intents:0, journal:0, forms:0, selected:0};
+function policyFingerprint() {return 'draft';}
+function isCurrentAccount(user, generation) {
+  return state.selectedUser===user && state.accountGeneration===generation;
+}
+async function loadPolicyForAccount() {
+  state.record={policy_fingerprint:'new', policy:{operating_mode:'live'}};
+}
+async function loadJournalForAccount() {state.journal=[{id:'new'}];}
+async function loadIntentsForAccount() {state.intents=[{operation_id:'old'}, {operation_id:'new'}];}
+async function loadTestTransfersForAccount() {}
+function renderStatusCards() {}
+function renderOverview() {}
+function renderAccountMode() {}
+function renderJournal() {rendered.journal++;}
+function renderIntents() {rendered.intents++;}
+function renderTestTransfers() {}
+function renderSelectedAccount() {rendered.selected++;}
+function fillPolicyForm() {rendered.forms++;}
+function capturePolicyBaseline() {}
+function syncDryJournalDisclosure() {}
+function setMessage(message) {throw new Error(message);}
+function byId() {return {disabled:false};}
+eval(ACTION);
+(async () => {
+  await refreshSelectedAccountData();
+  assert.deepEqual(state.intents.map(item => item.operation_id), ['old','new']);
+  assert.equal(rendered.intents, 1);
+  assert.equal(rendered.journal, 1);
+  assert.equal(rendered.forms, 0);
+  assert.equal(rendered.selected, 0);
+  assert.equal(state.record.policy_fingerprint, 'old');
+  assert.equal(state.accountDataRefreshGeneration, null);
+})().catch(error => {console.error(error); process.exitCode=1;});
+""".replace("ACTION", json.dumps(action))
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_intent_requests_ignore_late_responses() -> None:
+    """A slower prior intent response cannot erase a newer transfer row."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for the isolated frontend race test")
+    source = _source()
+    action = "async function loadIntentsForAccount" + source.split(
+        "async function loadIntentsForAccount", 1
+    )[1].split("async function loadTestTransfersForAccount", 1)[0]
+    script = r"""
+const assert = require('node:assert/strict');
+const state = {selectedUser:'bybit_CPT2', accountGeneration:1, intentsRequestId:0, intents:[]};
+const pending = [];
+function requestJson() {
+  return new Promise(resolve => pending.push(resolve));
+}
+function isCurrentAccount(user, generation) {
+  return state.selectedUser===user && state.accountGeneration===generation;
+}
+eval(ACTION);
+(async () => {
+  const old = loadIntentsForAccount('bybit_CPT2', 1);
+  const newest = loadIntentsForAccount('bybit_CPT2', 1);
+  pending[1]({intents:[{operation_id:'confirmed-new'}]});
+  await newest;
+  pending[0]({intents:[{operation_id:'failed-old'}]});
+  await old;
+  assert.deepEqual(state.intents.map(item => item.operation_id), ['confirmed-new']);
+  const switched = loadIntentsForAccount('bybit_CPT2', 1);
+  state.selectedUser='other';
+  state.accountGeneration=2;
+  pending[2]({intents:[]});
+  await switched;
+  assert.deepEqual(state.intents.map(item => item.operation_id), ['confirmed-new']);
+})().catch(error => {console.error(error); process.exitCode=1;});
+""".replace("ACTION", json.dumps(action))
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15, check=False)
+    assert result.returncode == 0, result.stderr

@@ -23,7 +23,7 @@ def test_save_and_queue_navigates_before_slow_jobs_refresh(cloud_page):
       window.editorVisible = () => true;
       window.ensureRawJsonValidForSave = () => true;
       window.ensureStructuredJsonFieldsValidForSave = () => true;
-      window.collectEditorConfig = () => ({name:'test', config:{pbgui:{execution:'vast'}, optimize:{iters:100,n_cpus:4}}});
+      window.collectEditorConfig = () => ({name:'test', config:{pbgui:{execution:'vast'}, optimize:{backend:'gpu',iters:100,n_cpus:4,gpu:{population_size:4096,batch_size:4096,max_dispatch_candidate_bars:1000000000}}}});
       window.setPageEditorStatus = text => {window.saveStatus=text;};
       window.apiFetch = () => new Promise(resolve => {window.finishSave=resolve;});
       window.refreshOpenedQueueSnapshot = async () => {};
@@ -318,7 +318,8 @@ def cloud_page():
     """Run the production component with intercepted HTTP and no provider access."""
     playwright = pytest.importorskip('playwright.sync_api')
     preferences = dict(gpu_name=None, max_price=.5, min_vram=12, min_ram=16,
-                       min_cpu=4, disk_gb=40, verified_only=True, hours=1, budget=1,
+                       min_cpu=4, min_power_watts=0, min_reliability_pct=0,
+                       disk_gb=40, verified_only=True, hours=1, budget=1,
                        idle_seconds=300)
     job = dict(id='a'*32, config_name='test-run', status='failed', can_delete=True,
                has_log=True, iterations=1000, exact_completed=120, workers=4,
@@ -496,7 +497,7 @@ def test_delete_and_requeue_locks_survive_row_replacement(cloud_page):
     assert page.locator('[title="Delete queue item"]').is_disabled()
     assert page.locator('[title="Requeue"]').is_disabled()
     assert page.evaluate('confirmations') == 1
-    assert not any(x[0] == 'DELETE' for x in calls)
+    assert not any(method == 'POST' and url.endswith('/jobs/delete') for method, url in calls)
     page.evaluate('confirmDelete(false)')
     page.wait_for_function("!document.querySelector('[title=\"Requeue\"]').disabled")
     overrides[path + '/requeue'] = 'hold'
@@ -507,13 +508,13 @@ def test_delete_and_requeue_locks_survive_row_replacement(cloud_page):
     assert page.locator('[title="Delete queue item"]').is_disabled()
     held.pop().fulfill(status=500, json={'detail':'Prepare failed'})
     page.wait_for_function("!document.querySelector('[title=\"Requeue\"]').disabled")
-    overrides[path] = 'hold'
+    overrides['/api/vast/jobs/delete'] = 'hold'
     page.locator('[title="Delete queue item"]').click()
     page.evaluate('confirmDelete(true)')
     page.wait_for_timeout(50)
     page.evaluate('renderQueueMaybeDeferred()')
     assert page.locator('[title="Delete queue item"]').is_disabled()
-    assert len([x for x in calls if x[0] == 'DELETE']) == 1
+    assert len([x for x in calls if x[0] == 'POST' and x[1].endswith('/jobs/delete')]) == 1
     data['jobs'].clear()
     held.pop().fulfill(json={'deleted':True})
     page.wait_for_function('PBGuiVast.queueItems().length === 0')
@@ -1071,6 +1072,30 @@ def test_cloud_validation_names_scenarios_and_displays_field_paths_safely(cloud_
     assert box.locator('img').count() == 0
     assert page.locator('#btn-editor-save-queue').is_enabled()
     assert page.locator('#btn-editor-save').is_enabled()
+
+
+def test_auto_gpu_sizing_never_prompts_for_missing_fields(cloud_page):
+    """Empty automatic fields remain valid during editing and queueing."""
+    page, _, _, _, _ = cloud_page
+    page.evaluate("""() => {
+        const box = document.getElementById('opted-vast-validation');
+        for (const id of ['opted-gpu-population-size', 'opted-gpu-batch-size',
+                          'opted-gpu-max-dispatch-bars']) {
+            const input = document.createElement('input');
+            input.id = id;
+            box.before(input);
+        }
+    }""")
+    config = {'pbgui': {'execution': 'vast'}, 'optimize': {'backend': 'gpu', 'gpu': {
+        'auto_lean_parallelism': True, 'population_size': None,
+        'batch_size': None, 'max_dispatch_candidate_bars': None}}}
+    box = page.locator('#opted-vast-validation')
+    assert page.evaluate('async config => PBGuiVast.validateConfig(config)', config) is True
+    assert box.is_hidden()
+    assert page.evaluate('async config => PBGuiVast.validateConfig(config, {forQueue: true})', config) is True
+    assert box.is_hidden()
+    assert page.locator('.cloud-invalid').count() == 0
+    assert page.locator('.cloud-required').count() == 0
 
 
 @pytest.mark.parametrize('minutes', [1, 7, 60])

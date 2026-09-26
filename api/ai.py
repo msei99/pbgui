@@ -56,6 +56,7 @@ class ConversationCreateRequest(BaseModel):
     provider: str = Field(min_length=1, max_length=32)
     model: str = Field(default="", max_length=128)
     effort: str = Field(default="", max_length=64)
+    service_tier: str = Field(default="", max_length=64)
     context: dict | None = None
     profile: str = Field(default="default", max_length=32)
 
@@ -66,8 +67,10 @@ class TurnCreateRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12_000)
     context: dict | None = None
     effort: str | None = Field(default=None, max_length=64)
+    service_tier: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=128)
     provider: str | None = Field(default=None, min_length=1, max_length=32)
+    jev_preview_id: str | None = Field(default=None, max_length=32)
 
 
 class LocalActionRequest(BaseModel):
@@ -83,6 +86,7 @@ class AIPreferencesRequest(BaseModel):
     drawer_width: int | None = Field(default=None, ge=180, le=100_000)
     drawer_open: bool | None = None
     drawer_pinned: bool | None = None
+    jev_max_cost_usd: float | None = Field(default=None, ge=0.000001, le=1.0)
 
 
 class ConversationRewindRequest(BaseModel):
@@ -103,9 +107,17 @@ def _owner(session: SessionToken) -> str:
     return owner_key(session.user_id)
 
 
+class _SafeAIJSONResponse(JSONResponse):
+    """Keep malformed legacy Unicode from breaking every AI conversation response."""
+
+    def render(self, content: object) -> bytes:
+        """Replace isolated UTF-16 surrogates while retaining normal JSON encoding."""
+        return json.dumps(content, ensure_ascii=False, allow_nan=False, indent=None, separators=(",", ":")).encode("utf-8", errors="replace")
+
+
 def _json(payload: object, status_code: int = 200) -> JSONResponse:
-    """Return a no-store JSON response."""
-    return JSONResponse(payload, status_code=status_code, headers={"Cache-Control": "no-store"})
+    """Return a no-store JSON response, including legacy malformed chat text."""
+    return _SafeAIJSONResponse(payload, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
 def _provider_error(operation: str, exc: Exception) -> HTTPException:
@@ -190,7 +202,7 @@ async def save_preferences(
     try:
         return _json(
             get_ai_chat_service().save_preferences(
-                _owner(session), body.drawer_width, body.drawer_open, body.drawer_pinned
+                _owner(session), body.drawer_width, body.drawer_open, body.drawer_pinned, body.jev_max_cost_usd
             )
         )
     except Exception as exc:
@@ -218,6 +230,29 @@ async def disconnect_go(session: SessionToken = Depends(require_auth)) -> JSONRe
         return _json({"success": True})
     except Exception as exc:
         raise _provider_error("disconnect_go", exc) from exc
+
+
+@router.post("/providers/openrouter/connect")
+async def connect_openrouter(
+    body: GoConnectRequest,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Verify and privately store the current user's OpenRouter API key."""
+    try:
+        await get_ai_chat_service().connect_openrouter(_owner(session), body.api_key)
+        return _json({"success": True})
+    except Exception as exc:
+        raise _provider_error("connect_openrouter", exc) from exc
+
+
+@router.delete("/providers/openrouter/connection")
+async def disconnect_openrouter(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Remove only the current user's OpenRouter connection."""
+    try:
+        await get_ai_chat_service().disconnect_openrouter(_owner(session))
+        return _json({"success": True})
+    except Exception as exc:
+        raise _provider_error("disconnect_openrouter", exc) from exc
 
 
 @router.post("/providers/chatgpt/device-login")
@@ -331,7 +366,8 @@ async def create_conversation(
     """Create an owner-bound conversation before its first provider request."""
     try:
         conversation_id = await get_ai_chat_service().create_conversation(
-            _owner(session), body.provider, body.model, body.effort, body.context, **({"profile": body.profile} if body.profile != "default" else {})
+            _owner(session), body.provider, body.model, body.effort, body.context,
+            **({"profile": body.profile} if body.profile != "default" else {}), service_tier=body.service_tier,
         )
         return _json({"conversation_id": conversation_id}, status_code=201)
     except Exception as exc:
@@ -362,6 +398,43 @@ async def get_conversation(
         raise _provider_error("get_conversation", exc) from exc
 
 
+class JevPreviewRequest(BaseModel):
+    """Explicit message and model for one PBGui data-transfer preview."""
+
+    message: str = Field(min_length=1, max_length=12_000)
+    model: str = Field(min_length=1, max_length=128)
+
+
+@router.post("/conversations/{conversation_id}/jev-preview")
+async def preview_jev_transfer(
+    conversation_id: str,
+    body: JevPreviewRequest,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Show the bounded provider payload before a Jev transfer."""
+    try:
+        result = await get_ai_chat_service().preview_jev_transfer(
+            _owner(session), conversation_id, body.message, body.model
+        )
+        return _json(result)
+    except Exception as exc:
+        raise _provider_error("preview_jev_transfer", exc) from exc
+
+
+@router.delete("/conversations/{conversation_id}/jev-preview/{preview_id}")
+async def discard_jev_preview(
+    conversation_id: str,
+    preview_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Discard an unapproved Jev transfer preview."""
+    try:
+        await get_ai_chat_service().discard_jev_preview(_owner(session), conversation_id, preview_id)
+        return _json({"discarded": True})
+    except Exception as exc:
+        raise _provider_error("discard_jev_preview", exc) from exc
+
+
 @router.post("/conversations/{conversation_id}/turns")
 async def start_turn(
     conversation_id: str,
@@ -371,7 +444,9 @@ async def start_turn(
     """Start one API-owned turn and return immediately."""
     try:
         result = await get_ai_chat_service().start_turn(
-            _owner(session), conversation_id, body.message, body.context, body.effort, body.model, body.provider
+            _owner(session), conversation_id, body.message, body.context, body.effort, body.model, body.provider,
+            jev_preview_id=body.jev_preview_id,
+            service_tier=body.service_tier,
         )
         return _json(result, status_code=202)
     except Exception as exc:
@@ -483,9 +558,8 @@ async def list_proposals(
 @router.get("/capabilities")
 async def capability_registry(session: SessionToken = Depends(require_auth)) -> JSONResponse:
     """Return the current effect-aware path-free capability registry."""
-    del session
     try:
-        return _json(get_ai_capability_service().capability_registry())
+        return _json(get_ai_capability_service().capability_registry(_owner(session)))
     except Exception as exc:
         raise _provider_error("capability_registry", exc) from exc
 
@@ -518,7 +592,7 @@ async def approve_proposal(
             chat_service = get_ai_chat_service()
             continuation_result = {
                 key: result.get(key)
-                for key in ("proposal_id", "status", "action", "name", "queued_count", "template")
+                for key in ("proposal_id", "status", "action", "name", "queued_count", "template", "jev_result")
                 if result.get(key) is not None
             }
             if result.get("action") == "python_analysis":
@@ -530,10 +604,17 @@ async def approve_proposal(
                     )
                 except Exception as exc:
                     _log(SERVICE, f"Approved analysis result could not be attached to chat: {type(exc).__name__}", level="WARNING")
+            if result.get("action") == "jev_analysis":
+                continuation_guidance = (
+                    "Explain the Jev result from this approved action without calling Jev again "
+                    "for the same decision."
+                )
+            else:
+                continuation_guidance = "Use the completed action result to continue the user's request."
             continuation_message = (
-                "An approved PBGui action completed successfully. Continue the user's existing "
-                "requested workflow now. If no requested step remains, briefly confirm completion "
-                "without creating another proposal. Approved action result:\n"
+                "An approved PBGui action completed successfully. "
+                + continuation_guidance
+                + " If no requested step remains, briefly confirm completion. Approved action result:\n"
                 + json.dumps(continuation_result, allow_nan=False, separators=(",", ":"))
             )
             try:

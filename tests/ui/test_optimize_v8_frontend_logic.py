@@ -1344,10 +1344,10 @@ def test_pb8_gpu_editor_uses_the_standard_eight_column_responsive_grid() -> None
     section = page.split("id=\"optimize-gpu-section\"", 1)[1].split("id=\"optimize-pymoo-section\"", 1)[0]
 
     for heading in (
-        "Automatic sizing",
+        "Population &amp; dispatch",
         "Exact validation &amp; checkpointing",
         "Drift safety",
-        "Successive halving",
+        "Optional search method (not GPU sizing)",
     ):
         assert heading in section
     assert "justify-content:space-between" not in section
@@ -1380,6 +1380,39 @@ def test_pb8_gpu_editor_uses_the_standard_eight_column_responsive_grid() -> None
         call = section.split("'" + field + "'", 1)[1].split("\n", 1)[0]
         assert call.rstrip().endswith(", 1)") or ", 1, optimizeGpuAutoPlaceholder(" in call
 
+
+
+def test_optional_staged_history_controls_do_not_look_like_vast_gpu_sizing() -> None:
+    """Only local, enabled staged-history search should expose its three parameters."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function = _page_function(page, "updateOptimizeGpuHalvingFields")
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const nodes = Object.fromEntries([
+          'opted-gpu-halving-heading', 'opted-gpu-halving-mobile-heading',
+          'opted-gpu-halving-switch', 'opted-gpu-halving-fields',
+          'opted-gpu-halving-cloud-note'
+        ].map(id => [id, {{style: {{display: ''}}}}]));
+        nodes['opted-gpu-halving-enabled'] = {{checked: false}};
+        nodes['opted-execution'] = {{value: 'vast'}};
+        const el = id => nodes[id] || null;
+        {function}
+        updateOptimizeGpuHalvingFields();
+        assert.equal(nodes['opted-gpu-halving-switch'].style.display, 'none');
+        assert.equal(nodes['opted-gpu-halving-fields'].style.display, 'none');
+        nodes['opted-execution'].value = 'local';
+        updateOptimizeGpuHalvingFields();
+        assert.equal(nodes['opted-gpu-halving-switch'].style.display, '');
+        assert.equal(nodes['opted-gpu-halving-fields'].style.display, 'none');
+        nodes['opted-gpu-halving-enabled'].checked = true;
+        updateOptimizeGpuHalvingFields();
+        assert.equal(nodes['opted-gpu-halving-fields'].style.display, 'contents');
+        nodes['opted-execution'].value = 'vast';
+        updateOptimizeGpuHalvingFields();
+        assert.equal(nodes['opted-gpu-halving-fields'].style.display, 'none');
+        assert.equal(nodes['opted-gpu-halving-cloud-note'].style.display, '');
+    """))
+    assert "if (halving.enabled) {\n    halving.history_fractions" in page
 
 def test_pb8_gpu_dashboard_uses_exact_budget_and_log_activity() -> None:
     """GPU progress should use exact validations and the API log section."""

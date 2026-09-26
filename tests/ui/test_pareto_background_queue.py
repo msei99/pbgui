@@ -39,12 +39,13 @@ def test_explorer_accepts_next_validation_while_first_batch_is_pending():
             route.fulfill(body=(root / 'frontend/js' / Path(path).name).read_text(), content_type='text/javascript')
         elif route.request.method == 'POST':
             posts.append(route.request.post_data_json)
+            assert path.endswith('/queue/batches')
             if len(posts) == 1:
                 held.append(route)
             else:
-                route.fulfill(json={'filename': posts[-1]['name']})
+                route.fulfill(json={'batch_id': 'second', 'status': 'queued', 'total': len(posts[-1]['items']), 'confirmed': 0})
         elif path.startswith('/api/'):
-            route.fulfill(json={'autostart': False} if path.endswith('/settings') else {'items': []})
+            route.fulfill(json={'autostart': False} if path.endswith('/settings') else {'batches': []} if path.endswith('/batches') else {'items': []})
         else:
             route.fulfill(body=html, content_type='text/html')
 
@@ -63,12 +64,15 @@ def test_explorer_accepts_next_validation_while_first_batch_is_pending():
             button.click()
             page.wait_for_function("document.querySelector('[data-backtest-queue-status]').textContent.includes('1 more batch')")
             assert len(posts) == 1
-            held[0].fulfill(json={'filename': posts[0]['name']})
-            page.wait_for_function("document.querySelector('[data-backtest-queue-status]').textContent.includes('1 jobs added') && !document.querySelector('[data-backtest-queue-status]').textContent.includes('waiting')")
-            assert [post['name'] for post in posts] == ['pareto_config_1_holdout', 'pareto_config_1_full_timerange', 'pareto_config_2_full_timerange']
-            assert [post['config']['bot']['value'] for post in posts] == [1, 1, 2]
-            assert posts[0]['config']['pbgui']['backtest_result_group']['id'] == posts[1]['config']['pbgui']['backtest_result_group']['id']
-            assert posts[1]['config']['pbgui']['backtest_result_group']['id'] != posts[2]['config']['pbgui']['backtest_result_group']['id']
+            held[0].fulfill(json={'batch_id': 'first', 'status': 'queued', 'total': 2, 'confirmed': 0})
+            page.wait_for_function("document.querySelector('[data-backtest-queue-status]').textContent.includes('jobs queued by PBGui server') && !document.querySelector('[data-backtest-queue-status]').textContent.includes('waiting')")
+            assert len(posts) == 2
+            assert [len(post['items']) for post in posts] == [2, 1]
+            queued = posts[0]['items'] + posts[1]['items']
+            assert [post['name'] for post in queued] == ['pareto_config_1_holdout', 'pareto_config_1_full_timerange', 'pareto_config_2_full_timerange']
+            assert [post['config']['bot']['value'] for post in queued] == [1, 1, 2]
+            assert queued[0]['config']['pbgui']['backtest_result_group']['id'] == queued[1]['config']['pbgui']['backtest_result_group']['id']
+            assert queued[1]['config']['pbgui']['backtest_result_group']['id'] != queued[2]['config']['pbgui']['backtest_result_group']['id']
             assert page.url == 'http://queue.test/'
         finally:
             browser.close()

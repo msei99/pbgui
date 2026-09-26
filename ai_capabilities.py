@@ -206,9 +206,17 @@ class AICapabilityService:
         self.analysis_tasks.clear()
         self.execution_tasks.clear()
 
-    def capability_registry(self) -> dict[str, Any]:
-        """Return effect-aware descriptors, virtual resources, limits, and runtime fingerprints."""
+    def capability_registry(self, owner: str | None = None) -> dict[str, Any]:
+        """Return effect-aware descriptors available to one owner."""
         descriptors = self._capability_descriptors()
+        if owner is not None:
+            from ai_chat import get_ai_chat_service
+
+            if not get_ai_chat_service().credentials.openrouter_configured(owner):
+                descriptors = [
+                    item for item in descriptors
+                    if item.name != "propose_jev_optimizer_analysis"
+                ]
         return {
             "schema_version": 1,
             "capabilities": [
@@ -247,13 +255,21 @@ class AICapabilityService:
         }
 
     def codex_dynamic_tools(self) -> list[dict[str, Any]]:
-        """Return canonical Codex dynamic-tool definitions."""
+        """Expose decision and clarification tools prominently without choosing for the model."""
+        specs = self._tool_specs()
+        priority = {"present_user_choices": 0, "propose_jev_optimizer_analysis": 1}
+        specs.sort(key=lambda item: priority.get(item["name"], 2))
         return [
             {
                 "type": "namespace",
                 "name": "pbgui",
-                "description": "Authenticated PBGui resources and approval-gated optimizer actions.",
-                "tools": [self._codex_tool(item) for item in self._tool_specs()],
+                "description": (
+                    "Authenticated PBGui resources and actions. The model can present its own "
+                    "clarification choices with present_user_choices and, when connected, "
+                    "propose a reviewable Jev decision for an optimizer run. Choose tools from "
+                    "the user's request; neither step is mandatory for every question."
+                ),
+                "tools": [self._codex_tool(item) for item in specs],
             }
         ]
 
@@ -308,7 +324,7 @@ class AICapabilityService:
         if len(encoded) > _MAX_CONFIG_BYTES:
             raise AICapabilityError("Tool arguments are too large")
         handlers = {
-            "get_capability_registry": lambda unused: self.capability_registry(),
+            "get_capability_registry": lambda unused: self.capability_registry(owner),
             "list_optimizer_configs": self._list_optimizer_configs,
             "get_optimizer_config": self._get_optimizer_config,
             "get_optimizer_metadata": self._get_optimizer_metadata,
@@ -337,6 +353,7 @@ class AICapabilityService:
             "propose_pareto_backtests": self._propose_pareto_backtests,
             "propose_dashboard_from_template": self._propose_dashboard_from_template,
             "propose_dashboard_layout": self._propose_dashboard_layout,
+            "propose_jev_optimizer_analysis": self._propose_jev_optimizer_analysis,
             "propose_python_analysis": self._propose_python_analysis,
             "propose_optimizer_run_python_analysis": self._propose_optimizer_run_python_analysis,
             "propose_workspace_python_analysis": self._propose_workspace_python_analysis,
@@ -444,7 +461,7 @@ class AICapabilityService:
                     )
                     if durable.get("status") != "awaiting_approval":
                         raise AICapabilityError("Proposal is no longer pending")
-                    if proposal.action != "python_analysis":
+                    if proposal.action not in {"python_analysis", "jev_analysis"}:
                         self._write_private_json(
                             self.journal_root / f"{proposal.id}.json",
                             self._journal_payload(proposal, phase="prepared"),
@@ -457,7 +474,7 @@ class AICapabilityService:
                 proposal.execution_task = task
                 self.execution_tasks.add(task)
                 task.add_done_callback(self.execution_tasks.discard)
-                if proposal.action == "python_analysis":
+                if proposal.action in {"python_analysis", "jev_analysis"}:
                     self.analysis_tasks.add(task)
                     task.add_done_callback(self.analysis_tasks.discard)
         return copy.deepcopy(await asyncio.shield(task))
@@ -509,6 +526,8 @@ class AICapabilityService:
             async with self.approval_semaphore:
                 if proposal.action == "python_analysis":
                     result = await self._execute_python_analysis(proposal)
+                elif proposal.action == "jev_analysis":
+                    result = await self._execute_jev_analysis(proposal)
                 else:
                     result = await asyncio.to_thread(self._execute_proposal, proposal)
         except asyncio.CancelledError:
@@ -516,7 +535,7 @@ class AICapabilityService:
                 proposal.status = "cancelled"
                 proposal.execution_task = None
                 self._persist_proposal(proposal)
-                self._persist_history(proposal, error="Python analysis was cancelled")
+                self._persist_history(proposal, error="Approved analysis was cancelled")
             raise
         except Exception as exc:
             async with proposal.lock:
@@ -640,10 +659,12 @@ class AICapabilityService:
             from api import optimize_v7
 
             payload = optimize_v7.list_results(session=object())
-        results = [
-            self._resource_projection("optimizer-run", version, item)
-            for item in payload.get("results", [])[:limit]
-        ]
+        results = []
+        for item in payload.get("results", [])[:limit]:
+            projected = self._resource_projection("optimizer-run", version, item)
+            if isinstance(item, dict):
+                projected["result_id"] = str(item.get("result") or "")[:200]
+            results.append(projected)
         return {"version": version, "runs": results, "returned": len(results)}
 
     def _list_backtests(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -687,7 +708,9 @@ class AICapabilityService:
             raise AICapabilityError("Optimizer run is unavailable")
         statistic = str(args.get("statistic") or "mean").strip().lower()
         scenario = str(args.get("scenario") or "Aggregated").strip() or "Aggregated"
-        limit = self._limit(args, maximum=200)
+        all_metrics = args.get("all_metrics") is True
+        limit = self._limit(args, maximum=24 if all_metrics else 200)
+        offset = self._bounded_int(args.get("offset"), default=0, maximum=5000)
         if version == "v8":
             from api import optimize_v8
 
@@ -698,6 +721,17 @@ class AICapabilityService:
                 session=object(),
                 metrics="",
             )
+            if all_metrics:
+                metric_names = (payload.get("meta") or {}).get("available_metrics") or []
+                if not isinstance(metric_names, list) or len(metric_names) > 256:
+                    raise AICapabilityError("Optimizer metric catalog exceeds Jev's bounded input")
+                payload = optimize_v8.list_paretos(
+                    result_path,
+                    scenario=scenario,
+                    statistic=statistic,
+                    session=object(),
+                    metrics=",".join(metric_names),
+                )
         else:
             from api import optimize_v7
 
@@ -708,7 +742,7 @@ class AICapabilityService:
                 session=object(),
             )
         candidates = []
-        for item in payload.get("paretos", [])[:limit]:
+        for item in payload.get("paretos", [])[offset:offset + limit]:
             if not isinstance(item, dict):
                 continue
             candidate_uri = self._virtual_uri("pareto", version, str(item.get("path") or ""))
@@ -727,7 +761,9 @@ class AICapabilityService:
             "pareto": candidates,
             "meta": self._strip_paths(self._sanitize_config(payload.get("meta") or {})),
             "returned": len(candidates),
-            "truncated": len(payload.get("paretos", [])) > limit,
+            "offset": offset,
+            "total": len(payload.get("paretos", [])),
+            "truncated": len(payload.get("paretos", [])) > offset + limit,
         }
 
     def _rank_optimizer_run_candidates(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -974,7 +1010,7 @@ class AICapabilityService:
             "candidate_names": names,
             "ui_action": {
                 "type": "optimize.select_paretos",
-                "target": {"page_key": f"{version}_optimize", "version": version, "run_name": run_name},
+                "target": {"page_key": f"{version}_optimize", "version": version, "run_name": run_name, "result_id": str(raw.get("result") or "")[:200]},
                 "payload": {"candidate_names": names, "mode": mode},
             },
         }
@@ -2364,6 +2400,82 @@ class AICapabilityService:
             owner, conversation_id, "queue_backtests", preview["name"], payload, preview
         )
 
+    async def _propose_jev_optimizer_analysis(
+        self, owner: str, conversation_id: str, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Offer one owner-approved Jev decision about an exact optimizer run."""
+        from ai_chat import get_ai_chat_service
+        from ai_openrouter import JEV_MODEL, OpenRouterDecisionError, decide_backtest_candidates
+
+        version = self._version(args)
+        resource = self._resource_uri(args.get("run_resource"), "optimizer-run", version)
+        raw = await self._to_thread_uncancellable(self._resolve_listed_resource, "optimizer-run", version, resource)
+        question = args.get("question")
+        if not isinstance(question, str) or not question.strip() or len(question) > 4000 or "\x00" in question:
+            raise AICapabilityError("A bounded Jev analysis question is required")
+        chat_service = get_ai_chat_service()
+        if not chat_service.credentials.openrouter_configured(owner):
+            raise AICapabilityError("Connect OpenRouter before requesting Jev")
+        selection_limit = args.get("max_candidates")
+        if selection_limit is not None and (
+            isinstance(selection_limit, bool) or not isinstance(selection_limit, int)
+            or not 1 <= selection_limit <= 50
+        ):
+            raise AICapabilityError("Jev candidate limit must be between 1 and 50")
+        budget = chat_service.get_preferences(owner)["jev_max_cost_usd"]
+        name = str(raw.get("name") or "")[:128]
+        context = {"entities": [{"kind": "optimizer_run", "version": version,
+                                 "name": name, "result_id": str(raw.get("result") or "")} ]}
+        try:
+            outbound = await decide_backtest_candidates(
+                self, None, "", owner, conversation_id, JEV_MODEL, question.strip(),
+                context, preview_only=True, selection_limit=selection_limit,
+            )
+        except OpenRouterDecisionError as exc:
+            raise AICapabilityError(str(exc)) from exc
+        if not isinstance(outbound, dict) or not outbound.get("requests"):
+            raise AICapabilityError(str(outbound))
+        payload = {"version": version, "run_resource": resource, "question": question.strip(),
+                   "max_candidates": selection_limit, "max_cost_usd": budget,
+                   "request_sha256": outbound["sha256"]}
+        preview = {"action": "jev_analysis", "name": "Jev analysis",
+                   "run_name": name, "version": version, "run_resource": resource,
+                   "question": question.strip(), "max_cost_usd": budget,
+                   "candidate_count": outbound["candidate_count"],
+                   "max_candidates": selection_limit,
+                   "metric_count": outbound["metric_count"],
+                   "request_sha256": outbound["sha256"],
+                   "outbound_requests": outbound["requests"]}
+        created = await self._create_custom_proposal(
+            owner, conversation_id, "jev_analysis", "Jev analysis", payload, preview
+        )
+        # The browser can review the exact payload from the durable proposal.
+        # Keep the model's tool result small so the preview is not billed again.
+        created["preview"].pop("outbound_requests", None)
+        return created
+
+    async def _execute_jev_analysis(self, proposal: ActionProposal) -> dict[str, Any]:
+        """Consult Jev once after approval, bounded by the approved and current budgets."""
+        from ai_chat import get_ai_chat_service
+        from ai_openrouter import JEV_MODEL
+
+        config = proposal.config or {}
+        version = self._version(config)
+        resource = self._resource_uri(config.get("run_resource"), "optimizer-run", version)
+        raw = await self._to_thread_uncancellable(self._resolve_listed_resource, "optimizer-run", version, resource)
+        service = get_ai_chat_service()
+        context = {"entities": [{"kind": "optimizer_run", "version": version,
+                                 "name": str(raw.get("name") or ""),
+                                 "result_id": str(raw.get("result") or "")}]}
+        answer = await service._openrouter_jev_chat(
+            proposal.owner, JEV_MODEL, str(config.get("question") or ""), context,
+            proposal.conversation_id, budget_override=float(config.get("max_cost_usd") or 0),
+            expected_payload_digest=str(config.get("request_sha256") or ""),
+            selection_limit=config.get("max_candidates"),
+        )
+        return {"proposal_id": proposal.id, "status": "executed", "action": "jev_analysis",
+                "name": "Jev analysis", "jev_result": answer}
+
     async def _propose_python_analysis(
         self,
         owner: str,
@@ -3647,7 +3759,7 @@ class AICapabilityService:
                 if status == "executing":
                     status = (
                         "interrupted"
-                        if payload.get("action") == "python_analysis"
+                        if payload.get("action") in {"python_analysis", "jev_analysis"}
                         else "approved_recovery"
                     )
                 self.proposals[proposal_id] = ActionProposal(
@@ -3831,7 +3943,7 @@ class AICapabilityService:
                         continue
                     try:
                         payload = self._read_private_json(path, self.proposal_root)
-                        if payload.get("action") != "python_analysis" or payload.get("status") not in {
+                        if payload.get("action") not in {"python_analysis", "jev_analysis"} or payload.get("status") not in {
                             "executing",
                             "approved_recovery",
                         }:
@@ -3845,12 +3957,12 @@ class AICapabilityService:
                             "proposal_id": payload.get("id"),
                             "owner": payload.get("owner"),
                             "conversation_id": payload.get("conversation_id"),
-                            "action": "python_analysis",
-                            "name": "Python analysis",
+                            "action": payload.get("action"),
+                            "name": payload.get("name"),
                             "status": "interrupted",
                             "preview": payload.get("preview") if isinstance(payload.get("preview"), dict) else {},
                             "result": None,
-                            "error": "API stopped before Python analysis completed",
+                            "error": "API stopped before approved analysis completed",
                             "created_at": payload.get("created_at"),
                             "updated_at": time.time(),
                         }
@@ -4150,6 +4262,8 @@ class AICapabilityService:
                         "scenario": {"type": "string", "maxLength": 128},
                         "statistic": {"type": "string", "maxLength": 32},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                        "offset": {"type": "integer", "minimum": 0, "maximum": 5000},
+                        "all_metrics": {"type": "boolean", "description": "Project all available numeric metrics; limits each page to 24 candidates."},
                     },
                     ["version", "resource"],
                 ),
@@ -4158,7 +4272,7 @@ class AICapabilityService:
             },
             {
                 "name": "rank_optimizer_run_candidates",
-                "description": "Scan and rank every Pareto candidate using explicit weighted min/max metrics and optional thresholds. Qualitative goals require user clarification first. If strict thresholds yield zero matches, alternatives are returned only as relaxed_suggestions with required_user_clarification and must not be selected automatically.",
+                "description": "Scan and rank every Pareto candidate using explicit weighted min/max metrics and optional thresholds. Use this when the selected metrics and weights are justified by the user or available evidence; ask about a missing preference only if it would materially change the choice. A connected Jev can provide a separate structured qualitative decision. If strict thresholds yield zero matches, alternatives are returned only as relaxed_suggestions with required_user_clarification and must not be selected automatically.",
                 "schema": self._object_schema(
                     {
                         "version": version_schema,
@@ -4259,7 +4373,7 @@ class AICapabilityService:
             },
             {
                 "name": "present_user_choices",
-                "description": "Present 2-5 concise clickable quick replies when a clarification is genuinely required. The selected value is submitted as the user's next message.",
+                "description": "Present one clarification you formulate when the user’s intent is materially ambiguous. Write the question and 2-5 distinct answer choices in the user’s language. Each selected value becomes the next user message. Do not add an Other or free-text choice; PBGui appends that option in the UI.",
                 "schema": self._object_schema(
                     {
                         "question": {"type": "string", "maxLength": 500},
@@ -4508,6 +4622,18 @@ class AICapabilityService:
                     ["name", "create", "cells"],
                 ),
                 "effect": "write",
+            },
+            {
+                "name": "propose_jev_optimizer_analysis",
+                "description": "TypeSafe's Jev is a System One model: it evaluates supplied text or JSON state and returns typed answers and probabilities, not prose or explanations. PBGui can ask it for a structured yes/no decision on backtest candidates from one exact PB7/PB8 optimizer run, using bounded candidate profiles. Consider it when this judgment would help, even if the user did not name Jev; decide whether clarification is needed. Pass any user-stated maximum as max_candidates; omit it when Jev should decide which candidates clear its yes/no decision. The user reviews the exact outbound data and USD budget before any Jev call. Jev does not perform a holdout backtest or guarantee future profit.",
+                "schema": self._object_schema(
+                    {"version": version_schema, "run_resource": {"type": "string", "maxLength": 128},
+                     "question": {"type": "string", "minLength": 1, "maxLength": 4000},
+                     "max_candidates": {"type": "integer", "minimum": 1, "maximum": 50}},
+                    ["version", "run_resource", "question"],
+                ),
+                "effect": "execute",
+                "resources": ["pbgui://optimizer-run/{version}/{opaque-id}"],
             },
             {
                 "name": "propose_python_analysis",

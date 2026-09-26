@@ -531,7 +531,7 @@ textarea.json-invalid:focus {
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
-<script defer src="/app/js/pb8_parameter_help.js?v=3"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -757,6 +757,17 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
     </div>
     </div>
     <div class="form-row cols-8" data-v8-only>
+    <div class="form-group" style="grid-column:span 2">
+      <label><span data-tip="Startup-only HSL engine. legacy is the default; revised is experimental and requires an engine-compatible configuration and an updated PB8 runtime on the target host.">hsl_engine</span></label>
+      <select id="f-hsl-engine">
+        <option value="legacy">legacy</option>
+        <option value="revised">revised (experimental)</option>
+      </select>
+    </div>
+    <div class="form-group" style="grid-column:span 2">
+      <label><span data-tip="Legacy HSL only: seconds of continuous signal unavailability before emergency loss evaluation. Default 120; 0 evaluates immediately. Fractional seconds are allowed.">hsl_unavailable_grace_seconds</span></label>
+      <input type="number" id="f-hsl-grace" min="0" step="any" value="120">
+    </div>
     <div class="form-group" style="grid-column:span 2;justify-content:flex-end">
       <div class="chk-row">
         <input type="checkbox" id="f-hsl-accept-incomplete">
@@ -1227,9 +1238,9 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=15"></script>
-<script src="/app/js/pbgui_dialogs.js?v=9"></script>
-<script src="/app/js/run_editor_adapter.js?v=9"></script>
-<script src="/app/js/log_viewer_panel.js?v=48"></script>
+<script src="/app/js/pbgui_dialogs.js?v=10"></script>
+<script src="/app/js/run_editor_adapter.js?v=10"></script>
+<script src="/app/js/log_viewer_panel.js?v=50"></script>
 <script src="/app/js/coin_overrides_editor.js?v=26"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
@@ -2546,6 +2557,8 @@ function populateForm(opts) {
   setVal('f-max-create', live.max_n_creations_per_batch != null ? live.max_n_creations_per_batch : 3);
   setVal('f-forced-long', forcedModeSelectValue(live.forced_mode_long));
   setVal('f-forced-short', forcedModeSelectValue(live.forced_mode_short));
+  setVal('f-hsl-engine', live.hsl_engine || 'legacy');
+  setVal('f-hsl-grace', live.hsl_unavailable_grace_seconds != null ? live.hsl_unavailable_grace_seconds : 120);
   setVal('f-hsl-signal-mode', live.hsl_signal_mode || 'unified');
   if (runEditorAdapter.isV8 && typeof coinOvSetContext === 'function') {
     coinOvSetContext({ hslSignalMode: live.hsl_signal_mode, strategyKind: live.strategy_kind });
@@ -3036,6 +3049,8 @@ function collectConfig() {
       forager_ws_candle_rest_audit_minutes: getNum('f-forager-ws-audit'),
       force_cold_startup: getChk('f-force-cold-startup'),
       hsl_accept_incomplete_history: getChk('f-hsl-accept-incomplete'),
+      hsl_engine: getVal('f-hsl-engine'),
+      hsl_unavailable_grace_seconds: getOptionalNum('f-hsl-grace'),
       order_replacement_churn_gate_activation_count: getInt('f-churn-activation-count'),
       order_replacement_churn_gate_market_dist_pct: getNum('f-churn-market-dist'),
       order_replacement_churn_gate_stability_minutes: getNum('f-churn-stability-minutes'),
@@ -4308,7 +4323,7 @@ window.PBGUI_NAV_CONFIG = {
   });
 })();
 </script>
-<script src="/app/js/shared_help_overlay.js?v=7"></script>
+<script src="/app/js/shared_help_overlay.js?v=8"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- Guide overlay JS -->
@@ -4419,12 +4434,12 @@ window.PBGUI_NAV_CONFIG = {
   helpLangEN.addEventListener('click', function () {
     if (helpLang === 'EN') return;
     helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active');
-    _topicCache = {}; helpSel = 0; loadHelpIndex(helpKeyword);
+    _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (helpKeyword));
   });
   helpLangDE.addEventListener('click', function () {
     if (helpLang === 'DE') return;
     helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active');
-    _topicCache = {}; helpSel = 0; loadHelpIndex(helpKeyword);
+    _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (helpKeyword));
   });
 
   document.getElementById('help-close').addEventListener('click', function () {

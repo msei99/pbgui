@@ -47,6 +47,17 @@ def test_ai_chat_clears_unsaved_secret_and_uses_only_ai_action_routes() -> None:
         assert forbidden not in HTML
 
 
+def test_ai_chat_offers_openrouter_as_decision_provider() -> None:
+    """The full page connects OpenRouter without rendering its API key."""
+    assert 'id="openrouter-key" type="password"' in HTML
+    assert "/providers/openrouter/connect" in HTML
+    assert "/providers/openrouter/connection" in HTML
+    assert "model.decision ? ' · Decision'" in HTML
+    assert 'id="openrouter-usage"' in HTML
+    assert "refreshOpenRouterUsage(!!openrouter.connected)" in HTML
+    assert "/app/js/ai_usage.js?v=2" in HTML
+
+
 def test_ai_chat_avoids_native_confirmation_dialogs_and_external_assets() -> None:
     """The page should follow PBGui dialog and offline asset policies."""
     assert "window.confirm" not in HTML
@@ -57,7 +68,7 @@ def test_ai_chat_avoids_native_confirmation_dialogs_and_external_assets() -> Non
 
 def test_ai_chat_requires_shared_dialog_approval_for_proposals() -> None:
     """Mutation proposals must use the explicit PBGui modal before approval."""
-    assert "/app/js/pbgui_dialogs.js?v=9" in HTML
+    assert "/app/js/pbgui_dialogs.js?v=10" in HTML
     assert "window.PBGuiDialogs.confirm" in HTML
     assert "/proposals/" in HTML
     assert "Review & approve" in HTML
@@ -86,10 +97,17 @@ def test_ai_chat_uses_persistent_history_and_detached_turn_polling() -> None:
     assert "loadConversation" in HTML
     assert "startActivityPolling" in HTML
     assert "'/turns'" in HTML
+    assert "/app/js/jev_transfer_preview.js?v=1" in HTML
+    assert "jev_preview_id: jevPreviewId || null" in HTML
     assert "api('/chat'" not in HTML
     assert "applyConversationSnapshot" in HTML
     assert "chat.quick_replies" in HTML
     assert "renderUiActions" in HTML
+    assert "Jev decides how many to mark" in HTML
+    assert "Write your own answer…" in HTML
+    quick_reply = HTML.split("function renderUiActions", 1)[1].split("async function loadConversation", 1)[0]
+    assert "sendMessage(value)" in quick_reply
+    assert "/ack" not in quick_reply
     assert "detectedQuickReplies" in HTML
     assert "appendDetectedQuickReplies" in HTML
     assert "reconcileProposals" in HTML
@@ -106,7 +124,7 @@ def test_ai_chat_uses_persistent_history_and_detached_turn_polling() -> None:
     assert "conversation.reasoning_summary" in HTML
     assert HTML.index('id="messages"') < HTML.index('id="chat-status-row"')
     assert "AbortController" not in HTML
-    assert "provider: selectedProvider()" in HTML
+    assert "provider: provider" in HTML
     assert "else await loadModels();" in HTML
     assert "await newChat(true); await loadModels();" not in HTML
     send_message = HTML.split("async function sendMessage", 1)[1].split("async function loadConversationSummary", 1)[0]

@@ -1,0 +1,19 @@
+{
+    "schema": 1,
+    "profiles": [
+        {
+            "gpu_name_key": "rtx3060",
+            "vram_gb": 12.0,
+            "measured_power_limit_watts": 170,
+            "workload_fingerprint": "dbec39723696cdcee45f367ae71ee8d9bb4f97613e03dce210737219c91f1197",
+            "workload": "EMA-anchor; 41 effective coins; Binance + Bybit; seven 300-day scenarios",
+            "population_size": 7168,
+            "batch_size": 7168,
+            "max_dispatch_candidate_bars": 130170880000,
+            "candidate_bars_per_candidate": 18148937,
+            "candidates_per_second": 3.565,
+            "peak_vram_gib": 6.62,
+            "source": "RTX 3060 170 W one-batch sweep, 2026-09-25; PB8 revision 69227b75e808f8ce1f4b8949350b3311916bd377; 7,168 is a measured plateau reference, not a proven optimum; 6,656 repeat reached 3.643/s and 7,680-8,704 reached 2.650-2.737/s with varying candidate paths and thermal throttling"
+        }
+    ]
+}

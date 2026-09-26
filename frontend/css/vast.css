@@ -3,6 +3,19 @@
 
 .vast-component .offer-secondary{margin-top:4px;white-space:normal;max-width:270px}.vast-component .offer-compatible{color:#86efac}.vast-component .offer-incompatible{color:#fbbf24}.vast-component .offer-details td{background:var(--bg)}.vast-component .offer-detail-grid{display:flex;flex-wrap:wrap;gap:24px;white-space:normal}.vast-component .offer-toggle{flex-direction:row;align-items:center;gap:8px}.vast-component .offer-toggle input{width:auto}
 
+.rental-gpu-profile{margin:var(--sp-sm) 0;padding:var(--sp-sm);border:1px solid var(--border);border-radius:var(--radius,6px);background:var(--bg)}
+.rental-gpu-profile strong{display:block;margin-bottom:var(--sp-xs)}
+.rental-gpu-profile .fields{margin:var(--sp-xs) 0}
+.rental-gpu-profile .offer-toggle{margin-top:var(--sp-xs)}
+.rental-gpu-profile input[type=number]{width:170px}
+.rental-gpu-profile input:disabled{opacity:.7}
+.rental-gpu-jobs{display:grid;gap:var(--sp-sm)}
+.rental-gpu-job{border:1px solid var(--border);border-radius:6px;padding:var(--sp-sm);background:var(--bg2)}
+.rental-gpu-job strong{margin:0 0 var(--sp-xs)}
+.rental-gpu-job p{margin:var(--sp-xs) 0;white-space:normal}
+.rental-gpu-job select{max-width:100%;min-width:320px}
+.rental-gpu-job .fields{margin:var(--sp-xs) 0}
+.rental-gpu-values{font-variant-numeric:tabular-nums;color:var(--text)}
 .queue-gpu-overview{margin:0 0 var(--sp-sm);padding:var(--sp-sm);border:1px solid var(--border);border-radius:var(--radius,6px);background:var(--bg2)}
 .queue-gpu-summary{display:flex;align-items:center;flex-wrap:wrap;gap:var(--sp-sm);margin-bottom:var(--sp-xs);color:var(--text-dim);font-size:var(--fs-xs)}
 .queue-gpu-summary strong{color:var(--text);font-size:var(--fs-sm)}
@@ -39,3 +52,20 @@
 .performance-chart svg { display:block; width:100%; height:auto; background:var(--bg); border:1px solid var(--border); border-radius:6px; }
 .performance-legend { display:flex; flex-wrap:wrap; gap:var(--sp-md); padding-block:var(--sp-sm); }
 #performance-rows td:first-child { min-width:180px; max-width:280px; white-space:normal; overflow-wrap:anywhere; }
+.vast-component button:disabled { cursor:not-allowed; }
+.vast-component button[aria-busy="true"] { cursor:progress; }
+.offer-action-status { color:#f6c76e; font-size:13px; font-weight:600; margin:-4px 0 8px; }
+.calibration-result{margin:var(--sp-sm) 0;padding:var(--sp-sm);border:1px solid var(--border);border-radius:var(--radius,6px);background:var(--bg)}
+.calibration-options{margin:var(--sp-sm) 0;padding:var(--sp-sm);border:1px solid var(--border);border-radius:var(--radius,6px);background:var(--bg2)}
+.calibration-result-head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-sm);flex-wrap:wrap;margin-bottom:var(--sp-xs)}
+.calibration-result-title{font-weight:650;color:var(--text)}
+.calibration-result-summary{color:var(--accent);font-weight:650;font-variant-numeric:tabular-nums}
+.calibration-result-meta{margin-bottom:var(--sp-xs);color:var(--text-dim);font-size:var(--fs-xs);white-space:normal}
+.calibration-result .table-wrap{max-height:260px}
+.calibration-result th,.calibration-result td{padding:6px 9px;font-size:var(--fs-xs);font-variant-numeric:tabular-nums}
+.calibration-result tr.is-recommended td{background:rgba(77,166,255,.12)}
+
+.calibration-watch-panel{margin:10px 0;padding:12px 14px;border:1px solid rgba(77,166,255,.4);border-left:3px solid var(--accent);border-radius:6px;background:rgba(77,166,255,.07)}
+.calibration-watch-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.calibration-watch-head strong{font-size:15px;color:var(--text)}.calibration-watch-phase{padding:3px 8px;border-radius:999px;background:rgba(77,166,255,.16);color:var(--accent);font-size:12px;font-weight:650}.calibration-watch-head button{margin-left:auto}
+.calibration-watch-target{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.calibration-watch-target span{padding:3px 8px;border:1px solid var(--border);border-radius:999px;background:var(--bg2);font-size:12px}.calibration-watch-panel #calibration-watch-status{margin:8px 0 0;color:var(--text-dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.offer-saved-settings{margin:8px 0;color:var(--text-dim);font-size:12px}.offer-saved-settings summary{width:max-content;max-width:100%}.offer-saved-settings p{margin:6px 0 0}

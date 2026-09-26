@@ -38,6 +38,15 @@ h1 { margin: 4px 0 3px; font-size: 24px; }
 .status.error { color: var(--red); }
 .status.error::before { background: var(--red); }
 .provider-help { margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+.openrouter-usage { display: grid; gap: 7px; margin: 10px 0; color: var(--muted); font-size: 11px; }
+.openrouter-usage-title { color: var(--text); font-weight: 700; }
+.openrouter-usage-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.openrouter-usage-card { display: grid; gap: 2px; min-width: 0; padding: 7px 5px; border: 1px solid var(--border); border-radius: 7px; background: #0b1320; }
+.openrouter-usage-card span { white-space: nowrap; }
+.openrouter-usage-card strong { color: var(--text); font-size: 11px; overflow-wrap: anywhere; }
+.openrouter-usage-note { overflow-wrap: anywhere; }
+.openrouter-usage a { color: var(--accent); text-decoration: none; }
+.openrouter-usage a:hover { text-decoration: underline; }
 .conversation-card { display: flex; min-height: 180px; flex-direction: column; }
 .conversation-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 #conversation-list { display: grid; gap: 6px; min-height: 0; overflow-y: auto; }
@@ -73,6 +82,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 #provider-select { width: auto; min-width: 180px; max-width: 320px; }
 #model-select { min-width: 180px; max-width: 330px; }
 #effort-select { width: 105px; }
+#speed-select { width: 125px; }
 #toolbar-spacer { flex: 1; }
 #chat-status-row { display: flex; align-items: center; gap: 8px; min-height: 29px; padding: 5px 16px 0; }
 #chat-status { min-width: 0; flex: 1; color: var(--muted); font-size: 12px; }
@@ -159,6 +169,26 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
     <section class="provider-card">
       <div class="provider-head">
+        <span class="provider-name">OpenRouter</span>
+        <span id="openrouter-status" class="status">Checking</span>
+      </div>
+      <div class="provider-help">Jev can choose, rate, or answer yes/no questions from data you enter. It also compares recent PBGui backtests and prioritizes Pareto candidates from an open Optimize result. Requests are billed by OpenRouter.</div>
+      <div id="openrouter-usage" class="openrouter-usage" hidden></div>
+      <label for="jev-max-cost">Jev preflight budget per analysis (USD)</label>
+      <div class="row">
+        <input id="jev-max-cost" type="number" min="0.000001" max="1" step="0.0001" value="0.01" aria-label="Maximum Jev cost per analysis in USD">
+        <button id="jev-max-cost-save" type="button">Save limit</button>
+      </div>
+      <div class="provider-help">PBGui checks current OpenRouter model pricing and the complete request size before sending. This is a conservative spending guard, not billed usage.</div>
+      <div id="openrouter-connect-row" class="row">
+        <input id="openrouter-key" type="password" autocomplete="new-password" placeholder="OpenRouter API key" aria-label="OpenRouter API key">
+        <button id="openrouter-connect" class="primary">Connect</button>
+      </div>
+      <button id="openrouter-disconnect" class="danger" hidden>Disconnect</button>
+    </section>
+
+    <section class="provider-card">
+      <div class="provider-head">
         <span class="provider-name">OpenCode</span>
         <span id="go-status" class="status">Checking</span>
       </div>
@@ -188,6 +218,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
       <select id="model-select" disabled></select>
       <label id="effort-label" for="effort-select" hidden>Effort</label>
       <select id="effort-select" hidden disabled></select>
+      <label id="speed-label" for="speed-select" hidden>Speed</label>
+      <select id="speed-select" hidden disabled title="Fast mode uses more ChatGPT credits"></select>
       <span id="toolbar-spacer"></span>
       <button id="clear-chat">New chat</button>
       <button id="delete-chat" class="danger" disabled>Delete</button>
@@ -213,9 +245,10 @@ window.PBGUI_VERSION = "%%VERSION%%";
 window.PBGUI_SERIAL = "%%SERIAL%%";
 window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authenticated: true };
 </script>
-<script src="/app/js/ai_usage.js?v=1"></script>
+<script src="/app/js/ai_usage.js?v=2"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-<script src="/app/js/pbgui_dialogs.js?v=9"></script>
+<script src="/app/js/pbgui_dialogs.js?v=10"></script>
+<script src="/app/js/jev_transfer_preview.js?v=1"></script>
 <script>
 (function () {
   'use strict';
@@ -303,6 +336,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
   }
 
   var goUsageGeneration = 0;
+  var openrouterUsageGeneration = 0;
   async function refreshGoUsage(connected) {
     var generation = ++goUsageGeneration;
     if (!connected) { $('go-usage').textContent = ''; return; }
@@ -311,6 +345,19 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       if (generation === goUsageGeneration) window.PBGuiAIUsage.render($('go-usage'), usage);
     } catch (error) {
       if (generation === goUsageGeneration) $('go-usage').textContent = 'Usage currently unavailable';
+    }
+  }
+
+  async function refreshOpenRouterUsage(connected) {
+    var generation = ++openrouterUsageGeneration;
+    var container = $('openrouter-usage');
+    container.hidden = !connected;
+    if (!connected) { container.replaceChildren(); return; }
+    try {
+      var usage = await api('/usage?provider=openrouter');
+      if (generation === openrouterUsageGeneration) window.PBGuiAIUsage.renderOpenRouter(container, usage);
+    } catch (error) {
+      if (generation === openrouterUsageGeneration) container.textContent = 'OpenRouter key usage currently unavailable';
     }
   }
 
@@ -341,12 +388,17 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       var go = state.providers['opencode-go'] || {};
       setProviderStatus('chatgpt', !!chatgpt.connected, chatgpt.connected ? ('Connected' + (chatgpt.plan ? ' · ' + chatgpt.plan : '')) : (chatgpt.available ? 'Not connected' : 'Runtime missing'), !chatgpt.available);
       setProviderStatus('go', !!go.connected, go.connected ? 'Connected' : 'Not connected', false);
+      var openrouter = state.providers.openrouter || {};
+      setProviderStatus('openrouter', !!openrouter.connected, openrouter.connected ? 'Connected' : 'Not connected', false);
+      $('openrouter-connect-row').hidden = !!openrouter.connected;
+      $('openrouter-disconnect').hidden = !openrouter.connected;
       $('chatgpt-connect').hidden = !currentProfile || !!chatgpt.connected || !chatgpt.available;
       $('chatgpt-device-connect').hidden = !currentProfile || !!chatgpt.connected || !chatgpt.available;
       $('chatgpt-disconnect').hidden = !chatgpt.connected;
       $('go-connect-row').hidden = !!go.connected;
       $('go-disconnect').hidden = !go.connected;
       refreshGoUsage(!!go.connected);
+      refreshOpenRouterUsage(!!openrouter.connected);
       await rebuildProviders();
       if ($('login-box').classList.contains('visible') && chatgpt.connected) {
         stopLoginPolling();
@@ -378,7 +430,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       option.textContent = 'ChatGPT · ' + profile.name;
       select.appendChild(option);
     });
-    [ ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go']].forEach(function (entry) {
+    [ ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go'], ['openrouter', 'OpenRouter'] ].forEach(function (entry) {
       var info = state.providers[entry[0]] || {};
       if (!info.connected) return;
       var option = document.createElement('option');
@@ -403,6 +455,9 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     select.textContent = '';
     state.modelsById = {};
     select.disabled = true;
+    $('speed-label').hidden = true;
+    $('speed-select').hidden = true;
+    $('speed-select').disabled = true;
     updateComposer();
     if (!provider) return;
     try {
@@ -415,7 +470,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
         var option = document.createElement('option');
         option.value = model.id;
         var health = model.health && model.health.status ? ' · ' + String(model.health.status).replace(/_/g, ' ') : '';
-        option.textContent = model.name + (model.free ? ' · Free' : '') + (model.tools ? ' · PBGui tools' : ' · Chat only') + (model.training ? ' · training enabled' : '') + health;
+        option.textContent = model.name + (model.free ? ' · Free' : '') + (model.decision ? ' · Decision' : model.tools ? ' · PBGui tools' : ' · Chat only') + (model.training ? ' · training enabled' : '') + health;
         option.dataset.training = model.training ? 'true' : 'false';
         option.dataset.free = model.free ? 'true' : 'false';
         option.title = model.retention ? ('Data retention: ' + model.retention) : '';
@@ -431,6 +486,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
       select.disabled = state.transitioning || !select.options.length;
       rebuildEffortOptions();
+      rebuildSpeedOptions();
       updateEffortControl();
       updateComposer();
       if (!select.options.length) setNotice('No supported models are currently available.', true);
@@ -450,6 +506,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     $('stop').hidden = !state.busy;
     $('stop').disabled = !state.busy;
     updateEffortControl();
+    $('speed-select').disabled = $('speed-select').hidden || state.busy || state.transitioning;
   }
 
   function updateEffortControl() {
@@ -482,11 +539,42 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     updateEffortControl();
   }
 
+  function rebuildSpeedOptions() {
+    var select = $('speed-select');
+    var current = select.value;
+    var model = state.modelsById[$('model-select').value] || {};
+    var tiers = selectedProvider() === 'chatgpt' && Array.isArray(model.service_tiers) ? model.service_tiers : [];
+    select.textContent = '';
+    var defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    var defaultTier = tiers.find(function (tier) { return tier && tier.id === model.default_service_tier; });
+    defaultOption.textContent = 'Model default' + (defaultTier ? ' (' + String(defaultTier.label || defaultTier.id) + ')' : '');
+    select.appendChild(defaultOption);
+    var standard = document.createElement('option');
+    standard.value = 'default';
+    standard.textContent = 'Standard';
+    select.appendChild(standard);
+    tiers.forEach(function (tier) {
+      if (!tier || typeof tier.id !== 'string' || !tier.id) return;
+      var option = document.createElement('option');
+      option.value = tier.id;
+      option.textContent = String(tier.label || tier.id);
+      option.title = String(tier.description || 'Fast mode uses more ChatGPT credits');
+      select.appendChild(option);
+    });
+    if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
+    $('speed-label').hidden = !tiers.length;
+    select.hidden = !tiers.length;
+    select.disabled = select.hidden || state.busy || state.transitioning;
+  }
+
   function showSelectedModelNotice() {
     var selected = $('model-select').selectedOptions[0];
     var model = selected ? state.modelsById[selected.value] : null;
     if (selected && selected.dataset.training === 'true') {
       setNotice('This contributor model may use prompts and responses for model training.', true);
+    } else if (model && model.decision) {
+      setNotice('Jev accepts listed options or a jev JSON block for Choice, Score, and Noul. For PBGui Pareto results, open the result in Optimize and include page context.', false);
     } else if (model && !model.tools) {
       setNotice('Chat-only model: it cannot inspect installed Passivbot documentation or current PBGui data.', false);
     } else {
@@ -509,6 +597,8 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     $('chatgpt-disconnect').disabled = state.transitioning;
     $('go-connect').disabled = state.transitioning;
     $('go-disconnect').disabled = state.transitioning;
+    $('openrouter-connect').disabled = state.transitioning;
+    $('openrouter-disconnect').disabled = state.transitioning;
     updateComposer();
   }
 
@@ -553,6 +643,8 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       var button = document.createElement('button'); button.type = 'button'; button.textContent = choice.length > 80 ? choice.slice(0, 77) + '...' : choice; button.title = choice;
       button.addEventListener('click', function () { sendMessage(choice); }); options.appendChild(button);
     });
+    var custom = document.createElement('button'); custom.type = 'button'; custom.textContent = 'Write your own answer…';
+    custom.addEventListener('click', function () { $('prompt').focus(); }); options.appendChild(custom);
     bubble.appendChild(options);
   }
 
@@ -617,7 +709,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     state.busy = !!conversation.busy;
     if (!state.busy) { state.pendingMessage = ''; stopActivityPolling(); }
     renderConversationMessages(conversation.messages || []);
-    renderUiActions(conversation.conversation_id, conversation.ui_actions || []);
+    renderUiActions(conversation.conversation_id, conversation.ui_actions || [], state.busy);
     $('reasoning-summary-text').textContent = String(conversation.reasoning_summary || '');
     $('reasoning-summary').hidden = !$('reasoning-summary-text').textContent;
     $('activity-history-text').textContent = (conversation.activity_history || []).map(function (item) { return String(item.message || ''); }).filter(Boolean).join('\n');
@@ -635,10 +727,11 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     if (!conversation.busy && !conversation.last_error) delete state.retryMessages[conversation.conversation_id];
   }
 
-  function renderUiActions(conversationId, actions) {
+  function renderUiActions(conversationId, actions, busy) {
+    Array.from($('messages').querySelectorAll('.quick-replies')).forEach(function (item) { item.remove(); });
+    if (busy) return;
     var action = (actions || []).find(function (item) { return item && item.type === 'chat.quick_replies'; });
     if (!action || !action.payload || !Array.isArray(action.payload.choices)) return;
-    Array.from($('messages').querySelectorAll('.inline-choices')).forEach(function (item) { item.remove(); });
     var row = document.createElement('div'); row.className = 'message assistant quick-replies';
     var bubble = document.createElement('div'); bubble.className = 'bubble';
     var question = document.createElement('div'); question.textContent = String(action.payload.question || 'Choose an option:'); bubble.appendChild(question);
@@ -649,12 +742,14 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
         var value = String((choice || {}).value || '').trim();
         if (!value) return;
         Array.from(options.querySelectorAll('button')).forEach(function (item) { item.disabled = true; });
-        api('/conversations/' + encodeURIComponent(conversationId) + '/ui-actions/' + encodeURIComponent(action.action_id) + '/ack', { method: 'POST' })
-          .then(function () { row.remove(); sendMessage(value); })
-          .catch(function (error) { setNotice(error.message, true); Array.from(options.querySelectorAll('button')).forEach(function (item) { item.disabled = false; }); });
+        Promise.resolve(sendMessage(value)).finally(function () {
+          if (row.isConnected && !state.busy) Array.from(options.querySelectorAll('button')).forEach(function (item) { item.disabled = false; });
+        });
       });
       options.appendChild(button);
     });
+    var custom = document.createElement('button'); custom.type = 'button'; custom.textContent = 'Write your own answer…';
+    custom.addEventListener('click', function () { $('prompt').focus(); }); options.appendChild(custom);
     bubble.appendChild(options); row.appendChild(bubble); $('messages').appendChild(row); $('messages').scrollTop = $('messages').scrollHeight;
   }
 
@@ -686,7 +781,9 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       }
       if (generation !== state.chatGeneration || conversationId !== state.conversationId) return;
       rebuildEffortOptions();
+      rebuildSpeedOptions();
       if (Array.from($('effort-select').options).some(function (option) { return option.value === conversation.effort; })) $('effort-select').value = conversation.effort || '';
+      if (Array.from($('speed-select').options).some(function (option) { return option.value === conversation.service_tier; })) $('speed-select').value = conversation.service_tier || '';
       applyConversationSnapshot(conversation);
       if (conversation.busy) {
         var selected = $('provider-select').selectedOptions[0];
@@ -708,12 +805,12 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       var requestedConversation = new URL(window.location.href).searchParams.get('conversation');
       if (!preferredId && requestedConversation === 'new') { await newChat(); return; }
       var selectedId = preferredId || requestedConversation || state.conversationId;
-      if (!state.conversations.some(function (item) { return item.conversation_id === selectedId; })) {
-        selectedId = state.conversations.length ? state.conversations[0].conversation_id : '';
-      }
+      var removed = !!selectedId && !state.conversations.some(function (item) { return item.conversation_id === selectedId; });
+      if (!selectedId || removed) selectedId = state.conversations.length ? state.conversations[0].conversation_id : '';
       renderConversationList();
       if (selectedId) await loadConversation(selectedId);
       else await newChat();
+      if (removed) setNotice('Selected conversation is no longer available. Showing the nearest available chat.', false);
     } catch (error) { setNotice(error.message, true); }
   }
 
@@ -787,10 +884,12 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     if (action === 'create_dashboard') return 'Create PBGui dashboard';
     if (action === 'save_dashboard_layout') return 'Save PBGui dashboard layout';
     if (action === 'python_analysis') return 'Run sandboxed Python analysis';
+    if (action === 'jev_analysis') return 'Ask Jev about optimizer results';
     return 'PBGui action';
   }
 
   function proposalDetail(preview) {
+    if (preview.action === 'jev_analysis') return String(preview.version || '') + ' ' + String(preview.run_name || '') + ' · ' + String(preview.candidate_count || 0) + ' candidates assessed · ' + (preview.max_candidates == null ? 'Jev decides how many to mark' : 'mark at most ' + String(preview.max_candidates)) + ' · USD ' + String(preview.max_cost_usd || '') + ' maximum';
     if (preview.action === 'python_analysis') {
       return String(preview.code_bytes || 0) + ' bytes of code · ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
     }
@@ -914,6 +1013,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     var provider = selectedProvider();
     var model = $('model-select').value;
     var effort = $('effort-select').value;
+    var serviceTier = $('speed-select').hidden ? '' : $('speed-select').value;
     var generation = state.chatGeneration;
     var retryKey = state.conversationId || '__new__';
     state.busy = true;
@@ -927,7 +1027,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
         var created = await api('/conversations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: provider, model: model, effort: effort, profile: state.profile })
+          body: JSON.stringify({ provider: provider, model: model, effort: effort, service_tier: serviceTier, profile: state.profile })
         });
         if (generation !== state.chatGeneration) return;
         state.conversationId = created.conversation_id;
@@ -937,18 +1037,43 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
         await loadConversationSummary();
       }
       state.retryMessages[state.conversationId] = message;
+      var turnConversationId = state.conversationId;
       if (generation !== state.chatGeneration) return;
+      var jevPreviewId = '';
+      if (provider === 'openrouter') {
+        var review = await window.PBGuiJevTransferPreview.review({
+          api: api, confirm: window.PBGuiDialogs.confirm,
+          conversationId: turnConversationId, provider: provider, model: model, message: message
+        });
+        if (review.cancelled) {
+          if (generation === state.chatGeneration) {
+            if (retryMessage == null) $('prompt').value = message;
+            state.busy = false;
+            state.pendingMessage = '';
+            setNotice('Jev data transfer cancelled.', false);
+            updateComposer();
+          }
+          return;
+        }
+        jevPreviewId = review.previewId;
+      }
+      if (generation !== state.chatGeneration) {
+        if (jevPreviewId) await window.PBGuiJevTransferPreview.discard(api, turnConversationId, jevPreviewId).catch(function () {});
+        return;
+      }
       renderPendingMessage();
       var providerLabel = $('provider-select').selectedOptions[0].textContent;
       setNotice('Waiting for ' + providerLabel + '...', false, true);
-      await api('/conversations/' + encodeURIComponent(state.conversationId) + '/turns', {
+      await api('/conversations/' + encodeURIComponent(turnConversationId) + '/turns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: message,
-          effort: $('effort-select').value,
-          model: $('model-select').value,
-          provider: selectedProvider(),
+          effort: effort,
+          service_tier: serviceTier,
+          model: model,
+          provider: provider,
+          jev_preview_id: jevPreviewId || null,
           context: window.PBGuiAI && typeof window.PBGuiAI.collectContext === 'function'
             ? window.PBGuiAI.collectContext()
             : null
@@ -957,6 +1082,9 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       if (generation !== state.chatGeneration) return;
       startActivityPolling(generation, state.conversationId, providerLabel);
     } catch (error) {
+      if (typeof jevPreviewId !== 'undefined' && jevPreviewId) {
+        await window.PBGuiJevTransferPreview.discard(api, turnConversationId, jevPreviewId).catch(function () {});
+      }
       if (generation === state.chatGeneration) {
         stopActivityPolling();
         state.busy = false;
@@ -1213,6 +1341,41 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     finally { setTransitioning(false); }
   });
 
+  $('jev-max-cost-save').addEventListener('click', async function () {
+    var value = Number($('jev-max-cost').value);
+    if (!Number.isFinite(value) || value < 0.000001 || value > 1) {
+      setNotice('Enter a Jev limit between $0.000001 and $1.', true); return;
+    }
+    try {
+      var saved = await api('/preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jev_max_cost_usd: value }) });
+      $('jev-max-cost').value = String(saved.jev_max_cost_usd);
+      setNotice('Jev cost limit saved.', false);
+    } catch (error) { setNotice(error.message, true); }
+  });
+
+  $('openrouter-connect').addEventListener('click', async function () {
+    var key = $('openrouter-key').value.trim();
+    if (!key) { setNotice('Enter an OpenRouter API key.', true); return; }
+    setTransitioning(true);
+    try {
+      await api('/providers/openrouter/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: key }) });
+      $('openrouter-key').value = '';
+      await refreshStatus();
+      setNotice('OpenRouter connected.', false);
+    } catch (error) {
+      $('openrouter-key').value = '';
+      setNotice(error.message, true);
+    } finally { setTransitioning(false); }
+  });
+
+  $('openrouter-disconnect').addEventListener('click', async function () {
+    setTransitioning(true);
+    try { await newChat(true); await api('/providers/openrouter/connection', { method: 'DELETE' }); await refreshStatus(); }
+    catch (error) { setNotice(error.message, true); }
+    finally { setTransitioning(false); }
+  });
+
   $('provider-select').addEventListener('change', async function () {
     setTransitioning(true);
     try {
@@ -1225,10 +1388,12 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
   });
   $('model-select').addEventListener('change', async function () {
     rebuildEffortOptions();
+    rebuildSpeedOptions();
     updateEffortControl();
     showSelectedModelNotice();
   });
   $('effort-select').addEventListener('change', updateComposer);
+  $('speed-select').addEventListener('change', updateComposer);
   $('send').addEventListener('click', function () { sendMessage(); });
   $('stop').addEventListener('click', stopCurrentTurn);
   $('clear-chat').addEventListener('click', function () { newChat(false); });
@@ -1252,9 +1417,14 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     stopActivityPolling();
     hideLoginBox();
     $('go-key').value = '';
+    $('openrouter-key').value = '';
   });
 
   async function initialize() {
+    try {
+      var preferences = await api('/preferences');
+      $('jev-max-cost').value = String(preferences.jev_max_cost_usd == null ? 0.01 : preferences.jev_max_cost_usd);
+    } catch (error) { setNotice(error.message, true); }
     await refreshStatus();
     await loadConversations();
   }

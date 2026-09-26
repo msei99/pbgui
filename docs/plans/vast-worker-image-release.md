@@ -1,5 +1,83 @@
 # Public PB8 GPU worker image
 
+## Published official PB8 calibration worker (2026-09-25)
+
+- Upstream source: official `enarjord/passivbot` at `903ed11153ce82d1b6760604eaa3a553309a752a`.
+- Public tag: `ghcr.io/msei99/pbgui-pb8-worker:903ed11-upstream-calibration-v1`.
+- Immutable manifest: `sha256:09cb0f9ba004db44f3ca02a7b3b03ea3211fd9e6c3c9ea33794cd4c6d24dee30`.
+- Image config: `sha256:e83fd9968e52dd98a16181c95319aa9369f676468a704abbd801dc065268c1e9`.
+- PBGui worker source SHA256: `707eaa4e12dd37e5f53339a29f674409166e0aab8c4b6692ee407b96f0529b8e`.
+- The published manifest has 26 compressed layers; their sizes are recorded in `vast_image_layers.py`.
+
+The base and calibration Dockerfiles build from that official commit and check
+the stamped revision. The one worker image was built and
+verified offline: worker import, rsync, PB8 optimizer/GPU backend imports,
+Rust source stamp, and exported metric contract. The contract matched the
+checked-in PBGui contract exactly. An anonymous manifest read and immutable
+digest pull confirmed public access. PBGui pins new rentals and both
+calibration protocols to this digest; existing rentals retain their recorded
+image/revision pair. No paid rental or remote host deployment was performed.
+
+Build order for a repeatable local rebuild:
+
+```sh
+docker build -f setup/vast_gpu_benchmark/Dockerfile -t pbgui-pb8-worker:upstream-903ed11-base setup/vast_gpu_benchmark
+docker build -f setup/vast_gpu_benchmark/Dockerfile.calibration -t pbgui-pb8-worker:upstream-903ed11-calibration setup/vast_gpu_benchmark
+```
+
+## Published offline-cache calibration worker (2026-09-23)
+
+- Public tag: `ghcr.io/msei99/pbgui-pb8-worker:69227b7-calibration-v5`.
+- Manifest: `sha256:8ad62f43decae47fe670f3ac15ba7e4d7c648f0bb030fa511cd4771321ff4327`.
+- Config: `sha256:30c620d3d1e515d18efc575243c38a6c3949c354fd47391571552bb368b30ca7`.
+- Worker SHA256: `7c842321cede4cfcc86497faa23a307bfbf2338636f759d48466db7c5afc00ae`.
+- Added compressed layer: `sha256:b7578f7cce419be7d2031ad0ef38c9807c17868b0da92b5524140c93218a3135` (11,143 bytes); 39 layers total.
+
+Built from only `Dockerfile.calibration` and `cloud_worker.py` on the unchanged immutable heartbeat base and PB8 revision. Each isolated calibration case now receives the staged market and first-candle caches, so a complete offline input does not fall back to the exchange. A network-disabled container verified the worker hash, import, calibration entry points, rsync and PB8 revision. An anonymous manifest read and immutable-digest pull verified public access. The previous image digests remain allowlisted for existing rentals and profile evidence. No paid rental or remote host deployment was performed.
+
+## Published full-dispatch calibration worker (2026-09-23)
+
+- Public tag: `ghcr.io/msei99/pbgui-pb8-worker:69227b7-calibration-v4`.
+- Manifest: `sha256:70366b9989a12528245d4c263e0e3dc4350271427afd76f9568dcf29cf33878f`.
+- Config: `sha256:de4498560e690a44cbc7274db7447b4c86155ff57335c7a94a4eb52195f96209`.
+- Worker SHA256: `e41a310167a30b5a9d8af21a95a9c73d69bf5fb29ec007e4815e0113db906dc8`.
+- Added compressed layer: `sha256:26842a45b418c14437a401923fef86a9c77638ce9b854a5a232b969f9e4da7f5` (10,694 bytes); 39 layers total.
+
+Built from only `Dockerfile.calibration` and `cloud_worker.py` on the same immutable heartbeat base and PB8 revision. A network-disabled container verified the worker hash, import, calibration entry points, rsync and PB8 revision. An anonymous manifest read and immutable-digest pull verified public access. The wrapper raises the per-case test work envelope, requires an unsplit PB8 dispatch for valid protocol-3 evidence and records measured candidate-bars for the fixed production profile limit. Earlier image digests remain allowlisted for existing rentals and profile evidence. No paid rental or remote host deployment was performed.
+
+## Published calibration protocol v3 (2026-09-22)
+
+- Public tag: `ghcr.io/msei99/pbgui-pb8-worker:69227b7-calibration-v3`.
+- Manifest: `sha256:bee2e513d77e2c22f5b0671392063c51bb04bd547c7334e614fe918ada2d49e2`.
+- Config: `sha256:60b25187d3ed32dae3fd177cc64542b62eb9f108899b25f6926c02ed43a4d1eb`.
+- Worker SHA256: `32a3dcf0f0eb1dfa2ad369fa6b60a156401d00b827555a2e4a576677bf5006e1`.
+- Added compressed worker layer: `sha256:b0211849434322384c507f83328187b1130b97b8e9ce137ee7ef5645d92bc2c1` (9,380 bytes).
+
+Built from a temporary context containing only `Dockerfile.calibration` and
+`cloud_worker.py`, on the unchanged published heartbeat base. A network-disabled
+container verified syntax, calibration entry points, the exact PB8 revision and
+the worker hash. Anonymous manifest inspection and pull by immutable digest
+verified the public artifact. Existing calibration v1/v2 evidence and all prior
+rental image digests remain supported. No paid rental or remote deployment was
+performed.
+
+## Published calibration protocol v2 (2026-09-22)
+
+- Tag: `ghcr.io/msei99/pbgui-pb8-worker:69227b7-calibration-v2`.
+- Manifest: `sha256:8a85444f341a447564fc23e955b34f8a68b1970afc54026334aefa204c6cbc56`.
+- Config: `sha256:a9a671f7877671651d7767b4c20047e2b222671cd8a38a561608ec97f938d742`.
+- Worker SHA256: `aad8faa9c2ab99823ec447152dd0b24652ee87bc47501c4036363e8974a67505`.
+
+Built and published with user approval using a streamed context containing only
+Dockerfile.calibration and cloud_worker.py. The immutable heartbeat base and PB8
+revision remain unchanged. A network-disabled container verified worker import,
+source hash, linear growth and positive-plateau retention. Anonymous manifest
+inspection with an empty Docker configuration verified the config digest and
+39 layers. The new wrapper layer is 9,202 compressed bytes. Both calibration
+wrapper digests are explicitly compatible for existing profile reuse; previous
+rental image pins remain recoverable. No paid rental or remote deployment was
+performed.
+
 Released 2026-09-13 with user authorization.
 
 - Package: `ghcr.io/msei99/pbgui-pb8-worker`
@@ -131,3 +209,27 @@ syntax and five-minute heartbeat contract. Anonymous manifest access was verifie
 PBGui pins the new digest only for new rentals and keeps every prior digest allowlisted for cleanup
 and recovery. Existing containers are not modified or restarted. No paid Vast instance was rented
 for this publication.
+
+## Published GPU calibration runner (2026-09-22)
+
+- Public tag: `ghcr.io/msei99/pbgui-pb8-worker:69227b7-calibration-v1`.
+- Manifest: `sha256:f078b47466f53e3039b13e41905531d9504ca6caca7b57469499fae20b77ec0e`.
+- Local image ID/config digest: `sha256:6fc2fa6e28583701bcba0d27b93498f78c963daf749d2b26eb70bdbcae50a12a`.
+- Worker source SHA256: `12d3d1c19ad58c16f8cea41668b296a7d8eda480fb969e8cd74e5555661df518`.
+- Compatibility revision: `69227b75e808f8ce1f4b8949350b3311916bd377`.
+
+The image derives by immutable digest from the HSL/optimizer-heartbeat image and
+replaces only `/opt/pbgui/worker.py`. Its runner recognizes the authenticated
+calibration plan, executes bounded fresh PB8 processes for adaptive population
+cases, publishes live case status and returns separately validated calibration
+evidence. The build context was the repository's dedicated Vast benchmark setup;
+the Dockerfile copies only `cloud_worker.py`. No credentials, configs, market
+data or runtime state are copied into the image.
+
+A network-disabled container check verified Python syntax, rsync, the exact
+worker hash, calibration entry points and the PB8 compatibility marker. The
+published manifest was pulled anonymously using an empty Docker configuration
+and rechecked by exact digest without network access. PBGui pins this manifest
+only for new rentals and retains the heartbeat image for recovery and cleanup of
+existing immutable rental intents. No paid Vast instance was started as part of
+the image publication itself.

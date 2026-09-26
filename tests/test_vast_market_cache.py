@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import shlex
 import time
 from types import SimpleNamespace
@@ -38,27 +39,24 @@ def test_stage_fresh_metadata(tmp_path, monkeypatch):
     assert not (tmp_path / 'input').exists()
 
 
-def test_metadata_failure_closes_client(monkeypatch):
-    """A blocked exchange must still release its asynchronous resources."""
-    import ccxt.async_support as ccxt
-    closed = []
-
-    class Client:
-        """Synthetic exchange rejecting its market request."""
-        def __init__(self, options):
-            """Accept the production constructor options."""
-        async def load_markets(self, reload):
-            """Simulate a region-blocked public endpoint."""
-            raise ValueError('blocked')
-        async def close(self):
-            """Record deterministic cleanup."""
-            closed.append(True)
-
-    monkeypatch.setattr(ccxt, 'bybit', Client)
-    with pytest.raises(ValueError, match='blocked'):
+def test_local_metadata_snapshot_filters_perpetuals_and_keeps_timestamp(tmp_path, monkeypatch):
+    """Only local linear perpetuals reach PB8 with the source file's real age."""
+    root = tmp_path / 'coindata'
+    source = root / 'bybit/ccxt_markets.json'
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps({
+        'BTC/USDT:USDT': {'symbol': 'BTC/USDT:USDT', 'quote': 'USDT', 'swap': True, 'linear': True},
+        'BTC/USDT': {'symbol': 'BTC/USDT', 'quote': 'USDT', 'spot': True, 'swap': False},
+    }))
+    stamp = time.time() - 60
+    os.utime(source, (stamp, stamp))
+    monkeypatch.setattr(cache, 'MARKET_ROOT', root)
+    result = asyncio.run(cache.fetch_markets(['bybit']))
+    assert list(result['bybit']['markets']) == ['BTC/USDT:USDT']
+    assert abs(result['bybit']['fetched_at'] - stamp) < 0.01
+    os.utime(source, (stamp - 86400, stamp - 86400))
+    with pytest.raises(VastError, match='older than 24 hours'):
         asyncio.run(cache.fetch_markets(['bybit']))
-    assert closed == [True]
-
 
 def test_unknown_exchange_never_connects():
     """Reject invalid persisted exchange identifiers before network activity."""

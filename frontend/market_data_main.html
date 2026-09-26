@@ -3652,10 +3652,10 @@
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=7"></script>
+  <script src="/app/js/shared_help_overlay.js?v=8"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-  <script src="/app/js/log_viewer_panel.js?v=48"></script>
-  <script src="/app/js/pbgui_dialogs.js?v=9"></script>
+  <script src="/app/js/log_viewer_panel.js?v=50"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=10"></script>
   <script src="/app/js/editor_shared.js?v=15"></script>
   <script src="/app/plotly.min.js?v=1"></script>
   <script>
@@ -4034,14 +4034,14 @@
           helpLang = 'EN';
           helpLangEN.classList.add('active');
           helpLangDE.classList.remove('active');
-          loadHelpIndex(helpDefaultTopic);
+          loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (helpDefaultTopic));
         });
         helpLangDE.addEventListener('click', function () {
           if (helpLang === 'DE') return;
           helpLang = 'DE';
           helpLangDE.classList.add('active');
           helpLangEN.classList.remove('active');
-          loadHelpIndex(helpDefaultTopic);
+          loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (helpDefaultTopic));
         });
         helpClose.addEventListener('click', function () {
           helpOvl.classList.remove('visible');

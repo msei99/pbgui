@@ -8,6 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -17,6 +18,8 @@ from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 import aiohttp
+
+from ai_openrouter import DEFAULT_JEV_BUDGET_USD, JEV_MODEL, OPENROUTER_API, OpenRouterDecisionError, _user_options, decide_backtest_candidates, decide_backtest_results, decide_general_choice, decide_user_jev_request, parse_structured_jev_request, prepare_user_jev_payload
 
 from ai_capabilities import (
     AICapabilityError,
@@ -103,7 +106,8 @@ _MAX_ACTION_CAPABILITY_ROUNDS = 10
 _MAX_CAPABILITY_CALLS = 16
 _MAX_REASONING_VARIANTS = 16
 _CONVERSATION_TTL_SECONDS = 2 * 60 * 60
-_MAX_CONVERSATIONS_PER_OWNER = 20
+_CONVERSATION_RETENTION_SECONDS = 30 * 24 * 60 * 60
+_MAX_CONVERSATIONS_PER_OWNER = 100
 _MAX_ACTIVE_TURNS = 4
 _MAX_CODEX_RUNTIMES = 4
 _MAX_PROVIDER_LOCKS = 64
@@ -188,23 +192,6 @@ _CAPABILITY_RESULT_ACTIVITY = {
     "search_passivbot_source": "Source search complete; model is processing results",
     "read_passivbot_source": "Source section loaded; model is processing results",
 }
-_COMPARE_KEEP_SOURCE_RISK = (
-    "Use the same coin universe, dates, exchange, fees, and starting balance, "
-    "but keep each source config's current risk settings."
-)
-_COMPARE_NORMALIZE_RISK = (
-    "Use the same coin universe, dates, exchange, fees, and starting balance, "
-    "and normalize n_positions and total_wallet_exposure_limit across both configs."
-)
-_COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE = (
-    "Set up a real cross-version comparison: an actual PB7 trailing config and optimizer run "
-    "against a separate PB8 trailing_martingale config and optimizer run. Do not substitute "
-    "PB8 trailing_grid_v7 for the PB7 side."
-)
-_COMPARE_PB8_MARTINGALE_VS_GRID = (
-    "Set up a PB8-only strategy comparison between trailing_martingale and the PB8 "
-    "trailing_grid_v7 compatibility strategy."
-)
 _ACTION_REQUEST_RE = re.compile(
     r"\b(?:ausf(?:ü|ue)hr\w*|mach(?:e|en|st)?|reich\w*\s+\w*\s*ein|erstell\w*|"
     r"öffn\w*|oeffn\w*|wechsel\w*|markier\w*|selektier\w*|wähl\w*|waehl\w*|"
@@ -305,6 +292,30 @@ def _agent_rules() -> str:
         return ""
 
 
+def _tools_for_openrouter_connection(
+    tools: list[dict[str, Any]], connected: bool
+) -> list[dict[str, Any]]:
+    """Expose the Jev proposal only while this owner has an OpenRouter key."""
+    if connected:
+        return tools
+    filtered = []
+    for item in tools:
+        if item.get("type") == "namespace":
+            filtered.append({
+                **item,
+                "tools": [
+                    tool for tool in item.get("tools", [])
+                    if tool.get("name") != "propose_jev_optimizer_analysis"
+                ],
+            })
+            continue
+        function = item.get("function")
+        name = function.get("name") if isinstance(function, dict) else item.get("name")
+        if name != "propose_jev_optimizer_analysis":
+            filtered.append(item)
+    return filtered
+
+
 class AIChatError(RuntimeError):
     """Safe provider error that can be returned to an authenticated user."""
 
@@ -325,7 +336,7 @@ def owner_key(user_id: str) -> str:
 
 
 class AICredentialStore:
-    """Owner-only storage for the OpenCode Go subscription key."""
+    """Owner-only storage for independent AI provider keys."""
 
     def __init__(self, root: Path | None = None) -> None:
         """Initialize the private credential root and shared lock target."""
@@ -364,6 +375,44 @@ class AICredentialStore:
         with advisory_file_lock(self.lock_target):
             self._path(owner).unlink(missing_ok=True)
 
+    def openrouter_configured(self, owner: str) -> bool:
+        """Return whether an owner has a separate OpenRouter key."""
+        path = self._openrouter_path(owner)
+        return path.is_file() and not path.is_symlink()
+
+    def save_openrouter_key(self, owner: str, api_key: str) -> None:
+        """Atomically store the validated OpenRouter key in an owner-only file."""
+        key = self._validate_key(api_key)
+        with advisory_file_lock(self.lock_target):
+            atomic_write_private_text(
+                self._openrouter_path(owner),
+                json.dumps({"provider": "openrouter", "api_key": key}, indent=4) + "\n",
+            )
+
+    def load_openrouter_key(self, owner: str) -> str:
+        """Read the owner's OpenRouter key only for a server-side request."""
+        path = self._openrouter_path(owner)
+        with advisory_file_lock(self.lock_target):
+            if not path.is_file() or path.is_symlink():
+                raise AIChatError("OpenRouter is not connected")
+            try:
+                payload = json.loads(read_regular_file_nofollow(path, self.root).decode("utf-8"))
+                if payload.get("provider") != "openrouter":
+                    raise ValueError("Invalid provider")
+                return self._validate_key(payload.get("api_key"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                raise AIChatError("OpenRouter credentials are unavailable") from exc
+
+    def delete_openrouter_key(self, owner: str) -> None:
+        """Delete only the selected owner's OpenRouter key."""
+        with advisory_file_lock(self.lock_target):
+            self._openrouter_path(owner).unlink(missing_ok=True)
+
+    def _openrouter_path(self, owner: str) -> Path:
+        """Resolve a separate credential file below the approved root."""
+        self._path(owner)
+        return self.root / f"{owner}.openrouter.json"
+
     def owners(self) -> list[str]:
         """Return validated opaque owners with configured OpenCode credentials."""
         owners = []
@@ -386,10 +435,10 @@ class AICredentialStore:
 
     @staticmethod
     def _validate_key(value: object) -> str:
-        """Return one bounded control-character-free OpenCode Go key."""
+        """Return one bounded control-character-free provider key."""
         key = str(value or "").strip()
         if not 16 <= len(key) <= 1024 or any(ord(char) < 32 or ord(char) == 127 for char in key):
-            raise AIChatError("Invalid OpenCode Go API key")
+            raise AIChatError("Invalid AI provider API key")
         return key
 
 
@@ -660,17 +709,36 @@ class CodexRuntime:
 
     async def models(self) -> list[dict[str, Any]]:
         """Return the account-visible text models."""
-        result = await self.request("model/list", {"includeHidden": False}, timeout=30)
-        data = result.get("data") if isinstance(result, dict) else None
-        if not isinstance(data, list):
-            return []
+        data: list[Any] = []
+        cursor = ""
+        seen_cursors: set[str] = set()
+        for _ in range(100):
+            params: dict[str, Any] = {"includeHidden": False, "limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            result = await self.request("model/list", params, timeout=30)
+            page = result.get("data") if isinstance(result, dict) else None
+            if not isinstance(page, list):
+                raise AIChatError("Codex model catalog is unavailable")
+            data.extend(page)
+            next_cursor = str(result.get("nextCursor") or "")
+            if not next_cursor:
+                break
+            if next_cursor in seen_cursors:
+                raise AIChatError("Codex model catalog repeated a page")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            raise AIChatError("Codex model catalog exceeds the page limit")
         models = []
-        for item in data[:100]:
+        seen_models: set[str] = set()
+        for item in data:
             if not isinstance(item, dict) or item.get("hidden"):
                 continue
             model_id = str(item.get("model") or item.get("id") or "").strip()
-            if not model_id:
+            if not model_id or model_id in seen_models:
                 continue
+            seen_models.add(model_id)
             modalities = item.get("inputModalities") or []
             if modalities and "text" not in modalities:
                 continue
@@ -693,6 +761,15 @@ class CodexRuntime:
                         "value": variant_id,
                     }
                 )
+            service_tiers = []
+            for tier in item.get("serviceTiers") or []:
+                if not isinstance(tier, dict) or not tier.get("id"):
+                    continue
+                service_tiers.append({
+                    "id": str(tier["id"]),
+                    "label": str(tier.get("name") or tier["id"]),
+                    "description": str(tier.get("description") or "")[:240],
+                })
             models.append(
                 {
                     "id": model_id,
@@ -702,6 +779,8 @@ class CodexRuntime:
                     "reasoning": bool(variants),
                     "reasoning_variants": variants,
                     "default_effort": _variant_id(item.get("defaultReasoningEffort")),
+                    "service_tiers": service_tiers,
+                    "default_service_tier": str(item.get("defaultServiceTier") or ""),
                 }
             )
         return models
@@ -769,7 +848,7 @@ class CodexRuntime:
         return thread_id
 
     async def chat(
-        self, thread_id: str, message: str, model: str | None = None, effort: str = ""
+        self, thread_id: str, message: str, model: str | None = None, effort: str = "", service_tier: str = ""
     ) -> str:
         """Run one text-only turn and collect streamed response text."""
         async with self.turn_lock:
@@ -783,6 +862,8 @@ class CodexRuntime:
                 params["model"] = model
             if effort:
                 params["effort"] = effort
+            if service_tier:
+                params["serviceTierForTurn"] = service_tier
             result = await self.request("turn/start", params, timeout=30)
             turn = result.get("turn") if isinstance(result, dict) else None
             turn_id = str(turn.get("id") or "") if isinstance(turn, dict) else ""
@@ -1051,9 +1132,12 @@ class Conversation:
     provider: str
     model: str
     effort: str = ""
+    service_tier: str = ""
     messages: list[dict[str, str]] = field(default_factory=list)
     codex_thread_id: str | None = None
     codex_runtime: CodexRuntime | None = None
+    codex_jev_available: bool | None = None
+    codex_instructions_digest: str = ""
     updated_at: float = field(default_factory=time.time)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     busy: bool = False
@@ -1084,6 +1168,8 @@ class AIChatService:
         self.codex: dict[str, CodexRuntime] = {}
         self.conversations: dict[str, Conversation] = {}
         self.active_tasks: dict[str, asyncio.Task] = {}
+        self.jev_previews: dict[str, dict[str, Any]] = {}
+        self.jev_user_requests: dict[str, str] = {}
         self.loaded_owners: set[str] = set()
         self.accepting_turns = True
         self.state_lock = asyncio.Lock()
@@ -1131,6 +1217,7 @@ class AIChatService:
             await self.http.close()
             self.http = None
         self.active_tasks.clear()
+        self.jev_previews.clear()
         self.conversations.clear()
         self.loaded_owners.clear()
         self.provider_disconnecting.clear()
@@ -1228,6 +1315,7 @@ class AIChatService:
                 "chatgpt": {"available": codex_available, "profiles": profiles, "profile": profile, **codex_status},
                 "opencode-zen": {"available": True, "connected": self.credentials.configured(owner)},
                 "opencode-go": {"available": True, "connected": self.credentials.configured(owner)},
+                "openrouter": {"available": True, "connected": self.credentials.openrouter_configured(owner)},
             },
             "capabilities": {"chat_only": False, "pbgui_tools": True},
         }
@@ -1239,6 +1327,39 @@ class AIChatService:
             info = status["providers"]["chatgpt"]
             return {"provider": provider, "profile": profile, "email": info.get("email", ""),
                     "limits": info.get("limits", []), "connected": info.get("connected", False)}
+        if provider == "openrouter":
+            if not self.credentials.openrouter_configured(owner):
+                return {"provider": provider, "connected": False}
+            key = self.credentials.load_openrouter_key(owner)
+            result = {"provider": provider, "connected": True, "spend": {},
+                      "key_limit_usd": None, "key_limit_remaining_usd": None, "key_limit_reset": None}
+            try:
+                session = await self._http_session()
+                async with session.get(
+                    f"{OPENROUTER_API}/v1/key", headers={"Authorization": f"Bearer {key}"},
+                    allow_redirects=False, timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    payload = await self._read_json_response(response, expected_status=200, max_bytes=64 * 1024)
+                data = payload.get("data") if isinstance(payload, dict) else None
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid OpenRouter key response")
+                for source, period in (("usage_daily", "daily"), ("usage_weekly", "weekly"),
+                                       ("usage_monthly", "monthly")):
+                    value = data.get(source)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
+                        result["spend"][period] = float(value)
+                for source, target in (("limit", "key_limit_usd"),
+                                       ("limit_remaining", "key_limit_remaining_usd")):
+                    value = data.get(source)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
+                        result[target] = float(value)
+                reset = data.get("limit_reset")
+                if isinstance(reset, str) and reset in {"daily", "weekly", "monthly"}:
+                    result["key_limit_reset"] = reset
+            except Exception as exc:
+                _log(SERVICE, f"OpenRouter usage unavailable: {type(exc).__name__}", level="WARNING")
+                result["message"] = "OpenRouter key usage is currently unavailable."
+            return result
         if provider not in {"opencode-go", "opencode-zen"}:
             raise AIChatError("Unsupported provider")
         result = {"provider": provider, "limits": []}
@@ -1253,7 +1374,6 @@ class AIChatService:
                                    allow_redirects=False, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 payload = await self._read_json_response(response, expected_status=200)
             from datetime import datetime
-            import math
             usage = payload.get("usage", {}) if isinstance(payload, dict) else {}
             for name, minutes in (("rolling", 300), ("weekly", 10080), ("monthly", 43200)):
                 window = usage.get(name) if isinstance(usage, dict) else None
@@ -1293,6 +1413,38 @@ class AIChatService:
                 raise AIChatError("Could not verify OpenCode Go connection") from exc
             self.credentials.save_go_key(owner, key)
             self.health_wakeup.set()
+
+    async def connect_openrouter(self, owner: str, api_key: str) -> None:
+        """Verify one OpenRouter key before storing it separately."""
+        async with self._provider_lock(owner, "openrouter"):
+            key = AICredentialStore._validate_key(api_key)
+            session = await self._http_session()
+            try:
+                async with session.get(
+                    f"{OPENROUTER_API}/v1/key",
+                    headers={"Authorization": f"Bearer {key}"},
+                    allow_redirects=False,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as response:
+                    if response.status != 200:
+                        raise AIChatError("OpenRouter rejected this API key")
+                    await self._read_json_response(response, expected_status=200)
+            except AIChatError:
+                raise
+            except Exception as exc:
+                raise AIChatError("Could not verify OpenRouter connection") from exc
+            self.credentials.save_openrouter_key(owner, key)
+
+    async def disconnect_openrouter(self, owner: str) -> None:
+        """Cancel OpenRouter turns and remove only its credential."""
+        async with self._provider_lock(owner, "openrouter"):
+            state_key = self._provider_state_key(owner, "openrouter")
+            self.provider_disconnecting.add(state_key)
+            try:
+                await self._cancel_provider(owner, "openrouter")
+                self.credentials.delete_openrouter_key(owner)
+            finally:
+                self.provider_disconnecting.discard(state_key)
 
     async def disconnect_go(self, owner: str) -> None:
         """Remove the owner's OpenCode Go key."""
@@ -1368,6 +1520,11 @@ class AIChatService:
 
     async def models(self, owner: str, provider: str, profile: str = "default") -> list[dict[str, Any]]:
         """Return account-visible models supported by the native adapters."""
+        if provider == "openrouter":
+            if not self.credentials.openrouter_configured(owner):
+                raise AIChatError("OpenRouter is not connected")
+            return [{"id": JEV_MODEL, "name": "Jev 1.13 · Structured decisions", "default": True,
+                     "tools": False, "decision": True, "retention": "See OpenRouter and TypeSafe terms"}]
         if provider == "chatgpt":
             self._ensure_reaper()
             await self._close_idle_codex_runtimes()
@@ -1432,6 +1589,7 @@ class AIChatService:
         conversation_id: str | None = None,
         effort: str = "",
         _pre_reserved: bool = False,
+        _jev_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run one bounded chat turn with controlled PBGui tools."""
         clean_message = self._validate_message(message)
@@ -1483,11 +1641,14 @@ class AIChatService:
                 raise AIChatError("AI provider is disconnecting")
             if provider in _OPENCODE_PROVIDERS and not self.credentials.configured(owner):
                 raise AIChatError("OpenCode is not connected")
+            if provider == "openrouter" and not self.credentials.openrouter_configured(owner):
+                raise AIChatError("OpenRouter is not connected")
             if not _pre_reserved:
                 await self._reserve_conversation(conversation)
             self.active_tasks[conversation.id] = task
             await self._set_activity(owner, conversation.id, "Contacting the selected model")
         async with conversation.lock:
+            self.jev_user_requests[conversation.id] = "" if pending_user and pending_user.get("hidden") else clean_message
             runtime: CodexRuntime | None = None
             started = time.monotonic()
             try:
@@ -1495,23 +1656,61 @@ class AIChatService:
                     self._ensure_reaper()
                     await self._close_idle_codex_runtimes()
                     runtime = conversation.codex_runtime or self._profile_runtime(owner, conversation.chatgpt_profile)
+                    jev_available = self.credentials.openrouter_configured(owner)
+                    instructions_digest = hashlib.sha256(_agent_rules().encode("utf-8")).hexdigest()
+                    tools_changed = (
+                        conversation.codex_jev_available is not None
+                        and conversation.codex_jev_available is not jev_available
+                    )
+                    instructions_changed = conversation.codex_instructions_digest != instructions_digest
+                    if conversation.codex_thread_id and (tools_changed or instructions_changed):
+                        await self._release_codex_thread(conversation, runtime)
+                        if runtime.closing or runtime.process is None:
+                            runtime = self._profile_runtime(owner, conversation.chatgpt_profile)
                     if conversation.codex_thread_id is None:
                         handoff = self._provider_handoff_prompt(conversation.messages, pending_user)
                         if handoff:
                             provider_message = handoff + provider_message
                         conversation.codex_thread_id = await runtime.start_thread(
                             model or None,
-                            self.capabilities.codex_dynamic_tools(),
+                            _tools_for_openrouter_connection(
+                                self.capabilities.codex_dynamic_tools(), jev_available
+                            ),
                         )
                         conversation.codex_runtime = runtime
+                        conversation.codex_jev_available = jev_available
+                        conversation.codex_instructions_digest = instructions_digest
                     reply = await self._run_internal_followup_with_timeout_retry(
                         owner,
                         conversation.id,
                         pending_user,
                         lambda: runtime.chat(
-                            conversation.codex_thread_id, provider_message, model or None, clean_effort
+                            conversation.codex_thread_id, provider_message, model or None, clean_effort,
+                            conversation.service_tier,
                         ),
                     )
+                    if reply.rstrip().endswith(("?", "？")) and not any(
+                        str(item.get("action_id") or "") not in initial_ui_action_ids
+                        for item in conversation.ui_actions
+                        if isinstance(item, dict)
+                    ):
+                        await self._set_activity(owner, conversation.id, "Checking interactive clarification")
+                        reply = await runtime.chat(
+                            conversation.codex_thread_id,
+                            (
+                                "[PBGui clarification presentation check]\n"
+                                "Your last response ended in a question, but no clickable clarification "
+                                "was created. Decide whether the user must answer that question before "
+                                "their original request can proceed. If so, call present_user_choices now "
+                                "with your own focused question and 2-5 useful choices; PBGui adds a "
+                                "free-text option. If the question was optional and the request is already "
+                                "answered, finish without an unanswered question. Do not choose a fixed "
+                                "preference or call any paid analysis for this presentation check."
+                            ),
+                            model or None,
+                            clean_effort,
+                            conversation.service_tier,
+                        )
                     if enforce_action:
                         proposals = await self.capabilities.list_proposals(owner, conversation.id)
                         new_proposal = any(
@@ -1538,6 +1737,7 @@ class AIChatService:
                                 ),
                                 model or None,
                                 clean_effort,
+                                conversation.service_tier,
                             )
                             proposals = await self.capabilities.list_proposals(owner, conversation.id)
                             new_proposal = any(
@@ -1556,7 +1756,7 @@ class AIChatService:
                                     proposal=new_proposal,
                                     ui_action=new_ui_action,
                                 )
-                elif provider in _OPENCODE_PROVIDERS:
+                elif provider in (*_OPENCODE_PROVIDERS, "openrouter"):
                     current_user = pending_user
                     if pending_user is None:
                         current_user = {
@@ -1580,20 +1780,18 @@ class AIChatService:
                                 owner,
                                 conversation.id,
                                 pending_user,
-                                lambda: self._go_chat(
-                                    owner,
-                                    model,
-                                    provider_history,
-                                    provider,
-                                    conversation.id,
-                                    clean_effort,
+                                lambda: self._openrouter_jev_chat(
+                                    owner, model, clean_message, conversation.context, conversation.id, _jev_payload
+                                ) if provider == "openrouter" else self._go_chat(
+                                    owner, model, provider_history, provider, conversation.id, clean_effort,
                                 ),
                             )
                         except AIChatError as exc:
-                            if self._health_status_from_error(str(exc)) != "error":
+                            if provider in _OPENCODE_PROVIDERS and self._health_status_from_error(str(exc)) != "error":
                                 self._record_model_health(owner, provider, model, str(exc))
                             raise
-                        self._record_model_health(owner, provider, model, "available")
+                        if provider in _OPENCODE_PROVIDERS:
+                            self._record_model_health(owner, provider, model, "available")
                     except BaseException:
                         conversation.messages.pop()
                         raise
@@ -1607,7 +1805,7 @@ class AIChatService:
                     [
                         *(
                             []
-                            if provider in _OPENCODE_PROVIDERS or pending_user is not None
+                            if provider in _OPENCODE_PROVIDERS or provider == "openrouter" or pending_user is not None
                             else [
                                 {
                                     "role": "user",
@@ -1641,6 +1839,7 @@ class AIChatService:
             except AIChatError:
                 raise
             finally:
+                self.jev_user_requests.pop(conversation.id, None)
                 self.active_tasks.pop(conversation.id, None)
                 runtime_stopped = runtime is not None and (
                     runtime.process is None
@@ -1853,19 +2052,24 @@ class AIChatService:
         effort: str = "",
         context: dict[str, Any] | None = None,
         profile: str = "default",
+        service_tier: str = "",
     ) -> str:
         """Create an owner-bound conversation before the first provider turn."""
         clean_effort = self._validate_effort(effort)
+        clean_service_tier = self._validate_service_tier(service_tier)
         selected_model = await self._validate_provider_model(owner, provider, model, **({"profile": profile} if profile != "default" else {}))
         self._validate_model_effort(selected_model, clean_effort)
+        self._validate_model_service_tier(selected_model, provider, clean_service_tier)
         conversation = await self._conversation(owner, provider, model, None, profile=profile)
         conversation.effort = clean_effort
+        conversation.service_tier = clean_service_tier
         conversation.context = self._validate_page_context(context)
         self._persist_conversation(conversation)
         return conversation.id
 
     async def list_conversations(self, owner: str) -> list[dict[str, Any]]:
         """List persistent conversation summaries for one owner."""
+        await self._prune_conversations(owner)
         await self._ensure_owner_loaded(owner)
         async with self.state_lock:
             selected = sorted(
@@ -1884,7 +2088,7 @@ class AIChatService:
     def _read_preferences_unlocked(self, path: Path) -> dict[str, Any]:
         """Read one preference file while the cross-process lock is held."""
         if not path.is_file() or path.is_symlink():
-            return {"drawer_width": 460, "drawer_open": False, "drawer_pinned": False}
+            return {"drawer_width": 460, "drawer_open": False, "drawer_pinned": False, "jev_max_cost_usd": DEFAULT_JEV_BUDGET_USD}
         try:
             raw = read_regular_file_nofollow(path, self.preference_root)
             if len(raw) > 16 * 1024:
@@ -1895,11 +2099,16 @@ class AIChatService:
             width = int(stored.get("drawer_width") or 460)
             drawer_open = stored.get("drawer_open") is True
             drawer_pinned = stored.get("drawer_pinned") is True
+            jev_budget = float(stored.get("jev_max_cost_usd", DEFAULT_JEV_BUDGET_USD))
+            if not math.isfinite(jev_budget):
+                raise ValueError("Invalid Jev budget")
         except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
             width = 460
             drawer_open = False
             drawer_pinned = False
+            jev_budget = DEFAULT_JEV_BUDGET_USD
         return {
+            "jev_max_cost_usd": max(0.000001, min(1.0, jev_budget)),
             "drawer_width": max(180, min(100_000, width)),
             "drawer_open": drawer_open,
             "drawer_pinned": drawer_pinned,
@@ -1911,9 +2120,10 @@ class AIChatService:
         drawer_width: int | None = None,
         drawer_open: bool | None = None,
         drawer_pinned: bool | None = None,
+        jev_max_cost_usd: float | None = None,
     ) -> dict[str, Any]:
         """Atomically save bounded owner-scoped AI UI preferences."""
-        if drawer_width is None and drawer_open is None and drawer_pinned is None:
+        if drawer_width is None and drawer_open is None and drawer_pinned is None and jev_max_cost_usd is None:
             raise AIChatError("No AI preferences supplied")
         width = None
         if drawer_width is not None:
@@ -1927,6 +2137,10 @@ class AIChatService:
             raise AIChatError("Invalid AI drawer state")
         if drawer_pinned is not None and not isinstance(drawer_pinned, bool):
             raise AIChatError("Invalid AI drawer pin state")
+        if jev_max_cost_usd is not None and (not isinstance(jev_max_cost_usd, (int, float))
+                or isinstance(jev_max_cost_usd, bool) or not math.isfinite(jev_max_cost_usd)
+                or not 0.000001 <= jev_max_cost_usd <= 1.0):
+            raise AIChatError("Jev USD budget must be between $0.000001 and $1")
         path = self._preference_path(owner)
         with advisory_file_lock(self.preference_lock_target):
             payload = self._read_preferences_unlocked(path)
@@ -1936,6 +2150,8 @@ class AIChatService:
                 payload["drawer_open"] = drawer_open
             if drawer_pinned is not None:
                 payload["drawer_pinned"] = drawer_pinned
+            if jev_max_cost_usd is not None:
+                payload["jev_max_cost_usd"] = float(jev_max_cost_usd)
             atomic_write_private_text(
                 path, json.dumps(payload, indent=4, allow_nan=False) + "\n"
             )
@@ -2002,6 +2218,68 @@ class AIChatService:
             conversation.revision += 1
             self._persist_conversation(conversation)
 
+    async def preview_jev_transfer(
+        self, owner: str, conversation_id: str, message: str, model: str,
+    ) -> dict[str, Any]:
+        """Resolve bounded read-only PBGui sources for one explicit transfer review."""
+        if not self.accepting_turns:
+            raise AIChatError("AI runtime is shutting down")
+        await self._ensure_owner_loaded(owner)
+        clean_message = self._validate_message(message)
+        if model != JEV_MODEL:
+            raise AIChatError("Select Jev before reviewing PBGui data")
+        try:
+            spec = parse_structured_jev_request(clean_message)
+        except OpenRouterDecisionError as exc:
+            raise AIChatError(str(exc)) from exc
+        sources = spec.get("sources") if isinstance(spec, dict) else None
+        if not isinstance(sources, list) or not 1 <= len(sources) <= 4:
+            raise AIChatError("List 1 to 4 PBGui sources in the Jev JSON request")
+        async with self.state_lock:
+            conversation = self._owned_conversation(owner, conversation_id)
+            if conversation.busy or conversation_id in self.active_tasks:
+                raise AIChatError("Conversation is busy")
+        readable = {item["name"] for item in self.capabilities.capability_registry().get("capabilities", [])
+                    if isinstance(item, dict) and item.get("effect") in {"read", "analyze"} and isinstance(item.get("name"), str)}
+        data = {}
+        for source in sources:
+            if not isinstance(source, dict) or set(source) != {"name", "tool", "args"}:
+                raise AIChatError("Jev PBGui source must name one read capability and its arguments")
+            name, tool, args = source["name"], source["tool"], source["args"]
+            if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,31}", name)
+                or name in data or not isinstance(tool, str)
+                or tool not in readable or not isinstance(args, dict)):
+                raise AIChatError("Jev PBGui source must use a unique name and a read-only capability")
+            result = await self.capabilities.dispatch(owner, conversation_id, tool, args)
+            data[name] = self.capabilities._sanitize_config(self.capabilities._strip_paths(result))
+        try:
+            payload = prepare_user_jev_payload(model, spec, data)
+        except OpenRouterDecisionError as exc:
+            raise AIChatError(str(exc)) from exc
+        token = uuid4().hex
+        expires_at = time.time() + 300
+        async with self.state_lock:
+            conversation = self._owned_conversation(owner, conversation_id)
+            if conversation.busy or conversation_id in self.active_tasks:
+                raise AIChatError("Conversation became busy during Jev preview")
+            now = time.time()
+            self.jev_previews = {key: value for key, value in self.jev_previews.items() if value["expires_at"] > now}
+            if len(self.jev_previews) >= 20:
+                raise AIChatError("Too many pending Jev previews")
+            self.jev_previews[token] = {
+                "owner": owner, "conversation_id": conversation_id, "model": model,
+                "message_hash": hashlib.sha256(clean_message.encode("utf-8")).hexdigest(),
+                "payload": payload, "expires_at": expires_at,
+            }
+        return {"preview_id": token, "payload": payload, "expires_at": expires_at}
+
+    async def discard_jev_preview(self, owner: str, conversation_id: str, preview_id: str) -> None:
+        """Release one owner-bound unsent Jev preview."""
+        async with self.state_lock:
+            pending = self.jev_previews.get(preview_id)
+            if pending and pending["owner"] == owner and pending["conversation_id"] == conversation_id:
+                self.jev_previews.pop(preview_id, None)
+
     async def start_turn(
         self,
         owner: str,
@@ -2012,6 +2290,8 @@ class AIChatService:
         model: str | None = None,
         provider: str | None = None,
         internal: bool = False,
+        jev_preview_id: str | None = None,
+        service_tier: str | None = None,
     ) -> dict[str, Any]:
         """Start one API-owned turn that survives browser navigation."""
         if not self.accepting_turns:
@@ -2026,15 +2306,30 @@ class AIChatService:
         selected_model_id = str(model or existing.model).strip()
         model_changed = selected_model_id != existing.model
         selected_model = None
-        if provider_changed or model_changed or effort is not None:
+        if provider_changed or model_changed or effort is not None or service_tier is not None:
             selected_model = await self._validate_provider_model(
                 owner, selected_provider, selected_model_id, **({"profile": existing.chatgpt_profile} if existing.chatgpt_profile != "default" else {})
             )
         clean_effort = self._validate_effort(effort) if effort is not None else ("" if provider_changed else None)
         if clean_effort is not None:
             self._validate_model_effort(selected_model or {}, clean_effort)
+        clean_service_tier = (
+            self._validate_service_tier(service_tier)
+            if service_tier is not None else ("" if provider_changed or model_changed else None)
+        )
+        if clean_service_tier is not None:
+            self._validate_model_service_tier(selected_model or {}, selected_provider, clean_service_tier)
         if (provider_changed or model_changed) and existing.provider == "chatgpt" and existing.codex_thread_id:
             await self._release_codex_thread(existing)
+        try:
+            jev_spec = parse_structured_jev_request(clean_message) if selected_provider == "openrouter" else None
+        except OpenRouterDecisionError as exc:
+            raise AIChatError(str(exc)) from exc
+        has_jev_sources = bool(jev_spec and jev_spec.get("sources"))
+        if has_jev_sources != bool(jev_preview_id):
+            raise AIChatError("Jev PBGui data needs a reviewed preview for this turn")
+        if jev_preview_id and not re.fullmatch(r"[0-9a-f]{32}", jev_preview_id):
+            raise AIChatError("Invalid Jev preview ID")
         if not internal:
             async with self.state_lock:
                 conversation = self._owned_conversation(owner, conversation_id)
@@ -2050,6 +2345,15 @@ class AIChatService:
                 raise AIChatError("Conversation is busy")
             if sum(1 for item in self.conversations.values() if item.busy) >= _MAX_ACTIVE_TURNS:
                 raise AIChatError("AI turn capacity reached")
+            approved_jev_payload = None
+            if jev_preview_id:
+                pending = self.jev_previews.get(jev_preview_id)
+                if (not pending or pending["owner"] != owner or pending["conversation_id"] != conversation_id
+                    or pending["model"] != selected_model_id or pending["expires_at"] <= time.time()
+                    or pending["message_hash"] != hashlib.sha256(clean_message.encode("utf-8")).hexdigest()):
+                    raise AIChatError("Jev preview expired or no longer matches this turn")
+                approved_jev_payload = pending["payload"]
+                self.jev_previews.pop(jev_preview_id, None)
             if context is not None:
                 conversation.context = self._validate_page_context(context)
             if provider_changed:
@@ -2058,6 +2362,12 @@ class AIChatService:
                 conversation.model = selected_model_id
             if clean_effort is not None:
                 conversation.effort = clean_effort
+            if clean_service_tier is not None:
+                conversation.service_tier = clean_service_tier
+            conversation.ui_actions = [
+                action for action in conversation.ui_actions
+                if action.get("type") != "chat.quick_replies"
+            ]
             self._compact_persisted_user_messages(conversation.messages)
             conversation.messages.append(
                 {
@@ -2081,7 +2391,7 @@ class AIChatService:
             conversation.revision += 1
             self._persist_conversation(conversation)
             task = asyncio.create_task(
-                self._run_detached_turn(conversation, clean_message, turn_id, internal),
+                self._run_detached_turn(conversation, clean_message, turn_id, internal, approved_jev_payload),
                 name=f"ai-turn-{turn_id}",
             )
             self.active_tasks[conversation.id] = task
@@ -2201,7 +2511,8 @@ class AIChatService:
         return projection
 
     async def _run_detached_turn(
-        self, conversation: Conversation, message: str, turn_id: str, internal: bool = False
+        self, conversation: Conversation, message: str, turn_id: str, internal: bool = False,
+        jev_payload: dict[str, Any] | None = None,
     ) -> None:
         """Own one detached provider turn and persist its terminal state."""
         try:
@@ -2213,6 +2524,7 @@ class AIChatService:
                 conversation.id,
                 conversation.effort,
                 _pre_reserved=True,
+                _jev_payload=jev_payload,
             )
         except AIChatError as exc:
             async with self.state_lock:
@@ -2370,11 +2682,16 @@ class AIChatService:
             raise AIChatError("Invalid page context")
         safe_entities = []
         for item in entities:
-            if not isinstance(item, dict) or set(item) - {"kind", "version", "name"}:
+            if not isinstance(item, dict) or set(item) - {"kind", "version", "name", "result_id"}:
                 raise AIChatError("Invalid page context")
             projected = {key: str(item.get(key) or "").strip() for key in ("kind", "version", "name")}
             if any(len(value) > 128 or any(ord(char) < 32 for char in value) for value in projected.values()):
                 raise AIChatError("Invalid page context")
+            result_id = str(item.get("result_id") or "").strip()
+            if result_id:
+                if projected["kind"] != "optimizer_run" or not re.fullmatch(r"[A-Za-z0-9_.-]{1,200}", result_id):
+                    raise AIChatError("Invalid page context")
+                projected["result_id"] = result_id
             safe_entities.append(projected)
         if safe_entities:
             result["entities"] = safe_entities
@@ -2511,6 +2828,7 @@ class AIChatService:
             "chatgpt_profile": conversation.chatgpt_profile,
             "model": conversation.model,
             "effort": conversation.effort,
+            "service_tier": conversation.service_tier,
             "created_at": conversation.created_at,
             "updated_at": conversation.updated_at,
             "busy": conversation.busy,
@@ -2561,6 +2879,7 @@ class AIChatService:
             "chatgpt_profile": conversation.chatgpt_profile,
             "model": conversation.model,
             "effort": conversation.effort,
+            "service_tier": conversation.service_tier,
             "messages": conversation.messages,
             "updated_at": conversation.updated_at,
             "created_at": conversation.created_at,
@@ -2592,7 +2911,12 @@ class AIChatService:
             owner_root = self.conversation_root / owner
             loaded = []
             if owner_root.is_dir() and not owner_root.is_symlink():
-                for path in sorted(owner_root.glob("*.json"))[:_MAX_CONVERSATIONS_PER_OWNER]:
+                paths = sorted(
+                    (path for path in owner_root.glob("*.json") if path.is_file() and not path.is_symlink()),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )[:_MAX_CONVERSATIONS_PER_OWNER]
+                for path in paths:
                     if path.is_symlink():
                         continue
                     try:
@@ -2607,6 +2931,7 @@ class AIChatService:
                             provider=str(data.get("provider") or ""),
                             model=str(data.get("model") or ""),
                             effort=str(data.get("effort") or ""),
+                            service_tier=self._validate_service_tier(data.get("service_tier")),
                             messages=list(data.get("messages") or [])[-_MAX_HISTORY_MESSAGES:],
                             updated_at=float(data.get("updated_at") or time.time()),
                             created_at=float(data.get("created_at") or time.time()),
@@ -2798,6 +3123,69 @@ class AIChatService:
         if effort and effort not in supported:
             raise AIChatError("Selected AI model does not support this reasoning variant")
 
+    @staticmethod
+    def _validate_model_service_tier(model: dict[str, Any], provider: str, service_tier: str) -> None:
+        """Accept standard speed or a tier advertised by the selected ChatGPT model."""
+        if not service_tier:
+            return
+        if provider != "chatgpt":
+            raise AIChatError("Speed selection is only available for ChatGPT")
+        if service_tier == "default":
+            return
+        tiers = model.get("service_tiers")
+        supported = {
+            str(item.get("id")) for item in tiers
+            if isinstance(item, dict) and item.get("id")
+        } if isinstance(tiers, list) else set()
+        if service_tier not in supported:
+            raise AIChatError("Selected AI model does not support this speed")
+
+    async def _openrouter_jev_chat(
+        self, owner: str, model: str, message: str, context: dict[str, Any], conversation_id: str,
+        approved_payload: dict[str, Any] | None = None,
+        budget_override: float | None = None,
+        expected_payload_digest: str = "",
+        selection_limit: int | None = None,
+    ) -> str:
+        """Ask Jev to choose backtest candidates using managed Optimize results."""
+        try:
+            session = await self._http_session()
+            api_key = self.credentials.load_openrouter_key(owner)
+            budget = min(self.get_preferences(owner)["jev_max_cost_usd"], budget_override) if budget_override is not None else self.get_preferences(owner)["jev_max_cost_usd"]
+            if expected_payload_digest:
+                return await decide_backtest_candidates(
+                    self.capabilities, session, api_key, owner, conversation_id, model,
+                    message, context,
+                    capture_selection=lambda result: self._capture_ui_action(owner, conversation_id, result),
+                    max_cost_usd=budget,
+                    expected_payload_digest=expected_payload_digest,
+                    selection_limit=selection_limit,
+                )
+            structured = parse_structured_jev_request(message)
+            if structured is not None:
+                return await decide_user_jev_request(session, api_key, model, structured, approved_payload, budget)
+            if approved_payload is not None:
+                raise AIChatError("Jev preview no longer matches a structured request")
+            options = _user_options(message)
+            if options:
+                return await decide_general_choice(session, api_key, model, message, options, context, max_cost_usd=budget)
+            entities = context.get("entities", []) if isinstance(context, dict) else []
+            if any(isinstance(entity, dict) and entity.get("kind") == "optimizer_run" for entity in entities) or re.search(r"\b(pareto|optimi[sz]e|optimier)\w*\b", message, re.I):
+                return await decide_backtest_candidates(
+                    self.capabilities, session, api_key, owner, conversation_id, model, message, context,
+                    capture_selection=lambda result: self._capture_ui_action(owner, conversation_id, result),
+                    max_cost_usd=budget,
+                    expected_payload_digest=expected_payload_digest,
+                    selection_limit=selection_limit,
+                )
+            if re.search(r"\b(backtest|backtests|backtest-resultat|backtest-ergebnis)\w*\b", message, re.I):
+                return await decide_backtest_results(self.capabilities, session, api_key, owner, conversation_id, model, message, context, budget)
+            return ("Jev trifft strukturierte Entscheidungen. Nenne ein Ziel und 2 bis 20 Alternativen unter 'Optionen:' als nummerierte Liste; oder frage nach Pareto- bzw. Backtest-Resultaten in PBGui."
+                    if re.search(r"\b(welche|welcher|soll|kann|bewerte)\b", message.casefold()) else
+                    "Jev makes structured decisions. Give a goal and 2 to 20 numbered alternatives under 'Options:', or ask about PBGui Pareto or backtest results.")
+        except (OpenRouterDecisionError, AICapabilityError) as exc:
+            raise AIChatError(str(exc)) from exc
+
     async def _go_chat(
         self,
         owner: str,
@@ -2818,70 +3206,6 @@ class AIChatService:
         history = messages[-_MAX_HISTORY_MESSAGES:]
         if sum(len(item["content"]) for item in history) > _MAX_HISTORY_CHARS:
             raise AIChatError("Conversation context exceeds the supported provider payload")
-        clarification = self._comparison_setup_clarification(history)
-        if conversation_id and available[model].get("tools") and clarification:
-            result = await self.capabilities.dispatch(
-                owner,
-                conversation_id,
-                "present_user_choices",
-                clarification,
-            )
-            await self._capture_ui_action(owner, conversation_id, result)
-            await self._set_activity(owner, conversation_id, "Waiting for comparison setup details")
-            return clarification["question"]
-        risk_clarification = self._comparison_risk_clarification(history)
-        if conversation_id and available[model].get("tools") and risk_clarification:
-            result = await self.capabilities.dispatch(
-                owner,
-                conversation_id,
-                "present_user_choices",
-                risk_clarification,
-            )
-            await self._capture_ui_action(owner, conversation_id, result)
-            await self._set_activity(owner, conversation_id, "Waiting for comparison risk alignment")
-            return risk_clarification["question"]
-        base_clarification = self._comparison_base_config_clarification(history)
-        if conversation_id and available[model].get("tools") and base_clarification:
-            listed = await self.capabilities.dispatch(
-                owner,
-                conversation_id,
-                "list_optimizer_configs",
-                {"version": base_clarification["version"], "limit": 5},
-            )
-            configs = listed.get("configs") if isinstance(listed, dict) else []
-            choices = []
-            for item in configs[:4] if isinstance(configs, list) else []:
-                name = str((item or {}).get("name") or (item or {}).get("config_name") or "").strip()
-                if not name:
-                    continue
-                choices.append(
-                    {
-                        "label": name[:80],
-                        "value": (
-                            base_clarification["selection_instruction"].format(name=name)
-                            + "; "
-                            f"{base_clarification['risk_instruction']}"
-                        ),
-                    }
-                )
-            choices.append(
-                {
-                    "label": "Choose another config",
-                    "value": base_clarification["custom_instruction"],
-                }
-            )
-            if len(choices) < 2:
-                return base_clarification["empty_message"]
-            question = base_clarification["question"]
-            result = await self.capabilities.dispatch(
-                owner,
-                conversation_id,
-                "present_user_choices",
-                {"question": question, "choices": choices},
-            )
-            await self._capture_ui_action(owner, conversation_id, result)
-            await self._set_activity(owner, conversation_id, "Waiting for comparison base config")
-            return question
         key = self.credentials.load_go_key(owner)
         selected_protocol = str(available[model]["protocol"])
         if conversation_id and available[model].get("tools"):
@@ -3037,7 +3361,9 @@ class AIChatService:
     ) -> str:
         """Run stateless Responses function calls with bounded result replay."""
         input_items: list[dict[str, Any]] = copy.deepcopy(history)
-        tools = self.capabilities.responses_tools()
+        tools = _tools_for_openrouter_connection(
+            self.capabilities.responses_tools(), self.credentials.openrouter_configured(owner)
+        )
         session = await self._http_session()
         total_calls = 0
         total_result_bytes = 0
@@ -3213,7 +3539,9 @@ class AIChatService:
     ) -> str:
         """Run Messages tool_use/tool_result calls with bounded result replay."""
         messages: list[dict[str, Any]] = copy.deepcopy(history)
-        tools = self.capabilities.messages_tools()
+        tools = _tools_for_openrouter_connection(
+            self.capabilities.messages_tools(), self.credentials.openrouter_configured(owner)
+        )
         session = await self._http_session()
         total_calls = 0
         total_result_bytes = 0
@@ -3366,7 +3694,9 @@ class AIChatService:
             {"role": "system", "content": _go_instructions(model, tools_enabled=True)},
             *copy.deepcopy(history),
         ]
-        tools = self.capabilities.chat_completion_tools()
+        tools = _tools_for_openrouter_connection(
+            self.capabilities.chat_completion_tools(), self.credentials.openrouter_configured(owner)
+        )
         session = await self._http_session()
         total_calls = 0
         total_result_bytes = 0
@@ -3772,8 +4102,8 @@ class AIChatService:
         """Resolve or create one owner-bound persistent conversation."""
         await self._ensure_owner_loaded(owner)
         await self._cleanup_conversations()
-        async with self.state_lock:
-            if conversation_id:
+        if conversation_id:
+            async with self.state_lock:
                 conversation = self._owned_conversation(owner, conversation_id)
                 if conversation.closed:
                     raise AIChatError("Conversation is closed")
@@ -3782,16 +4112,26 @@ class AIChatService:
                 if conversation.model != model:
                     raise AIChatError("Conversation model cannot be changed")
                 return conversation
-            owner_conversations = [item for item in self.conversations.values() if item.owner == owner]
-            if len(owner_conversations) >= _MAX_CONVERSATIONS_PER_OWNER:
-                raise AIChatError("Conversation history limit reached; delete an old chat")
-            new_id = uuid4().hex
-            self._profile_key(owner, profile)
-            if provider == "chatgpt":
-                self._require_profile(owner, profile)
-            conversation = Conversation(new_id, owner, provider, model, chatgpt_profile=profile)
-            self.conversations[new_id] = conversation
-            self._persist_conversation(conversation)
+        self._profile_key(owner, profile)
+        if provider == "chatgpt":
+            self._require_profile(owner, profile)
+        removed: list[tuple[str, Conversation | None]] = []
+        try:
+            async with self.state_lock:
+                with advisory_file_lock(self.conversation_lock_target):
+                    removed, remaining = self._prune_conversation_files_unlocked(owner, reserve_slot=True)
+                    if remaining >= _MAX_CONVERSATIONS_PER_OWNER:
+                        raise AIChatError("All AI conversation slots are active; try again when a turn completes")
+                    new_id = uuid4().hex
+                    conversation = Conversation(new_id, owner, provider, model, chatgpt_profile=profile)
+                    self.conversations[new_id] = conversation
+                    try:
+                        self._persist_conversation(conversation)
+                    except Exception:
+                        self.conversations.pop(new_id, None)
+                        raise
+        finally:
+            await self._finish_pruned_conversations(owner, removed)
         return conversation
 
     def _owned_conversation(self, owner: str, conversation_id: str) -> Conversation:
@@ -3802,6 +4142,99 @@ class AIChatService:
         if conversation is None or conversation.owner != owner:
             raise AIChatError("Conversation not found")
         return conversation
+
+    def _prune_conversation_files_unlocked(
+        self, owner: str, *, reserve_slot: bool = False
+    ) -> tuple[list[tuple[str, Conversation | None]], int]:
+        """Prune one owner's validated files while state and cross-process locks are held."""
+        self.credentials._path(owner)
+        owner_root = self.conversation_root / owner
+        if not owner_root.is_dir() or owner_root.is_symlink():
+            return [], 0
+        records: list[tuple[float, Path, str, bool]] = []
+        for path in owner_root.glob("*.json"):
+            conversation_id = path.stem
+            if len(conversation_id) != 32 or any(char not in "0123456789abcdef" for char in conversation_id) or path.is_symlink():
+                continue
+            try:
+                if path.stat().st_size > 4 * 1024 * 1024:
+                    continue
+                data = json.loads(read_regular_file_nofollow(path, owner_root).decode("utf-8"))
+                if not isinstance(data, dict) or data.get("owner") != owner or data.get("conversation_id") != conversation_id:
+                    continue
+                updated_at = float(data.get("updated_at"))
+                if not math.isfinite(updated_at) or updated_at < 0:
+                    continue
+                current = self.conversations.get(conversation_id)
+                busy = bool(data.get("busy") or data.get("active_turn_id"))
+                busy = busy or conversation_id in self.active_tasks or bool(current and current.busy)
+                records.append((updated_at, path, conversation_id, busy))
+            except (OSError, RuntimeError, ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                _log(SERVICE, f"AI chat retention skipped one file: {type(exc).__name__}", level="WARNING")
+        records.sort(key=lambda item: item[0])
+        cutoff = time.time() - _CONVERSATION_RETENTION_SECONDS
+        idle = [item for item in records if not item[3]]
+        selected = [item for item in idle if item[0] < cutoff]
+        selected_ids = {item[2] for item in selected}
+        need = max(0, len(records) + int(reserve_slot) - _MAX_CONVERSATIONS_PER_OWNER)
+        for item in idle:
+            if len(selected) >= need:
+                break
+            if item[2] not in selected_ids:
+                selected.append(item)
+                selected_ids.add(item[2])
+        removed: list[tuple[str, Conversation | None]] = []
+        for expected_updated_at, path, conversation_id, _ in selected:
+            try:
+                # Another process may have updated the file while this service was idle.
+                raw = read_regular_file_nofollow(path, owner_root)
+                if len(raw) > 4 * 1024 * 1024:
+                    continue
+                data = json.loads(raw.decode("utf-8"))
+                current = self.conversations.get(conversation_id)
+                if (
+                    not isinstance(data, dict)
+                    or data.get("owner") != owner
+                    or data.get("conversation_id") != conversation_id
+                    or data.get("busy")
+                    or data.get("active_turn_id")
+                    or conversation_id in self.active_tasks
+                    or bool(current and current.busy)
+                    or float(data.get("updated_at")) != expected_updated_at
+                ):
+                    continue
+                path.unlink()
+                if current is not None:
+                    current.closed = True
+                    self.conversations.pop(conversation_id, None)
+                removed.append((conversation_id, current))
+            except (OSError, RuntimeError, ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                _log(SERVICE, f"AI chat retention could not remove one file: {type(exc).__name__}", level="WARNING")
+        return removed, len(records) - len(removed)
+
+    async def _finish_pruned_conversations(
+        self, owner: str, removed: list[tuple[str, Conversation | None]]
+    ) -> None:
+        """Release proposal and ephemeral runtime ownership for removed chats."""
+        for conversation_id, conversation in removed:
+            try:
+                await self.capabilities.reject_conversation(owner, conversation_id)
+            except Exception as exc:
+                _log(SERVICE, f"AI chat retention proposal cleanup failed: {type(exc).__name__}", level="WARNING")
+            if conversation is not None:
+                try:
+                    await self._release_codex_thread(conversation)
+                except Exception as exc:
+                    _log(SERVICE, f"AI chat retention runtime cleanup failed: {type(exc).__name__}", level="WARNING")
+        if removed:
+            _log(SERVICE, f"Automatically removed {len(removed)} inactive AI chat(s)", level="INFO")
+
+    async def _prune_conversations(self, owner: str) -> None:
+        """Apply retention whenever an owner opens their conversation history."""
+        async with self.state_lock:
+            with advisory_file_lock(self.conversation_lock_target):
+                removed, _ = self._prune_conversation_files_unlocked(owner)
+        await self._finish_pruned_conversations(owner, removed)
 
     async def _cleanup_conversations(self) -> None:
         """Unload stale Codex threads while retaining persistent history."""
@@ -4595,113 +5028,12 @@ class AIChatService:
         )
 
     @staticmethod
-    def _comparison_setup_clarification(
-        history: list[dict[str, Any]],
-    ) -> dict[str, Any] | None:
-        """Return safe quick replies for one vague comparison-setup confirmation."""
-        text = ""
-        for item in reversed(history):
-            if isinstance(item, dict) and item.get("role") == "user":
-                text = str(item.get("content") or "").split("\n\n[Untrusted PBGui page context", 1)[0]
-                break
-        normalized = " ".join(text.strip().lower().split())
-        patterns = (
-            r"^(?:(?:yes|yes please|ok|okay|sure|please)\s+)?(?:set up|setup|prepare)\s+(?:the\s+)?(?:compare|comparison)[.!]?$",
-            r"^(?:(?:ja|ja bitte|ok|okay|bitte)\s+)?(?:(?:den\s+)?vergleich\s+(?:einrichten|aufsetzen|vorbereiten|erstellen))[.!]?$",
-        )
-        if not normalized or len(normalized) > 160 or not any(
-            re.fullmatch(pattern, normalized) for pattern in patterns
-        ):
-            return None
-        question = "Which comparison should PBGui set up? PB7 and PB8 remain separate runtimes."
-        return {
-            "question": question,
-            "choices": [
-                {
-                    "label": "PB7 trailing vs PB8 martingale",
-                    "value": _COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE,
-                },
-                {
-                    "label": "PB8 martingale vs PB8 grid",
-                    "value": _COMPARE_PB8_MARTINGALE_VS_GRID,
-                },
-                {
-                    "label": "Custom comparison",
-                    "value": "Ask me which exact PB7/PB8 generations, strategies, and source configs to compare without converting between generations.",
-                },
-            ],
-        }
-
-    @staticmethod
-    def _comparison_risk_clarification(
-        history: list[dict[str, Any]],
-    ) -> dict[str, Any] | None:
-        """Ask risk alignment only after the user selects an explicit comparison scope."""
-        text = ""
-        for item in reversed(history):
-            if isinstance(item, dict) and item.get("role") == "user":
-                text = str(item.get("content") or "").split("\n\n[Untrusted PBGui page context", 1)[0].strip()
-                break
-        if text == _COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE:
-            question = "For the real PB7 trailing vs PB8 trailing_martingale comparison, how should PBGui align risk and the test universe?"
-        elif text == _COMPARE_PB8_MARTINGALE_VS_GRID:
-            question = "For the PB8 trailing_martingale vs PB8 trailing_grid_v7 comparison, how should PBGui align risk and the test universe?"
-        else:
-            return None
-        return {
-            "question": question,
-            "choices": [
-                {"label": "Keep source risk", "value": _COMPARE_KEEP_SOURCE_RISK},
-                {"label": "Normalize risk", "value": _COMPARE_NORMALIZE_RISK},
-                {
-                    "label": "Custom values",
-                    "value": "Ask me for custom source configs, coins, dates, fees, and risk values while preserving the selected PB generations.",
-                },
-            ],
-        }
-
-    @staticmethod
-    def _comparison_base_config_clarification(
-        history: list[dict[str, Any]],
-    ) -> dict[str, str] | None:
-        """Resolve one generated risk-choice reply before asking for a concrete base config."""
-        text = ""
-        user_messages = []
-        for item in reversed(history):
-            if isinstance(item, dict) and item.get("role") == "user":
-                value = str(item.get("content") or "").split("\n\n[Untrusted PBGui page context", 1)[0].strip()
-                user_messages.append(value)
-                if not text:
-                    text = value
-        if text == _COMPARE_KEEP_SOURCE_RISK:
-            risk_instruction = "keep each source config's current risk settings"
-        elif text == _COMPARE_NORMALIZE_RISK:
-            risk_instruction = "normalize n_positions and total_wallet_exposure_limit across both sides"
-        else:
-            return None
-        if _COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE in user_messages:
-            return {
-                "version": "v7",
-                "risk_instruction": risk_instruction,
-                "selection_instruction": (
-                    "Use PB7 optimizer config '{name}' as the real PB7 trailing source and compare it "
-                    "against a separate PB8 trailing_martingale config; never convert it to PB8 trailing_grid_v7. "
-                    "PB7 mutation, queueing, and starting remain manual because AI PB7 mutations are unavailable"
-                ),
-                "custom_instruction": "Ask me for the exact real PB7 optimizer config name to use as the V7 comparison source.",
-                "empty_message": "No PB7 optimizer source config is available. Create or import the real PB7 trailing config before setting up this cross-version comparison.",
-                "question": "Which PB7 optimizer config should PBGui use as the real V7 trailing source?",
-            }
-        if _COMPARE_PB8_MARTINGALE_VS_GRID in user_messages:
-            return {
-                "version": "v8",
-                "risk_instruction": risk_instruction,
-                "selection_instruction": "Use PB8 optimizer config '{name}' as the base for both PB8 strategy variants",
-                "custom_instruction": "Ask me for the exact PB8 optimizer config name to use as the PB8-only comparison base.",
-                "empty_message": "No PB8 optimizer base config is available. Create or import one before setting up the PB8-only comparison.",
-                "question": "Which PB8 optimizer config should PBGui use as the PB8-only comparison base?",
-            }
-        return None
+    def _validate_service_tier(value: object) -> str:
+        """Normalize one catalog-provided service tier without allowing arbitrary values."""
+        tier = str(value or "").strip()
+        if tier and (_variant_id(tier) != tier or len(tier) > 64):
+            raise AIChatError("Invalid AI speed selection")
+        return tier
 
     @staticmethod
     def _validate_effort(value: object) -> str:

@@ -94,6 +94,18 @@ def test_no_progress_eventually_fails_after_full_recovery_window(recovery, monke
     assert store.read(identifier, 'control.json')['cleanup']
 
 
+
+def test_generic_rsync_exit_255_uses_bounded_recovery(recovery):
+    """An unclassified rsync transport failure must not fail a paid test immediately."""
+    store, identifier, clock, _ = recovery
+    error = VastError('Rsync file synchronization failed: remote rsync or SSH operation failed '
+                      '(exit 255); partial files retained', 502)
+    runner.schedule_upload_retry(store, identifier, error, 5000)
+    state = store.read(identifier)
+    assert state['status'] == 'uploading'
+    assert state['upload_retry_at'] == clock[0] + 15
+    assert state['upload_progress']['stage'] == 'reconnecting'
+
 def test_new_transfer_progress_renews_recovery_window(recovery):
     """Growing partial data earns recovery time; repeated same bytes do not."""
     store, identifier, clock, _ = recovery

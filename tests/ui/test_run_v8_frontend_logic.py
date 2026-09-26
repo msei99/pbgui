@@ -98,7 +98,7 @@ def test_every_runtime_control_has_forward_and_reverse_mapping() -> None:
     collect = _page_function(page, "collectConfig")
     populate = _page_function(page, "populateForm")
     sections = {
-        "sharedLiveFields": ("live", 58),
+        "sharedLiveFields": ("live", 60),
         "sharedLoggingFields": ("logging", 9),
         "sharedMonitorFields": ("monitor", 15),
     }
@@ -184,7 +184,7 @@ def test_pb8_run_editor_exposes_cookie_authenticated_strategy_handoff() -> None:
 
     assert "supportsStrategyExplorer: true" in adapter
     assert 'data-v7-only onclick="goStrategyExplorer()"' not in page
-    assert '/app/js/run_editor_adapter.js?v=9' in page
+    assert '/app/js/run_editor_adapter.js?v=10' in page
     assert "'/api/strategy-explorer-v8'" in page
     assert "coinOvSnapshotAllFiles()" in handoff
     assert "override_configs: overrideConfigs || {}" in handoff

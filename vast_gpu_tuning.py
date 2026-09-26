@@ -6,6 +6,7 @@ from datetime import date
 import hashlib
 import json
 import math
+from pathlib import Path
 
 
 def _positive_number(value):
@@ -150,15 +151,88 @@ def _dispatch_limit(
     return max(floor, int(candidate_bars) * int(target_candidates))
 
 
+
+
+def rental_card_profile(offer: dict, state: dict | None = None,
+                        profile_root: Path | None = None) -> dict:
+    """Preview one card-wide profile, preliminary before rental and verified when possible."""
+    from vast_calibration import (CalibrationProfiles, COMPATIBLE_CALIBRATION_IMAGES,
+                                  SUPPORTED_PROFILE_PROTOCOLS, gpu_variant_identity)
+    from vast_jobs import IMAGE, REVISION
+
+    state = state if isinstance(state, dict) else {}
+    hardware = state.get('hardware') if isinstance(state.get('hardware'), dict) else {}
+    metrics = state.get('runtime_metrics') if isinstance(state.get('runtime_metrics'), dict) else {}
+    actual_bytes = _positive_number(hardware.get('vram_bytes'))
+    vram_gb = actual_bytes / 1024**3 if actual_bytes is not None else _positive_number(offer.get('vram_gb'))
+    if vram_gb is None:
+        raise ValueError('GPU VRAM is unavailable')
+    power = _positive_number(metrics.get('gpu_power_limit_watts'))
+    runtime_identity = dict(hardware)
+    if power is not None:
+        runtime_identity['gpu_power_limit_watts'] = power
+    identity = gpu_variant_identity(offer, runtime_identity)
+    match = None
+    try:
+        profiles = CalibrationProfiles(profile_root or Path(__file__).resolve().parent / 'data/vast')
+        match = (profiles.match(identity) if identity['runtime_verified']
+                 else profiles.preliminary_match(offer))
+        if not (match and match.get('protocol') in SUPPORTED_PROFILE_PROTOCOLS
+                and IMAGE in COMPATIBLE_CALIBRATION_IMAGES
+                and match.get('worker_image') in COMPATIBLE_CALIBRATION_IMAGES
+                and match.get('pb8_revision') == REVISION):
+            match = None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        match = None
+    bandwidth = _positive_number(offer.get('gpu_mem_bw_gbps'))
+    tflops = _positive_number(offer.get('tflops'))
+    population = int(match['population_size']) if match else _cuda_population(vram_gb, bandwidth, tflops)
+    measured_limit = match.get('max_dispatch_candidate_bars') if match else None
+    has_measured_limit = type(measured_limit) is int and measured_limit > 0
+    return {
+        'population_size': population,
+        'batch_size': population,
+        'max_dispatch_candidate_bars': (measured_limit if has_measured_limit
+                                        else _dispatch_limit(vram_gb, None)),
+        'source': match.get('source') if match else 'hardware_fallback',
+        'match_type': match.get('match_type') if match else None,
+        'profile_power_limit_watts': ((match.get('hardware_identity') or {}).get('gpu_power_limit_watts')
+                                      if match else None),
+        'card_power_limit_watts': power or _positive_number(offer.get('gpu_max_power_watts')),
+        'runtime_verified': bool(identity['runtime_verified'] and power is not None),
+        'work_limit_is_floor': not has_measured_limit,
+    }
+
+
+def _validated_rental_gpu_profile(value: dict | None) -> dict | None:
+    """Reject malformed persisted rental overrides before preparing execution input."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        'population_size', 'batch_size', 'max_dispatch_candidate_bars',
+    }:
+        raise ValueError('Invalid rental GPU profile')
+    population = value['population_size']
+    batch = value['batch_size']
+    limit = value['max_dispatch_candidate_bars']
+    if (type(population) is not int or not 1024 <= population <= 131072
+            or type(batch) is not int or not 1 <= batch <= population
+            or type(limit) is not int or not 1 <= limit <= 1_000_000_000_000):
+        raise ValueError('Invalid rental GPU profile')
+    return dict(value)
+
+
 def resolve_gpu_settings(
     config: dict,
     state: dict,
     offer: dict,
+    rental_gpu_profile: dict | None = None,
 ) -> dict:
     """Fill only automatic GPU fields and return an auditable tuning record."""
     optimize = config.setdefault('optimize', {})
     gpu = optimize.setdefault('gpu', {})
     hardware = state.get('hardware') if isinstance(state.get('hardware'), dict) else {}
+    measured_power_limit = _positive_number((state.get('runtime_metrics') or {}).get('gpu_power_limit_watts'))
     actual_bytes = _positive_number(hardware.get('vram_bytes'))
     vram_gb = actual_bytes / 1024**3 if actual_bytes is not None else _positive_number(offer.get('vram_gb'))
     memory_bandwidth_gbps = _positive_number(offer.get('gpu_mem_bw_gbps'))
@@ -167,19 +241,49 @@ def resolve_gpu_settings(
     parameters = _active_parameter_count(optimize.get('bounds', {}))
     automatic = {}
     preserved = {}
+    rental_override = _validated_rental_gpu_profile(rental_gpu_profile)
+
+    calibrated_profile = None
+    try:
+        from vast_calibration import (CalibrationProfiles, SUPPORTED_PROFILE_PROTOCOLS,
+                                      COMPATIBLE_CALIBRATION_IMAGES, gpu_variant_identity)
+        from vast_jobs import IMAGE, REVISION
+        runtime_identity = dict(hardware)
+        runtime_metrics = state.get('runtime_metrics') or {}
+        power_limit = _positive_number(runtime_metrics.get('gpu_power_limit_watts'))
+        if power_limit is not None:
+            runtime_identity['gpu_power_limit_watts'] = power_limit
+        identity = gpu_variant_identity(offer, runtime_identity)
+        candidate = CalibrationProfiles(Path(__file__).resolve().parent / 'data/vast').match(identity)
+        if (candidate and candidate.get('protocol') in SUPPORTED_PROFILE_PROTOCOLS
+                and IMAGE in COMPATIBLE_CALIBRATION_IMAGES
+                and candidate.get('worker_image') in COMPATIBLE_CALIBRATION_IMAGES
+                and candidate.get('pb8_revision') == REVISION):
+            calibrated_profile = candidate
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        calibrated_profile = None
 
     profile_population = (
-        _cuda_population(vram_gb, memory_bandwidth_gbps, tflops)
+        rental_override['population_size'] if rental_override is not None
+        else int(calibrated_profile['population_size']) if calibrated_profile is not None
+        else _cuda_population(vram_gb, memory_bandwidth_gbps, tflops)
         if vram_gb is not None else None
     )
-    profile_scale = profile_population // 1024 if profile_population is not None else None
+    profile_dispatch_limit = (
+        rental_override['max_dispatch_candidate_bars'] if rental_override is not None
+        else calibrated_profile.get('max_dispatch_candidate_bars') if calibrated_profile is not None
+        else None
+    )
+    if type(profile_dispatch_limit) is not int or profile_dispatch_limit <= 0:
+        profile_dispatch_limit = None
+    profile_scale = max(1, profile_population // 1024) if profile_population is not None else None
     profile_window = 128 * profile_scale if profile_scale is not None else None
     iterations = optimize.get('iters')
     auto_profile = (
         vram_gb is not None
         and isinstance(iterations, int)
         and not isinstance(iterations, bool)
-        and iterations >= profile_window
+        and (rental_override is not None or iterations >= profile_window)
         and gpu.get('auto_lean_parallelism', True) is not False
         and optimize.get('population_size') is None
         and gpu.get('population_size') is None
@@ -194,12 +298,14 @@ def resolve_gpu_settings(
         scale = profile_scale
         automatic.update(
             population_size=population,
-            batch_size=population,
+            batch_size=rental_override['batch_size'] if rental_override is not None else population,
             validate_per_generation=8 * scale,
             drift_probes=4 * scale,
             drift_window=128 * scale,
         )
-        if candidate_bars is not None:
+        if profile_dispatch_limit is not None:
+            automatic['max_dispatch_candidate_bars'] = profile_dispatch_limit
+        elif candidate_bars is not None:
             automatic['max_dispatch_candidate_bars'] = _dispatch_limit(
                 vram_gb, candidate_bars, population,
                 memory_bandwidth_gbps, tflops,
@@ -207,15 +313,16 @@ def resolve_gpu_settings(
         gpu.update(automatic)
 
     if gpu.get('max_dispatch_candidate_bars') is None and vram_gb is not None:
-        configured_population = optimize.get('population_size') or gpu.get('population_size')
+        configured_population = gpu.get('population_size') or optimize.get('population_size')
         target_candidates = (
             int(configured_population)
             if isinstance(configured_population, int) and configured_population > 0
             else 1024
         )
-        automatic['max_dispatch_candidate_bars'] = _dispatch_limit(
-            vram_gb, candidate_bars, target_candidates,
-            memory_bandwidth_gbps, tflops,
+        automatic['max_dispatch_candidate_bars'] = (
+            profile_dispatch_limit if profile_dispatch_limit is not None
+            else _dispatch_limit(vram_gb, candidate_bars, target_candidates,
+                                 memory_bandwidth_gbps, tflops)
         )
         gpu['max_dispatch_candidate_bars'] = automatic['max_dispatch_candidate_bars']
     elif ('max_dispatch_candidate_bars' not in automatic
@@ -223,16 +330,21 @@ def resolve_gpu_settings(
         preserved['max_dispatch_candidate_bars'] = gpu['max_dispatch_candidate_bars']
 
     if not auto_profile:
-        population = optimize.get('population_size')
+        population = gpu.get('population_size')
         if population is None:
-            population = gpu.get('population_size')
+            population = optimize.get('population_size')
         if population is not None:
             preserved['population_size'] = population
+        if gpu.get('batch_size') is not None:
+            preserved['batch_size'] = gpu['batch_size']
 
-    population = optimize.get('population_size') or gpu.get('population_size')
+    population = gpu.get('population_size') or optimize.get('population_size')
+    batch_size = gpu.get('batch_size')
     dispatch_limit = gpu.get('max_dispatch_candidate_bars')
     dispatch_candidates = (
-        max(1, min(int(population or 1024), int(dispatch_limit) // candidate_bars))
+        max(1, min(int(population or 1024),
+                   int(batch_size) if isinstance(batch_size, int) and batch_size > 0 else int(population or 1024),
+                   int(dispatch_limit) // candidate_bars))
         if candidate_bars and isinstance(dispatch_limit, int) and dispatch_limit > 0 else None
     )
     dispatch_chunks = (
@@ -245,10 +357,23 @@ def resolve_gpu_settings(
         'vram_gb': round(vram_gb, 2) if vram_gb is not None else None,
         'memory_bandwidth_gbps': memory_bandwidth_gbps,
         'tflops': tflops,
-        'applied_by': 'pbgui',
+        'applied_by': ('rental_override' if rental_override is not None and auto_profile
+                       else 'local_calibration' if calibrated_profile and calibrated_profile.get('source') == 'local'
+                       else 'pbgui_reference' if calibrated_profile else 'pbgui'),
+        'calibration_profile_id': calibrated_profile.get('id') if calibrated_profile else None,
+        'calibration_profile_match': calibrated_profile.get('match_type') if calibrated_profile else None,
+        'calibration_max_dispatch_candidate_bars': (calibrated_profile.get('max_dispatch_candidate_bars')
+                                                    if calibrated_profile else None),
+        'gpu_power_limit_watts': measured_power_limit,
+        'calibration_power_limit_delta_watts': calibrated_profile.get('power_limit_delta_watts') if calibrated_profile else None,
+        'calibration_profile_power_limit_watts': (
+            (calibrated_profile.get('hardware_identity') or {}).get('gpu_power_limit_watts')
+            if calibrated_profile else None
+        ),
         'cpu_workers': state.get('workers'),
         'largest_candidate_bars': candidate_bars,
         'active_parameters': parameters,
+        'rental_gpu_profile': rental_override if auto_profile else None,
         'dispatch_candidates': dispatch_candidates,
         'dispatch_chunks': dispatch_chunks,
         'automatic': automatic,

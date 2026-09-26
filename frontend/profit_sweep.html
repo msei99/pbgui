@@ -6,7 +6,7 @@
   <title>Profit Sweep - PBGui</title>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
   <script src="/app/js/sidebar_resize.js?v=1"></script>
-  <script src="/app/js/profit_sweep_overview.js?v=6"></script>
+  <script src="/app/js/profit_sweep_overview.js?v=7"></script>
   <style>
     :root {
       --bg: #0e1117; --bg2: #131b2b; --bg3: #182234; --field: #0b1320;
@@ -201,7 +201,6 @@
               <option value="30">30 min</option><option value="60">60 min</option>
             </select>
           </label>
-          <button type="button" class="btn overview-refresh-control" id="overview-refresh-now">Refresh now</button>
           <button type="button" class="btn" id="open-logs">Logs</button>
         </div>
       </div>
@@ -348,8 +347,6 @@
             <div class="panel-desc">Simulation outcomes are labeled WOULD TRANSFER and remain separate from Live transfer intents.</div>
           </div></summary>
           <div class="panel-body">
-            <button type="button" class="btn account-action" id="refresh-journal">Refresh journal</button>
-            <div style="height:12px"></div>
             <div class="journal-wrap" id="journal-content"></div>
           </div>
         </details>
@@ -359,8 +356,6 @@
             <div class="panel-desc">Durable prepared, submitting, confirmed, failed, and unknown states. Unknown intents pause Live until reconciled.</div>
           </div>
           <div class="panel-body">
-            <button type="button" class="btn account-action" id="refresh-intents">Refresh intents</button>
-            <div style="height:12px"></div>
             <div class="journal-wrap" id="intents-content"></div>
           </div>
         </div>
@@ -398,7 +393,7 @@
     };
   </script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-  <script src="/app/js/pbgui_dialogs.js?v=9"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=10"></script>
   <script>
   (function () {
     'use strict';
@@ -514,9 +509,35 @@
       previewRefreshQueued: false,
       previewRefreshPendingVisibility: false,
       automaticRefreshTimer: null,
+      accountDataRefreshGeneration: null,
+      policyRequestId: 0,
+      journalRequestId: 0,
+      intentsRequestId: 0,
+      testOperationsRequestId: 0,
       usersRetryTimer: null
     };
 
+    var NAVIGATION_KEY = 'pbgui-profit-sweep-navigation';
+    function readNavigation() {
+      try {
+        var saved = JSON.parse(window.sessionStorage.getItem(NAVIGATION_KEY) || '{}');
+        return {
+          user: typeof saved.user === 'string' ? saved.user : '',
+          tab: typeof saved.tab === 'string' ? saved.tab : 'overview'
+        };
+      } catch (_error) {
+        return { user: '', tab: 'overview' };
+      }
+    }
+    function persistNavigation() {
+      var selectedTab = document.querySelector('.tab-button.selected');
+      try {
+        window.sessionStorage.setItem(NAVIGATION_KEY, JSON.stringify({
+          user: state.selectedUser,
+          tab: selectedTab ? selectedTab.dataset.tab : 'overview'
+        }));
+      } catch (_error) {}
+    }
     function byId(id) { return document.getElementById(id); }
     function text(value, fallback) {
       if (value === null || value === undefined || value === '') return fallback === undefined ? '-' : fallback;
@@ -1262,30 +1283,32 @@
     }
 
     async function loadJournalForAccount(userName, generation, signal) {
+      var requestId = ++state.journalRequestId;
       try {
         var data = await requestJson('/journal/' + encodeURIComponent(userName) + '?limit=100', { signal: signal });
-        if (isCurrentAccount(userName, generation)) state.journal = Array.isArray(data.journal) ? data.journal : [];
+        if (isCurrentAccount(userName, generation) && requestId === state.journalRequestId) state.journal = Array.isArray(data.journal) ? data.journal : [];
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         if (error.status === 404) {
-          if (isCurrentAccount(userName, generation)) state.journal = [];
+          if (isCurrentAccount(userName, generation) && requestId === state.journalRequestId) state.journal = [];
           return;
         }
         throw error;
       }
     }
-    async function loadPolicyForAccount(userName, generation, signal) {
+    async function loadPolicyForAccount(userName, generation, signal, expectedRecord) {
+      var requestId = ++state.policyRequestId;
       var revision = livePolicyRevisions.get(userName);
       try {
         var data = await requestJson('/policies/' + encodeURIComponent(userName), { signal: signal });
-        if (isCurrentAccount(userName, generation) && revision === livePolicyRevisions.get(userName)) {
+        if (isCurrentAccount(userName, generation) && requestId === state.policyRequestId && revision === livePolicyRevisions.get(userName) && (expectedRecord === undefined || state.record === expectedRecord)) {
           state.record = data;
           syncSelectedUserSummary();
         }
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         if (error.status === 404) {
-          if (isCurrentAccount(userName, generation) && revision === livePolicyRevisions.get(userName)) {
+          if (isCurrentAccount(userName, generation) && requestId === state.policyRequestId && revision === livePolicyRevisions.get(userName) && (expectedRecord === undefined || state.record === expectedRecord)) {
             state.record = null;
             syncSelectedUserSummary();
           }
@@ -1295,26 +1318,28 @@
       }
     }
     async function loadIntentsForAccount(userName, generation, signal) {
+      var requestId = ++state.intentsRequestId;
       try {
         var data = await requestJson('/intents/' + encodeURIComponent(userName), { signal: signal });
-        if (isCurrentAccount(userName, generation)) state.intents = Array.isArray(data.intents) ? data.intents : [];
+        if (isCurrentAccount(userName, generation) && requestId === state.intentsRequestId) state.intents = Array.isArray(data.intents) ? data.intents : [];
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         if (error.status === 404) {
-          if (isCurrentAccount(userName, generation)) state.intents = [];
+          if (isCurrentAccount(userName, generation) && requestId === state.intentsRequestId) state.intents = [];
           return;
         }
         throw error;
       }
     }
     async function loadTestTransfersForAccount(userName, generation, signal) {
+      var requestId = ++state.testOperationsRequestId;
       try {
         var data = await requestJson('/test-transfers/' + encodeURIComponent(userName), { signal: signal });
-        if (isCurrentAccount(userName, generation)) state.testOperations = Array.isArray(data.operations) ? data.operations : [];
+        if (isCurrentAccount(userName, generation) && requestId === state.testOperationsRequestId) state.testOperations = Array.isArray(data.operations) ? data.operations : [];
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         if (error.status === 404) {
-          if (isCurrentAccount(userName, generation)) state.testOperations = [];
+          if (isCurrentAccount(userName, generation) && requestId === state.testOperationsRequestId) state.testOperations = [];
           return;
         }
         throw error;
@@ -1330,9 +1355,13 @@
       var user = state.users.find(function (item) { return item.name === state.selectedUser; });
       if (!user) return;
       var current = statusState();
-      user.has_policy = !!state.record;
-      user.operating_mode = state.record ? state.record.policy.operating_mode : 'disabled';
-      user.due = state.record ? current.sweep_due : '0';
+      var hasPolicy = !!state.record;
+      var operatingMode = state.record ? state.record.policy.operating_mode : 'disabled';
+      var due = state.record ? current.sweep_due : '0';
+      if (user.has_policy === hasPolicy && user.operating_mode === operatingMode && String(user.due || '0') === String(due || '0')) return;
+      user.has_policy = hasPolicy;
+      user.operating_mode = operatingMode;
+      user.due = due;
       renderAccounts();
     }
     async function selectAccount(userName) {
@@ -1353,11 +1382,13 @@
       }
       stopAutomaticPreview();
       state.accountGeneration += 1;
+      state.accountDataRefreshGeneration = null;
       var generation = state.accountGeneration;
       if (state.accountController) state.accountController.abort();
       state.accountController = new AbortController();
       var signal = state.accountController.signal;
       state.selectedUser = userName;
+      persistNavigation();
       state.record = null;
       state.journal = [];
       state.intents = [];
@@ -1414,6 +1445,8 @@
         if (nextUser) await selectAccount(nextUser);
         else {
           state.selectedUser = '';
+          persistNavigation();
+          if (preferredUser) setMessage('The selected account is no longer available. Showing Profit Sweep Overview.', 'error');
           state.record = null;
           state.journal = [];
           state.intents = [];
@@ -2026,41 +2059,73 @@
       }
     }
 
-    async function refreshJournal() {
+    async function refreshSelectedAccountData() {
       var userName = state.selectedUser;
       var generation = state.accountGeneration;
-      if (!userName) return;
+      if (!userName || document.hidden || state.accountDataRefreshGeneration === generation) return;
+      state.accountDataRefreshGeneration = generation;
+      var previousPolicy = JSON.stringify(state.record);
+      var recordAtRequest = state.record;
+      var previousPolicyFingerprint = state.record && state.record.policy_fingerprint;
+      var draftDirty = false;
+      try { draftDirty = Boolean(state.policyBaseline) && policyFingerprint() !== state.policyBaseline; }
+      catch (_error) { draftDirty = true; }
+      var previousJournal = JSON.stringify(state.journal);
+      var previousIntents = JSON.stringify(state.intents);
+      var previousTestOperations = JSON.stringify(state.testOperations);
+      var signal = state.accountController ? state.accountController.signal : undefined;
       try {
-        await loadJournalForAccount(userName, generation, state.accountController.signal);
+        var results = await Promise.allSettled([
+          loadPolicyForAccount(userName, generation, signal, recordAtRequest),
+          loadJournalForAccount(userName, generation, signal),
+          loadIntentsForAccount(userName, generation, signal),
+          loadTestTransfersForAccount(userName, generation, signal)
+        ]);
         if (!isCurrentAccount(userName, generation)) return;
-        renderJournal();
-        setMessage('Journal refreshed.', 'ok');
-      } catch (error) {
-        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
-      }
-    }
-    async function refreshIntents() {
-      var userName = state.selectedUser;
-      var generation = state.accountGeneration;
-      if (!userName) return;
-      try {
-        await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
-        if (!isCurrentAccount(userName, generation)) return;
-        syncSelectedUserSummary();
-        renderIntents();
-        setMessage('Policy and Live intents refreshed.', 'ok');
-      } catch (error) {
-        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
+        try { draftDirty = draftDirty || (Boolean(state.policyBaseline) && policyFingerprint() !== state.policyBaseline); }
+        catch (_error) { draftDirty = true; }
+        if (state.record && state.record.policy_fingerprint !== previousPolicyFingerprint) {
+          if (draftDirty && previousPolicyFingerprint) {
+            state.record.policy_fingerprint = previousPolicyFingerprint;
+          } else if (!draftDirty) {
+            fillPolicyForm(state.record.policy);
+            capturePolicyBaseline();
+          }
+        }
+        if (JSON.stringify(state.record) !== previousPolicy) {
+          var user = state.users.find(function (item) { return item.name === userName; }) || null;
+          renderStatusCards();
+          renderOverview(user);
+          var mode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
+          var previousMode = recordAtRequest && recordAtRequest.policy ? recordAtRequest.policy.operating_mode : 'disabled';
+          if (mode !== previousMode) {
+            renderAccountMode(user);
+            byId('disable-policy').disabled = !state.record || mode === 'disabled';
+            syncDryJournalDisclosure(mode);
+          }
+        }
+        if (JSON.stringify(state.journal) !== previousJournal) renderJournal();
+        if (JSON.stringify(state.intents) !== previousIntents) renderIntents();
+        if (JSON.stringify(state.testOperations) !== previousTestOperations && !state.testActionPending) {
+          renderTestTransfers(state.users.find(function (user) { return user.name === userName; }) || null);
+        }
+        if (results.some(function (result) {
+          return result.status === 'rejected' && result.reason && result.reason.name !== 'AbortError';
+        })) setMessage('Account data update failed. Retrying automatically.', 'error');
+      } finally {
+        if (state.accountDataRefreshGeneration === generation) state.accountDataRefreshGeneration = null;
       }
     }
 
-    function showTab(tabName) {
+    function showTab(tabName, persist) {
+      if (!['overview', 'policy', 'schedule', 'exchange', 'journal'].includes(tabName)) tabName = 'overview';
       document.querySelectorAll('.tab-button').forEach(function (button) {
         var selected = button.dataset.tab === tabName;
         button.classList.toggle('selected', selected);
         button.setAttribute('aria-selected', selected ? 'true' : 'false');
       });
       document.querySelectorAll('.tab-panel').forEach(function (panel) { panel.classList.toggle('selected', panel.id === 'panel-' + tabName); });
+      if (persist !== false) persistNavigation();
     }
     function openLogs() {
       var sharedLogButton = document.getElementById('pbgui-notify-btn');
@@ -2108,7 +2173,9 @@
         state.schema = results[0];
         state.health = results[1];
         renderPolicyForm();
-        await loadUsers('');
+        var navigation = readNavigation();
+        showTab(navigation.tab, false);
+        await loadUsers(navigation.user);
       } catch (error) {
         setMessage(error.message, 'error');
       }
@@ -2118,7 +2185,6 @@
     overview.onAnonymize = renderAccounts;
     byId('overview-anonymize').addEventListener('change', function () { overview.setAnonymized(this.checked); });
     byId('overview-refresh-minutes').addEventListener('change', function () { overview.setRefreshMinutes(this.value); });
-    byId('overview-refresh-now').addEventListener('click', function () { overview.refreshNow(); });
     byId('show-overview').addEventListener('click', function () { selectAccount(''); });
     byId('account-search').addEventListener('input', function () { renderAccounts(); overview.render(); });
     byId('account-list').addEventListener('keydown', function (event) {
@@ -2134,8 +2200,6 @@
     byId('disable-policy').addEventListener('click', function () { savePolicyWithMode('disabled'); });
     byId('reset-baseline').addEventListener('click', resetBaseline);
     byId('delete-policy').addEventListener('click', deletePolicy);
-    byId('refresh-journal').addEventListener('click', refreshJournal);
-    byId('refresh-intents').addEventListener('click', refreshIntents);
     byId('enable-live').addEventListener('click', enableLive);
     byId('apply-live-baseline').addEventListener('click', function () {
       state.baselineRecalculationRequested = true;
@@ -2161,7 +2225,10 @@
     byId('open-logs').addEventListener('click', openLogs);
     byId('fund-account').addEventListener('click', openFundAccount);
     state.automaticRefreshTimer = window.setInterval(function () {
-      if (state.selectedUser) renderStatusCards();
+      if (state.selectedUser) {
+        renderStatusCards();
+        refreshSelectedAccountData();
+      }
       if (!document.hidden && !state.previewLoading && state.selectedUser && Date.now() - state.previewLoadedAt >= 60_000) {
         scheduleAutomaticPreview(0);
       }
@@ -2172,6 +2239,7 @@
         loadUsers('');
         return;
       }
+      refreshSelectedAccountData();
       if (state.previewRefreshPendingVisibility) {
         state.previewRefreshPendingVisibility = false;
         scheduleAutomaticPreview(0);

@@ -654,6 +654,28 @@ def test_local_log_delta_resets_on_file_replacement(tmp_path) -> None:
 
     assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["new"]
     assert sub.identity != old_identity
+    assert sub.replacement_pending is True
+
+
+def test_local_log_delta_replacement_starts_at_new_tail(tmp_path) -> None:
+    """A long rewritten log must not replay old lines before reaching its tail."""
+    path = tmp_path / "replace-tail.log"
+    path.write_bytes(b"old\n")
+    _content, _size, sub = async_logs.AsyncLogStreamer.initialize_local_log_subscription(
+        path, "replace-tail.log",
+    )
+    replacement = tmp_path / "replacement-tail.log"
+    replacement.write_bytes(b"".join(f"line-{index:03d}\n".encode() for index in range(100)))
+    replacement.replace(path)
+
+    lines = async_logs.AsyncLogStreamer.read_local_log_delta(sub, max_bytes=80)
+
+    assert lines
+    assert lines[-1] == "line-099"
+    assert "line-000" not in lines
+    assert sub.pos == path.stat().st_size
+    assert sub.replacement_pending is True
+    assert async_logs.AsyncLogStreamer.read_local_log_delta(sub, max_bytes=80) == []
 
 
 def test_local_log_delta_resets_on_in_place_truncation(tmp_path) -> None:
@@ -669,6 +691,7 @@ def test_local_log_delta_resets_on_in_place_truncation(tmp_path) -> None:
     assert async_logs.AsyncLogStreamer.read_local_log_delta(sub) == ["new"]
     assert sub.identity == identity
     assert sub.partial == b""
+    assert sub.replacement_pending is True
 
 
 def test_local_log_subscription_snapshot_handoff_has_no_gap(

@@ -102,7 +102,8 @@ def test_conversation_is_created_before_first_chat_turn(monkeypatch) -> None:
     class FakeService:
         """Return a deterministic conversation ID."""
 
-        async def create_conversation(self, owner, provider, model, effort, context):
+        async def create_conversation(self, owner, provider, model, effort, context, service_tier=""):
+            assert service_tier == "priority"
             assert len(owner) == 32
             assert provider == "chatgpt"
             assert model == "gpt-test"
@@ -111,7 +112,7 @@ def test_conversation_is_created_before_first_chat_turn(monkeypatch) -> None:
             return "b" * 32
 
     monkeypatch.setattr(ai_api, "get_ai_chat_service", lambda: FakeService())
-    body = ai_api.ConversationCreateRequest(provider="chatgpt", model="gpt-test")
+    body = ai_api.ConversationCreateRequest(provider="chatgpt", model="gpt-test", service_tier="priority")
     response = asyncio_run(ai_api.create_conversation(body, SimpleNamespace(user_id="owner")))
 
     assert response.status_code == 201
@@ -154,13 +155,14 @@ def test_persistent_history_and_detached_turn_routes_are_owner_scoped(monkeypatc
             assert len(owner) == 32 and conversation_id == "a" * 32
             return {"conversation_id": conversation_id, "messages": []}
 
-        async def start_turn(self, owner, conversation_id, message, context, effort, model, provider, internal=False):
+        async def start_turn(self, owner, conversation_id, message, context, effort, model, provider, internal=False, jev_preview_id=None, service_tier=None):
+            assert service_tier == "default"
             assert len(owner) == 32 and conversation_id == "a" * 32 and message == "Hello"
             assert context is None
             assert effort is None
             assert model is None
             assert provider is None
-            assert internal is False
+            assert internal is False and jev_preview_id is None
             return {"conversation_id": conversation_id, "turn_id": "b" * 32, "status": "queued"}
 
         async def record_local_action(self, owner, conversation_id, message, context):
@@ -178,7 +180,7 @@ def test_persistent_history_and_detached_turn_routes_are_owner_scoped(monkeypatc
 
     listed = asyncio_run(ai_api.list_conversations(session))
     detail = asyncio_run(ai_api.get_conversation("a" * 32, session))
-    started = asyncio_run(ai_api.start_turn("a" * 32, ai_api.TurnCreateRequest(message="Hello"), session))
+    started = asyncio_run(ai_api.start_turn("a" * 32, ai_api.TurnCreateRequest(message="Hello", service_tier="default"), session))
     local = asyncio_run(
         ai_api.record_local_action(
             "a" * 32, ai_api.LocalActionRequest(message="Close log"), session
@@ -192,6 +194,31 @@ def test_persistent_history_and_detached_turn_routes_are_owner_scoped(monkeypatc
     assert json_body(started)["status"] == "queued"
     assert json_body(local)["messages"][0]["content"] == "completed"
     assert json_body(acknowledged) == {"status": "acknowledged"}
+
+
+def test_jev_preview_routes_are_owner_scoped_and_no_store(monkeypatch) -> None:
+    """Preview and discard route only delegate with the authenticated owner."""
+    class FakeService:
+        """Record the explicit preview lifecycle."""
+
+        async def preview_jev_transfer(self, owner, conversation_id, message, model):
+            assert len(owner) == 32 and conversation_id == "a" * 32
+            assert message == "request" and model == "typesafe/jev-1.13"
+            return {"preview_id": "b" * 32, "payload": {"state": "request"}}
+
+        async def discard_jev_preview(self, owner, conversation_id, preview_id):
+            assert len(owner) == 32 and conversation_id == "a" * 32
+            assert preview_id == "b" * 32
+
+    monkeypatch.setattr(ai_api, "get_ai_chat_service", lambda: FakeService())
+    session = SimpleNamespace(user_id="owner")
+    preview = asyncio_run(ai_api.preview_jev_transfer(
+        "a" * 32, ai_api.JevPreviewRequest(message="request", model="typesafe/jev-1.13"), session,
+    ))
+    discarded = asyncio_run(ai_api.discard_jev_preview("a" * 32, "b" * 32, session))
+    assert preview.headers["cache-control"] == "no-store"
+    assert json_body(preview)["preview_id"] == "b" * 32
+    assert json_body(discarded) == {"discarded": True}
 
 
 def test_model_health_refresh_is_owner_scoped_and_async(monkeypatch) -> None:
@@ -227,9 +254,9 @@ def test_ai_preferences_are_owner_scoped_merged_and_no_store(monkeypatch) -> Non
             assert len(owner) == 32
             return {"drawer_width": 540, "drawer_open": True, "drawer_pinned": False}
 
-        def save_preferences(self, owner, width, drawer_open, drawer_pinned):
+        def save_preferences(self, owner, width, drawer_open, drawer_pinned, jev_max_cost_usd):
             assert len(owner) == 32 and width == 620 and drawer_open is False
-            assert drawer_pinned is True
+            assert drawer_pinned is True and jev_max_cost_usd is None
             return {
                 "drawer_width": width,
                 "drawer_open": drawer_open,
@@ -384,6 +411,8 @@ def test_python_approval_persists_and_forwards_bounded_analysis_output(monkeypat
 
     assert captured["recorded"][1:] == ("c" * 32, result)
     assert '"winner":"candidate-1"' in captured["message"]
+    assert "without calling Jev again" not in captured["message"]
+    assert "without creating another proposal" not in captured["message"]
     assert json_body(response)["continuation"]["status"] == "queued"
 
     class FailingRecordChat(FakeChat):
@@ -429,7 +458,8 @@ def test_capability_registry_and_action_history_are_owner_safe_and_no_store(monk
     class FakeCapabilities:
         """Return path-free discovery and owner audit projections."""
 
-        def capability_registry(self):
+        def capability_registry(self, owner):
+            assert len(owner) == 32
             return {"effect_classes": ["read", "write"], "virtual_resources": ["pbgui://draft/{id}"]}
 
         async def list_action_history(self, owner, limit):
@@ -461,3 +491,33 @@ def json_body(response):
     import json
 
     return json.loads(response.body)
+
+
+def test_approved_jev_result_is_forwarded_to_original_chat(monkeypatch) -> None:
+    """The normal assistant receives Jev's approved decision for explanation."""
+    class FakeCapabilities:
+        """Return one completed Jev decision."""
+
+        async def approve(self, owner, proposal_id, payload_digest, conversation_id):
+            """Approve the owner-bound analysis."""
+            return {"proposal_id": proposal_id, "status": "executed", "action": "jev_analysis",
+                    "name": "Jev analysis", "jev_result": "Jev chose candidate A"}
+
+    class FakeChat:
+        """Capture the hidden continuation message."""
+
+        async def start_turn(self, owner, conversation_id, message, *args):
+            """Require the Jev result without a second Jev invocation."""
+            assert "Jev chose candidate A" in message
+            assert "without calling Jev again" in message
+            return {"status": "queued"}
+
+    monkeypatch.setattr(ai_api, "get_ai_capability_service", lambda: FakeCapabilities())
+    monkeypatch.setattr(ai_api, "get_ai_chat_service", lambda: FakeChat())
+    response = asyncio_run(ai_api.approve_proposal(
+        "a" * 32,
+        ai_api.ProposalDecisionRequest(payload_digest="sha256:" + "b" * 64,
+                                       conversation_id="c" * 32),
+        SimpleNamespace(user_id="owner"),
+    ))
+    assert json_body(response)["continuation"]["status"] == "queued"

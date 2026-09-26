@@ -16,7 +16,7 @@ def test_transfers_page_uses_shared_shell_and_cookie_auth() -> None:
     assert "current:'system_transfers'" in source
     assert '/app/css/sidebar.css?v=4' in source
     assert '/app/js/sidebar_resize.js?v=1' in source
-    assert '/app/js/pbgui_dialogs.js?v=9' in source
+    assert '/app/js/pbgui_dialogs.js?v=10' in source
     assert "credentials:'same-origin'" in source
     assert "Authorization" not in source
     assert "document.cookie" not in source

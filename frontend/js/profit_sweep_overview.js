@@ -100,34 +100,6 @@
       document.getElementById('sweep-overview-rows').replaceChildren();
       document.getElementById('sweep-overview-summary').replaceChildren();
     }
-    async refreshNow() {
-      if (this.stopped || this.settingsController) return;
-      this.cancel();
-      const button = document.getElementById('overview-refresh-now');
-      const controller = this.settingsController = new AbortController();
-      const deadline = window.setTimeout(() => controller.abort(), 10000);
-      button.disabled = true;
-      button.textContent = 'Requesting…';
-      try {
-        await this.request('/overview/refresh', {method: 'POST', signal: controller.signal});
-        if (controller.signal.aborted || this.stopped || !this.active) return;
-        document.getElementById('sweep-overview-message').textContent = 'Balance refresh queued. Values update as background reads complete.';
-      } catch (error) {
-        if (this.stopped || !this.active) return;
-        if (error.status === 401 || error.status === 403) {
-          this.destroy();
-          document.getElementById('sweep-overview-message').textContent = 'Session expired. Please sign in again.';
-        } else {
-          document.getElementById('sweep-overview-message').textContent = 'Balance refresh could not be requested. Please try again.';
-        }
-      } finally {
-        window.clearTimeout(deadline);
-        button.disabled = false;
-        button.textContent = 'Refresh now';
-        this.settingsController = null;
-        if (this.active && !this.stopped) this.timer = window.setTimeout(() => this.refresh(), 5000);
-      }
-    }
     async setRefreshMinutes(value) {
       if (this.stopped || this.settingsController) return;
       this.cancel();

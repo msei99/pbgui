@@ -11,12 +11,12 @@ const assert=require('node:assert/strict');
 const crypto=require('node:crypto').webcrypto;
 const status={textContent:''}, auto={textContent:''}, open={textContent:'',addEventListener:(event,fn)=>open.click=fn};
 const document={readyState:'complete',querySelectorAll:selector=>selector.includes('status')?[status]:selector.includes('autostart')?[auto]:[open]};
-const window={OPTIMIZE_VERSION:'v8',location:{href:'explorer'}};
+const window={OPTIMIZE_VERSION:'v7',location:{href:'explorer'}};
 const posts=[];
 let fail=true;
 async function fetch(url,opts){
  if(!opts || !opts.method) return {ok:true,json:async()=>url.endsWith('/settings')?{autostart:true}:{items:[{status:'queued'},{status:'complete'}]}};
- assert.equal(url,'/api/backtest-v8/queue');
+ assert.equal(url,'/api/backtest-v7/queue');
  const body=JSON.parse(opts.body);posts.push(body);
  if(body.name==='second'&&fail){fail=false;return {ok:false,text:async()=> 'temporary failure'};}
  return {ok:true,json:async()=>({filename:body.name})};
@@ -43,7 +43,7 @@ async function fetch(url,opts){
  assert.equal(open.textContent,'Open Queue (1)');
  assert.match(auto.textContent,/Autostart ON/);
  open.click();
- assert.equal(window.location.href,'/api/backtest-v8/main_page?panel=queue');
+ assert.equal(window.location.href,'/api/backtest-v7/main_page?panel=queue');
  let release; const waiting=new Promise(resolve=>release=resolve);
  let calls=0;const first=client.perform(button,()=>{calls++;return waiting;});
  assert.equal(button.textContent,'Queue Validation');
@@ -65,7 +65,7 @@ const status={textContent:''}, auto={textContent:''};
 const open={textContent:'',addEventListener:(event,fn)=>open.click=fn};
 const document={readyState:'complete',querySelectorAll:s=>s.includes('status')?[status]:s.includes('autostart')?[auto]:[open]};
 const tabs=[];
-const window={OPTIMIZE_VERSION:'v8',location:{href:'explorer'},open:(...args)=>tabs.push(args)};
+const window={OPTIMIZE_VERSION:'v7',location:{href:'explorer'},open:(...args)=>tabs.push(args)};
 let release, started, fail=true;
 const posting=new Promise(resolve=>started=resolve);
 const gate=new Promise(resolve=>release=resolve);
@@ -97,7 +97,7 @@ async function fetch(url,opts) {
  assert.match(status.textContent,/4 more batch/);
  assert.equal(posts.length,1);
  open.click();
- assert.deepEqual(tabs,[['/api/backtest-v8/main_page?panel=queue','_blank','noopener']]);
+ assert.deepEqual(tabs,[['/api/backtest-v7/main_page?panel=queue','_blank','noopener']]);
  assert.equal(window.location.href,'explorer');
  release();
  await Promise.all([first,second,duplicate,expectedFailure,last]);
@@ -108,7 +108,46 @@ async function fetch(url,opts) {
  await client.perform(button,()=>client.submit([item('fails')]));
  assert.equal(posts[2].operation_id,posts[4].operation_id);
  open.click();
- assert.equal(window.location.href,'/api/backtest-v8/main_page?panel=queue');
+ assert.equal(window.location.href,'/api/backtest-v7/main_page?panel=queue');
 })().catch(error=>{console.error(error);process.exit(1);});
+'''
+    subprocess.run(['node', '-e', script], check=True, text=True, capture_output=True)
+
+
+def test_pb8_uses_one_durable_backend_batch_and_restores_progress():
+    """PB8 submits one command and reads progress from the server."""
+    source = Path('frontend/js/backtest_queue_actions.js').read_text()
+    script = r'''
+const assert=require('node:assert/strict');
+const crypto=require('node:crypto').webcrypto;
+const status={textContent:''}, auto={textContent:''};
+const open={textContent:'',addEventListener:(event,fn)=>open.click=fn};
+const document={readyState:'complete',querySelectorAll:s=>s.includes('status')?[status]:s.includes('autostart')?[auto]:[open]};
+const window={OPTIMIZE_VERSION:'v8',location:{href:'explorer'}};
+const posts=[];
+let confirmed=0;
+async function fetch(url,opts) {
+  if(opts && opts.method) {
+    assert.equal(url,'/api/backtest-v8/queue/batches');
+    const body=JSON.parse(opts.body);
+    posts.push(body);
+    return {ok:true,json:async()=>({batch_id:'batch-1',status:'queued',total:body.items.length,confirmed:0})};
+  }
+  if(url.endsWith('/settings')) return {ok:true,json:async()=>({autostart:true})};
+  if(url.endsWith('/batches')) return {ok:true,json:async()=>({batches:[{status:'running',total:90,confirmed}]})};
+  return {ok:true,json:async()=>({items:[]})};
+}
+''' + source + r'''
+(async()=>{
+  const item=i=>({name:'candidate-'+i,config:{bot:{index:i},pbgui:{backtest_result_group:{id:'group'}}},override_configs:{}});
+  const result=await window.PBGuiBacktestQueue.submit(Array.from({length:90},(_,i)=>item(i)));
+  assert.equal(posts.length,1);
+  assert.equal(posts[0].items.length,90);
+  assert.equal(result.queued,90);
+  assert.equal(window.location.href,'explorer');
+  confirmed=10;
+  await window.PBGuiBacktestQueue.refresh();
+  assert.match(status.textContent,/10 \/ 90 jobs queued by PBGui server/);
+})().catch(error=>{console.error(error);process.exit(1)});
 '''
     subprocess.run(['node', '-e', script], check=True, text=True, capture_output=True)

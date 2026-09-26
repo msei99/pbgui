@@ -784,7 +784,7 @@ html, body {
   <iframe id="tpl-iframe" src=""></iframe>
 </div>
 
-<script src="/app/js/pbgui_dialogs.js?v=9"></script>
+<script src="/app/js/pbgui_dialogs.js?v=10"></script>
 <script>
 (function () {
   'use strict';
@@ -1448,7 +1448,7 @@ html, body {
       return html;
     }
 
-    function loadHelpIndex() {
+    function loadHelpIndex(keyword) {
       helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
       fetch(API_BASE + '/docs/index?lang=' + helpLang)
         .then(function (r) { return r.json(); })
@@ -1457,8 +1457,8 @@ html, body {
           renderToc();
           if (helpTopics.length > 0) {
             var startIdx = 0;
-            if (helpDefaultTopic) {
-              var kw = helpDefaultTopic.toLowerCase();
+            if (keyword || helpDefaultTopic) {
+              var kw = (keyword || helpDefaultTopic).toLowerCase();
               for (var i = 0; i < helpTopics.length; i++) {
                 if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 ||
                     (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) {
@@ -1505,13 +1505,13 @@ html, body {
       if (helpLang === 'EN') return;
       helpLang = 'EN';
       helpLangEN.classList.add('active'); helpLangDE.classList.remove('active');
-      helpSel = 0; loadHelpIndex();
+      loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || helpDefaultTopic);
     });
     helpLangDE.addEventListener('click', function () {
       if (helpLang === 'DE') return;
       helpLang = 'DE';
       helpLangDE.classList.add('active'); helpLangEN.classList.remove('active');
-      helpSel = 0; loadHelpIndex();
+      loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || helpDefaultTopic);
     });
 
     document.getElementById('help-close').addEventListener('click', function () {
@@ -1583,7 +1583,7 @@ html, body {
     serial:   _NAV_SERIAL
   };
 </script>
-<script src="/app/js/shared_help_overlay.js?v=7"></script>
+<script src="/app/js/shared_help_overlay.js?v=8"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

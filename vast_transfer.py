@@ -530,6 +530,30 @@ class WorkerConnection:
             self.command('/usr/local/bin/python -c ' + shlex.quote(script), timeout=30)
         from vast_inception import stage_inception
         stage_inception(self)
+        state = self.store.read(self.identifier)
+        if state.get('kind') == 'calibration':
+            from vast_calibration import ANCHOR_POPULATIONS, PROTOCOL_VERSION
+            plan = state.get('calibration_plan') or {}
+            if (plan.get('protocol') != PROTOCOL_VERSION
+                    or plan.get('populations') != list(ANCHOR_POPULATIONS)
+                    or plan.get('sample_seconds') != 300
+                    or plan.get('population_step') != 4096
+                    or plan.get('min_scale_gain') != .10
+                    or plan.get('max_population') != 131072
+                    or plan.get('vram_reserve_ratio') != .15):
+                raise VastError('Invalid GPU calibration plan', 422)
+            payload = json.dumps(plan, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+            if len(payload) > 4096:
+                raise VastError('GPU calibration plan is too large', 422)
+            script = (
+                'import pathlib,sys,os; root=pathlib.Path(' + repr(self.remote_root) + '); '
+                'tmp=root/"calibration.json.tmp"; target=root/"calibration.json"; '
+                'data=sys.stdin.buffer.read(4097); assert 0<len(data)<=4096; '
+                'tmp.write_bytes(data); os.replace(tmp,target)'
+            )
+            with tempfile.TemporaryFile() as stream:
+                stream.write(payload); stream.seek(0)
+                self.command('/usr/local/bin/python -c ' + shlex.quote(script), stdin=stream, timeout=30)
         self.command("mkdir -p " + self.remote_root + " && " + "PBGUI_WORKDIR=" + self.remote_root + " nohup " + WORKER + "run > " + self.remote_root + "/runner.log 2>&1 < /dev/null &", timeout=15)
 
     def collect(self, final: bool, timeout: int) -> Path:
@@ -546,15 +570,15 @@ class WorkerConnection:
         temporary = destination.with_suffix(".tmp")
         try:
             with temporary.open("wb") as stream:
+                temporary.chmod(0o600)
                 self.command(f"head -c {size + 1} {self.remote_root}/{action}.tar.gz", stdout=stream,
                              timeout=timeout, max_output=size + 1)
+            if temporary.stat().st_size != size or digest(temporary) != metadata["sha256"]:
+                raise VastError("Result archive checksum mismatch")
+            os.replace(temporary, destination)
         finally:
-            if temporary.exists():
-                temporary.chmod(0o600)
-                self.store.update(self.identifier, downloaded_bytes=int(state.get("downloaded_bytes", 0)) + temporary.stat().st_size)
-        if temporary.stat().st_size != size or digest(temporary) != metadata["sha256"]:
-            raise VastError("Result archive checksum mismatch")
-        os.replace(temporary, destination)
+            temporary.unlink(missing_ok=True)
+        self.store.update(self.identifier, downloaded_bytes=int(state.get("downloaded_bytes", 0)) + size)
         extracted = extract_results(destination, self.directory, action)
         log = extracted / "optimizer.log"
         if log.is_file():
@@ -580,7 +604,7 @@ def extract_results(archive_path: Path, directory: Path, name: str) -> Path:
                 if not item.isfile() or item.name in names:
                     raise VastError("Invalid result archive entry")
                 parts = Path(item.name).parts
-                allowed = item.name in {"manifest.json", "finished.json", "optimizer.log"} or (
+                allowed = item.name in {"manifest.json", "finished.json", "optimizer.log", "calibration-result.json"} or (
                     len(parts) in (3, 4) and parts[0] == "optimize_results" and (
                         len(parts) == 3 and parts[2] in {"all_results.bin", "checkpoint.pkl"} or
                         len(parts) == 4 and parts[2] == "pareto" and re.fullmatch(r"[A-Za-z0-9_-]+\.json", parts[3])))
@@ -644,10 +668,13 @@ def execution_input(store: JobStore, identifier: str) -> Path:
         intent_owner = row.get('lease_id') or identifier
         intent_path = store.directory(intent_owner) / 'intent.json'
         intent = store.read(intent_owner, 'intent.json') if intent_path.is_file() else {}
+        job_profiles = intent.get('rental_job_gpu_profiles')
+        selected_profile = (job_profiles.get(identifier) if isinstance(job_profiles, dict) else None)
         tuning = resolve_gpu_settings(
             config,
             row,
             intent.get('offer') or {},
+            selected_profile or intent.get('rental_gpu_profile'),
         )
         if target.exists():
             manifest = json.loads((target / 'manifest.json').read_text())

@@ -230,20 +230,25 @@ class VastClient:
 
     def offers(self, *, max_price: float = 1, min_vram: float = 12,
                min_ram: float = 16, min_cpu: float = 4, min_tflops: float = 0, disk_gb: int = 40,
+               min_power_watts: int = 0, min_reliability_pct: float = 0,
                verified_only: bool = True, gpu_name: str = "", offer_id: int | None = None,
                min_cuda: float = 0, min_duration: float = 0,
                excluded_machine_ids: list[int] | None = None,
-               included_machine_ids: list[int] | None = None) -> list[dict]:
+               included_machine_ids: list[int] | None = None,
+               max_offers: int = 100) -> list[dict]:
         """Search a bounded page of single-GPU on-demand offers."""
-        values = [number(x) for x in (max_price, min_vram, min_ram, min_cpu, min_tflops, disk_gb, min_cuda, min_duration)]
-        if any(x is None for x in values) or not (0 < max_price <= 100 and min_tflops >= 0 and 1 <= disk_gb <= 2000):
+        if type(max_offers) is not int or not 1 <= max_offers <= 500:
+            raise VastError('Invalid GPU offer page limit', 422)
+        values = [number(x) for x in (max_price, min_vram, min_ram, min_cpu, min_tflops, disk_gb, min_cuda, min_duration, min_power_watts, min_reliability_pct)]
+        if any(x is None for x in values) or not (0 < max_price <= 100 and min_tflops >= 0
+                and 1 <= disk_gb <= 2000 and 0 <= min_power_watts <= 1000 and 0 <= min_reliability_pct <= 100):
             raise VastError("Invalid GPU search limits", 422)
         query = {"rentable": {"eq": True}, "rented": {"eq": False}, "gpu_arch": {"eq": "nvidia"},
                  "num_gpus": {"eq": 1}, "gpu_ram": {"gte": min_vram * 1024},
                  "cpu_ram": {"gte": min_ram * 1024}, "cpu_cores_effective": {"gte": min_cpu},
                  "dph_total": {"lte": max_price}, "disk_space": {"gte": disk_gb},
                  "type": "on-demand", "allocated_storage": disk_gb,
-                 "order": [["dph_total", "asc"]], "limit": 100}
+                 "order": [["dph_total", "asc"]], "limit": max_offers}
         excluded = {positive_id(value) for value in (excluded_machine_ids or [])}
         included = None if included_machine_ids is None else {positive_id(value) for value in included_machine_ids} - excluded
         if included is not None:
@@ -260,6 +265,8 @@ class VastClient:
             query["duration"] = {"gte": min_duration}
         if verified_only:
             query["verified"] = {"eq": True}
+        if min_reliability_pct:
+            query["reliability"] = {"gte": min_reliability_pct / 100}
         if offer_id is not None:
             query["ask_contract_id"] = {"eq": positive_id(offer_id)}
         matching_names = None
@@ -278,7 +285,7 @@ class VastClient:
         if not isinstance(rows, list):
             raise VastError("Vast returned an invalid offer list")
         output = []
-        for row in rows[:100]:
+        for row in rows[:max_offers]:
             if not isinstance(row, dict) or type(row.get("id")) is not int:
                 continue
             machine_id = row.get('machine_id')
@@ -302,6 +309,12 @@ class VastClient:
             tflops = number(row.get("total_flops"))
             if min_tflops and (tflops is None or tflops < min_tflops):
                 continue
+            power = number(row.get("gpu_max_power"), minimum=1)
+            reliability = number(row.get("reliability2", row.get("reliability")))
+            if min_power_watts and (power is None or power < min_power_watts):
+                continue
+            if min_reliability_pct and (reliability is None or reliability * 100 < min_reliability_pct):
+                continue
             output.append({
                 "id": positive_id(row["id"]), "gpu_name": public_text(row.get("gpu_name")),
                 "machine_id": machine_id,
@@ -311,6 +324,7 @@ class VastClient:
                 "cpu_cores": number(row.get("cpu_cores_effective")),
                 "cpu_name": public_text(row.get("cpu_name")),
                 "gpu_mem_bw_gbps": number(row.get("gpu_mem_bw")),
+                "gpu_max_power_watts": power,
                 "tflops": tflops,
                 "pci_gen": number(row.get("pci_gen")),
                 "gpu_lanes": number(row.get("gpu_lanes")),
@@ -324,7 +338,7 @@ class VastClient:
                 "download_gb_usd": number(row.get("inet_down_cost")),
                 "inet_down_mbps": number(row.get("inet_down")),
                 "inet_up_mbps": number(row.get("inet_up")),
-                "reliability": number(row.get("reliability2", row.get("reliability"))),
+                "reliability": reliability,
                 "verified": row.get("verification") == "verified" or row.get("verified") is True,
                 "location": public_text(row.get("geolocation")),
                 "cuda_max_good": number(row.get("cuda_max_good")),

@@ -30,21 +30,78 @@
       <label>Min RAM (GB)<input id="min-ram" type="number" min="0" max="4096" value="16" required></label>
       <label><span data-tip="Minimum CPU allocation for cloud rentals. Set 16 or 32 here if required. Cloud jobs automatically use the allocated cores; local optimizer CPU settings do not set this minimum.">Min CPU cores</span><input id="min-cpu" type="number" min="0" max="512" value="4" required></label>
       <label><span data-tip="Minimum advertised GPU compute throughput. Set 0 to allow all offers.">Min TFLOPS</span><input id="min-tflops" type="number" min="0" max="100000" step="0.1" value="0" required></label>
+      <label><span data-tip="Minimum GPU power limit advertised by Vast. The actual limit is measured after rental. Set 0 to allow unknown limits.">Min advertised W</span><input id="min-power-watts" type="number" min="0" max="1000" step="1" value="0" required></label>
+      <label><span data-tip="Minimum Vast host reliability. Set 0 to include hosts without a reported value.">Min reliability (%)</span><input id="min-reliability-pct" type="number" min="0" max="100" step="0.1" value="0" required></label>
       <label>Disk (GB)<input id="disk" type="number" min="40" max="2000" value="40" required></label>
       <label>Hosts<select id="verified"><option value="true">Verified only</option><option value="false">All</option></select></label>
       <button type="submit" id="find-offers">Preview available GPUs</button>
       <button type="button" id="save-gpu-preferences">Save GPU requirements</button>
       <label class="offer-toggle"><input id="show-incompatible" type="checkbox">Show incompatible hosts</label>
     </div></form>
+    <section id="calibration-watch-panel" class="calibration-watch-panel" aria-label="Performance test status" hidden>
+      <div class="calibration-watch-head">
+        <strong id="calibration-watch-title"></strong>
+        <span id="calibration-watch-phase" class="calibration-watch-phase"></span>
+        <button id="calibration-watch-cancel" type="button" hidden>Cancel waiting test</button>
+      </div>
+      <div id="calibration-watch-target" class="calibration-watch-target"></div>
+      <p id="calibration-watch-status" role="status" aria-live="polite"></p>
+    </section>
     <div class="table-wrap"><table><thead><tr>
       <th>GPU</th><th>VRAM</th><th>CPU / RAM</th><th>USD/hour</th><th>Transfer in / out (USD/GB)</th><th>Network ↓ / ↑ (Mbps)</th><th>Location</th><th>Reliability</th><th>Max duration</th><th>Compatibility</th><th>Details</th>
     </tr></thead><tbody id="offers-body"><tr><td colspan="11">Save your key, then find available GPUs.</td></tr></tbody></table></div>
-    <button id="rent-offer" type="button" disabled>Rent</button>
-    <p id="saved-rental-policy" class="muted">Loading saved rental limits…</p>
+    <div class="fields">
+      <button id="rent-offer" type="button" disabled>Rent</button>
+      <button id="calibration-open" type="button" aria-expanded="false" aria-controls="calibration-options">Performance test…</button>
+      <button id="calibration-accept" type="button" hidden>Use completed test profile</button>
+    </div>
+    <section id="offer-gpu-profile" class="rental-gpu-profile" aria-label="GPU profile for selected rental" hidden>
+      <strong>GPU settings for queued jobs on this offer</strong>
+      <p id="offer-gpu-profile-source" class="muted" role="status"></p>
+      <div id="offer-gpu-jobs" class="rental-gpu-jobs"></div>
+      <div hidden>
+      <label class="offer-toggle"><input id="offer-gpu-custom" type="checkbox">Customize this rental</label>
+      <div class="fields">
+        <label>Population<input id="offer-gpu-population" type="number" min="1024" max="131072" step="1" disabled></label>
+        <label>Batch size<input id="offer-gpu-batch" type="number" min="1" max="131072" step="1" disabled></label>
+        <label>Work limit (candidate-bars)<input id="offer-gpu-work-limit" type="number" min="1" max="1000000000000" step="1" disabled></label>
+      </div>
+      </div>
+      <p class="muted">Choose Auto, a matching workload measurement, or custom values separately for each prepared job. Explicit config sizing stays unchanged.</p>
+    </section>
+    <section id="calibration-options" class="calibration-options" aria-label="Performance test options" hidden>
+    <div class="fields">
+      <label>Reference workload<select id="calibration-preset">
+        <option value="small">Small · 3 coins, Binance, 1 scenario</option>
+        <option value="medium">Medium · 10 coins, 2 exchanges, 2 scenarios</option>
+        <option value="large">Large · 41 coins, 2 exchanges, 4 scenarios</option>
+      </select></label>
+      <details id="calibration-parameters"><summary>Adjust test search</summary>
+        <div class="fields">
+          <label>Start population<input id="calibration-population" type="number" min="4096" max="131072" step="512" value="4096"></label>
+          <label>Population step<input id="calibration-step" type="number" min="512" max="32768" step="512" value="4096"></label>
+          <label>Maximum population<input id="calibration-maximum" type="number" min="4096" max="131072" step="512" value="131072"></label>
+          <label>Minimum gain (%)<input id="calibration-gain" type="number" min="0" max="50" step="0.5" value="10"></label>
+          <label>Case timeout (seconds)<input id="calibration-timeout" type="number" min="390" max="7200" step="30" value="390"></label>
+        </div>
+      </details>
+    </div>
+    <div class="fields">
+      <button id="calibration-start" type="button" disabled>Run performance test</button>
+      <button id="calibration-watch-start" type="button" disabled>Test when matching GPU is available</button>
+      <button id="calibration-close" type="button">Cancel</button>
+    </div>
+    </section>
+    <p id="offer-action-status" class="offer-action-status" role="status" aria-live="polite" hidden></p>
+    <p id="calibration-status" class="muted" role="status" aria-live="polite">Select an offer to check PBGui performance coverage.</p>
+    <div id="calibration-result" class="calibration-result" hidden></div>
+    <details id="offer-saved-settings" class="offer-saved-settings"><summary>Saved rental settings and GPU requirements</summary>
+      <p id="saved-rental-policy" class="muted">Loading saved rental limits…</p>
+      <p id="saved-requirements" class="muted">Loading saved GPU requirements…</p>
+    </details>
     <div id="rent-message" role="status" aria-live="polite"></div>
     <p id="settings-rental-status" class="muted" hidden></p>
     <p id="selection" class="muted" hidden>Preview offers to choose a GPU type, or enter it above.</p>
-    <p id="saved-requirements" class="muted">Loading saved GPU requirements…</p>
   </section>
   <section id="vast-rental" class="card" hidden>
     <h2>Rental &amp; Automation</h2>
@@ -61,6 +118,21 @@
       <label><span data-tip="Additional exact evaluations without a significant improvement before collecting the final result.">Patience (exact evaluations)</span><input id="convergence-patience" type="number" min="128" max="10000000" step="1" value="512" required></label>
       <label><span data-tip="Relative improvement in normalized Pareto hypervolume needed to reset patience. Several small improvements accumulate against the last accepted improvement.">Improvement tolerance (%)</span><input id="convergence-tolerance" type="number" min="0.001" max="10" step="0.001" value="0.25" required></label>
     </div><button type="submit" id="save-rental-preferences">Save rental &amp; automation</button></form>
+    <section id="active-rental-gpu-profile" class="rental-gpu-profile" aria-label="Reserved GPU profile" hidden>
+      <strong>GPU settings for queued jobs on this rental</strong>
+      <p id="active-gpu-profile-source" class="muted" role="status"></p>
+      <div id="active-gpu-jobs" class="rental-gpu-jobs"></div>
+      <div hidden>
+      <label class="offer-toggle"><input id="active-gpu-custom" type="checkbox">Customize this rental</label>
+      <div class="fields">
+        <label>Population<input id="active-gpu-population" type="number" min="1024" max="131072" step="1" disabled></label>
+        <label>Batch size<input id="active-gpu-batch" type="number" min="1" max="131072" step="1" disabled></label>
+        <label>Work limit (candidate-bars)<input id="active-gpu-work-limit" type="number" min="1" max="1000000000000" step="1" disabled></label>
+      </div>
+      </div>
+      <button id="active-gpu-save" type="button">Save GPU settings for this rental</button>
+      <p class="muted">Changes are allowed until this rental starts its first job; explicit config sizing is preserved.</p>
+    </section>
   </section>
   <section id="vast-hosts-filter" class="card" hidden>
     <h2>Hosts</h2>
@@ -116,6 +188,8 @@
   </section>
   <section id="vast-jobs">
     <div id="cloud-job-details" hidden>
+    <div id="cloud-calibration-result" class="calibration-result" hidden></div>
+    <button id="cloud-calibration-accept" type="button" hidden>Save measured profile for this workload</button>
     <div id="cloud-utilization" class="optlog-summary-grid" hidden>
       <div class="optlog-card"><div class="optlog-label"><span data-tip="Live rented GPU utilization, current board power and configured power limit from nvidia-smi. Sampled approximately every 15 seconds.">GPU utilization</span></div><div id="cloud-gpu-util" class="optlog-value">—</div><div id="cloud-gpu-power" class="muted">—</div></div>
       <div class="optlog-card"><div class="optlog-label"><span data-tip="Container CPU use divided by its effective CPU allocation. The first reading needs a second sample.">CPU utilization</span></div><div id="cloud-cpu-util" class="optlog-value">—</div></div>

@@ -470,7 +470,7 @@
     .gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
     .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
   </style>
-  <script src="/app/js/log_viewer_panel.js?v=48"></script>
+  <script src="/app/js/log_viewer_panel.js?v=50"></script>
 </head>
 <body>
 <!-- ── Prices overlay ── -->
@@ -915,8 +915,8 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/pbgui_dialogs.js?v=9"></script>
-<script src="/app/js/shared_help_overlay.js?v=7"></script>
+<script src="/app/js/pbgui_dialogs.js?v=10"></script>
+<script src="/app/js/shared_help_overlay.js?v=8"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
 <script>
@@ -1085,14 +1085,12 @@ window.PBGUI_NAV_CONFIG = {
   helpLangEN.addEventListener('click', function() {
     if (helpLang === 'EN') return;
     helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active');
-    _topicCache = {}; helpSel = 0;
-    loadHelpIndex(window._servicesGuideKeyword || 'services_overview');
+    _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (window._servicesGuideKeyword || 'services_overview'));
   });
   helpLangDE.addEventListener('click', function() {
     if (helpLang === 'DE') return;
     helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active');
-    _topicCache = {}; helpSel = 0;
-    loadHelpIndex(window._servicesGuideKeyword || 'services_overview');
+    _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (window._servicesGuideKeyword || 'services_overview'));
   });
   document.getElementById('help-close').addEventListener('click', function() { helpOvl.classList.remove('visible'); });
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape') helpOvl.classList.remove('visible'); });

@@ -27,16 +27,25 @@ from vast_exchanges import SUPPORTED_EXCHANGES
 
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
-IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:bc330893bef1864065dc21835faac725e551383c3455ad4c5908a6713417268e"
-# Existing immutable rental intents must remain recoverable after a wrapper update.
-SUPPORTED_RENTAL_IMAGES = (
-    IMAGE,
-    "ghcr.io/msei99/pbgui-pb8-worker@sha256:b67111ebcc0d0c55c57c0b27ad8d2017c8577061a47a4b7909936bd4215c0fc4",
-    "ghcr.io/msei99/pbgui-pb8-worker@sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc",
-    "ghcr.io/msei99/pbgui-pb8-worker@sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743",
-    "ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88",
-)
-REVISION = "69227b75e808f8ce1f4b8949350b3311916bd377"
+IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:09cb0f9ba004db44f3ca02a7b3b03ea3211fd9e6c3c9ea33794cd4c6d24dee30"
+REVISION = "903ed11153ce82d1b6760604eaa3a553309a752a"
+PREVIOUS_REVISION = "69227b75e808f8ce1f4b8949350b3311916bd377"
+ORIGINAL_REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
+# Persisted rental intents keep their own immutable image/revision pair.
+SUPPORTED_RENTAL_IMAGE_REVISIONS = {
+    IMAGE: REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:8ad62f43decae47fe670f3ac15ba7e4d7c648f0bb030fa511cd4771321ff4327": PREVIOUS_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:70366b9989a12528245d4c263e0e3dc4350271427afd76f9568dcf29cf33878f": PREVIOUS_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:bee2e513d77e2c22f5b0671392063c51bb04bd547c7334e614fe918ada2d49e2": PREVIOUS_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:f078b47466f53e3039b13e41905531d9504ca6caca7b57469499fae20b77ec0e": PREVIOUS_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:8a85444f341a447564fc23e955b34f8a68b1970afc54026334aefa204c6cbc56": PREVIOUS_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:bc330893bef1864065dc21835faac725e551383c3455ad4c5908a6713417268e": PREVIOUS_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:b67111ebcc0d0c55c57c0b27ad8d2017c8577061a47a4b7909936bd4215c0fc4": PREVIOUS_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:b6f61c54b546640f5f00e386c10a27380e0ed8715788bcc8c4b597eedff58dbc": ORIGINAL_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743": ORIGINAL_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88": ORIGINAL_REVISION,
+}
+SUPPORTED_RENTAL_IMAGES = tuple(SUPPORTED_RENTAL_IMAGE_REVISIONS)
 from vast_config_validation import METRICS, validate_cloud_config
 
 TERMINAL = {"completed", "cancelled", "failed"}
@@ -520,6 +529,89 @@ class JobStore:
             self.update(identifier, status="failed", error="Prepared input snapshot reuse failed; requeue to rebuild")
             raise
 
+    def create_calibration(self, source_id: str, plan: dict) -> dict:
+        """Create a disk-efficient immutable calibration copy of one prepared input."""
+        source_id = job_id(source_id)
+        source = self.read(source_id)
+        if (source.get('kind') in {'worker', 'calibration'} or source.get('status') != 'ready'
+                or source.get('lease_id') or source.get('deleted_at')):
+            raise VastError('Choose an inactive prepared PB8 queue item for calibration', 409)
+        if not isinstance(plan, dict):
+            raise VastError('Invalid GPU calibration plan', 422)
+        from vast_calibration import configurable_calibration_plan
+        try:
+            expected = configurable_calibration_plan(
+                plan.get('populations', [None])[0], plan.get('population_step'),
+                plan.get('max_population'), plan.get('min_scale_gain'),
+                plan.get('sample_seconds'), plan.get('case_timeout_seconds'))
+        except (AttributeError, IndexError, TypeError, ValueError) as exc:
+            raise VastError('Invalid GPU calibration plan', 422) from exc
+        if plan != expected:
+            raise VastError('Invalid GPU calibration plan', 422)
+        source_directory = self.directory(source_id)
+        source_input = source_directory / 'input'
+        source_archive = source_directory / 'input.tar.gz'
+        source_intent = self.read(source_id, 'intent.json')
+        manifest = self.read(source_id, 'input/manifest.json')
+        if (source_intent.get('image') != IMAGE
+                or source_intent.get('pb8_revision') != REVISION
+                or any(not path.is_file() or path.is_symlink()
+                       for path in (source_archive, source_input / 'optimize.json', source_input / 'manifest.json'))
+                or digest(source_archive) != source_intent.get('bundle_sha256')):
+            raise VastError('Prepared PB8 input is no longer reusable; prepare it again', 409)
+        calibration_name = ('GPU calibration · ' + config_name(source.get('config_name', 'PB8')))[:160]
+        identifier = self.create_preparation(
+            calibration_name,
+            source['iterations'], source['workers'], bool(source.get('use_adg')),
+        )['id']
+        target_directory = self.directory(identifier)
+        try:
+            target_input = ensure_private_directory(target_directory / 'input')
+            files = manifest.get('files')
+            if not isinstance(files, list):
+                raise VastError('Prepared cloud input manifest is invalid', 422)
+            relative_paths = [Path('optimize.json'), Path('manifest.json')]
+            for entry in files:
+                relative = Path(str(entry.get('path') or '')) if isinstance(entry, dict) else Path()
+                if (relative.is_absolute() or not relative.parts or '..' in relative.parts
+                        or '\\' in str(relative) or any(ord(char) < 32 for char in str(relative))):
+                    raise VastError('Prepared cloud input manifest is invalid', 422)
+                relative_paths.append(relative)
+            for relative in relative_paths:
+                source_path = source_input / relative
+                target_path = target_input / relative
+                source_path.resolve(strict=True).relative_to(source_input.resolve(strict=True))
+                if source_path.is_symlink() or not source_path.is_file():
+                    raise VastError('Prepared cloud input changed; prepare it again', 409)
+                ensure_private_directory(target_path.parent)
+                os.link(source_path, target_path)
+                target_path.chmod(0o600)
+            os.link(source_archive, target_directory / 'input.tar.gz')
+            (target_directory / 'input.tar.gz').chmod(0o600)
+            write_json(target_directory / 'intent.json', {
+                'id': identifier, 'image': IMAGE, 'pb8_revision': REVISION,
+                'results_root': source_intent.get('results_root'),
+                'bundle_sha256': source_intent['bundle_sha256'],
+                'bundle_bytes': source_intent['bundle_bytes'],
+                'source_config_sha256': source_intent.get('source_config_sha256'),
+            })
+            progress = source.get('input_progress') or {}
+            return self.update(
+                identifier, kind='calibration', status='ready', calibration_plan=copy.deepcopy(plan),
+                calibration_source_id=source_id, snapshot_source_id=source.get('snapshot_source_id') or source_id,
+                input_bytes=source_intent['bundle_bytes'], use_adg=bool(source.get('use_adg')),
+                exchanges=list(source.get('exchanges') or []), sweep_enabled=bool(source.get('sweep_enabled')),
+                input_progress={
+                    'stage': 'complete', 'files_completed': int(progress.get('files_total', 0)),
+                    'files_total': int(progress.get('files_total', 0)),
+                    'bytes_completed': int(progress.get('bytes_total', 0)),
+                    'bytes_total': int(progress.get('bytes_total', 0)),
+                },
+            )
+        except Exception:
+            self.update(identifier, status='failed', error='Calibration snapshot creation failed; no instance rented')
+            raise
+
     def start(self, identifier: str, offer: dict, hours: float, budget: float) -> dict:
         """Persist authorization before starting independently supervised processes."""
         if not services_available():
@@ -550,7 +642,12 @@ class JobStore:
             if len(active) >= limit:
                 raise VastError("Finish the existing rental and cleanup first", 409)
             from vast_image import require_public_image
-            require_public_image(IMAGE)
+            intent = self.read(identifier, "intent.json")
+            image = intent.get("image")
+            authorized_revision = SUPPORTED_RENTAL_IMAGE_REVISIONS.get(image) if isinstance(image, str) else None
+            if not authorized_revision or intent.get("pb8_revision") != authorized_revision:
+                raise VastError("Invalid cloud rental image/revision", 422)
+            require_public_image(intent["image"])
             secrets = VastCredentialStore(self.root).secrets()
             if (queue_state.get('pool_enabled') and state.get('kind') == 'worker'
                     and (queue_state.get('pool_authorization') or {}).get('credential_generation') != secrets['generation']):
@@ -563,7 +660,6 @@ class JobStore:
             outbound = number(offer.get("upload_gb_usd"))
             if inbound is None or outbound is None:
                 raise VastError("Choose an offer with known transfer prices", 422)
-            intent = self.read(identifier, "intent.json")
             reserve = max(.05, 2 * intent["bundle_bytes"] / 1e9 * inbound + 3 * outbound * max(1, int(intent.get("job_count", 1))))
             duration = min(hours * 3600, (budget - reserve) / rate * 3600)
             if duration < 900:

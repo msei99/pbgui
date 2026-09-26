@@ -543,6 +543,7 @@
     </div>
   </div>
 
+  <script src="./js/shared_help_overlay.js?v=8"></script>
   <script>
     var _query = new URLSearchParams(window.location.search);
     var API_BASE = '%%API_BASE%%';
@@ -1088,8 +1089,7 @@
         localStorage.setItem('help-lang', helpLang);
         topicCache = {};
         setLanguageButtons();
-        helpSel = 0;
-        loadHelpIndex('overview');
+        loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || 'overview');
       });
 
       helpLangDE.addEventListener('click', function () {
@@ -1098,8 +1098,7 @@
         localStorage.setItem('help-lang', helpLang);
         topicCache = {};
         setLanguageButtons();
-        helpSel = 0;
-        loadHelpIndex('overview');
+        loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || 'overview');
       });
 
       document.getElementById('help-close').addEventListener('click', function () {
@@ -1172,6 +1171,6 @@
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="./pbgui_nav.js?v=1788"></script>
+  <script src="./pbgui_nav.js?v=1792"></script>
 </body>
 </html>

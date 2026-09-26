@@ -10,7 +10,9 @@ def test_queue_validation_survives_background_generation_without_repainting():
     end = source.index('\n  function scheduleValidation', start)
     code = r'''
 const assert=require('assert');
-let validationGeneration=0,validationTimer=null,cloudMetrics=null,disposed=false,resolve,reject,paint=0;
+let validationGeneration=0,validationTimer=null,cloudMetrics=null,disposed=false,resolve,reject,paint=0,sizingSubmitted=false;
+const refreshGpuRecommendation=async()=>{};
+const manualGpuErrors=()=>[];
 const clearTimeout=()=>{},setQueueBlocked=()=>{},showValidation=()=>paint++;
 const request=()=>new Promise((a,b)=>{resolve=a;reject=b});
 (async()=>{

@@ -2,17 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import threading
 import time
 import traceback
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt
 
 from api.auth import SessionToken, authenticate_websocket, require_auth
+from api.page_templates import render_page_urls, script_json
 from api.vps import get_bot_log_matches
+from file_lock import advisory_file_lock
+from secure_files import atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow
 from logging_helpers import human_log as _log
 from vps_manager_service import UnknownHostKeyError, VPSManagerService
 
@@ -27,6 +34,18 @@ _CLUSTER_ONBOARD_TASKS: dict[str, asyncio.Task[dict[str, object]]] = {}
 _CLUSTER_ONBOARD_JOBS: dict[str, dict[str, object]] = {}
 _CLUSTER_ONBOARD_ACTIVE: dict[str, str] = {}
 _CLUSTER_ONBOARD_JOB_TTL_SECONDS = 3600
+_HL_RATE_LIMIT_INTERVAL_SECONDS = 300
+_HL_RATE_LIMIT_IMPORT_INTERVAL_SECONDS = 30
+_HL_RATE_LIMIT_HISTORY_SECONDS = 24 * 60 * 60
+_HL_RATE_LIMIT_HISTORY_DIR = Path(__file__).resolve().parent.parent / "data" / "vpsmanager" / "hl_rate_limit_history"
+_HL_RATE_LIMIT_HISTORY_FILE = _HL_RATE_LIMIT_HISTORY_DIR / "samples.json"
+_HL_WALLET_PATTERN = re.compile(r"0x[0-9a-fA-F]{40}\Z")
+_HL_CREDIT_PRICE_USDC = Decimal("0.0005")
+_HL_MAX_CREDIT_PURCHASE = 100_000
+_hl_credit_purchase_lock = threading.Lock()
+_hl_rate_limit_task: asyncio.Task[None] | None = None
+_hl_rate_limit_accounts: dict[str, dict[str, object]] = {}
+_hl_rate_limit_accounts_lock = threading.RLock()
 
 
 class ExistingVpsImportRequest(BaseModel):
@@ -43,6 +62,13 @@ class ExistingVpsImportRequest(BaseModel):
 class ClusterNodesImportRequest(BaseModel):
     local_sudo_pw: str = ""
     passwords: dict[str, str] = {}
+
+
+class HlCreditPurchaseRequest(BaseModel):
+    """A confirmed, one-time purchase for a saved Hyperliquid account."""
+
+    user_name: str
+    credits: StrictInt = Field(ge=1, le=_HL_MAX_CREDIT_PURCHASE)
 
 MASTER_CONTEXT_VIEWS = {
     "master",
@@ -78,12 +104,23 @@ def get_service_instance() -> VPSManagerService:
 
 def startup() -> None:
     """Prepare an existing VPS Manager service for a new API lifespan."""
+    global _hl_rate_limit_task
     if _service is not None:
         _service.prepare_startup()
+    if _hl_rate_limit_task is None or _hl_rate_limit_task.done():
+        _hl_rate_limit_task = asyncio.get_running_loop().create_task(
+            _poll_hl_rate_limits(), name="vps-manager-hl-rate-limits"
+        )
 
 
 async def shutdown() -> None:
-    """Join API-owned deploy controllers while leaving Ansible processes alive."""
+    """Join API-owned deploy controllers and Hyperliquid polling."""
+    global _hl_rate_limit_task
+    task = _hl_rate_limit_task
+    _hl_rate_limit_task = None
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     tasks = list(_CLUSTER_ONBOARD_TASKS.values())
     for task in tasks:
         task.cancel()
@@ -92,6 +129,340 @@ async def shutdown() -> None:
     _CLUSTER_ONBOARD_TASKS.clear()
     if _service is not None:
         await asyncio.to_thread(_service.shutdown)
+
+
+def _configured_hl_wallets() -> dict[str, list[str]]:
+    """Group saved Hyperliquid account names by validated public wallet address."""
+    from User import Users
+
+    wallets: dict[str, list[str]] = {}
+    for user in Users():
+        if str(getattr(user, "exchange", "") or "").lower() != "hyperliquid":
+            continue
+        address = str(getattr(user, "wallet_address", "") or "").strip()
+        if not _HL_WALLET_PATTERN.fullmatch(address):
+            continue
+        wallets.setdefault(address.lower(), []).append(str(user.name))
+    return {address: sorted(set(names)) for address, names in wallets.items()}
+
+
+
+def restart_block_reason() -> str:
+    """Keep API restart from interrupting a paid exchange action."""
+    return "A Hyperliquid request-credit purchase is in progress." if _hl_credit_purchase_lock.locked() else ""
+
+
+def _read_hl_rate_limit_now(address: str) -> tuple[int, int]:
+    """Read current account action counters after a purchase."""
+    response = httpx.post(
+        "https://api.hyperliquid.xyz/info",
+        json={"type": "userRateLimit", "user": address},
+        timeout=10.0,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("Unexpected userRateLimit response")
+    used, cap = payload.get("nRequestsUsed"), payload.get("nRequestsCap")
+    if any(type(value) is not int or value < 0 for value in (used, cap)):
+        raise ValueError("Invalid userRateLimit counters")
+    return used, cap
+
+
+def _read_hl_rate_limit_history() -> dict[str, list[list[int]]]:
+    """Read account samples from the private on-disk history."""
+    if not _HL_RATE_LIMIT_HISTORY_FILE.exists():
+        return {}
+    raw = read_regular_file_nofollow(_HL_RATE_LIMIT_HISTORY_FILE, _HL_RATE_LIMIT_HISTORY_DIR)
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid Hyperliquid rate-limit history")
+    return payload
+
+
+def _append_hl_rate_limit_sample(address: str, sampled_at: int, used: int, cap: int) -> None:
+    """Persist one sample per wallet, pruning old samples under a process lock."""
+    ensure_private_directory(_HL_RATE_LIMIT_HISTORY_DIR)
+    with advisory_file_lock(_HL_RATE_LIMIT_HISTORY_FILE):
+        history = _read_hl_rate_limit_history()
+        cutoff = sampled_at - _HL_RATE_LIMIT_HISTORY_SECONDS
+        history = {
+            wallet: [sample for sample in samples
+                     if isinstance(sample, list) and len(sample) == 3
+                     and isinstance(sample[0], int) and sample[0] >= cutoff][-300:]
+            for wallet, samples in history.items()
+            if _HL_WALLET_PATTERN.fullmatch(wallet) and isinstance(samples, list)
+        }
+        points = history.setdefault(address, [])
+        points[:] = [sample for sample in points if sample[0] != sampled_at]
+        points.append([sampled_at, used, cap])
+        points.sort(key=lambda sample: sample[0])
+        history[address] = points[-300:]
+        atomic_write_private_text(_HL_RATE_LIMIT_HISTORY_FILE, json.dumps(history, indent=4))
+
+
+def _get_hl_rate_limit_history(address: str) -> list[dict[str, int]]:
+    """Return recent counter samples for one validated wallet."""
+    ensure_private_directory(_HL_RATE_LIMIT_HISTORY_DIR)
+    with advisory_file_lock(_HL_RATE_LIMIT_HISTORY_FILE):
+        history = _read_hl_rate_limit_history()
+    cutoff = int(time.time()) - _HL_RATE_LIMIT_HISTORY_SECONDS
+    samples = history.get(address, [])
+    if not isinstance(samples, list):
+        raise ValueError("Invalid Hyperliquid rate-limit account history")
+    return [
+        {"sampled_at": sample[0], "used": sample[1], "cap": sample[2]}
+        for sample in samples
+        if isinstance(sample, list) and len(sample) == 3
+        and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in sample)
+        and sample[0] >= cutoff
+    ]
+
+
+async def _poll_hl_rate_limits() -> None:
+    """Import the latest VPS-agent samples; masters never poll Hyperliquid here."""
+    global _hl_rate_limit_accounts
+    from api.vps import get_monitor_state_snapshot
+
+    while True:
+        cycle_started = time.monotonic()
+        try:
+            wallets = await asyncio.to_thread(_configured_hl_wallets)
+            snapshot = await asyncio.to_thread(get_monitor_state_snapshot)
+            now = int(time.time())
+            wallet_by_user = {user: address for address, names in wallets.items() for user in names}
+            observed: dict[str, dict[str, object]] = {
+                address: {"users": names, "hosts": set(), "bots": set(), "sample": None}
+                for address, names in wallets.items()
+            }
+            for version, field in (("7", "v7_instances"), ("8", "v8_instances")):
+                by_host = snapshot.get(field) if isinstance(snapshot, dict) else None
+                if not isinstance(by_host, dict):
+                    continue
+                for host, rows in by_host.items():
+                    if not isinstance(host, str) or not isinstance(rows, list):
+                        continue
+                    for row in rows:
+                        if not isinstance(row, dict) or row.get("running") is not True:
+                            continue
+                        name = str(row.get("name") or "").strip()
+                        user = str(row.get("user") or "").strip()
+                        address = wallet_by_user.get(user)
+                        if not name or not address:
+                            continue
+                        item = observed[address]
+                        item["hosts"].add(host)
+                        item["bots"].add((name, host, version))
+                        sample = row.get("hl_rate_limit")
+                        if not isinstance(sample, dict):
+                            continue
+                        used, cap, sampled_at = (sample.get(key) for key in ("used", "cap", "sampled_at"))
+                        if any(type(value) is not int or value < 0 for value in (used, cap, sampled_at)):
+                            continue
+                        if sampled_at > now + 300 or sampled_at < now - 86400:
+                            continue
+                        current = item["sample"]
+                        if current is None or sampled_at > current["sampled_at"]:
+                            item["sample"] = {"used": used, "cap": cap, "sampled_at": sampled_at}
+            with _hl_rate_limit_accounts_lock:
+                previous = dict(_hl_rate_limit_accounts)
+            next_accounts: dict[str, dict[str, object]] = {}
+            for address, item in observed.items():
+                bots = [{"name": name, "host": host, "pb_version": version}
+                        for name, host, version in sorted(item["bots"])]
+                entry: dict[str, object] = {
+                    "users": item["users"], "hosts": sorted(item["hosts"]), "bots": bots,
+                    "state": "pending" if bots else "idle",
+                }
+                sample = item["sample"]
+                if sample is not None:
+                    entry.update(sample)
+                    entry["state"] = "ok" if now - sample["sampled_at"] <= 2 * _HL_RATE_LIMIT_INTERVAL_SECONDS else "stale"
+                    prior_sampled_at = int(previous.get(address, {}).get("sampled_at") or 0)
+                    if sample["sampled_at"] != prior_sampled_at:
+                        try:
+                            await asyncio.to_thread(_append_hl_rate_limit_sample, address, sample["sampled_at"], sample["used"], sample["cap"])
+                        except (OSError, ValueError, RuntimeError) as exc:
+                            _log(SERVICE, f"Hyperliquid VPS sample history write failed: {type(exc).__name__}", level="WARNING")
+                elif not bots and previous.get(address, {}).get("source") == "on_demand":
+                    prior = previous[address]
+                    entry.update({key: prior[key] for key in ("used", "cap", "sampled_at") if key in prior})
+                    entry["state"] = "on_demand"
+                    entry["source"] = "on_demand"
+                next_accounts[address] = entry
+            with _hl_rate_limit_accounts_lock:
+                for address, entry in next_accounts.items():
+                    current = _hl_rate_limit_accounts.get(address, {})
+                    if (current.get("source") in {"on_demand", "purchase"}
+                            and int(current.get("sampled_at") or 0) >= int(entry.get("sampled_at") or 0)):
+                        entry.update({key: current[key] for key in ("used", "cap", "sampled_at") if key in current})
+                        entry["state"] = "on_demand"
+                        entry["source"] = current["source"]
+                _hl_rate_limit_accounts = next_accounts
+        except Exception as exc:
+            _log(SERVICE, f"Hyperliquid VPS sample import failed: {type(exc).__name__}", level="WARNING")
+        await asyncio.sleep(max(1.0, _HL_RATE_LIMIT_IMPORT_INTERVAL_SECONDS - (time.monotonic() - cycle_started)))
+
+
+@router.get("/user-rate-limits")
+def get_hl_user_rate_limits(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Return cached address-limit counters without triggering exchange traffic."""
+    del session
+    with _hl_rate_limit_accounts_lock:
+        accounts = sorted((dict(item) for item in _hl_rate_limit_accounts.values()), key=lambda item: item.get("users") or [])
+    return JSONResponse(
+        content={"accounts": accounts, "interval_seconds": _HL_RATE_LIMIT_INTERVAL_SECONDS},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/user-rate-limits/live/{user_name}")
+def get_hl_user_rate_limit_live(
+    user_name: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Read one saved wallet once when its API-key editor is opened."""
+    del session
+    if not user_name or user_name in {".", ".."} or any(char in user_name for char in ("/", "\\", "\x00")) or any(ord(char) < 32 for char in user_name):
+        raise HTTPException(status_code=400, detail="Invalid account name")
+    wallets = _configured_hl_wallets()
+    address = next((wallet for wallet, names in wallets.items() if user_name in names), None)
+    if address is None:
+        raise HTTPException(status_code=404, detail="Hyperliquid account not found")
+    try:
+        used, cap = _read_hl_rate_limit_now(address)
+    except (httpx.HTTPError, ValueError) as exc:
+        _log(SERVICE, f"Hyperliquid live userRateLimit read failed: {type(exc).__name__}", level="WARNING")
+        raise HTTPException(status_code=502, detail="Hyperliquid account limit unavailable") from exc
+    sampled_at = int(time.time())
+    with _hl_rate_limit_accounts_lock:
+        prior = _hl_rate_limit_accounts.get(address, {})
+        _hl_rate_limit_accounts[address] = {
+            **prior, "users": wallets[address], "used": used, "cap": cap,
+            "sampled_at": sampled_at, "state": "on_demand", "source": "on_demand",
+        }
+    return JSONResponse(
+        content={"account": user_name, "used": used, "cap": cap, "remaining": max(0, cap - used),
+                 "sampled_at": sampled_at, "source": "Hyperliquid userRateLimit"},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/user-rate-limits/credits")
+def purchase_hl_request_credits(
+    request: HlCreditPurchaseRequest,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Reserve the exact confirmed action count using the saved agent key."""
+    del session
+    name = request.user_name
+    if not name or name in {".", ".."} or any(char in name for char in ("/", "\\", "\x00")) or any(ord(char) < 32 for char in name):
+        raise HTTPException(status_code=400, detail="Invalid account name")
+    if not _hl_credit_purchase_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A Hyperliquid credit purchase is already in progress")
+    try:
+        from User import Users
+        import ccxt
+
+        user = Users().find_user(name)
+        if user is None or str(getattr(user, "exchange", "") or "").lower() != "hyperliquid":
+            raise HTTPException(status_code=404, detail="Hyperliquid account not found")
+        if bool(getattr(user, "is_vault", False)):
+            raise HTTPException(status_code=400, detail="Request-credit purchase is available for main accounts only")
+        address = str(getattr(user, "wallet_address", "") or "").strip()
+        private_key = str(getattr(user, "private_key", "") or "").strip()
+        if not _HL_WALLET_PATTERN.fullmatch(address) or not private_key:
+            raise HTTPException(status_code=400, detail="Saved Hyperliquid wallet address and private key are required")
+
+        cost = _HL_CREDIT_PRICE_USDC * request.credits
+        client = ccxt.hyperliquid({
+            "walletAddress": address,
+            "privateKey": private_key,
+            "enableRateLimit": True,
+            "timeout": 15000,
+        })
+        try:
+            result = client.reserve_request_weight(request.credits)
+        except ccxt.InsufficientFunds as exc:
+            _log(SERVICE, f"Hyperliquid credit purchase lacked Perps balance for {name}", level="WARNING")
+            raise HTTPException(status_code=409, detail="Insufficient Hyperliquid Perps USDC balance") from exc
+        except ccxt.NetworkError as exc:
+            _log(SERVICE, f"Hyperliquid credit purchase result uncertain for {name}: {type(exc).__name__}", level="WARNING")
+            raise HTTPException(
+                status_code=502,
+                detail="Exchange response unavailable. Check the account limit and Perps balance before purchasing again.",
+            ) from exc
+        except ccxt.BaseError as exc:
+            _log(SERVICE, f"Hyperliquid credit purchase rejected for {name}: {type(exc).__name__}", level="WARNING")
+            raise HTTPException(status_code=502, detail="Hyperliquid rejected the credit purchase; check the account and Perps balance") from exc
+
+
+        if not isinstance(result, dict) or result.get("status") != "ok" or not isinstance(result.get("response"), dict) or result["response"].get("type") != "default":
+            _log(SERVICE, f"Hyperliquid credit purchase response unconfirmed for {name}", level="WARNING")
+            raise HTTPException(status_code=502, detail="Exchange result unconfirmed. Check the account limit and Perps balance before purchasing again.")
+
+        sampled_at = int(time.time())
+        verified = False
+        used = cap = None
+        try:
+            used, cap = _read_hl_rate_limit_now(address)
+            verified = True
+            with _hl_rate_limit_accounts_lock:
+                prior = _hl_rate_limit_accounts.get(address.lower(), {})
+                _hl_rate_limit_accounts[address.lower()] = {
+                    **prior, "users": sorted(set((prior.get("users") or []) + [name])),
+                    "used": used, "cap": cap, "sampled_at": sampled_at,
+                    "state": "ok" if prior.get("bots") else "on_demand",
+                    "source": "purchase" if prior.get("bots") else "on_demand",
+                }
+            if prior.get("bots"):
+                try:
+                    _append_hl_rate_limit_sample(address.lower(), sampled_at, used, cap)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    _log(SERVICE, f"Hyperliquid post-purchase history write failed: {type(exc).__name__}", level="WARNING")
+        except (httpx.HTTPError, ValueError) as exc:
+            _log(SERVICE, f"Hyperliquid post-purchase limit read failed: {type(exc).__name__}", level="WARNING")
+
+        _log(SERVICE, f"Reserved {request.credits} Hyperliquid request credits for {name}", level="INFO")
+        return JSONResponse(
+            content={
+                "account": name, "credits": request.credits, "cost_usdc": str(cost),
+                "verified": verified, "used": used, "cap": cap, "sampled_at": sampled_at,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(SERVICE, f"Hyperliquid credit purchase failed for {name}: {type(exc).__name__}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Credit purchase unavailable") from exc
+    finally:
+        _hl_credit_purchase_lock.release()
+
+
+@router.get("/user-rate-limits/history/{user_name}")
+def get_hl_user_rate_limit_history(
+    user_name: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Return one account's stored history without exposing its wallet address."""
+    del session
+    if not user_name or user_name in {".", ".."} or any(char in user_name for char in ("/", "\\", "\x00")) or any(ord(char) < 32 for char in user_name):
+        raise HTTPException(status_code=400, detail="Invalid account name")
+    wallets = _configured_hl_wallets()
+    address = next((wallet for wallet, names in wallets.items() if user_name in names), None)
+    if address is None:
+        raise HTTPException(status_code=404, detail="Hyperliquid account not found")
+    try:
+        points = _get_hl_rate_limit_history(address)
+    except (OSError, ValueError, RuntimeError) as exc:
+        _log(SERVICE, f"Hyperliquid rate-limit history read failed: {type(exc).__name__}", level="WARNING")
+        raise HTTPException(status_code=500, detail="Account history unavailable") from exc
+    return JSONResponse(
+        content={"account": user_name, "source": "Hyperliquid userRateLimit", "window_seconds": _HL_RATE_LIMIT_HISTORY_SECONDS,
+                 "step_seconds": _HL_RATE_LIMIT_INTERVAL_SECONDS, "samples": points},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def _public_cluster_onboard_job(job: dict[str, object]) -> dict[str, object]:
@@ -284,6 +655,26 @@ def get_main_page(
     nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
     html = html.replace("%%NAV_HASH%%", nav_hash)
 
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/hyperliquid-limits/main_page", response_class=HTMLResponse)
+def get_hl_limits_page(
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+) -> HTMLResponse:
+    """Serve the central account-limit overview."""
+    del session
+    html_path = Path(__file__).resolve().parent.parent / "frontend" / "hl_limits.html"
+    html = html_path.read_text(encoding="utf-8")
+    from pbgui_purefunc import PBGUI_VERSION, PBGUI_SERIAL
+
+    nav_js = html_path.parent / "pbgui_nav.js"
+    nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
+    html = html.replace("%%NAV_HASH%%", nav_hash)
+    html = render_page_urls(request, html, "/api/vps-manager")
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 

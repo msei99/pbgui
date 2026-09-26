@@ -836,6 +836,12 @@ def _owned_client(user: Any, exchange: str) -> tuple[Exchange, Any]:
         owner.connect()
         if owner.instance is None:
             raise RuntimeError("exchange client unavailable")
+        if exchange == "bybit":
+            # Raw V5 private methods do not fetch markets, so CCXT does not
+            # automatically load the server time before signing them.
+            owner.instance.options["recvWindow"] = 10000
+            owner.instance.options["adjustForTimeDifference"] = True
+            owner.instance.load_time_difference()
     except Exception:
         owner.close()
         raise
@@ -1185,6 +1191,8 @@ def submit_transfer(user: Any, descriptor: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         # Narrow typed provider refusals prove non-execution; generic/duplicate errors do not.
         definitive_rejection = type(exc) in {ccxt.InsufficientFunds, ccxt.AuthenticationError, ccxt.PermissionDenied}
+        if adapter == "bybit_v5" and type(exc) is ccxt.InvalidNonce:
+            definitive_rejection = True
         result = _error_result(exc, adapter=adapter, reconciliation=submission_started and not definitive_rejection)
         result.update({
             "operation_id": validated["operation_id"],
@@ -1438,6 +1446,14 @@ def reconcile_transfer(
                 )
             ]
             result = _matched_result(matches, amount_field="amount")
+            submission_error = submission.get("error")
+            if (
+                result["status"] == "pending"
+                and result["matched_records"] == 0
+                and isinstance(submission_error, dict)
+                and submission_error.get("type") == "InvalidNonce"
+            ):
+                result = {"status": "failed", "matched_records": 0, "reason": "bybit_timestamp_rejected"}
         elif adapter == "binance_um":
             exchange_id = str(submission.get("exchange_id") or "")
             response = client.sapiGetAssetTransfer({

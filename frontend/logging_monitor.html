@@ -377,9 +377,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
   var PBGUI_VERSION  = "%%VERSION%%";
   var PBGUI_SERIAL   = "%%SERIAL%%";
 </script>
-<script src="/app/js/log_viewer_panel.js?v=48"></script>
-<script src="/app/js/pbgui_dialogs.js?v=9"></script>
-<script src="/app/js/shared_help_overlay.js?v=7"></script>
+<script src="/app/js/log_viewer_panel.js?v=50"></script>
+<script src="/app/js/pbgui_dialogs.js?v=10"></script>
+<script src="/app/js/shared_help_overlay.js?v=8"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -872,8 +872,8 @@ loadRotationData();
       .catch(function() { helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>'; });
   }
   helpFilter.addEventListener('input', renderToc);
-  helpLangEN.addEventListener('click', function() { if (helpLang === 'EN') return; helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active'); _topicCache = {}; helpSel = 0; loadHelpIndex('logging'); });
-  helpLangDE.addEventListener('click', function() { if (helpLang === 'DE') return; helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active'); _topicCache = {}; helpSel = 0; loadHelpIndex('logging'); });
+  helpLangEN.addEventListener('click', function() { if (helpLang === 'EN') return; helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active'); _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || ('logging')); });
+  helpLangDE.addEventListener('click', function() { if (helpLang === 'DE') return; helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active'); _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || ('logging')); });
   document.getElementById('help-close').addEventListener('click', function() { helpOvl.classList.remove('visible'); });
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape') helpOvl.classList.remove('visible'); });
   (function() {

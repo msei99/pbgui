@@ -37,6 +37,8 @@ data/monitor_agent/collector_status.json
 
 Snapshot JSON files are replaced atomically. The NDJSON stream uses PBGui-managed, byte-based retention and rotation so its disk use remains bounded while readers continue following the stream.
 
+While live bot telemetry is fresh, an instance snapshot retains the current CPU, RAM, and swap values for the same bot run. This keeps threshold alerts stable between live samples. Without custom `[monitor]` settings, PB7 bot CPU warning and error thresholds are 15% and 20%; the RAM error threshold is 500 MB.
+
 ## Agent health
 
 Every host card shows **Monitor Agent: OK, Stale, Missing, Error, or Unknown** and always identifies the source as `monitor-agent cache`.

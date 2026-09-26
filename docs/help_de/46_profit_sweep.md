@@ -174,6 +174,8 @@ Ruecktransfer-Bestaetigungen verwenden feste Labels aus der konkreten Rueckroute
 
 Die Tabelle **Live Transfer Intents** zeigt die dauerhaften Statuswerte **Prepared**, **Submitting**, **Confirmed**, **Failed** und **Unknown**. Prepared wird vor Exchange-I/O persistiert. Confirmed aktualisiert die Abrechnung erst nach Reconciliation. Failed ist ein eindeutig nicht ausgefuehrtes Ergebnis.
 
+Status, Dry Journal, Live Intents und Testtransfer-Verlauf des ausgewaehlten Accounts aktualisieren sich automatisch alle 15 Sekunden und wenn die Seite wieder sichtbar wird. Ungespeicherte Policy-Eingaben und der gewaehlte Tab bleiben erhalten. Nach einem Browser-Refresh werden Account und Tab wiederhergestellt, sofern der Account noch verfuegbar ist.
+
 Das **Dry Decision Journal** ist einklappbar. Bei einer bereits **Live** oder **Paused Unknown** laufenden Policy startet es geschlossen, bei Dry oder Disabled offen. Eine manuelle Expand-/Collapse-Auswahl bleibt beim Refresh desselben Accounts erhalten; beim Wechsel in Live oder zu einem anderen Live-Account wird der geschlossene Default einmalig angewendet.
 
 Unknown bedeutet, dass PBGui nicht beweisen kann, ob die Exchange den Request ausgefuehrt hat. Die Policy wechselt zu **Paused Unknown** und blockiert neue Live-Submissions. **Reconcile** fragt die Exchange mit derselben dauerhaften Operation Identity erneut ab und sendet niemals blind einen zweiten Transfer. Test-Transfer-Operationen bleiben getrennt und bieten bei Unknown absichtlich keine Retry-Aktion.

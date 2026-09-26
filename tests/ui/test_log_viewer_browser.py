@@ -117,6 +117,59 @@ def test_large_filtered_log_layout_and_long_line_preservation(log_page, width):
     }""")
 
 
+def test_atomic_log_replacement_appends_without_scroll_flash(log_page):
+    """A newer atomic snapshot reuses the rendered tail instead of duplicating it."""
+    page, _errors = log_page
+    metrics = page.evaluate("""() => {
+        panel._MAX = 200;
+        const before = Array.from({length:200}, (_, i) => '[INFO] live-' + i);
+        panel._handleMsg({type:'local_logs', lines:before});
+        const terminal = panel._q('terminal');
+        terminal.scrollTop = terminal.scrollHeight;
+        let fullRenders = 0;
+        const original = panel._renderFull;
+        panel._renderFull = function() { fullRenders++; return original.apply(this, arguments); };
+        panel._handleMsg({type:'local_log_lines', replace:true,
+            lines:before.concat(['[INFO] live-200', '[INFO] live-201'])});
+        return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve({
+            fullRenders,
+            rows:terminal.childElementCount,
+            model:panel._lines.slice(),
+            pinned:panel._tailPinned,
+            atBottom:terminal.scrollHeight-terminal.clientHeight-terminal.scrollTop <= 2
+        }))));
+    }""")
+    assert metrics["fullRenders"] == 0
+    assert metrics["rows"] == 200
+    assert metrics["model"][0] == "[INFO] live-2"
+    assert metrics["model"][-1] == "[INFO] live-201"
+    assert metrics["pinned"] and metrics["atBottom"]
+
+
+def test_sliding_log_snapshot_keeps_tail_without_full_redraw(log_page):
+    """A bounded live snapshot may lose old rows but must not flash to the top."""
+    page, _errors = log_page
+    metrics = page.evaluate("""() => {
+        panel._MAX = 200;
+        const before = Array.from({length:200}, (_, i) => '[INFO] live-' + i);
+        panel._handleMsg({type:'local_logs', lines:before});
+        const terminal = panel._q('terminal');
+        terminal.scrollTop = terminal.scrollHeight;
+        let fullRenders = 0;
+        const original = panel._renderFull;
+        panel._renderFull = function() { fullRenders++; return original.apply(this, arguments); };
+        panel._handleMsg({type:'local_log_lines', replace:true,
+            lines:before.slice(20).concat(Array.from({length:20}, (_, i) => '[INFO] live-' + (200+i)))});
+        return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve({
+            fullRenders, rows:terminal.childElementCount,
+            first:panel._lines[0], last:panel._lines.at(-1),
+            atBottom:terminal.scrollHeight-terminal.clientHeight-terminal.scrollTop <= 2
+        }))));
+    }""")
+    assert metrics == {'fullRenders': 0, 'rows': 200, 'first': '[INFO] live-20',
+                       'last': '[INFO] live-219', 'atBottom': True}
+
+
 @pytest.mark.parametrize("action", ["clear", "close", "replace", "search"])
 def test_pending_search_cancellation_and_invalid_pattern(log_page, action):
     """Queued work cannot resurrect cleared/replaced lines or overwrite a new search."""

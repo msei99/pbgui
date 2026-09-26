@@ -481,6 +481,26 @@ PY
     log "Non-running bot cleanup summary: ${stale_bot_count} bot config directories kept, ${stale_log_count} log files removable"
 }
 
+cleanup_aged_pb7_logs() {
+    local log_path
+    local log_name
+    local removed_count=0
+
+    if [ ! -d "$pb7_dir/logs" ]; then
+        log "Skipping aged PB7 log cleanup: log directory missing"
+        return
+    fi
+    while IFS= read -r -d '' log_path; do
+        log_name="${log_path##*/}"
+        # Keep undated/current logs; only PB7's timestamped run logs expire.
+        if [[ "$log_name" =~ ^[0-9]{8}_[0-9]{6}_.+\.log$ ]]; then
+            remove_file "$log_path" "PB7 run log older than 30 days"
+            removed_count=$((removed_count + 1))
+        fi
+    done < <(find "$pb7_dir/logs" -maxdepth 1 -type f -name '*.log' -mmin +43200 -print0)
+    log "Aged PB7 log cleanup summary: ${removed_count} run logs removable"
+}
+
 if [ "$dry_run" -eq 1 ]; then
     log "Starting VPS cleanup job (dry-run)"
 else
@@ -509,6 +529,8 @@ done
 remove_file "${pbgui_dir}/data/logs/PBGui.log" "unexpected VPS PBGui log"
 remove_tree "${pbgui_dir}/data/remote" "legacy PBRemote data cache"
 remove_tree "${pbgui_dir}/data/state/pbremote" "legacy PBRemote state"
+cleanup_stale_bot_runtime
+cleanup_aged_pb7_logs
 remove_tree "${pbgui_dir}/data/cmd" "legacy PBRun command/status directory"
 remove_tree "${pbgui_dir}/cmd" "legacy root command directory"
 if [ "$cluster_role" = "vps" ]; then
@@ -517,7 +539,6 @@ if [ "$cluster_role" = "vps" ]; then
 else
     log "Skipping backup directory cleanup: cluster role is '${cluster_role:-unknown}', expected vps"
 fi
-cleanup_stale_bot_runtime
 if [ "$dry_run" -eq 1 ]; then
     log "Finished VPS cleanup job (dry-run)"
 else

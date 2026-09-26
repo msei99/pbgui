@@ -1,6 +1,100 @@
 ;(function () {
   'use strict';
 
+  // Match the visible heading and text block across translated Markdown.
+  function guideBlocks(content) {
+    var box = content.getBoundingClientRect();
+    return Array.prototype.slice.call(content.querySelectorAll('h1,h2,h3,h4,p,li,pre,blockquote,table')).map(function (node) {
+      var rect = node.getBoundingClientRect();
+      return { node: node, top: rect.top - box.top + content.scrollTop, height: Math.max(1, rect.height) };
+    });
+  }
+
+  function isGuideHeading(node) {
+    return /^H[1-4]$/.test(node.tagName);
+  }
+
+  function captureGuidePosition(content) {
+    if (!content) return null;
+    var blocks = guideBlocks(content);
+    var scrollMax = Math.max(1, content.scrollHeight - content.clientHeight);
+    var fallback = content.scrollTop / scrollMax;
+    if (!blocks.length) return { fallback: fallback };
+    var visible = content.scrollTop + 8;
+    var headingIndices = [];
+    blocks.forEach(function (block, index) {
+      if (isGuideHeading(block.node)) headingIndices.push(index);
+    });
+    if (!headingIndices.length) return { fallback: fallback };
+    var heading = 0;
+    headingIndices.forEach(function (blockIndex, index) {
+      if (blocks[blockIndex].top <= visible) heading = index;
+    });
+    var first = headingIndices[heading];
+    var last = heading + 1 < headingIndices.length ? headingIndices[heading + 1] : blocks.length;
+    var active = first;
+    for (var i = first; i < last; i += 1) {
+      if (blocks[i].top <= visible) active = i;
+    }
+    return {
+      heading: heading,
+      block: active - first,
+      count: last - first,
+      fraction: Math.max(0, Math.min(1, (visible - blocks[active].top) / blocks[active].height)),
+      fallback: fallback
+    };
+  }
+
+  function restoreGuidePosition(content, position) {
+    if (!content || !position) return;
+    var blocks = guideBlocks(content);
+    var headingIndices = [];
+    blocks.forEach(function (block, index) {
+      if (isGuideHeading(block.node)) headingIndices.push(index);
+    });
+    if (position.heading === undefined || !headingIndices.length) {
+      content.scrollTop = position.fallback * Math.max(0, content.scrollHeight - content.clientHeight);
+      return;
+    }
+    var heading = Math.min(position.heading, headingIndices.length - 1);
+    var first = headingIndices[heading];
+    var last = heading + 1 < headingIndices.length ? headingIndices[heading + 1] : blocks.length;
+    var count = last - first;
+    var block = count === position.count
+      ? Math.min(position.block, count - 1)
+      : Math.round(position.block / Math.max(1, position.count - 1) * Math.max(0, count - 1));
+    var target = blocks[first + block];
+    content.scrollTop = Math.max(0, target.top + position.fraction * target.height - 8);
+  }
+
+  window.PBGuiHelpPosition = { capture: captureGuidePosition, restore: restoreGuidePosition };
+  var pendingGuidePositions = new WeakMap();
+  document.addEventListener('click', function (event) {
+    var button = event.target && event.target.closest ? event.target.closest('button') : null;
+    if (!button || !/^(help-lang|pbgui-shared-help-lang)-(en|de)$/.test(button.id) || button.classList.contains('active')) return;
+    var content = document.getElementById(button.id.indexOf('pbgui-shared-') === 0
+      ? 'pbgui-shared-help-content' : 'help-content');
+    if (!content || !window.MutationObserver) return;
+    var prior = pendingGuidePositions.get(content);
+    if (prior) prior.disconnect();
+    var position = captureGuidePosition(content);
+    var observer = new MutationObserver(function () {
+      if (content.querySelector('.help-loading,.pbgui-shared-help-loading')) return;
+      if (!content.querySelector('h1,h2,h3,h4')) return;
+      observer.disconnect();
+      pendingGuidePositions.delete(content);
+      window.requestAnimationFrame(function () { restoreGuidePosition(content, position); });
+    });
+    pendingGuidePositions.set(content, observer);
+    observer.observe(content, { childList: true });
+    window.setTimeout(function () {
+      if (pendingGuidePositions.get(content) === observer) {
+        observer.disconnect();
+        pendingGuidePositions.delete(content);
+      }
+    }, 15000);
+  }, true);
+
   var state = {
     lang: localStorage.getItem('help-lang') || 'EN',
     topics: [],
@@ -509,10 +603,11 @@
     if (state.lang === lang) return;
     state.lang = lang;
     localStorage.setItem('help-lang', state.lang);
+    var selected = state.topics[state.selectedIndex];
+    var keyword = selected && selected.file ? selected.file : state.currentKeyword;
     state.topicCache = {};
-    state.selectedIndex = 0;
     syncLangButtons();
-    loadHelpIndex(state.currentKeyword, state.pendingAnchor);
+    loadHelpIndex(keyword, state.pendingAnchor);
   }
 
   function bindDrag() {

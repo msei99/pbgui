@@ -12,11 +12,15 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=42" in NAV
-    assert "/app/css/ai_drawer.css?v=16" in NAV
-    assert "/app/js/pbgui_dialogs.js?v=9" in NAV
+    assert "/app/js/ai_drawer.js?v=54" in NAV
+    assert "/app/js/ai_usage.js?v=2" in NAV
+    assert "/app/js/jev_transfer_preview.js?v=1" in NAV
+    assert "jev_preview_id: jevPreviewId || null" in DRAWER
+    assert "PBGuiAIUsage.renderOpenRouter(container, usage)" in DRAWER
+    assert "/app/css/ai_drawer.css?v=18" in NAV
+    assert "/app/js/pbgui_dialogs.js?v=10" in NAV
     loader = NAV.split("function loadDrawerScript", 1)[1].split("var pendingAIAction", 1)[0]
-    assert loader.index("pbgui_dialogs.js?v=9") < loader.index("dialogs.onload = loadDrawerScript")
+    assert loader.index("pbgui_dialogs.js?v=10") < loader.index("dialogs.onload = loadDrawerScript")
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
 
@@ -36,7 +40,7 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "credentials: 'same-origin'" in DRAWER
     assert "api('/conversations')" in DRAWER
     assert "'/turns'" in DRAWER
-    assert "models/health-refresh" in DRAWER
+    assert "Refresh free-model availability" not in DRAWER
     assert "navigator.clipboard.writeText" in DRAWER
     assert "'/rewind'" in DRAWER
     rewind = DRAWER.split("async function rewindMessage", 1)[1].split("async function", 1)[0]
@@ -64,9 +68,9 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "Loading models..." in DRAWER
     assert "Models unavailable" in DRAWER
     assert "state.modelsLoading" in DRAWER
-    assert "model: root.querySelector('#pai-model').value" in DRAWER
-    assert "effort: root.querySelector('#pai-effort').value" in DRAWER
-    assert "provider: selectedProvider()" in DRAWER
+    assert "model: turnModel" in DRAWER
+    assert "effort: turnEffort" in DRAWER
+    assert "provider: turnProvider" in DRAWER
     assert "api('/preferences')" in DRAWER
     assert "method: 'PUT'" in DRAWER
     assert "pagehide" in DRAWER
@@ -116,6 +120,11 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "credentials: 'same-origin'" in NAV
     assert "chat.quick_replies" in DRAWER
     assert "renderQuickReplies" in DRAWER
+    assert "Jev decides how many to mark" in DRAWER
+    assert "Write your own answer…" in DRAWER
+    quick_reply = DRAWER.split("function renderQuickReplies", 1)[1].split("function renderMessages", 1)[0]
+    assert "sendMessage(value)" in quick_reply
+    assert "/ack" not in quick_reply
     assert "proposalReviewText" in DRAWER
     assert "python_analysis" in DRAWER
     assert "proposal.input_data" not in DRAWER

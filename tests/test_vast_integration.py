@@ -24,7 +24,7 @@ def client(tmp_path, monkeypatch):
     from vast_queue import CloudQueue
     from vast_jobs import JobStore
     monkeypatch.setattr(vast, 'CloudQueue', lambda: CloudQueue(JobStore(store.root)))
-    monkeypatch.setattr(vast, "VastCredentialStore", lambda: store)
+    monkeypatch.setattr(vast, "VastCredentialStore", lambda *args: store)
     app = FastAPI()
     app.include_router(vast.router, prefix="/api/vast")
     app.dependency_overrides[require_auth] = lambda: object()
@@ -46,6 +46,77 @@ def test_partial_preferences_preserve_other_groups_and_validate(client):
     assert http.patch('/api/vast/gpu-preferences', json={'hours': 0}).status_code == 422
     assert http.patch('/api/vast/gpu-preferences', json={'unknown': True}).status_code == 422
     assert http.get('/api/vast/gpu-preferences').json()['hours'] == 2
+
+
+def test_calibration_status_and_acceptance_are_local_and_explicit(client):
+    """Profile discovery is read-only and incomplete evidence cannot be accepted."""
+    from secure_files import ensure_private_directory
+    from vast_jobs import write_json
+
+    http, store, _ = client
+    offer = {'id': 11, 'machine_id': 22, 'gpu_name': 'RTX 3090', 'vram_gb': 24,
+             'gpu_mem_bw_gbps': 936, 'price_hour_usd': .5}
+    status = http.post('/api/vast/calibration/status', json=offer)
+    assert status.status_code == 200
+    assert status.headers['cache-control'] == 'no-store'
+    assert status.json()['calibration_worker'] is True
+    assert status.json()['workload']['version'] == 'pb8-gpu-calibration-v2'
+    assert status.json()['workload']['coins'] == ['BTC', 'ETH', 'SOL']
+    assert 'inputs' not in status.json()
+    assert 'configs' not in status.json()
+    assert status.json()['identity']['runtime_verified'] is False
+
+    calibration_id = '2' * 32
+    calibration = ensure_private_directory(store.root / 'jobs' / calibration_id)
+    candidate = {'id': 'a' * 64, 'gpu_variant_fingerprint': 'b' * 64,
+                 'workload_fingerprint': 'c' * 64, 'population_size': 12288,
+                 'protocol': 1, 'hardware_identity': {'provider': offer}}
+    write_json(calibration / 'state.json', {'id': calibration_id, 'kind': 'calibration',
+                                            'status': 'completed', 'rental_state': 'none',
+                                            'calibration_profile_candidate': candidate})
+    accepted = http.post('/api/vast/calibration/accept', json={'job_id': calibration_id})
+    assert accepted.status_code == 422
+    assert not (store.root / 'calibration_profiles.json').exists()
+
+
+def test_calibration_start_requires_paid_rental_consent_before_provider_access(client):
+    """Missing confirmation is rejected before any marketplace or rental mutation."""
+    http, _, _ = client
+    response = http.post('/api/vast/calibration/start', json={
+        'offer': {'id': 11, 'machine_id': 22, 'gpu_name': 'RTX 3090', 'vram_gb': 24,
+                  'gpu_mem_bw_gbps': 936, 'price_hour_usd': .5},
+        'hours': 1, 'budget': 1, 'accept_rental_and_cleanup': False,
+    })
+    assert response.status_code == 422
+
+
+def test_waiting_calibration_requires_paid_consent_and_new_pinned_worker(client, monkeypatch):
+    """An unattended future rental is rejected before any provider call without both gates."""
+    http, store, _ = client
+    request = {'preferences': {'gpu_name': 'RTX 3090', 'max_price': .2,
+                               'min_power_watts': 350, 'min_reliability_pct': 95},
+               'hours': 1, 'budget': 5}
+    assert http.post('/api/vast/calibration/watch', json=request).status_code == 422
+    request['accept_rental_and_cleanup'] = True
+    import vast_calibration
+    monkeypatch.setattr(vast_calibration, 'CALIBRATION_WORKER_DIGEST', None)
+    response = http.post('/api/vast/calibration/watch', json=request)
+    assert response.status_code == 409
+    assert not (store.root / 'jobs').exists()
+
+
+def test_calibration_start_requires_pinned_runner_before_provider_access(client, monkeypatch):
+    """A heartbeat-only worker must never create another paid calibration rental."""
+    import vast_calibration
+    http, _, _ = client
+    monkeypatch.setattr(vast_calibration, 'CALIBRATION_WORKER_DIGEST', None)
+    response = http.post('/api/vast/calibration/start', json={
+        'offer': {'id': 11, 'machine_id': 22, 'gpu_name': 'RTX 3090', 'vram_gb': 24,
+                  'gpu_mem_bw_gbps': 936, 'price_hour_usd': .5},
+        'hours': 1, 'budget': 1, 'accept_rental_and_cleanup': True,
+    })
+    assert response.status_code == 409
+    assert 'calibration runner' in response.json()['detail']
 
 
 def test_concurrent_preference_groups_do_not_lose_updates(client):
@@ -172,7 +243,7 @@ def test_offer_projection_and_query(monkeypatch):
         """Provide one affordable offer and one outside the requested price cap."""
         calls.append((method,path,body))
         return {'offers':[
-            {'id':7,'gpu_name':'RTX 3090','gpu_ram':24576,'cpu_ram':32768,'cpu_cores_effective':8.7,'total_flops':35.58,'dph_total':0.17,'verification':'verified','inet_up_cost':0.01,'inet_down_cost':0.02,'secret':'hidden'},
+            {'id':7,'gpu_name':'RTX 3090','gpu_ram':24576,'cpu_ram':32768,'cpu_cores_effective':8.7,'total_flops':35.58,'gpu_max_power':200,'dph_total':0.17,'verification':'verified','inet_up_cost':0.01,'inet_down_cost':0.02,'secret':'hidden'},
             {'id':8,'dph_total':3}, {'id':9,'dph_total':'nan'},
         ]}
     monkeypatch.setattr(VastClient,'request',request)
@@ -185,6 +256,9 @@ def test_offer_projection_and_query(monkeypatch):
     assert calls[0][2]['allocated_storage']==40
     assert calls[0][2]['type']=='on-demand'
     assert calls[0][2]['num_gpus']=={'eq':1}
+    assert rows[0]['gpu_max_power_watts'] == 200
+    VastClient('key').offers(max_price=.5, max_offers=500)
+    assert calls[-1][2]['limit'] == 500
 
 
 def test_offer_api_passes_validated_filters(client, monkeypatch):
@@ -720,7 +794,7 @@ def test_performance_collector_lifecycle_is_owned_and_idempotent(monkeypatch, tm
     """API shutdown always stops and joins its collector without touching rentals."""
     import asyncio
     import vast_performance
-    from vast_jobs import JobStore
+    from vast_jobs import JobStore, write_json
     from vast_queue import CloudQueue
     stopped = []
     async def inline_to_thread(function, *args, **kwargs):
@@ -741,12 +815,25 @@ def test_performance_collector_lifecycle_is_owned_and_idempotent(monkeypatch, tm
             stopped.append('join')
     monkeypatch.setattr(vast, '_PREPARATION_STOPPING', False)
     monkeypatch.setattr(vast, '_PREPARATION_EXECUTOR', None)
+    monkeypatch.setattr(vast, '_DELETION_EXECUTOR', None)
     monkeypatch.setattr(vast, '_PERFORMANCE_COLLECTOR', None)
     monkeypatch.setattr(vast_performance, 'PerformanceCollector', Collector)
     monkeypatch.setattr(vast.asyncio, 'to_thread', inline_to_thread)
     store = JobStore(tmp_path)
     monkeypatch.setattr(vast, 'JobStore', lambda: store)
     monkeypatch.setattr(vast, 'CloudQueue', lambda: CloudQueue(store))
+    staged = tmp_path / 'jobs' / ('.' + 'a' * 32 + '.delete-interrupted')
+    staged.mkdir(parents=True)
+    (staged / 'input.tar.gz').write_bytes(b'partial old deletion')
+    legacy = tmp_path / 'jobs' / ('b' * 32)
+    legacy.mkdir()
+    write_json(legacy / 'state.json', {'id': 'b' * 32, 'kind': 'job',
+               'status': 'cancelled', 'rental_state': 'none', 'deleted_at': 1})
+    (legacy / 'input.tar.gz').write_bytes(b'old hidden input')
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    monkeypatch.setattr(vast, 'CLOUD_LOG_ROOT', logs)
+    (logs / ('vast_' + 'b' * 32 + '.log')).write_text('old log')
     vast.startup(); vast.startup()
     async def shutdown_twice():
         """Exercise idempotence inside the API's single event-loop lifecycle."""
@@ -755,4 +842,8 @@ def test_performance_collector_lifecycle_is_owned_and_idempotent(monkeypatch, tm
     asyncio.run(shutdown_twice())
     assert stopped == ['start', 'stop', 'join']
     assert vast._PREPARATION_EXECUTOR is None
+    assert vast._DELETION_EXECUTOR is None
     assert vast._PERFORMANCE_COLLECTOR is None
+    assert not staged.exists()
+    assert not legacy.exists()
+    assert not (logs / ('vast_' + 'b' * 32 + '.log')).exists()

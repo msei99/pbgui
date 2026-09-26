@@ -368,7 +368,7 @@ class PerformanceCollector:
                 continue
             try:
                 row = self.store.read(directory.name)
-                if row.get('kind') == 'worker':
+                if row.get('kind') in {'worker', 'calibration'}:
                     continue
                 collect_run(self.store, self.history, row, self.log_root, self.stop_event)
             except InterruptedError:

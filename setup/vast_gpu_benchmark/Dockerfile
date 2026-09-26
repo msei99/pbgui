@@ -6,7 +6,8 @@ COPY --from=rust /usr/local/rustup /usr/local/rustup
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends git build-essential && rm -rf /var/lib/apt/lists/*
-ARG PB8_REVISION=ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8
+# Official enarjord/passivbot source, pinned independently of dependency wheels.
+ARG PB8_REVISION=903ed11153ce82d1b6760604eaa3a553309a752a
 RUN git clone https://github.com/enarjord/passivbot.git /opt/passivbot \
     && cd /opt/passivbot && git checkout --detach "$PB8_REVISION" \
     && git rev-parse HEAD > /opt/pb8-revision \
@@ -25,6 +26,8 @@ FROM python:3.12-bookworm AS runtime
 COPY --from=build /opt/runtime-site/ /usr/local/lib/python3.12/site-packages/
 COPY --from=build /usr/local/lib/python3.12/site-packages/torch/ /usr/local/lib/python3.12/site-packages/torch/
 COPY --from=build /usr/local/lib/python3.12/site-packages/triton/ /usr/local/lib/python3.12/site-packages/triton/
+RUN apt-get update && apt-get install -y --no-install-recommends rsync \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/lib/python3.12/site-packages/nvidia/__init__.py /usr/local/lib/python3.12/site-packages/nvidia/__init__.py
 COPY --from=build /opt/runtime-cu13/ /usr/local/lib/python3.12/site-packages/nvidia/cu13/
 COPY --from=build /usr/local/lib/python3.12/site-packages/nvidia/cu13/lib/libcublasLt.so.13 /usr/local/lib/python3.12/site-packages/nvidia/cu13/lib/libcublasLt.so.13

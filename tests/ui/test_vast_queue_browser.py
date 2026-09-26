@@ -17,7 +17,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
     starts = []
     release_start = threading.Event()
     release_stop = threading.Event()
-    preferences = {'gpu_name':'','max_price':.5,'min_vram':12,'min_ram':16,'min_cpu':4,'disk_gb':40,'verified_only':True,'hours':1,'budget':1,'idle_seconds':300,'max_rentals':1,'auto_rent':False}
+    preferences = {'gpu_name':'','max_price':.5,'min_vram':12,'min_ram':16,'min_cpu':4,'min_power_watts':0,'min_reliability_pct':0,'disk_gb':40,'verified_only':True,'hours':1,'budget':1,'idle_seconds':300,'max_rentals':1,'auto_rent':False}
     class Handler(BaseHTTPRequestHandler):
         """Serve repository assets and fake authenticated cloud API responses."""
         def log_message(self, *args):
@@ -51,7 +51,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
             elif route == '/api/vast/jobs':
                 data = json.dumps({'jobs':jobs,'worker':None,'queue':{},'supervision_available':True})
             elif route == '/api/vast/offers':
-                data = json.dumps({'offers':[{'id':1,'gpu_name':'RTX 3090','disk_gb':40,'price_hour_usd':.15,
+                data = json.dumps({'offers':[{'id':1,'gpu_name':'RTX 3090','disk_gb':40,'price_hour_usd':.15,'gpu_max_power_watts':200,
                     'cpu_name':'Xeon test','gpu_mem_bw_gbps':805,'pci_gen':3,'gpu_lanes':8,'pcie_bw_gbps':5.5,'disk_name':'NVMe test','disk_bw_mbps':1810,'duration_seconds':172800,
                     'cpu_cores':8,'ram_gb':32,'vram_gb':24,'cuda_max_good':13,'location':'test','verified':True}]})
             else:
@@ -189,6 +189,13 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert page.locator('#editor #vast-offers').count() == 0
                 page.locator('[data-vast-view=offers]').click()
                 assert page.locator('#settings #vast-offers').is_visible()
+                assert page.locator('#calibration-options').is_hidden()
+                assert page.locator('#rent-offer').is_visible()
+                page.locator('#calibration-open').click()
+                assert page.locator('#calibration-options').is_visible()
+                assert page.locator('#calibration-preset').is_visible()
+                page.locator('#calibration-close').click()
+                assert page.locator('#calibration-options').is_hidden()
                 assert not page.locator('#show-incompatible').is_checked()
                 page.locator('#gpu-model').fill('3090')
                 page.locator('#find-offers').click()
@@ -199,6 +206,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert 'NVMe test' in page.locator('.offer-details').inner_text()
                 assert page.locator('#gpu-model').input_value() == '3090'
                 assert 'Xeon test' in page.locator('#offers-body').inner_text()
+                assert 'Vast power limit: 200 W' in page.locator('#offers-body tr[data-offer]').inner_text()
                 assert 'Compatible' in page.locator('#offers-body').inner_text()
                 assert '2d 0h' in page.locator('#offers-body').inner_text()
                 details.click()
@@ -590,6 +598,11 @@ def test_convergence_dashboard_progress_and_completion():
             assert page.locator('#stop-job').is_disabled()
             assert page.evaluate("state.logFile") == 'optimizes_v8/vast_worker-observed.log'
             assert page.evaluate("currentObservedOptimizer({observed_optimizer:{running:true,sampled_at:Date.now()/1000-46}})") is None
+            assert page.evaluate("""jobLastError(
+                {status:'failed',error:'Vast.ai instance disappeared'},
+                {creation_error:'Vast request failed (HTTP 400)',instance_id:null,provider_seen_at:null})
+            """) == ('Rental was not created: Vast request failed (HTTP 400). '
+                       'Vast confirms no instance exists; refresh offers and select another host.')
             page.evaluate('''openObservedOptimizer({
                 id:'worker-observed',
                 observed_optimizer:{running:true,name:'perf-halving',activity:'Suite scenario 7/7',sampled_at:Date.now()/1000},
@@ -598,6 +611,123 @@ def test_convergence_dashboard_progress_and_completion():
             assert page.evaluate('openedObservedLog.id') == 'worker-observed'
             assert page.evaluate('openedObservedLog.name') == 'perf-halving'
             assert page.evaluate('openedObservedLog.options.hasLog') is True
+        finally:
+            browser.close()
+
+
+def test_completed_calibration_remains_visible_and_acceptable():
+    """Render persisted case evidence and its pending acceptance after reload."""
+    playwright = pytest.importorskip('playwright.sync_api')
+    source = (ROOT / 'frontend/js/vast.js').read_text()
+    functions = source[
+        source.index('  function formatElapsedSeconds(value)'):
+        source.index('  function hostStatus(profile)')
+    ]
+    with playwright.sync_playwright() as runner:
+        browser = runner.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.set_content('''
+                <p id="calibration-status"></p>
+                <button id="calibration-start"></button>
+                <button id="calibration-accept" hidden></button>
+                <div id="calibration-result" hidden></div>
+                <form id="offers-form"><input id="gpu-model" value="RTX 3090"><input id="max-price" value="0.2"></form>
+                <button id="calibration-watch-start"></button>
+                <section id="calibration-watch-panel" hidden>
+                  <strong id="calibration-watch-title"></strong>
+                  <span id="calibration-watch-phase"></span>
+                  <button id="calibration-watch-cancel" hidden></button>
+                  <div id="calibration-watch-target"></div>
+                  <p id="calibration-watch-status"></p>
+                </section>
+            ''')
+            page.add_script_tag(content='''
+                const el = id => document.getElementById(id);
+                const calibrationSelection = () => ({preset:'small',legacy:true});
+                const fmt = (value, digits) => Number(value).toFixed(digits);
+                const renderOfferGpuProfile = () => {};
+                let selectedOffer = null, calibrationInfo = null, calibrationStarting = false;
+                let workers = [], supervision = true, savedPreferences = {}, renting = false;
+                let startingQueue = false, workerAction = null, calibrationGeneration = 0, disposed = false;
+                let queueState = {}, watchCancelling = false, calibrationWorkerAvailable = true;
+                let jobRows = [{
+                  id:'calibration-1', kind:'calibration', status:'completed',
+                  calibration_profile_candidate:{population_size:8192,
+                    hardware_identity:{gpu_name:'NVIDIA RTX 3060',vram_mib:11908,compute_capability:'8.6',pci_device_id:'0X250310DE',
+                      provider:{gpu_name:'RTX 3060',vram_gb:12}},
+                    cases:{
+                      '4096':{population_size:4096,rate_per_second:41.5,wall_seconds:400,source:'completed_generation',valid:true},
+                      '8192':{population_size:8192,rate_per_second:45.9,wall_seconds:391,source:'completed_generation',valid:true},
+                      '16384':{population_size:16384,rate_per_second:45.4,wall_seconds:400,source:'completed_generation',valid:true}
+                    }}
+                }];
+            ''' + functions)
+            page.evaluate('''jobRows.unshift({
+              id:'calibration-3090', kind:'calibration', status:'completed',
+              calibration_profile_candidate:{protocol:3,population_size:12288,
+                hardware_identity:{gpu_name:'NVIDIA RTX 3090',vram_mib:24200,gpu_power_limit_watts:200,
+                  provider:{gpu_name:'RTX 3090',vram_gb:24}},
+                cases:{'12288':{population_size:12288,rate_per_second:60,wall_seconds:400,
+                  source:'generation_profile',rate_window_seconds:224,generation_count:1,
+                  proxy_seconds:217,dispatch_count:11,dispatch_batch_size:1186,
+                  last_dispatch_size:428,valid:true}}}
+            }); renderCalibration()''')
+            assert page.locator('#calibration-result').is_hidden()
+            assert page.locator('#calibration-accept').is_hidden()
+            page.evaluate("selectedOffer={gpu_name:'RTX 3060',vram_gb:12}; renderCalibration()")
+            assert page.locator('#calibration-result').is_visible()
+            assert 'RTX 3060' in page.locator('#calibration-result').inner_text()
+            assert page.locator('#calibration-result tbody tr').count() == 3
+            assert page.locator('#calibration-result tr.is-recommended').inner_text().startswith('8,192')
+            assert '6m 31s' in page.locator('#calibration-result tr.is-recommended').inner_text()
+            assert page.locator('#calibration-accept').is_visible()
+            assert page.locator('#calibration-accept').get_attribute('data-job-id') == 'calibration-1'
+            assert 'Completed performance test ready' in page.locator('#calibration-status').inner_text()
+
+            page.evaluate("selectedOffer={gpu_name:'RTX 3060',vram_gb:24}; renderCalibration()")
+            assert page.locator('#calibration-result').is_hidden()
+            assert page.locator('#calibration-accept').is_hidden()
+
+            page.evaluate("selectedOffer={gpu_name:'RTX 3090',vram_gb:24,gpu_max_power_watts:350}; calibrationInfo={calibration_worker:true}; renderCalibration()")
+            assert 'RTX 3090' in page.locator('#calibration-result').inner_text()
+            assert page.locator('#calibration-accept').get_attribute('data-job-id') == 'calibration-3090'
+            assert 'EMA-anchor calibration' in page.locator('#calibration-result').inner_text()
+            assert '11 × ≤1,186 · last 428' in page.locator('#calibration-result').inner_text()
+            assert '3m 44s · 1 gen' in page.locator('#calibration-result').inner_text()
+            assert page.locator('#calibration-start').is_enabled()
+            assert page.locator('#calibration-start').inner_text() == 'Repeat performance test'
+            assert 'nearest saved test at 200 W for this offer at 350 W' in page.locator('#calibration-status').inner_text()
+
+            page.evaluate("calibrationInfo={calibration_worker:false,error:'Calibration API unavailable'}; renderCalibration()")
+            assert page.locator('#calibration-start').is_disabled()
+            assert 'pinned calibration worker is unavailable' in page.locator('#calibration-status').inner_text()
+            assert page.locator('#calibration-start').get_attribute('title') == 'The pinned calibration worker is unavailable or mismatched.'
+
+            page.evaluate("selectedOffer={gpu_name:'RTX 3060',vram_gb:12}; jobRows[1].calibration_profile_accepted_at=123; renderCalibration()")
+            assert page.locator('#calibration-accept').is_hidden()
+            assert 'Local profile active' in page.locator('#calibration-result').inner_text()
+
+            page.evaluate("""queueState.calibration_watch={id:'watch-1',job_id:'watch-job',hours:12,budget:5,
+              last_checked_at:Date.now()/1000,preferences:{gpu_name:'RTX 3090',max_price:.25,min_power_watts:350,
+              min_reliability_pct:95,verified_only:true,min_vram:24,min_cpu:16,min_ram:32,disk_gb:40}};
+              jobRows.push({id:'watch-job',kind:'calibration',status:'ready',
+                calibration_watch_preferences:queueState.calibration_watch.preferences}); renderCalibration()""")
+            assert page.locator('#calibration-watch-panel').is_visible()
+            assert page.locator('#calibration-watch-title').inner_text() == 'Waiting for RTX 3090'
+            assert page.locator('#calibration-watch-phase').inner_text() == 'Searching offers'
+            assert '≥350 W advertised' in page.locator('#calibration-watch-target').inner_text()
+            assert '≤$0.2500/hour' in page.locator('#calibration-watch-target').inner_text()
+            assert page.locator('#calibration-watch-cancel').is_visible()
+            assert page.locator('#calibration-status').is_hidden()
+            page.evaluate("""queueState.calibration_watch=null;
+              jobRows.find(row=>row.id==='watch-job').status='running'; renderCalibration()""")
+            assert page.locator('#calibration-watch-title').inner_text() == 'Performance test: RTX 3090'
+            assert page.locator('#calibration-watch-phase').inner_text() == 'Test running'
+            assert page.locator('#calibration-watch-cancel').is_hidden()
+            page.evaluate('''jobRows.find(row=>row.id==='watch-job').status='ready';
+              workers=[{calibration_job_id:'watch-job',rental_state:'provisioning'}]; renderCalibration()''')
+            assert page.locator('#calibration-watch-phase').inner_text() == 'GPU found · starting test'
         finally:
             browser.close()
 
@@ -614,11 +744,15 @@ def test_vast_result_snapshots_trigger_refresh_without_local_runs():
             page.set_content('<div id="supervision-status"></div>')
             page.add_script_tag(content='''
                 const el = id => document.getElementById(id);
-                let jobGeneration=0, disposed=false, jobRows=[], workers=[], worker=null, queueState={}, supervision=false, selectedJobId=null;
+                let jobGeneration=0, jobTimer=null, timers=[], disposed=false, jobRows=[], workers=[], worker=null, queueState={}, supervision=false, selectedJobId=null;
+                const setTimeout=(callback, delay)=>{const timer={callback,delay,cleared:false}; timers.push(timer); return timer;};
+                const clearTimeout=timer=>{if(timer) timer.cleared=true;};
                 const stoppingJobs = new Map();
+                const pollJobs=()=>{};
                 let data={jobs:[{id:'test'}]};
                 const request=async () => structuredClone(data);
-                const renderJob=()=>{},renderQueueOverview=()=>{};
+                const renderJob=()=>{},renderQueueOverview=()=>{},refreshActiveGpuProfile=()=>{};
+                const completedCalibration=()=>false;
                 const message=msg=>{throw new Error(msg);};
                 window.refreshes=[];
                 const refreshLiveResultsDuringRun=async force=>refreshes.push(force);
@@ -631,6 +765,7 @@ def test_vast_result_snapshots_trigger_refresh_without_local_runs():
             page.evaluate('data.jobs[0].last_backup_at=160; refreshJobs()')
             page.evaluate('data.jobs[0].result_partial=false; refreshJobs()')
             assert page.evaluate('refreshes') == [True, True, True]
+            assert page.evaluate('timers.filter(timer => !timer.cleared).length') == 1
         finally:
             browser.close()
 

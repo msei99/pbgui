@@ -174,6 +174,7 @@ def test_real_start_admits_three_and_no_more(queue, monkeypatch):
     """Exercise durable start and cap checks while mocking all paid boundaries."""
     import vast_jobs
     import vast_image
+    monkeypatch.setattr('vast_queue.preflight_local_metadata', lambda *args: None)
     monkeypatch.setattr(vast_jobs, 'services_available', lambda: True)
     monkeypatch.setattr(vast_image, 'require_public_image', lambda *args: None)
     monkeypatch.setattr(vast_jobs, 'VastCredentialStore', lambda *args: SimpleNamespace(

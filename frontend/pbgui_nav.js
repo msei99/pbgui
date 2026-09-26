@@ -51,6 +51,10 @@
       name: aiContextText(value.name, 128)
     };
     if (!entity.kind || !entity.name || aiContextSensitiveName(entity.kind)) return null;
+    if (entity.kind === 'optimizer_run') {
+      var resultId = aiContextText(value.result_id, 200);
+      if (/^[A-Za-z0-9_.-]{1,200}$/.test(resultId)) entity.result_id = resultId;
+    }
     return entity;
   }
 
@@ -632,6 +636,7 @@
       { page: 'dashboards',           icon: '&#128202;', label: 'Dashboards'        },
       { page: 'info_coin_data',       icon: '&#129689;', label: 'Coin Data'         },
       { page: 'info_market_data_fastapi', icon: '&#128187;', label: 'Market Data' },
+      { page: 'info_hl_limits',         icon: '&#128200;', label: 'Hyperliquid Limits' },
       { page: 'info_balance_calc',    icon: '&#128176;', label: 'Balance Calculator'},
       { page: 'info_ai_chat',         icon: '&#10024;',  label: 'AI Chat'           },
       { page: 'help',                 icon: '&#10067;',  label: 'Help'              }
@@ -987,7 +992,7 @@
     // A classic-script class is a global lexical binding, not a window property.
     if (typeof LogViewerPanel === 'function') { cb(); return; }
     var s = document.createElement('script');
-    s.src = _appPath('/app/js/log_viewer_panel.js?v=48');
+    s.src = _appPath('/app/js/log_viewer_panel.js?v=50');
     s.onload = cb;
     s.onerror = function() { console.warn('Failed to load log_viewer_panel.js'); };
     document.head.appendChild(s);
@@ -1567,6 +1572,7 @@
     'dashboards':        '/api/dashboard/main_page',
     'info_coin_data':    '/api/coin-data/main_page',
     'info_market_data_fastapi': '/api/market-data/main_page',
+    'info_hl_limits':  '/api/vps-manager/hyperliquid-limits/main_page',
     'info_ai_chat':      '/api/ai/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
     'system_profit_sweep': '/api/profit-sweep/main_page',
@@ -1597,6 +1603,7 @@
     'dashboards':                  '33_dashboard',
     'info_coin_data':              '27_coin_data',
     'info_market_data_fastapi':    '26_market_data',
+    'info_hl_limits':             '49_hyperliquid_limits',
     'info_ai_chat':                 '45_ai_chat',
     'system_api_keys':             '20_api_keys',
     'system_profit_sweep':          '46_profit_sweep',
@@ -1806,7 +1813,7 @@
 
       guideBtn.disabled = true;
       var script = document.createElement('script');
-      script.src = _appPath('/app/js/shared_help_overlay.js?v=7');
+      script.src = _appPath('/app/js/shared_help_overlay.js?v=8');
       script.onload = function () {
         guideBtn.disabled = false;
         if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {
@@ -1843,19 +1850,27 @@
       _aiDrawerLoading = true;
       var link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = _appPath('/app/css/ai_drawer.css?v=16');
+      link.href = _appPath('/app/css/ai_drawer.css?v=18');
       document.head.appendChild(link);
       function loadDrawerScript() {
         if (!window.PBGuiAIUsage) {
           var usage = document.createElement('script');
-          usage.src = _appPath('/app/js/ai_usage.js?v=1');
+          usage.src = _appPath('/app/js/ai_usage.js?v=2');
           usage.onload = loadDrawerScript;
           usage.onerror = function () { _aiDrawerLoading = false; };
           document.head.appendChild(usage);
           return;
         }
+        if (!window.PBGuiJevTransferPreview) {
+          var transfer = document.createElement('script');
+          transfer.src = _appPath('/app/js/jev_transfer_preview.js?v=1');
+          transfer.onload = loadDrawerScript;
+          transfer.onerror = function () { _aiDrawerLoading = false; };
+          document.head.appendChild(transfer);
+          return;
+        }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=42');
+        script.src = _appPath('/app/js/ai_drawer.js?v=54');
         script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);
@@ -1865,7 +1880,7 @@
         return;
       }
       var dialogs = document.createElement('script');
-      dialogs.src = _appPath('/app/js/pbgui_dialogs.js?v=9');
+      dialogs.src = _appPath('/app/js/pbgui_dialogs.js?v=10');
       dialogs.onload = loadDrawerScript;
       dialogs.onerror = loadDrawerScript;
       document.head.appendChild(dialogs);

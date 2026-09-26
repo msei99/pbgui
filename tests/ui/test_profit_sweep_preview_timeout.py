@@ -132,7 +132,7 @@ const assert=require('assert');
 const livePolicyRevisions = new Map();
 const original={policy:{operating_mode:'dry'}};
 const user={name:'mani10',has_policy:true,operating_mode:'dry',due:'7'};
-const state={selectedUser:'mani10',accountGeneration:2,record:original,users:[user]};
+const state={selectedUser:'mani10',accountGeneration:2,policyRequestId:0,record:original,users:[user]};
 const isCurrentAccount=(name,generation)=>name===state.selectedUser&&generation===state.accountGeneration;
 const statusState=()=>({sweep_due:'0'});
 let renders=0;function renderAccounts(){renders++;}

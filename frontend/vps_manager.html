@@ -968,6 +968,16 @@
       filter: brightness(1.08);
     }
 
+    .hl-limit-history {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+    }
+
+    .hl-limit-history .field-help {
+      font-weight: 400;
+    }
+
     .cpu-chart-meta {
       display: flex;
       flex-wrap: wrap;
@@ -978,6 +988,36 @@
     #cpuHistoryMeta {
       flex: 0 0 auto;
     }
+
+    #hlCreditPurchasePanel[hidden] { display: none !important; }
+
+    #hlCreditPurchasePanel {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: 10px;
+      padding: 10px 0 14px;
+    }
+
+    #hlCreditPurchasePanel label {
+      display: grid;
+      gap: 5px;
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+
+    #hlCreditAmount {
+      width: 135px;
+      height: 34px;
+      padding: 0 9px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg2);
+      color: var(--text);
+    }
+
+    #hlCreditCost { color: var(--text-dim); font-size: 12px; padding-bottom: 9px; }
+    #hlCreditStatus { width: 100%; color: var(--text-dim); font-size: 12px; }
 
     #cpuHistoryBody {
       flex: 1 1 auto;
@@ -2982,6 +3022,14 @@
       </div>
       <div class='cpu-history-body'>
         <div id='cpuHistoryMeta'></div>
+        <div id='hlCreditPurchasePanel' hidden>
+          <label for='hlCreditAmount'>Request credits to buy
+            <input id='hlCreditAmount' type='number' min='1' max='100000' step='1' inputmode='numeric' placeholder='e.g. 6000'>
+          </label>
+          <span id='hlCreditCost'>Enter a whole number from 1 to 100,000.</span>
+          <button id='hlCreditBuyButton' class='btn' type='button' disabled>Buy credits</button>
+          <span id='hlCreditStatus' role='status' aria-live='polite'></span>
+        </div>
         <div id='cpuHistoryBody'></div>
       </div>
     </div>
@@ -3043,7 +3091,8 @@
     </main>
   </div>
 
-  <script src='/app/js/log_viewer_panel.js?v=48'></script>
+  <script src='/app/js/log_viewer_panel.js?v=50'></script>
+  <script src='/app/js/pbgui_dialogs.js?v=10'></script>
   <script>
     const API_BASE = "%%API_BASE%%";
     const WS_BASE = "%%WS_BASE%%";
@@ -3083,6 +3132,8 @@
       deletedOverviewHosts: {},
       pendingDeleteVpsHostname: '',
       detail: null,
+      hlRateLimits: { accounts: [] },
+      hlRateLimitsRequestGeneration: 0,
       view: 'overview',
       hostname: '',
       addDebug: false,
@@ -6826,16 +6877,14 @@
         helpLang = 'EN';
         helpLangEN.classList.add('active');
         helpLangDE.classList.remove('active');
-        helpSel = 0;
-        loadHelpIndex(helpDefaultTopic);
+        loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (helpDefaultTopic));
       });
       helpLangDE.addEventListener('click', function () {
         if (helpLang === 'DE') return;
         helpLang = 'DE';
         helpLangDE.classList.add('active');
         helpLangEN.classList.remove('active');
-        helpSel = 0;
-        loadHelpIndex(helpDefaultTopic);
+        loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (helpDefaultTopic));
       });
 
       window.closeHelp = function () {
@@ -11647,6 +11696,7 @@
 
     const METRIC_HISTORY_META = {
       cpu: { label: 'CPU', source: 'cpu_60s', unit: '%', empty: 'No confirmed 60s samples stored yet.' },
+      hl_requests: { label: 'Account Request Limit', source: 'Hyperliquid userRateLimit', unit: '', empty: 'No account samples stored yet.' },
       memory: { label: 'Memory', source: 'mem_percent', unit: '%', botSource: 'rss_mb', botUnit: 'MB', empty: 'No memory history available yet.', botEmpty: 'No bot memory history available yet.' },
       disk: { label: 'Disk', source: 'disk_percent', unit: '%', empty: 'No disk history available yet.' },
       swap: { label: 'Swap', source: 'swap_percent', unit: '%', botSource: 'swap_mb', botUnit: 'MB', empty: 'No swap history available yet.', botEmpty: 'No bot swap history available yet.' },
@@ -11663,12 +11713,14 @@
     function metricHistoryTitle(metric, host, bot) {
       const meta = metricHistoryMeta(metric);
       const botLabel = String(bot || '').replace(/^[78]:/, '');
+      if (metric === 'hl_requests') return meta.label + ' History - ' + botLabel;
       return botLabel ? (meta.label + ' History - ' + botLabel + ' @ ' + host) : (meta.label + ' History - ' + host);
     }
 
     function metricHistorySubtitle(metric, payload) {
       const meta = metricHistoryMeta(metric);
       const source = String((payload && payload.source) || meta.source || '').trim();
+      if (metric === 'hl_requests') return '24h history, 1 sample/5 minutes, source: ' + source;
       if (meta.countMetric) return '4w history, 1 sample/hour, UTC day totals, source: ' + source;
       if (meta.fillsMetric) return 'full history from available logs, UTC daily fill totals, source: ' + source;
       if (meta.pnlMetric) return 'full history from available logs, UTC daily aggregates, source: ' + source;
@@ -11677,6 +11729,7 @@
 
     function metricHistoryLoadingSubtitle(metric) {
       const meta = metricHistoryMeta(metric);
+      if (metric === 'hl_requests') return 'Loading 24h account request history...';
       if (meta.fillsMetric) return 'Loading full ' + meta.source + ' fill history...';
       if (meta.pnlMetric) return 'Loading full ' + meta.source + ' history...';
       return (meta.countMetric ? 'Loading 4w ' : 'Loading 24h ') + meta.source + ' history...';
@@ -11948,9 +12001,11 @@
     }
 
     function setCpuHistoryLoading(host, bot, metric) {
+      cpuHistoryLastPayload = null;
       document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
       document.getElementById('cpuHistorySubtitle').textContent = metricHistoryLoadingSubtitle(metric);
       document.getElementById('cpuHistoryMeta').innerHTML = '';
+      document.getElementById('hlCreditPurchasePanel').hidden = metric !== 'hl_requests';
       document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Loading...</div>';
     }
 
@@ -11989,14 +12044,151 @@
     let cpuHistoryRequestGeneration = 0;
     let cpuHistoryAbortController = null;
     const metricHistoryCache = {};
+    let hlCreditPurchasePending = false;
+
+    function formatHlRequestCount(value) {
+      return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, "'");
+    }
+
+    function updateHlCreditCost() {
+      const input = document.getElementById('hlCreditAmount');
+      const raw = input.value.trim();
+      const valid = /^[1-9]\d*$/.test(raw) && Number(raw) <= 100000;
+      document.getElementById('hlCreditCost').textContent = valid
+        ? 'Cost: ' + (Number(raw) * 0.0005).toFixed(4) + ' USDC from Perps balance'
+        : 'Enter a whole number from 1 to 100,000.';
+      document.getElementById('hlCreditBuyButton').disabled = hlCreditPurchasePending || !valid;
+      return valid ? Number(raw) : null;
+    }
+
+    async function buyHlRequestCredits() {
+      if (hlCreditPurchasePending || !cpuHistoryLastPayload || cpuHistoryLastPayload.metric !== 'hl_requests') return;
+      const credits = updateHlCreditCost();
+      if (credits === null) return;
+      const account = cpuHistoryLastPayload.botName;
+      const cost = (credits * 0.0005).toFixed(4);
+      if (!window.PBGuiDialogs || typeof window.PBGuiDialogs.confirm !== 'function') {
+        document.getElementById('hlCreditStatus').textContent = 'Confirmation dialog unavailable. Reload the page.';
+        return;
+      }
+      const confirmed = await window.PBGuiDialogs.confirm({
+        title: 'Buy Hyperliquid request credits',
+        message: 'Buy ' + formatHlRequestCount(credits) + ' request credits for ' + account + '?',
+        detail: 'Hyperliquid charges ' + cost + ' USDC from this account’s Perps balance. This is a one-time purchase.',
+        confirmText: 'Buy for ' + cost + ' USDC'
+      });
+      if (!confirmed || !cpuHistoryLastPayload || cpuHistoryLastPayload.metric !== 'hl_requests'
+          || cpuHistoryLastPayload.botName !== account || updateHlCreditCost() !== credits) return;
+      hlCreditPurchasePending = true;
+      updateHlCreditCost();
+      document.getElementById('hlCreditStatus').textContent = 'Submitting purchase to Hyperliquid…';
+      try {
+        const response = await fetch(API_BASE + '/user-rate-limits/credits', {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_name: account, credits: credits })
+        });
+        const data = await response.json().catch(function () { return {}; });
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Purchase request failed');
+        if (cpuHistoryLastPayload && cpuHistoryLastPayload.metric === 'hl_requests' && cpuHistoryLastPayload.botName === account) {
+          document.getElementById('hlCreditStatus').textContent = data.verified
+            ? 'Purchased ' + formatHlRequestCount(credits) + ' credits for ' + data.cost_usdc + ' USDC.'
+            : 'Purchase accepted. Current account limit could not be verified yet.';
+          refreshOpenHlRateLimitHistory(true);
+        }
+        fetchHlAccountLimits();
+      } catch (error) {
+        if (cpuHistoryLastPayload && cpuHistoryLastPayload.metric === 'hl_requests' && cpuHistoryLastPayload.botName === account) {
+          document.getElementById('hlCreditStatus').textContent = error.message || 'Purchase status unknown. Check the account before trying again.';
+        }
+      } finally {
+        hlCreditPurchasePending = false;
+        updateHlCreditCost();
+      }
+    }
+
+    document.getElementById('hlCreditAmount').addEventListener('input', updateHlCreditCost);
+    document.getElementById('hlCreditBuyButton').addEventListener('click', buyHlRequestCredits);
 
     function renderMetricHistoryPayload(payload, host, bot, metric) {
       const points = metricHistorySeriesPoints(metric, payload);
       cpuHistoryLastPayload = { data: payload, host: host, botName: bot, metric: metric };
       document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
       document.getElementById('cpuHistorySubtitle').textContent = metricHistorySubtitle(metric, payload);
-      document.getElementById('cpuHistoryMeta').innerHTML = renderCpuHistoryMeta(payload, points, metric);
-      document.getElementById('cpuHistoryBody').innerHTML = renderCpuHistoryChart(payload, points, metric);
+      document.getElementById('hlCreditPurchasePanel').hidden = metric !== 'hl_requests';
+      document.getElementById('cpuHistoryMeta').innerHTML = metric === 'hl_requests'
+        ? renderHlRateLimitHistoryMeta(payload) : renderCpuHistoryMeta(payload, points, metric);
+      document.getElementById('cpuHistoryBody').innerHTML = metric === 'hl_requests'
+        ? renderHlRateLimitHistoryChart(payload) : renderCpuHistoryChart(payload, points, metric);
+    }
+
+    function renderHlRateLimitHistoryMeta(payload) {
+      const samples = Array.isArray(payload && payload.samples) ? payload.samples : [];
+      const latest = samples.length ? samples[samples.length - 1] : null;
+      if (!latest) return `<div class='cpu-chart-meta'>${cpuChartPill('Samples', '0')}</div>`;
+      const used = Number(latest.used);
+      const cap = Number(latest.cap);
+      const remaining = Math.max(0, cap - used);
+      return `<div class='cpu-chart-meta'>`
+        + cpuChartPill('Used', formatHlRequestCount(used))
+        + cpuChartPill('Cap', formatHlRequestCount(cap))
+        + cpuChartPill('Remaining', formatHlRequestCount(remaining))
+        + cpuChartPill('Usage', cap > 0 ? (used / cap * 100).toFixed(1) + '%' : 'n/a')
+        + cpuChartPill('Last sample', new Date(Number(latest.sampled_at) * 1000).toLocaleString())
+        + cpuChartPill('Samples', String(samples.length)) + `</div>`;
+    }
+
+    function renderHlRateLimitHistoryChart(payload) {
+      const samples = (Array.isArray(payload && payload.samples) ? payload.samples : []).filter(function (sample) {
+        return Number.isFinite(Number(sample.sampled_at)) && Number.isFinite(Number(sample.used))
+          && Number.isFinite(Number(sample.cap)) && Number(sample.sampled_at) > 0
+          && Number(sample.used) >= 0 && Number(sample.cap) >= 0;
+      }).sort(function (a, b) { return Number(a.sampled_at) - Number(b.sampled_at); });
+      if (!samples.length) return `<div class='empty-state'>No account samples stored yet.</div>`;
+      const width = 920;
+      const height = getCpuHistoryChartHeight();
+      const pad = { left: 74, right: 18, top: 28, bottom: 32 };
+      const innerW = width - pad.left - pad.right;
+      const innerH = height - pad.top - pad.bottom;
+      const end = Math.max(Date.now() / 1000, Number(samples[samples.length - 1].sampled_at));
+      const start = end - 86400;
+      const maxCounter = Math.max(1, ...samples.map(function (sample) { return Math.max(Number(sample.used), Number(sample.cap)); }));
+      const ceiling = Math.ceil(maxCounter / 4) * 4;
+      function x(sample) { return pad.left + Math.max(0, Math.min(1, (Number(sample.sampled_at) - start) / 86400)) * innerW; }
+      function y(value) { return pad.top + innerH - Number(value) / ceiling * innerH; }
+      function pathFor(key) {
+        return samples.map(function (sample, index) {
+          const gap = index > 0 && Number(sample.sampled_at) - Number(samples[index - 1].sampled_at) > 600;
+          return (index === 0 || gap ? 'M' : 'L') + x(sample).toFixed(1) + ' ' + y(sample[key]).toFixed(1);
+        }).join(' ');
+      }
+      const guides = [0, 1, 2, 3, 4].map(function (step) {
+        const value = ceiling * step / 4;
+        const yy = y(value).toFixed(1);
+        return `<line x1='${pad.left}' y1='${yy}' x2='${width - pad.right}' y2='${yy}' stroke='rgba(255,255,255,0.08)'/>`
+          + `<text x='${pad.left - 8}' y='${Number(yy) + 4}' text-anchor='end' fill='rgba(255,255,255,0.55)' font-size='11'>${esc(formatHlRequestCount(Math.round(value)))}</text>`;
+      }).join('');
+      const markers = samples.map(function (sample) {
+        const label = new Date(Number(sample.sampled_at) * 1000).toLocaleString()
+          + ' | Used ' + formatHlRequestCount(Number(sample.used)) + ' / Cap ' + formatHlRequestCount(Number(sample.cap));
+        return `<circle cx='${x(sample).toFixed(1)}' cy='${y(sample.cap).toFixed(1)}' r='3' fill='rgba(244,185,66,0.9)'><title>${esc(label)}</title></circle>`
+          + `<circle cx='${x(sample).toFixed(1)}' cy='${y(sample.used).toFixed(1)}' r='3' fill='rgba(93,196,255,0.95)'><title>${esc(label)}</title></circle>`;
+      }).join('');
+      const ticks = [0, 6, 12, 18, 24].map(function (hour) {
+        const xx = pad.left + hour / 24 * innerW;
+        const label = new Date((start + hour * 3600) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `<text x='${xx.toFixed(1)}' y='${height - 8}' text-anchor='${hour === 0 ? 'start' : (hour === 24 ? 'end' : 'middle')}' fill='rgba(255,255,255,0.55)' font-size='11'>${esc(label)}</text>`;
+      }).join('');
+      return `<div class='cpu-chart-wrap'><svg class='cpu-chart-svg' viewBox='0 0 ${width} ${height}' preserveAspectRatio='none' role='img' aria-label='24 hour account request usage and cap history chart'>
+        <rect x='0' y='0' width='${width}' height='${height}' rx='10' fill='rgba(5,9,15,0.55)'/>
+        ${guides}
+        <path d='${pathFor('cap')}' fill='none' stroke='rgba(244,185,66,0.9)' stroke-width='2' stroke-linejoin='round'/>
+        <path d='${pathFor('used')}' fill='none' stroke='rgba(93,196,255,0.95)' stroke-width='2.5' stroke-linejoin='round'/>
+        ${markers}
+        <text x='${pad.left}' y='17' fill='rgba(93,196,255,0.95)' font-size='11'>Used</text>
+        <text x='${pad.left + 48}' y='17' fill='rgba(244,185,66,0.9)' font-size='11'>Cap</text>
+        ${ticks}
+      </svg></div>`;
     }
 
     window.openMetricHistory = function openMetricHistory(hostname, metricName, botName) {
@@ -12005,6 +12197,9 @@
       const requestMetric = metric === 'pnl_fills' ? 'pnl' : metric;
       const bot = String(botName || '').trim();
       if (!host) return;
+      if (metric === 'hl_requests' && (!cpuHistoryLastPayload || cpuHistoryLastPayload.botName !== bot)) {
+        document.getElementById('hlCreditStatus').textContent = '';
+      }
       const cacheKey = host + '::' + requestMetric + '::' + bot;
       const generation = ++cpuHistoryRequestGeneration;
       if (cpuHistoryAbortController) cpuHistoryAbortController.abort();
@@ -12017,7 +12212,10 @@
       }
       showCpuHistoryOverlay();
       prepareCpuHistoryWindow(980, 560);
-      fetch(API_BASE + '/metric-history/' + encodeURIComponent(host) + '?metric=' + encodeURIComponent(requestMetric) + (bot ? '&bot_name=' + encodeURIComponent(bot) : ''), {
+      const historyUrl = metric === 'hl_requests'
+        ? API_BASE + '/user-rate-limits/history/' + encodeURIComponent(bot)
+        : API_BASE + '/metric-history/' + encodeURIComponent(host) + '?metric=' + encodeURIComponent(requestMetric) + (bot ? '&bot_name=' + encodeURIComponent(bot) : '');
+      fetch(historyUrl, {
         credentials: 'same-origin',
         signal: cpuHistoryAbortController.signal,
         cache: 'no-store'
@@ -12851,7 +13049,8 @@
     }
 
     var BOT_COLUMNS = [
-      { label: 'Name',              field: 'name',                  width: '21%', type: 'str' },
+      { label: 'Name',              field: 'name',                  width: '20%', type: 'str' },
+      { label: 'HL Limit',          field: 'hl_limit',              width: '8%',  type: 'num' },
       { label: 'CPU',               field: 'cpu',                   width: '10%', type: 'num' },
       { label: 'Memory',            field: 'memory_mb',             width: '7%',  type: 'num' },
       { label: 'Swap',              field: 'swap_mb',               width: '7%',  type: 'num' },
@@ -12879,12 +13078,68 @@
       var m = s.dir === 'asc' ? 1 : -1;
       var t = col.type;
       return items.slice().sort(function(a, b) {
-        var va = a[s.field], vb = b[s.field];
+        var va = s.field === 'hl_limit' ? _hlLimitSortValue(a) : a[s.field];
+        var vb = s.field === 'hl_limit' ? _hlLimitSortValue(b) : b[s.field];
         if (va == null) va = t === 'num' ? 0 : '';
         if (vb == null) vb = t === 'num' ? 0 : '';
         if (t === 'num') return (Number(va) - Number(vb)) * m;
         return String(va).localeCompare(String(vb)) * m;
       });
+    }
+
+    function _hlAccountForBot(item, pbVersion) {
+      if (!item || !item.name) return null;
+      const name = String(item.name || '');
+      const version = String(pbVersion || item.pb_version || '7');
+      const host = String(item.server || store.hostname || '');
+      const accounts = ((store.hlRateLimits || {}).accounts || []);
+      const matches = accounts.filter(function (account) {
+        return Array.isArray(account.bots) && account.bots.some(function (bot) {
+          return String(bot.name || '') === name && String(bot.host || '') === host
+            && (!bot.pb_version || String(bot.pb_version) === version);
+        });
+      });
+      if (matches.length === 1) return matches[0];
+      const nameMatches = accounts.filter(function (account) {
+        return Array.isArray(account.bots) && account.bots.some(function (bot) {
+          return String(bot.name || '') === name
+            && (!bot.pb_version || String(bot.pb_version) === version);
+        });
+      });
+      if (nameMatches.length === 1) return nameMatches[0];
+      const userMatches = accounts.filter(function (account) {
+        return Array.isArray(account.users) && account.users.includes(name);
+      });
+      return userMatches.length === 1 ? userMatches[0] : null;
+    }
+
+    function _hlLimitSortValue(item) {
+      const account = _hlAccountForBot(item);
+      const used = Number(account && account.used);
+      const cap = Number(account && account.cap);
+      return account && Number.isFinite(used) && Number.isFinite(cap) && cap > 0 ? used / cap : -1;
+    }
+
+    function _hlLimitCell(item, host, pbVersion) {
+      const account = _hlAccountForBot(item, pbVersion);
+      if (!account) return { html: `<span class='field-help'>—</span>`, sig: 'no-hl-account' };
+      const historyUser = String((account.users || [])[0] || '');
+      const used = Number(account.used);
+      const cap = Number(account.cap);
+      const hasSample = Number.isFinite(used) && Number.isFinite(cap) && cap > 0 && !!account.sampled_at;
+      const percent = hasSample ? used / cap * 100 : 0;
+      const stale = hasSample && (account.state !== 'ok' || Date.now() / 1000 - Number(account.sampled_at) > 600);
+      const tone = !hasSample || stale ? 'warning' : (used >= cap ? 'error' : (percent >= 90 ? 'warning' : 'ok'));
+      const status = !hasSample ? 'Unavailable' : (stale ? 'Stale' : (used >= cap ? 'Limit reached' : (percent >= 90 ? 'Near limit' : 'Available')));
+      const value = hasSample ? percent.toFixed(0) + '%' : status;
+      const counters = hasSample ? formatHlRequestCount(used) + ' / ' + formatHlRequestCount(cap) : 'Waiting for sample';
+      const sampled = account.sampled_at ? new Date(Number(account.sampled_at) * 1000).toLocaleString() : 'n/a';
+      const title = 'nRequestsUsed: ' + (hasSample ? formatHlRequestCount(used) : 'n/a')
+        + ' | nRequestsCap: ' + (hasSample ? formatHlRequestCount(cap) : 'n/a')
+        + ' | Remaining: ' + (hasSample ? formatHlRequestCount(Math.max(0, cap - used)) : 'n/a')
+        + ' | ' + status + ' | Sampled: ' + sampled + ' | Click for 24-hour history';
+      const html = `<button class='table-button cpu-clickable hl-limit-history' type='button' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(historyUser)}' data-history-metric='hl_requests' title='${escAttr(title)}'><span class='tag ${tone}'>${esc(value)}</span><span class='field-help'>${esc(counters)}</span></button>`;
+      return { html: html, sig: [historyUser, String(account.sampled_at || ''), String(used), String(cap), String(account.state || ''), stale ? 'stale' : 'fresh'].join('|') };
     }
 
     function _cpuTag(v) {
@@ -12949,6 +13204,7 @@
           html: `<div><button class='tag table-button' type='button' style='cursor:pointer;color:var(--accent);background:rgba(93,196,255,0.12)' data-vps-action='open-bot-log' data-host='${escAttr(host)}' data-bot='${escAttr(item.name || '')}' data-pb-version='${escAttr(pbVersion)}' title='Open bot log'>${esc(item.name || '-')}</button></div><div class='field-help' title='Bot start time'>${esc(item.start_time || '-')}</div>`,
           sig: [host, pbVersion, String(item.name || ''), String(item.start_time || '')].join('|')
         },
+        hl_limit: _hlLimitCell(item, host, pbVersion),
         cpu: {
           html: `<div><span class='cpu-clickable' data-cpu-history-host='${escAttr(host)}' data-cpu-history-bot='${escAttr(historyName)}'>${_cpuTag(item.cpu)}</span><div class='field-help'>${esc(_cpuSubline(item))}</div></div>`,
           sig: [String(Number(item.cpu) || 0), String(Number(item.cpu_60s) || 0), String(Number(item.cpu_60s_window) || 0), item.cpu_60s_confirmed ? '1' : '0'].join('|')
@@ -13041,6 +13297,54 @@
               </div>`;
           }).join('')}
         </div>`;
+    }
+
+    function updateHlAccountLimitsPanel() {
+      const monitor = (store.detail && store.detail.monitor) || {};
+      const rows = [].concat(monitor.v7 || [], monitor.v8 || []);
+      if (store.view === 'master') _liveUpdateServiceRows('master-monitor-live', rows);
+      else if (store.view === 'vps') _liveUpdateServiceRows('vps-monitor-live', rows);
+    }
+
+    function refreshOpenHlRateLimitHistory(force) {
+      const current = cpuHistoryLastPayload;
+      const overlay = document.getElementById('cpuHistoryOverlay');
+      if (!current || current.metric !== 'hl_requests' || !overlay || !overlay.classList.contains('visible')) return;
+      const account = ((store.hlRateLimits || {}).accounts || []).find(function (item) {
+        return Array.isArray(item.users) && item.users.includes(current.botName);
+      });
+      const samples = Array.isArray(current.data && current.data.samples) ? current.data.samples : [];
+      const lastSample = samples.length ? Number(samples[samples.length - 1].sampled_at) : 0;
+      if (!force && (!account || Number(account.sampled_at || 0) <= lastSample)) return;
+      const generation = ++cpuHistoryRequestGeneration;
+      if (cpuHistoryAbortController) cpuHistoryAbortController.abort();
+      cpuHistoryAbortController = new AbortController();
+      fetch(API_BASE + '/user-rate-limits/history/' + encodeURIComponent(current.botName), {
+        credentials: 'same-origin', signal: cpuHistoryAbortController.signal, cache: 'no-store'
+      }).then(function (response) {
+        if (!response.ok) throw new Error('Account history read failed');
+        return response.json();
+      }).then(function (data) {
+        if (generation !== cpuHistoryRequestGeneration || store.authExpired) return;
+        metricHistoryCache[current.host + '::hl_requests::' + current.botName] = data;
+        renderMetricHistoryPayload(data, current.host, current.botName, 'hl_requests');
+      }).catch(function () { /* Keep the last chart until the next automatic update. */ });
+    }
+
+    function fetchHlAccountLimits() {
+      const generation = ++store.hlRateLimitsRequestGeneration;
+      fetch(API_BASE + '/user-rate-limits', { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('Account limit read failed');
+          return response.json();
+        })
+        .then(function (data) {
+          if (generation !== store.hlRateLimitsRequestGeneration || store.authExpired) return;
+          store.hlRateLimits = data && Array.isArray(data.accounts) ? data : { accounts: [] };
+          updateHlAccountLimitsPanel();
+          refreshOpenHlRateLimitHistory();
+        })
+        .catch(function () { /* The next automatic poll retains the last sample. */ });
     }
 
     function renderMonitorPanel(monitor, isMaster, status) {
@@ -13378,8 +13682,10 @@
       applyCpuHistoryRect(box.getBoundingClientRect());
       if (cpuHistoryLastPayload) {
         const points = metricHistorySeriesPoints(cpuHistoryLastPayload.metric, cpuHistoryLastPayload.data);
-        document.getElementById('cpuHistoryMeta').innerHTML = renderCpuHistoryMeta(cpuHistoryLastPayload.data, points, cpuHistoryLastPayload.metric);
-        document.getElementById('cpuHistoryBody').innerHTML = renderCpuHistoryChart(cpuHistoryLastPayload.data, points, cpuHistoryLastPayload.metric);
+        document.getElementById('cpuHistoryMeta').innerHTML = cpuHistoryLastPayload.metric === 'hl_requests'
+          ? renderHlRateLimitHistoryMeta(cpuHistoryLastPayload.data) : renderCpuHistoryMeta(cpuHistoryLastPayload.data, points, cpuHistoryLastPayload.metric);
+        document.getElementById('cpuHistoryBody').innerHTML = cpuHistoryLastPayload.metric === 'hl_requests'
+          ? renderHlRateLimitHistoryChart(cpuHistoryLastPayload.data) : renderCpuHistoryChart(cpuHistoryLastPayload.data, points, cpuHistoryLastPayload.metric);
       }
     });
     initCpuHistoryModalInteractions();
@@ -13402,11 +13708,13 @@
     initSidebarResize();
     initAlertModalInteractions();
     connectWs();
+    fetchHlAccountLimits();
+    window.setInterval(fetchHlAccountLimits, 30000);
     window.addEventListener('hashchange', function () {
       restoreViewFromHash();
     });
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=7"></script>
+  <script src="/app/js/shared_help_overlay.js?v=8"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

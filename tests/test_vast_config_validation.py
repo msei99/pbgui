@@ -24,6 +24,20 @@ def test_supported_config_is_not_modified(config):
     assert config == original
 
 
+def test_automatic_gpu_fields_can_be_blank(config):
+    """Cloud validation leaves GPU sizing for post-rental profile selection."""
+    config['optimize']['backend'] = 'gpu'
+    config['optimize']['gpu'] = {
+        'auto_lean_parallelism': True,
+        'population_size': None,
+        'batch_size': None,
+        'max_dispatch_candidate_bars': None,
+    }
+    original = copy.deepcopy(config)
+    assert validate_cloud_config(config) == []
+    assert config == original
+
+
 @pytest.mark.parametrize('path,value', [
     ('optimize.scoring.0.metric','gain_strategy_eq'), ('optimize.scoring.0.goal','invalid'),
     ('optimize.limits.0.value','nan'), ('optimize.limits.0.penalize_if','invalid'),

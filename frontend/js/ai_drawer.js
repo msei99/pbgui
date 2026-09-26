@@ -26,10 +26,14 @@
     drawerPinnedDirty: false,
     retryMessages: {},
     messageSnapshots: {},
+    messageSignature: '',
+    messageConversationId: '',
     resolvingProposalIds: new Set(),
     uiActionIds: new Set(),
     contextTimer: null,
-    contextSignature: ''
+    contextSignature: '',
+    usageDisplayKey: '',
+    usageSignature: ''
   };
   var root;
 
@@ -119,21 +123,23 @@
     toolbar.appendChild(provider);
     var model = el('select');
     model.id = 'pai-model';
-    model.addEventListener('change', function () { state.selectionDirty = true; rebuildEfforts(); });
+    model.addEventListener('change', function () { state.selectionDirty = true; rebuildEfforts(); rebuildSpeeds(); });
     toolbar.appendChild(model);
     var effort = el('select');
     effort.id = 'pai-effort';
     effort.addEventListener('change', function () { state.selectionDirty = true; });
     toolbar.appendChild(effort);
+    var speed = el('select');
+    speed.id = 'pai-speed';
+    speed.setAttribute('aria-label', 'Speed');
+    speed.title = 'Fast mode uses more ChatGPT credits';
+    speed.hidden = true;
+    speed.addEventListener('change', function () { state.selectionDirty = true; });
+    toolbar.appendChild(speed);
     var fresh = el('button', 'pai-new', 'New');
     fresh.type = 'button';
     fresh.addEventListener('click', newConversation);
     toolbar.appendChild(fresh);
-    var health = el('button', '', 'Health');
-    health.type = 'button';
-    health.title = 'Refresh free-model availability';
-    health.addEventListener('click', refreshHealth);
-    toolbar.appendChild(health);
     root.appendChild(toolbar);
     var usage = el('div', 'pai-usage');
     usage.id = 'pai-usage';
@@ -205,8 +211,6 @@
 
   function renderContext(context) {
     if (!root) return;
-    var chips = root.querySelector('.pai-context-chips');
-    chips.textContent = '';
     context = context || {};
     var values = [];
     if (context.title || context.page_key) values.push(context.title || context.page_key);
@@ -220,16 +224,32 @@
     });
     if (context.focused_field) values.push('Field: ' + String(context.focused_field.label || context.focused_field.path || ''));
     if (!values.length) values.push('Current page');
+    var signature = JSON.stringify(values);
+    if (signature === state.contextSignature) return;
+    state.contextSignature = signature;
+    var chips = root.querySelector('.pai-context-chips');
+    chips.textContent = '';
     values.forEach(function (value) { chips.appendChild(el('span', 'pai-context-chip', value)); });
   }
 
   function refreshLiveContext() {
     var context = collectDisplayContext();
-    var signature = '';
-    try { signature = JSON.stringify(context); } catch (_) {}
-    if (signature === state.contextSignature) return;
-    state.contextSignature = signature;
     renderContext(context);
+  }
+
+  function updateJevAvailability(provider, container) {
+    var disconnected = provider && provider !== 'openrouter'
+      && state.providers.openrouter && state.providers.openrouter.connected === false;
+    var note = container.querySelector('.pai-jev-availability');
+    if (!disconnected) {
+      if (note) note.remove();
+      return;
+    }
+    if (!note) {
+      note = el('div', 'pai-jev-availability');
+      container.appendChild(note);
+    }
+    note.textContent = 'Jev unavailable: connect OpenRouter in AI Chat.';
   }
 
   async function refreshUsage() {
@@ -238,16 +258,39 @@
     state.usageTimer = null;
     var container = root.querySelector('#pai-usage');
     var provider = selectedProvider(), profile = selectedProfile();
-    container.textContent = 'Loading usage…';
+    var displayKey = provider + '|' + profile;
+    if (displayKey !== state.usageDisplayKey) {
+      state.usageDisplayKey = displayKey;
+      state.usageSignature = '';
+      container.textContent = 'Loading usage…';
+    }
     if (!provider || !state.open) { container.textContent = ''; return; }
     try {
       var usage = await api('/usage?provider=' + encodeURIComponent(provider) + '&profile=' + encodeURIComponent(profile));
       if (generation !== state.usageGeneration || !state.open || provider !== selectedProvider() || profile !== selectedProfile()) return;
-      window.PBGuiAIUsage.render(container, usage);
+      var signature = JSON.stringify(usage);
+      if (signature !== state.usageSignature) {
+        state.usageSignature = signature;
+        if (provider === 'openrouter') window.PBGuiAIUsage.renderOpenRouter(container, usage);
+        else window.PBGuiAIUsage.render(container, usage);
+      }
     } catch (error) {
-      if (generation === state.usageGeneration) container.textContent = 'Usage currently unavailable';
+      if (generation === state.usageGeneration) {
+        state.usageSignature = '';
+        container.textContent = 'Usage currently unavailable';
+      }
     } finally {
-      if (generation === state.usageGeneration && state.open) state.usageTimer = setTimeout(refreshUsage, 30000);
+      if (generation === state.usageGeneration && state.open) {
+        updateJevAvailability(provider, container);
+        if (provider !== 'openrouter') {
+          api('/status').then(function (status) {
+            if (generation !== state.usageGeneration || !state.open || provider !== selectedProvider()) return;
+            state.providers = status.providers || {};
+            updateJevAvailability(provider, container);
+          }).catch(function () {});
+        }
+        state.usageTimer = setTimeout(refreshUsage, 30000);
+      }
     }
   }
 
@@ -281,6 +324,7 @@
     root.querySelector('#pai-provider').disabled = busy || !root.querySelector('#pai-provider').options.length;
     root.querySelector('#pai-model').disabled = busy || state.modelsLoading || !Object.keys(state.models).length;
     root.querySelector('#pai-effort').disabled = busy || state.modelsLoading || root.querySelector('#pai-effort').hidden;
+    root.querySelector('#pai-speed').disabled = busy || state.modelsLoading || root.querySelector('#pai-speed').hidden;
     root.querySelector('.pai-new').disabled = busy;
   }
 
@@ -407,7 +451,7 @@
       option.value = 'chatgpt:' + profile.id;
       select.appendChild(option);
     });
-    [ ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go']].forEach(function (provider) {
+    [ ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go'], ['openrouter', 'OpenRouter'] ].forEach(function (provider) {
       if (!(state.providers[provider[0]] || {}).connected) return;
       var option = el('option', '', provider[1]);
       option.value = provider[0];
@@ -425,11 +469,15 @@
   async function loadModels(preferred) {
     var provider = selectedProvider();
     var profile = selectedProfile();
+    root.querySelector('.pai-compose textarea').placeholder = provider === 'openrouter'
+      ? 'Ask Jev to choose, rate, or judge yes/no from supplied data.'
+      : 'Ask about this page...';
     refreshUsage();
     var select = root.querySelector('#pai-model');
     var current = preferred || select.value;
     var generation = ++state.modelGeneration;
     var effort = root.querySelector('#pai-effort');
+    var speed = root.querySelector('#pai-speed');
     state.modelsLoading = true;
     state.models = {};
     select.textContent = '';
@@ -440,6 +488,8 @@
     select.appendChild(loading);
     select.disabled = true;
     effort.disabled = true;
+    speed.hidden = true;
+    speed.disabled = true;
     if (!provider) {
       state.modelsLoading = false;
       setBusy(state.busy);
@@ -452,7 +502,7 @@
       (data.models || []).forEach(function (model) {
         state.models[model.id] = model;
         var healthStatus = model.health && model.health.status ? ' - ' + String(model.health.status).replace(/_/g, ' ') : '';
-        var option = el('option', '', model.name + (model.tools ? ' - PBGui tools' : ' - Chat only') + healthStatus);
+        var option = el('option', '', model.name + (model.decision ? ' - Decision' : model.tools ? ' - PBGui tools' : ' - Chat only') + healthStatus);
         option.value = model.id;
         if (model.default) option.selected = true;
         select.appendChild(option);
@@ -465,6 +515,7 @@
       }
       if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
       rebuildEfforts();
+      rebuildSpeeds();
       state.modelsLoading = false;
       setBusy(state.busy);
     } catch (error) {
@@ -499,17 +550,45 @@
     select.hidden = select.options.length < 2;
   }
 
+  function rebuildSpeeds(preferred) {
+    var model = state.models[root.querySelector('#pai-model').value] || {};
+    var select = root.querySelector('#pai-speed');
+    var current = preferred == null ? select.value : preferred;
+    var tiers = selectedProvider() === 'chatgpt' && Array.isArray(model.service_tiers) ? model.service_tiers : [];
+    select.textContent = '';
+    var defaultTier = tiers.find(function (tier) { return tier && tier.id === model.default_service_tier; });
+    var defaultName = defaultTier ? 'Default (' + String(defaultTier.label || defaultTier.id) + ')' : 'Default speed';
+    var modelDefault = el('option', '', defaultName);
+    modelDefault.value = '';
+    select.appendChild(modelDefault);
+    var standard = el('option', '', 'Standard');
+    standard.value = 'default';
+    select.appendChild(standard);
+    tiers.forEach(function (tier) {
+      if (!tier || typeof tier.id !== 'string' || !tier.id) return;
+      var option = el('option', '', tier.label || tier.id);
+      option.value = tier.id;
+      option.title = tier.description || 'Fast mode uses more ChatGPT credits';
+      select.appendChild(option);
+    });
+    if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
+    select.hidden = !tiers.length;
+    select.disabled = state.busy || state.modelsLoading || select.hidden;
+  }
+
   async function loadConversations(preferredId) {
     var generation = ++state.listGeneration;
     try {
       var data = await api('/conversations');
       if (generation !== state.listGeneration) return;
       state.conversations = data.conversations || [];
-      var available = state.conversations.some(function (item) { return item.conversation_id === state.current; });
-      if (preferredId) state.current = preferredId;
-      else if (!available) state.current = state.conversations.length ? state.conversations[0].conversation_id : '';
+      var requestedId = preferredId || state.current;
+      var available = state.conversations.some(function (item) { return item.conversation_id === requestedId; });
+      var removed = !!requestedId && !available;
+      state.current = available ? requestedId : (state.conversations.length ? state.conversations[0].conversation_id : '');
       renderHistory();
       if (state.current) await loadConversation(state.current);
+      if (removed) setStatus('Selected conversation is no longer available. Showing the nearest available chat.', false);
       else {
         stopPoll();
         renderMessages([]);
@@ -555,13 +634,17 @@
       } else if (messages.length || !conversation.busy) {
         state.messageSnapshots[id] = messages.slice();
       }
+      if (state.messageConversationId !== id) {
+        state.messageConversationId = id;
+        state.messageSignature = '';
+      }
       renderMessages(messages);
       renderReasoningSummary(conversation.reasoning_summary || '');
       renderActivityHistory(conversation.activity_history || []);
       var uiActions = conversation.ui_actions || [];
-      dispatchUiActions(id, uiActions);
+      dispatchUiActions(id, uiActions, !!conversation.busy);
       if (conversation.retry_message) state.retryMessages[id] = conversation.retry_message;
-      renderContext(conversation.context && Object.keys(conversation.context).length ? conversation.context : collectDisplayContext());
+      renderContext(collectDisplayContext());
       setBusy(!!conversation.busy);
       var retry = root.querySelector('.pai-retry');
       retry.hidden = !conversation.last_error || !state.retryMessages[id] || conversation.busy;
@@ -576,7 +659,10 @@
         }
       }
       if (id !== state.current || generation !== state.requestGeneration) return;
-      if (!state.selectionDirty) rebuildEfforts(conversation.effort || '');
+      if (!state.selectionDirty) {
+        rebuildEfforts(conversation.effort || '');
+        rebuildSpeeds(conversation.service_tier || '');
+      }
       await reconcileProposals(id, generation);
       var pendingPageAction = uiActions.some(function (action) {
         return action && action.type === 'page.perform_action';
@@ -591,12 +677,15 @@
     }
   }
 
-  function dispatchUiActions(conversationId, actions) {
+  function dispatchUiActions(conversationId, actions, busy) {
+    if (busy || !(actions || []).some(function (action) { return action && action.type === 'chat.quick_replies'; })) {
+      Array.from(root.querySelectorAll('.pai-quick-replies')).forEach(function (item) { item.remove(); });
+    }
     (actions || []).forEach(function (action) {
       var actionId = String((action || {}).action_id || '');
       if (!actionId || state.uiActionIds.has(actionId)) return;
       if (action.type === 'chat.quick_replies') {
-        renderQuickReplies(conversationId, action);
+        if (!busy) renderQuickReplies(conversationId, action);
         return;
       }
       var event = new CustomEvent('pbgui:ai-ui-action', {
@@ -643,18 +732,15 @@
         var value = String((choice || {}).value || '').trim();
         if (!value) return;
         Array.from(options.querySelectorAll('button')).forEach(function (item) { item.disabled = true; });
-        api('/conversations/' + encodeURIComponent(conversationId) + '/ui-actions/' + encodeURIComponent(action.action_id) + '/ack', {
-          method: 'POST'
-        }).then(function () {
-          row.remove();
-          sendMessage(value);
-        }).catch(function (error) {
-          Array.from(options.querySelectorAll('button')).forEach(function (item) { item.disabled = false; });
-          setStatus(error.message, true);
+        Promise.resolve(sendMessage(value)).finally(function () {
+          if (row.isConnected && !state.busy) Array.from(options.querySelectorAll('button')).forEach(function (item) { item.disabled = false; });
         });
       });
       options.appendChild(button);
     });
+    var custom = el('button', '', 'Write your own answer…'); custom.type = 'button';
+    custom.addEventListener('click', function () { root.querySelector('textarea').focus(); });
+    options.appendChild(custom);
     content.appendChild(options);
     row.appendChild(content);
     box.appendChild(row);
@@ -663,6 +749,9 @@
 
   function renderMessages(messages) {
     var box = root.querySelector('.pai-messages');
+    var signature = JSON.stringify(messages);
+    if (signature === state.messageSignature) return;
+    state.messageSignature = signature;
     box.textContent = '';
     if (!messages.length) {
       box.appendChild(el('div', 'pai-empty', 'Ask about the current PBGui page, selected resource, or installed Passivbot source.'));
@@ -707,6 +796,9 @@
       button.addEventListener('click', function () { sendMessage(choice); });
       options.appendChild(button);
     });
+    var custom = el('button', '', 'Write your own answer…'); custom.type = 'button';
+    custom.addEventListener('click', function () { root.querySelector('textarea').focus(); });
+    options.appendChild(custom);
     bubble.appendChild(options);
   }
 
@@ -764,10 +856,12 @@
     if (action === 'create_dashboard') return 'Create PBGui dashboard';
     if (action === 'save_dashboard_layout') return 'Save PBGui dashboard layout';
     if (action === 'python_analysis') return 'Run sandboxed Python analysis';
+    if (action === 'jev_analysis') return 'Ask Jev about optimizer results';
     return 'PBGui action';
   }
 
   function proposalDetail(preview) {
+    if (preview.action === 'jev_analysis') return String(preview.version || '') + ' ' + String(preview.run_name || '') + ' - ' + String(preview.candidate_count || 0) + ' candidates assessed - ' + (preview.max_candidates == null ? 'Jev decides how many to mark' : 'mark at most ' + String(preview.max_candidates)) + ' - USD ' + String(preview.max_cost_usd || '') + ' maximum';
     if (preview.action === 'python_analysis') return String(preview.code_bytes || 0) + ' bytes of code - ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
     if (preview.action === 'queue_backtests') {
       var validationMode = String(preview.validation_mode || 'configured');
@@ -1038,7 +1132,7 @@
       var data = await api('/conversations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: provider, profile: profile, model: model, effort: root.querySelector('#pai-effort').value, context: context })
+        body: JSON.stringify({ provider: provider, profile: profile, model: model, effort: root.querySelector('#pai-effort').value, service_tier: root.querySelector('#pai-speed').hidden ? '' : root.querySelector('#pai-speed').value, context: context })
       });
       state.selectionDirty = false;
       state.current = data.conversation_id;
@@ -1051,6 +1145,10 @@
     var prompt = root.querySelector('textarea');
     var message = String(override == null ? prompt.value : override).trim();
     if (!message) return;
+    var turnProvider = selectedProvider();
+    var turnModel = root.querySelector('#pai-model').value;
+    var turnEffort = root.querySelector('#pai-effort').value;
+    var turnServiceTier = root.querySelector('#pai-speed').hidden ? '' : root.querySelector('#pai-speed').value;
     if (!state.current) await newConversation();
     if (!state.current) return;
     var conversationId = state.current;
@@ -1082,16 +1180,38 @@
     }
     setBusy(true);
     setStatus('Starting model...', false);
+    var jevPreviewId = '';
     try {
+      if (turnProvider === 'openrouter' && window.PBGuiJevTransferPreview) {
+        var review = await window.PBGuiJevTransferPreview.review({
+          api: api, confirm: confirmAction, conversationId: conversationId,
+          provider: turnProvider, model: turnModel, message: message
+        });
+        if (review.cancelled) {
+          if (conversationId === state.current) {
+            if (override == null) prompt.value = message;
+            setBusy(false);
+            setStatus('Jev data transfer cancelled.', false);
+          }
+          return;
+        }
+        jevPreviewId = review.previewId;
+      }
+      if (conversationId !== state.current) {
+        if (jevPreviewId) await window.PBGuiJevTransferPreview.discard(api, conversationId, jevPreviewId);
+        return;
+      }
       await api('/conversations/' + encodeURIComponent(conversationId) + '/turns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: message,
           context: turnContext,
-          effort: root.querySelector('#pai-effort').value,
-          model: root.querySelector('#pai-model').value,
-          provider: selectedProvider()
+          effort: turnEffort,
+          service_tier: turnServiceTier,
+          model: turnModel,
+          provider: turnProvider,
+          jev_preview_id: jevPreviewId || null
         })
       });
       state.selectionDirty = false;
@@ -1100,6 +1220,9 @@
         await loadConversation(conversationId);
       }
     } catch (error) {
+      if (jevPreviewId && window.PBGuiJevTransferPreview) {
+        await window.PBGuiJevTransferPreview.discard(api, conversationId, jevPreviewId).catch(function () {});
+      }
       if (conversationId === state.current) {
         setBusy(false);
         root.querySelector('.pai-retry').hidden = false;
@@ -1118,13 +1241,6 @@
     try {
       await api('/conversations/' + encodeURIComponent(state.current) + '/cancel', { method: 'POST' });
       await loadConversation(state.current);
-    } catch (error) { setStatus(error.message, true); }
-  }
-
-  async function refreshHealth() {
-    try {
-      await api('/models/health-refresh', { method: 'POST' });
-      setStatus('Free-model health refresh queued.', false);
     } catch (error) { setStatus(error.message, true); }
   }
 

@@ -97,6 +97,52 @@ def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch)
     assert store.read(row["id"], "intent.json")["results_root"] == str((tmp_path / "new-results").resolve())
 
 
+def test_create_calibration_reuses_frozen_input_without_mutating_source(tmp_path):
+    """Calibration gets independent state while hard-linking immutable input bytes."""
+    store = JobStore(tmp_path / 'vast')
+    source = store.create_preparation('benchmark', 20_000, 8, False)
+    directory = store.directory(source['id'])
+    input_directory = ensure_private_directory(directory / 'input')
+    config = input_directory / 'optimize.json'
+    config.write_text('{}')
+    shard = input_directory / 'ohlcv/binance/1m/BTC/data.npy'
+    shard.parent.mkdir(parents=True)
+    shard.write_bytes(b'candles')
+    write_json(input_directory / 'manifest.json', {
+        'schema_version': 1, 'config_sha256': digest(config),
+        'files': [{'path': 'ohlcv/binance/1m/BTC/data.npy', 'bytes': shard.stat().st_size,
+                   'sha256': digest(shard)}],
+    })
+    archive = directory / 'input.tar.gz'
+    archive.write_bytes(b'archive')
+    archive.chmod(0o600)
+    write_json(directory / 'intent.json', {
+        'id': source['id'], 'image': IMAGE, 'pb8_revision': REVISION,
+        'results_root': str(tmp_path / 'results'), 'bundle_sha256': digest(archive),
+        'bundle_bytes': archive.stat().st_size, 'source_config_sha256': 'f' * 64,
+    })
+    store.update(source['id'], status='ready', input_bytes=archive.stat().st_size,
+                 use_adg=False, exchanges=['binance'], input_progress={
+                     'stage': 'complete', 'files_completed': 1, 'files_total': 1,
+                     'bytes_completed': shard.stat().st_size, 'bytes_total': shard.stat().st_size,
+                 })
+    with pytest.raises(VastError, match='Invalid GPU calibration plan'):
+        store.create_calibration(source['id'], {
+            'protocol': 1, 'populations': [1024, 2048, 4096, 8192],
+            'sample_seconds': 300, 'allow_32768': False,
+        })
+    from vast_calibration import configurable_calibration_plan
+    plan = configurable_calibration_plan(5632, 512, 7168, .05, 300, 3600)
+    row = store.create_calibration(source['id'], plan)
+    target = store.directory(row['id'])
+    assert row['kind'] == 'calibration' and row['status'] == 'ready'
+    assert row['calibration_source_id'] == source['id']
+    assert row['calibration_plan'] == plan
+    assert (target / 'input.tar.gz').stat().st_ino == archive.stat().st_ino
+    assert (target / 'input/ohlcv/binance/1m/BTC/data.npy').stat().st_ino == shard.stat().st_ino
+    assert store.read(source['id'])['status'] == 'ready'
+
+
 def test_clone_prepared_rejects_changed_config_without_creating_job(tmp_path, monkeypatch):
     """Snapshot reuse falls back before creating state when the saved config changed."""
     store = JobStore(tmp_path / "vast")
@@ -604,6 +650,22 @@ def test_ambiguous_creation_cleanup_uses_two_fresh_checks_after_grace(job):
     assert guard_step(store, identifier, client, intent, '', now=1231)
     assert store.read(identifier)['rental_state'] == 'deletion_verified'
     assert client.calls == [('PUT', '/asks/42/')]
+
+
+def test_rejected_creation_is_not_reported_as_disappeared_instance(job):
+    """A failed create followed by confirmed absence reports that no rental existed."""
+    store, identifier, intent = job
+    client = Provider(fail=True)
+    with pytest.raises(VastError, match='Ambiguous timeout'):
+        guard_step(store, identifier, client, intent, '', now=1100)
+    client.fail = False
+    assert not guard_step(store, identifier, client, intent, '', now=1221)
+    assert guard_step(store, identifier, client, intent, '', now=1231)
+    state = store.read(identifier)
+    assert state['rental_end_reason'] == 'provider_creation_failed'
+    assert state['status'] == 'failed'
+    assert 'Rental was not created: Ambiguous timeout' in state['error']
+    assert 'select another host' in state['error']
 
 
 def test_host_identity_accepts_legacy_timestamp_split(monkeypatch):

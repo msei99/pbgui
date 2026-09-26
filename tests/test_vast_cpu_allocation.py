@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from vast_jobs import JobStore, write_json, digest
+from vast_jobs import JobStore, REVISION, write_json, digest
 from vast_transfer import execution_input
 
 
@@ -30,6 +30,8 @@ def test_cpu_execution_copy_preserves_original_and_manifest(tmp_path, monkeypatc
     target = execution_input(store, identifier)
     actual = json.loads((target / 'optimize.json').read_text())
     assert actual['optimize']['n_cpus'] == actual['optimize']['gpu']['exact_workers'] == 9
+    assert actual['optimize']['gpu']['population_size'] == 8192
+    assert actual['optimize']['gpu']['batch_size'] == 8192
     assert actual['backtest']['ohlcv_source_dir'] == '/work/pbgui/jobs/' + identifier + '/input/ohlcv'
     assert actual['optimize']['iters'] == 200000
     assert actual['bot'] == config['bot']
@@ -56,6 +58,18 @@ def test_cpu_execution_copy_preserves_original_and_manifest(tmp_path, monkeypatc
     replacement_config = json.loads((target / 'optimize.json').read_text())
     assert replacement['execution_gpu_profile'] != first_profile
     assert replacement_config['optimize']['gpu']['max_dispatch_candidate_bars'] == 2_000_000_000
+    assert (source / 'optimize.json').read_bytes() == before
+    rental = 'c' * 32
+    rental_dir = store.root / 'jobs' / rental
+    rental_dir.mkdir()
+    selected = {'population_size': 6656, 'batch_size': 6656,
+                'max_dispatch_candidate_bars': 130_170_880_000}
+    write_json(rental_dir / 'intent.json', {'offer': {'gpu_name': 'Replacement GPU', 'vram_gb': 24},
+                                            'rental_job_gpu_profiles': {identifier: selected}})
+    store.update(identifier, lease_id=rental)
+    assert execution_input(store, identifier) == target
+    chosen = json.loads((target / 'optimize.json').read_text())['optimize']['gpu']
+    assert {key: chosen[key] for key in selected} == selected
     assert (source / 'optimize.json').read_bytes() == before
 
 
@@ -110,9 +124,11 @@ def test_runner_caps_workers_before_upload(tmp_path, monkeypatch):
     import vast_jobs
     import vast_provisioning_log
     from vast_provider import VastError
+    import vast_runtime_metrics
     monkeypatch.setattr(runner, '_log', lambda *a, **kw: None)
     monkeypatch.setattr(vast_jobs, '_log', lambda *a, **kw: None)
     monkeypatch.setattr(vast_provisioning_log, 'collect_provisioning_log', lambda *a, **kw: None)
+    monkeypatch.setattr(vast_runtime_metrics, 'sample_metrics', lambda *a: None)
     store = JobStore(tmp_path)
     identifier = 'a' * 32
     directory = tmp_path / 'jobs' / identifier
@@ -122,7 +138,8 @@ def test_runner_caps_workers_before_upload(tmp_path, monkeypatch):
     write_json(directory / 'state.json', {'id': identifier, 'status': 'provisioning',
         'rental_state': 'active', 'auto_cpu_workers': True, 'workers': 4})
     write_json(directory / 'control.json', {'stop': False, 'cleanup': False})
-    write_json(directory / 'intent.json', {'deadline': deadline, 'offer': {'cpu_cores': 21.3333},
+    write_json(directory / 'intent.json', {'deadline': deadline, 'pb8_revision': REVISION,
+        'offer': {'cpu_cores': 21.3333},
         'bundle_sha256': digest(bundle)})
     monkeypatch.setattr(runner, 'validate_intent', lambda value, name: value)
     monkeypatch.setattr(runner, 'owned_instance', lambda *a: {'id': 123, 'actual_status': 'running'})
@@ -139,7 +156,7 @@ def test_runner_caps_workers_before_upload(tmp_path, monkeypatch):
             pass
         def operation(self, action, **kwargs):
             """Model a container exposing all host CPUs."""
-            return {'cpu_cores': 256, 'revision': runner.REVISION,
+            return {'cpu_cores': 256, 'revision': REVISION,
                 'guard': {'instance_id': 123, 'job_id': identifier, 'deadline': deadline}}
         def upload(self, **kwargs):
             """Record the resolved count and stop before sending data."""

@@ -367,6 +367,62 @@ class LogViewerPanel {
         this._lineBase = trim;
     }
 
+    _replaceStreamingSnapshot(lines) {
+        var normalized = this._normalizeIncomingLines(lines);
+        var previous = this._lines;
+        if (!previous.length) {
+            this._replaceLines(normalized);
+            this._renderFull();
+            return;
+        }
+
+        // Atomic log writers replace the inode with a complete newer snapshot.
+        // Reuse the existing DOM when that snapshot still contains our model;
+        // appending only its suffix avoids duplicate rows and scroll flashes.
+        var prefix = new Array(previous.length).fill(0);
+        for (var i = 1, matched = 0; i < previous.length; i++) {
+            while (matched && previous[i] !== previous[matched]) matched = prefix[matched - 1];
+            if (previous[i] === previous[matched]) matched++;
+            prefix[i] = matched;
+        }
+        var foundAt = -1;
+        for (var j = 0, size = 0; j < normalized.length; j++) {
+            while (size && normalized[j] !== previous[size]) size = prefix[size - 1];
+            if (normalized[j] === previous[size]) size++;
+            if (size === previous.length) {
+                foundAt = j - previous.length + 1;
+                size = prefix[size - 1];
+            }
+        }
+        if (foundAt >= 0) {
+            this._ingestLines(normalized.slice(foundAt + previous.length));
+            return;
+        }
+        // A bounded server snapshot can drop the first old rows while retaining
+        // the tail. Match its prefix against the old suffix before rebuilding.
+        var overlapPrefix = new Array(normalized.length).fill(0);
+        for (var p = 1, matchedPrefix = 0; p < normalized.length; p++) {
+            while (matchedPrefix && normalized[p] !== normalized[matchedPrefix])
+                matchedPrefix = overlapPrefix[matchedPrefix - 1];
+            if (normalized[p] === normalized[matchedPrefix]) matchedPrefix++;
+            overlapPrefix[p] = matchedPrefix;
+        }
+        var overlap = 0;
+        for (var q = Math.max(0, previous.length - normalized.length); q < previous.length; q++) {
+            while (overlap && previous[q] !== normalized[overlap])
+                overlap = overlapPrefix[overlap - 1];
+            if (previous[q] === normalized[overlap]) overlap++;
+            if (overlap === normalized.length && q < previous.length - 1)
+                overlap = overlapPrefix[overlap - 1];
+        }
+        if (overlap) {
+            this._ingestLines(normalized.slice(overlap));
+            return;
+        }
+        this._replaceLines(normalized);
+        this._renderFull();
+    }
+
     _prettyFormatStructuredPayload(text) {
         var source = String(text == null ? '' : text);
         if (!source) return source;
@@ -894,7 +950,8 @@ class LogViewerPanel {
 
         case 'local_log_lines':
             if (msg.sid !== undefined && msg.sid !== this._sid) return;
-            this._ingestLines(msg.lines || []);
+            if (msg.replace) this._replaceStreamingSnapshot(msg.lines || []);
+            else this._ingestLines(msg.lines || []);
             break;
 
         case 'local_log_filtered_lines':

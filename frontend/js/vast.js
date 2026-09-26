@@ -24,8 +24,75 @@
   let worker = null, queueState = {}, selectedOffer = null, renting = false;
   let hostBlockBusy = false, offerRows = [];
   let hostProfiles = new Map(), hostGeneration = 0;
+  let calibrationInfo = null, calibrationGeneration = 0, calibrationStarting = false, watchCancelling = false;
+  let calibrationWorkerAvailable = false;
+  let gpuRecommendation = null, gpuRecommendationGeneration = 0;
 
   const el = id => document.getElementById(id);
+  function setCalibrationOptionsOpen(open) {
+    el('calibration-options').hidden = !open;
+    el('calibration-open').setAttribute('aria-expanded', String(open));
+    const state = window.history.state;
+    window.history.replaceState({
+      ...(state && typeof state === 'object' ? state : {}),
+      vastCalibrationOptionsOpen:open,
+    }, '');
+  }
+  setCalibrationOptionsOpen(!!window.history.state?.vastCalibrationOptionsOpen);
+  el('calibration-open').addEventListener('click', () => {
+    setCalibrationOptionsOpen(el('calibration-options').hidden);
+  });
+  el('calibration-close').addEventListener('click', () => setCalibrationOptionsOpen(false));
+  const calibrationDefaults = {
+    small:{start:4096, step:4096, maximum:131072, gain:10, timeout:390},
+    medium:{start:5632, step:512, maximum:12288, gain:5, timeout:3600},
+    large:{start:5632, step:512, maximum:12288, gain:5, timeout:5400},
+  };
+  const calibrationFields = ['population', 'step', 'maximum', 'gain', 'timeout'];
+  function calibrationSelection() {
+    const preset = el('calibration-preset').value;
+    const values = Object.fromEntries(calibrationFields.map(key =>
+      [key === 'population' ? 'start' : key, Number(el('calibration-' + key).value)]));
+    const defaultPlan = calibrationDefaults[preset];
+    const legacy = preset === 'small' && defaultPlan && Object.keys(defaultPlan)
+      .every(key => values[key] === defaultPlan[key]);
+    return {preset, ...values, legacy};
+  }
+  function saveCalibrationSelection() {
+    const state = window.history.state;
+    window.history.replaceState({
+      ...(state && typeof state === 'object' ? state : {}),
+      vastCalibrationSelection:calibrationSelection(),
+    }, '');
+    renderCalibration();
+  }
+  const restoredCalibration = window.history.state?.vastCalibrationSelection;
+  if (restoredCalibration && calibrationDefaults[restoredCalibration.preset]) {
+    el('calibration-preset').value = restoredCalibration.preset;
+    for (const key of calibrationFields) {
+      const field = key === 'population' ? 'start' : key;
+      if (Number.isFinite(Number(restoredCalibration[field]))) {
+        el('calibration-' + key).value = String(restoredCalibration[field]);
+      }
+    }
+  }
+  el('calibration-preset').addEventListener('change', () => {
+    const defaults = calibrationDefaults[el('calibration-preset').value];
+    for (const key of calibrationFields) {
+      el('calibration-' + key).value = defaults[key === 'population' ? 'start' : key];
+    }
+    saveCalibrationSelection();
+  });
+  calibrationFields.forEach(key => el('calibration-' + key).addEventListener('change', saveCalibrationSelection));
+  const savedSettingsDetails = el('offer-saved-settings');
+  savedSettingsDetails.open = !!window.history.state?.vastOfferSettingsOpen;
+  savedSettingsDetails.addEventListener('toggle', () => {
+    const state = window.history.state;
+    window.history.replaceState({
+      ...(state && typeof state === 'object' ? state : {}),
+      vastOfferSettingsOpen: savedSettingsDetails.open,
+    }, '');
+  });
   function idlePolicyLabel(seconds) {
     const value = Number(seconds);
     if (value < 0) return 'keep idle GPUs until their rental deadline';
@@ -192,6 +259,7 @@
   function renderOffers(rows) {
     offerRows = rows;
     selectedOffer = null;
+    calibrationInfo = null; calibrationGeneration++;
     renderJob();
     const body = el('offers-body'); body.replaceChildren();
     el('selection').textContent = 'Save GPU requirements for future queue starts.';
@@ -213,7 +281,9 @@
       values.forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell); });
       const secondary = (cell, value) => { const line = document.createElement('div'); line.className = 'muted offer-secondary'; line.textContent = value; cell.appendChild(line); };
       secondary(row.cells[0], offer.tflops == null ? 'TFLOPS unknown' : fmt(offer.tflops, 1) + ' TFLOPS');
-      row.cells[0].title = 'GPU compute capacity reported by Vast. Optimizer speed also depends on CPU and memory.';
+      secondary(row.cells[0], 'Vast power limit: ' + (Number(offer.gpu_max_power_watts) > 0
+        ? fmt(offer.gpu_max_power_watts, 0) + ' W' : 'not reported'));
+      row.cells[0].title = 'GPU compute capacity and advertised power limit reported by Vast. The actual limit is checked after rental; optimizer speed also depends on CPU and memory.';
       secondary(row.cells[1], fmt(offer.gpu_mem_bw_gbps, 0) + ' GB/s');
       secondary(row.cells[2], offer.cpu_name || 'CPU model unknown');
       secondary(row.cells[6], offer.machine_id ? 'Machine ' + offer.machine_id : 'Machine ID unavailable');
@@ -244,15 +314,628 @@
       const select = () => {
         body.querySelectorAll('tr').forEach(other => { other.classList.remove('selected'); other.setAttribute('aria-selected', 'false'); });
         selectedOffer = reasons.length ? null : offer;
+        calibrationInfo = null;
         row.classList.add('selected'); row.setAttribute('aria-selected', 'true');
         el('selection').hidden = false;
         el('selection').textContent = offer.gpu_name + ' · ' + offer.location + ' · $' + fmt(offer.price_hour_usd, 4) + '/hour · not reserved. Rent starts billing immediately.';
         renderJob();
+        void refreshCalibration();
+        if (el('opted-gpu-apply-measured')) scheduleValidation();
       };
       row.addEventListener('click', select);
       row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); } });
       body.appendChild(row); body.appendChild(detailsRow);
     });
+  }
+
+  function calibrationOffer(offer) {
+    return {id:Number(offer.id), machine_id:Number(offer.machine_id), gpu_name:String(offer.gpu_name || ''),
+      vram_gb:Number(offer.vram_gb), gpu_mem_bw_gbps:offer.gpu_mem_bw_gbps == null ? null : Number(offer.gpu_mem_bw_gbps),
+      tflops:offer.tflops == null ? null : Number(offer.tflops),
+      price_hour_usd:Number(offer.price_hour_usd),
+      gpu_max_power_watts:offer.gpu_max_power_watts == null ? null : Number(offer.gpu_max_power_watts)};
+  }
+
+  function rentalGpuProfileSource(profile) {
+    if (!profile) return 'Checking the selected card profile…';
+    const source = profile.source === 'local' ? 'Local GPU measurement'
+      : profile.source === 'pbgui' ? 'PBGui measurement' : 'Hardware fallback (no usable measurement)';
+    const power = Number(profile.profile_power_limit_watts);
+    const actual = Number(profile.card_power_limit_watts);
+    const reference = power > 0 ? ' · profile ' + fmt(power, 0) + ' W' : '';
+    const card = actual > 0 ? ' · card ' + fmt(actual, 0) + ' W' : '';
+    const match = profile.match_type === 'preliminary_nearest' ? ' · nearest advertised power' : '';
+    const verified = profile.runtime_verified ? ' · runtime verified' : ' · preliminary Vast offer';
+    const floor = profile.work_limit_is_floor
+      ? ' · work limit is a base value; Auto may raise it for a larger job' : '';
+    return source + reference + card + match + verified + floor;
+  }
+
+  function setRentalGpuFields(prefix, values) {
+    el(prefix + '-gpu-population').value = values?.population_size ?? '';
+    el(prefix + '-gpu-batch').value = values?.batch_size ?? '';
+    el(prefix + '-gpu-work-limit').value = values?.max_dispatch_candidate_bars ?? '';
+  }
+
+  function rentalGpuFields(prefix) {
+    const population_size = Number(el(prefix + '-gpu-population').value);
+    const batch_size = Number(el(prefix + '-gpu-batch').value);
+    const max_dispatch_candidate_bars = Number(el(prefix + '-gpu-work-limit').value);
+    if (!Number.isSafeInteger(population_size) || population_size < 1024 || population_size > 131072
+        || !Number.isSafeInteger(batch_size) || batch_size < 1 || batch_size > population_size
+        || !Number.isSafeInteger(max_dispatch_candidate_bars)
+        || max_dispatch_candidate_bars < 1 || max_dispatch_candidate_bars > 1e12) {
+      throw new Error('Enter a population of 1,024–131,072, a batch up to that population, and a positive work limit up to 1 trillion.');
+    }
+    return {population_size, batch_size, max_dispatch_candidate_bars};
+  }
+
+  const offerJobSelections = new Map(), activeJobSelections = new Map();
+  function gpuNumber(value) {
+    return Number.isFinite(Number(value)) && Number(value) > 0
+      ? Number(value).toLocaleString() : '—';
+  }
+  function gpuWorkBillions(value) {
+    const bars = Number(value);
+    return Number.isSafeInteger(bars) && bars > 0
+      ? (bars / 1e9).toLocaleString(undefined, {maximumFractionDigits:9}) + ' billion candidate-bars' : '—';
+  }
+  function validatedGpuTriple(values) {
+    const population_size = Number(values?.population_size);
+    const batch_size = Number(values?.batch_size);
+    const max_dispatch_candidate_bars = Number(values?.max_dispatch_candidate_bars);
+    if (!Number.isSafeInteger(population_size) || population_size < 1024 || population_size > 131072
+        || !Number.isSafeInteger(batch_size) || batch_size < 1 || batch_size > population_size
+        || !Number.isSafeInteger(max_dispatch_candidate_bars)
+        || max_dispatch_candidate_bars < 1 || max_dispatch_candidate_bars > 1e12) {
+      throw new Error('Enter a population of 1,024–131,072, a batch up to that population, and a positive work limit up to 1 trillion.');
+    }
+    return {population_size, batch_size, max_dispatch_candidate_bars};
+  }
+  function gpuJobOverrides(previews, selections) {
+    const result = {};
+    for (const row of previews?.jobs || []) {
+      const selection = selections.get(row.id);
+      if (row.mode !== 'auto' || !selection || selection.mode === 'auto') continue;
+      const measured = selection.mode.startsWith('measured:')
+        ? row.measurements?.[Number(selection.mode.slice(9))] : null;
+      if (selection.mode.startsWith('measured:') && !measured) {
+        throw new Error('The selected measurement is no longer available for ' + row.name + '.');
+      }
+      result[row.id] = validatedGpuTriple(measured || selection.values);
+    }
+    return result;
+  }
+  function renderGpuJobPreviews(containerId, previews, selections, locked, onEdit, force = false) {
+    const container = el(containerId);
+    const stamp = JSON.stringify({previews, locked});
+    if (!force && container.dataset.gpuStamp === stamp) return;
+    container.dataset.gpuStamp = stamp;
+    container.replaceChildren();
+    if (!previews) { container.textContent = 'Checking prepared queue jobs…'; return; }
+    const rows = previews.jobs || [];
+    if (!rows.length) {
+      container.textContent = 'No prepared optimizer jobs are waiting. A later job will use Auto sizing when it starts.';
+      return;
+    }
+    for (const row of rows) {
+      const card = document.createElement('article'); card.className = 'rental-gpu-job';
+      const title = document.createElement('strong'); title.textContent = row.name; card.appendChild(title);
+      if (row.error) {
+        const issue = document.createElement('p'); issue.className = 'muted';
+        issue.textContent = row.error; card.appendChild(issue); container.appendChild(card); continue;
+      }
+      const workload = document.createElement('p'); workload.className = 'muted';
+      workload.textContent = 'Total across scenarios: ' + gpuNumber(row.estimated_coin_candles)
+        + ' candles/candidate · largest scenario: ' + gpuNumber(row.candidate_bars_per_largest_scenario)
+        + ' candidate-bars/candidate';
+      card.appendChild(workload);
+      const choices = row.measurements || [];
+      const state = selections.get(row.id) || {mode:'auto', values:{...row.auto}};
+      if (row.mode !== 'auto') {
+        const fixed = document.createElement('p');
+        fixed.textContent = 'Config sizing (not overridden): population ' + gpuNumber(row.auto?.population_size)
+          + ' · batch ' + gpuNumber(row.auto?.batch_size)
+          + ' · work limit ' + gpuWorkBillions(row.auto?.max_dispatch_candidate_bars);
+        card.appendChild(fixed); container.appendChild(card); continue;
+      }
+      const selector = document.createElement('select');
+      selector.setAttribute('aria-label', 'GPU setting for ' + row.name);
+      const options = [{value:'auto', label:'Auto · calculated for this job'}];
+      choices.forEach((choice, index) => {
+        options.push({value:'measured:' + index,
+          label:'Measured ' + gpuNumber(choice.measured_power_limit_watts) + ' W · population '
+            + gpuNumber(choice.population_size) + ' · ' + choice.candidates_per_second + ' candidates/s'});
+      });
+      options.push({value:'custom', label:'Custom for this job'});
+      for (const option of options) {
+        const node = document.createElement('option'); node.value = option.value;
+        node.textContent = option.label; selector.appendChild(node);
+      }
+      if (!options.some(option => option.value === state.mode)) state.mode = 'auto';
+      selector.value = state.mode; selector.disabled = locked;
+      selector.addEventListener('change', () => {
+        state.mode = selector.value;
+        if (state.mode === 'custom' && !state.values) state.values = {...row.auto};
+        selections.set(row.id, state);
+        onEdit();
+        renderGpuJobPreviews(containerId, previews, selections, locked, onEdit, true);
+      });
+      card.appendChild(selector);
+      const selectedMeasured = state.mode.startsWith('measured:')
+        ? choices[Number(state.mode.slice(9))] : null;
+      const values = state.mode === 'custom' ? (state.values || row.auto)
+        : selectedMeasured || row.auto;
+      if (state.mode === 'custom') {
+        const fields = document.createElement('div'); fields.className = 'fields';
+        for (const [key, labelText] of [
+          ['population_size','Population'], ['batch_size','Batch size'],
+          ['max_dispatch_candidate_bars','Work limit (billions of candidate-bars)']]) {
+          const label = document.createElement('label'); label.textContent = labelText;
+          const isWorkLimit = key === 'max_dispatch_candidate_bars';
+          const input = document.createElement('input'); input.type = 'number';
+          input.min = isWorkLimit ? '0.000001' : key === 'population_size' ? '1024' : '1';
+          input.max = isWorkLimit ? '1000' : '131072';
+          input.step = isWorkLimit ? '0.000001' : '1';
+          input.value = isWorkLimit ? (Number(values?.[key]) / 1e9 || '') : (values?.[key] ?? '');
+          input.disabled = locked;
+          input.addEventListener('input', () => {
+            const parsed = isWorkLimit ? Math.round(Number(input.value) * 1e9) : input.value;
+            state.values = {...(state.values || row.auto), [key]: input.value === '' ? '' : parsed};
+            selections.set(row.id, state); onEdit();
+          });
+          label.appendChild(input); fields.appendChild(label);
+        }
+        card.appendChild(fields);
+      } else {
+        const summary = document.createElement('p'); summary.className = 'rental-gpu-values';
+        summary.textContent = 'Population ' + gpuNumber(values?.population_size)
+          + ' · batch ' + gpuNumber(values?.batch_size)
+          + ' · work limit ' + gpuWorkBillions(values?.max_dispatch_candidate_bars);
+        card.appendChild(summary);
+      }
+      if (selectedMeasured) {
+        const evidence = document.createElement('p'); evidence.className = 'muted';
+        const offeredWatts = Number(selectedMeasured.offered_power_limit_watts);
+        const delta = offeredWatts > 0 ? offeredWatts - Number(selectedMeasured.measured_power_limit_watts) : 0;
+        evidence.textContent = 'Exact workload measurement at ' + gpuNumber(selectedMeasured.measured_power_limit_watts)
+          + ' W' + (Number.isFinite(delta) && delta !== 0
+            ? ' · selected offer advertises ' + gpuNumber(selectedMeasured.offered_power_limit_watts) + ' W (not the same power limit)' : '')
+          + ' · peak VRAM ' + gpuNumber(selectedMeasured.peak_vram_gib) + ' GiB. Runtime performance may differ.';
+        card.appendChild(evidence);
+      }
+      const bars = Number(row.candidate_bars_per_largest_scenario);
+      const population = Number(values?.population_size), batch = Number(values?.batch_size);
+      const cap = Number(values?.max_dispatch_candidate_bars);
+      if (bars > 0 && population > 0 && batch > 0 && cap > 0) {
+        const effective = Math.min(population, batch, Math.max(1, Math.floor(cap / bars)));
+        const dispatch = document.createElement('p'); dispatch.className = 'muted';
+        dispatch.textContent = 'Largest scenario: estimated ' + Math.ceil(population / effective)
+          + ' dispatch' + (Math.ceil(population / effective) === 1 ? '' : 'es')
+          + ' using a conservative calendar estimate; one full batch needs '
+          + gpuWorkBillions(population * bars) + '.';
+        card.appendChild(dispatch);
+      }
+      container.appendChild(card);
+    }
+    if (previews.truncated) {
+      const note = document.createElement('p'); note.className = 'muted';
+      note.textContent = 'Only the first 100 waiting jobs are shown; remaining jobs keep Auto sizing.';
+      container.appendChild(note);
+    }
+  }
+  function restoreGpuJobSelections(selections, previews, overrides) {
+    selections.clear();
+    for (const row of previews?.jobs || []) {
+      const chosen = overrides?.[row.id];
+      if (!chosen || row.mode !== 'auto') continue;
+      const index = (row.measurements || []).findIndex(measured =>
+        ['population_size','batch_size','max_dispatch_candidate_bars'].every(key => Number(measured[key]) === Number(chosen[key])));
+      selections.set(row.id, {mode:index >= 0 ? 'measured:' + index : 'custom', values:{...chosen}});
+    }
+  }
+
+  function setRentalGpuFieldMode(prefix, custom, locked) {
+    ['population', 'batch', 'work-limit'].forEach(key => {
+      el(prefix + '-gpu-' + key).disabled = !custom || !!locked;
+    });
+  }
+
+  let offerGpuProfileId = null;
+  function renderOfferGpuProfile() {
+    const panel = el('offer-gpu-profile');
+    panel.hidden = !selectedOffer;
+    if (!selectedOffer) { offerGpuProfileId = null; offerJobSelections.clear(); return; }
+    if (offerGpuProfileId !== selectedOffer.id) {
+      offerGpuProfileId = selectedOffer.id;
+      offerJobSelections.clear();
+      el('offer-gpu-custom').checked = false;
+      setRentalGpuFields('offer', null);
+    }
+    const preview = calibrationInfo?.rental_profile;
+    el('offer-gpu-profile-source').textContent = preview
+      ? 'Preliminary Vast offer · ' + (Number(preview.card_power_limit_watts) > 0
+        ? gpuNumber(preview.card_power_limit_watts) + ' W advertised · ' : '')
+        + 'Auto values below are calculated separately for each frozen queue job.'
+      : 'Checking queued jobs for the selected offer…';
+    el('offer-gpu-custom').disabled = !preview;
+    if (preview && !el('offer-gpu-custom').checked) setRentalGpuFields('offer', preview);
+    setRentalGpuFieldMode('offer', el('offer-gpu-custom').checked, !preview);
+    renderGpuJobPreviews('offer-gpu-jobs', calibrationInfo?.queued_gpu_previews,
+                         offerJobSelections, !calibrationInfo, () => {});
+  }
+
+  let activeGpuProfile = null, activeGpuWorkerId = null, activeGpuStamp = null;
+  let activeGpuDirty = false, activeGpuGeneration = 0, activeGpuSaving = false;
+  function renderActiveGpuProfile() {
+    const panel = el('active-rental-gpu-profile');
+    panel.hidden = !activeGpuWorkerId;
+    if (!activeGpuWorkerId) return;
+    const record = activeGpuProfile;
+    const preview = record?.preview;
+    el('active-gpu-profile-source').textContent = preview
+      ? 'Reserved GPU · ' + (Number(preview.card_power_limit_watts) > 0
+        ? gpuNumber(preview.card_power_limit_watts) + ' W · ' : '')
+        + 'settings below apply to each waiting job.'
+        + (record.override ? ' Saving per-job choices replaces the earlier card-wide override.' : '')
+      : 'Checking queued jobs for this rental…';
+    if (record && !activeGpuDirty) {
+      el('active-gpu-custom').checked = !!record.override;
+      setRentalGpuFields('active', record.override || preview);
+      restoreGpuJobSelections(activeJobSelections, record.queued_gpu_previews, record.job_overrides);
+    }
+    const locked = !record?.can_edit || activeGpuSaving;
+    el('active-gpu-custom').disabled = locked;
+    setRentalGpuFieldMode('active', el('active-gpu-custom').checked, locked);
+    el('active-gpu-save').disabled = locked || !activeGpuDirty;
+    renderGpuJobPreviews('active-gpu-jobs', record?.queued_gpu_previews, activeJobSelections,
+                         locked, () => { activeGpuDirty = true;
+                           el('active-gpu-save').disabled = false; renderQueueOverview(); });
+  }
+
+  async function refreshActiveGpuProfile() {
+    const item = workers.find(row => row.awaiting_queue_start
+      && !['none', 'deletion_verified'].includes(row.rental_state));
+    if (!item) {
+      activeGpuWorkerId = null; activeGpuProfile = null; activeGpuStamp = null; activeJobSelections.clear();
+      activeGpuDirty = false; activeGpuGeneration++; renderActiveGpuProfile(); return;
+    }
+    if (activeGpuWorkerId !== item.id) {
+      activeGpuWorkerId = item.id; activeGpuProfile = null; activeGpuStamp = null; activeJobSelections.clear();
+      activeGpuDirty = false; renderActiveGpuProfile();
+    }
+    const waitingIds = jobRows.filter(row => row.status === 'ready' && !['worker', 'calibration'].includes(row.kind))
+      .map(row => row.id).sort().join(',');
+    const stamp = item.id + ':' + item.generation + ':' + waitingIds;
+    if (stamp === activeGpuStamp && activeGpuProfile) return;
+    const current = ++activeGpuGeneration;
+    try {
+      const record = await request('/queue/rental-gpu-profile/' + encodeURIComponent(item.id));
+      if (disposed || current !== activeGpuGeneration || activeGpuWorkerId !== item.id) return;
+      activeGpuProfile = record; activeGpuStamp = stamp; renderActiveGpuProfile();
+    } catch (error) {
+      if (disposed || current !== activeGpuGeneration || activeGpuWorkerId !== item.id) return;
+      activeGpuStamp = null;
+      el('active-gpu-profile-source').textContent = error.message;
+    }
+  }
+
+  el('offer-gpu-custom').addEventListener('change', () => renderOfferGpuProfile());
+  el('active-gpu-custom').addEventListener('change', () => {
+    activeGpuDirty = true;
+    if (el('active-gpu-custom').checked && !activeGpuProfile?.override) {
+      setRentalGpuFields('active', activeGpuProfile?.preview);
+    }
+    renderActiveGpuProfile(); renderQueueOverview();
+  });
+  ['population', 'batch', 'work-limit'].forEach(key => {
+    el('active-gpu-' + key).addEventListener('input', () => {
+      activeGpuDirty = true;
+      renderActiveGpuProfile(); renderQueueOverview();
+    });
+  });
+  el('active-gpu-save').addEventListener('click', async () => {
+    if (!activeGpuWorkerId || !activeGpuProfile?.can_edit || activeGpuSaving) return;
+    let jobProfiles;
+    try { jobProfiles = gpuJobOverrides(activeGpuProfile.queued_gpu_previews, activeJobSelections); }
+    catch (error) { message(error.message, true); return; }
+    activeGpuSaving = true; renderActiveGpuProfile();
+    try {
+      await request('/queue/rental-gpu-profile/' + encodeURIComponent(activeGpuWorkerId), {
+        method:'POST', body:JSON.stringify({profile:null, job_profiles:jobProfiles})
+      });
+      activeGpuDirty = false; activeGpuStamp = null;
+      el('active-gpu-jobs').dataset.gpuStamp = '';
+      await refreshJobs();
+      if (!disposed) message('GPU profile saved for this rental. Queue jobs have not started.');
+    } catch (error) { if (!disposed) message(error.message, true); }
+    finally { activeGpuSaving = false; if (!disposed) renderActiveGpuProfile(); }
+  });
+
+  function formatElapsedSeconds(value) {
+    const seconds = Math.max(0, Math.round(Number(value) || 0));
+    if (seconds < 60) return seconds + 's';
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    return minutes + 'm' + (remainder ? ' ' + remainder + 's' : '');
+  }
+
+  function completedCalibration(job) {
+    return job?.kind === 'calibration' && job.status === 'completed'
+      && job.calibration_profile_candidate && Object.keys(job.calibration_profile_candidate.cases || {}).length;
+  }
+
+  function calibrationMatchesOffer(job, offer) {
+    if (!offer || !completedCalibration(job)) return false;
+    const identity = job.calibration_profile_candidate.hardware_identity || {};
+    const provider = identity.provider;
+    return provider?.gpu_name === offer.gpu_name && Number.isFinite(Number(provider.vram_gb))
+      && Number(provider.vram_gb) === Number(offer.vram_gb);
+  }
+
+  function latestCompletedCalibration({pendingOnly=false, offer=selectedOffer}={}) {
+    if (!offer) return null;
+    const offerPower = Number(offer.gpu_max_power_watts);
+    const selection = calibrationSelection();
+    const candidates = jobRows.map((job, order) => ({job, order}))
+      .filter(({job}) => calibrationMatchesOffer(job, offer)
+        && !job.calibration_source_id
+        && (selection.legacy
+          ? !job.calibration_preset
+          : job.calibration_preset === selection.preset && Number(job.calibration_profile_candidate?.protocol) === 4)
+        && (!pendingOnly || !job.calibration_profile_accepted_at));
+    candidates.sort((left, right) => {
+      const powerOf = ({job}) => Number(job.calibration_profile_candidate.hardware_identity?.gpu_power_limit_watts);
+      const leftPower = powerOf(left), rightPower = powerOf(right);
+      const leftDelta = offerPower > 0 && leftPower > 0 ? Math.abs(leftPower - offerPower) : Infinity;
+      const rightDelta = offerPower > 0 && rightPower > 0 ? Math.abs(rightPower - offerPower) : Infinity;
+      return leftDelta - rightDelta || left.order - right.order;
+    });
+    return candidates[0]?.job || null;
+  }
+
+  function renderCalibrationResult(container, job) {
+    container.replaceChildren();
+    if (!completedCalibration(job)) { container.hidden = true; return; }
+    const candidate = job.calibration_profile_candidate;
+    const identity = candidate.hardware_identity || {};
+    const head = document.createElement('div'); head.className = 'calibration-result-head';
+    const title = document.createElement('span'); title.className = 'calibration-result-title';
+    title.textContent = identity.gpu_name || 'GPU performance test'; head.appendChild(title);
+    const summary = document.createElement('span'); summary.className = 'calibration-result-summary';
+    summary.textContent = 'Population / batch ' + Number(candidate.population_size).toLocaleString()
+      + (Number(candidate.max_dispatch_candidate_bars) > 0
+        ? ' · measured work cap ' + Number(candidate.max_dispatch_candidate_bars).toLocaleString() + ' candidate-bars' : '');
+    head.appendChild(summary);
+    container.appendChild(head);
+    const meta = document.createElement('div'); meta.className = 'calibration-result-meta';
+    const metaParts = [];
+    if (Number(candidate.protocol) === 4) metaParts.push(job.calibration_source_id
+      ? 'Exact frozen queue input · source ' + job.calibration_source_id
+      : 'EMA-anchor ' + (job.calibration_preset || 'custom') + ' reference');
+    if (Number(candidate.protocol) === 3) metaParts.push('EMA-anchor calibration');
+    else if (Number(candidate.protocol) === 2) metaParts.push('Legacy trailing-martingale calibration; rate may cover only one logged generation');
+    if (Number.isFinite(Number(identity.vram_mib))) metaParts.push(fmt(Number(identity.vram_mib) / 1024, 2) + ' GB runtime VRAM');
+    if (identity.compute_capability) metaParts.push('CUDA ' + identity.compute_capability);
+    if (Number.isFinite(Number(identity.gpu_power_limit_watts)) && Number(identity.gpu_power_limit_watts) > 0) {
+      metaParts.push('Measured power limit ' + fmt(Number(identity.gpu_power_limit_watts), 0) + ' W');
+    }
+    if (identity.pci_device_id) metaParts.push('PCI ' + identity.pci_device_id);
+    const stopReason = job.calibration_result?.stop_reason || candidate.stop_reason;
+    const stopLabels = {scaling_plateau:'Scaling plateau reached',performance_regression:'Next step was slower',
+      vram_limit:'VRAM safety limit reached',rental_deadline:'Rental deadline reached; faster populations may exist',
+      maximum_safety_limit:'131k safety limit reached'};
+    if (stopLabels[stopReason]) metaParts.push(stopLabels[stopReason]);
+    metaParts.push(job.calibration_profile_accepted_at ? 'Local profile active' : 'Ready to use as a local profile');
+    meta.textContent = metaParts.join(' · '); container.appendChild(meta);
+    const wrap = document.createElement('div'); wrap.className = 'table-wrap';
+    const table = document.createElement('table'); table.setAttribute('aria-label', 'GPU performance test results');
+    const thead = document.createElement('thead'), header = document.createElement('tr');
+    ['Population', 'Candidates / s', 'Rate window', 'Completed GPU proxy', 'Effective dispatch', 'Measured', 'Evidence', 'Result'].forEach(label => {
+      const cell = document.createElement('th'); cell.textContent = label; header.appendChild(cell);
+    });
+    thead.appendChild(header); table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    Object.values(candidate.cases || {}).filter(row => row && Number.isFinite(Number(row.population_size)))
+      .sort((left, right) => Number(left.population_size) - Number(right.population_size)).forEach(row => {
+        const tr = document.createElement('tr');
+        if (Number(row.population_size) === Number(candidate.population_size)) tr.className = 'is-recommended';
+        const dispatchSize = Number(row.dispatch_batch_size);
+        const dispatchCount = Number(row.dispatch_count);
+        const lastDispatch = Number(row.last_dispatch_size);
+        const dispatch = dispatchSize > 0 && dispatchCount > 0
+          ? dispatchCount.toLocaleString() + ' × ≤' + dispatchSize.toLocaleString()
+            + (lastDispatch > 0 ? ' · last ' + lastDispatch.toLocaleString() : '')
+          : '—';
+        const rateWindow = Number(row.rate_window_seconds);
+        const generations = Number(row.generation_count);
+        const values = [
+          Number(row.population_size).toLocaleString(),
+          Number.isFinite(Number(row.rate_per_second)) ? fmt(Number(row.rate_per_second), 1) : '—',
+          rateWindow > 0 ? formatElapsedSeconds(rateWindow) + (generations > 0 ? ' · ' + generations + ' gen' : '') : '—',
+          Number(row.proxy_seconds) > 0 ? formatElapsedSeconds(Number(row.proxy_seconds)) : '—',
+          dispatch,
+          Number.isFinite(Number(row.wall_seconds)) ? formatElapsedSeconds(Number(row.wall_seconds)) : '—',
+          row.source === 'heartbeat' ? '5-minute heartbeat' : row.source === 'generation_profile'
+            ? (row.all_dispatches_full ? 'One batch per scenario · ' + Number(row.scenario_count || 1)
+              + ' scenarios' : 'PB8 GPU profile')
+            : row.source === 'completed_generation' ? 'Sparse legacy log' : String(row.source || '—'),
+          row.valid ? (Number(row.population_size) === Number(candidate.population_size) ? 'Recommended' : 'Valid') : 'Invalid',
+        ];
+        values.forEach(value => { const cell = document.createElement('td'); cell.textContent = value; tr.appendChild(cell); });
+        tbody.appendChild(tr);
+      });
+    table.appendChild(tbody); wrap.appendChild(table); container.appendChild(wrap); container.hidden = false;
+  }
+
+  function renderCalibrationWatch(activeRental, activeCalibration) {
+    const watch = queueState.calibration_watch;
+    const watchedJob = watch ? jobRows.find(row => row.id === watch.job_id) : null;
+    const activeTest = watch ? null : jobRows.find(row => row.kind === 'calibration'
+      && row.calibration_watch_preferences
+      && (['provisioning', 'uploading', 'running', 'collecting'].includes(row.status)
+        || workers.some(worker => worker.calibration_job_id === row.id
+          && !['none', 'deletion_verified'].includes(worker.rental_state))));
+    const criteria = watch?.preferences || activeTest?.calibration_watch_preferences;
+    const start = el('calibration-watch-start');
+    const cancel = el('calibration-watch-cancel');
+    const panel = el('calibration-watch-panel');
+    const status = el('calibration-watch-status');
+    let reason = '';
+    if (watch) reason = 'A waiting performance test is already active.';
+    else if (!calibrationWorkerAvailable) reason = 'The EMA-anchor 4k/8k worker has not been published and pinned yet.';
+    else if (!supervision) reason = 'Rental supervision is unavailable.';
+    else if (!savedPreferences) reason = 'Rental settings are still loading.';
+    else if (activeRental) reason = 'Finish the active GPU rental first.';
+    else if (activeCalibration) reason = 'A performance test is already preparing or running.';
+    else if (calibrationStarting || watchCancelling) reason = 'A performance-test action is in progress.';
+    else if (!el('offers-form').checkValidity()) reason = 'Enter valid GPU requirements.';
+    else if (!el('gpu-model').value.trim()) reason = 'Enter a GPU type to watch.';
+    else if (Number(savedPreferences.hours) < .75) reason = 'Set maximum rental hours to at least 0.75.';
+    else if (Number(savedPreferences.hours) * Number(el('max-price').value) > Number(savedPreferences.budget) + 1e-6)
+      reason = 'Budget must cover the maximum rate for the approved duration.';
+    start.disabled = !!reason;
+    start.hidden = !!criteria;
+    start.title = reason;
+    start.textContent = calibrationStarting && !watch ? 'Starting waiting test…' : 'Test when matching GPU is available';
+    cancel.hidden = !watch;
+    cancel.disabled = watchCancelling;
+    cancel.dataset.watchId = watch?.id || '';
+    cancel.textContent = watchCancelling ? 'Cancelling…' : 'Cancel waiting test';
+    panel.hidden = !criteria;
+    if (!criteria) { status.textContent = ''; status.title = ''; return; }
+
+    const label = criteria.gpu_name || 'matching GPU';
+    el('calibration-watch-title').textContent = watch ? 'Waiting for ' + label : 'Performance test: ' + label;
+    const rental = workers.find(row => row.calibration_job_id === (watch?.job_id || activeTest?.id));
+    let phase = 'Searching offers';
+    let detail = 'Checks about every 30 seconds until you cancel.';
+    if (rental?.cleanup_wait_until) {
+      phase = 'Verifying failed rental';
+      detail = 'No second rental attempt until Vast confirms that no instance was created.';
+    } else if (rental?.rental_state === 'creation_pending' && !rental.instance_id) {
+      phase = 'Offer found · awaiting Vast';
+      detail = 'Rental request pending; another offer will not be rented yet.';
+    } else if (activeTest || rental) {
+      phase = activeTest?.status === 'running' ? 'Test running' : 'GPU found · starting test';
+      detail = 'Follow rental and test progress in Queue.';
+    } else if (watchedJob?.status === 'preparing') {
+      phase = 'Preparing test data';
+      detail = 'No rental starts until the fixed test input is ready.';
+    } else if (watchedJob?.status === 'failed') {
+      phase = 'Preparing another attempt';
+      detail = 'The earlier attempt did not complete; PBGui will retry a matching offer.';
+    }
+    el('calibration-watch-phase').textContent = phase;
+    const items = [
+      '≤$' + fmt(criteria.max_price, 4) + '/hour',
+      Number(criteria.min_power_watts) > 0 ? '≥' + fmt(criteria.min_power_watts, 0) + ' W advertised' : 'Any power limit',
+      Number(criteria.min_reliability_pct) > 0 ? '≥' + fmt(criteria.min_reliability_pct, 1) + '% reliability' : 'Any reliability',
+      criteria.verified_only ? 'Verified hosts' : 'All hosts',
+      '≥' + fmt(criteria.min_vram, 0) + ' GB VRAM',
+      '≥' + fmt(criteria.min_cpu, 0) + ' CPU',
+      '≥' + fmt(criteria.min_ram, 0) + ' GB RAM',
+      '≥' + fmt(criteria.disk_gb, 0) + ' GB disk',
+    ];
+    if (watch) items.push('Up to ' + fmt(watch.hours, 2) + ' h', '$' + fmt(watch.budget, 2) + ' budget');
+    const target = el('calibration-watch-target');
+    target.replaceChildren();
+    items.forEach(value => {
+      const chip = document.createElement('span');
+      chip.textContent = value;
+      target.appendChild(chip);
+    });
+    const checked = watch?.last_checked_at ? ' Last checked ' + new Date(watch.last_checked_at * 1000).toLocaleTimeString() + '.' : '';
+    status.textContent = detail + checked + (watch?.last_error ? ' Last search error: ' + watch.last_error : '');
+    status.title = status.textContent;
+  }
+
+  function renderCalibration() {
+    renderOfferGpuProfile();
+    const status = el('calibration-status');
+    const match = calibrationInfo?.match;
+    const selection = calibrationSelection();
+    const pending = latestCompletedCalibration({pendingOnly:true});
+    const latest = pending || latestCompletedCalibration();
+    if (!selectedOffer) status.textContent = 'Select an offer to check PBGui performance coverage.';
+    else if (pending) {
+      const identity = pending.calibration_profile_candidate.hardware_identity || {};
+      const measuredPower = Number(identity.gpu_power_limit_watts);
+      const offerPower = Number(selectedOffer?.gpu_max_power_watts);
+      const proximity = measuredPower > 0 && offerPower > 0
+        ? (Math.abs(measuredPower - offerPower) < 0.5 ? 'exact power-limit match'
+          : 'nearest saved test at ' + fmt(measuredPower, 0) + ' W for this offer at ' + fmt(offerPower, 0) + ' W')
+        : 'closest saved test for this GPU/VRAM variant';
+      status.textContent = 'Completed performance test ready: population '
+        + Number(pending.calibration_profile_candidate.population_size).toLocaleString() + ' · ' + proximity
+        + '. Review the measured populations below and use the profile without running another test.';
+    }
+    else if (!calibrationInfo) status.textContent = 'Checking performance coverage…';
+    else if (!(selection.legacy ? calibrationInfo.calibration_worker : calibrationInfo.configurable_worker))
+      status.textContent = selection.legacy ? 'The pinned Small-test worker is unavailable.'
+        : 'This reference mode requires the protocol-4 worker release; no GPU will be rented yet.';
+    else if (match) status.textContent = (match.source === 'local' ? 'Local test' : 'PBGui reference') + ' available: population '
+      + Number(match.population_size).toLocaleString() + '. Hardware match only; workload compatibility is checked separately.';
+    else status.textContent = 'No verified profile for this advertised GPU variant. Selected reference: '
+      + selection.preset + '. Runtime identity distinguishes power limits and modified-VRAM cards.';
+    const selectedWorkerAvailable = selection.legacy
+      ? calibrationInfo?.calibration_worker : calibrationInfo?.configurable_worker;
+    const activeRental = workers.some(item => !['none','deletion_verified'].includes(item.rental_state));
+    const activeCalibration = jobRows.some(job => job.kind === 'calibration'
+      && !['completed','failed','cancelled'].includes(job.status));
+    renderCalibrationWatch(activeRental, activeCalibration);
+    if (!selection.legacy) {
+      el('calibration-watch-start').disabled = true;
+      el('calibration-watch-start').title = 'Waiting tests currently use the fixed Small reference only.';
+    }
+    let blockedReason = '';
+    if (!selectedOffer) blockedReason = 'Select an offer first.';
+    else if (!calibrationInfo) blockedReason = 'Checking performance-test availability.';
+    else if (!selectedWorkerAvailable) {
+      blockedReason = selection.legacy
+        ? 'The pinned calibration worker is unavailable or mismatched.'
+        : 'Configurable tests require a published, pinned protocol-4 worker; no rental will start.';
+    } else if (!supervision) blockedReason = 'Rental supervision is unavailable.';
+    else if (!savedPreferences) blockedReason = 'Rental settings are still loading.';
+    else if (activeRental) blockedReason = 'Finish the active GPU rental first.';
+    else if (activeCalibration) blockedReason = 'A performance test is already preparing or running.';
+    else if (queueState.calibration_watch) blockedReason = 'Cancel the waiting performance test first.';
+    else if (calibrationStarting) blockedReason = 'A performance test is already starting.';
+    else if (renting) blockedReason = 'A rental request is already starting.';
+    else if (startingQueue) blockedReason = 'A queue start is already in progress.';
+    else if (workerAction) blockedReason = 'A GPU worker action is in progress.';
+    if (blockedReason && selectedOffer) status.textContent += ' Performance test disabled: ' + blockedReason;
+    el('calibration-start').textContent = calibrationStarting ? 'Starting performance test…'
+      : (selection.legacy ? (match || pending ? 'Repeat performance test' : 'Run performance test')
+        : 'Run ' + selection.preset + ' performance test');
+    el('calibration-start').disabled = !!blockedReason;
+    el('calibration-start').title = blockedReason;
+    el('calibration-start').setAttribute('aria-busy', String(calibrationStarting));
+    el('calibration-accept').hidden = !pending;
+    el('calibration-accept').textContent = pending ? 'Use completed test profile ('
+      + Number(pending.calibration_profile_candidate.population_size).toLocaleString() + ')' : 'Use completed test profile';
+    el('calibration-accept').dataset.jobId = pending?.id || '';
+    const result = el('calibration-result');
+    renderCalibrationResult(result, latest);
+    const showingWatch = !el('calibration-watch-panel').hidden;
+    status.hidden = showingWatch;
+    if (showingWatch) result.hidden = true;
+  }
+
+  async function refreshCalibration() {
+    const offer = selectedOffer, current = ++calibrationGeneration;
+    if (!offer || !offer.machine_id) { calibrationInfo = null; renderCalibration(); return; }
+    try {
+      const data = await request('/calibration/status', {method:'POST', body:JSON.stringify(calibrationOffer(offer))});
+      if (disposed || current !== calibrationGeneration || selectedOffer?.id !== offer.id) return;
+      calibrationInfo = data; renderJob();
+    } catch (error) {
+      if (!disposed && current === calibrationGeneration) {
+        calibrationInfo = {calibration_worker:false, error:error.message};
+        el('calibration-status').textContent = error.message;
+        renderJob();
+      }
+    }
   }
 
   function hostStatus(profile) {
@@ -405,7 +1088,8 @@
     const current = ++offerGeneration;
     el('find-offers').disabled = true;
     const params = new URLSearchParams({max_price:el('max-price').value, min_vram:el('min-vram').value,
-      min_ram:el('min-ram').value, min_cpu:el('min-cpu').value, min_tflops:el('min-tflops').value, disk_gb:el('disk').value,
+      min_ram:el('min-ram').value, min_cpu:el('min-cpu').value, min_tflops:el('min-tflops').value,
+      min_power_watts:el('min-power-watts').value, min_reliability_pct:el('min-reliability-pct').value, disk_gb:el('disk').value,
       verified_only:el('verified').value, gpu_name:el('gpu-model').value.trim(),
       include_incompatible:String(el('show-incompatible').checked), rental_hours:savedPreferences?.hours ?? 1});
     try {
@@ -419,16 +1103,19 @@
   }
 
   const preferenceFields = {gpu_name:'gpu-model', max_price:'max-price', min_vram:'min-vram',
-    min_ram:'min-ram', min_cpu:'min-cpu', min_tflops:'min-tflops', disk_gb:'disk', verified_only:'verified', hours:'job-hours', budget:'job-budget', idle_seconds:'worker-idle', max_rentals:'max-rentals', auto_rent:'auto-rent', convergence_enabled:'convergence-enabled', convergence_min_exact:'convergence-min', convergence_patience:'convergence-patience', convergence_tolerance_pct:'convergence-tolerance'};
+    min_ram:'min-ram', min_cpu:'min-cpu', min_tflops:'min-tflops', min_power_watts:'min-power-watts', min_reliability_pct:'min-reliability-pct', disk_gb:'disk', verified_only:'verified', hours:'job-hours', budget:'job-budget', idle_seconds:'worker-idle', max_rentals:'max-rentals', auto_rent:'auto-rent', convergence_enabled:'convergence-enabled', convergence_min_exact:'convergence-min', convergence_patience:'convergence-patience', convergence_tolerance_pct:'convergence-tolerance'};
   const preferenceGroups = {
-    offers: ['gpu_name','max_price','min_vram','min_ram','min_cpu','min_tflops','disk_gb','verified_only'],
+    offers: ['gpu_name','max_price','min_vram','min_ram','min_cpu','min_tflops','min_power_watts','min_reliability_pct','disk_gb','verified_only'],
     rental: ['hours','budget','idle_seconds','max_rentals','auto_rent','convergence_enabled','convergence_min_exact','convergence_patience','convergence_tolerance_pct']
   };
   const preferenceEdits = {};
   let preferenceSavePending = false;
   Object.entries(preferenceFields).forEach(([key,id]) => {
     preferenceEdits[key] = 0;
-    ['input','change'].forEach(event => el(id).addEventListener(event, () => { preferenceEdits[key]++; }));
+    ['input','change'].forEach(event => el(id).addEventListener(event, () => {
+      preferenceEdits[key]++;
+      if (preferenceGroups.offers.includes(key)) renderCalibration();
+    }));
   });
   function applyPreferences(data, keys, editSnapshot) {
     data = {max_rentals:1, auto_rent:false, min_tflops:0, convergence_enabled:false, convergence_min_exact:512, convergence_patience:512, convergence_tolerance_pct:0.25, ...data};
@@ -533,6 +1220,18 @@
       uploading:'Uploading input', running:'Running', collecting:'Collecting results',
       completed:'Complete', failed:'Failed', cancelled:'Cancelled'
     }[job.status] || job.status || 'Waiting';
+    if (job.kind === 'calibration') {
+      const calibration = job.calibration_result || {};
+      const cases = Object.values(calibration.cases || {}).filter(item => item && item.valid);
+      const parts = [phase, cases.length + ' valid population' + (cases.length === 1 ? '' : 's')];
+      if (calibration.active_population) parts.push('testing ' + Number(calibration.active_population).toLocaleString());
+      const progress = calibration.active_progress || {};
+      if (Number.isFinite(progress.elapsed_seconds)) parts.push(Math.round(progress.elapsed_seconds) + 's sample');
+      if (Number.isFinite(progress.rate_per_second)) parts.push(fmt(progress.rate_per_second, 3) + '/s');
+      const recommendation = job.calibration_profile_candidate?.population_size || calibration.population_size;
+      if (recommendation) parts.push('recommended ' + Number(recommendation).toLocaleString());
+      return parts.join(' · ');
+    }
     if (job.status === 'provisioning' && job.image_progress) {
       const image = job.image_progress;
       if (image.total > 0) {
@@ -627,6 +1326,10 @@
 
   function jobLastError(job, rental) {
     const ownError = job?.error || job?.log_error || job?.cleanup_error || '';
+    if (rental?.creation_error && !rental.instance_id && !rental.provider_seen_at) {
+      return 'Rental was not created: ' + rental.creation_error
+        + '. Vast confirms no instance exists; refresh offers and select another host.';
+    }
     if (['completed', 'cancelled', 'failed'].includes(job?.status)) return ownError;
     return (rental && (rental.creation_error || rental.cleanup_error)) || ownError;
   }
@@ -634,9 +1337,32 @@
   function renderJob() {
     renderHostBlocks();
     const job = selectedJob();
-    const active = (worker && !['none', 'deletion_verified'].includes(worker.rental_state)) || queueState.pool_enabled;
-    el('rent-offer').disabled = !selectedOffer || active || renting || startingQueue || !!workerAction || !supervision;
+    const activeRental = workers.some(item => !['none', 'deletion_verified'].includes(item.rental_state));
+    const active = activeRental || queueState.pool_enabled;
+    const rentReason = !selectedOffer ? 'Select an offer first.'
+      : !supervision ? 'Rental supervision is unavailable.'
+      : activeRental ? 'Finish the active GPU rental first.'
+      : queueState.calibration_watch ? 'Cancel the waiting performance test first.'
+      : !calibrationInfo?.rental_profile ? 'Waiting for the selected GPU profile.' : '';
+    el('rent-offer').disabled = !!rentReason || renting || startingQueue || !!workerAction;
     el('rent-offer').textContent = renting ? 'Renting…' : 'Rent';
+    el('rent-offer').title = rentReason;
+    renderCalibration();
+    renderCalibrationResult(el('cloud-calibration-result'), job?.kind === 'calibration' ? job : null);
+    const queueAccept = el('cloud-calibration-accept');
+    queueAccept.hidden = !completedCalibration(job) || !!job.calibration_profile_accepted_at;
+    queueAccept.dataset.jobId = queueAccept.hidden ? '' : job.id;
+    const actionReasons = [];
+    if (el('calibration-watch-panel').hidden) {
+      const calibrationReason = el('calibration-start').title;
+      if (rentReason && rentReason === calibrationReason) actionReasons.push(rentReason);
+      else {
+        if (rentReason) actionReasons.push('Rent: ' + rentReason);
+        if (calibrationReason) actionReasons.push('Performance test: ' + calibrationReason);
+      }
+    }
+    el('offer-action-status').hidden = actionReasons.length === 0;
+    el('offer-action-status').textContent = actionReasons.join(' ');
     el('settings-rental-status').textContent = workerActivity() + (active && worker && worker.awaiting_queue_start ? (queueState.paused ? ' · Reserved for queue start' : ' · Queue started — waiting for input preparation') : '');
     const settingsEndRental = el('settings-end-rental');
     if (settingsEndRental) {
@@ -646,7 +1372,7 @@
     }
     el('start-job').hidden = !job || job.status !== 'ready';
     el('start-job').disabled = !!workerAction || renting || startingQueue || !job || job.status !== 'ready' || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || !supervision;
-    el('requeue-job').hidden = !job || !['failed','cancelled'].includes(job.status) || !job.can_delete;
+    el('requeue-job').hidden = !job || job.kind === 'calibration' || !['failed','cancelled'].includes(job.status) || !job.can_delete;
     el('requeue-job').disabled = !!job && (requeuingJobs.has(job.id) || deletingJobs.has(job.id));
     el('requeue-job').textContent = job && requeuingJobs.has(job.id) ? 'Preparing…' : 'Requeue';
     const labels = {pause:'Pause queue', resume:'Start queue', end:queueState.pool_authorization ? 'End rentals' : 'End rental', recover:'Resume supervision'};
@@ -730,21 +1456,62 @@
           if (Number(item.idle_seconds) < 0) progress.textContent = 'Idle · retained until rental deadline · uploaded data and worker cache stay available';
           else {
             const remaining = Math.max(0, Number(item.idle_since) + Number(item.idle_seconds ?? -1) - Date.now() / 1000);
-            progress.textContent = 'Idle · retained for ' + duration(remaining) + ' · uploaded data and worker cache stay available';
+            progress.textContent = 'Idle · retained for ' + formatElapsedSeconds(remaining) + ' · uploaded data and worker cache stay available';
           }
         } else progress.textContent = 'No active optimizer';
         if (job?.status === 'uploading' && Number(job.rental?.offer?.inet_down_mbps) > 0) progress.title = 'Upload saturation compares the measured transfer rate with the provider-advertised host download bandwidth.';
         card.appendChild(progress);
+        if (job?.kind === 'calibration') {
+          const measured = Object.values(job.calibration_result?.cases || {})
+            .filter(row => row?.valid && Number.isFinite(Number(row.population_size))
+              && Number.isFinite(Number(row.rate_per_second)))
+            .sort((left, right) => Number(left.population_size) - Number(right.population_size));
+          if (measured.length) {
+            const speeds = document.createElement('div'); speeds.className = 'queue-gpu-tuning';
+            speeds.textContent = 'Measured: ' + measured.map(row =>
+              Number(row.population_size).toLocaleString() + ' → '
+              + fmt(Number(row.rate_per_second), 1) + ' candidates/s').join(' · ');
+            card.appendChild(speeds);
+          }
+        }
+        const selectedJobProfiles = item.rental_job_gpu_profiles || {};
+        if (Object.keys(selectedJobProfiles).length) {
+          const selected = document.createElement('div'); selected.className = 'queue-gpu-tuning';
+          selected.textContent = Object.keys(selectedJobProfiles).length + ' queued job GPU profile selection(s) on this rental';
+          card.appendChild(selected);
+        }
+        if (item.rental_gpu_profile) {
+          const rental = item.rental_gpu_profile;
+          const summary = document.createElement('div'); summary.className = 'queue-gpu-tuning';
+          summary.textContent = 'Rental GPU override · population ' + Number(rental.population_size).toLocaleString()
+            + ' · batch ' + Number(rental.batch_size).toLocaleString()
+            + ' · work limit ' + gpuWorkBillions(rental.max_dispatch_candidate_bars);
+          card.appendChild(summary);
+        }
         if (job?.gpu_tuning) {
           const tuning = document.createElement('div'); tuning.className = 'queue-gpu-tuning';
           const automatic = job.gpu_tuning.automatic || {};
+          const sizing = {...automatic, ...(job.gpu_tuning.preserved || {})};
           const details = [];
-          if (Number.isFinite(Number(automatic.max_dispatch_candidate_bars))) {
-            details.push(fmt(Number(automatic.max_dispatch_candidate_bars) / 1e9, 2) + 'B dispatch bars');
+          if (Number(sizing.max_dispatch_candidate_bars) > 0) {
+            details.push(gpuWorkBillions(sizing.max_dispatch_candidate_bars));
           }
-          if (Number.isFinite(Number(automatic.population_size))) details.push('population ' + Number(automatic.population_size).toLocaleString());
+          if (Number(sizing.population_size) > 0) details.push('population ' + Number(sizing.population_size).toLocaleString());
+          if (Number(sizing.batch_size) > 0) details.push('batch ' + Number(sizing.batch_size).toLocaleString());
           if (Number.isFinite(Number(job.gpu_tuning.cpu_workers))) details.push(Number(job.gpu_tuning.cpu_workers).toLocaleString() + ' exact workers');
-          tuning.textContent = (Object.keys(automatic).length ? 'Auto tuned' : 'Execution settings') + (details.length ? ' · ' + details.join(' · ') : ' · explicit GPU values preserved');
+          if (job.gpu_tuning.calibration_profile_match === 'exact') {
+            const watts = Number(job.gpu_tuning.gpu_power_limit_watts);
+            details.push('exact calibration profile' + (watts > 0 ? ' · ' + fmt(watts, 0) + ' W' : ''));
+          } else if (job.gpu_tuning.calibration_profile_match === 'nearest_power_limit') {
+            const watts = Number(job.gpu_tuning.calibration_profile_power_limit_watts);
+            const actual = Number(job.gpu_tuning.gpu_power_limit_watts);
+            const delta = Number(job.gpu_tuning.calibration_power_limit_delta_watts);
+            details.push('nearest profile ' + (watts > 0 ? fmt(watts, 0) + ' W' : '')
+              + (actual > 0 ? ' for ' + fmt(actual, 0) + ' W GPU' : '')
+              + (Number.isFinite(delta) ? ' (Δ ' + fmt(delta, 0) + ' W)' : ''));
+          }
+          tuning.textContent = (job.gpu_tuning.applied_by === 'rental_override' ? 'Rental GPU override'
+            : Object.keys(automatic).length ? 'Auto tuned' : 'Execution settings') + (details.length ? ' · ' + details.join(' · ') : ' · explicit GPU values preserved');
           tuning.title = 'Resolved from the rented GPU and frozen optimizer workload. Explicitly configured values are preserved.';
           card.appendChild(tuning);
         }
@@ -761,7 +1528,13 @@
         results.dataset.tip = results.title; results.disabled = !job?.result_path;
         results.addEventListener('click', () => openCloudResults(job)); actions.appendChild(results);
         if (item.awaiting_queue_start) {
-          const start = document.createElement('button'); start.type = 'button'; start.className = 'act-btn'; start.textContent = pending === 'start' ? 'Starting…' : 'Start queue'; start.disabled = !!pending; start.addEventListener('click', () => runWorkerAction(item, 'start')); actions.appendChild(start);
+          const profile = document.createElement('button'); profile.type = 'button'; profile.className = 'act-btn'; profile.textContent = 'GPU profile';
+          profile.addEventListener('click', () => {
+            if (typeof window.setPanel === 'function') window.setPanel('vast', 'rental');
+            else if (typeof showSettings === 'function') showSettings('rental');
+            el('active-rental-gpu-profile').scrollIntoView({block:'center'});
+          }); actions.appendChild(profile);
+          const start = document.createElement('button'); start.type = 'button'; start.className = 'act-btn'; start.textContent = pending === 'start' ? 'Starting…' : 'Start queue'; start.disabled = !!pending || (activeGpuWorkerId === item.id && activeGpuDirty); start.title = activeGpuWorkerId === item.id && activeGpuDirty ? 'Save GPU profile changes first' : 'Start queued jobs on this rental'; start.addEventListener('click', () => runWorkerAction(item, 'start')); actions.appendChild(start);
         }
         const autoReplace = !!(queueState.pool_enabled && (queueState.gpu_preferences?.auto_rent || savedPreferences?.auto_rent));
         const end = document.createElement('button'); end.type = 'button'; end.className = 'act-btn';
@@ -779,6 +1552,9 @@
 
   async function runWorkerAction(item, action) {
     if (disposed || workerActions.has(item.id)) return;
+    if (action === 'start' && activeGpuWorkerId === item.id && activeGpuDirty) {
+      message('Save the GPU profile changes before starting queued jobs.', true); return;
+    }
     if (action === 'replace') {
       if (!window.PBGuiDialogs?.confirm) { message('GPU replacement confirmation unavailable. Reload this page.', true); return; }
       const job = jobRows.find(row => row.id === item.active_job)
@@ -801,6 +1577,8 @@
   }
 
   async function refreshJobs(preferred) {
+    clearTimeout(jobTimer);
+    jobTimer = null;
     const current = ++jobGeneration;
     try {
       const data = await request('/jobs');
@@ -816,7 +1594,10 @@
       const previousResults = new Map(jobRows.map(job => [job.id, [job.result_path, job.last_backup_at, job.result_partial].join('|')]));
       const resultsChanged = data.jobs.some(job => job.result_path && previousResults.get(job.id) !==
         [job.result_path, job.last_backup_at, job.result_partial].join('|'));
-      jobRows = data.jobs; workers = data.workers || (data.worker && !['none','deletion_verified'].includes(data.worker.rental_state) ? [data.worker] : []); worker = workers[0] || data.worker; queueState = data.queue; supervision = data.supervision_available;
+      jobRows = data.jobs; workers = data.workers || (data.worker && !['none','deletion_verified'].includes(data.worker.rental_state) ? [data.worker] : []); worker = workers[0] || data.worker; queueState = data.queue; supervision = data.supervision_available; calibrationWorkerAvailable = data.calibration_worker_available === true;
+      const globalMessage = el('message');
+      if (globalMessage?.textContent?.startsWith('Preparing the canonical calibration input')
+          && jobRows.some(job => job.kind === 'calibration' && job.status !== 'preparing')) message('');
       for (const id of stoppingJobs.keys()) {
         const row = jobRows.find(item => item.id === id);
         if (!row || ['completed','failed','cancelled'].includes(row.status)) stoppingJobs.delete(id);
@@ -835,6 +1616,8 @@
         if (observedWorker) renderObservedOptimizer(observedWorker);
       }
       renderQueueOverview();
+      void refreshActiveGpuProfile();
+      if (typeof selectedOffer !== 'undefined' && selectedOffer) void refreshCalibration();
       if (resultsChanged && typeof refreshLiveResultsDuringRun === 'function') await refreshLiveResultsDuringRun(true);
     } catch (error) {
       if (!disposed && current === jobGeneration) {
@@ -842,12 +1625,13 @@
         const pollError = el('queue-message');
         if (pollError) pollError.dataset.jobPollError = error.message;
       }
+    } finally {
+      if (!disposed && current === jobGeneration) jobTimer = setTimeout(pollJobs, 10000);
     }
   }
 
   async function pollJobs() {
     await refreshJobs();
-    if (!disposed) jobTimer = setTimeout(pollJobs, 10000);
   }
 
   let validationGeneration = 0, validationTimer = null, cloudMetrics = null;
@@ -977,6 +1761,10 @@
       }
       if (actions.childElementCount) item.appendChild(actions);
       const fields = {'live.strategy_kind':'opted-strategy-kind', 'optimize.iters':'opted-iters',
+        'optimize.backend':'opted-opt-backend',
+        'optimize.gpu.population_size':'opted-gpu-population-size',
+        'optimize.gpu.batch_size':'opted-gpu-batch-size',
+        'optimize.gpu.max_dispatch_candidate_bars':'opted-gpu-max-dispatch-bars',
         'optimize.gpu.exact_workers':'opted-gpu-exact-workers', 'backtest.btc_collateral_cap':'opted-btc-collateral-cap',
         'optimize.objective_scenario':'opted-objective-scenario-name',
         'bot.long.hsl.enabled':'opted-runtime-long-hsl-enabled', 'bot.short.hsl.enabled':'opted-runtime-short-hsl-enabled',
@@ -995,9 +1783,83 @@
     extra.open = expanded;
     if (!unchanged) { box.replaceChildren(content); box.dataset.signature = signature; }
   }
+  function manualGpuErrors(config) {
+    if (config?.pbgui?.execution === 'vast' && config?.optimize?.backend !== 'gpu') {
+      return [{path:'optimize.backend', message:'Vast.ai runs use the GPU backend. Choose GPU before queueing.'}];
+    }
+    return [];
+  }
+
+  function renderGpuRecommendation() {
+    const status = el('opted-gpu-recommendation');
+    const preview = el('opted-gpu-dispatch-preview');
+    const button = el('opted-gpu-apply-measured');
+    if (!status || !preview || !button) return;
+    const info = gpuRecommendation;
+    const profile = info?.result?.suggestion?.profile;
+    const matching = !!profile && info.offerId === selectedOffer?.id;
+    button.hidden = !matching;
+    button.disabled = !matching;
+    status.hidden = !matching;
+    status.textContent = matching ? 'Measured ' + Number(profile.population_size).toLocaleString()
+      + ' · ' + Number(profile.measured_power_limit_watts).toLocaleString() + ' W · '
+      + Number(profile.candidates_per_second).toFixed(2) + ' candidates/s' : '';
+    const row = info?.result?.preview;
+    const sized = ['opted-gpu-population-size', 'opted-gpu-batch-size', 'opted-gpu-max-dispatch-bars']
+      .every(id => Number(el(id)?.value) > 0);
+    preview.hidden = !sized || !row?.dispatches_per_largest_scenario_estimate;
+    preview.textContent = preview.hidden ? '' : 'Largest scenario: ~'
+      + Number(row.dispatches_per_largest_scenario_estimate).toLocaleString() + ' dispatches · batch up to '
+      + Number(row.effective_batch_estimate).toLocaleString() + ' · one batch ≈'
+      + Number(row.minimum_one_batch_bars_estimate).toLocaleString() + ' candidate-bars';
+  }
+
+  async function refreshGpuRecommendation(config) {
+    const current = ++gpuRecommendationGeneration;
+    const offer = selectedOffer;
+    if (config?.optimize?.backend !== 'gpu') {
+      gpuRecommendation = null; renderGpuRecommendation(); return;
+    }
+    gpuRecommendation = {pending:true, offerId:offer?.id};
+    renderGpuRecommendation();
+    try {
+      const result = await request('/gpu/recommendation', {method:'POST',
+        body:JSON.stringify({config, offer:offer ? calibrationOffer(offer) : null})});
+      if (disposed || current !== gpuRecommendationGeneration || selectedOffer?.id !== offer?.id) return;
+      gpuRecommendation = {result, offerId:offer?.id};
+    } catch (error) {
+      if (disposed || current !== gpuRecommendationGeneration) return;
+      gpuRecommendation = {error:error.message, offerId:offer?.id};
+    }
+    renderGpuRecommendation();
+  }
+
+  function applyMeasuredGpuRecommendation() {
+    const info = gpuRecommendation;
+    const profile = info?.result?.suggestion?.profile;
+    if (!profile || info.offerId !== selectedOffer?.id) return;
+    const fields = {
+      'opted-gpu-population-size':profile.population_size,
+      'opted-gpu-batch-size':profile.batch_size,
+      'opted-gpu-max-dispatch-bars':profile.max_dispatch_candidate_bars
+    };
+    Object.entries(fields).forEach(([id, value]) => { if (el(id)) el(id).value = String(value); });
+    if (el('opted-gpu-auto-lean')) el('opted-gpu-auto-lean').checked = false;
+    if (typeof scheduleStructuredEditorSync === 'function') scheduleStructuredEditorSync();
+    scheduleValidation();
+  }
+  document.addEventListener('click', event => {
+    if (event.target?.id === 'opted-gpu-apply-measured') applyMeasuredGpuRecommendation();
+  });
   async function validateEditorConfig(config, options) {
     const current = ++validationGeneration;
     clearTimeout(validationTimer); setQueueBlocked(true); showValidation([], true);
+    void refreshGpuRecommendation(config);
+    const manualErrors = manualGpuErrors(config);
+    if (manualErrors.length) {
+      if (!disposed && current === validationGeneration) showValidation(manualErrors, false);
+      return false;
+    }
     try {
       const result = await request('/validate-config', {method:'POST', body:JSON.stringify({config})});
       if (disposed) return false;
@@ -1016,8 +1878,14 @@
     const execution = el('opted-execution');
     if (!execution || execution.value !== 'vast') {
       setQueueBlocked(false);
-      const box = el('opted-vast-validation'); if (box) box.hidden = true;
-      document.querySelectorAll('.cloud-invalid').forEach(node => node.classList.remove('cloud-invalid'));
+      showValidation([], false);
+      validationTimer = setTimeout(() => {
+        if (disposed || current !== validationGeneration) return;
+        try {
+          const config = window.collectEditorConfig?.(null, {strict:false})?.config;
+          if (config) void refreshGpuRecommendation(config);
+        } catch (error) { gpuRecommendation = {error:error.message}; renderGpuRecommendation(); }
+      }, 350);
       return;
     }
     setQueueBlocked(true); showValidation([], true);
@@ -1572,7 +2440,10 @@
       selectedJobId = job.id; renderJob();
       startCloudQueue(job);
     });
-    if (['error','cancelled'].includes(item.status) && job.can_delete) {
+    if (item.status === 'queued' && job.kind !== 'calibration') {
+      button('⚙', 'Tune GPU with this frozen input', () => startQueuedCalibration(job));
+    }
+    if (job.kind !== 'calibration' && ['error','cancelled'].includes(item.status) && job.can_delete) {
       button('↺', 'Requeue', () => requeueCloudJob(job));
     }
     if (!['queued','complete','error','cancelled'].includes(item.status)) button('⬛', 'Stop', () => {
@@ -1645,6 +2516,23 @@
       const execution = el('opted-execution'), target = el('opted-vast-worker');
       if (target) target.hidden = !execution || execution.value !== 'vast';
       const cloud = !!execution && execution.value === 'vast';
+      const backend = el('opted-opt-backend');
+      if (backend) {
+        if (cloud && !Array.from(backend.options || []).some(option => option.value === 'gpu')) {
+          const option = document.createElement('option');
+          option.value = 'gpu';
+          option.textContent = 'gpu (Vast.ai worker)';
+          backend.appendChild(option);
+        }
+        if (cloud && backend.value !== 'gpu') {
+          backend.value = 'gpu';
+          backend.dispatchEvent(new Event('change', {bubbles:true}));
+        }
+        backend.disabled = cloud;
+        const backendRow = backend.closest?.('.form-row');
+        if (backendRow) backendRow.style.display = cloud ? 'none' : '';
+      }
+      if (typeof updateOptimizeBackendSections === 'function') updateOptimizeBackendSections();
       ['opted-n-cpus', 'opted-gpu-exact-workers'].forEach(id => {
         const input = el(id);
         const group = input?.closest('.form-group');
@@ -1670,7 +2558,7 @@
       }
       scheduleValidation();
     },
-    closeEditor: function () { validationGeneration++; clearTimeout(validationTimer); setQueueBlocked(false); },
+    closeEditor: function () { validationGeneration++; gpuRecommendationGeneration++; gpuRecommendation = null; clearTimeout(validationTimer); setQueueBlocked(false); },
     queue: async function (name, config) {
       const job = await request('/jobs/prepare', {method:'POST', body:JSON.stringify({config_name:name,
         iterations:Number(config.optimize.iters), workers:Number(config.optimize.gpu && config.optimize.gpu.exact_workers || config.optimize.n_cpus), use_adg:false})});
@@ -1728,6 +2616,57 @@
     }
   }
   el('requeue-job').addEventListener('click', () => requeueCloudJob(selectedJob()));
+  async function startQueuedCalibration(job) {
+    if (disposed || calibrationStarting || !job || job.status !== 'ready') return;
+    if (!selectedOffer) {
+      message('Select an offer under GPU & Offers, then tune this prepared queue item.', true);
+      showSettings('offers');
+      return;
+    }
+    if (!calibrationInfo?.configurable_worker) {
+      message('Exact-input tuning needs the published protocol-4 worker; no rental was started.', true);
+      return;
+    }
+    if (!savedPreferences || !supervision || !window.PBGuiDialogs?.confirm) {
+      message('Rental settings or supervision are unavailable.', true); return;
+    }
+    const selection = calibrationSelection();
+    const search = selection.legacy
+      ? {start:5632, step:512, maximum:12288, gain:5, timeout:3600}
+      : selection;
+    const offer = selectedOffer;
+    const accepted = await window.PBGuiDialogs.confirm({
+      title:'Tune GPU for this queued job?',
+      message:'Create a separate immutable test copy of "' + job.config_name
+        + '" using exactly its already prepared data. The original queued job will not run or change. Rent '
+        + offer.gpu_name + ' on machine ' + offer.machine_id + ' for up to '
+        + savedPreferences.hours + ' hours and a $' + fmt(savedPreferences.budget,2)
+        + ' budget target? Test populations ' + search.start.toLocaleString() + ' to '
+        + search.maximum.toLocaleString() + ' in ' + search.step.toLocaleString()
+        + ' steps, requiring ' + search.gain + '% gain and one complete generation per case. '
+        + 'Each case has a ' + search.timeout + '-second timeout. The rental is deleted when finished.',
+      confirmText:'Rent and tune this job'
+    });
+    if (!accepted || disposed || selectedOffer?.id !== offer.id || jobRows.find(row => row.id === job.id)?.status !== 'ready') return;
+    calibrationStarting = true; renderJob();
+    try {
+      const data = await request('/calibration/start-configurable', {method:'POST', body:JSON.stringify({
+        offer:calibrationOffer(offer), hours:Number(savedPreferences.hours),
+        budget:Number(savedPreferences.budget), source_job_id:job.id,
+        start_population:search.start, population_step:search.step,
+        max_population:search.maximum, min_scale_gain:search.gain / 100,
+        case_timeout_seconds:search.timeout, accept_rental_and_cleanup:true,
+      })});
+      selectedJobId = data.job.id;
+      await refreshJobs(data.job.id);
+      if (!disposed) message('Exact-input tuning started. The original queue item is unchanged.');
+    } catch (error) {
+      if (!disposed) { message(error.message, true); await refreshJobs(); }
+    } finally {
+      calibrationStarting = false;
+      if (!disposed) renderJob();
+    }
+  }
   async function startCloudQueue(job) {
     if (renting || startingQueue || workerAction || disposed || !supervision || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || (job && deletingJobs.has(job.id))) return;
     if (((savedPreferences?.max_rentals || 1) > 1 || queueState.pool_authorization) && !(await window.PBGuiDialogs.confirm({
@@ -1773,11 +2712,16 @@
     if (!selectedOffer || renting || startingQueue || workerAction || !supervision || disposed) return;
     if (!el('offers-form').reportValidity()) return;
     const offer = selectedOffer;
+    if (!calibrationInfo?.rental_profile) { message('Wait for the selected GPU profile.', true); return; }
+    let jobProfileOverrides;
+    try { jobProfileOverrides = gpuJobOverrides(calibrationInfo.queued_gpu_previews, offerJobSelections); }
+    catch (error) { message(error.message, true); return; }
     renting = true; renderJob();
     try {
       if (!savedPreferences) throw new Error('Rental defaults are still loading.');
       await request('/queue/start', {method:'POST', body:JSON.stringify({
         rent_only:true, offer_id:offer.id, accept_rental_and_cleanup:true,
+        gpu_job_profile_overrides:jobProfileOverrides,
         preferences:{gpu_name:offer.gpu_name, max_price:offer.price_hour_usd,
           min_vram:offer.vram_gb ?? 0, min_ram:offer.ram_gb ?? 0, min_cpu:offer.cpu_cores ?? 0,
           min_tflops:offer.tflops ?? 0,
@@ -1788,6 +2732,155 @@
       if (!disposed) message('GPU rental started. Queued jobs remain paused until Start queue.');
     } catch (error) { if (!disposed) { message(error.message,true); await refreshJobs(); } }
     finally { renting=false; if (!disposed) { renderJob(); renderQueueOverview(); } }
+  });
+  el('calibration-watch-start').addEventListener('click', async () => {
+    if (disposed || calibrationStarting || queueState.calibration_watch) return;
+    if (!el('offers-form').reportValidity() || !savedPreferences) return;
+    const preferences = {};
+    preferenceGroups.offers.forEach(key => {
+      const value = el(preferenceFields[key]).value;
+      preferences[key] = key === 'gpu_name' ? value.trim()
+        : key === 'verified_only' ? value === 'true' : Number(value);
+    });
+    if (!preferences.gpu_name) { message('Enter a GPU type to watch.', true); return; }
+    const hours = Number(savedPreferences.hours), budget = Number(savedPreferences.budget);
+    if (hours < .75 || hours * preferences.max_price > budget + 1e-6) {
+      message('The rental budget must cover the selected maximum price for at least 0.75 hours.', true);
+      return;
+    }
+    if (!window.PBGuiDialogs?.confirm) { message('Rental confirmation unavailable. Reload this page.', true); return; }
+    const accepted = await window.PBGuiDialogs.confirm({
+      title:'Wait for a matching GPU and run the performance test?',
+      message:'PBGui will check about every 30 seconds until you cancel. When an offer for '
+        + preferences.gpu_name + ' with at least ' + preferences.min_power_watts + ' advertised W, at least '
+        + preferences.min_reliability_pct + '% host reliability and at most $' + fmt(preferences.max_price, 4)
+        + '/hour appears, it may rent automatically without another confirmation. This authorizes one rental for at most '
+        + hours + ' hours with a $' + fmt(budget, 2)
+        + ' budget target plus provider transfer charges. PBGui measures the actual GPU limit after renting and stops the test if it is below your minimum. The frozen criteria remain in effect even if you change these fields later. Automatic queue rentals pause while waiting.',
+      confirmText:'Authorize one future test rental'
+    });
+    if (!accepted || disposed || queueState.calibration_watch) return;
+    calibrationStarting = true; renderJob();
+    try {
+      const data = await request('/calibration/watch', {method:'POST', body:JSON.stringify({
+        preferences, hours, budget, accept_rental_and_cleanup:true
+      })});
+      selectedJobId = data.job.id;
+      await refreshJobs(data.job.id);
+      if (!disposed) message('');
+    } catch (error) {
+      if (!disposed) { message(error.message, true); await refreshJobs(); }
+    } finally {
+      calibrationStarting = false;
+      if (!disposed) renderJob();
+    }
+  });
+  el('calibration-watch-cancel').addEventListener('click', async () => {
+    const watchId = queueState.calibration_watch?.id;
+    if (!watchId || disposed || watchCancelling) return;
+    watchCancelling = true; renderJob();
+    try {
+      await request('/calibration/watch/cancel', {method:'POST', body:JSON.stringify({watch_id:watchId})});
+      if (!disposed) { await refreshJobs(); message(''); }
+    } catch (error) {
+      if (!disposed) { message(error.message, true); await refreshJobs(); }
+    } finally {
+      watchCancelling = false;
+      if (!disposed) renderJob();
+    }
+  });
+  el('calibration-start').addEventListener('click', async () => {
+    const selection = calibrationSelection();
+    if (calibrationStarting || disposed || !selectedOffer) return;
+    if (!(selection.legacy ? calibrationInfo?.calibration_worker : calibrationInfo?.configurable_worker)) {
+      message('The selected test requires a published, pinned calibration worker.', true); return;
+    }
+    for (const key of calibrationFields) {
+      if (!el('calibration-' + key).reportValidity()) return;
+    }
+    if (!selection.legacy && selection.timeout < 600) {
+      message('Set a case timeout of at least 600 seconds for configurable tests.', true); return;
+    }
+    if (!savedPreferences) { message('Rental defaults are still loading.', true); return; }
+    if (Number(savedPreferences.hours) < .75) {
+      message('Set Maximum rental hours to at least 0.75 in Rental & Automation before calibration.', true); return;
+    }
+    if (!window.PBGuiDialogs?.confirm) { message('Calibration confirmation unavailable. Reload this page.', true); return; }
+    const offer = selectedOffer;
+    const workload = selection.legacy
+      ? 'fixed Small EMA-anchor reference (3 coins, Binance, 2024)'
+      : selection.preset + ' EMA-anchor reference with population ' + selection.start.toLocaleString()
+        + ' to ' + selection.maximum.toLocaleString() + ' in steps of ' + selection.step.toLocaleString()
+        + ', at least ' + selection.gain + '% gain and up to ' + selection.timeout + ' seconds per case';
+    const accepted = await window.PBGuiDialogs.confirm({
+      title:calibrationInfo?.match ? 'Repeat GPU performance test?' : 'Run GPU performance test?',
+      message:'Rent exactly ' + offer.gpu_name + ' on machine ' + offer.machine_id + ' at up to $'
+        + fmt(offer.price_hour_usd,4) + '/hour for at most ' + savedPreferences.hours
+        + ' hours and a $' + fmt(savedPreferences.budget,2) + ' budget target? PBGui will prepare the '
+        + workload + ' only after this click, then measure full one-batch generations when using the configurable mode. The rental is deleted when finished. The result needs explicit acceptance.',
+      confirmText:'Run performance test'
+    });
+    if (!accepted || disposed || selectedOffer?.id !== offer.id) return;
+    calibrationStarting = true; renderJob();
+    try {
+      const body = {
+        offer:calibrationOffer(offer), hours:Number(savedPreferences.hours),
+        budget:Number(savedPreferences.budget), accept_rental_and_cleanup:true,
+      };
+      const endpoint = selection.legacy ? '/calibration/start' : '/calibration/start-configurable';
+      if (!selection.legacy) Object.assign(body, {
+        preset:selection.preset, start_population:selection.start, population_step:selection.step,
+        max_population:selection.maximum, min_scale_gain:selection.gain / 100,
+        case_timeout_seconds:selection.timeout,
+      });
+      const data = await request(endpoint, {method:'POST', body:JSON.stringify(body)});
+      selectedJobId = data.job.id;
+      await refreshJobs(data.job.id);
+      if (!disposed) message('Preparing the selected reference input. Queue shows progress; no rental starts until preparation succeeds.');
+    } catch (error) {
+      if (!disposed) { message(error.message, true); await refreshJobs(); }
+    } finally {
+      calibrationStarting = false;
+      if (!disposed) { renderJob(); void refreshCalibration(); }
+    }
+  });
+  el('calibration-accept').addEventListener('click', async () => {
+    const identifier = el('calibration-accept').dataset.jobId;
+    const offer = selectedOffer;
+    if (!identifier || !offer || disposed || latestCompletedCalibration({pendingOnly:true})?.id !== identifier) return;
+    if (!window.PBGuiDialogs?.confirm) { message('Profile confirmation unavailable. Reload this page.', true); return; }
+    const job = jobRows.find(item => item.id === identifier);
+    const population = job?.calibration_profile_candidate?.population_size;
+    if (!await window.PBGuiDialogs.confirm({title:'Use local GPU profile?',
+      message:'Use population ' + Number(population).toLocaleString() + ' for future exact matches of this runtime-verified GPU variant and workload? The PBGui reference remains unchanged.',
+      confirmText:'Use local profile'})) return;
+    if (disposed || selectedOffer !== offer || latestCompletedCalibration({pendingOnly:true})?.id !== identifier) return;
+    try {
+      await request('/calibration/accept', {method:'POST', body:JSON.stringify({job_id:identifier})});
+      await refreshJobs(identifier); await refreshCalibration();
+      if (!disposed) message('Local GPU performance profile accepted.');
+    } catch (error) { if (!disposed) message(error.message, true); }
+  });
+  el('cloud-calibration-accept').addEventListener('click', async () => {
+    const identifier = el('cloud-calibration-accept').dataset.jobId;
+    const job = jobRows.find(row => row.id === identifier);
+    if (!job || !completedCalibration(job) || job.calibration_profile_accepted_at || disposed) return;
+    if (!window.PBGuiDialogs?.confirm) { message('Profile confirmation unavailable. Reload this page.', true); return; }
+    const candidate = job.calibration_profile_candidate;
+    if (!await window.PBGuiDialogs.confirm({
+      title:'Save measured GPU settings for this workload?',
+      message:'Save population and batch ' + Number(candidate.population_size).toLocaleString()
+        + ' with measured work cap ' + Number(candidate.max_dispatch_candidate_bars || 0).toLocaleString()
+        + ' candidate-bars as a local profile for this exact workload and runtime GPU variant? '
+        + 'The original queued job remains unchanged.',
+      confirmText:'Save local profile',
+    })) return;
+    if (disposed || selectedJob()?.id !== identifier) return;
+    try {
+      await request('/calibration/accept', {method:'POST', body:JSON.stringify({job_id:identifier})});
+      await refreshJobs(identifier);
+      if (!disposed) message('Local workload-specific GPU profile saved. The original queue item was not changed.');
+    } catch (error) { if (!disposed) message(error.message, true); }
   });
   el('settings-end-rental')?.addEventListener('click', () => el('end-worker')?.click());
   el('start-job').addEventListener('click', () => startCloudQueue(selectedJob()));

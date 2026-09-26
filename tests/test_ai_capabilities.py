@@ -14,6 +14,40 @@ import ai_capabilities
 from ai_capabilities import AICapabilityError, AICapabilityService, restart_block_reason
 
 
+def test_registry_hides_jev_for_owner_without_openrouter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Owner-scoped discovery must not advertise an unusable Jev proposal."""
+    import ai_chat
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    service._runtime_fingerprints = lambda: {
+        "v7": {"installed": True}, "v8": {"installed": True},
+    }
+
+    class FakeChat:
+        """Expose a changing OpenRouter connection without a live provider."""
+
+        class Credentials:
+            """Return the test owner's connection state."""
+
+            connected = False
+
+            def openrouter_configured(self, owner: str) -> bool:
+                """Match the exact owner under test."""
+                assert owner == "owner"
+                return self.connected
+
+        credentials = Credentials()
+
+    fake_chat = FakeChat()
+    monkeypatch.setattr(ai_chat, "get_ai_chat_service", lambda: fake_chat)
+    names = lambda: {item["name"] for item in service.capability_registry("owner")["capabilities"]}
+    assert "propose_jev_optimizer_analysis" not in names()
+    fake_chat.credentials.connected = True
+    assert "propose_jev_optimizer_analysis" in names()
+
+
 def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
     """The initial catalog should expose no direct mutation function."""
     service = AICapabilityService(tmp_path / "capabilities")
@@ -55,6 +89,7 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "propose_pareto_backtests",
         "propose_dashboard_from_template",
         "propose_dashboard_layout",
+        "propose_jev_optimizer_analysis",
         "propose_python_analysis",
         "propose_optimizer_run_python_analysis",
         "propose_workspace_python_analysis",
@@ -479,6 +514,19 @@ def test_proposal_diff_omits_unchanged_sensitive_values() -> None:
     ) == []
 
 
+def test_codex_catalog_surfaces_model_authored_choices_and_jev(
+    tmp_path: Path,
+) -> None:
+    """ChatGPT sees both decision aids early while retaining the complete tool catalog."""
+    service = AICapabilityService(tmp_path / "capabilities")
+    catalog = service.codex_dynamic_tools()
+    names = [tool["name"] for tool in catalog[0]["tools"]]
+
+    assert names[:2] == ["present_user_choices", "propose_jev_optimizer_analysis"]
+    assert set(names) == {spec["name"] for spec in service._tool_specs()}
+    assert "model can present its own" in catalog[0]["description"]
+
+
 def test_quick_reply_capability_returns_typed_clickable_choices() -> None:
     """Clarifications should use bounded browser actions instead of long free-text questionnaires."""
     result = AICapabilityService._present_user_choices(
@@ -817,6 +865,41 @@ def test_dashboard_layout_rejects_last_n_for_non_income_widget(tmp_path: Path, m
         service._prepare_dashboard_layout(
             {"name": "portfolio", "create": False, "cells": [{"row": 1, "column": 1, "last_n": 0}]}
         )
+
+
+def test_jev_optimizer_projection_pages_all_metrics_and_targets_exact_run(tmp_path: Path, monkeypatch) -> None:
+    """Jev can inspect every numeric column without confusing duplicate run labels."""
+    from api import optimize_v8
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    run = {"path": "managed/exact-run", "result": "exact-run", "name": "backtests", "pareto_count": 26}
+    monkeypatch.setattr(optimize_v8, "list_results", lambda session=None: {"results": [run]})
+    resource = service._virtual_uri("optimizer-run", "v8", run["path"])
+    assert service._list_optimizer_runs({"version": "v8", "limit": 10})["runs"][0]["result_id"] == "exact-run"
+    monkeypatch.setattr(service, "_resolve_listed_resource", lambda kind, version, selected: run)
+    requested = []
+
+    def list_paretos(result_path, scenario, statistic, session, metrics=""):
+        """Model the default and full metric projections of one managed run."""
+        requested.append(metrics)
+        names = ["gain", "drawdown_worst", "unusual_metric"]
+        return {"meta": {"available_metrics": names}, "paretos": [
+            {"path": f"managed/exact-run/pareto/{index}.json", "name": f"candidate-{index}",
+             "summary": {"gain": index, "drawdown_worst": 0.2, **({"unusual_metric": index * 3} if metrics else {})}}
+            for index in range(26)
+        ]}
+
+    monkeypatch.setattr(optimize_v8, "list_paretos", list_paretos)
+    first = service._get_optimizer_run_analysis({"version": "v8", "resource": resource, "all_metrics": True, "offset": 0, "limit": 24})
+    second = service._get_optimizer_run_analysis({"version": "v8", "resource": resource, "all_metrics": True, "offset": 24, "limit": 24})
+    assert first["total"] == second["total"] == 26
+    assert first["returned"] == 24 and second["returned"] == 2
+    assert second["pareto"][0]["metrics"]["unusual_metric"] == 72
+    assert requested[:2] == ["", "gain,drawdown_worst,unusual_metric"]
+    selected = service._select_pareto_candidates({"version": "v8", "run_resource": resource,
+        "candidate_resources": [second["pareto"][0]["resource"]], "mode": "replace"})
+    assert selected["ui_action"]["target"]["result_id"] == "exact-run"
+    assert selected["ui_action"]["payload"]["candidate_names"] == ["candidate-24"]
 
 
 def test_optimizer_run_ranking_scans_every_candidate(tmp_path: Path, monkeypatch) -> None:
@@ -2128,3 +2211,70 @@ def test_python_analysis_is_cancelled_and_awaited_on_shutdown(tmp_path: Path) ->
         assert restart_block_reason(tmp_path / "capabilities") == ""
 
     asyncio.run(scenario())
+
+
+def test_jev_optimizer_tool_proposes_without_spending_until_approval(tmp_path: Path, monkeypatch) -> None:
+    """A model may propose Jev; the owner must still approve exact cost and selection scope."""
+    import ai_chat
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    owner, conversation = "a" * 32, "b" * 32
+    resource = "pbgui://optimizer-run/v8/" + "c" * 32
+    service._resolve_listed_resource = lambda kind, version, selected: {
+        "name": "run-one", "result": "result-one", "path": "managed-run"
+    }
+
+    class FakeChat:
+        """Expose only the current request, budget, and approved Jev execution."""
+
+        def __init__(self) -> None:
+            self.jev_user_requests = {}
+            self.calls = []
+            self.credentials = self
+
+        def openrouter_configured(self, selected_owner):
+            """Expose an already connected OpenRouter key."""
+            return selected_owner == owner
+
+        def get_preferences(self, selected_owner):
+            """Return one owner-scoped configured budget."""
+            assert selected_owner == owner
+            return {"jev_max_cost_usd": 0.002}
+
+        async def _openrouter_jev_chat(self, *args, **kwargs):
+            """Record the single approved provider call."""
+            self.calls.append((args, kwargs))
+            return "Jev chose candidate A"
+
+    chat = FakeChat()
+    monkeypatch.setattr(ai_chat, "get_ai_chat_service", lambda: chat)
+    async def fake_preview(*args, **kwargs):
+        """Return a stable exact transfer preview without loading runtime data."""
+        assert kwargs["preview_only"] is True
+        return {"requests": [{"model": "typesafe/jev-1.13", "state": {"candidate": "A"},
+                              "questions": {"c1": {"type": "noul", "instructions": "Select?"}}}],
+                "sha256": "d" * 64, "candidate_count": 1, "metric_count": 2}
+    monkeypatch.setattr("ai_openrouter.decide_backtest_candidates", fake_preview)
+    args = {"version": "v8", "run_resource": resource, "question": "Which candidates should I backtest?", "max_candidates": 5}
+
+    async def exercise():
+        """Create, review, and approve exactly one Jev analysis."""
+        with pytest.raises(AICapabilityError, match="candidate limit"):
+            await service._propose_jev_optimizer_analysis(owner, conversation, {**args, "max_candidates": 0})
+        proposal = await service._propose_jev_optimizer_analysis(owner, conversation, args)
+        assert proposal["preview"]["max_cost_usd"] == 0.002
+        assert proposal["preview"]["max_candidates"] == 5
+        assert "outbound_requests" not in proposal["preview"]
+        assert service.proposals[proposal["proposal_id"]].preview["outbound_requests"][0]["state"]["candidate"] == "A"
+        assert not chat.calls
+        durable = service.proposals[proposal["proposal_id"]]
+        result = await service.approve(owner, proposal["proposal_id"], durable.payload_digest, conversation)
+        assert result["jev_result"] == "Jev chose candidate A"
+        assert result["action"] == "jev_analysis"
+        assert len(chat.calls) == 1
+        assert chat.calls[0][1]["budget_override"] == 0.002
+        assert chat.calls[0][1]["selection_limit"] == 5
+        assert chat.calls[0][1]["expected_payload_digest"] == "d" * 64
+        await service.shutdown()
+
+    asyncio.run(exercise())

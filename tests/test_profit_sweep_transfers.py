@@ -82,6 +82,13 @@ class FakeClient:
 
         self.responses = responses or {}
         self.calls: list[tuple[str, Any]] = []
+        self.options = {"recvWindow": 5000, "adjustForTimeDifference": False}
+        self.time_synced = False
+
+    def load_time_difference(self) -> None:
+        """Simulate an offline Bybit server-time preflight."""
+
+        self.time_synced = True
 
     def _call(self, method: str, payload: Any) -> Any:
         """Capture one method and return or raise its configured fixture."""
@@ -1277,6 +1284,83 @@ def test_bybit_v5_payload_uses_persisted_uuid_and_reconciles_by_transfer_id(
     assert submission["status"] == "submitted"
     assert reconciliation["status"] == "confirmed"
     assert all(owner.closed for owner in owners)
+
+
+def test_owned_bybit_client_syncs_server_time_before_private_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Override CCXT defaults and load Bybit time before private V5 calls."""
+
+    client = SimpleNamespace(options={"recvWindow": 5000, "adjustForTimeDifference": False})
+    observed: list[tuple[int, bool]] = []
+    client.load_time_difference = lambda: observed.append(
+        (client.options["recvWindow"], client.options["adjustForTimeDifference"])
+    )
+
+    class Owner:
+        """Expose an isolated CCXT-like client."""
+
+        def __init__(self, exchange: str, user: Any) -> None:
+            self.instance = client
+
+        def connect(self) -> None:
+            """Keep the fake client available."""
+
+        def close(self) -> None:
+            """No external resources are owned by the fake client."""
+
+    monkeypatch.setattr(transfers, "Exchange", Owner)
+    owner, actual = transfers._owned_client(_user("bybit"), "bybit")
+
+    assert owner.instance is actual
+    assert observed == [(10000, True)]
+
+
+def test_bybit_invalid_nonce_is_definitive_rejection_and_old_intent_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected timestamp cannot leave an empty-history transfer paused."""
+
+    user = _user("bybit")
+    descriptor = transfers.prepare_transfer(
+        user,
+        operation_id=BYBIT_ID,
+        amount="2",
+        asset="USDT",
+        route="unified_to_fund",
+        snapshot=_snapshot("bybit"),
+    )
+    client = FakeClient({
+        "privatePostV5AssetTransferInterTransfer": ccxt.InvalidNonce("request expired"),
+        "privateGetV5AssetTransferQueryInterTransferList": {
+            "retCode": 0,
+            "result": {"list": []},
+        },
+    })
+    _install_client(monkeypatch, client)
+
+    submission = transfers.submit_transfer(user, descriptor)
+    historical_submission = {
+        **submission,
+        "status": "unknown",
+        "no_transfer": False,
+    }
+    reconciliation = transfers.reconcile_transfer(user, descriptor, historical_submission)
+
+    assert submission["status"] == "failed"
+    assert submission["no_transfer"] is True
+    assert submission["error"]["type"] == "InvalidNonce"
+    assert reconciliation["status"] == "failed"
+    assert reconciliation["reason"] == "bybit_timestamp_rejected"
+    assert client.calls[-1] == (
+        "privateGetV5AssetTransferQueryInterTransferList",
+        {"transferId": BYBIT_ID},
+    )
+    client.responses["privateGetV5AssetTransferQueryInterTransferList"] = {
+        "retCode": 0,
+        "result": {"list": [{"transferId": BYBIT_ID, "status": "SUCCESS"}]},
+    }
+    assert transfers.reconcile_transfer(user, descriptor, historical_submission)["status"] == "confirmed"
 
 
 def test_bybit_requires_canonical_uuid() -> None:

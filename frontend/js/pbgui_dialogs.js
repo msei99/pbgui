@@ -31,13 +31,15 @@
       '#' + OVERLAY_ID + '{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:20000;align-items:center;justify-content:center;backdrop-filter:blur(2px);padding:var(--sp-lg);}',
       '#' + OVERLAY_ID + '.visible{display:flex;}',
       '#pbgui-dialog-box{box-sizing:border-box;min-width:0;background:#131b2b;border:1px solid #2d3748;border-radius:14px;box-shadow:0 20px 70px rgba(0,0,0,.9);overflow:hidden;width:min(480px,100%);max-width:100%;}',
+      '#pbgui-dialog-box.is-wide{width:min(960px,100%);}',
       '#pbgui-dialog-header{display:flex;justify-content:space-between;align-items:center;gap:var(--sp-sm);padding:.85rem 1.1rem;border-bottom:1px solid #1e2736;background:#111827;}',
       '#pbgui-dialog-title{font-size:var(--fs-md);font-weight:700;color:#e2e8f0;}',
       '#pbgui-dialog-close{background:transparent;border:none;color:#64748b;font-size:var(--fs-lg);cursor:pointer;padding:.2rem .35rem;border-radius:5px;line-height:1;}',
       '#pbgui-dialog-close:hover{color:#e2e8f0;background:rgba(255,255,255,.06);}',
       '#pbgui-dialog-body{box-sizing:border-box;display:grid;width:100%;max-width:100%;min-width:0;gap:var(--sp-md);padding:var(--sp-lg);overflow:hidden;}',
       '#pbgui-dialog-message{min-width:0;font-size:var(--fs-base);line-height:1.5;color:#e2e8f0;white-space:pre-wrap;overflow-wrap:anywhere;}',
-      '#pbgui-dialog-detail{min-width:0;max-width:100%;font-size:var(--fs-sm);line-height:1.45;color:#94a3b8;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}',
+      '#pbgui-dialog-detail{min-width:0;max-width:100%;max-height:55vh;overflow:auto;font-size:var(--fs-sm);line-height:1.45;color:#94a3b8;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}',
+      '#pbgui-dialog-box.is-code-detail #pbgui-dialog-detail{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;}',
       '#pbgui-dialog-detail[hidden],#pbgui-dialog-field[hidden],#pbgui-dialog-cancel[hidden]{display:none!important;}',
       '#pbgui-dialog-field{display:grid;gap:var(--sp-xs);}',
       '#pbgui-dialog-field label{font-size:var(--fs-sm);font-weight:600;color:#cbd5e1;}',
@@ -184,6 +186,11 @@
     }
 
     currentMode = mode;
+    var box = document.getElementById('pbgui-dialog-box');
+    if (box) {
+      box.classList.toggle('is-wide', options.wide === true);
+      box.classList.toggle('is-code-detail', options.codeDetail === true);
+    }
     title.textContent = String(options.title || (mode === 'prompt' ? 'Enter value' : mode === 'alert' ? 'Notice' : 'Confirm action'));
     message.textContent = String(options.message || (mode === 'prompt' ? 'Enter a value.' : mode === 'alert' ? 'Done.' : 'Are you sure?'));
     var detailText = String(options.detail || '').trim();

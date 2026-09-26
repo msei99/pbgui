@@ -174,6 +174,8 @@ Transfer-back confirmations use fixed labels from the persisted operation's conc
 
 The **Live Transfer Intents** table shows durable **Prepared**, **Submitting**, **Confirmed**, **Failed**, and **Unknown** states. Prepared is persisted before exchange I/O. Confirmed updates accounting only after reconciliation. Failed is a definite non-transfer result.
 
+The selected account's status, Dry journal, Live intents, and test transfer history update automatically every 15 seconds and when the page becomes visible. Unsaved policy edits and the selected tab remain in place. A browser refresh restores the selected account and tab when the account is still available.
+
 The **Dry Decision Journal** is collapsible. It starts collapsed when a selected policy is already **Live** or **Paused Unknown**, and open for Dry or Disabled policies. A manual Expand/Collapse choice is preserved while refreshing the same account; entering Live or switching to another Live account applies the collapsed default once.
 
 Unknown means PBGui cannot prove whether the exchange executed the request. The policy changes to **Paused Unknown** and blocks new Live submissions. **Reconcile** queries the exchange again with the same durable operation identity; it never blindly submits a second transfer. Test-transfer operations remain separate and deliberately provide no retry action for Unknown.

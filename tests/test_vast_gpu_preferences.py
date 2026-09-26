@@ -162,6 +162,7 @@ def test_partial_model_search_filters_before_marketplace_limit(monkeypatch, sear
     assert rows[0]['disk_bw_mbps'] == 1810
     assert rows[0]['pcie_bw_gbps'] == 5.5
     assert rows[0]['duration_seconds'] == 86400
+    assert rows[0]['gpu_max_power_watts'] is None
 
 
 def test_compatibility_filter_and_unknown_metadata(monkeypatch):
