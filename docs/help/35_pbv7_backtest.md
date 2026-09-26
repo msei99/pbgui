@@ -172,8 +172,10 @@ Browse all completed backtest results.
 - **Version** dropdown — show PBv7 results, PBv8 results, or both; PBv7 is selected by default on this page
 - **Config** dropdown — filter by config name (exact match)
 - **Search** text field — free-text filter on any column
-- **Columns** — choose visible result columns. **Defaults** restores the established table, while **All** also enables available optional values such as Final Equity and Equity/Balance Difference. Local Results and Archive keep independent browser-local selections.
+- **Columns** — choose visible result columns. **Start Date** and **End Date** show the timeframe saved with each result and are visible by default. **Defaults** restores the standard table, while **All** also enables available optional values such as Final Equity and Equity/Balance Difference. Local Results and Archive keep independent browser-local selections.
 - Click any column header to sort; click again to reverse
+
+Optimize validation rows run from the earliest start date to the latest, with the full timeframe last. The Start Date and End Date columns show dates without time-of-day details.
 
 Completed queue jobs now invalidate the cached Results list immediately. If you are already on the Results panel when a backtest finishes, PBGui refreshes the table automatically so the new result appears without having to leave and reopen the panel.
 

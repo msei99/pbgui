@@ -1163,8 +1163,8 @@ var BACKTEST_SORT_DEFAULTS = {
 };
 var BACKTEST_SORT_COLUMNS = {
   configs: ['name', 'exchanges', 'strategy', 'coins', 'twe_long', 'start_date', 'end_date', 'results', 'modified'],
-  results: ['backtest_version', 'config_name', 'strategy', 'coins_text', 'exchange_dir', 'modified', 'adg', 'adg_w_usd', 'gain', 'drawdown_worst', 'drawdown_worst_w_usd', 'sharpe_ratio', 'sharpe_ratio_w_usd', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
-  archive: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'adg_w_usd', 'gain', 'drawdown_worst', 'drawdown_worst_w_usd', 'sharpe_ratio', 'sharpe_ratio_w_usd', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
+  results: ['backtest_version', 'config_name', 'strategy', 'coins_text', 'exchange_dir', 'modified', 'start_date', 'end_date', 'adg', 'adg_w_usd', 'gain', 'drawdown_worst', 'drawdown_worst_w_usd', 'sharpe_ratio', 'sharpe_ratio_w_usd', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
+  archive: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'start_date', 'end_date', 'adg', 'adg_w_usd', 'gain', 'drawdown_worst', 'drawdown_worst_w_usd', 'sharpe_ratio', 'sharpe_ratio_w_usd', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
   legacy: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance']
 };
 var BACKTEST_RESULT_COLUMN_DEFINITIONS = [
@@ -1173,6 +1173,8 @@ var BACKTEST_RESULT_COLUMN_DEFINITIONS = [
   { key: 'coins_text', label: 'Coins', conditional: 'coins', default: true },
   { key: 'exchange_dir', label: 'Exch.', default: true },
   { key: 'modified', label: 'Result Time', default: true },
+  { key: 'start_date', label: 'Start Date', default: true },
+  { key: 'end_date', label: 'End Date', default: true },
   { key: 'adg', label: 'ADG USD', default: true },
   { key: 'adg_w_usd', label: 'ADG W USD', optional: true, default: false },
   { key: 'gain', label: 'Gain', default: true },
@@ -1252,8 +1254,21 @@ function orderedResultColumns(columns) {
 function readStoredResultColumns(context) {
   if (typeof window === 'undefined' || !window.localStorage) return [];
   try {
-    var stored = JSON.parse(window.localStorage.getItem(resultColumnStorageKey(context)) || '[]');
-    return Array.isArray(stored) ? stored.map(function(key) { return String(key || '').trim(); }).filter(Boolean) : [];
+    var key = resultColumnStorageKey(context);
+    var stored = JSON.parse(window.localStorage.getItem(key) || '[]');
+    if (!Array.isArray(stored)) return [];
+    var columns = stored.map(function(item) { return String(item || '').trim(); }).filter(Boolean);
+    var migrationKey = key + ':date_columns_v1';
+    if (window.localStorage.getItem(migrationKey) === null) {
+      if (columns.length) {
+        ['start_date', 'end_date'].forEach(function(item) {
+          if (columns.indexOf(item) < 0) columns.push(item);
+        });
+        window.localStorage.setItem(key, JSON.stringify(columns));
+      }
+      window.localStorage.setItem(migrationKey, '1');
+    }
+    return columns;
   } catch (_error) {
     return [];
   }
@@ -6200,9 +6215,24 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
       if (!validationGroups.has(key)) validationGroups.set(key, { indices: [], result: result });
       validationGroups.get(key).indices.push(index);
     });
+    validationGroups.forEach(function(group) {
+      group.indices.sort(function(left, right) {
+        var a = data[left] || {}, b = data[right] || {};
+        var aFull = String(a.result_group && a.result_group.item || '') === 'full_timerange';
+        var bFull = String(b.result_group && b.result_group.item || '') === 'full_timerange';
+        if (aFull !== bFull) return aFull ? 1 : -1;
+        var aStart = String(a.start_date || '').slice(0, 10);
+        var bStart = String(b.start_date || '').slice(0, 10);
+        if (!aStart && bStart) return 1;
+        if (aStart && !bStart) return -1;
+        if (aStart < bStart) return -1;
+        if (aStart > bStart) return 1;
+        return left - right;
+      });
+    });
   }
 
-  /* Columns: Version | Backtest Name | Strategy | Exch. | Result Time | exact metrics | balances | TWE | POS | Actions */
+  /* Columns: Version | Backtest Name | Strategy | Exch. | Result Time | Start/End Date | metrics | balances | TWE | POS | Actions */
   var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
     (showVersion && hasColumn('backtest_version') ? rthFn('Version', 'backtest_version') : '') +
     rthFn('Backtest Name', 'config_name') +
@@ -6210,6 +6240,8 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     (showCoins && hasColumn('coins_text') ? rthFn('Coins', 'coins_text') : '') +
     (hasColumn('exchange_dir') ? rthFn('Exch.', 'exchange_dir') : '') +
     (hasColumn('modified') ? rthFn('Result Time', 'modified') : '') +
+    (hasColumn('start_date') ? rthFn('Start Date', 'start_date') : '') +
+    (hasColumn('end_date') ? rthFn('End Date', 'end_date') : '') +
     (hasColumn('adg') ? rthFn('ADG USD', 'adg') : '') +
     (hasColumn('adg_w_usd') ? rthFn('ADG W USD', 'adg_w_usd') : '') +
     (hasColumn('gain') ? rthFn('Gain', 'gain') : '') +
@@ -6247,6 +6279,8 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
       (showCoins && hasColumn('coins_text') ? '\x3Ctd title="' + esc(coinsText) + '" style="max-width:140px">' + esc(coinsText) + '\x3C/td>' : '') +
       (hasColumn('exchange_dir') ? '\x3Ctd>' + esc(Array.isArray(r.exchanges) ? r.exchanges.join(', ') : '') + '\x3C/td>' : '') +
       (hasColumn('modified') ? '\x3Ctd>' + fmtDate(r.modified) + '\x3C/td>' : '') +
+      (hasColumn('start_date') ? '\x3Ctd>' + esc(String(r.start_date || '—').slice(0, 10)) + '\x3C/td>' : '') +
+      (hasColumn('end_date') ? '\x3Ctd>' + esc(String(r.end_date || '—').slice(0, 10)) + '\x3C/td>' : '') +
       (hasColumn('adg') ? '\x3Ctd>' + fmt(r.adg, 4) + '\x3C/td>' : '') +
       (hasColumn('adg_w_usd') ? '\x3Ctd>' + fmt(r.adg_w_usd, 4) + '\x3C/td>' : '') +
       (hasColumn('gain') ? '\x3Ctd>' + fmt(r.gain, 2) + '\x3C/td>' : '') +

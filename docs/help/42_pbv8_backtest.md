@@ -95,7 +95,9 @@ When a Results rebacktest or queue draft splits into multiple exchange jobs, nam
 
 The shared parameter dialogs render starting balances only as finite numbers. Invalid or non-finite draft/archive values use the dialog default instead of becoming HTML; review the value before queueing.
 
-The Results toolbar includes a persistent **Columns** picker. **Defaults** restores the comparable unweighted result table, while **All** also exposes available weighted metrics, Final Equity, and Equity/Balance Difference values. This browser-local selection is independent from Archive.
+Within each Optimize validation group, results are ordered by start date from earliest to latest, followed by the full timeframe. Start and end columns show dates without times.
+
+The Results toolbar includes a persistent **Columns** picker. **Start Date** and **End Date** show each result's saved backtest timeframe by default. **Defaults** restores the comparable unweighted result table, while **All** also exposes available weighted metrics, Final Equity, and Equity/Balance Difference values. This browser-local selection is independent from Archive.
 
 Panel navigation synchronously closes the Config editor sidebar before showing Results, Queue, Archive, or Refine actions, so delayed editor state cannot leave the wrong sidebar attached to the active panel.
 

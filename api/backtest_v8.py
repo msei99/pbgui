@@ -1773,6 +1773,7 @@ def _list_results(
                     "balance_equity_diff": equity_balance_diff,
                     "equity_balance_diff_neg_max": equity_balance_diff,
                     "btc_collateral_cap": backtest.get("btc_collateral_cap", 0),
+                    "start_date": backtest.get("start_date", ""),
                     "end_date": backtest.get("end_date", ""),
                     "twe_long": _bot_risk_value(config, "long", "total_wallet_exposure_limit"),
                     "twe_short": _bot_risk_value(config, "short", "total_wallet_exposure_limit"),

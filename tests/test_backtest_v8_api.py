@@ -1499,7 +1499,7 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
     (pb8_analysis.parent / "config.json").write_text(
         json.dumps(
             {
-                "backtest": {"starting_balance": 5000, "btc_collateral_cap": 0.25, "end_date": "2026-07-01"},
+                "backtest": {"starting_balance": 5000, "btc_collateral_cap": 0.25, "start_date": "2026-01-01", "end_date": "2026-07-01"},
                 "bot": {"long": {"risk": {"total_wallet_exposure_limit": 2.0, "n_positions": 6}}},
                 "live": {
                     "strategy_kind": "ema_anchor",
@@ -1542,6 +1542,7 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
     assert results[0]["equity_balance_diff_neg_max"] == 0.04
     assert results[0]["balance_equity_diff"] == 0.04
     assert results[0]["btc_collateral_cap"] == 0.25
+    assert results[0]["start_date"] == "2026-01-01"
     assert results[0]["end_date"] == "2026-07-01"
     assert results[0]["coins_text"] == "BTC, ETH"
     assert results[0]["strategy"] == "ema_anchor"
