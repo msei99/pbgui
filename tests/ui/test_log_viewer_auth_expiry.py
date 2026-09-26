@@ -71,7 +71,7 @@ def test_log_viewer_close_4001_is_terminal_and_redirects() -> None:
         assert.equal(sockets.length, 1);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -116,7 +116,7 @@ def test_log_viewer_open_reconnects_only_when_socket_is_disconnected() -> None:
         assert.equal(panel.connects, 2);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -199,7 +199,7 @@ def test_replaced_log_viewer_socket_callbacks_cannot_mutate_current_state() -> N
         assert.deepEqual(currentSocket.sent, [{{cmd: 'list_local_logs'}}]);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -272,7 +272,7 @@ def test_log_viewer_buffers_and_dom_keep_the_newest_configured_lines() -> None:
         assert.equal(panel._getLines(), 200);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     assert '<option value="50000">Max (50,000)</option>' in source
     assert '<option value="0">All</option>' not in source
@@ -357,7 +357,7 @@ def test_chunked_full_render_defers_live_lines_until_frozen_snapshot_finishes() 
         assert.deepEqual(terminal.children.map(item => item.num), [3, 4, 5, 6, 7]);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -546,7 +546,7 @@ def test_remote_log_info_uses_subscription_sid_to_reject_delayed_metadata() -> N
         assert.deepEqual(sizes, [20]);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -612,7 +612,7 @@ def test_server_filtered_local_records_remain_compact_and_drop_expired_blocks() 
         assert.deepEqual(panel._lines, ['later context', 'new needle']);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -691,7 +691,7 @@ def test_restart_arms_stream_before_kill_and_keeps_it_after_success() -> None:
         assert.equal(panel._restartAttempt, null);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -704,8 +704,8 @@ def test_every_log_viewer_asset_reference_uses_current_cache_version() -> None:
         references.extend((path, match.group(0)) for match in re.finditer(r"log_viewer_panel\.js\?v=\d+", source))
 
     assert references
-    assert all(reference.endswith("?v=48") for _path, reference in references), references
-    assert "log_viewer_panel.js?v=48" in NAV.read_text(encoding="utf-8")
+    assert all(reference.endswith("?v=50") for _path, reference in references), references
+    assert "log_viewer_panel.js?v=50" in NAV.read_text(encoding="utf-8")
 
 
 def test_api_keys_local_viewer_disables_vps_state_transport() -> None:

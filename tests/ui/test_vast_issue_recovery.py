@@ -75,7 +75,7 @@ def test_manual_rent_uses_selected_specs_after_filter_edits(cloud_page):
     """Issue 350: stale search inputs cannot invalidate an explicitly chosen offer."""
     page, data, calls, overrides, held = cloud_page
     data['worker'] = None
-    offer = dict(id=7, gpu_name='RTX 5090', price_hour_usd=.35, vram_gb=32, ram_gb=64,
+    offer = dict(id=7, machine_id=77, gpu_name='RTX 5090', price_hour_usd=.35, vram_gb=32, ram_gb=64,
                  cpu_cores=16, tflops=100, disk_gb=80, verified=False, cuda_max_good=13,
                  duration_seconds=86400, location='Test')
     overrides['/api/vast/offers'] = (200, json.dumps({'offers': [offer]}), {'Content-Type': 'application/json'})
@@ -389,8 +389,13 @@ def cloud_page():
             payload = dict(balance_usd=3, account_id=1)
         elif path.endswith('/charges'):
             payload = dict(billing=dict(amount_usd=.12))
+        elif path == '/api/vast/calibration/status':
+            payload = dict(rental_profile=dict(population_size=8192, batch_size=8192,
+                max_dispatch_candidate_bars=1_000_000_000),
+                queued_gpu_previews=dict(jobs=[], total_jobs=0, truncated=False),
+                calibration_worker=False)
         elif path == '/api/vast/offers':
-            payload = dict(offers=[dict(id=1, gpu_name='RTX 3090', price_hour_usd=.15,
+            payload = dict(offers=[dict(id=1, machine_id=7, gpu_name='RTX 3090', price_hour_usd=.15,
                  duration_seconds=86400, cuda_max_good=13, location='test', tflops=35.58)])
         else:
             payload = {}

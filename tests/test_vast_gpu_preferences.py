@@ -245,7 +245,8 @@ def test_manual_rent_selects_exact_offer_without_jobs(rental):
     rows.extend([offer(9, price_hour_usd=.1), offer(42)])
     body = request().model_copy(update={'rent_only': True, 'offer_id': 42})
     assert vast.start_queue(body, session=None)['id'] == 42
-    assert calls[-1][1][1] == {'manual': True}
+    assert calls[-1][1][1] == {'manual': True, 'rental_gpu_profile': None,
+                              'rental_job_gpu_profiles': {}}
     assert calls[0][1]['offer_id'] == 42
 
 

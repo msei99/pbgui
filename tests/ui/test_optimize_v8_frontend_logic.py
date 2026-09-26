@@ -748,6 +748,7 @@ def test_all_timeranges_button_stays_enabled_without_sweep_plan() -> None:
         const el = id => controls[id];
         const pruneSelectionSet = () => {{}};
         const syncSelectedParetoScenarios = () => {{}};
+        const persistParetoSelection = () => {{}};
         const state = {{
           selectedParetos: new Set(['/candidate.json']),
           selectedResultPath: '/result',
@@ -2576,6 +2577,7 @@ def test_switching_result_sets_clears_stale_paretos_before_loading() -> None:
         const deferred = [];
         function apiFetch(path) {{ return new Promise((resolve) => deferred.push({{path, resolve}})); }}
         function normalizeParetoStatistic(value) {{ return value || 'mean'; }}
+        function restoreParetoSelection() {{}}
         function clearParetoMeta() {{ state.paretoMode = 'none'; }}
         function applyParetoMeta(meta) {{ state.paretoMode = meta.mode || 'unknown'; }}
         function persistSelectedOptimizeResult() {{}}

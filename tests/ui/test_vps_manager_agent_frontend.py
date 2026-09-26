@@ -275,6 +275,7 @@ def test_manager_renderers_keep_host_and_bot_payloads_out_of_inline_code() -> No
         function normalizeOverviewSort(value) {{ return value; }}
         function renderOverviewTaskSummary() {{ return ''; }}
         function levelTag() {{ return ''; }}
+        function _hlLimitCell() {{ return {{ html: '', sig: '' }}; }}
         function agentStateModel() {{ return {{state: 'ok', tone: 'ok'}}; }}
         function _historyMetricBubble() {{ return ''; }}
         function _metricTag(value) {{ return '<span>' + String(value || 0) + '</span>'; }}

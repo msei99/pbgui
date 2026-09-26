@@ -17,6 +17,7 @@ const nodes=new Map();const el=id=>{if(!nodes.has(id))nodes.set(id,{value:'',che
 const toNullableNumber=v=>v===''?null:Number(v),toNumberOr=(v,d)=>v===''?d:Number(v);
 const scheduleStructuredEditorSync=()=>{};
 const config={gpu:{...defaults,drift_rank_halt:0.8,drift_objective_tolerance:0,future:42}};
+const updateOptimizeGpuHalvingFields=()=>{};
 populateOptimizeGpuSettings(config);collectOptimizeGpuSettings(config,true);
 assert.equal(config.gpu.drift_rank_halt,0.8);assert.equal(config.gpu.drift_objective_tolerance,0);assert.equal(config.gpu.future,42);
 el('opted-gpu-drift-rank-halt').value='';collectOptimizeGpuSettings(config,true);assert.equal(config.gpu.drift_rank_halt,null);

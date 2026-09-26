@@ -11,7 +11,7 @@ ALLOWED_WRITERS = {
     Path("pbgui_purefunc.py"),
     Path("setup/installer/core.py"),
 }
-EXCLUDED_ROOTS = {"tests", "setup", "scripts", ".git", ".venv", "venv"}
+EXCLUDED_ROOTS = {"tests", "setup", "scripts", "data", ".git", ".venv", "venv"}
 
 
 def _is_config_write(call: ast.Call) -> bool:

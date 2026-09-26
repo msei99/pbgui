@@ -913,7 +913,7 @@ def test_ssh_cluster_peer_client_uses_dedicated_key_and_forced_command(monkeypat
     private_key.write_text("private", encoding="utf-8")
     monkeypatch.setattr(
         "master.cluster_sync_worker.ensure_cluster_ssh_key",
-        lambda cluster_root: {"private_key_path": str(private_key)},
+        lambda cluster_root: {"private_key_path": str(private_key), "key_dir": str(tmp_path)},
     )
     client = SshClusterPeerClient(cluster_root=tmp_path / "data" / "cluster")
 

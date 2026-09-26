@@ -11,7 +11,7 @@ def test_stop_before_conversation_creation_invalidates_pending_send():
     """A late conversation ID cannot send the prompt after local Stop (#297)."""
     execute(function('ai_chat.html', 'selectedProvider') + function('ai_chat.html', 'sendMessage') + function('ai_chat.html', 'stopCurrentTurn') + r'''
 const assert=require('node:assert/strict');
-const nodes={prompt:{value:'hello'},'provider-select':{value:'test',selectedOptions:[{textContent:'Test'}]},'model-select':{value:'model'},'effort-select':{value:''},stop:{},'retry-turn':{}};
+const nodes={prompt:{value:'hello'},'provider-select':{value:'test',selectedOptions:[{textContent:'Test'}]},'model-select':{value:'model'},'effort-select':{value:''},'speed-select':{hidden:true,value:''},stop:{},'retry-turn':{}};
 const $=id=>nodes[id]; const state={conversationId:'',chatGeneration:1,retryMessages:{},busy:false};
 let finish, turns=0, composed=0;
 const api=path=>{if(path==='/conversations')return new Promise(resolve=>finish=resolve);turns++;};
@@ -54,6 +54,7 @@ const renderAccountLoading=()=>{};const renderAccountLoadError=()=>{};
 const loadPolicyForAccount=async()=>{},loadJournalForAccount=async()=>{},loadIntentsForAccount=async()=>{},loadTestTransfersForAccount=async()=>{};
 const renderSelectedAccount=()=>{};
 const renderTestTransfers=()=>{};const refreshTestTransfersAfterAction=async()=>{};
+const persistNavigation=()=>{};
 let finish;const requestJson=()=>new Promise(resolve=>finish=resolve);
 (async()=>{
 const pending=cancelPreparedTest({operation_id:'old-op',can_cancel:true});assert.equal(state.testActionPending,true);

@@ -417,6 +417,7 @@ class TestV7OptimizeBackendLogic:
         function formatOptimizePymooMutationAutoLabel() { return 'mutation-auto'; }
         function formatOptimizePymooPopulationAutoLabel() { return 'population-auto'; }
         function formatOptimizePymooRefDirPartitionsAutoValue() { return 'refdir-auto'; }
+        function updateOptimizeGpuHalvingFields() {}
         function scheduleStructuredEditorSync() { __scheduled += 1; }
         function toNullableNumber(raw) {
           if (raw == null) return null;
