@@ -243,7 +243,7 @@ def test_offer_projection_and_query(monkeypatch):
         """Provide one affordable offer and one outside the requested price cap."""
         calls.append((method,path,body))
         return {'offers':[
-            {'id':7,'gpu_name':'RTX 3090','gpu_ram':24576,'cpu_ram':32768,'cpu_cores_effective':8.7,'total_flops':35.58,'gpu_max_power':200,'dph_total':0.17,'verification':'verified','inet_up_cost':0.01,'inet_down_cost':0.02,'secret':'hidden'},
+            {'id':7,'machine_id':70,'gpu_name':'RTX 3090','gpu_ram':24576,'cpu_ram':32768,'cpu_cores_effective':8.7,'total_flops':35.58,'gpu_max_power':200,'dph_total':0.17,'verification':'verified','inet_up_cost':0.01,'inet_down_cost':0.02,'secret':'hidden'},
             {'id':8,'dph_total':3}, {'id':9,'dph_total':'nan'},
         ]}
     monkeypatch.setattr(VastClient,'request',request)
@@ -265,7 +265,7 @@ def test_offer_api_passes_validated_filters(client, monkeypatch):
     """Bound browser-supplied filters and never perform rental operations."""
     http, store, _ = client
     store.save(api_key='key')
-    monkeypatch.setattr(VastClient,'offers',lambda self,**kw: [{'id':10,'disk_gb':kw['disk_gb']}])
+    monkeypatch.setattr(VastClient,'offers',lambda self,**kw: [{'id':10,'machine_id':70,'disk_gb':kw['disk_gb']}])
     assert http.get('/api/vast/offers?disk_gb=60').json()['offers'][0]['disk_gb']==60
     assert http.get('/api/vast/offers?disk_gb=-1').status_code==422
 
@@ -426,7 +426,7 @@ def test_start_uses_persisted_rental_settings(client, monkeypatch, tmp_path):
     assert saved.status_code == 200
     assert http.get('/api/vast/gpu-preferences').json()['hours'] == 3
     monkeypatch.setattr(queue, 'waiting', lambda: [{'workers':4}])
-    offer = dict(id=1,gpu_name='RTX 3090',num_gpus=1,cuda_max_good=13,duration_seconds=20000,
+    offer = dict(id=1,machine_id=70,gpu_name='RTX 3090',num_gpus=1,cuda_max_good=13,duration_seconds=20000,
                  price_hour_usd=.1,vram_gb=24,ram_gb=32,cpu_cores=8,disk_gb=40,verified=True)
     searches, starts = [], []
     class Provider:
@@ -691,7 +691,7 @@ def test_exact_offer_search_uses_contract_id(monkeypatch):
         """Model the provider returning another representative in a general search."""
         queries.append(body)
         identifier = 7 if body.get('ask_contract_id') == {'eq': 7} else 8
-        return {'offers': [{'id': identifier, 'dph_total': .17}]}
+        return {'offers': [{'id': identifier, 'machine_id': 70, 'dph_total': .17}]}
     monkeypatch.setattr(VastClient, 'request', request)
     assert VastClient('fake').offers()[0]['id'] == 8
     assert VastClient('fake').offers(offer_id=7)[0]['id'] == 7
@@ -750,10 +750,22 @@ def test_jobs_statistics_use_existing_local_log_without_remote_access(client, mo
     write_json(folder / 'state.json', {'id':identifier, 'status':'running', 'rental_state':'none'})
     logfile = logs / f'vast_{identifier}.log'
     logfile.write_text('2026-09-16T10:00:00Z INFO GPU optimize | gen=1 proxy=100 (1.0/s) exact=10 inflight=0\n'
-                      '2026-09-16T10:01:00Z INFO GPU optimize | gen=2 proxy=700 (1.0/s) exact=40 inflight=0\n')
+                      + 'unrelated log line\n' * 6000
+                      + '2026-09-16T10:01:00Z INFO GPU optimize | gen=2 proxy=700 (1.0/s) exact=40 inflight=0\n')
     first = http.get('/api/vast/jobs').json()['jobs'][0]['throughput']
     assert first['proxy_per_minute'] == 600
     assert first['exact_per_minute'] == 30
+    assert http.get('/api/vast/jobs').json()['jobs'][0]['throughput'] == first
+    def unexpected_observation(*_args):
+        """Finished jobs with a saved snapshot must not reparse their logs."""
+        raise AssertionError('finished job reparsed')
+
+    with monkeypatch.context() as guarded:
+        guarded.setattr('vast_throughput.observe_throughput', unexpected_observation)
+        for status in ('completed', 'failed', 'cancelled'):
+            queue.store.update(identifier, status=status)
+            assert http.get('/api/vast/jobs').json()['jobs'][0]['throughput'] == first
+    queue.store.update(identifier, status='completed', throughput=None)
     assert http.get('/api/vast/jobs').json()['jobs'][0]['throughput'] == first
     logfile.unlink()
     logfile.symlink_to(tmp_path / 'outside.log')

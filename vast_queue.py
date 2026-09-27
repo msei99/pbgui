@@ -26,9 +26,9 @@ def blocked_machine_ids(state: dict) -> list[int]:
 
 
 def offer_host_allowed(offer: dict, blocked: list[int]) -> bool:
-    """Fail closed for unidentified machines when exclusions are active."""
+    """Reject unidentified machines and blocked hosts before selection or rental."""
     machine = offer.get('machine_id')
-    return not blocked or (type(machine) is int and machine > 0 and machine not in blocked)
+    return type(machine) is int and machine > 0 and machine not in blocked
 
 
 def can_remove_job(row: dict, worker: dict | None) -> bool:

@@ -905,13 +905,21 @@
         const ok = el('confirm-ok');
         ok.className = 'btn ' + (danger ? 'danger' : 'warning');
         function close(result) {
+          document.removeEventListener('keydown', onKeyDown);
           ovl.classList.remove('visible');
           ovl.setAttribute('aria-hidden', 'true');
           ok.onclick = null; el('confirm-cancel').onclick = null;
           resolve(result);
         }
+        function onKeyDown(event) {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            close(false);
+          }
+        }
         ok.onclick = function () { close(true); };
         el('confirm-cancel').onclick = function () { close(false); };
+        document.addEventListener('keydown', onKeyDown);
         ovl.classList.add('visible');
         ovl.setAttribute('aria-hidden', 'false');
         el('confirm-cancel').focus();

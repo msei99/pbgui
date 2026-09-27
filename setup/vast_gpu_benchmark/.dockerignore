@@ -1,5 +1,7 @@
 *
 !Dockerfile
 !Dockerfile.worker
+!Dockerfile.exact-progress-test
 !cloud_worker.py
 !run.py
+!gpu_exact_progress.patch

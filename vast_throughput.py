@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import re
 
 SERVICE = "VastThroughput"
+LOG_TAIL_BYTES = 512 * 1024
 _STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?Z\b")
 _COUNTERS = re.compile(
     r"GPU (?:optimize\s*\|\s*gen=\d+\s+proxy=(\d+)\s+\([0-9.]+/s\)\s+exact=(\d+)"
@@ -15,7 +16,7 @@ def parse_throughput(raw_log: bytes, previous: dict | None = None) -> dict | Non
     """Measure counter deltas over roughly a minute; never infer work from population size."""
     samples = []
     reset = False
-    for line in raw_log[-65536:].decode("utf-8", errors="replace").splitlines():
+    for line in raw_log[-LOG_TAIL_BYTES:].decode("utf-8", errors="replace").splitlines():
         stamp, counts = _STAMP.match(line), _COUNTERS.search(line)
         if not stamp or not counts:
             continue

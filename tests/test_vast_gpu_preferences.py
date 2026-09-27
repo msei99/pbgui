@@ -19,6 +19,7 @@ def rental(monkeypatch):
                             read=lambda: {}, store=SimpleNamespace(read=lambda *args: {}),
                             start=lambda *args: calls.append(('start', args)) or args[0])
     monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
+    monkeypatch.setattr(vast, '_reconcile_pool_consent', lambda target: None)
     monkeypatch.setattr(vast, 'VastCredentialStore', lambda: SimpleNamespace(secrets=lambda:{'api_key':'fake'}))
     def offers(**kwargs):
         """Record current search criteria and return the mock live marketplace."""
@@ -30,7 +31,7 @@ def rental(monkeypatch):
 
 def offer(identifier=2, **changes):
     """Produce one available matching offer with explicit hardware capabilities."""
-    return {'id':identifier,'gpu_name':'RTX 3090','num_gpus':1,'cuda_max_good':13,
+    return {'id':identifier,'machine_id':70,'gpu_name':'RTX 3090','num_gpus':1,'cuda_max_good':13,
             'price_hour_usd':.2,'vram_gb':24,'ram_gb':32,'cpu_cores':8,
             'disk_gb':40,'verified':True, **changes}
 
@@ -56,7 +57,9 @@ def test_preferences_persist_without_offer_id(tmp_path, monkeypatch):
 def test_startup_restores_enabled_pool_supervisor(tmp_path, monkeypatch):
     """API restart relaunches the durable scheduler for authorized automation."""
     queue = CloudQueue(JobStore(tmp_path/'vast'))
-    queue.update(pool_enabled=True)
+    settings = vast.RentalPreferences(max_rentals=2, auto_rent=True).model_dump()
+    queue.update(pool_enabled=True, gpu_preferences=settings,
+                 pool_authorization={'id':'a' * 32, 'settings':settings})
     calls = []
     monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
     monkeypatch.setattr('vast_pool.launch_pool', lambda target: calls.append(target.root))
@@ -64,6 +67,38 @@ def test_startup_restores_enabled_pool_supervisor(tmp_path, monkeypatch):
     monkeypatch.setattr(vast, '_PREPARATION_EXECUTOR', SimpleNamespace())
     vast.startup()
     assert calls == [queue.root]
+
+
+def test_startup_revokes_legacy_pool_when_auto_rent_is_off(tmp_path, monkeypatch):
+    """An API restart must not relaunch paid scheduling from a stale pool flag."""
+    queue = CloudQueue(JobStore(tmp_path / 'vast'))
+    settings = vast.RentalPreferences(max_rentals=3).model_dump()
+    queue.update(pool_enabled=True, paused=False, gpu_preferences=settings,
+                 pool_authorization={'id':'a' * 32, 'settings':settings})
+    calls = []
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
+    monkeypatch.setattr('vast_pool.launch_pool', lambda target: calls.append(target.root))
+    monkeypatch.setattr(vast, '_PERFORMANCE_COLLECTOR', SimpleNamespace())
+    monkeypatch.setattr(vast, '_PREPARATION_EXECUTOR', SimpleNamespace())
+    vast.startup()
+    assert calls == []
+    assert queue.read()['pool_enabled'] is False
+    assert queue.read()['pool_authorization'] is None
+
+
+def test_saved_manual_start_with_multi_gpu_limit_rents_only_once(rental, monkeypatch):
+    """A manual Start never creates a persistent pool from the saved GPU limit."""
+    queue, rows, calls = rental
+    settings = vast.RentalPreferences(max_rentals=3, auto_rent=False).model_dump()
+    queue.read = lambda: {'gpu_preferences':settings}
+    monkeypatch.setattr(vast, '_reconcile_pool_consent', lambda target: None)
+    monkeypatch.setattr('vast_pool.authorize_pool', lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError('Manual start authorized an automatic pool')))
+    rows.append(offer(42))
+    result = vast.start_queue(vast.StartJobRequest(use_saved_settings=True,
+        accept_rental_and_cleanup=True), session=None)
+    assert result['id'] == 42
+    assert [kind for kind, _ in calls] == ['search', 'start']
 
 
 def test_start_uses_current_matching_offer_not_preview(rental):
@@ -148,7 +183,7 @@ def test_partial_model_search_filters_before_marketplace_limit(monkeypatch, sear
         if path == '/gpu_names/unique/':
             return {'gpu_names':['RTX 3060', 'RTX 3090', 'RTX 4090']}
         queries.append(body)
-        return {'offers':[{'id':42, 'gpu_name':'RTX 3090', 'dph_total':.2,
+        return {'offers':[{'id':42, 'machine_id':70, 'gpu_name':'RTX 3090', 'dph_total':.2,
                           'cpu_name':'Xeon test','gpu_mem_bw':805.4, 'pci_gen':3,
                           'gpu_lanes':8, 'pcie_bw':5.5,'disk_name':'NVMe test',
                           'disk_bw':1810,'duration':86400,'cuda_max_good':13}]}
@@ -169,10 +204,10 @@ def test_compatibility_filter_and_unknown_metadata(monkeypatch):
     """Preview hides old CUDA/short leases but can show them explicitly."""
     from vast_provider import VastClient
     payload = {'offers':[
-        {'id':1,'dph_total':.1,'cuda_max_good':12.6,'duration':90000},
-        {'id':2,'dph_total':.1,'cuda_max_good':13,'duration':600},
-        {'id':3,'dph_total':.1,'cuda_max_good':13,'duration':90000,'disk_bw':'nan'},
-        {'id':4,'dph_total':.1},
+        {'id':1,'machine_id':70,'dph_total':.1,'cuda_max_good':12.6,'duration':90000},
+        {'id':2,'machine_id':70,'dph_total':.1,'cuda_max_good':13,'duration':600},
+        {'id':3,'machine_id':70,'dph_total':.1,'cuda_max_good':13,'duration':90000,'disk_bw':'nan'},
+        {'id':4,'machine_id':70,'dph_total':.1},
     ]}
     monkeypatch.setattr(VastClient, 'request', lambda *args: payload)
     client = VastClient('fake')

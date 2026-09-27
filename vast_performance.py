@@ -19,7 +19,7 @@ from logging_helpers import human_log as _log
 from secure_files import ensure_private_directory, secure_private_file
 from vast_jobs import job_id
 from vast_provider import VastError
-from vast_throughput import observe_throughput
+from vast_throughput import LOG_TAIL_BYTES, observe_throughput
 
 SERVICE = 'VastPerformance'
 TERMINAL = {'completed', 'failed', 'cancelled'}
@@ -310,8 +310,8 @@ def collect_run(store, history, row, log_root, stop=None):
     log = Path(log_root) / ('vast_' + identifier + '.log')
     if log.is_file() and not log.is_symlink():
         with log.open('rb') as stream:
-            stream.seek(max(0, os.fstat(stream.fileno()).st_size - 65536))
-            observe_throughput(store, identifier, stream.read(65536))
+            stream.seek(max(0, os.fstat(stream.fileno()).st_size - LOG_TAIL_BYTES))
+            observe_throughput(store, identifier, stream.read(LOG_TAIL_BYTES))
         row = store.read(identifier)
     throughput = row.get('throughput') or {}
     now = time.time()

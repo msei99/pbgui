@@ -1,0 +1,17 @@
+# Temporary PB8 exact-progress trial, layered over the published worker image.
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:09cb0f9ba004db44f3ca02a7b3b03ea3211fd9e6c3c9ea33794cd4c6d24dee30
+
+RUN grep -qx '903ed11153ce82d1b6760604eaa3a553309a752a' /opt/pb8-revision
+COPY gpu_exact_progress.patch /tmp/gpu_exact_progress.patch
+RUN cd /opt/passivbot \
+    && git diff --quiet -- src/optimization/backends/gpu_backend.py \
+    && git apply --check /tmp/gpu_exact_progress.patch \
+    && git apply /tmp/gpu_exact_progress.patch \
+    && printf '%s  %s\n' \
+       '96a5d1f3be377e27eb53291e619b3b87a201b562ce4bf80378f921a07c518fb8' \
+       'src/optimization/backends/gpu_backend.py' | sha256sum -c - \
+    && PYTHONPATH=/opt/passivbot/src python -c \
+       'import ast, pathlib; ast.parse(pathlib.Path("src/optimization/backends/gpu_backend.py").read_text()); from optimization.backends.gpu_backend import _collect_exact_during_proxy' \
+    && rm /tmp/gpu_exact_progress.patch
+
+LABEL org.opencontainers.image.title="PBGui PB8 GPU Exact Progress Test Worker"

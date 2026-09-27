@@ -248,7 +248,7 @@ def test_private_image_blocks_before_any_provider_call(queue, monkeypatch):
         raise AssertionError('Provider called before image verification')
     monkeypatch.setattr(vast_jobs,'VastClient',no_provider)
     with pytest.raises(VastError,match='Image not public'):
-        queue.start({'id':42,'price_hour_usd':.15,'cuda_max_good':13,'disk_gb':40,'cpu_cores':8},1,1,300)
+        queue.start({'id':42,'machine_id':70,'price_hour_usd':.15,'cuda_max_good':13,'disk_gb':40,'cpu_cores':8},1,1,300)
     assert queue.worker()['rental_state']=='none'
 
 
@@ -275,7 +275,7 @@ def test_repeated_start_reuses_authorization_and_reserves_remaining_budget(queue
     monkeypatch.setattr(vast_jobs, 'VastClient', lambda key: SimpleNamespace(account=lambda:{'balance_usd':10}))
     launches=[]
     monkeypatch.setattr(queue.store,'launch_service',lambda identifier,mode:launches.append((identifier,mode)))
-    offer={'id':42,'price_hour_usd':.15,'cuda_max_good':13,'disk_gb':40,'cpu_cores':8,
+    offer={'id':42,'machine_id':70,'price_hour_usd':.15,'cuda_max_good':13,'disk_gb':40,'cpu_cores':8,
            'download_gb_usd':.01,'upload_gb_usd':.01}
     first=queue.start(offer,1,1,300)
     second=queue.start(offer,1,1,300)
@@ -593,7 +593,7 @@ def test_missing_local_metadata_blocks_rental_before_worker_creation(tmp_path, m
     queue = CloudQueue(store)
     reason = 'Prepared market cache is invalid or expired' if expired_bundle else 'Local market metadata is missing for bybit'
     with pytest.raises(VastError, match=reason):
-        queue.start({'id': 42}, 1, 1, 300)
+        queue.start({'id': 42, 'machine_id': 70}, 1, 1, 300)
     assert queue.worker() is None
     assert queue.read().get('worker_id') is None
 
@@ -607,8 +607,8 @@ def test_rent_without_jobs_starts_services_immediately(tmp_path, monkeypatch):
         calls.append(identifier)
         return queue.store.update(identifier, rental_state='creation_pending')
     monkeypatch.setattr(queue.store, 'start', start)
-    first = queue.start({'id':123}, 1, 1, 300, manual=True)
-    second = queue.start({'id':456}, 1, 1, 300, manual=True)
+    first = queue.start({'id':123, 'machine_id':70}, 1, 1, 300, manual=True)
+    second = queue.start({'id':456, 'machine_id':71}, 1, 1, 300, manual=True)
     assert calls == [first['id']]
     assert second['id'] == first['id']
     assert first['awaiting_queue_start']

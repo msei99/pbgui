@@ -83,22 +83,23 @@ def test_insufficient_budget_does_not_dispatch_later_job(queue, monkeypatch):
     assert not queue.store.read('a'*32).get('deadline_request')
 
 
-@pytest.mark.parametrize('payload_size', [65536, 65537, 131072])
+@pytest.mark.parametrize('payload_size', [512 * 1024, 512 * 1024 + 1, 1024 * 1024])
 def test_log_tail_has_transport_margin_and_bounded_local_copy(queue, tmp_path, monkeypatch, payload_size):
-    """A bounded noisy transport does not fail at exactly 64 KiB of log output."""
+    """A bounded noisy transport does not fail at exactly 512 KiB of log output."""
     import vast_jobs
     monkeypatch.setattr(vast_jobs, 'PROJECT', tmp_path)
     calls = []
 
     def command(value, **kwargs):
         """Return bounded log bytes without any remote connection."""
+        assert 'tail -c 524288 ' in value
         calls.append(kwargs)
         return b'x' * payload_size
 
     runner.sync_optimizer_log(SimpleNamespace(command=command, remote_root='/work/test'), queue.store, 'b'*32)
-    assert calls == [{'max_output': 131072}]
+    assert calls == [{'max_output': 1024 * 1024}]
     path = tmp_path / 'data/logs/optimizes_v8' / ('vast_' + 'b'*32 + '.log')
-    assert path.stat().st_size == 65536
+    assert path.stat().st_size == 512 * 1024
     assert queue.store.read('b'*32)['log_error'] is None
 
 
@@ -196,7 +197,7 @@ def test_auto_cpu_uses_explicit_cloud_minimum(queue, monkeypatch, minimum, cores
     queue.store.update('b'*32, auto_cpu_workers=True, workers=32)
     monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
     monkeypatch.setattr(vast, 'VastCredentialStore', lambda: SimpleNamespace(secrets=lambda: {'api_key': 'fake'}))
-    offer = dict(id=42, gpu_name='RTX 5090', num_gpus=1, cuda_max_good=13, price_hour_usd=.2,
+    offer = dict(id=42, machine_id=70, gpu_name='RTX 5090', num_gpus=1, cuda_max_good=13, price_hour_usd=.2,
                  vram_gb=32, ram_gb=64, cpu_cores=cores, disk_gb=40, verified=True)
     queries = []
 

@@ -34,7 +34,7 @@ def test_current_image_has_offline_layer_sizes():
     """The active immutable image keeps byte-weighted pull progress available."""
     from vast_image_layers import IMAGE_LAYERS
     assert IMAGE in IMAGE_LAYERS
-    assert len(IMAGE_LAYERS[IMAGE]) == 26
+    assert len(IMAGE_LAYERS[IMAGE]) == 28
 
 
 @pytest.mark.parametrize('image', SUPPORTED_RENTAL_IMAGES)
@@ -73,7 +73,10 @@ def test_old_rental_can_still_be_cleaned_up(job):
 def test_known_image_with_wrong_revision_is_rejected(job):
     """A valid image cannot authorize a different PB8 revision."""
     _, identifier, intent = job
-    intent['image'] = SUPPORTED_RENTAL_IMAGES[1]
+    intent['image'] = next(
+        image for image, revision in SUPPORTED_RENTAL_IMAGE_REVISIONS.items()
+        if revision != REVISION
+    )
     assert intent['pb8_revision'] == REVISION
     with pytest.raises(VastError):
         validate_intent(intent, identifier)

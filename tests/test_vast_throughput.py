@@ -66,8 +66,16 @@ def test_completion_and_sparse_log_interval_are_preserved():
 def test_counter_input_is_bounded_and_browser_safe():
     """Ignore oversized counts and old samples outside the bounded tail."""
     assert parse_throughput(line(0, 2**54, 1)) is None
-    raw = line(0, 100, 10) + b'x' * 65536 + b'\n' + line(60, 200, 20)
+    raw = line(0, 100, 10) + b'x' * (512 * 1024) + b'\n' + line(60, 200, 20)
     assert parse_throughput(raw)['proxy_per_minute'] is None
+
+
+def test_counter_pair_survives_more_than_64_kib_of_intervening_log():
+    """Read the longer synchronized tail to retain a valid earlier baseline."""
+    raw = line(0, 100, 10) + b'x' * (70 * 1024) + b'\n' + line(60, 700, 40)
+    result = parse_throughput(raw)
+    assert result['proxy_per_minute'] == 600
+    assert result['exact_per_minute'] == 30
 
 
 def test_disjoint_tails_preserve_rates_and_reject_delayed_snapshots():

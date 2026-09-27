@@ -461,7 +461,7 @@ def _live_balance_for_user(user_obj: Any, db: Any) -> tuple[float, float, float]
         balance = _safe_float(exchange.fetch_balance("swap"), 0.0)
         positions = _live_positions_for_user(user_obj, db)
         upnl = sum(_safe_float(pos.get("upnl"), 0.0) for pos in positions)
-    pprices = sum(_safe_float(pos.get("size"), 0.0) * _safe_float(pos.get("entry"), 0.0) for pos in positions)
+    pprices = sum(abs(_safe_float(pos.get("size"), 0.0) * _safe_float(pos.get("entry"), 0.0)) for pos in positions)
     return balance, upnl, pprices
 
 
@@ -732,11 +732,19 @@ def _apply_tp_only_all(cfg: dict) -> None:
     _apply_all_forced_mode(cfg, _TP_ONLY_MODE)
 
 
+def _db_position_side(pos: list) -> str:
+    """Use the signed size when an older DB row has no position side."""
+    side = str(pos[7] or "").strip().lower() if len(pos) > 7 else ""
+    if side in ("long", "short"):
+        return side
+    return "short" if _safe_float(pos[3], 0.0) < 0 else "long"
+
+
 def _find_dashboard_position(positions: list, symbol: str, side: str) -> list | None:
     """Find a DB position row by symbol and normalized side."""
     normalized_side = str(side or "long").strip().lower()
     for pos in positions or []:
-        pos_side = str(pos[7] if len(pos) > 7 else "long").strip().lower()
+        pos_side = _db_position_side(pos)
         if pos[1] == symbol and pos_side == normalized_side:
             return pos
     return None
@@ -1332,7 +1340,7 @@ def refresh_positions_for_user(user_name: str):
         for pos in positions:
             sym = pos[1]
             if pos[3]:  # size != 0 means open
-                side = str(pos[7] if len(pos) > 7 else "long").lower()
+                side = _db_position_side(pos)
                 open_pos[(sym, side)] = {
                     "entry": pos[5],
                     "size":  pos[3],
@@ -1598,10 +1606,10 @@ async def register_chart_client(user_name: str, symbol: str, tf: str, side: str,
             positions = _get_db().fetch_positions(user_obj) or []
             pos_data = None
             for pos in positions:
-                if pos[1] == symbol and pos[3] and str(pos[7] if len(pos) > 7 else "long").lower() == normalized_side:
+                if pos[1] == symbol and pos[3] and _db_position_side(pos) == normalized_side:
                     pos_data = {
                         "entry": pos[5], "size": pos[3],
-                        "upnl":  pos[4], "side": pos[7] if len(pos) > 7 else "long",
+                        "upnl":  pos[4], "side": normalized_side,
                     }
                     break
             q.put_nowait({"type": "position", "position": pos_data})
@@ -1819,7 +1827,7 @@ def get_balance(
                     date_str = str(db_row[1])
                 positions = db.fetch_positions(user_obj) or []
                 upnl = sum(_safe_float(pos[4], 0.0) for pos in positions)
-                pprices = sum(_safe_float(pos[3], 0.0) * _safe_float(pos[5], 0.0) for pos in positions)
+                pprices = sum(abs(_safe_float(pos[3], 0.0) * _safe_float(pos[5], 0.0)) for pos in positions)
             total_balance += balance
             total_upnl += upnl
             all_pprices += pprices
@@ -1872,7 +1880,7 @@ def get_balance(
         upnl = 0.0
         pprices = 0.0
         for pos in (positions or []):
-            pprices += pos[3] * pos[5]
+            pprices += abs(_safe_float(pos[3], 0.0) * _safe_float(pos[5], 0.0))
             upnl += pos[4]
 
         all_pprices += pprices
@@ -2372,20 +2380,16 @@ def get_adg_data(
         adg_pct = 100.0 * (income / running) if running != 0 else 0.0
         adg_rows[i][1] = round(adg_pct, 4)
 
-    # Fill missing dates with 0
+    # Fill the requested period, including days before the first trade.
     from datetime import datetime as _dt, timedelta as _td
-    if adg_rows:
-        filled = []
-        date_map = {r[0]: r[1] for r in adg_rows}
-        d_start = _dt.strptime(adg_rows[0][0], "%Y-%m-%d").date()
-        d_end = _dt.strptime(adg_rows[-1][0], "%Y-%m-%d").date()
-        d = d_start
-        while d <= d_end:
-            ds = d.strftime("%Y-%m-%d")
-            filled.append({"date": ds, "adg": date_map.get(ds, 0.0)})
-            d += _td(days=1)
-    else:
-        filled = []
+    filled = []
+    date_map = {r[0]: r[1] for r in adg_rows}
+    d = _dt.strptime(from_date or (adg_rows[0][0] if adg_rows else to_date), "%Y-%m-%d").date()
+    d_end = _dt.strptime(to_date, "%Y-%m-%d").date()
+    while d <= d_end:
+        ds = d.strftime("%Y-%m-%d")
+        filled.append({"date": ds, "adg": date_map.get(ds, 0.0)})
+        d += _td(days=1)
 
     return {
         "mode":             mode,
@@ -2662,14 +2666,14 @@ def get_positions_data(
         for pos in positions:
             symbol = pos[1]
             uname = pos[6]
-            side = pos[7] if len(pos) > 7 else "long"
+            side = _db_position_side(pos)
             orders = db.fetch_orders_by_symbol(uname, symbol) or []
             dca, next_dca, next_tp = _classify_position_orders(orders, side)
             price = 0.0
             for p in prices:
                 if p[1] == symbol:
                     price = p[3]
-            pos_value = pos[3] * price
+            pos_value = abs(_safe_float(pos[3], 0.0) * _safe_float(price, 0.0))
             all_positions.append({
                 "user":     uname,
                 "exchange": user_obj.exchange,
@@ -3028,10 +3032,10 @@ def get_orders_data(
             }
             break
     for pos in positions:
-        if position_data is None and pos[1] == symbol and str(pos[7] if len(pos) > 7 else "long").lower() == normalized_side:
+        if position_data is None and pos[1] == symbol and _db_position_side(pos) == normalized_side:
             position_data = {
                 "entry": pos[5], "size": pos[3],
-                "upnl":  pos[4], "side": pos[7] if len(pos) > 7 else "long",
+                "upnl":  pos[4], "side": normalized_side,
             }
             break
 

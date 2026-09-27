@@ -85,3 +85,9 @@ IMAGE_LAYERS['ghcr.io/msei99/pbgui-pb8-worker@sha256:09cb0f9ba004db44f3ca02a7b3b
     '5b4a86fa384b': 1307, 'e9da40aec3d0': 2599,
     'a7e7593d61d': 94, '6a77165a8ae9': 11961,
 }
+
+IMAGE_LAYERS['ghcr.io/msei99/pbgui-pb8-worker@sha256:a1a458b296653e438d2dac5a1cbfd4fa990045ce28cd4a2f70684fc2a404a0bf'] = {
+    **IMAGE_LAYERS['ghcr.io/msei99/pbgui-pb8-worker@sha256:09cb0f9ba004db44f3ca02a7b3b03ea3211fd9e6c3c9ea33794cd4c6d24dee30'],
+    '34814f8c77ae': 1953,
+    'a4fc9ce233b7': 2650480,
+}

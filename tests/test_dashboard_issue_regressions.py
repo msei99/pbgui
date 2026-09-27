@@ -69,7 +69,9 @@ def test_adg_balance_updates_do_not_accumulate_snapshots(monkeypatch, legacy, us
     assert result["current_balance"] == expected
     assert result["starting_balance"] == expected - 20
     assert result["total_pnl"] == 20
-    assert result["bars"] == [{"date": "2026-09-01", "adg": round(2000 / (expected - 20), 4)}]
+    assert result["bars"][0] == {"date": "2026-09-01", "adg": round(2000 / (expected - 20), 4)}
+    assert result["bars"][-1]["date"] == result["to_date"]
+    assert all(bar["adg"] == 0.0 for bar in result["bars"][1:])
 
 
 @pytest.mark.parametrize("route", ["example", "templates/example"])

@@ -1072,12 +1072,14 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
                 row['cost_estimate'] = _run_cost_estimate(row, rentals[lease], time.time())
             if isinstance(row.get('throughput'), dict):
                 row['throughput'] = {key: value for key, value in row['throughput'].items() if key != 'samples'}
-            if row['has_log'] and len(rows) < 100:
-                from vast_throughput import observe_throughput
+            if (row['has_log'] and len(rows) < 100
+                    and (row.get('status') not in {'completed', 'failed', 'cancelled'}
+                         or not row.get('throughput'))):
+                from vast_throughput import LOG_TAIL_BYTES, observe_throughput
                 try:
                     with log.open('rb') as stream:
-                        stream.seek(max(0, os.fstat(stream.fileno()).st_size - 65536))
-                        row['throughput'] = observe_throughput(queue.store, row['id'], stream.read(65536))
+                        stream.seek(max(0, os.fstat(stream.fileno()).st_size - LOG_TAIL_BYTES))
+                        row['throughput'] = observe_throughput(queue.store, row['id'], stream.read(LOG_TAIL_BYTES))
                 except OSError:
                     _log(SERVICE, 'Optimizer throughput snapshot unavailable', level='WARNING')
             rows.append(row)

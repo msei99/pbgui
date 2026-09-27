@@ -13,6 +13,10 @@ Du kannst mehrspaltige Widget-Layouts erstellen, Daten mehrerer Benutzerkonten k
 
 Dashboard-APIs, Renderer-Skripte und WebSockets bleiben auf dem eigenen PBGui-Origin und behalten einen serverseitig konfigurierten Mount-Praefix. Ein `api_base`-Queryparameter kann keinen anderen Server auswaehlen. Editor-/Template-Nachrichten werden nur vom erwarteten Same-Origin-Parent oder Iframe akzeptiert; fremde Seiten koennen die Seiten nicht einbetten.
 
+Balance-TWE addiert die absoluten Positionswerte von Long- und Short-Positionen. Bei älteren Positionen ohne Side wird Long oder Short aus dem Vorzeichen der Größe bestimmt; der Positionswert wird positiv angezeigt.
+
+Das ADG-Diagramm füllt alle Tage des gewählten Zeitraums vor dem ersten Trade auf. Im PNL zeigt Daily die täglichen Erträge und Cumulative deren laufende Summe. P+L hält Datums- und Wertbeschriftungen sichtbar und verarbeitet Zeiträume ohne Trades.
+
 ---
 
 ## Dashboard anzeigen

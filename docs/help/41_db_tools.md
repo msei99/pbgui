@@ -1,5 +1,7 @@
 # DB Tools
 
+Press **Escape** in a DB Tools confirmation dialog to cancel the pending action. Confirm and Cancel remain the explicit dialog buttons.
+
 Sync Job drafts require confirmation before Close, New Job or another row replaces unsaved changes. Operation buttons become available again on completion or error. After a status connection failure, Run resumes checking the existing operation instead of starting another one.
 
 DB Tools provides controlled maintenance and one-way migration workflows for PBGui databases, dashboard definitions, and templates across the local master and known remote masters. Open it from **System -> DB Tools**.

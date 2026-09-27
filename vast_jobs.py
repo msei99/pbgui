@@ -27,13 +27,14 @@ from vast_exchanges import SUPPORTED_EXCHANGES
 
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
-IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:09cb0f9ba004db44f3ca02a7b3b03ea3211fd9e6c3c9ea33794cd4c6d24dee30"
+IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:a1a458b296653e438d2dac5a1cbfd4fa990045ce28cd4a2f70684fc2a404a0bf"
 REVISION = "903ed11153ce82d1b6760604eaa3a553309a752a"
 PREVIOUS_REVISION = "69227b75e808f8ce1f4b8949350b3311916bd377"
 ORIGINAL_REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 # Persisted rental intents keep their own immutable image/revision pair.
 SUPPORTED_RENTAL_IMAGE_REVISIONS = {
     IMAGE: REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:09cb0f9ba004db44f3ca02a7b3b03ea3211fd9e6c3c9ea33794cd4c6d24dee30": REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:8ad62f43decae47fe670f3ac15ba7e4d7c648f0bb030fa511cd4771321ff4327": PREVIOUS_REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:70366b9989a12528245d4c263e0e3dc4350271427afd76f9568dcf29cf33878f": PREVIOUS_REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:bee2e513d77e2c22f5b0671392063c51bb04bd547c7334e614fe918ada2d49e2": PREVIOUS_REVISION,

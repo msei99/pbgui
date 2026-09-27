@@ -373,7 +373,7 @@
         if (normalized === 'mixed') label = 'Mixed live/DB';
         return label + ': ' + liveAgeText(ts);
     }
-    function tweBarPct(v) { return Math.min(100, (v / 300) * 100).toFixed(1); }
+    function tweBarPct(v) { return Math.max(0, Math.min(100, (v / 300) * 100)).toFixed(1); }
     function signedFmt(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
 
     /** Prepend an icon span before titleSpan and append a trash button to hdr.
@@ -1565,18 +1565,19 @@
 
         var bars = (data && data.bars) ? data.bars : [];
         var mode = (data && data.mode) || 'bar';
+        var isCum = mode === 'line' || mode === 'Cumulative';
 
         var dates  = bars.map(function (b) { return b.date; });
-        var values = bars.map(function (b) { return b.income; });
+        var values = bars.map(function (b) { return isCum && b.cum !== undefined ? b.cum : b.income; });
         var colors = values.map(function (v) { return v < 0 ? '#fc8181' : '#68d391'; });
 
         var trace;
-        if (mode === 'line') {
+        if (isCum) {
             trace = {
                 x: dates, y: values, type: 'scatter', mode: 'lines+markers',
                 line: { color: '#63b3ed', width: 1 },
                 marker: { color: colors, size: 6 },
-                hovertemplate: '<b>%{x}</b><br>Income: %{y:.2f}<extra></extra>'
+                hovertemplate: '<b>%{x}</b><br>Cumulative PnL: %{y:.2f}<extra></extra>'
             };
         } else {
             trace = {
@@ -1584,7 +1585,7 @@
                 marker: { color: colors },
                 text: values.map(function (v) { return v.toFixed(2); }),
                 textposition: 'auto',
-                hovertemplate: '<b>%{x}</b><br>Income: %{y:.2f}<extra></extra>'
+                hovertemplate: '<b>%{x}</b><br>Daily PnL: %{y:.2f}<extra></extra>'
             };
         }
 
@@ -1594,9 +1595,9 @@
             font:   { color: '#e2e8f0', size: 11 },
             margin: { l: 50, r: 20, t: 40, b: 50 },
             xaxis:  { tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0',
-                      type: 'date' },
+                      type: 'date', automargin: true },
             yaxis:  { gridcolor: '#2d3748', color: '#e2e8f0',
-                      zeroline: true, zerolinecolor: '#4a5568' },
+                      zeroline: true, zerolinecolor: '#4a5568', automargin: true },
             bargap: 0.3,
             autosize: true
         };
@@ -1832,8 +1833,8 @@
 
         /* Y-axis range with 10% padding; guard against yRange=0 */
         var allVals = profits.concat(losses);
-        var yMin = Math.min.apply(null, allVals);
-        var yMax = Math.max.apply(null, allVals);
+        var yMin = allVals.length ? Math.min.apply(null, allVals) : 0;
+        var yMax = allVals.length ? Math.max.apply(null, allVals) : 0;
         var yRange = yMax - yMin;
         var padding = yRange > 0 ? yRange * 0.10
                                  : (Math.max(Math.abs(yMin), Math.abs(yMax)) * 0.2 || 1);
@@ -1842,13 +1843,13 @@
             paper_bgcolor: '#0e1117',
             plot_bgcolor:  '#0e1117',
             font:   { color: '#e2e8f0', size: 11 },
-            margin: { l: 50, r: 20, t: 40, b: 50 },
+            margin: { l: 65, r: 20, t: 40, b: 65 },
             barmode: 'relative',
             xaxis:  { tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0',
-                      type: 'category', nticks: 20 },
+                      type: 'category', nticks: 20, automargin: true },
             yaxis:  { gridcolor: '#2d3748', color: '#e2e8f0',
                       zeroline: true, zerolinecolor: '#4a5568',
-                      range: [yMin - padding, yMax + padding] },
+                      range: [yMin - padding, yMax + padding], automargin: true },
             bargap: 0.3,
             legend: { font: { color: '#e2e8f0' } },
             autosize: true
@@ -4047,7 +4048,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20260904a',
+        VERSION:            '20260927a',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

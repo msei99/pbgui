@@ -73,10 +73,12 @@ def sync_optimizer_log(connection, store: JobStore, identifier: str) -> None:
     """Bound telemetry independently so log failures cannot skip stop or collection."""
     from secure_files import atomic_write_private_text, ensure_private_directory
     from vast_jobs import PROJECT
+    from vast_throughput import LOG_TAIL_BYTES
     try:
-        raw_log = connection.command('if test -f ' + connection.remote_root + '/output/optimizer.log; then tail -c 65536 '
-                                     + connection.remote_root + '/output/optimizer.log; fi', max_output=131072)
-        raw_log = raw_log[-65536:]
+        raw_log = connection.command('if test -f ' + connection.remote_root + '/output/optimizer.log; then tail -c '
+                                     + str(LOG_TAIL_BYTES) + ' ' + connection.remote_root + '/output/optimizer.log; fi',
+                                     max_output=LOG_TAIL_BYTES * 2)
+        raw_log = raw_log[-LOG_TAIL_BYTES:]
         if raw_log:
             from vast_exact_queue import parse_exact_queue
             exact_queue = parse_exact_queue(raw_log)

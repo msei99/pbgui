@@ -290,8 +290,8 @@ class VastClient:
                 continue
             machine_id = row.get('machine_id')
             if type(machine_id) is not int or machine_id <= 0:
-                machine_id = None
-            if excluded and (machine_id is None or machine_id in excluded):
+                continue
+            if machine_id in excluded:
                 continue
             if included is not None and machine_id not in included:
                 continue

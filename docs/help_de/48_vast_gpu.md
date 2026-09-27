@@ -1,6 +1,10 @@
 # Vast.ai GPU-Queue
 
+Die Job-Ansicht verwendet gespeicherte Durchsatzmessungen für abgeschlossene, fehlgeschlagene und abgebrochene Jobs erneut. Das Optimizer-Log eines beendeten Jobs wird nur gelesen, wenn die Durchsatzmessung noch fehlt.
+
 Ist eine Mietsteuerung noch nicht verfügbar, erklärt ein Klick den Grund. Die Karten zeigen dafür keinen dauerhaften Starthinweis.
+
+Die Job-Ansicht pausiert ihre 10-Sekunden-Aktualisierung, solange der Browser-Tab verborgen ist, und lädt die aktuellen Jobs sofort beim Zurückkehren.
 
 Ungespeicherte Eingaben für Budget, Transferreserve und Minuten bleiben bei automatischen Aktualisierungen des Log-Dashboards erhalten. Beim Wechsel zu einer anderen Miete werden sie verworfen. Änderungen gelten erst nach dem Speichern und der Bestätigung des Workers.
 
@@ -10,7 +14,7 @@ Die Cloud-Optimierung ist direkt in **PB8 Optimize** integriert. Eine separate
 Vast-Seite unter System gibt es nicht mehr. Jeder Nutzer verwendet sein eigenes
 Vast-Konto und Mietguthaben.
 
-Das Log-Dashboard zeigt **Proxy / min**, **Exact / min**, **Proxy / exact** und **Exact / USD (estimate)**. Die Raten verwenden Zählerdifferenzen über ungefähr die letzten 60 Sekunden der nativen GPU-Logs mit Zeitstempeln (mindestens 10 Sekunden sind erforderlich). Messintervall und Alter werden angezeigt; nach 90 Sekunden ohne neue Probe verschwinden die Live-Raten. Beendete Jobs zeigen das letzte gemessene Intervall, keinen Gesamtdurchschnitt. Proxy/Exact beschreibt den kumulierten Auswahlaufwand, keine Ergebnisqualität oder Annahmequote. Exact/USD verwendet den Mietpreis pro Stunde und berücksichtigt weder Transfers noch Start- und Leerlaufzeiten. Fehlende Zähler bleiben unbekannt; die Populationsgröße dient nicht als Ersatz. Eine begrenzte Messhistorie wird bei den Job-Abfragen gespeichert und bleibt beim Ersetzen des Log-Ausschnitts sowie beim Neuladen der Seite oder API erhalten. Ein Update des entfernten Workers ist nicht erforderlich.
+Das Log-Dashboard zeigt **Proxy / min**, **Exact / min**, **Proxy / exact** und **Exact / USD (estimate)**. Die Raten verwenden Zählerdifferenzen über ungefähr die letzten 60 Sekunden der nativen GPU-Logs mit Zeitstempeln (mindestens 10 Sekunden sind erforderlich). Messintervall und Alter werden angezeigt; die zuletzt gültig gemessenen Raten bleiben bis zu neueren Zählern sichtbar. Beendete Jobs zeigen das letzte gemessene Intervall, keinen Gesamtdurchschnitt. Proxy/Exact beschreibt den kumulierten Auswahlaufwand, keine Ergebnisqualität oder Annahmequote. Exact/USD verwendet den Mietpreis pro Stunde und berücksichtigt weder Transfers noch Start- und Leerlaufzeiten. Fehlende Zähler bleiben unbekannt; die Populationsgröße dient nicht als Ersatz. PBGui liest die letzten 512 KiB des entfernten Optimizer-Logs und speichert bei den Job-Abfragen eine begrenzte Messhistorie, die beim Ersetzen des Log-Ausschnitts sowie beim Neuladen der Seite oder API erhalten bleibt. Ein Update des entfernten Workers ist nicht erforderlich.
 
 ## Performance History
 
@@ -178,7 +182,7 @@ Präferenzen und manuelle Working-Markierungen bleiben nach Neuladen und API-Neu
 
 Mit **Block host** neben einem Angebot, unter Hosts oder in der **Host**-Karte des Optimizer-Logs sperrst du einen Rechner. PBGui speichert dessen dauerhafte Vast **Machine ID**. Auch neue Angebote desselben Rechners werden damit aus der Vorschau sowie aus zukünftigen manuellen und automatischen Mieten ausgeschlossen. Eine laufende Miete bleibt bestehen; beende sie bei Bedarf separat mit **End rental**.
 
-Unter **Hosts** mit dem Filter **Blocked** kannst du die IDs ansehen, eine bekannte Vast Machine ID manuell sperren und mit **Unblock host** wieder freigeben. Die Sperren bleiben nach Neuladen und API-Neustart erhalten. Bei älteren Mieten ermittelt PBGui die Machine ID beim Klick auf Block host anhand der zugehörigen Vast-Instanz. Ist diese nicht mehr verfügbar, kannst du die ID manuell eintragen. Sobald Sperren vorhanden sind, werden auch Angebote ohne gültige Machine ID ausgeschlossen, weil sich deren Freigabe nicht zuverlässig prüfen lässt.
+Unter **Hosts** mit dem Filter **Blocked** kannst du die IDs ansehen, eine bekannte Vast Machine ID manuell sperren und mit **Unblock host** wieder freigeben. Die Sperren bleiben nach Neuladen und API-Neustart erhalten. Bei älteren Mieten ermittelt PBGui die Machine ID beim Klick auf Block host anhand der zugehörigen Vast-Instanz. Ist diese nicht mehr verfügbar, kannst du die ID manuell eintragen. Angebote ohne gültige Machine ID werden in der Marktvorschau immer ausgeblendet und können nicht gemietet werden, weil PBGui ihren Host nicht zuordnen kann.
 
 ## Prüfung der GPU-Konfiguration
 

@@ -83,7 +83,7 @@
         }
     }
 
-    var DR_VERSION = '20260904a';
+    var DR_VERSION = '20260927a';
 
     /* Load dashboard_render.js once (CSS + shared render primitives) */
     function _loadRenderScript(cb) {
@@ -127,7 +127,7 @@
 
     function tweColor(v)  { return v < 100 ? '#22c55e' : v < 200 ? '#f59e0b' : '#ef4444'; }
     function upnlColor(v) { return v >= 0  ? '#22c55e' : '#ef4444'; }
-    function tweBarPct(v) { return Math.min(100, (v / 300) * 100).toFixed(1); }
+    function tweBarPct(v) { return Math.max(0, Math.min(100, (v / 300) * 100)).toFixed(1); }
     function signedFmt(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
     function setStatus(m) { var e = document.getElementById('db-status'); if (e) e.textContent = m; }
     function statusLabel(source) {

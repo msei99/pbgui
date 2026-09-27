@@ -1,5 +1,19 @@
 # Public PB8 GPU worker image
 
+## Temporary exact-progress test worker (2026-09-27)
+
+- Base: public worker image at `sha256:09cb0f9ba004db44f3ca02a7b3b03ea3211fd9e6c3c9ea33794cd4c6d24dee30`.
+- PB8 revision remains `903ed11153ce82d1b6760604eaa3a553309a752a`; the source patch is tracked separately in `setup/vast_gpu_benchmark/gpu_exact_progress.patch`.
+- Test tag: `ghcr.io/msei99/pbgui-pb8-worker:903ed11-exact-progress-test-v1`.
+- Immutable manifest: `sha256:a1a458b296653e438d2dac5a1cbfd4fa990045ce28cd4a2f70684fc2a404a0bf`.
+- Patched GPU backend SHA256: `96a5d1f3be377e27eb53291e619b3b87a201b562ce4bf80378f921a07c518fb8`.
+
+`Dockerfile.exact-progress-test` applies the reviewed patch to the pinned base,
+checks the resulting source hash and imports the changed module. PBGui uses the
+new digest for fresh rentals and retains the previous digest for existing ones.
+The registry accepted the test image and an anonymous manifest read verified
+that it is publicly downloadable. No optimizer was restarted.
+
 ## Published official PB8 calibration worker (2026-09-25)
 
 - Upstream source: official `enarjord/passivbot` at `903ed11153ce82d1b6760604eaa3a553309a752a`.

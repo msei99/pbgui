@@ -1,5 +1,7 @@
 # DB Tools
 
+Mit **Escape** brichst du die ausstehende Aktion in einem DB-Tools-Bestätigungsdialog ab. Confirm und Cancel bleiben die ausdrücklichen Dialogschaltflächen.
+
 Bei ungespeicherten Sync-Job-Änderungen erfordern Close, New Job und die Auswahl einer anderen Zeile eine Bestätigung. Aktionsbuttons werden nach Abschluss oder Fehler wieder freigegeben. Nach einem Verbindungsfehler beim Statusabruf setzt Run die Abfrage des bestehenden Auftrags fort, statt einen weiteren zu starten.
 
 DB Tools bietet kontrollierte Wartungs- und Einweg-Migrationsabläufe für PBGui-Datenbanken, Dashboards und Templates zwischen dem lokalen Master und bekannten Remote-Mastern. Öffne die Seite über **System -> DB Tools**.

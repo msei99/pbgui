@@ -1,6 +1,10 @@
 # Vast.ai GPU queue
 
+The jobs view reuses saved throughput measurements for completed, failed and cancelled jobs. It reads a finished job's optimizer log only when its throughput snapshot is still missing.
+
 If a rental control is unavailable, clicking it explains why; the cards do not show permanent startup notices.
+
+The jobs view pauses its 10-second updates while the browser tab is hidden and loads current jobs immediately when you return.
 
 Unsaved budget, transfer-reserve and deadline-minute edits survive automatic log-dashboard refreshes. Switching to another rental discards those edits. Changes take effect only after saving and worker acknowledgement.
 
@@ -9,7 +13,7 @@ During image download, the progress bar uses compressed layer sizes from the pin
 Cloud optimization is integrated into **PB8 Optimize**. There is no separate
 Vast system page. Each installation uses its own Vast account and rental credit.
 
-The log dashboard shows **Proxy / min**, **Exact / min**, **Proxy / exact** and **Exact / USD (estimate)**. Rates use counter differences over approximately the last 60 seconds of timestamped native GPU logs (at least 10 seconds are required). The interval and sample age are displayed; live rates disappear after 90 seconds without a new sample. Finished jobs show the last recorded interval, not a whole-run average. Proxy/exact is cumulative screening workload, not result quality or acceptance rate. Exact/USD uses the rental hourly price and excludes transfers, startup and idle time. Missing counters remain unavailable; population size is never used as a substitute. A bounded observation history is saved while PBGui polls jobs, so counter samples survive log-tail replacement and page/API reloads. No remote worker update is required.
+The log dashboard shows **Proxy / min**, **Exact / min**, **Proxy / exact** and **Exact / USD (estimate)**. Rates use counter differences over approximately the last 60 seconds of timestamped native GPU logs (at least 10 seconds are required). The interval and sample age are displayed; the last valid measured rates remain visible until newer counters arrive. Finished jobs show the last recorded interval, not a whole-run average. Proxy/exact is cumulative screening workload, not result quality or acceptance rate. Exact/USD uses the rental hourly price and excludes transfers, startup and idle time. Missing counters remain unavailable; population size is never used as a substitute. PBGui reads the latest 512 KiB of the remote optimizer log and saves a bounded observation history while polling jobs, so counter samples survive log-tail replacement and page/API reloads. No remote worker update is required.
 
 ## Performance History
 
@@ -175,7 +179,7 @@ Preferences and manual Working marks survive reloads and API restarts. Use **Rem
 
 Use **Block host** beside an offer, under Hosts, or in the optimizer log's **Host** card. PBGui saves the physical Vast **Machine ID**, so new offers from the same machine are excluded from previews and future manual or automatic rentals. Blocking does not end a current rental; use **End rental** separately when needed.
 
-Open **Hosts** and select **Blocked** to review the IDs, add a known Vast Machine ID, or use **Unblock host**. Exclusions survive reloads and API restarts. Older rentals resolve their machine ID from the matching Vast instance when you click Block host. If that instance is no longer available, enter its Machine ID manually. When exclusions exist, offers without a valid Machine ID are also excluded because PBGui cannot verify that the host is allowed.
+Open **Hosts** and select **Blocked** to review the IDs, add a known Vast Machine ID, or use **Unblock host**. Exclusions survive reloads and API restarts. Older rentals resolve their machine ID from the matching Vast instance when you click Block host. If that instance is no longer available, enter its Machine ID manually. Offers without a valid Machine ID are always hidden from the marketplace preview and cannot be rented, because PBGui cannot identify their host.
 
 ## GPU configuration validation
 

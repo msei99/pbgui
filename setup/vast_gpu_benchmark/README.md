@@ -8,11 +8,13 @@ The current integration is in **PB8 Optimize**, with Cloud setup in Queue and GP
 selection in the editor. Multiple jobs share one rental and cached market data.
 See the [user guide](../../docs/help/48_vast_gpu.md).
 
-Active public image: `ghcr.io/msei99/pbgui-pb8-worker:903ed11-upstream-calibration-v1`
-(pinned by manifest digest in PBGui). It contains official `enarjord/passivbot`
-commit `903ed11153ce82d1b6760604eaa3a553309a752a`.
-Build the pinned base with `Dockerfile`, then the single worker image with
-`Dockerfile.calibration`; see the [release review](../../docs/plans/vast-worker-image-release.md).
+Active test image: `ghcr.io/msei99/pbgui-pb8-worker:903ed11-exact-progress-test-v1`
+(pinned by manifest digest in PBGui). It keeps official `enarjord/passivbot`
+commit `903ed11153ce82d1b6760604eaa3a553309a752a` and applies only the
+exact-result collection patch in `gpu_exact_progress.patch`. Build the test
+layer with `Dockerfile.exact-progress-test` on top of the previous published
+worker. Existing rentals retain their own image and process state; see the
+[image release review](../../docs/plans/vast-worker-image-release.md).
 
 PBGui pins its manifest digest; no registry token is needed to download it.
 The [image release review](../../docs/plans/vast-worker-image-release.md) records

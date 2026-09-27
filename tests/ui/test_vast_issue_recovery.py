@@ -944,9 +944,9 @@ def test_host_management_uses_existing_optimizer_sidebar(cloud_page):
     assert page.locator('#sidebar-resize').get_attribute('data-sidebar-resize-bound') == 'true'
 
 
-@pytest.mark.parametrize('status,age,available', [('running', 15, True), ('running', 120, False), ('completed', 120, True)])
+@pytest.mark.parametrize('status,age,available', [('running', 15, True), ('running', 18000, False), ('completed', 120, True)])
 def test_optimizer_statistics_rates_cost_and_sample_age(cloud_page, status, age, available):
-    """Only recent live counters or explicitly final intervals provide speed and cost rates."""
+    """Keep the last valid interval visible with its age, including on running jobs."""
     import time
     page, data, _, _, _ = cloud_page
     data['jobs'][0].update(status=status, throughput=dict(sampled_at=time.time()-age,
@@ -956,14 +956,14 @@ def test_optimizer_statistics_rates_cost_and_sample_age(cloud_page, status, age,
     page.reload()
     page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
     page.locator('[title="Open log"]').click()
-    assert page.locator('#cloud-proxy-rate').inner_text() == ('6,000' if available else '—')
-    assert page.locator('#cloud-exact-rate').inner_text() == ('60' if available else '—')
-    assert page.locator('#cloud-cost-efficiency').inner_text() == ('7,200' if available else '—')
+    assert page.locator('#cloud-proxy-rate').inner_text() == '6,000'
+    assert page.locator('#cloud-exact-rate').inner_text() == '60'
+    assert page.locator('#cloud-cost-efficiency').inner_text() == '7,200'
     assert page.locator('#cloud-proxy-exact').inner_text() == '100'
     assert '12,000' in page.locator('#cloud-proxy-total').inner_text()
     note = page.locator('#cloud-throughput-sample').inner_text()
     assert '60s' in note
-    assert ('Last recorded interval' if status == 'completed' else 'Latest measured interval' if available else 'Stale sample') in note
+    assert ('Last recorded interval' if status == 'completed' else 'Latest measured interval' if available else 'Last measured interval') in note
 
 
 def test_missing_statistics_never_uses_estimated_gpu_population(cloud_page):

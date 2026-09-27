@@ -13,6 +13,10 @@ You can build multi-widget layouts, combine data from multiple users, and rearra
 
 Dashboard APIs, renderer scripts and WebSockets stay on PBGui's own origin, preserving a server-configured mount prefix. An `api_base` query parameter cannot select another server. Editor/template messages are accepted only from their expected same-origin parent or iframe, and external sites cannot frame the pages.
 
+Balance TWE sums the absolute notional of long and short positions. Positions with an older missing side use the signed size to identify long or short, and Pos Value shows positive notional.
+
+The ADG chart fills dates across the selected period before the first trade. In PNL, Daily mode shows each day's income and Cumulative mode shows its running total. P+L keeps date and value labels visible and handles periods with no trades.
+
 ---
 
 ## Viewing a dashboard

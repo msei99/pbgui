@@ -57,12 +57,13 @@ def test_provider_filter_and_recheck(monkeypatch):
         """Return changing offer IDs, a good host and unknown machine identity."""
         calls.append(body)
         return {'offers': [{'id': i, 'machine_id': machine, 'dph_total': .2}
-                           for i, machine in [(1, 7), (2, 7), (3, 8), (4, None), (5, True)]]}
+                           for i, machine in [(1, 7), (2, 7), (3, 8), (4, None), (5, True), (6, 0)]]
+                           + [{'id': 7, 'dph_total': .2}]}
 
     monkeypatch.setattr(VastClient, 'request', provider)
     assert [row['id'] for row in VastClient('fake').offers(excluded_machine_ids=[7])] == [3]
     assert calls[0]['machine_id'] == {'notin': [7]}
-    assert len(VastClient('fake').offers()) == 5
+    assert [row['id'] for row in VastClient('fake').offers()] == [1, 2, 3]
 
 
 @pytest.mark.parametrize('machine', [7, None, True])
@@ -99,13 +100,14 @@ def test_host_block_api_and_preview(queue, monkeypatch):
     app.include_router(vast.router, prefix='/api/vast')
     app.dependency_overrides[require_auth] = lambda: object()
     monkeypatch.setattr(vast, 'VastClient', lambda key: SimpleNamespace(
-        offers=lambda **kwargs: [{'id': 1, 'machine_id': 7}, {'id': 2, 'machine_id': 8}]))
+        offers=lambda **kwargs: [{'id': 1, 'machine_id': 7}, {'id': 2, 'machine_id': 8},
+                                 {'id': 3, 'machine_id': None}, {'id': 4}]))
     with TestClient(app) as http:
         assert http.post('/api/vast/blocked-hosts', json={'machine_id': True, 'blocked': True}).status_code == 422
         assert http.post('/api/vast/blocked-hosts', json={'machine_id': 7, 'blocked': True}).json() == {'blocked_machine_ids': [7]}
         assert http.get('/api/vast/offers?include_incompatible=true').json()['offers'] == [{'id': 2, 'machine_id': 8, 'host_history': {}}]
         assert http.post('/api/vast/blocked-hosts', json={'machine_id': 7, 'blocked': False}).status_code == 200
-        assert len(http.get('/api/vast/offers').json()['offers']) == 2
+        assert [row['id'] for row in http.get('/api/vast/offers').json()['offers']] == [1, 2]
         app.dependency_overrides.clear()
         assert http.post('/api/vast/blocked-hosts', json={'machine_id': 7, 'blocked': True}).status_code in (401, 403)
 

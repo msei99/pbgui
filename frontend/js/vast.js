@@ -257,6 +257,7 @@
   }
 
   function renderOffers(rows) {
+    rows = rows.filter(offer => Number.isSafeInteger(offer.machine_id) && offer.machine_id > 0);
     offerRows = rows;
     selectedOffer = null;
     calibrationInfo = null; calibrationGeneration++;
@@ -1580,6 +1581,7 @@
     clearTimeout(jobTimer);
     jobTimer = null;
     const current = ++jobGeneration;
+    if (disposed || document.hidden) return;
     try {
       const data = await request('/jobs');
       if (disposed || current !== jobGeneration) return;
@@ -1626,11 +1628,12 @@
         if (pollError) pollError.dataset.jobPollError = error.message;
       }
     } finally {
-      if (!disposed && current === jobGeneration) jobTimer = setTimeout(pollJobs, 10000);
+      if (!disposed && !document.hidden && current === jobGeneration) jobTimer = setTimeout(pollJobs, 10000);
     }
   }
 
   async function pollJobs() {
+    if (disposed || document.hidden) return;
     await refreshJobs();
   }
 
@@ -2122,7 +2125,7 @@
     const age = sample && Number.isFinite(sample.sampled_at) ? Math.max(0, Math.floor(Date.now()/1000 - sample.sampled_at)) : null;
     const current = age !== null && (terminal || (['running', 'collecting'].includes(job.status) && age <= 90));
     const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits:1}) : '—';
-    const rate = value => current ? number(value) : '—';
+    const rate = value => number(value);
     el('cloud-proxy-rate').textContent = rate(sample?.proxy_per_minute);
     el('cloud-exact-rate').textContent = rate(sample?.exact_per_minute);
     el('cloud-proxy-total').textContent = sample ? number(sample.proxy_total) + ' logged proxy evaluations' : '';
@@ -2132,7 +2135,7 @@
     const efficiency = Number.isFinite(price) && price > 0 && Number.isFinite(sample?.exact_per_minute) ? sample.exact_per_minute * 60 / price : null;
     el('cloud-cost-efficiency').textContent = rate(efficiency);
     el('cloud-throughput-sample').textContent = !sample ? 'Waiting for timestamped optimizer counters.' :
-      (terminal ? 'Last recorded interval' : !current ? 'Stale sample — rates unavailable' : 'Latest measured interval') +
+      (terminal ? 'Last recorded interval' : !current ? 'Last measured interval' : 'Latest measured interval') +
       ' · ' + number(sample.window_seconds) + 's · sample ' + age + 's ago' +
       (sample.proxy_per_minute == null ? ' · waiting for at least 10 seconds between counters' : '');
   }
@@ -2949,7 +2952,16 @@
     if (Number.isSafeInteger(machine) && machine > 0) changeHostPreference(machine, {[event.submitter?.dataset.mark || 'preferred']:true});
   });
   el('show-incompatible').addEventListener('change', () => { if (!disposed) el('offers-form').requestSubmit(); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) clearSecrets(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      clearSecrets();
+      clearTimeout(jobTimer);
+      jobTimer = null;
+      jobGeneration++;
+    } else if (!disposed) {
+      void pollJobs();
+    }
+  });
   window.addEventListener('pagehide', () => { disposed = true; performanceView?.dispose(); validationGeneration++; clearTimeout(validationTimer); closeLog(); clearTimeout(jobTimer); jobGeneration++; generation++; accountGeneration++; offerGeneration++; clearSecrets(); controllers.forEach(controller => controller.abort()); });
   const initial = generation;
   refreshHostHistory();
