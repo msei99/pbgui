@@ -6,6 +6,8 @@ Bei unterstützten PB8-Versionen verwendet **Additional Parameters → offline**
 
 Der visuelle Scenario Editor nutzt die authentifizierten Backtest-Endpunkte für lokale Kerzendaten, Charts und Fenstervorschauen. Änderungen an Basisdaten oder Exchanges erhalten die gezeichneten Fenster; Check & Apply prüft sie gegen die aktuellen Basiseinstellungen.
 
+Die Reference Exchange kann fuer den lokalen Preischart unabhaengig von den Backtest-Exchanges gewaehlt werden. Hyperliquid-USDC- und Bybit-USDT-Perpetual-Kerzen werden ihrem Basis-Coin zugeordnet; die Referenzwahl aendert weder Simulations-Exchanges noch laedt sie Daten herunter.
+
 Die Spalte POS zeigt die Positionslimits Long / Short. Eine deaktivierte Seite (Positionslimit oder Total Wallet Exposure null) erscheint als `-`, zum Beispiel `4 / -`.
 
 Szenario-Backtests (Suite) benötigen identische Long-/Short-Listen für freigegebene und ignorierte Coins. Ist genau eine Seite durch null Positionen oder null Total Wallet Exposure deaktiviert, übernimmt sie beim Speichern bzw. Einreihen die Listen der aktiven Seite. Beim Start gilt dies auch für ältere Queue-Einträge. Die deaktivierte Seite wird dadurch nicht aktiviert. Bei zwei aktiven Seiten müssen die Listen selbst angeglichen werden; PBGui weist widersprüchliche Listen zurück. Fehler des Runners erscheinen im Job-Log und bleiben zusätzlich in der Queue-Statusdatei erhalten.
@@ -74,6 +76,8 @@ PB8 speichert wiederverwendbare Datensaetze unter `pb8/caches/hlcvs_data` und te
 ## Results
 
 In jeder Optimize-Validation-Gruppe stehen die Ergebnisse nach Startdatum vom fruehesten zum spaetesten; der gesamte Zeitraum steht am Schluss. Start- und Endspalte zeigen nur das Datum.
+
+Eingeklappte Optimize-Validation-Gruppen verwenden dieselben einzeiligen Spalten wie ein einzelner Backtest. Die Zeile zeigt Strategie, Coins, Exchanges, Ergebniszeit, Zeitraum, alle verfuegbaren Kennzahlen, Salden, Exposure-Limits und Positionszahlen des Full-Timerange-Ergebnisses; im Namen steht auch die Anzahl der Gruppenergebnisse. Fehlt das Full-Ergebnis, wird dies im Namen angezeigt und die Kennzahlen bleiben leer. Fuer einzelne Trainings- und Holdout-Werte die Gruppe aufklappen.
 
 Die Spalten **Start Date** und **End Date** zeigen standardmaessig den mit jedem Ergebnis gespeicherten Backtest-Zeitraum. Die Spalten sind in Results und Archive ueber **Columns** waehlbar.
 

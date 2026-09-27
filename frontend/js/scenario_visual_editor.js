@@ -36,7 +36,8 @@
     }
     const top = element('div', null, host); top.className = 'scenario-toolbar';
     const exchange = element('select', null, top); exchange.setAttribute('aria-label', 'Reference exchange');
-    (options.context.exchanges || []).forEach(ex => { const node = element('option', ex, exchange); node.value = ex; });
+    const referenceExchanges = [...new Set([...(options.context.exchanges || []), ...(options.referenceExchanges || [])])];
+    referenceExchanges.forEach(ex => { const node = element('option', ex, exchange); node.value = ex; });
     if(reference?.key===referenceKey && (options.context.exchanges||[]).includes(reference.exchange))exchange.value=reference.exchange;
     const source = element('select', null, top); source.setAttribute('aria-label', 'Reference coin and dataset');
     field(exchange,'Reference exchange');field(source,'Reference coin / dataset');

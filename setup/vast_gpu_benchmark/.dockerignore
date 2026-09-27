@@ -5,3 +5,5 @@
 !cloud_worker.py
 !run.py
 !gpu_exact_progress.patch
+!Dockerfile.multi-venue-btc
+!pb8_multi_venue_btc.patch

@@ -6,6 +6,8 @@ Neuere PB8-GPU-Versionen bieten **drift_rank_halt** (leer übernimmt `drift_halt
 
 Die lokale PB8-Config-Prüfung nutzt nach dem ersten Start den verwalteten Helper-Prozess erneut. Die Draft-Wiederherstellung erlaubt TOKEN-Coin-Overrides, lehnt darin enthaltene Zugangsdatenfelder aber weiterhin ab. Nach Änderungen an Basisdaten oder Exchanges prüft Check & Apply die erhaltenen visuellen Fenster gegen die aktuellen Formularwerte; ein erneutes Öffnen des Editors ist nicht erforderlich.
 
+Im visuellen Szenarioeditor sind unterstuetzte Reference Exchanges unabhaengig von den Optimize-Exchanges waehlbar. Lokale Hyperliquid-USDC- und Bybit-USDT-Perpetual-Kerzen koennen den Preischart fuer denselben Basis-Coin liefern; die Auswahl aendert keine Optimize-Maerkte und laedt fehlende Kerzen nicht herunter.
+
 **Vast.ai → Performance History** bewahrt Vast-Durchsatz und Aufgabenmerkmale nach dem Entfernen aus der Queue auf. Wähle gleiche Aufgaben für Geschwindigkeitsvergleiche; Details im [Vast-GPU-Guide](48_vast_gpu.md#performance-history).
 
 Die Cloud-CPU-Mindestleistung stellst du unter **Min CPU cores** in den Vast Settings ein; Cloud Auto nutzt die gemietete Zuteilung. Manuelles Rent übernimmt die Eigenschaften des ausgewählten Angebots. Später hinzugefügte Jobs können eine bestätigte Umschichtung von Mietzeit in Transferreserve innerhalb desselben Budgets auslösen. Fehler beim Abruf des Optimizer-Logs verhindern Stop und Ergebnissicherung nicht mehr.
@@ -359,7 +361,7 @@ Vor dem Optimizer-Start beschafft PBGui außerdem die erste Tageskerze für jede
 
 **Queue Settings** steuert lokalen Autostart, CPU-Overrides und PBGui-Marktdaten. Vast.ai besitzt fünf getrennte Sidebar-Bereiche: GPU & Offers, Rental & Automation, Hosts, Performance History und Account. Siehe [Vast.ai-Anleitung](48_vast_gpu.md#optimizer-settings).
 
-Die Queue-Spalte **Est. coin candles / candidate** schätzt die Datenmenge einer vollständigen Kandidatenbewertung aus der eingefrorenen Config schon vor dem Start. Warm-up und Datenverfügbarkeit sind nicht enthalten. Berechnung und History-Vergleich beschreibt [Vast.ai workload comparison](48_vast_gpu.md#config-workload-comparison).
+Die Queue-Spalte **Est. coin candles / candidate** schätzt die Datenmenge einer vollständigen Kandidatenbewertung aus der eingefrorenen Config schon vor dem Start. Jeder ausgewählte Coin zählt pro ausgewählter Börse in jedem aktiven Trainingsszenario. Warm-up und Datenverfügbarkeit sind nicht enthalten. Berechnung und History-Vergleich beschreibt [Vast.ai workload comparison](48_vast_gpu.md#config-workload-comparison).
 
 Datumsfelder im Optimizer überschreiben beim Tippen innerhalb eines vollständigen YYYY-MM-DD-Werts die vorhandenen Ziffern. Markierter Text und eingefügte Datumswerte lassen sich weiterhin normal ersetzen. Beim Übernehmen grafischer Fenster werden automatisch erzeugte Szenarionamen an die aktuelle Training-/Holdout-Rolle und die Daten angepasst. Nur Trainingsfenster erscheinen in den Optimizer-Szenarien; beide verteilten Holdouts bleiben im Validierungsplan erhalten.
 

@@ -105,6 +105,7 @@ def test_full_suite_editor_apply_save_reload():
               suiteInit('suite',{version:'v8',scenarioGenerator:true,getScenarioContext:()=>({start_date:'2024-01-01',end_date:'2024-12-31',exchanges:[]})});
               suiteLoad({backtest:{suite_enabled:true,scenarios:[{label:'train',start_date:'2024-01-01',end_date:'2024-06-30'}],aggregate:{default:'median'}}});
             }""")
+            assert {'bybit', 'hyperliquid'} <= set(page.get_by_label('Reference exchange').locator('option').all_text_contents())
             _draw_dates(page, 'holdout', 182, 244, 366)
             page.evaluate("window.visualHostBeforeApply = document.getElementById('suite-visual-host')")
             page.get_by_role('button', name='Check & Apply windows').click()
@@ -210,6 +211,45 @@ def test_price_reference_prefers_optimizer_coin_and_keeps_gap_strip_small():
             page.evaluate("PBGuiScenarioVisual.mount(document.getElementById('editor'),options)")
             page.wait_for_function("document.querySelector('.scenario-feedback').textContent.includes(' days · ')")
             assert requested[-1]=='ETH_USDT:USDT'
+        finally:
+            browser.close()
+
+
+def test_reference_exchange_can_differ_from_optimizer_exchange():
+    """A local Bybit HYPE chart can be chosen without adding Bybit to optimization."""
+    playwright = pytest.importorskip('playwright.sync_api')
+    with playwright.sync_playwright() as runner:
+        browser = runner.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            def route_request(route):
+                """Serve deterministic local sources for each reference exchange."""
+                from urllib.parse import urlparse, parse_qs
+                url = urlparse(route.request.url)
+                exchange = parse_qs(url.query).get('exchange', [''])[0]
+                if url.path.endswith('/sources'):
+                    coin = 'HYPE_USDC:USDC' if exchange == 'hyperliquid' else 'HYPE_USDT:USDT'
+                    route.fulfill(json={'sources': [{'coin': coin, 'base_coin': 'HYPE', 'dataset': '1m'}]})
+                elif url.path.endswith('/chart'):
+                    route.fulfill(json={'candles': [], 'missing_days': [], 'incomplete_days': []})
+                else:
+                    route.fulfill(body='<div id="editor"></div>', content_type='text/html')
+            page.route('**/*', route_request)
+            page.goto('http://scenario.test/')
+            page.add_script_tag(path=str(ROOT / 'frontend/js/scenario_visual_editor.js'))
+            page.evaluate("""() => PBGuiScenarioVisual.mount(document.getElementById('editor'), {
+              apiBase:'/api', context:{start_date:'2026-04-01',end_date:'2026-06-29',
+                exchanges:['hyperliquid'],coins:['HYPE']},
+              referenceExchanges:['bybit','hyperliquid'],windows:[],change:()=>{},apply:async()=>{}
+            })""")
+            exchange = page.get_by_label('Reference exchange')
+            source = page.get_by_label('Reference coin and dataset')
+            assert exchange.locator('option').all_text_contents() == ['hyperliquid', 'bybit']
+            page.wait_for_function("document.querySelector('[aria-label=\"Reference coin and dataset\"]').options.length === 2")
+            assert 'HYPE_USDC:USDC' in source.text_content()
+            exchange.select_option('bybit')
+            page.wait_for_function("document.querySelector('[aria-label=\"Reference coin and dataset\"]').options[1]?.textContent.includes('HYPE_USDT:USDT')")
+            assert 'HYPE_USDT:USDT' in source.text_content()
         finally:
             browser.close()
 

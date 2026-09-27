@@ -258,6 +258,24 @@ def _runtime_service_restart_state() -> dict:
     }
 
 
+def _vast_restart_activity() -> dict:
+    """Read local cloud state for restart context without contacting Vast.ai."""
+    try:
+        from vast_queue import CloudQueue
+
+        rows = CloudQueue().store.list()
+        active_rentals = sum(row.get("kind") == "worker"
+                             and row.get("rental_state") not in {"none", "deletion_verified"}
+                             for row in rows)
+        queued_jobs = sum(row.get("kind") not in {"worker", "calibration"}
+                          and row.get("status") == "ready" for row in rows)
+    except Exception as exc:
+        _log(SERVICE, f"[restart] could not inspect local Vast activity: {type(exc).__name__}", level="WARNING")
+        return {"state": "unknown", "active_rentals": None, "queued_jobs": None}
+    return {"state": "active" if active_rentals else ("queued" if queued_jobs else "idle"),
+            "active_rentals": active_rentals, "queued_jobs": queued_jobs}
+
+
 def _restart_status_payload() -> dict:
     """Build the shared API and managed-daemon restart status payload."""
 
@@ -277,6 +295,9 @@ def _restart_status_payload() -> dict:
     restart_services.extend(runtime_state.get("stale_services") or [])
     vast_services = _vast_supervisor_restart_state()
     restart_services.extend(vast_services)
+    vast_activity = (_vast_restart_activity() if any(
+        item.get("service") in {"VastPool", "VastSupervisor"} for item in restart_services
+    ) else None)
     return {
         "needs_restart": bool(restart_services),
         "serial_restart_required": current_serial != _startup_serial,
@@ -287,6 +308,7 @@ def _restart_status_payload() -> dict:
         "api_restart_required": api_restart_required,
         "service_restart_required": bool(runtime_state.get("stale_services") or vast_services),
         "restart_services": restart_services,
+        "vast_activity": vast_activity,
         "restart_inspection_error": str(runtime_state.get("inspection_error") or ""),
     }
 

@@ -721,7 +721,7 @@ textarea.json-invalid:focus {
 .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
-<link rel="stylesheet" href="/app/css/backtest_shell.css?v=5">
+<link rel="stylesheet" href="/app/css/backtest_shell.css?v=8">
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script src="/app/js/date_overwrite.js?v=2"></script>
 <script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
@@ -6318,21 +6318,52 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     var expanded = _expandedResultGroups.has(groupKey);
     var resultGroup = group.result.result_group || {};
     var groupLabel = resultGroup.label || group.result.config_name || 'Pareto candidate';
+    var shortLabel = /^[a-f0-9]{64}$/i.test(groupLabel) ? groupLabel.slice(0, 12) + '…' : groupLabel;
     var countLabel = group.indices.length + (group.indices.length === 1 ? ' result' : ' results');
+    var members = group.indices.map(function(index) { return data[index] || {}; });
+    var fullResult = members.find(function(member) {
+      return String(member.result_group && member.result_group.item || '') === 'full_timerange';
+    });
+    var summary = fullResult || group.result;
+    var coinsText = summary.coins_text || (Array.isArray(summary.coins) ? summary.coins.join(', ') : '');
+    var exchangeText = Array.isArray(summary.exchanges) ? summary.exchanges.join(', ') : '';
+    function summaryMetric(key, decimals) { return fullResult ? fmt(fullResult[key], decimals) : '—'; }
     html += '\x3Ctr class="result-group-row">' +
-      '\x3Ctd colspan="99">' +
+      (showVersion && hasColumn('backtest_version') ? '\x3Ctd>PB' + esc((summary.backtest_version || '').toUpperCase()) + '\x3C/td>' : '') +
+      '\x3Ctd class="result-group-name" title="' + esc(groupLabel) + '">' +
         '\x3Cdiv class="result-group-header">' +
           '\x3Cbutton type="button" class="result-group-compare" data-result-group-key="' + esc(groupKey) + '"' +
             ' onclick="compareResultGroup(this)" title="Compare this validation group" aria-label="Compare this validation group">📈\x3C/button>' +
-          '\x3Cbutton type="button" class="result-group-toggle" data-result-group-key="' + esc(groupKey) + '"' +
-            ' aria-expanded="' + (expanded ? 'true' : 'false') + '" onclick="toggleResultGroup(this)">' +
-            '\x3Cspan class="result-group-chevron" aria-hidden="true">' + (expanded ? '▼' : '▶') + '\x3C/span>' +
-            '\x3Cspan class="result-group-kind">Optimize validation\x3C/span>' +
-            '\x3Cstrong>' + esc(groupLabel) + '\x3C/strong>' +
-            '\x3Cspan class="result-group-count">' + esc(countLabel) + '\x3C/span>' +
-          '\x3C/button>' +
+        '\x3Cbutton type="button" class="result-group-toggle" data-result-group-key="' + esc(groupKey) + '"' +
+          ' aria-expanded="' + (expanded ? 'true' : 'false') + '" onclick="toggleResultGroup(this)"' +
+          ' title="Optimize validation: ' + esc(groupLabel) + (fullResult ? '' : ' — Full result unavailable') + '"' +
+          ' aria-label="Optimize validation: ' + esc(groupLabel) + ', ' + esc(countLabel) + '">' +
+          '\x3Cspan class="result-group-chevron" aria-hidden="true">' + (expanded ? '▼' : '▶') + '\x3C/span>' +
+          '\x3Cstrong>' + esc(shortLabel) + '\x3C/strong>' +
+          '\x3Cspan class="result-group-count">' + esc(countLabel) + (fullResult ? '' : ' · No full result') + '\x3C/span>' +
+        '\x3C/button>' +
         '\x3C/div>' +
-      '\x3C/td>\x3C/tr>';
+      '\x3C/td>' +
+      (showStrategy && hasColumn('strategy') ? '\x3Ctd class="mono">' + esc(summary.strategy || '-') + '\x3C/td>' : '') +
+      (showCoins && hasColumn('coins_text') ? '\x3Ctd title="' + esc(coinsText) + '" style="max-width:140px">' + esc(coinsText) + '\x3C/td>' : '') +
+      (hasColumn('exchange_dir') ? '\x3Ctd>' + esc(exchangeText) + '\x3C/td>' : '') +
+      (hasColumn('modified') ? '\x3Ctd>' + fmtDate(summary.modified) + '\x3C/td>' : '') +
+      (hasColumn('start_date') ? '\x3Ctd>' + esc(String(summary.start_date || '—').slice(0, 10)) + '\x3C/td>' : '') +
+      (hasColumn('end_date') ? '\x3Ctd>' + esc(String(summary.end_date || '—').slice(0, 10)) + '\x3C/td>' : '') +
+      (hasColumn('adg') ? '\x3Ctd>' + summaryMetric('adg', 4) + '\x3C/td>' : '') +
+      (hasColumn('adg_w_usd') ? '\x3Ctd>' + summaryMetric('adg_w_usd', 4) + '\x3C/td>' : '') +
+      (hasColumn('gain') ? '\x3Ctd>' + summaryMetric('gain', 2) + '\x3C/td>' : '') +
+      (hasColumn('drawdown_worst') ? '\x3Ctd>' + summaryMetric('drawdown_worst', 4) + '\x3C/td>' : '') +
+      (hasColumn('drawdown_worst_w_usd') ? '\x3Ctd>' + summaryMetric('drawdown_worst_w_usd', 4) + '\x3C/td>' : '') +
+      (hasColumn('sharpe_ratio') ? '\x3Ctd>' + summaryMetric('sharpe_ratio', 4) + '\x3C/td>' : '') +
+      (hasColumn('sharpe_ratio_w_usd') ? '\x3Ctd>' + summaryMetric('sharpe_ratio_w_usd', 4) + '\x3C/td>' : '') +
+      (hasColumn('starting_balance') ? '\x3Ctd>' + summaryMetric('starting_balance', 0) + '\x3C/td>' : '') +
+      (hasColumn('final_balance') ? '\x3Ctd>' + (fullResult && fullResult.final_balance_estimated ? '~ ' : '') + summaryMetric('final_balance', 0) + '\x3C/td>' : '') +
+      (hasColumn('final_equity') ? '\x3Ctd>' + summaryMetric('final_equity', 0) + '\x3C/td>' : '') +
+      (hasColumn('balance_equity_diff') ? '\x3Ctd>' + summaryMetric('balance_equity_diff', 4) + '\x3C/td>' : '') +
+      (hasColumn('twe') ? '\x3Ctd>' + (fullResult ? fmt(fullResult.twe_long, 2) + ' / ' + fmt(fullResult.twe_short, 2) : '—') + '\x3C/td>' : '') +
+      (hasColumn('pos') ? '\x3Ctd>' + (fullResult ? (fullResult.pos_long === 0 || fullResult.twe_long === 0 ? '-' : fmt(fullResult.pos_long, 0)) + ' / ' + (fullResult.pos_short === 0 || fullResult.twe_short === 0 ? '-' : fmt(fullResult.pos_short, 0)) : '—') + '\x3C/td>' : '') +
+      '\x3Ctd class="actions-cell">\x3C/td>\x3C/tr>';
     group.indices.forEach(function(memberIndex) {
       appendResultRow(data[memberIndex], memberIndex, true, !expanded);
     });
@@ -11093,8 +11124,8 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 }];
 </script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=2">
-<script src="/app/js/scenario_visual_editor.js?v=5"></script>
-<script src="/app/js/suite_editor.js?v=42"></script>
+<script src="/app/js/scenario_visual_editor.js?v=6"></script>
+<script src="/app/js/suite_editor.js?v=43"></script>
 <script src="/app/js/coin_overrides_editor.js?v=26"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -44,12 +45,21 @@ def test_history_endpoint_exposes_only_named_account(monkeypatch: pytest.MonkeyP
     now = int(time.time())
     vps_manager._append_hl_rate_limit_sample(WALLET, now, 7, 100)
     monkeypatch.setattr(vps_manager, "_configured_hl_wallets", lambda: {WALLET: ["hl_mani11"]})
+    import User
+
+    account = SimpleNamespace(is_vault=False)
+    monkeypatch.setattr(User, "Users", lambda: SimpleNamespace(find_user=lambda name: account))
 
     response = vps_manager.get_hl_user_rate_limit_history("hl_mani11", session=object())
     payload = json.loads(response.body)
     assert payload["account"] == "hl_mani11"
     assert payload["samples"] == [{"sampled_at": now, "used": 7, "cap": 100}]
+    assert payload["is_vault"] is False
     assert WALLET not in response.body.decode()
+
+    account.is_vault = True
+    vault_response = vps_manager.get_hl_user_rate_limit_history("hl_mani11", session=object())
+    assert json.loads(vault_response.body)["is_vault"] is True
 
     with pytest.raises(HTTPException) as invalid:
         vps_manager.get_hl_user_rate_limit_history("..", session=object())

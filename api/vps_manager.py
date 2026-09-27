@@ -453,6 +453,10 @@ def get_hl_user_rate_limit_history(
     address = next((wallet for wallet, names in wallets.items() if user_name in names), None)
     if address is None:
         raise HTTPException(status_code=404, detail="Hyperliquid account not found")
+    from User import Users
+
+    user = Users().find_user(user_name)
+    is_vault = bool(user.is_vault) if user is not None else None
     try:
         points = _get_hl_rate_limit_history(address)
     except (OSError, ValueError, RuntimeError) as exc:
@@ -460,7 +464,7 @@ def get_hl_user_rate_limit_history(
         raise HTTPException(status_code=500, detail="Account history unavailable") from exc
     return JSONResponse(
         content={"account": user_name, "source": "Hyperliquid userRateLimit", "window_seconds": _HL_RATE_LIMIT_HISTORY_SECONDS,
-                 "step_seconds": _HL_RATE_LIMIT_INTERVAL_SECONDS, "samples": points},
+                 "step_seconds": _HL_RATE_LIMIT_INTERVAL_SECONDS, "samples": points, "is_vault": is_vault},
         headers={"Cache-Control": "no-store"},
     )
 

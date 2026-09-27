@@ -6,9 +6,11 @@ import asyncio
 import hashlib
 import json
 import os
+import stat
 import time
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 from threading import RLock
 from typing import Literal
@@ -1011,6 +1013,13 @@ def _run_cost_estimate(row, rental, now):
     return {'compute_usd': compute, 'transfer_usd': transfer, 'total_usd': compute + transfer}
 
 
+@lru_cache(maxsize=128)
+def _cached_display_estimate(path: Path, root: Path, ctime_ns: int, mtime_ns: int,
+                             size: int, time_bucket: int) -> int | None:
+    """Reuse bounded read-only estimates for frozen inputs across queue polls."""
+    return estimate_snapshot(path, root)
+
+
 @router.get("/jobs")
 def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> dict:
     """List durable job state without starting any process or rental."""
@@ -1060,8 +1069,18 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
             log = CLOUD_LOG_ROOT / ('vast_' + job_id(row['id']) + '.log')
             provider_log = CLOUD_LOG_ROOT / ('vast_' + row['id'] + '_provider.log')
             estimate = row.get('estimated_coin_candles')
-            if 'estimated_coin_candles' not in row:
-                estimate = estimate_snapshot(queue.store.directory(row['id']) / 'input/optimize.json', queue.store.root)
+            if len(rows) < 100:
+                snapshot = queue.store.directory(row['id']) / 'input/optimize.json'
+                try:
+                    signature = snapshot.lstat()
+                except OSError:
+                    signature = None
+                if signature and stat.S_ISREG(signature.st_mode):
+                    current = _cached_display_estimate(
+                        snapshot, queue.store.root, signature.st_ctime_ns,
+                        signature.st_mtime_ns, signature.st_size, int(time.monotonic() // 300))
+                    if current is not None:
+                        estimate = current
             row = dict(row, estimated_coin_candles=estimate, exchange=', '.join(queue.store.exchanges(row)),
                        has_log=log.is_file() and not log.is_symlink(), can_delete=can_remove_job(row, worker_by_id.get(row.get('lease_id'), worker)))
             control_exists = (queue.store.directory(row['id']) / 'control.json').exists()

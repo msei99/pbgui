@@ -1944,6 +1944,31 @@
       }
     });
 
+    function visibleRestartServices(status, services) {
+      if (!status || !status.vast_activity || status.vast_activity.state !== 'idle') return services;
+      return services.filter(function (item) {
+        return item && item.service !== 'VastPool' && item.service !== 'VastSupervisor';
+      });
+    }
+
+    function vastRestartContext(status, services) {
+      var hasVast = services.some(function (item) {
+        return item && (item.service === 'VastPool' || item.service === 'VastSupervisor');
+      });
+      if (!hasVast) return '';
+      var activity = status && status.vast_activity;
+      if (!activity || activity.state === 'unknown') {
+        return ' Vast activity could not be verified. This entry describes local service code, not a GPU rental.';
+      }
+      if (activity.state === 'active') {
+        return ' Active Vast.ai GPU rentals continue on their remote hosts. Local monitoring and result sync may pause briefly during restart.';
+      }
+      if (activity.state === 'queued') {
+        return ' Local queue records show no active GPU rentals. Queued cloud jobs remain queued while the local scheduler restarts.';
+      }
+      return ' Local queue records show no active GPU rentals or queued cloud jobs. Idle Vast controllers will also be updated without starting a rental.';
+    }
+
     /* Restart button */
     var restartBtn = document.getElementById('pbgui-restart-btn');
     if (restartBtn) {
@@ -1963,12 +1988,13 @@
           return;
         }
         var restartServices = Array.isArray(_restartStatus.restart_services) ? _restartStatus.restart_services : [];
-        var restartLabels = restartServices.map(function (item) {
+        var restartLabels = visibleRestartServices(_restartStatus, restartServices).map(function (item) {
           return String((item || {}).label || (item || {}).service || '').trim();
         }).filter(Boolean);
         var restartDetail = restartLabels.length
-          ? 'Outdated services: ' + restartLabels.join(', ') + '. The API server restarts last and the page reconnects automatically.'
+          ? 'Local services running outdated code: ' + restartLabels.join(', ') + '. The API server restarts last and the page reconnects automatically.'
           : 'The API server restarts and the page reconnects automatically.';
+        restartDetail += vastRestartContext(_restartStatus, restartServices);
         _restartConfirmPending = true;
         showNavConfirm({
           title: 'Restart PBGui services',
@@ -2157,7 +2183,7 @@
       ? String(state.restart_block_reason || '')
       : (btn.getAttribute('data-restart-block-reason') || '');
     var services = state && Array.isArray(state.restart_services) ? state.restart_services : [];
-    var serviceLabels = services.map(function (item) {
+    var serviceLabels = visibleRestartServices(state, services).map(function (item) {
       return String((item || {}).label || (item || {}).service || '').trim();
     }).filter(Boolean);
     btn.style.display = visible ? 'flex' : 'none';

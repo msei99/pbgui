@@ -1,5 +1,19 @@
 # Public PB8 GPU worker image
 
+## Multi-venue BTC source fix worker (2026-09-27)
+
+- Base: exact-progress worker at `sha256:a1a458b296653e438d2dac5a1cbfd4fa990045ce28cd4a2f70684fc2a404a0bf`.
+- PB8 base revision remains `903ed11153ce82d1b6760604eaa3a553309a752a`; the source patch is tracked in `setup/vast_gpu_benchmark/pb8_multi_venue_btc.patch` and [upstream PR #1834](https://github.com/enarjord/passivbot/pull/1834).
+- Tag: `ghcr.io/msei99/pbgui-pb8-worker:903ed11-btc-source-fix-v1`.
+- Immutable manifest: `sha256:d715bf7596215f9664ab3c439b463f7cc265753775a226f23e308db38ed0676d`.
+- Patched `src/hlcv_preparation.py` SHA256: `1697253d6eb86893df1de967789da40cb6bf6e02bb47909952a56022e915b987`.
+- The published manifest has 30 compressed layers; sizes are recorded in `vast_image_layers.py`. Anonymous manifest access and an offline container import were verified.
+
+`Dockerfile.multi-venue-btc` applies the source patch and checks the revision,
+source hash, and import. New rentals use this image after the PBGui API loads
+its updated pin. Existing rental intents retain their exact image. The PB8 PR
+is open; this image includes its patch without waiting for a merge.
+
 ## Temporary exact-progress test worker (2026-09-27)
 
 - Base: public worker image at `sha256:09cb0f9ba004db44f3ca02a7b3b03ea3211fd9e6c3c9ea33794cd4c6d24dee30`.

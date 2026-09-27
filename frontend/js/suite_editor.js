@@ -1346,7 +1346,8 @@ function _suiteMountVisual(host) {
   var context = _suiteScenarioContext();
   _suiteState.visualContextSignature = _suiteScenarioContextSignature(context);
   window.PBGuiScenarioVisual.mount(host, {
-    apiBase:_suiteState.apiBase, context:context, windows:_suiteVisualWindows(),
+    apiBase:_suiteState.apiBase, context:context, referenceExchanges:_suiteState.exchanges,
+    windows:_suiteVisualWindows(),
     settings:function(){return _suiteCaptureScenarioGeneratorDraft() || {};},
     coverage:function() {
       var button=document.getElementById('opted-sidebar-ohlcv-preflight-btn');

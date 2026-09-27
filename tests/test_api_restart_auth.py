@@ -164,7 +164,7 @@ def test_shared_nav_restarts_all_reported_services_and_waits_for_serials() -> No
     source = Path("frontend/pbgui_nav.js").read_text(encoding="utf-8")
 
     assert "Restart all PBGui services running outdated code?" in source
-    assert "Outdated services: " in source
+    assert "Local services running outdated code: " in source
     assert "Restarting PBGui Services" in source
     assert "fetch(apiBase + '/api/server-status'" in source
 

@@ -596,7 +596,7 @@ def test_queue_snapshot_is_immutable_after_config_save(optimize_v8_roots) -> Non
     snapshot_after = optimize_v8._read_json(optimize_v8._snapshot_file(filename))
     assert snapshot_before == snapshot_after
     assert snapshot_after["optimize"]["seed"] == 12345
-    assert optimize_v8._queue_item(optimize_v8._queue_file(filename))["estimated_coin_candles"] == 2880
+    assert optimize_v8._queue_item(optimize_v8._queue_file(filename))["estimated_coin_candles"] == 5760
 
 
 def test_queue_operation_id_is_persistently_idempotent(optimize_v8_roots) -> None:

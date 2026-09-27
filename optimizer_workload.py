@@ -16,10 +16,10 @@ def _coins(value):
 
 
 def estimate_coin_candles(config):
-    """Sum inclusive date-only scenario bars times distinct selected coins.
+    """Sum inclusive scenario bars times distinct coin-exchange pairs.
 
-    Counts one full candidate, without warm-up, data availability, exchange
-    multiplication, holdouts or optimizer iteration/population multipliers.
+    Counts one full candidate, without warm-up, data availability, holdouts
+    or optimizer iteration/population multipliers.
     Return None when required inputs cannot be resolved conservatively.
     """
     try:
@@ -36,6 +36,12 @@ def estimate_coin_candles(config):
         if not isinstance(approved, dict) or not isinstance(ignored, dict):
             return None
         base = set().union(*(_coins(approved.get(side, [])) - _coins(ignored.get(side, [])) for side in ('long', 'short')))
+        base_exchanges = bt.get('exchanges')
+        if not isinstance(base_exchanges, list) or not base_exchanges or any(
+            not isinstance(exchange, str) or not exchange.strip() for exchange in base_exchanges
+        ):
+            return None
+        base_exchanges = {exchange.strip().lower() for exchange in base_exchanges}
         scenarios = bt.get('scenarios') if bt.get('suite_enabled') else [{}]
         if not isinstance(scenarios, list) or not scenarios:
             return None
@@ -50,12 +56,21 @@ def estimate_coin_candles(config):
             coins = coins - _coins(scenario.get('ignored_coins') or [])
             if not coins:
                 return None
+            selected_exchanges = scenario.get('exchanges')
+            if selected_exchanges is None:
+                exchanges = base_exchanges
+            elif isinstance(selected_exchanges, list) and selected_exchanges and all(
+                isinstance(exchange, str) and exchange.strip() for exchange in selected_exchanges
+            ):
+                exchanges = {exchange.strip().lower() for exchange in selected_exchanges}
+            else:
+                return None
             start = date.fromisoformat(scenario.get('start_date') or bt['start_date'])
             end = date.fromisoformat(scenario.get('end_date') or bt['end_date'])
             days = (end - start).days + 1
             if days <= 0:
                 return None
-            total += math.ceil(days * 1440 / interval) * len(coins)
+            total += math.ceil(days * 1440 / interval) * len(coins) * len(exchanges)
         return total
     except (KeyError, TypeError, ValueError, OverflowError):
         return None

@@ -53,6 +53,23 @@ def test_source_coin_uses_persisted_mapping(tmp_path, monkeypatch):
     assert scenario_chart.sources('binance') == [{'coin':'ETH_USDT:USDT','dataset':'1m','base_coin':'ETH'}]
 
 
+def test_hyperliquid_usdc_reference_coin_uses_persisted_mapping(tmp_path, monkeypatch):
+    """Hyperliquid USDC perpetual candles remain selectable by their base coin."""
+    import json
+    root = tmp_path / 'data/ohlcv/hyperliquid'
+    (root / '1m/HYPE_USDC:USDC').mkdir(parents=True)
+    mapping = tmp_path / 'data/coindata/hyperliquid/mapping.json'
+    mapping.parent.mkdir(parents=True)
+    mapping.write_text(json.dumps([
+        {'coin': 'HYPE', 'ccxt_symbol': 'HYPE/USDC:USDC', 'quote': 'USDC', 'swap': True},
+        {'coin': 'HYPE', 'ccxt_symbol': 'HYPE/USDT:USDT', 'quote': 'USDT', 'swap': True},
+    ]))
+    monkeypatch.setattr(scenario_chart, '_root', lambda _: root)
+    assert scenario_chart.sources('hyperliquid') == [
+        {'coin': 'HYPE_USDC:USDC', 'dataset': '1m', 'base_coin': 'HYPE'}
+    ]
+
+
 def test_daily_cache_reuses_summaries_and_invalidates_files(tmp_path, monkeypatch):
     """Repeated and overlapping ranges reuse summaries but file changes stay visible."""
     monkeypatch.setattr(scenario_chart, '_root', lambda _: tmp_path)

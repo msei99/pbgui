@@ -40,12 +40,14 @@ def test_restart_button_lists_legacy_supervisor_and_schedules_before_api(monkeyp
     row = {'unit':unit,'label':'Vast run supervisor aaaaaaaa','service':'VastSupervisor'}
     monkeypatch.setattr(api, '_vast_supervisor_restart_state', lambda: [row])
     monkeypatch.setattr(api, '_runtime_service_restart_state', lambda: {})
+    monkeypatch.setattr(api, '_vast_restart_activity', lambda: {'state': 'idle', 'active_rentals': 0, 'queued_jobs': 0})
     monkeypatch.setattr(api, '_read_serial', lambda: 7)
     monkeypatch.setattr(api, '_startup_serial', 7)
     monkeypatch.setattr(api, '_runtime_restart_reasons', [])
     payload = api._restart_status_payload()
     assert payload['needs_restart'] and payload['service_restart_required']
     assert payload['restart_services'] == [row]
+    assert payload['vast_activity'] == {'state': 'idle', 'active_rentals': 0, 'queued_jobs': 0}
     commands = []
     def run(args, **kwargs):
         """Capture transient unit creation without invoking systemd."""
@@ -58,3 +60,18 @@ def test_restart_button_lists_legacy_supervisor_and_schedules_before_api(monkeyp
     assert script.index(unit) < script.index('systemctl --user restart ' + api._API_SYSTEMD_UNIT)
     assert 'ssh ' not in script and 'cleanup' not in script
     assert not api._queue_current_api_systemd_restart(['pbgui-vast-'+'b'*32+'-run.service'])[0]
+
+
+@pytest.mark.parametrize('rows,expected', [
+    ([], {'state': 'idle', 'active_rentals': 0, 'queued_jobs': 0}),
+    ([{'kind': 'optimize', 'status': 'ready'}], {'state': 'queued', 'active_rentals': 0, 'queued_jobs': 1}),
+    ([{'kind': 'worker', 'rental_state': 'active'}], {'state': 'active', 'active_rentals': 1, 'queued_jobs': 0}),
+    ([{'kind': 'worker', 'rental_state': 'deletion_verified'}], {'state': 'idle', 'active_rentals': 0, 'queued_jobs': 0}),
+])
+def test_vast_restart_activity_reads_only_local_job_state(monkeypatch, rows, expected):
+    """Restart context distinguishes idle, queued, active and closed rentals."""
+    import PBApiServer as api
+    import vast_queue
+
+    monkeypatch.setattr(vast_queue, 'CloudQueue', lambda: SimpleNamespace(store=SimpleNamespace(list=lambda: rows)))
+    assert api._vast_restart_activity() == expected

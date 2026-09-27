@@ -150,7 +150,9 @@ def test_backtest_sort_state_validates_restores_and_persists() -> None:
         for (const key of {json.dumps(result_header_keys)}) assert.ok(BACKTEST_SORT_COLUMNS.results.includes(key));
         for (const key of {json.dumps(shared_result_header_keys)}) {{
           assert.ok(BACKTEST_SORT_COLUMNS.archive.includes(key));
-          assert.ok(BACKTEST_SORT_COLUMNS.legacy.includes(key));
+          if (!['start_date', 'end_date'].includes(key)) {{
+            assert.ok(BACKTEST_SORT_COLUMNS.legacy.includes(key));
+          }}
         }}
         applyBacktestSortState(loaded.sorts);
         assert.deepEqual(currentBacktestSortState(), {{

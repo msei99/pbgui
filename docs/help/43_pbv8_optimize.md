@@ -6,6 +6,8 @@ Newer PB8 GPU runtimes expose **drift_rank_halt** (blank inherits `drift_halt`) 
 
 Local PB8 config validation reuses the managed helper process after its initial startup. Draft recovery permits TOKEN coin override objects while still rejecting nested credential fields. After changing base dates or exchanges, Check & Apply validates the retained visual windows against the current form; it does not require reopening the editor.
 
+The visual Scenario Editor offers supported reference exchanges independently of Optimize exchanges. Local Hyperliquid USDC and Bybit USDT perpetual candles can both supply the price chart for a matching base coin; choosing one does not change the optimizer markets or fetch missing candles.
+
 **Vast.ai → Performance History** retains Vast throughput and workload metadata after queue deletion. Select matching workloads for speed comparisons; see the [Vast GPU guide](48_vast_gpu.md#performance-history).
 
 For cloud CPU capacity, set **Min CPU cores** in Vast Settings; Cloud Auto uses the rented allocation. Manual Rent takes its specifications from the selected offer. Later queued jobs may trigger a confirmed transfer-reserve adjustment that shortens rental time within the same budget. Optimizer log retrieval errors no longer prevent stop or final collection.
@@ -359,7 +361,7 @@ Before optimizer launch, PBGui also fetches the authoritative first daily candle
 
 **Queue Settings** controls local autostart, CPU overrides and PBGui market data. Vast.ai has five independent sidebar areas: GPU & Offers, Rental & Automation, Hosts, Performance History and Account. See the [Vast.ai guide](48_vast_gpu.md#optimizer-settings).
 
-The queue column **Est. coin candles / candidate** estimates the full-candidate data volume from the frozen config before a run starts. It excludes warm-up and data availability. See [Vast.ai workload comparison](48_vast_gpu.md#config-workload-comparison) for the calculation and Performance History comparisons.
+The queue column **Est. coin candles / candidate** estimates the full-candidate data volume from the frozen config before a run starts. It counts each selected coin on each selected exchange within every active training scenario, and excludes warm-up and data availability. See [Vast.ai workload comparison](48_vast_gpu.md#config-workload-comparison) for the calculation and Performance History comparisons.
 
 Date fields in the optimizer overwrite existing digits when typing within a complete YYYY-MM-DD value; selected text and pasted dates can still be replaced normally. After applying graphical windows, automatically generated scenario names reflect the current training/holdout role and dates. Only training windows appear in optimizer scenarios; both distributed holdouts remain in the validation plan.
 

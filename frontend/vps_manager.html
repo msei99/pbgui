@@ -3030,6 +3030,7 @@
           <button id='hlCreditBuyButton' class='btn' type='button' disabled>Buy credits</button>
           <span id='hlCreditStatus' role='status' aria-live='polite'></span>
         </div>
+        <div id='hlCreditVaultNote' class='field-help' hidden>Request-credit purchases are available for main accounts only.</div>
         <div id='cpuHistoryBody'></div>
       </div>
     </div>
@@ -12005,7 +12006,9 @@
       document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
       document.getElementById('cpuHistorySubtitle').textContent = metricHistoryLoadingSubtitle(metric);
       document.getElementById('cpuHistoryMeta').innerHTML = '';
-      document.getElementById('hlCreditPurchasePanel').hidden = metric !== 'hl_requests';
+      document.getElementById('hlCreditPurchasePanel').hidden = true;
+      document.getElementById('hlCreditVaultNote').hidden = true;
+      updateHlCreditCost();
       document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Loading...</div>';
     }
 
@@ -12046,6 +12049,18 @@
     const metricHistoryCache = {};
     let hlCreditPurchasePending = false;
 
+    function hlCreditLimitReached(payload) {
+      const samples = Array.isArray(payload && payload.samples) ? payload.samples : [];
+      const latest = samples.length ? samples[samples.length - 1] : null;
+      const used = Number(latest && latest.used);
+      const cap = Number(latest && latest.cap);
+      return !!latest && Number.isFinite(used) && Number.isFinite(cap) && cap > 0 && used >= cap;
+    }
+
+    function canBuyHlCredits(payload) {
+      return payload && payload.is_vault === false && hlCreditLimitReached(payload);
+    }
+
     function formatHlRequestCount(value) {
       return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, "'");
     }
@@ -12057,12 +12072,14 @@
       document.getElementById('hlCreditCost').textContent = valid
         ? 'Cost: ' + (Number(raw) * 0.0005).toFixed(4) + ' USDC from Perps balance'
         : 'Enter a whole number from 1 to 100,000.';
-      document.getElementById('hlCreditBuyButton').disabled = hlCreditPurchasePending || !valid;
+      document.getElementById('hlCreditBuyButton').disabled = hlCreditPurchasePending || !valid
+        || document.getElementById('hlCreditPurchasePanel').hidden;
       return valid ? Number(raw) : null;
     }
 
     async function buyHlRequestCredits() {
-      if (hlCreditPurchasePending || !cpuHistoryLastPayload || cpuHistoryLastPayload.metric !== 'hl_requests') return;
+      if (hlCreditPurchasePending || !cpuHistoryLastPayload || cpuHistoryLastPayload.metric !== 'hl_requests'
+          || !canBuyHlCredits(cpuHistoryLastPayload.data) || document.getElementById('hlCreditPurchasePanel').hidden) return;
       const credits = updateHlCreditCost();
       if (credits === null) return;
       const account = cpuHistoryLastPayload.botName;
@@ -12078,7 +12095,8 @@
         confirmText: 'Buy for ' + cost + ' USDC'
       });
       if (!confirmed || !cpuHistoryLastPayload || cpuHistoryLastPayload.metric !== 'hl_requests'
-          || cpuHistoryLastPayload.botName !== account || updateHlCreditCost() !== credits) return;
+          || cpuHistoryLastPayload.botName !== account || !canBuyHlCredits(cpuHistoryLastPayload.data)
+          || document.getElementById('hlCreditPurchasePanel').hidden || updateHlCreditCost() !== credits) return;
       hlCreditPurchasePending = true;
       updateHlCreditCost();
       document.getElementById('hlCreditStatus').textContent = 'Submitting purchase to Hyperliquid…';
@@ -12115,7 +12133,10 @@
       cpuHistoryLastPayload = { data: payload, host: host, botName: bot, metric: metric };
       document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
       document.getElementById('cpuHistorySubtitle').textContent = metricHistorySubtitle(metric, payload);
-      document.getElementById('hlCreditPurchasePanel').hidden = metric !== 'hl_requests';
+      const limitReached = metric === 'hl_requests' && hlCreditLimitReached(payload);
+      document.getElementById('hlCreditPurchasePanel').hidden = !(limitReached && canBuyHlCredits(payload));
+      document.getElementById('hlCreditVaultNote').hidden = !(limitReached && payload.is_vault === true);
+      updateHlCreditCost();
       document.getElementById('cpuHistoryMeta').innerHTML = metric === 'hl_requests'
         ? renderHlRateLimitHistoryMeta(payload) : renderCpuHistoryMeta(payload, points, metric);
       document.getElementById('cpuHistoryBody').innerHTML = metric === 'hl_requests'
@@ -12233,6 +12254,9 @@
         .catch(function (error) {
           if (generation !== cpuHistoryRequestGeneration || error.name === 'AbortError') return;
           cpuHistoryLastPayload = null;
+          document.getElementById('hlCreditPurchasePanel').hidden = true;
+          document.getElementById('hlCreditVaultNote').hidden = true;
+          updateHlCreditCost();
           document.getElementById('cpuHistorySubtitle').textContent = 'Failed to load history';
           document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Failed to load ' + esc(metricHistoryMeta(metric).label) + ' history: ' + esc(error.message || error) + '</div>';
         });

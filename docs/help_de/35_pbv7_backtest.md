@@ -177,6 +177,8 @@ Alle abgeschlossenen Backtest-Ergebnisse durchsuchen.
 
 Zeilen einer Optimize-Validation-Gruppe stehen vom fruehesten zum spaetesten Startdatum; der gesamte Zeitraum steht am Schluss. Start Date und End Date zeigen nur das Datum ohne Uhrzeit.
 
+Eingeklappte Optimize-Validation-Gruppen verwenden dieselben einzeiligen Spalten wie ein einzelner Backtest. Die Zeile zeigt Strategie, Coins, Exchanges, Ergebniszeit, Zeitraum, alle verfuegbaren Kennzahlen, Salden, Exposure-Limits und Positionszahlen des Full-Timerange-Ergebnisses; im Namen steht auch die Anzahl der Gruppenergebnisse. Fehlt das Full-Ergebnis, wird dies im Namen angezeigt und die Kennzahlen bleiben leer. Fuer einzelne Trainings- und Holdout-Werte die Gruppe aufklappen.
+
 Abgeschlossene Queue-Jobs invalidieren jetzt sofort den gecachten Results-Stand. Wenn du bereits im Results-Panel bist, lädt PBGui die Tabelle automatisch neu, sodass der neue Eintrag ohne Panel-Wechsel erscheint.
 
 Beim Wechsel vom Config-Editor zu Results, Queue, Archive, Legacy oder Refine wird die normale Panel-Aktionssidebar sofort wiederhergestellt; eine veraltete Editor-Sidebar kann nicht an einem anderen Panel haengen bleiben.

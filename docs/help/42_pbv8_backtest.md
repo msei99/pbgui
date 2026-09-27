@@ -6,6 +6,8 @@ On supported PB8 versions, **Additional Parameters → offline** uses cached sim
 
 The visual Scenario Editor uses the authenticated Backtest scenario endpoints for local candle sources, charts and window previews. Changing base dates or exchanges preserves the drawn windows; Check & Apply validates them against the current base settings.
 
+The Reference Exchange can be chosen independently of the backtest exchanges for its local price chart. Hyperliquid USDC and Bybit USDT perpetual candles are recognized by base coin; the reference choice does not change simulation exchanges or downloaded data.
+
 The POS column shows Long / Short position limits. A disabled side (zero position limit or zero total wallet exposure) is displayed as `-`, for example `4 / -`.
 
 PBv8 Backtest manages Passivbot V8 configurations and jobs independently from PBv7. PBGui validates every configuration through the currently installed PB8 loader before saving or starting it.
@@ -96,6 +98,8 @@ When a Results rebacktest or queue draft splits into multiple exchange jobs, nam
 The shared parameter dialogs render starting balances only as finite numbers. Invalid or non-finite draft/archive values use the dialog default instead of becoming HTML; review the value before queueing.
 
 Within each Optimize validation group, results are ordered by start date from earliest to latest, followed by the full timeframe. Start and end columns show dates without times.
+
+Collapsed Optimize validation groups use the same one-line columns as an individual backtest. The row shows the full-timerange result’s strategy, coins, exchanges, time, dates, all available metrics, balances, exposure limits, and position counts; the name also shows how many validation results belong to the group. If the full result is unavailable, the row marks this in its name and leaves its metrics empty. Expand the group for individual training and holdout values.
 
 The Results toolbar includes a persistent **Columns** picker. **Start Date** and **End Date** show each result's saved backtest timeframe by default. **Defaults** restores the comparable unweighted result table, while **All** also exposes available weighted metrics, Final Equity, and Equity/Balance Difference values. This browser-local selection is independent from Archive.
 

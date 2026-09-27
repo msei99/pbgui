@@ -414,6 +414,33 @@ def test_cloud_delete_and_log_metadata(client, monkeypatch, tmp_path):
     assert not (logs / f'vast_{identifier}.log').exists()
 
 
+def test_existing_vast_job_displays_recomputed_estimate_without_requeue(client, monkeypatch):
+    """A frozen input updates the queue estimate without changing persisted job state."""
+    from secure_files import ensure_private_directory
+    from vast_jobs import JobStore, write_json
+
+    http, store, _ = client
+    identifier = 'e' * 32
+    folder = ensure_private_directory(store.root / 'jobs' / identifier)
+    write_json(folder / 'state.json', {'id': identifier, 'status': 'ready',
+                                      'rental_state': 'none', 'estimated_coin_candles': 777_600})
+    input_dir = ensure_private_directory(folder / 'input')
+    (input_dir / 'optimize.json').write_text('{}')
+    calls = []
+    def recompute(path, root):
+        """Record bounded calls to the immutable snapshot estimator."""
+        calls.append((path, root))
+        return 1_555_200
+    monkeypatch.setattr(vast, 'estimate_snapshot', recompute)
+
+    for _ in range(2):
+        response = http.get('/api/vast/jobs')
+        assert response.status_code == 200
+        assert response.json()['jobs'][0]['estimated_coin_candles'] == 1_555_200
+    assert len(calls) == 1
+    assert JobStore(store.root).read(identifier)['estimated_coin_candles'] == 777_600
+
+
 def test_start_uses_persisted_rental_settings(client, monkeypatch, tmp_path):
     """The row Start request uses server-side limits, not unsaved browser fields."""
     from vast_jobs import JobStore

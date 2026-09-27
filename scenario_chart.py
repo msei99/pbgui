@@ -47,8 +47,9 @@ def _mapped_coins(root: Path, exchange: str) -> dict[str, str]:
         rows = json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(rows, list):
             raise ValueError('Expected a market mapping list')
+        quote = 'USDC' if exchange.lower() == 'hyperliquid' else 'USDT'
         return {row['ccxt_symbol'].replace('/', '_'): row['coin'] for row in rows
-                if isinstance(row, dict) and row.get('quote') == 'USDT' and row.get('swap') is True
+                if isinstance(row, dict) and row.get('quote') == quote and row.get('swap') is True
                 and isinstance(row.get('ccxt_symbol'), str) and isinstance(row.get('coin'), str)}
     except (ValueError, OSError) as exc:
         _log(SERVICE, 'Reference coin mapping unavailable', level='WARNING', meta={'reason':str(exc)})

@@ -753,7 +753,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
     shell_source = (ROOT / "frontend" / "js" / "backtest_shell.js").read_text(encoding="utf-8")
     adapter_source = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
 
-    assert '/app/css/backtest_shell.css?v=5' in v7_source
+    assert '/app/css/backtest_shell.css?v=8' in v7_source
     assert '/app/js/backtest_shell.js?v=5' in v7_source
     assert '/app/js/backtest_editor_adapter.js?v=12' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
@@ -2234,6 +2234,86 @@ def test_optimize_validation_results_render_as_collapsible_candidate_groups() ->
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "groupValidation: true" in source
     assert "tbody tr[data-path]:not([hidden])" in source
+
+
+def test_collapsed_validation_group_uses_full_metrics_and_visible_columns() -> None:
+    """Summaries use only the full result and stay aligned when columns are hidden."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("resultGroupKey", "_renderResultsTableInto")
+    )
+    script = textwrap.dedent(
+        rf"""
+        const assert = require('node:assert/strict');
+        const window = {{}};
+        let _activeResultsCtx = null;
+        const _selectedResultPaths = new Set();
+        const _expandedResultGroups = new Set();
+        const backtestEditorAdapter = {{version: 'v8'}};
+        const esc = value => String(value == null ? '' : value)
+          .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+        const fmt = (value, decimals) => value == null ? '—' : Number(value).toFixed(decimals);
+        const fmtDate = value => value;
+        const BACKTEST_RESULT_COLUMN_DEFINITIONS = [];
+        let visible = ['backtest_version', 'strategy', 'coins_text', 'exchange_dir', 'modified',
+          'start_date', 'end_date', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio',
+          'starting_balance', 'final_balance', 'twe', 'pos'];
+        const prepareResultColumns = () => visible;
+        {functions}
+        const rth = label => '<th>' + label + '</th>';
+        const label = 'abcdef0123456789'.repeat(4);
+        const group = {{kind: 'optimize_validate', id: 'candidate-1', label}};
+        const full = {{backtest_version:'v8', config_name:'candidate', path:'/full', strategy:'ema_anchor',
+          coins:['BTC','ETH'], exchanges:['binance','bybit'], modified:'2026-09-27T15:52:00',
+          start_date:'2019-01-01', end_date:'2026-09-19', adg:0.0048, gain:656.32,
+          drawdown_worst:0.49, sharpe_ratio:0.11, starting_balance:10000, final_balance:6653159,
+          final_balance_estimated:true, twe_long:5, twe_short:0, pos_long:3, pos_short:0,
+          result_group:{{...group, item:'full_timerange'}}}};
+        const train = {{backtest_version:'v8', config_name:'candidate', path:'/train', strategy:'ema_anchor',
+          coins:['BTC','ETH'], exchanges:['binance'], modified:'2026-09-27T15:45:00',
+          start_date:'2020-01-01', end_date:'2020-10-01', adg:0.99,
+          drawdown_worst:0.88, sharpe_ratio:0.77,
+          result_group:{{...group, item:'train_01'}}}};
+        const host = {{innerHTML:''}};
+        const render = rows => _renderResultsTableInto(host, rows, null, rth,
+          {{showVersion:true, showStrategy:true, groupValidation:true, columnContext:'results'}});
+        const summary = () => host.innerHTML.match(/<tr class="result-group-row">([\s\S]*?)<\/tr>/)[1];
+        render([full,train]);
+        assert.match(summary(), /abcdef012345…/);
+        assert.match(summary(), /title="Optimize validation: [a-f0-9]{{64}}"/);
+        assert.match(summary(), /BTC, ETH/);
+        assert.match(summary(), /binance, bybit/);
+        assert.match(summary(), /2019-01-01/);
+        assert.match(summary(), /2026-09-19/);
+        assert.doesNotMatch(summary(), /Full metrics/);
+        assert.match(summary(), /class=\"result-group-header\"/);
+        assert.match(summary(), /onclick=\"compareResultGroup\(this\)\"/);
+        assert.match(summary(), /0\.0048/);
+        assert.match(summary(), /0\.4900/);
+        assert.match(summary(), /0\.1100/);
+        assert.match(summary(), /656\.32/);
+        assert.match(summary(), /10000/);
+        assert.match(summary(), /~ 6653159/);
+        assert.match(summary(), /5\.00 \/ 0\.00/);
+        assert.match(summary(), /3 \/ -/);
+        assert.doesNotMatch(summary(), /0\.9900|0\.8800|0\.7700/);
+        assert.equal((summary().match(/<td/g) || []).length, (host.innerHTML.match(/<th(?:\s|>)/g) || []).length);
+
+        visible = ['coins_text','adg'];
+        render([full,train]);
+        assert.equal((summary().match(/<td/g) || []).length, 4);
+        assert.doesNotMatch(summary(), /ema_anchor|0\.4900|0\.1100/);
+
+        visible = ['adg','drawdown_worst','sharpe_ratio'];
+        render([train,{{...train, path:'/holdout', result_group:{{...group,item:'holdout_01'}}}}]);
+        assert.match(summary(), /No full result/);
+        assert.doesNotMatch(summary(), /0\.9900|0\.8800|0\.7700/);
+        assert.equal((summary().match(/<td/g) || []).length, 5);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_optimize_validation_group_compare_selects_and_opens_all_members() -> None:
