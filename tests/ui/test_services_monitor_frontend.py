@@ -311,3 +311,43 @@ function _resultPopup() { throw new Error('restart should not fail'); }
 """
 
     _run_node(script)
+
+
+def test_escape_closes_visible_services_dialog_without_backdrop_dismissal() -> None:
+    """Escape closes the active Services dialog through its existing close action."""
+    source = PAGE.read_text(encoding="utf-8")
+    start = source.index("  document.addEventListener('keydown', function(e) {\n    if (e.key !== 'Escape'")
+    end = source.index("\n  });", start) + len("\n  });")
+    handler = source[start:end]
+    script = """
+const assert = require('node:assert/strict');
+const events = {};
+const modal = hidden => ({hidden});
+const key = modal(false), authority = modal(true);
+const result = {removed:false,remove(){this.removed=true;}};
+const classes = values => ({contains:value=>values.has(value),remove:value=>values.delete(value)});
+const prices = {classList:classes(new Set(['active']))};
+const helpOvl = {classList:classes(new Set(['visible']))};
+const elements = {'cmc-key-modal':key,'cmc-authority-modal':authority,
+  'result-modal':result,'prices-overlay':prices};
+const document = {getElementById:id=>elements[id],addEventListener:(key,fn)=>events[key]=fn};
+const closed = [];
+const window = {closeCmcKeyModal:()=>{closed.push('key');key.hidden=true;},
+ closeCmcAuthorityModal:()=>{closed.push('authority');authority.hidden=true;},
+ closePricesOverlay:()=>{closed.push('prices');prices.classList.remove('active');}};
+""" + handler + """
+function press(key='Escape',defaultPrevented=false){
+ const event={key,defaultPrevented,prevented:false,preventDefault(){this.prevented=true;}};
+ events.keydown(event); return event;
+}
+assert.equal(press('Enter').prevented,false);
+assert.equal(press('Escape',true).prevented,false);
+assert.equal(press().prevented,true); assert.deepEqual(closed,['key']);
+authority.hidden=false; assert.equal(press().prevented,true); assert.deepEqual(closed,['key','authority']);
+assert.equal(press().prevented,true); assert.equal(result.removed,true);
+delete elements['result-modal'];
+assert.equal(press().prevented,true); assert.deepEqual(closed,['key','authority','prices']);
+assert.equal(press().prevented,true); assert.equal(helpOvl.classList.contains('visible'),false);
+assert.equal(press().prevented,false);
+"""
+    _run_node(script)

@@ -2188,6 +2188,7 @@ def test_pb8_default_bounds_do_not_limit_slider_minima() -> None:
         function el() {{ return null; }}
         function getOptimizeBoundSuffix(key) {{ return optimizeEditorAdapter.boundSuffix(key); }}
         function getOptimizeBoundRequiredMin() {{ return null; }}
+        function getOptimizeBoundRequiredMax() {{ return null; }}
 
         {functions}
 
@@ -2211,6 +2212,69 @@ def test_pb8_default_bounds_do_not_limit_slider_minima() -> None:
     _run_node(script)
     assert "if (maxPendingInput)" in page
     assert "el('opted-max-pending-starting-evals').value =" not in page
+
+
+def test_pb8_invalid_optimize_endpoints_are_clamped_even_with_runtime_metadata() -> None:
+    """Imported PB8 metadata and manually entered extremes stay inside valid ranges."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(_page_function(page, name) for name in (
+        "isOptimizeHslRedThresholdBound", "getOptimizeHslRedThresholdRequiredMin",
+        "getOptimizeBoundRequiredMin", "getOptimizeBoundRequiredMax",
+        "countOptimizeDecimals", "getOptimizeStepFromDecimals",
+        "getOptimizeRoundToSignificantDigits", "getOptimizeBoundPrecisionFromStep",
+        "getOptimizeBoundMeta", "formatOptimizeBoundValue",
+        "optimizeBoundNumbersMatch", "constrainOptimizeBoundEntry",
+    ))
+    script = textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        global.window = {{}};
+        eval(fs.readFileSync('frontend/js/optimize_editor_adapter.js', 'utf8'));
+        const optimizeEditorAdapter = window.PBGuiOptimizeEditorAdapter.create('v8', {{}});
+        const OPT_HSL_RED_THRESHOLD_MIN = 0.001;
+        const OPT_BOUNDS_META = {{
+          n_positions:[0,100,1,1,0], unstuck_ema_dist:[-1,1,0.001,0.00001,3],
+          hsl_red_threshold:[0,1,0.01,0.01,2], volume_ema_span_1m:[0,100,1,1,0]
+        }};
+        function el() {{ return null; }}
+        function getOptimizeBoundGroup(key) {{ return optimizeEditorAdapter.boundGroup(key); }}
+        function getOptimizeBoundSuffix(key) {{ return optimizeEditorAdapter.boundSuffix(key); }}
+        function isOptimizeHslEnabledForSide() {{ return true; }}
+        {functions}
+        function checked(key, low, high) {{
+          const entry={{key,lowValue:low,highValue:high,stepValue:0,lowText:String(low),highText:String(high)}};
+          constrainOptimizeBoundEntry(entry);
+          return entry;
+        }}
+        assert.equal(checked('long.risk.unstuck_ema_dist',-1,0).lowValue,-0.99);
+        assert.equal(checked('short.risk.unstuck_ema_dist',0,1).highValue,0.99);
+        assert.equal(checked('long.risk.n_positions',0,10).lowValue,1);
+        assert.equal(checked('long.forager.volume_ema_span_1m',0,20).lowValue,1);
+        assert.equal(checked('long.hsl.red_threshold',0,1).lowValue,0.001);
+        assert.equal(checked('long.hsl.red_threshold',0,1).highValue,0.999);
+        assert.equal(checked('long.hsl.red_threshold',0,1).highText,'0.999');
+    """)
+    _run_node(script)
+
+
+def test_pb7_imported_position_bounds_require_positive_counts() -> None:
+    """Legacy flat PB7 zero-position bounds are constrained on editor load."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(_page_function(page, name) for name in (
+        "getOptimizeBoundRequiredMin", "getOptimizeBoundRequiredMax",
+    ))
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const optimizeEditorAdapter = {{isV8:false}};
+        const getOptimizeBoundSuffix = key => key.replace(/^(long|short)_/, '');
+        const getOptimizeBoundGroup = key => key.startsWith('long_') ? 'long' : 'short';
+        const getOptimizeHslRedThresholdRequiredMin = () => null;
+        const isOptimizeHslRedThresholdBound = () => false;
+        {functions}
+        assert.equal(getOptimizeBoundRequiredMin('long_n_positions'),1);
+        assert.equal(getOptimizeBoundRequiredMin('long_unstuck_ema_dist'),-0.99);
+        assert.equal(getOptimizeBoundRequiredMax('short_unstuck_ema_dist'),0.99);
+    """))
 
 
 def test_pb8_forager_ema_span_sliders_require_positive_values() -> None:

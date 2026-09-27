@@ -2672,7 +2672,7 @@
   }
   async function startCloudQueue(job) {
     if (renting || startingQueue || workerAction || disposed || !supervision || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || (job && deletingJobs.has(job.id))) return;
-    if (((savedPreferences?.max_rentals || 1) > 1 || queueState.pool_authorization) && !(await window.PBGuiDialogs.confirm({
+    if (savedPreferences?.auto_rent && !(await window.PBGuiDialogs.confirm({
       title:'Start GPU pool',
       message:'Automatically rent up to ' + savedPreferences.max_rentals + ' GPUs for queued jobs, with a budget target of $' + fmt(savedPreferences.budget,2) + ' per rental (up to $' + fmt(savedPreferences.max_rentals * savedPreferences.budget,2) + ' simultaneously)? Each rental lasts at most ' + savedPreferences.hours + ' hours. Replacement rentals may be started while jobs remain queued. Pause queue prevents new rentals; End rentals stops the pool.',
       confirmText:'Start GPU pool'

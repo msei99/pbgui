@@ -106,8 +106,11 @@ def test_full_suite_editor_apply_save_reload():
               suiteLoad({backtest:{suite_enabled:true,scenarios:[{label:'train',start_date:'2024-01-01',end_date:'2024-06-30'}],aggregate:{default:'median'}}});
             }""")
             _draw_dates(page, 'holdout', 182, 244, 366)
+            page.evaluate("window.visualHostBeforeApply = document.getElementById('suite-visual-host')")
             page.get_by_role('button', name='Check & Apply windows').click()
             page.wait_for_function("_suiteState.scenarioTemplate?.contract_version === 2")
+            page.wait_for_function("document.querySelector('.scenario-actions [role=status]')?.textContent === 'Windows applied.'")
+            assert page.evaluate("document.getElementById('suite-visual-host') === window.visualHostBeforeApply")
             assert page.get_by_role('button', name='Apply Training Scenarios', exact=True).count() == 0
             assert page.get_by_text('Preview:', exact=False).count() == 0
             assert page.get_by_role('button', name='Generate windows', exact=True).count() == 1

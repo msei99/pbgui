@@ -297,3 +297,5 @@ Queue Backtest und Queue Validation fügen die Kandidaten direkt hinzu; Diagramm
 ## Optimizer Settings
 
 **Queue Settings** in der Sidebar öffnet die lokalen Queue-Einstellungen. **Guide** springt bei geöffneten Settings hierher. CPU, Override config CPU, Use PBGui Market Data und Autostart einstellen und mit **Save** speichern. **Queue** in der linken Sidebar führt zur Jobliste zurück. Vast-Cloud-Ausführung ist in PB8 Optimize verfügbar.
+
+Der gemeinsame Grenzwert-Editor vermeidet jetzt die ungültigen Endpunkte für Long und Short Auto-Unstuck. Die Positionsanzahl bleibt in beiden Versionen positiv; unter PBv8 bleiben auch Forager-EMA-Spannen positiv. Check & Apply im visuellen Szenario-Editor erhält den aktuellen Fenster-Editor und den Rückgängig-Verlauf.

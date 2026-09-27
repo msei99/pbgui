@@ -40,8 +40,8 @@ def _side_active(config: dict, side: str) -> bool:
     return True
 
 
-def _largest_candidate_bars(config: dict) -> int | None:
-    """Estimate the largest active scenario's coin-side minute-bar workload."""
+def _largest_candidate_bars(config: dict, warmup_minutes: int = 0) -> int | None:
+    """Bound the largest scenario's coin-side work, including PB8 warmup."""
     try:
         backtest = config['backtest']
         interval = _positive_number(backtest.get('candle_interval_minutes', 1))
@@ -82,10 +82,30 @@ def _largest_candidate_bars(config: dict) -> int | None:
             days = (end - start).days + 1
             if days <= 0 or side_work <= 0:
                 return None
-            largest = max(largest, math.ceil(days * 1440 / interval) * side_work)
+            largest = max(largest, math.ceil((days * 1440 + warmup_minutes) / interval) * side_work)
         return largest or None
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
+
+
+def _optimizer_warmup_minutes(config: dict) -> int:
+    """Ask PB8 for the largest base or suite warmup before automatic sizing."""
+    # Editor previews and legacy test inputs may be incomplete; valid frozen
+    # PB8 configs always carry this native warmup setting.
+    if 'warmup_ratio' not in config.get('live', {}):
+        return 0
+    from pb8_config import _call_helper
+    from vast_scenarios import scenario_plan
+
+    contexts, _, errors = scenario_plan(config)
+    if errors:
+        raise ValueError('Cannot size GPU dispatch for invalid optimizer scenarios')
+    configs = [config, *(context['config'] for context in contexts)]
+    values = _call_helper('optimizer_warmup', configs=configs).get('minutes')
+    if (not isinstance(values, list) or len(values) != len(configs)
+            or any(type(value) is not int or value < 0 for value in values)):
+        raise ValueError('Invalid PB8 optimizer warmup response')
+    return max(values)
 
 
 def _cuda_population(
@@ -148,7 +168,8 @@ def _dispatch_limit(
     # Keep the full generation in one candidate dispatch. PB8 owns temporal
     # replay chunking where a strategy supports it; candidate dispatch sizing
     # must not be reused as a UI progress interval.
-    return max(floor, int(candidate_bars) * int(target_candidates))
+    work = int(candidate_bars) * int(target_candidates)
+    return max(floor, (work * 105 + 99) // 100)
 
 
 
@@ -237,7 +258,9 @@ def resolve_gpu_settings(
     vram_gb = actual_bytes / 1024**3 if actual_bytes is not None else _positive_number(offer.get('vram_gb'))
     memory_bandwidth_gbps = _positive_number(offer.get('gpu_mem_bw_gbps'))
     tflops = _positive_number(offer.get('tflops'))
-    candidate_bars = _largest_candidate_bars(config)
+    warmup_minutes = (_optimizer_warmup_minutes(config)
+                      if vram_gb is not None and gpu.get('max_dispatch_candidate_bars') is None else 0)
+    candidate_bars = _largest_candidate_bars(config, warmup_minutes)
     parameters = _active_parameter_count(optimize.get('bounds', {}))
     automatic = {}
     preserved = {}

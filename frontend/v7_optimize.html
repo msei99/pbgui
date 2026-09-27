@@ -2768,7 +2768,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <script src="/app/js/date_overwrite.js?v=2"></script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
 <script src="/app/js/scenario_visual_editor.js?v=21"></script>
-<script src="/app/js/suite_editor.js?v=40"></script>
+<script src="/app/js/suite_editor.js?v=41"></script>
 <script src="/app/js/log_viewer_panel.js?v=50"></script>
 <script src="/app/js/pbgui_dialogs.js?v=10"></script>
 <script>
@@ -6097,9 +6097,19 @@ function getOptimizeHslRedThresholdRequiredMin(key) {
 function getOptimizeBoundRequiredMin(key) {
   var hslMinimum = getOptimizeHslRedThresholdRequiredMin(key);
   if (Number.isFinite(hslMinimum)) return hslMinimum;
-  if (!optimizeEditorAdapter.isV8) return null;
   var suffix = getOptimizeBoundSuffix(key);
+  if (suffix === 'unstuck_ema_dist' && getOptimizeBoundGroup(key) === 'long') return -0.99;
+  if (suffix === 'n_positions' || suffix === 'risk.n_positions') return 1;
+  if (!optimizeEditorAdapter.isV8) return null;
   if (suffix === 'forager.volume_ema_span_1m' || suffix === 'forager.volatility_ema_span_1m') return 1;
+  if (suffix === 'risk.unstuck_ema_dist' && getOptimizeBoundGroup(key) === 'long') return -0.99;
+  return null;
+}
+
+function getOptimizeBoundRequiredMax(key) {
+  var suffix = getOptimizeBoundSuffix(key);
+  if ((suffix === 'risk.unstuck_ema_dist' || suffix === 'unstuck_ema_dist') && getOptimizeBoundGroup(key) === 'short') return 0.99;
+  if (isOptimizeHslRedThresholdBound(key) && isOptimizeHslEnabledForSide(getOptimizeBoundGroup(key))) return 0.999;
   return null;
 }
 
@@ -6192,7 +6202,15 @@ function getOptimizeBoundMeta(key, low, high, step) {
     min = Math.max(min, requiredMin);
     max = Math.max(max, requiredMin);
   }
-  if (max <= min) max = min + 1;
+  var requiredMax = getOptimizeBoundRequiredMax(key);
+  if (Number.isFinite(requiredMax)) {
+    min = Math.min(min, requiredMax);
+    max = Math.min(max, requiredMax);
+  }
+  if (max <= min) {
+    if (Number.isFinite(requiredMax)) min = Math.min(min, requiredMax - 0.001);
+    max = Math.max(max, min + (Number.isFinite(requiredMax) ? 0.001 : 1));
+  }
   var boundStep = Number.isFinite(step) && step > 0 ? step : null;
   var rawSliderStep = boundStep != null ? boundStep : (rawMeta ? Number(rawMeta[2]) : 0.001);
   var widgetStep = rawMeta ? Number(rawMeta[3]) : rawSliderStep;
@@ -6205,6 +6223,8 @@ function getOptimizeBoundMeta(key, low, high, step) {
       ? Math.floor(metaDecimals)
       : (Number.isFinite(precisionFromRoundDigits) && precisionFromRoundDigits > 0 ? precisionFromRoundDigits : 5));
   if (!Number.isFinite(decimals) || decimals < 0) decimals = 0;
+  if (Number.isFinite(requiredMin)) decimals = Math.max(decimals, countOptimizeDecimals(requiredMin));
+  if (Number.isFinite(requiredMax)) decimals = Math.max(decimals, countOptimizeDecimals(requiredMax));
   var sliderStep = boundStep != null
     ? boundStep
     : (Number.isFinite(rawSliderStep) && rawSliderStep > 0 ? rawSliderStep : getOptimizeStepFromDecimals(decimals));
@@ -7542,10 +7562,10 @@ var OPT_BOUNDS_META = {
   filter_volume_drop_pct: [0.0, 1.0, 0.01, 0.00001, 2],
   filter_volatility_drop_pct: [0.0, 1.0, 0.01, 0.00001, 2],
   filter_volume_ema_span: [0.0, 10000.0, 1.0, 0.1, 0],
-  n_positions: [0.0, 100.0, 1.0, 1.0, 0],
+  n_positions: [1.0, 100.0, 1.0, 1.0, 0],
   total_wallet_exposure_limit: [0.0, 100.0, 0.1, 0.01, 1],
   unstuck_close_pct: [0.0, 1.0, 0.001, 0.00001, 3],
-  unstuck_ema_dist: [-1.0, 1.0, 0.001, 0.00001, 3],
+  unstuck_ema_dist: [-0.99, 0.99, 0.001, 0.00001, 3],
   unstuck_loss_allowance_pct: [0.0, 1.0, 0.001, 0.00001, 3],
   unstuck_threshold: [0.0, 1.0, 0.01, 0.00001, 2],
   risk_wel_enforcer_threshold: [0.0, 2.0, 0.01, 0.00001, 2],
@@ -15396,6 +15416,6 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=2"></script>
-<script src="/app/js/vast.js?v=149"></script>
+<script src="/app/js/vast.js?v=150"></script>
 </body>
 </html>

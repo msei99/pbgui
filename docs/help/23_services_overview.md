@@ -96,3 +96,5 @@ have no global INI watcher.
 Settings saves are locked while pending. Validation errors identify the affected field rather than displaying a generic object.
 
 The navigation Restart action shows progress immediately after confirmation and ignores duplicate clicks. PBGui reconnects automatically and verifies that a new API instance is running before reloading the current page. A lost restart response is checked without automatically submitting another restart.
+
+Press Escape to close the active Services Monitor Help, Prices, result, CMC key, or CMC authority dialog. A CMC dialog remains open while its mutation is in progress.

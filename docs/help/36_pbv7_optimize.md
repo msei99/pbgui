@@ -297,3 +297,5 @@ Queue Backtest and Queue Validation now add the selected candidates directly and
 ## Optimizer Settings
 
 The sidebar **Queue Settings** opens local queue settings. **Guide** jumps here while Settings is open. Set CPU, Override config CPU, Use PBGui Market Data and Autostart, then click **Save**. **Queue** in the left sidebar returns to jobs. Vast cloud execution is available in PB8 Optimize.
+
+The shared bounds editor keeps long and short auto-unstuck ranges away from the invalid endpoints. Position counts remain positive on both versions; PBv8 also keeps Forager EMA spans positive. Check & Apply in the visual Scenario Editor preserves the current window editor and Undo history.

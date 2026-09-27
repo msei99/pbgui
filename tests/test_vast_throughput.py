@@ -1,15 +1,17 @@
 """Offline statistics checks against native GPU counter log formats."""
 
+import json
+
 import pytest
 
 from vast_throughput import parse_throughput
 
 
-def line(seconds, proxy, exact, *, complete=False):
+def line(seconds, proxy, exact, *, complete=False, reported_rate=9999.0):
     """Emit a native counter record with a deterministic UTC observation time."""
     prefix = f"2026-09-16T10:{seconds // 60:02}:{seconds % 60:02}Z INFO "
     text = (f"GPU optimization complete | generations=100 proxy={proxy} exact={exact}" if complete
-            else f"GPU optimize | gen=100 proxy={proxy} (9999.0/s) exact={exact} inflight=4")
+            else f"GPU optimize | gen=100 proxy={proxy} ({reported_rate}/s) exact={exact} inflight=4")
     return (prefix + text + '\n').encode()
 
 
@@ -44,13 +46,13 @@ def test_missing_or_invalid_native_counters_remain_unknown(raw):
 def test_insufficient_intervals_or_resets_do_not_fabricate_rates(raw):
     """Handle initial observations, clock rollback, same-second records and restarts."""
     result = parse_throughput(raw)
-    assert result['proxy_per_minute'] is None
+    assert result['proxy_per_minute'] == 9999 * 60
     assert result['exact_per_minute'] is None
 
 
 def test_zero_work_is_a_valid_measurement_and_zero_exact_has_no_ratio():
     """Measured idle intervals are zero; division by zero is unavailable."""
-    result = parse_throughput(line(0, 100, 0) + line(60, 100, 0))
+    result = parse_throughput(line(0, 100, 0, reported_rate=0.0) + line(60, 100, 0, reported_rate=0.0))
     assert result['proxy_per_minute'] == result['exact_per_minute'] == 0
     assert result['proxy_per_exact'] is None
 
@@ -67,7 +69,7 @@ def test_counter_input_is_bounded_and_browser_safe():
     """Ignore oversized counts and old samples outside the bounded tail."""
     assert parse_throughput(line(0, 2**54, 1)) is None
     raw = line(0, 100, 10) + b'x' * (512 * 1024) + b'\n' + line(60, 200, 20)
-    assert parse_throughput(raw)['proxy_per_minute'] is None
+    assert parse_throughput(raw)['exact_per_minute'] is None
 
 
 def test_counter_pair_survives_more_than_64_kib_of_intervening_log():
@@ -88,8 +90,31 @@ def test_disjoint_tails_preserve_rates_and_reject_delayed_snapshots():
     assert parse_throughput(line(60, 700, 40), second) == second
     assert parse_throughput(b'partial output', second) == second
     reset = parse_throughput(line(90, 10, 0), second)
-    assert reset['proxy_per_minute'] is None
+    assert reset['proxy_per_minute'] == 9999 * 60
     assert len(reset['samples']) == 1
+
+
+def test_native_exact_progress_and_last_proxy_rate_survive_sparse_gpu_summaries():
+    """One native GPU rate and frequent CPU completions remain useful between generations."""
+    def progress(seconds, exact):
+        """Emit one cumulative native Exact progress event."""
+        stamp = f"2026-09-16T10:{seconds // 60:02}:{seconds % 60:02}Z INFO [gpu-profile] "
+        return (stamp + json.dumps({'event': 'exact_progress', 'exact_completed': exact}) + '\n').encode()
+
+    first = parse_throughput(line(0, 8192, 0, reported_rate=47.1)
+                             + progress(30, 10) + progress(60, 30))
+    assert first['proxy_total'] == 8192
+    assert first['exact_total'] == 30
+    assert first['proxy_per_minute'] == 2826
+    assert first['exact_per_minute'] == 30
+    assert first['proxy_per_exact'] == pytest.approx(8192 / 30)
+    second = parse_throughput(progress(90, 45), first)
+    assert second['proxy_per_minute'] == 2826
+    assert second['exact_per_minute'] == 35
+    assert second['exact_total'] == 45
+    stalled = parse_throughput(progress(180, 45), second)
+    assert stalled['proxy_per_minute'] == 2826
+    assert stalled['exact_per_minute'] == 35  # Keep the last valid rate during a quiet interval.
 
 
 def test_history_is_bounded_across_many_snapshots():

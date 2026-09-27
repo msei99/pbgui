@@ -154,6 +154,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - Read-only inspection of remote hosts is allowed when needed for debugging, but any command that changes files, git state, services, processes, or runtime state requires a separate question first.
 
 ### Closing Issues
+- Write all GitHub issue resolution and closure comments in English, regardless of the language used in chat.
 - Never close an issue without a substantive resolution comment. Post the comment before closing, or include it in the close operation.
 - State the concrete cause and fix, the checks actually performed and their results, and link the fixing commit and release when available. Do not claim unperformed tests or an unpublished release.
 - For duplicate, declined, or otherwise unfixed issues, explain the reason and link the relevant issue or decision instead of claiming a fix.

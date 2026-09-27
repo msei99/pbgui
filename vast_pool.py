@@ -37,7 +37,10 @@ def rental_needed(queue: CloudQueue, authorization_id: str) -> bool:
     """Count starting/closing leases and idle slots before authorizing more capacity."""
     state = queue.read()
     authorization = state.get('pool_authorization') or {}
-    if not state.get('pool_enabled') or state.get('paused') or authorization.get('id') != authorization_id:
+    if (not state.get('pool_enabled') or state.get('paused')
+            or authorization.get('id') != authorization_id
+            or (state.get('gpu_preferences') or {}).get('auto_rent') is not True
+            or (authorization.get('settings') or {}).get('auto_rent') is not True):
         return False
     rows = queue.store.list()
     active = [r for r in rows if r.get('rental_state') not in ('none', 'deletion_verified')]
@@ -119,6 +122,8 @@ def pool_step(queue: CloudQueue) -> dict | None:
 
 def authorize_pool(queue: CloudQueue, settings: dict, *, resume: bool = True) -> dict:
     """Record explicit start consent without changing existing rental limits."""
+    if settings.get('auto_rent') is not True:
+        raise VastError('Enable Auto rent & start before authorizing automatic GPU rentals', 409)
     if queue.read().get('calibration_watch'):
         raise VastError('Cancel the waiting performance test before enabling automatic GPU rentals', 409)
     if not services_available():

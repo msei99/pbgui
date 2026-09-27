@@ -3705,6 +3705,7 @@
         activeSubsection: 'normal',
         baselineRequest: '',
         isDirty: false,
+        saveBusy: false,
         tiingoConfigured: false,
         tiingoProfileId: '',
         tiingoSaveGeneration: 0,
@@ -5525,7 +5526,7 @@
       function updateSaveSettingsButton() {
         var button = document.getElementById('btn-save-settings-sidebar');
         if (!button) return;
-        button.disabled = !settingsState.isDirty;
+        button.disabled = settingsState.saveBusy || !settingsState.isDirty;
         button.classList.toggle('save-needed', settingsState.isDirty);
       }
 
@@ -8981,21 +8982,36 @@
       }
 
       async function saveSettings() {
+        if (settingsState.saveBusy) return;
+        settingsState.saveBusy = true;
+        updateSaveSettingsButton();
+        var savedExchange = settingsState.exchange;
         try {
-          var result = await fetchJson('/settings/' + encodeURIComponent(settingsState.exchange), {
+          var savedRequest = collectSettingsRequest();
+          var result = await fetchJson('/settings/' + encodeURIComponent(savedExchange), {
             method: 'POST',
-            body: JSON.stringify(collectSettingsRequest())
+            body: JSON.stringify(savedRequest)
           });
           if (!result.success) {
             throw new Error(result.error || 'Save failed.');
           }
-          settingsState.payload = result.settings;
-          settingsState.selectedCoins = new Set(Array.isArray(result.settings.enabled_coins) ? result.settings.enabled_coins : []);
-          renderSettingsPayload();
-          setSettingsBaseline();
-          showToast(result.message || 'Settings saved.', 'success');
+          if (settingsState.exchange === savedExchange) {
+            settingsState.payload = result.settings;
+            if (JSON.stringify(collectSettingsRequest()) === JSON.stringify(savedRequest)) {
+              settingsState.selectedCoins = new Set(Array.isArray(result.settings.enabled_coins) ? result.settings.enabled_coins : []);
+              renderSettingsPayload();
+              setSettingsBaseline();
+            } else {
+              settingsState.baselineRequest = JSON.stringify(savedRequest);
+              syncSettingsDirtyState();
+            }
+            showToast(result.message || 'Settings saved.', 'success');
+          }
         } catch (error) {
-          showToast(error && error.message ? error.message : 'Save failed.', 'error');
+          if (settingsState.exchange === savedExchange) showToast(error && error.message ? error.message : 'Save failed.', 'error');
+        } finally {
+          settingsState.saveBusy = false;
+          updateSaveSettingsButton();
         }
       }
 

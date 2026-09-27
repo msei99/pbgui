@@ -78,3 +78,47 @@ function showToast(error) {errors.push(error);}
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True,timeout=10)
+
+
+def test_settings_save_deduplicates_requests_and_keeps_edits_made_during_save():
+    """A second Save cannot POST while the first is pending or erase newer input."""
+    source = (Path(__file__).resolve().parents[2] / 'frontend/market_data_main.html').read_text()
+    start = source.index('      function updateSaveSettingsButton()')
+    end = source.index('      function setFieldValue(', start)
+    helpers = source[start:end]
+    start = source.index('      async function saveSettings()')
+    end = source.index('      async function testTiingo()', start)
+    script = helpers + source[start:end] + r'''
+const assert = require('node:assert/strict');
+const button = {disabled:false,classList:{toggle:()=>{}}};
+const document = {getElementById:()=>button};
+const settingsState = {exchange:'binance',selectedCoins:new Set(),payload:null,baselineRequest:'',isDirty:true,saveBusy:false};
+let current='BTC';
+const requests=[], renders=[], messages=[];
+function collectSettingsRequest(){return {enabled_coins:[current]};}
+function fetchJson(path,options){return new Promise((resolve,reject)=>requests.push({path,options,resolve,reject}));}
+function renderSettingsPayload(){renders.push(current);}
+function showToast(message){messages.push(message);}
+(async()=>{
+ const first=saveSettings();
+ assert.equal(button.disabled,true);
+ await saveSettings();
+ assert.equal(requests.length,1);
+ assert.deepEqual(JSON.parse(requests[0].options.body),{enabled_coins:['BTC']});
+ current='ETH';
+ requests[0].resolve({success:true,settings:{enabled_coins:['BTC']}});
+ await first;
+ assert.deepEqual(renders,[]);
+ assert.equal(settingsState.isDirty,true);
+ assert.equal(button.disabled,false);
+ const second=saveSettings();
+ assert.equal(requests.length,2);
+ requests[1].resolve({success:true,settings:{enabled_coins:['ETH']}});
+ await second;
+ assert.deepEqual(renders,['ETH']);
+ assert.equal(settingsState.isDirty,false);
+ assert.equal(button.disabled,true);
+ assert.equal(messages.length,2);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+'''
+    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True, timeout=10)

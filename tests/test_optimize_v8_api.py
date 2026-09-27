@@ -104,6 +104,8 @@ def optimize_v8_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(optimize_v8, "validate_pb8_optimizer_overrides", lambda _config, **_kwargs: None)
     with optimize_v8._result_progress_cache_lock:
         optimize_v8._result_progress_cache.clear()
+    with optimize_v8._result_listing_cache_lock:
+        optimize_v8._result_listing_cache.clear()
     with optimize_v8._active_eval_count_cache_lock:
         optimize_v8._active_eval_count_cache.clear()
     with optimize_v8._backtest_count_cache_lock:
@@ -960,6 +962,46 @@ def test_result_listing_never_cold_decodes_streams_and_scans_each_pareto_dir_onc
     assert all(item["progress"]["scan_deferred"] is True for item in listed)
     assert all(item["has_config"] is True for item in listed)
     assert sorted(scans) == ["checkpoint-only", "with-pareto"]
+
+
+def test_result_listing_reuses_unchanged_summaries_and_invalidates_modified_pareto(
+    optimize_v8_roots, monkeypatch,
+) -> None:
+    """Repeated Results polls avoid JSON/checkpoint reads until an artifact changes."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    config = _full_pb8_config()
+    result = _make_resumable_result(results / "cached-result", config)
+    pareto = result / "pareto"
+    pareto.mkdir()
+    candidate = pareto / "candidate.json"
+    candidate.write_text(json.dumps(config), encoding="utf-8")
+    original_json = optimize_v8._read_json
+    original_readiness = optimize_v8._checkpoint_resume_readiness
+    calls = {"json": 0, "readiness": 0}
+
+    def counted_json(path: Path):
+        calls["json"] += 1
+        return original_json(path)
+
+    def counted_readiness(*args, **kwargs):
+        calls["readiness"] += 1
+        return original_readiness(*args, **kwargs)
+
+    monkeypatch.setattr(optimize_v8, "_read_json", counted_json)
+    monkeypatch.setattr(optimize_v8, "_checkpoint_resume_readiness", counted_readiness)
+    first = optimize_v8._list_results()
+    assert calls["json"] > 0 and calls["readiness"] == 1
+    unchanged_calls = calls.copy()
+    assert optimize_v8._list_results() == first
+    assert calls == unchanged_calls
+
+    changed = copy.deepcopy(config)
+    changed["backtest"]["base_dir"] = "updated-result-name"
+    candidate.write_text(json.dumps(changed), encoding="utf-8")
+    updated = optimize_v8._list_results()
+    assert updated[0]["name"] == "updated-result-name"
+    assert calls["json"] > unchanged_calls["json"]
+    assert calls["readiness"] == 2
 
 
 def test_result_listing_resolves_the_runtime_root_only_once(optimize_v8_roots, monkeypatch) -> None:

@@ -1,6 +1,8 @@
 """Measured optimizer throughput from bounded, timestamped native GPU log tails."""
 
 from datetime import datetime, timezone
+import json
+import math
 import re
 
 SERVICE = "VastThroughput"
@@ -10,23 +12,50 @@ _COUNTERS = re.compile(
     r"GPU (?:optimize\s*\|\s*gen=\d+\s+proxy=(\d+)\s+\([0-9.]+/s\)\s+exact=(\d+)"
     r"|optimization complete\s*\|\s*generations=\d+\s+proxy=(\d+)\s+exact=(\d+))"
 )
+_REPORTED_PROXY_RATE = re.compile(r"GPU optimize\s*\|[^\n]*?\bproxy=\d+\s+\(([0-9.]+)/s\)")
 
 
 def parse_throughput(raw_log: bytes, previous: dict | None = None) -> dict | None:
-    """Measure counter deltas over roughly a minute; never infer work from population size."""
+    """Keep the last measured proxy rate and measure native Exact progress."""
     samples = []
     reset = False
+    reported_proxy_rate = None
     for line in raw_log[-LOG_TAIL_BYTES:].decode("utf-8", errors="replace").splitlines():
-        stamp, counts = _STAMP.match(line), _COUNTERS.search(line)
-        if not stamp or not counts:
+        stamp = _STAMP.match(line)
+        if not stamp:
+            continue
+        counts = _COUNTERS.search(line)
+        progress = None
+        if counts is None and '[gpu-profile] ' in line:
+            try:
+                progress = json.loads(line.split('[gpu-profile] ', 1)[1])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(progress, dict) or progress.get('event') != 'exact_progress':
+                continue
+        elif counts is None:
             continue
         try:
             sampled_at = datetime.strptime(stamp[1], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
-            proxy, exact = (int(value) for value in ((counts[1], counts[2]) if counts[1] is not None else (counts[3], counts[4])))
+            if counts is not None:
+                proxy, exact = (int(value) for value in ((counts[1], counts[2]) if counts[1] is not None else (counts[3], counts[4])))
+            else:
+                exact = progress.get('exact_completed')
+                if type(exact) is not int or exact < 0:
+                    continue
+                proxy = samples[-1]['proxy_total'] if samples else (previous or {}).get('proxy_total')
+                if type(proxy) is not int:
+                    continue
         except (ValueError, OverflowError):
             continue
         if max(proxy, exact) > 2**53 - 1:
             continue
+        if counts is not None:
+            rate_match = _REPORTED_PROXY_RATE.search(line)
+            if rate_match:
+                native_rate = float(rate_match[1]) * 60
+                if math.isfinite(native_rate):
+                    reported_proxy_rate = native_rate
         sample = dict(sampled_at=sampled_at, proxy_total=proxy, exact_total=exact)
         if samples:
             last = samples[-1]
@@ -56,15 +85,26 @@ def parse_throughput(raw_log: bytes, previous: dict | None = None) -> dict | Non
             samples = (prefix + samples)[-128:]
         elif latest['proxy_total'] < old['proxy_total'] or latest['exact_total'] < old['exact_total']:
             samples = [latest]
+            reset = True
     latest = samples[-1]
     baseline = samples[0]
     for sample in samples[:-1]:
         if sample['sampled_at'] <= latest['sampled_at'] - 60:
             baseline = sample
     seconds = latest['sampled_at'] - baseline['sampled_at']
+    proxy_delta = latest['proxy_total'] - baseline['proxy_total']
+    exact_delta = latest['exact_total'] - baseline['exact_total']
+    last_proxy_rate = (previous or {}).get('proxy_per_minute') if not reset else None
+    last_exact_rate = (previous or {}).get('exact_per_minute') if not reset else None
+    proxy_rate = (proxy_delta * 60 / seconds if seconds >= 10 and proxy_delta > 0
+                  else reported_proxy_rate if reported_proxy_rate is not None
+                  else last_proxy_rate if last_proxy_rate is not None
+                  else 0 if seconds >= 10 else None)
+    exact_rate = (exact_delta * 60 / seconds if seconds >= 10 and exact_delta > 0
+                  else last_exact_rate if last_exact_rate is not None
+                  else 0 if seconds >= 10 else None)
     return dict(latest, samples=samples, window_seconds=seconds,
-                proxy_per_minute=(latest['proxy_total'] - baseline['proxy_total']) * 60 / seconds if seconds >= 10 else None,
-                exact_per_minute=(latest['exact_total'] - baseline['exact_total']) * 60 / seconds if seconds >= 10 else None,
+                proxy_per_minute=proxy_rate, exact_per_minute=exact_rate,
                 proxy_per_exact=latest['proxy_total'] / latest['exact_total'] if latest['exact_total'] else None)
 
 

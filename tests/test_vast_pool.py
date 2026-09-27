@@ -31,8 +31,9 @@ def add_row(queue, number, *, worker=False, **changes):
 def queue(tmp_path, monkeypatch):
     """Enable a three-GPU pool with every process/provider boundary replaced."""
     queue = CloudQueue(JobStore(tmp_path / 'vast'))
-    settings = RentalPreferences(max_rentals=3).model_dump()
-    queue.update(pool_enabled=True, paused=False, pool_authorization={'id':'a'*32, 'settings':settings, 'credential_generation':1})
+    settings = RentalPreferences(max_rentals=3, auto_rent=True).model_dump()
+    queue.update(pool_enabled=True, paused=False, gpu_preferences=settings,
+                 pool_authorization={'id':'a'*32, 'settings':settings, 'credential_generation':1})
     monkeypatch.setattr(queue.store, 'launch_service', lambda *args: None)
     monkeypatch.setattr(pool, 'launch_pool', lambda *args: None)
     monkeypatch.setattr(pool, 'VastCredentialStore', lambda *args: SimpleNamespace(
@@ -201,26 +202,49 @@ def test_real_start_admits_three_and_no_more(queue, monkeypatch):
     assert not queue.workers()
 
 
-def test_api_requires_consent_and_authorizes_saved_pool(queue, monkeypatch):
-    """Saving settings is inert; explicit Start durably authorizes their snapshot."""
+def test_start_queue_reauthorizes_only_saved_automatic_pool(queue, monkeypatch):
+    """An explicit Start can refresh a saved automatic pool after consent."""
     from api import vast
     from fastapi import HTTPException
     monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
     monkeypatch.setattr(pool, 'services_available', lambda: True)
-    queue.update(pool_enabled=False)
-    vast.save_gpu_preferences(RentalPreferences(max_rentals=3), session=None)
-    assert not queue.read()['pool_enabled']
+    queue.update(pool_enabled=False, pool_authorization=None)
     with pytest.raises(HTTPException):
         vast.start_queue(vast.StartJobRequest(use_saved_settings=True), session=None)
     result = vast.start_queue(vast.StartJobRequest(use_saved_settings=True,
         accept_rental_and_cleanup=True), session=None)
     assert result['max_rentals'] == 3
-    assert queue.read()['pool_enabled']
-    vast.save_gpu_preferences(RentalPreferences(max_rentals=2), session=None)
-    assert pool.pool_limit(queue.read()) == 3
-    vast.start_queue(vast.StartJobRequest(use_saved_settings=True,
-        accept_rental_and_cleanup=True), session=None)
-    assert pool.pool_limit(queue.read()) == 2
+    assert queue.read()['pool_enabled'] is True
+    assert queue.read()['pool_authorization']['settings']['auto_rent'] is True
+
+
+def test_stale_pool_cannot_rent_with_saved_auto_rent_off(queue):
+    """A queued job cannot use a legacy pool authorization when Auto rent is off."""
+    add_row(queue, 10)
+    queue.update(gpu_preferences=RentalPreferences(max_rentals=3, auto_rent=False).model_dump())
+    assert pool.rental_needed(queue, 'a' * 32) is False
+    settings = RentalPreferences(max_rentals=3, auto_rent=False).model_dump()
+    queue.update(gpu_preferences=RentalPreferences(max_rentals=3, auto_rent=True).model_dump(),
+                 pool_authorization={'id':'a' * 32, 'settings':settings})
+    assert pool.rental_needed(queue, 'a' * 32) is False
+
+
+def test_automatic_pool_rejects_manual_settings(queue):
+    """An automatic pool requires an explicit Auto rent setting at authorization."""
+    with pytest.raises(VastError, match='Enable Auto rent'):
+        pool.authorize_pool(queue, RentalPreferences(max_rentals=3).model_dump())
+
+
+def test_saving_auto_rent_off_repairs_stale_enabled_pool(queue, monkeypatch):
+    """A repeated Off save revokes a pool left enabled by the old Start path."""
+    from api import vast
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
+    queue.update(gpu_preferences=RentalPreferences(max_rentals=3).model_dump())
+    vast.save_gpu_preferences(RentalPreferences(max_rentals=3), session=None)
+    state = queue.read()
+    assert state['pool_enabled'] is False
+    assert state['pool_authorization'] is None
+    assert state['paused'] is True
 
 
 def test_saved_auto_rent_starts_pool_and_end_disables_it(queue, monkeypatch):
@@ -228,7 +252,8 @@ def test_saved_auto_rent_starts_pool_and_end_disables_it(queue, monkeypatch):
     from api import vast
     monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
     monkeypatch.setattr(pool, 'services_available', lambda: True)
-    queue.update(pool_enabled=False, paused=True)
+    queue.update(pool_enabled=False, paused=True,
+                 gpu_preferences=RentalPreferences(max_rentals=3).model_dump())
     saved = vast.save_gpu_preferences(
         RentalPreferences(max_rentals=3, auto_rent=True), session=None)
     state = queue.read()
@@ -337,7 +362,7 @@ def test_supervisor_start_failure_restores_previous_pool_state(queue, monkeypatc
     monkeypatch.setattr(pool, 'launch_pool', fail)
     previous = queue.read()['pool_authorization']
     with pytest.raises(VastError):
-        pool.authorize_pool(queue, RentalPreferences(max_rentals=3).model_dump())
+        pool.authorize_pool(queue, RentalPreferences(max_rentals=3, auto_rent=True).model_dump())
     assert queue.read()['paused'] is False
     assert queue.read()['pool_enabled'] is True
     assert queue.read()['pool_authorization'] == previous

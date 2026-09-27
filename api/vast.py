@@ -63,6 +63,7 @@ def startup() -> None:
     queue = CloudQueue()
     from vast_job_runner import recover_cancelled_empty_results
     recover_cancelled_empty_results(queue.store)
+    _reconcile_pool_consent(queue)
     if queue.read().get('pool_enabled') or queue.read().get('calibration_watch'):
         try:
             from vast_pool import launch_pool
@@ -442,14 +443,28 @@ def _apply_gpu_preferences(queue: CloudQueue, values: dict) -> None:
     """Persist settings and explicitly enable or disable automatic paid rentals."""
     ensure_private_directory(queue.root)
     with advisory_file_lock(queue.root / '.queue-lock'):
-        previous = queue.read().get('gpu_preferences', {})
+        state = queue.read()
+        previous = state.get('gpu_preferences', {})
         was_automatic = previous.get('auto_rent') is True
         if values.get('auto_rent'):
             from vast_pool import authorize_pool
             authorize_pool(queue, values, resume=not was_automatic)
-        elif was_automatic:
+        elif was_automatic or state.get('pool_enabled') or state.get('pool_authorization'):
             queue.update(pool_enabled=False, paused=True, pool_authorization=None, pool_error=None)
         queue.update(gpu_preferences=values)
+
+
+def _reconcile_pool_consent(queue: CloudQueue) -> None:
+    """Clear legacy pool permission that conflicts with the saved Auto rent setting."""
+    ensure_private_directory(queue.root)
+    with advisory_file_lock(queue.root / '.queue-lock'):
+        state = queue.read()
+        authorization = state.get('pool_authorization') or {}
+        settings = authorization.get('settings') or {}
+        if (state.get('pool_enabled') or authorization) and not (
+                (state.get('gpu_preferences') or {}).get('auto_rent') is True
+                and settings.get('auto_rent') is True):
+            queue.update(pool_enabled=False, pool_authorization=None, pool_error=None)
 
 
 def _error(exc: VastError) -> HTTPException:
@@ -1234,13 +1249,14 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
             raise VastError("Confirm the shared rental and automatic cleanup first", 422)
         if (body.gpu_profile_override is not None or body.gpu_job_profile_overrides) and not body.rent_only:
             raise VastError('GPU rental overrides require an explicitly selected manual rental', 422)
+        _reconcile_pool_consent(queue)
         if body.use_saved_settings and not body.rent_only:
             stored = queue.read().get('gpu_preferences', {})
             try:
                 saved = RentalPreferences.model_validate(stored)
             except ValueError:
                 raise VastError('Save valid GPU requirements and rental limits in Settings', 422) from None
-            if saved.max_rentals > 1 or queue.read().get('pool_authorization'):
+            if saved.auto_rent:
                 from vast_pool import authorize_pool
                 return authorize_pool(queue, saved.model_dump())
         current = queue.worker()

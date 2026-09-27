@@ -1093,7 +1093,20 @@ window.PBGUI_NAV_CONFIG = {
     _topicCache = {}; loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (window._servicesGuideKeyword || 'services_overview'));
   });
   document.getElementById('help-close').addEventListener('click', function() { helpOvl.classList.remove('visible'); });
-  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') helpOvl.classList.remove('visible'); });
+  document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    var keyModal = document.getElementById('cmc-key-modal');
+    var authorityModal = document.getElementById('cmc-authority-modal');
+    var resultModal = document.getElementById('result-modal');
+    var pricesOverlay = document.getElementById('prices-overlay');
+    if (keyModal && !keyModal.hidden) window.closeCmcKeyModal();
+    else if (authorityModal && !authorityModal.hidden) window.closeCmcAuthorityModal();
+    else if (resultModal) resultModal.remove();
+    else if (pricesOverlay && pricesOverlay.classList.contains('active')) window.closePricesOverlay();
+    else if (helpOvl.classList.contains('visible')) helpOvl.classList.remove('visible');
+    else return;
+    e.preventDefault();
+  });
   (function() {
     var startX, startY, boxL, boxT;
     helpDragHandle.addEventListener('mousedown', function(e) {

@@ -841,5 +841,8 @@ def test_pool_summary_and_explicit_start_consent():
             page.evaluate('window.accept=true; startCloudQueue()')
             assert page.evaluate('sent.length') == 1
             assert page.evaluate('JSON.parse(sent[0][1].body).accept_rental_and_cleanup')
+            page.evaluate('sent.length=0; savedPreferences.auto_rent=false; window.accept=false; window.confirmation=null; startCloudQueue()')
+            page.wait_for_function('sent.length === 1')
+            assert page.evaluate('window.confirmation') is None
         finally:
             browser.close()

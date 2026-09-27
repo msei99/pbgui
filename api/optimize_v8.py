@@ -139,6 +139,10 @@ _dash_lock = threading.RLock()
 _dash_admission_open = False
 _result_progress_cache: OrderedDict[str, dict] = OrderedDict()
 _result_progress_cache_lock = threading.RLock()
+_result_listing_cache: OrderedDict[str, dict] = OrderedDict()
+_result_listing_cache_lock = threading.RLock()
+_RESULT_LISTING_CACHE_TTL_SECONDS = 10 * 60
+_RESULT_LISTING_CACHE_MAX_ENTRIES = 256
 _active_eval_count_cache: OrderedDict[str, dict] = OrderedDict()
 _active_eval_count_cache_lock = threading.RLock()
 _active_eval_scan_threads: dict[str, threading.Thread] = {}
@@ -2087,11 +2091,40 @@ def _latest_existing_mtime(paths: list[Path]) -> float | None:
     return max(mtimes) if mtimes else None
 
 
+def _result_listing_signature(directory: Path, pareto_dir: Path, paretos: list[Path]) -> tuple:
+    """Track the files that can change a result row without decoding their contents."""
+    paths = [
+        directory, pareto_dir, paretos[0] if paretos else None,
+        directory / "all_results.bin", directory / "checkpoint.pkl",
+        directory / "config.json", directory / "optimize.json",
+    ]
+    signature = [paretos[0].name if paretos else None, len(paretos)]
+    for path in paths:
+        if path is None:
+            signature.append(None)
+            continue
+        try:
+            info = path.stat(follow_symlinks=False)
+            signature.append((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+        except OSError:
+            signature.append(None)
+    return tuple(signature)
+
+
 def _list_results() -> list[dict]:
     results = []
     results_root = _results_root()
     for directory in _result_dirs(results_root) or []:
         pareto_dir, paretos = _pareto_files_for_listing(directory)
+        signature = _result_listing_signature(directory, pareto_dir, paretos)
+        cache_key = str(directory)
+        now = time.monotonic()
+        with _result_listing_cache_lock:
+            cached = _result_listing_cache.get(cache_key)
+            if cached and cached["signature"] == signature and now - cached["created_at"] < _RESULT_LISTING_CACHE_TTL_SECONDS:
+                _result_listing_cache.move_to_end(cache_key)
+                results.append(copy.deepcopy(cached["row"]))
+                continue
         artifacts = [path for path in (directory / "all_results.bin", directory / "checkpoint.pkl") if path.is_file()]
         modified_paths = [pareto_dir, *artifacts] if paretos else [*artifacts, directory]
         progress = _all_results_progress_for_listing(directory / "all_results.bin")
@@ -2127,29 +2160,33 @@ def _list_results() -> list[dict]:
             modified = _latest_existing_mtime([directory])
         if modified is None:
             continue
-        results.append(
-            {
-                "path": str(directory),
-                "result": directory.name,
-                "name": _result_name(directory, first_data),
-                "pareto_count": len(paretos),
-                "has_pareto": has_pareto,
-                "checkpoint": checkpoint_present,
-                "checkpoint_present": checkpoint_present,
-                "resumable": readiness["ready"],
-                "has_config": readiness["config"] is not None,
-                "supports_3d": has_pareto and len(objective_names) == 3,
-                "supports_dash": has_pareto,
-                "resume_reasons": readiness["reasons"],
-                "evaluations": progress["evaluations"],
-                "progress": progress,
-                "strategy": strategy,
-                "mode": contract["mode"],
-                "scenario_count": contract["scenario_count"],
-                "scenario_labels": contract["scenario_labels"],
-                "modified": datetime.datetime.fromtimestamp(modified).isoformat(),
-            }
-        )
+        row = {
+            "path": str(directory),
+            "result": directory.name,
+            "name": _result_name(directory, first_data),
+            "pareto_count": len(paretos),
+            "has_pareto": has_pareto,
+            "checkpoint": checkpoint_present,
+            "checkpoint_present": checkpoint_present,
+            "resumable": readiness["ready"],
+            "has_config": readiness["config"] is not None,
+            "supports_3d": has_pareto and len(objective_names) == 3,
+            "supports_dash": has_pareto,
+            "resume_reasons": readiness["reasons"],
+            "evaluations": progress["evaluations"],
+            "progress": progress,
+            "strategy": strategy,
+            "mode": contract["mode"],
+            "scenario_count": contract["scenario_count"],
+            "scenario_labels": contract["scenario_labels"],
+            "modified": datetime.datetime.fromtimestamp(modified).isoformat(),
+        }
+        with _result_listing_cache_lock:
+            _result_listing_cache[cache_key] = {"signature": signature, "created_at": now, "row": copy.deepcopy(row)}
+            _result_listing_cache.move_to_end(cache_key)
+            while len(_result_listing_cache) > _RESULT_LISTING_CACHE_MAX_ENTRIES:
+                _result_listing_cache.popitem(last=False)
+        results.append(row)
     return sorted(results, key=lambda item: item["modified"], reverse=True)
 
 
@@ -4901,6 +4938,8 @@ def _forget_result_progress(result_dir: Path) -> None:
 
 def _forget_result_caches(result_dir: Path) -> None:
     _forget_result_progress(result_dir)
+    with _result_listing_cache_lock:
+        _result_listing_cache.pop(str(result_dir), None)
     prefix = str(result_dir.resolve()) + os.sep
     with _pareto_list_cache_lock:
         for key in list(_pareto_list_cache):

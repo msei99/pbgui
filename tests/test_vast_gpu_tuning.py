@@ -45,7 +45,7 @@ def test_rented_vram_resolves_bounded_dispatch(
     dispatch_candidates = target_candidates
     dispatch = max(
         dispatch_floor,
-        result['largest_candidate_bars'] * dispatch_candidates,
+        (result['largest_candidate_bars'] * dispatch_candidates * 105 + 99) // 100,
     )
     assert config['optimize']['gpu']['max_dispatch_candidate_bars'] == dispatch
     assert result['automatic']['max_dispatch_candidate_bars'] == dispatch
@@ -198,8 +198,26 @@ def test_pbgui_resolves_standard_cuda_profile_for_new_worker():
     assert config['optimize']['gpu']['population_size'] == 8192
     assert config['optimize']['gpu']['batch_size'] == 8192
     assert config['optimize']['gpu']['max_dispatch_candidate_bars'] == (
-        result['largest_candidate_bars'] * 8192
+        (result['largest_candidate_bars'] * 8192 * 105 + 99) // 100
     )
+    assert result['dispatch_chunks'] == 1
+
+
+def test_native_warmup_and_reserve_keep_large_suite_in_one_dispatch(monkeypatch):
+    """A 410-day two-coin suite has room for PB8 warmup and five percent spare."""
+    import vast_gpu_tuning
+
+    config = workload()
+    config['live']['warmup_ratio'] = 1.0
+    config['live']['approved_coins']['long'] = ['BTC', 'ETH']
+    config['live']['approved_coins']['short'] = ['BTC', 'ETH']
+    config['backtest'].update(start_date='2020-01-03', end_date='2021-02-15')
+    monkeypatch.setattr(vast_gpu_tuning, '_optimizer_warmup_minutes', lambda _: 12_096)
+    result = resolve_gpu_settings(config, {'hardware': {'vram_bytes': 12 * 1024**3}}, {})
+    assert result['largest_candidate_bars'] == (410 * 1440 + 12_096) * 2
+    expected = (result['largest_candidate_bars'] * 8192 * 105 + 99) // 100
+    assert config['optimize']['gpu']['max_dispatch_candidate_bars'] == expected
+    assert expected > 601_057 * 2 * 8192
     assert result['dispatch_chunks'] == 1
 
 
