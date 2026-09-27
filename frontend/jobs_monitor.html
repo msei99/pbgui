@@ -1559,12 +1559,14 @@
             const logJobId = document.getElementById('log-job-id');
             
             logJobId.textContent = jobId;
+            logContent.style.color = '';
             logContent.innerHTML = '<p>Loading...</p>';
             modal.classList.add('active');
             
             try {
                 const resp = await fetch(`${API_BASE}/jobs/${jobId}/log?lines=500`, authOptions());
                 const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
                 
                 if (!data.exists || !data.log || data.log.length === 0) {
                     logContent.innerHTML = '<p style="color:#94a3b8;">No log file found or log is empty.</p>';
@@ -1579,7 +1581,8 @@
                 logContent.scrollTop = logContent.scrollHeight;
             } catch (e) {
                 console.error('Log error:', e);
-                logContent.innerHTML = '<p style="color:#ef4444;">Failed to load log.</p>';
+                logContent.textContent = `Failed to load log: ${e.message || 'Unknown error'}`;
+                logContent.style.color = '#ef4444';
             }
         }
 
@@ -1846,6 +1849,12 @@
         document.getElementById('action-modal-cancel').addEventListener('click', () => closeActionDialog(false));
         document.getElementById('action-modal-accept').addEventListener('click', () => closeActionDialog(true));
         document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && document.getElementById('log-modal').classList.contains('active')) {
+                e.preventDefault(); closeLogModal(); return;
+            }
+            if (e.key === 'Escape' && document.getElementById('details-modal').classList.contains('active')) {
+                e.preventDefault(); closeDetailsModal(); return;
+            }
             const modal = document.getElementById('action-modal');
             if (!modal.classList.contains('active')) return;
             if (e.key === 'Escape') {

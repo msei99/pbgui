@@ -3652,7 +3652,7 @@
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=8"></script>
+  <script src="/app/js/shared_help_overlay.js?v=9"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
   <script src="/app/js/log_viewer_panel.js?v=50"></script>
   <script src="/app/js/pbgui_dialogs.js?v=10"></script>
@@ -6972,7 +6972,9 @@
         }
       }
 
+      var tradfiSavePending = false;
       async function saveTradfiMapping() {
+        if (tradfiSavePending) return false;
         var xyzCoin = readFieldValue('tradfi-editor-xyz-coin').toUpperCase();
         if (!xyzCoin) {
           showToast('XYZ coin cannot be empty.', 'error');
@@ -6992,6 +6994,9 @@
           spec_source: 'manual'
         };
 
+        var saveButton = document.getElementById('btn-tradfi-save');
+        tradfiSavePending = true;
+        saveButton.disabled = true;
         try {
           var result = await fetchJson('/settings/hyperliquid/tradfi-map', {
             method: 'POST',
@@ -7002,11 +7007,15 @@
           }
           tradfiMapState.selectedCoin = String(((result.payload || {}).selected_xyz_coin) || xyzCoin);
           renderTradfiMap(result.payload || {});
+          cancelTradfiEditor();
           showToast(result.message || 'TradFi symbol mapping saved.', 'success');
           return true;
         } catch (error) {
           showToast(error && error.message ? error.message : 'TradFi symbol map save failed.', 'error');
           return false;
+        } finally {
+          tradfiSavePending = false;
+          saveButton.disabled = false;
         }
       }
 

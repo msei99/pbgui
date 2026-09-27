@@ -34,3 +34,5 @@ Alle PBAPIServer-Aktivitäten werden in `PBApiServer.log` protokolliert, sichtba
 - **🔴 Status**: Schaltfläche klicken zum Neustart; `PBApiServer.log` auf Fehler prüfen
 - **VPS Monitor zeigt keine Daten**: sicherstellen, dass PBAPIServer läuft und der WebSocket-Endpunkt erreichbar ist
 - **Port-Konflikt**: Port in den Einstellungen ändern, speichern, dann neu starten
+
+Wenn das Laden der API-Server-Einstellungen fehlschlägt, zeigt der Tab Einstellungen den Fehler und eine Schaltfläche zum erneuten Laden. Speichern bleibt bis zum erfolgreichen Laden deaktiviert.

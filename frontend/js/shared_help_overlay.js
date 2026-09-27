@@ -673,6 +673,8 @@
         gotoMark(state.searchIndex + (event.shiftKey ? -1 : 1));
       }
       if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
         dom('pbgui-shared-help-search').value = '';
         if (state.globalMode) showGlobalResults('');
         else clearSearch();

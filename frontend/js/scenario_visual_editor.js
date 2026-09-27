@@ -74,8 +74,8 @@
       if(applying)return;
       if(JSON.stringify(split())!==JSON.stringify(windows)){save();changed();}
       const errors=validate();if(errors.length){problem.textContent=errors.join(' ');return;}
-      applying=true;apply.disabled=true;apply.textContent='Checking…';applyStatus.textContent='Validating windows and creating scenarios…';
-      try{await options.apply(copy(windows));if(!disposed)applyStatus.textContent='Windows applied.';}
+      applying=true;apply.disabled=true;apply.textContent='Checking…';applyStatus.textContent='Validating windows and creating scenarios…';applyStatus.style.color='';problem.textContent='';
+      try{const applied=await options.apply(copy(windows));if(!disposed){applyStatus.textContent=applied===false?'':'Windows applied.';problem.textContent='';}}
       catch(error){if(!disposed){applyStatus.textContent=error.message||'Could not apply windows.';applyStatus.style.color='var(--red, #ed7777)';problem.textContent=applyStatus.textContent;}}
       finally{applying=false;if(!disposed){apply.disabled=false;apply.textContent='Check & Apply windows';}}
 
@@ -250,7 +250,7 @@
       event.preventDefault();if(drag)return;
       const rect=svg.getBoundingClientRect(),fraction=Math.max(0,Math.min(1,(event.clientX-rect.left-100)/plotWidth));
       const oldSize=viewEnd-viewStart,anchor=viewStart+fraction*oldSize;
-      const size=Math.max(7,Math.min(maximum-minimum,oldSize*Math.exp(Math.max(-1,Math.min(1,event.deltaY*.002)))));
+      const size=Math.max(Math.min(7,maximum-minimum),Math.min(maximum-minimum,oldSize*Math.exp(Math.max(-1,Math.min(1,event.deltaY*.002)))));
       viewStart=Math.max(minimum,Math.min(maximum-size,anchor-fraction*size));viewEnd=viewStart+size;render();
     },{passive:false,signal:events.signal});
     on(svg,'dblclick',event=>{if(event.target.dataset.id)return;viewStart=minimum;viewEnd=maximum;render();});

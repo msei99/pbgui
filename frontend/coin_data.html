@@ -2107,7 +2107,12 @@
       }, 350);
     }
 
+    var refreshPending = false;
     function runRefresh(path, busyTitle, okFallback) {
+      if (refreshPending) return Promise.resolve();
+      refreshPending = true;
+      var refreshButtons = ['btn-refresh-exchange', 'btn-refresh-all', 'btn-refresh-cmc', 'btn-refresh-cmc-all'].map(function (id) { return document.getElementById(id); });
+      refreshButtons.forEach(function (button) { if (button) button.disabled = true; });
       showBusy(busyTitle, 'Starting refresh...');
       setActionStatus(busyTitle + '...', false);
       return fetch(API_BASE + path, {
@@ -2134,6 +2139,10 @@
           setActionStatus(error.message, true);
           hideBusy();
         })
+        .finally(function () {
+          refreshPending = false;
+          refreshButtons.forEach(function (button) { if (button) button.disabled = false; });
+        });
     }
 
     function renderWarnings() {
@@ -2858,6 +2867,8 @@
       var volMcapInput = document.getElementById('filter-vol-mcap');
       if (marketCapInput) marketCapInput.value = '';
       if (volMcapInput) volMcapInput.value = '10';
+      var hip3DexInput = document.getElementById('filter-hip3-dex');
+      if (hip3DexInput) hip3DexInput.value = '';
       syncToggleButtons();
       loadState();
     }
@@ -3035,7 +3046,11 @@
       });
       document.getElementById('btn-busy-dismiss').addEventListener('click', dismissBusy);
       document.addEventListener('keydown', function (event) {
-        if (event.key !== 'Escape' || !document.getElementById('busy-overlay').classList.contains('visible')) return;
+        if (event.key !== 'Escape') return;
+        if (!document.getElementById('busy-overlay').classList.contains('visible')) {
+          if (uiState.selectedKey) { event.preventDefault(); closeSelectedDetails(); }
+          return;
+        }
         event.preventDefault();
         dismissBusy();
       });
@@ -3149,7 +3164,7 @@
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=8"></script>
+  <script src="/app/js/shared_help_overlay.js?v=9"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

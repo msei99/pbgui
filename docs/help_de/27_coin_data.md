@@ -132,3 +132,5 @@ Coin Data liest und schreibt unter:
 - Erst CMC-Daten aktualisieren, dann die ausgewaehlte Exchange
 - Pruefen, ob Symbole neu gelistet sind oder Exchange-spezifische Namensvarianten verwenden
 - Wenn der CMC-Refresh blockiert ist, vor dem Retry die Readiness des PBCoinData-Pools prüfen
+
+Filter zurücksetzen setzt auch die HIP-3-DEX-Auswahl zurück. Escape schließt die Detailkarte der ausgewählten Coin. Aktionen zur Aktualisierung von Coin Data bleiben während des Starts ihrer Anfrage deaktiviert.

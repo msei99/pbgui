@@ -758,7 +758,7 @@
                     <button class="sb-btn active" data-section-target="overview">Overview</button>
                     <button class="sb-btn" data-section-target="setup">Setup</button>
                     <hr class="sb-sep">
-                    <button class="sb-btn" id="sidebar-password-btn" disabled>Password</button>
+                    <button class="sb-btn" id="sidebar-password-btn" data-section-target="password" disabled>Password</button>
                 </div>
             </div>
             <div id="sidebar-resize"></div>
@@ -1125,7 +1125,7 @@
                 state.fileBrowser.selectedPath = state.fileBrowser.mode === "python" ? (data.selected_path || "") : (data.current_path || "");
                 renderFileBrowser();
             } catch (error) {
-                setBanner(error.message, "error");
+                document.getElementById("file-browser-list").textContent = "Failed to load directory: " + error.message;
             }
         }
 
@@ -1603,7 +1603,7 @@
         initWelcomeHelp();
     </script>
 
-    <script src="/app/js/shared_help_overlay.js?v=8"></script>
+    <script src="/app/js/shared_help_overlay.js?v=9"></script>
 
     <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>

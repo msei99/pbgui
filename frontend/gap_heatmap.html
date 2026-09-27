@@ -692,7 +692,7 @@
     }
 
     // ---------------------------------------------------------------- toast helper
-    function showToast(msg, cls) {
+    function showToast(msg, cls, anchor) {
         fetch('/api/notify_log', {
             method: 'POST',
             credentials: 'same-origin',
@@ -705,8 +705,9 @@
         t.className = 'hm-toast ' + (cls || 'success');
         t.textContent = msg;
         // Insert next to the download button so it's always visible
-        if (elBtnDlL2book && elBtnDlL2book.parentNode) {
-            elBtnDlL2book.parentNode.appendChild(t);
+        var button = anchor || elBtnDlL2book;
+        if (button && button.parentNode) {
+            button.parentNode.appendChild(t);
         } else {
             root.appendChild(t);
         }
@@ -737,7 +738,7 @@
             var m = ('0' + (dt.getMonth() + 1)).slice(-2);
             var d = ('0' + dt.getDate()).slice(-2);
             sd = '' + y + m + d;
-            if (sd > today) { showToast('No missing days — data is up to date', 'success'); return; }
+            if (sd > today) { showToast('No missing days — data is up to date', 'success', elBtnDlOvMissing); return; }
 
             elBtnDlOvMissing.disabled = true;
             elBtnDlOvMissing.textContent = 'Queueing\u2026';
@@ -752,15 +753,15 @@
                     elBtnDlOvMissing.disabled = false;
                     elBtnDlOvMissing.textContent = '\u25bc Download missing';
                     if (data.error) {
-                        showToast(data.error, 'error');
+                        showToast(data.error, 'error', elBtnDlOvMissing);
                     } else {
-                        showToast('Queued: ' + data.coin + ' ' + data.start_day + '\u2013' + data.end_day + ' (job ' + data.job_id.substring(0, 12) + '\u2026)', 'success');
+                        showToast('Queued: ' + data.coin + ' ' + data.start_day + '\u2013' + data.end_day + ' (job ' + data.job_id.substring(0, 12) + '\u2026)', 'success', elBtnDlOvMissing);
                     }
                 })
                 .catch(function(e) {
                     elBtnDlOvMissing.disabled = false;
                     elBtnDlOvMissing.textContent = '\u25bc Download missing';
-                    showToast('Queue failed: ' + e.message, 'error');
+                    showToast('Queue failed: ' + e.message, 'error', elBtnDlOvMissing);
                 });
         });
     }

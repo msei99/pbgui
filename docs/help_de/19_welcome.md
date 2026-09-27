@@ -90,3 +90,5 @@ Ein leeres Passwort allein wird abgelehnt. Jeder Passwort- oder Auth-Modus-Wechs
 - **Du willst nur das Passwort aendern**: die Sidebar-Aktion **Password** verwenden statt die Setup-Felder anzupassen
 
 Login und Save Setup verarbeiten jeweils nur eine Anfrage. Nach einem Fehler werden die Eingabefelder wieder freigegeben.
+
+Die Seitenleiste markiert den aktiven Passwortbereich. Wenn das Laden eines Serververzeichnisses fehlschlägt, zeigt der Dateibrowser den Fehler im Dialog an. Sie können einen anderen Pfad wählen oder den Dialog schließen.

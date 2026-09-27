@@ -72,3 +72,5 @@ If a mapping build fails for an exchange (e.g. due to a temporary network error)
 - **Mapping stale**: Check `data/logs/PBCoinData.log` for repeated `ERROR` or `self-heal` entries
 - **CMC rate-limit errors (429)**: The affected key enters cooldown and the pool tries another eligible key; increase `fetch_interval` if every key remains limited
 - **Ignored/approved lists not updating in PBRun**: Verify mapping files exist under `data/coindata/{exchange}/` and restart PBCoinData once
+
+If loading service settings fails, the Settings tab shows the error and a Retry button. Saving remains disabled until the settings load succeeds.

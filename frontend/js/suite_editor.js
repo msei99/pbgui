@@ -817,12 +817,12 @@ async function _suiteConfirmScenarioReplacement(action, confirmText) {
 
 async function _suiteApplyScenarioPreview(preserveVisual) {
   var preview = _suiteState.scenarioPreview;
-  if (!preview || !Array.isArray(preview.training_scenarios)) return;
+  if (!preview || !Array.isArray(preview.training_scenarios)) return false;
   if (_suiteScenarioContextSignature(_suiteScenarioContext()) !== _suiteState.scenarioPreviewContext) {
     toast('Base dates or exchanges changed. Preview the scenario template again before applying.', 'err');
     return;
   }
-  if (!(await _suiteConfirmScenarioReplacement('Applying generated training scenarios', 'Apply scenarios'))) return;
+  if (!(await _suiteConfirmScenarioReplacement('Applying generated training scenarios', 'Apply scenarios'))) return false;
   if (preview !== _suiteState.scenarioPreview || _suiteScenarioContextSignature(_suiteScenarioContext()) !== _suiteState.scenarioPreviewContext) {
     toast('Scenario preview changed. Preview the scenario template again before applying.', 'err');
     return;
@@ -838,6 +838,7 @@ async function _suiteApplyScenarioPreview(preserveVisual) {
   _suiteState.applyingGeneratedTemplate = false;
   _suiteRender(preserveVisual);
   toast('Applied ' + _suiteState.scenarios.length + ' generated training scenarios', 'ok');
+  return true;
 }
 
 /* ── Toggle enabled ─────────────────────────────────────────── */
@@ -1372,11 +1373,12 @@ function _suiteMountVisual(host) {
       _suiteState.scenarioPreview=preview;
       _suiteState.scenarioPreviewContext=signature;
       _suiteState.scenarioGeneratorDraft=Object.assign({},draft,{windows:(preview.parameters && preview.parameters.windows) || windows});
-      await _suiteApplyScenarioPreview(true);
+      if (!(await _suiteApplyScenarioPreview(true))) return false;
       if(_suiteState.scenarioTemplate!==null && JSON.stringify(_suiteState.scenarios)===JSON.stringify(preview.training_scenarios)){
         var table=document.querySelector('#suite-container .suite-scenarios-table');
         if(table)table.scrollIntoView({block:'nearest'});
       }else throw new Error('Scenarios were not applied. Close the individual scenario editor and try again.');
+      return true;
     }
   });
 }

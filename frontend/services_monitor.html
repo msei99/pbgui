@@ -916,7 +916,7 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/js/pbgui_dialogs.js?v=10"></script>
-<script src="/app/js/shared_help_overlay.js?v=8"></script>
+<script src="/app/js/shared_help_overlay.js?v=9"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
 <script>
@@ -2106,10 +2106,37 @@ window.PBGUI_NAV_CONFIG = {
       .then(function (data) {
         applySettings(svcId, data);
         _settingsLoaded[svcId] = true;
+        var panel = typeof document === 'undefined' ? null : document.getElementById(svcId + '-tab-settings');
+        if (panel && svcId !== 'pbdata') {
+          var notice = panel.querySelector('.settings-load-error');
+          if (notice) notice.remove();
+          var saveButton = panel.querySelector('.form-btn.save');
+          if (saveButton) saveButton.disabled = false;
+        }
       })
       .catch(function (error) {
         console.error('Failed to load service settings', error);
-        if (svcId !== 'pbdata') return;
+        if (svcId !== 'pbdata') {
+          var panel = typeof document === 'undefined' ? null : document.getElementById(svcId + '-tab-settings');
+          var settingsWrap = panel && panel.querySelector('.settings-wrap');
+          if (!settingsWrap) return;
+          var saveButton = settingsWrap.querySelector('.form-btn.save');
+          if (saveButton) saveButton.disabled = true;
+          var notice = settingsWrap.querySelector('.settings-load-error');
+          if (!notice) {
+            notice = document.createElement('div');
+            notice.className = 'settings-load-error';
+            settingsWrap.prepend(notice);
+          }
+          notice.replaceChildren();
+          var message = document.createElement('span');
+          message.textContent = 'Failed to load settings: ' + error.message + ' ';
+          var retry = document.createElement('button');
+          retry.type = 'button'; retry.className = 'form-btn'; retry.textContent = 'Retry';
+          retry.addEventListener('click', function () { loadSettings(svcId); });
+          notice.append(message, retry);
+          return;
+        }
         var wrap = document.getElementById('pbdata-settings-wrap');
         if (!wrap) return;
         wrap.replaceChildren();

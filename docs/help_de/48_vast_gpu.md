@@ -409,3 +409,5 @@ Beim Upload zeigt **Transferring job metadata** die komprimierten Konfigurations
 **Stop & collect** bricht auch einen Upload ab, der auf die Metadatenbestätigung wartet. Die Transfer-Steuerung prüft Stop-Anforderungen weiter, während SSH oder rsync keine Ausgabe liefert – auch nach dem Schließen der Ausgabekanäle bis zum tatsächlichen Prozessende. Vor dem Optimierungsstart gibt es keine Optimierungsergebnisse abzuholen; der Job wechselt auf **Cancelled**. Für eine pausierte Miete gelten weiterhin die bestehende Leerlaufbereinigung und Deadline.
 
 Gueltige Pareto-Fronten mit mehr als 1.000 Ergebnissen werden weiterhin auf Stagnation geprueft; alle zulaessigen Punkte gehen in die exakte Hypervolumenberechnung ein.
+
+Aktionen zum Leistungsvergleich sind während einer laufenden Vergleichsanfrage deaktiviert. So werden doppelte Anfragen verhindert.

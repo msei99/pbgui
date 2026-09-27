@@ -402,3 +402,5 @@ During upload, **Transferring job metadata** reports compressed configuration/ma
 **Stop & collect** also cancels an upload that is waiting for metadata acknowledgement. Transfer controllers continue checking stop requests while SSH or rsync is silent, including after its output closes but before its process exits. Before optimization starts there are no optimizer results to collect; the job becomes **Cancelled**. A paused rental remains subject to its existing idle cleanup and deadline.
 
 Valid Pareto fronts with more than 1,000 results remain eligible for stagnation checks; all feasible points contribute to the exact hypervolume calculation.
+
+Performance comparison actions are disabled while a comparison request is running, preventing duplicate submissions.

@@ -7,3 +7,5 @@ Only a VPS running a bot for the wallet polls Hyperliquid `userRateLimit` automa
 Open an active account row to see its 24-hour Used and Cap history. History is collected on the Master only while a bot is running for the account. An account without a running bot is listed as **Not sampled**. To check such an account once, open its saved entry under **System → API-Keys**; PBGui reads the limit once from Hyperliquid and displays Used, Cap, and remaining requests in a card beside Futures Balance. Request counters here and in VPS Manager use apostrophes for thousands (for example, `2'209'548`). That one-time read does not create ongoing history. Opening the API key again performs another single read.
 
 These counters describe Hyperliquid's address-based action quota, not the separate IP REST weight limit. The page updates automatically and has no manual refresh control.
+
+Accounts without a sample show a neutral dash for Remaining. A single history sample appears as a point with one time label.

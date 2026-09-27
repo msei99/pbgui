@@ -132,3 +132,5 @@ Coin Data reads and writes under:
 - Refresh CMC data first, then refresh the selected exchange
 - Check whether symbols are newly listed or use exchange-specific naming variants
 - If CMC refresh is blocked, confirm the PBCoinData Pool is ready before retrying
+
+Reset Filters also clears the HIP-3 DEX selector. Escape closes the selected coin details card. Coin Data refresh actions stay disabled while their request is starting.

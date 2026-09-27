@@ -543,7 +543,7 @@
     </div>
   </div>
 
-  <script src="./js/shared_help_overlay.js?v=8"></script>
+  <script src="./js/shared_help_overlay.js?v=9"></script>
   <script>
     var _query = new URLSearchParams(window.location.search);
     var API_BASE = '%%API_BASE%%';
@@ -701,7 +701,11 @@
       }
 
       function clearSearch() {
-        if (rawHtml !== null) helpContent.innerHTML = rawHtml;
+        if (rawHtml !== null) {
+          var scrollTop = helpContent.scrollTop;
+          helpContent.innerHTML = rawHtml;
+          helpContent.scrollTop = scrollTop;
+        }
         searchMarks = [];
         searchIndex = -1;
         helpSearchCount.textContent = '';
@@ -1055,6 +1059,8 @@
           gotoMark(searchIndex + (event.shiftKey ? -1 : 1));
         }
         if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
           helpSearch.value = '';
           if (globalMode) showGlobalResults('');
           else clearSearch();

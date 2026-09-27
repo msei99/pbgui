@@ -1114,6 +1114,12 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     state.pendingMessage = '';
     delete state.retryMessages.__new__;
     Array.from($('messages').querySelectorAll('.message')).forEach(function (node) { node.remove(); });
+    $('reasoning-summary-text').textContent = '';
+    $('reasoning-summary').hidden = true;
+    $('reasoning-summary').open = false;
+    $('activity-history-text').textContent = '';
+    $('activity-history').hidden = true;
+    $('activity-history').open = false;
     $('empty-state').hidden = false;
     renderProposals([]);
     renderConversationList();
@@ -1327,7 +1333,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       setNotice('OpenCode Go connected.', false);
       await refreshStatus();
     } catch (error) {
-      if (generation === state.goGeneration) { $('go-key').value = ''; setNotice(error.message, true); }
+      if (generation === state.goGeneration) setNotice(error.message, true);
     } finally {
       if (generation === state.goGeneration) setTransitioning(false);
     }

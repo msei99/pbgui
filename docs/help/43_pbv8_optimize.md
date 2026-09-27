@@ -376,3 +376,5 @@ The pinned Vast GPU worker supports HSL for ema_anchor and trailing_martingale. 
 Set **Max concurrent GPUs** and enable **Auto rent & start** under **Rental & Automation** to run prepared queued jobs concurrently on separate Vast GPUs (default 1). After the explicit save confirmation, **Save & Queue** needs no per-job Start action. Budgets and deadlines apply per rental. See the [GPU pool guide](48_vast_gpu.md#gpu-pool-and-shared-rentals) for pause, cleanup and replacement behavior.
 
 Optimize bounds now keep position counts positive and avoid the invalid long/short auto-unstuck endpoints. Forager EMA spans remain at least 1, and an enabled HSL red threshold stays strictly below 1, including when PB8 supplies broader slider metadata. The Results list reuses unchanged summaries and updates them when result artifacts change. In the Scenario Visual Editor, Check & Apply keeps the current window editor and its Undo history open after a successful apply.
+
+In the visual scenario editor, zoom stays within the configured dates. A successful retry clears earlier errors, and cancelling scenario replacement leaves the open editor unchanged.

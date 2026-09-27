@@ -34,3 +34,5 @@ All PBAPIServer activity is logged to `PBApiServer.log`, visible in the log view
 - **🔴 status**: click the button to restart; check `PBApiServer.log` for errors
 - **VPS Monitor shows no data**: ensure PBAPIServer is running and the WebSocket endpoint is reachable
 - **Port conflict**: change the port in Settings, save, then restart
+
+If loading API Server settings fails, the Settings tab shows the error and a Retry button. Saving remains disabled until the settings load succeeds.

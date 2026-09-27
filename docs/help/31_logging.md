@@ -215,3 +215,5 @@ their own dedicated log or job transcript. `OptimizeQueueAPI` intentionally
 remains dedicated rather than being grouped into `PBGui.log`.
 
 Live output follows the newest line, including delayed wrapping and panel resizing. Scroll upward to read history without being pulled back; scroll to the bottom to resume following. Releasing a drag outside the log area does not leave history mode stuck.
+
+Purge cannot be submitted twice while its request is running. A failed default rotation save shows the API error briefly so you can correct the setting and try again.

@@ -7,3 +7,5 @@ Nur eine VPS, auf der ein Bot für die Wallet läuft, fragt Hyperliquid `userRat
 Ein Klick auf einen aktiven Account zeigt den 24-Stunden-Verlauf für Used und Cap. Der Master sammelt History nur, solange ein Bot dieses Accounts läuft. Accounts ohne laufenden Bot erscheinen als **Not sampled**. Für eine einmalige aktuelle Abfrage den gespeicherten Eintrag unter **System → API-Keys** öffnen: PBGui zeigt Used, Cap und verbleibende Requests in einer Karte neben Futures Balance. Die Request-Zähler hier und im VPS Manager verwenden Apostrophe als Tausendertrennzeichen (zum Beispiel `2'209'548`). Diese Einzelabfrage startet keine laufende History. Erneutes Öffnen löst wieder genau eine Abfrage aus.
 
 Die Zähler betreffen das adressbezogene Aktionslimit von Hyperliquid, nicht das separate IP-REST-Gewichtslimit. Die Seite aktualisiert sich automatisch und hat keinen manuellen Refresh-Button.
+
+Konten ohne Messwert zeigen bei Verbleibend einen neutralen Strich. Ein einzelner Verlaufswert erscheint als Punkt mit einer Zeitangabe.

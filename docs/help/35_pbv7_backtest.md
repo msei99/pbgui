@@ -341,3 +341,5 @@ The AI assistant can also open exact managed PB7 backtest resources in this Resu
 When a Suite scenario editor is open, applying a template, resetting to Base, or applying generated training scenarios asks for confirmation before discarding unsaved edits. Cancel keeps the draft intact.
 
 If Add to Run cannot create an editor draft, Backtest shows the server error and keeps the current page open. Navigation occurs only after a valid draft ID is returned.
+
+In the visual scenario editor, zoom stays within the configured dates. A successful retry clears earlier errors, and cancelling scenario replacement leaves the open editor unchanged.

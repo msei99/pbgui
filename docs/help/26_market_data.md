@@ -556,3 +556,5 @@ If Build coin list is empty:
 Inventory deletion and job actions reject duplicate clicks while pending. Deletion keeps the dataset selected at confirmation; cancelling a Hyperliquid job updates the running list automatically. Download queue failures display the backend reason.
 
 Save Settings accepts only one request at a time. Edits made while a save is pending remain in the form and can be saved afterward.
+
+After saving a TradFi symbol mapping, the editor closes and the updated row remains selected. The Save button is disabled while the request is in progress.

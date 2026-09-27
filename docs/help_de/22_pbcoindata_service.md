@@ -72,3 +72,5 @@ Schlägt ein Mapping-Build für eine Exchange fehl (z. B. durch einen temporäre
 - **Mapping veraltet**: `data/logs/PBCoinData.log` auf wiederholte `ERROR`- oder `self-heal`-Einträge prüfen
 - **CMC-Rate-Limit-Fehler (429)**: Der betroffene Key geht in Cooldown und der Pool versucht einen anderen geeigneten Key; wenn alle Keys limitiert bleiben, `fetch_interval` erhöhen
 - **Ignored/Approved-Listen in PBRun werden nicht aktualisiert**: Mapping-Dateien unter `data/coindata/{exchange}/` prüfen und PBCoinData einmal neu starten
+
+Wenn das Laden der Diensteinstellungen fehlschlägt, zeigt der Tab Einstellungen den Fehler und eine Schaltfläche zum erneuten Laden. Speichern bleibt bis zum erfolgreichen Laden deaktiviert.

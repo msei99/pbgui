@@ -5,7 +5,7 @@
     const el = id => document.getElementById(id);
     const events = new AbortController();
     let rows = [], selected = new Map(), offset = 0, total = 0, fingerprint = null;
-    let active = false, disposed = false, generation = 0, drag = null;
+    let active = false, disposed = false, generation = 0, drag = null, comparing = false;
     const colors = ['#4da6ff', '#5eead4', '#fbbf24', '#c084fc'];
     const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 1}) : '—';
     const money = value => Number.isFinite(value) ? value.toFixed(4) : '—';
@@ -24,9 +24,9 @@
         row.classList.toggle('selected', selected.has(row.dataset.run));
         row.setAttribute('aria-selected', String(selected.has(row.dataset.run)));
       });
-      el('performance-compare').disabled = !comparable();
-      el('performance-config-compare').disabled = selected.size < 2;
-      el('performance-view').disabled = selected.size !== 1;
+      el('performance-compare').disabled = comparing || !comparable();
+      el('performance-config-compare').disabled = comparing || selected.size < 2;
+      el('performance-view').disabled = comparing || selected.size !== 1;
       el('performance-same').disabled = !selected.size || !selected.values().next().value.fingerprint;
       el('performance-selection').textContent = selected.size + ' selected' +
         (selected.size > 1 && !comparable() ? ' · hardware comparison requires identical verified workloads; use Compare configs for different workloads' : '');
@@ -161,8 +161,10 @@
       });
     }
     async function compare(inspect = false, mode = 'hardware') {
+      if (comparing) return;
       if (inspect ? selected.size !== 1 : mode === 'config' ? selected.size < 2 : !comparable()) return;
       const current = ++generation;
+      comparing = true; updateSelection();
       status('Loading comparison…');
       try {
         const data = await request('/performance/compare', {method:'POST', body:JSON.stringify({ids:[...selected.keys()], mode})});
@@ -190,6 +192,7 @@
         el('performance-browser').hidden = true; el('performance-comparison').hidden = false;
         el('performance-back').hidden = false; status(mode === 'config' ? 'Config workload comparison · rates also depend on GPU, CPU allocation, worker version and search settings. This is not an isolated hardware benchmark.' : (data.runs.length > 1 ? 'Identical frozen workload · ' : 'Workload · ') + (data.runs[0].fingerprint || 'Unverified — comparison unavailable'));
       } catch (error) { if (!disposed && active && current === generation) status(error.message); }
+      finally { comparing = false; if (!disposed) updateSelection(); }
     }
     function browse() {
       generation++; el('performance-browser').hidden = false; el('performance-comparison').hidden = true;

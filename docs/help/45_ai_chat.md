@@ -222,3 +222,5 @@ If a login was interrupted or its link was lost after reloading, click Browser l
 The compact AI drawer shows usage for the selected provider and ChatGPT profile, updating automatically every 30 seconds. OpenCode Go reports 5-hour, weekly and monthly usage with reset dates in both chat interfaces. Zen balance remains available in the OpenCode console.
 
 Deleting a conversation clears its active response state. Reviewing one proposal leaves other pending proposals visible; cancelling review restores its card.
+
+Starting a new chat clears the previous reasoning summary and activity history. If connecting OpenCode Go fails, the entered API key stays in the password field for correction and retry.

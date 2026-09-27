@@ -222,3 +222,5 @@ Wurde eine Anmeldung unterbrochen oder ging ihr Link nach dem Neuladen verloren,
 Der kompakte AI-Seitenbereich zeigt die Nutzung des ausgewählten Anbieters und ChatGPT-Profils und aktualisiert sie automatisch alle 30 Sekunden. OpenCode Go zeigt 5-Stunden-, Wochen- und Monatslimits mit Rücksetzdatum in beiden Chat-Ansichten. Das Zen-Guthaben ist weiterhin in der OpenCode-Konsole verfügbar.
 
 Beim Löschen eines Chats wird dessen laufender Antwortstatus bereinigt. Während der Prüfung eines Vorschlags bleiben andere Vorschläge sichtbar; ein Abbruch stellt die betreffende Karte wieder her.
+
+Ein neuer Chat entfernt die bisherige Zusammenfassung der Überlegungen und den Aktivitätsverlauf. Wenn die Verbindung zu OpenCode Go fehlschlägt, bleibt der eingegebene API-Schlüssel zur Korrektur und für einen erneuten Versuch im Passwortfeld.

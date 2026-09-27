@@ -90,3 +90,5 @@ An empty password by itself is rejected. Every password or authentication-mode c
 - **You only want to change the password**: use the **Password** sidebar action instead of editing setup fields
 
 Login and Save Setup accept one request at a time. Failed requests restore the controls so you can correct the input and retry.
+
+The sidebar highlights the active Password section. If browsing a server directory fails, the file browser shows the error inside the dialog so you can choose another path or close it.
