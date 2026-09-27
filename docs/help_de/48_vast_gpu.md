@@ -205,7 +205,7 @@ garantiert deshalb noch keinen erfolgreichen GPU-Lauf.
 
 ## GPU-Pool und gemeinsame Mieten
 
-Unter **Rental & Automation** lässt sich **Max concurrent GPUs** einstellen (Standard **1**, maximal **16**). Damit nicht jeder Queue-Job von Hand gestartet werden muss, **Auto rent & start** auf **On** stellen und speichern. Die Bestätigung genehmigt ausdrücklich die Budgetziele pro Miete und für alle gleichzeitigen Mieten. Danach reicht **Save & Queue**: Sobald die Eingabevorbereitung fertig ist, mietet PBGui bis zum gespeicherten Limit und startet pro GPU einen Optimizer. Passende freie GPUs werden zuerst wiederverwendet. Aufbauende und noch nicht nachweislich gelöschte Mieten zählen zum Limit. **Auto rent & start** funktioniert auch mit Limit 1. Bei ausgeschaltetem Auto rent mietet **Start** nur eine GPU für die bestehende Queue, selbst wenn Max concurrent GPUs höher eingestellt ist; ein weiterer Queue-Job genehmigt keine zusätzliche Miete.
+Unter **Rental & Automation** lässt sich **Max concurrent GPUs** einstellen (Standard **1**, maximal **16**). Damit nicht jeder Queue-Job von Hand gestartet werden muss, **Auto rent & start** auf **On** stellen und speichern. Die Bestätigung genehmigt ausdrücklich die Budgetziele pro Miete und für alle gleichzeitigen Mieten. Danach reicht **Save & Queue**: Sobald die Eingabevorbereitung fertig ist, mietet PBGui bis zum gespeicherten Limit und startet pro GPU einen Optimizer. Passende freie GPUs werden zuerst wiederverwendet. Aufbauende und noch nicht nachweislich gelöschte Mieten zählen zum Limit. **Auto rent & start** funktioniert auch mit Limit 1. Bei ausgeschaltetem Auto rent mietet **Start** nur eine GPU für die bestehende Queue, selbst wenn Max concurrent GPUs höher eingestellt ist; ein weiterer Queue-Job genehmigt keine zusätzliche Miete. Fuer eine weitere ausdrueckliche Miete waehrend laufender Jobs unter **GPU & Offers** ein anderes Angebot auswaehlen und **Rent** klicken. Die reservierte GPU auf ihrer eigenen Queue-Karte mit **Start queue** starten; jeweils nur eine manuelle Reservierung kann auf diesen Start warten.
 
 Stunden, Budget und Leerlaufregel gelten **pro GPU-Miete**. Die Einstellungen zeigen die Summe der gleichzeitig geltenden Budgetziele. Dies ist kein Gesamtbudget über die Laufzeit des Pools: Solange der Pool aktiv ist und vorbereitete Jobs warten, kann er nach Ende einer Miete Ersatz-GPUs mieten. Neue Angebote müssen die genehmigten Anforderungen und Host-Sperren erfüllen. Ohne passendes Angebot zeigt die Queue den Grund und versucht es automatisch erneut.
 
@@ -241,7 +241,7 @@ in PB8 Results/Paretos importiert; der genaue lokale Pfad wird angezeigt.
   Queue kann danach der nächste Job dieselbe GPU verwenden.
 - **Pause queue** verhindert Folgestarts; der aktuelle Lauf geht weiter.
 - **Start queue** auf der Karte einer reservierten GPU gibt nur diese manuelle Reservierung für die Abarbeitung frei.
-- **End rental** auf einer manuellen GPU-Karte beendet/sichert deren aktiven Job und löscht diesen Worker.
+- **End rental** auf einer manuellen GPU-Karte beendet/sichert deren aktiven Job und löscht diesen Worker. Die globale Aktion **End all rentals** wird bei mehreren manuellen GPUs angezeigt und muss bestaetigt werden.
 - **Replace GPU** auf einer automatisch verwalteten Karte beendet nur diese Miete. Die Pool-Planung bleibt aktiv und stellt die Kapazität nach bestätigter Bereinigung wieder her.
 - **Resume supervision** stellt die Überwachung derselben Miete nach einem
   Controller-/Host-Ausfall wieder her, ohne eine Ersatzinstanz zu mieten.

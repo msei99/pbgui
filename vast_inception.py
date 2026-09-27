@@ -7,12 +7,14 @@ import math
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import tempfile
 import time
 
+from file_lock import advisory_file_lock
 from logging_helpers import human_log
-from pbgui_purefunc import pb8dir
-from secure_files import read_regular_file_nofollow
+from pbgui_purefunc import pb8dir, pb8venv
+from secure_files import atomic_write_private_text, read_regular_file_nofollow
 from vast_jobs import PROJECT
 from vast_provider import VastError
 
@@ -107,6 +109,83 @@ def load_local_inception(markets):
         raise VastError('No local first-candle metadata for the exported markets', 422)
     unified = {coin: min(values.values()) for coin, values in selected_specific.items()}
     return {'version': CACHE_VERSION, 'files': dict(zip(CACHE_FILES, (unified, selected_specific, selected_symbols)))}
+
+
+def ensure_local_inception(markets):
+    """Resolve missing first candles on the PBGui host before any Vast rental."""
+    configured = pb8dir()
+    if not configured:
+        raise VastError('Local PB8 runtime is unavailable for first-candle preparation', 422)
+    root = Path(configured).expanduser().resolve() / 'caches'
+    try:
+        version = int(read_regular_file_nofollow(root / 'first_ohlcv_timestamps_unified.version', root).strip())
+        specific = json.loads(read_regular_file_nofollow(root / CACHE_FILES[1], root))
+        symbols = json.loads(read_regular_file_nofollow(root / CACHE_FILES[2], root))
+    except (OSError, RuntimeError, ValueError, TypeError):
+        raise VastError('Local PB8 first-candle cache is missing or invalid; prepare it before renting', 422) from None
+    if version != CACHE_VERSION or not isinstance(specific, dict) or not isinstance(symbols, dict):
+        raise VastError('Local PB8 first-candle cache version or structure is incompatible', 422)
+    missing = {}
+    for exchange, coins in markets.items():
+        identifier = 'binanceusdm' if exchange == 'binance' else exchange
+        for coin, symbol in coins.items():
+            cached = specific.get(coin, {})
+            cached_symbols = symbols.get(coin, {})
+            timestamp = cached.get(identifier) if isinstance(cached, dict) else None
+            cached_symbol = cached_symbols.get(identifier) if isinstance(cached_symbols, dict) else None
+            if (type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+                    or not 1262304000000 < timestamp <= time.time() * 1000 or cached_symbol != symbol):
+                missing.setdefault(exchange, {})[coin] = symbol
+    if not missing:
+        return load_local_inception(markets)
+    interpreter = pb8venv()
+    if not interpreter:
+        raise VastError('Local PB8 interpreter is unavailable for first-candle preparation', 422)
+
+    helper = Path(__file__).parent / 'setup/vast_gpu_benchmark/resolve_local_inception.py'
+    try:
+        completed = subprocess.run(
+            [str(Path(interpreter).expanduser().absolute()), '-I', str(helper)],
+            input=json.dumps({'pb8_dir': str(root.parent), 'markets': missing}),
+            cwd=str(root.parent), text=True, capture_output=True, timeout=300, check=False,
+        )
+        if completed.returncode or len(completed.stdout) > 1024 * 1024:
+            raise ValueError('PB8 resolver failed')
+        resolved = json.loads(completed.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+        human_log(SERVICE, 'Local first-candle resolver failed before Vast rental', level='ERROR')
+        raise VastError('Could not prepare local PB8 first-candle metadata; no Vast rental started', 422) from None
+
+    for exchange, coins in missing.items():
+        for coin, symbol in coins.items():
+            venue_result = resolved.get(exchange) if isinstance(resolved, dict) else None
+            item = venue_result.get(coin) if isinstance(venue_result, dict) else None
+            timestamp = item.get('timestamp') if isinstance(item, dict) else None
+            if (not isinstance(item, dict) or item.get('symbol') != symbol
+                    or type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+                    or not 1262304000000 < timestamp <= time.time() * 1000):
+                raise VastError(f'PB8 could not resolve a matching first candle for {exchange}/{coin}; no Vast rental started', 422)
+
+    with advisory_file_lock(root / 'first_ohlcv_timestamps_unified'):
+        try:
+            if int(read_regular_file_nofollow(root / 'first_ohlcv_timestamps_unified.version', root).strip()) != CACHE_VERSION:
+                raise ValueError('cache version changed')
+            specific = json.loads(read_regular_file_nofollow(root / CACHE_FILES[1], root))
+            symbols = json.loads(read_regular_file_nofollow(root / CACHE_FILES[2], root))
+            if not isinstance(specific, dict) or not isinstance(symbols, dict):
+                raise ValueError('cache structure changed')
+            for exchange, coins in missing.items():
+                identifier = 'binanceusdm' if exchange == 'binance' else exchange
+                for coin in coins:
+                    if not isinstance(specific.get(coin, {}), dict) or not isinstance(symbols.get(coin, {}), dict):
+                        raise ValueError('coin cache structure changed')
+                    specific.setdefault(coin, {})[identifier] = resolved[exchange][coin]['timestamp']
+                    symbols.setdefault(coin, {})[identifier] = resolved[exchange][coin]['symbol']
+            atomic_write_private_text(root / CACHE_FILES[2], json.dumps(symbols, indent=4, sort_keys=True) + '\n')
+            atomic_write_private_text(root / CACHE_FILES[1], json.dumps(specific, indent=4, sort_keys=True) + '\n')
+        except (OSError, RuntimeError, ValueError, TypeError):
+            raise VastError('Local PB8 first-candle cache changed during preparation; no Vast rental started', 409) from None
+    return load_local_inception(markets)
 
 
 def stage_inception(connection):

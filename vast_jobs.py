@@ -637,9 +637,11 @@ class JobStore:
             active = [row for row in self.list() if row['id'] != identifier
                       and row['rental_state'] not in ('none', 'deletion_verified')]
             from vast_queue import CloudQueue
-            from vast_pool import pool_limit
+            from vast_pool import MAX_RENTALS, pool_limit
             queue_state = CloudQueue(self).read()
-            limit = pool_limit(queue_state) if queue_state.get('pool_enabled') and state.get('kind') == 'worker' else 1
+            limit = (MAX_RENTALS if state.get('kind') == 'worker' and state.get('awaiting_queue_start')
+                     else pool_limit(queue_state) if queue_state.get('pool_enabled') and state.get('kind') == 'worker'
+                     else 1)
             if len(active) >= limit:
                 raise VastError("Finish the existing rental and cleanup first", 409)
             from vast_image import require_public_image

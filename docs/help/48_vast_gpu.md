@@ -201,7 +201,7 @@ stages; passing the configuration check does not guarantee a successful GPU run.
 
 ## GPU pool and shared rentals
 
-Set **Max concurrent GPUs** in **Rental & Automation** (default **1**, maximum **16**). To avoid starting every queued job manually, set **Auto rent & start** to **On** and save. The confirmation explicitly authorizes the per-rental and simultaneous budget targets. From then on, **Save & Queue** is enough: as soon as input preparation finishes, PBGui rents up to the saved limit and starts one optimizer on each GPU. Compatible idle GPUs are reused first. Provisioning and cleanup rentals count toward the limit until deletion is confirmed. **Auto rent & start** also works with a limit of 1. With Auto rent off, **Start** rents only one GPU for the existing queue, even if Max concurrent GPUs is higher; adding another job cannot authorize another rental.
+Set **Max concurrent GPUs** in **Rental & Automation** (default **1**, maximum **16**). To avoid starting every queued job manually, set **Auto rent & start** to **On** and save. The confirmation explicitly authorizes the per-rental and simultaneous budget targets. From then on, **Save & Queue** is enough: as soon as input preparation finishes, PBGui rents up to the saved limit and starts one optimizer on each GPU. Compatible idle GPUs are reused first. Provisioning and cleanup rentals count toward the limit until deletion is confirmed. **Auto rent & start** also works with a limit of 1. With Auto rent off, **Start** rents only one GPU for the existing queue, even if Max concurrent GPUs is higher; adding another job cannot authorize another rental. For an additional explicit rental while other jobs run, select a different offer under **GPU & Offers** and click **Rent**. Start that reserved GPU from its own Queue card; only one manual reservation can await Start queue at a time.
 
 Hours, budget and idle cleanup apply **per GPU rental**. The settings show the combined simultaneous budget targets. This is not a lifetime pool spending cap: while the pool is enabled and prepared jobs are waiting, it may rent replacement GPUs after earlier rentals end. Fresh offers must still satisfy your saved requirements and host exclusions. If none matches, the queue shows the reason and retries automatically.
 
@@ -235,7 +235,7 @@ sweep metadata are imported into PB8 Results/Paretos; the exact path is shown.
   running, the next job can then start on the same GPU.
 - **Pause queue** prevents subsequent starts; the current job continues.
 - **Start queue** on a reserved GPU card releases only that manual reservation for scheduling.
-- **End rental** on a manual GPU card stops/collects its active job and deletes that worker.
+- **End rental** on a manual GPU card stops/collects its active job and deletes that worker. The global **End all rentals** action is shown when several manual GPUs are active and requires confirmation.
 - **Replace GPU** on an automatically managed card stops only that rental. Pool scheduling stays enabled and restores capacity after verified cleanup.
 - **Resume supervision** recovers the existing worker after a controller/host
   interruption without creating a replacement rental.

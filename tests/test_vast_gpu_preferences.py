@@ -296,15 +296,17 @@ def test_manual_rent_never_substitutes_unavailable_offer(rental):
     assert [item[0] for item in calls] == ['search']
 
 
-def test_manual_rent_retry_does_not_resume_queue(rental):
-    """Repeated Rent reuses the existing lease without dispatching waiting jobs."""
-    queue, _, calls = rental
-    current = {'id': 'existing', 'rental_state': 'active'}
-    queue.worker = lambda: current
-    queue.read = lambda: {'paused': True}
+def test_manual_rent_with_existing_worker_uses_selected_offer(rental):
+    """An explicit second Rent rechecks its chosen offer without resuming other GPUs."""
+    queue, rows, calls = rental
+    queue.worker = lambda: {'id': 'existing', 'rental_state': 'active'}
+    queue.read = lambda: {'paused': False}
     queue.action = lambda action: calls.append(action)
-    assert vast.start_queue(request().model_copy(update={'rent_only': True, 'offer_id': 42}), session=None) == current
-    assert calls == []
+    queue.start = lambda *args, **kwargs: calls.append(('start', (args, kwargs))) or args[0]
+    rows.append(offer(42))
+    result = vast.start_queue(request().model_copy(update={'rent_only': True, 'offer_id': 42}), session=None)
+    assert result['id'] == 42
+    assert [kind for kind, _ in calls] == ['search', 'start']
 
 
 def test_queue_start_reuses_manual_rental_without_saved_preferences(rental):

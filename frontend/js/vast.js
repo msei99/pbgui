@@ -1338,11 +1338,17 @@
   function renderJob() {
     renderHostBlocks();
     const job = selectedJob();
-    const activeRental = workers.some(item => !['none', 'deletion_verified'].includes(item.rental_state));
+    const activeRentalCount = workers.filter(item => !['none', 'deletion_verified'].includes(item.rental_state)).length;
+    const activeRental = activeRentalCount > 0;
     const active = activeRental || queueState.pool_enabled;
+    const selectedOfferRented = selectedOffer && workers.some(item =>
+      !['none', 'deletion_verified'].includes(item.rental_state) && String(item.offer_id) === String(selectedOffer.id));
+    const pendingManualRental = workers.some(item =>
+      !['none', 'deletion_verified'].includes(item.rental_state) && item.awaiting_queue_start);
     const rentReason = !selectedOffer ? 'Select an offer first.'
       : !supervision ? 'Rental supervision is unavailable.'
-      : activeRental ? 'Finish the active GPU rental first.'
+      : selectedOfferRented ? 'This GPU is already rented.'
+      : pendingManualRental ? 'Start or end the reserved GPU rental first.'
       : queueState.calibration_watch ? 'Cancel the waiting performance test first.'
       : !calibrationInfo?.rental_profile ? 'Waiting for the selected GPU profile.' : '';
     el('rent-offer').disabled = !!rentReason || renting || startingQueue || !!workerAction;
@@ -1364,19 +1370,19 @@
     }
     el('offer-action-status').hidden = actionReasons.length === 0;
     el('offer-action-status').textContent = actionReasons.join(' ');
-    el('settings-rental-status').textContent = workerActivity() + (active && worker && worker.awaiting_queue_start ? (queueState.paused ? ' · Reserved for queue start' : ' · Queue started — waiting for input preparation') : '');
+    el('settings-rental-status').textContent = workerActivity() + (active && worker && worker.awaiting_queue_start ? ' · Reserved for queue start' : '');
     const settingsEndRental = el('settings-end-rental');
     if (settingsEndRental) {
       settingsEndRental.hidden = !active || !!queueState.pool_authorization;
       settingsEndRental.disabled = !!workerAction || renting || startingQueue;
-      settingsEndRental.textContent = workerAction === 'end' ? 'Ending rental…' : (queueState.pool_authorization ? 'End rentals' : 'End rental');
+      settingsEndRental.textContent = workerAction === 'end' ? 'Ending rentals…' : (activeRentalCount > 1 ? 'End all rentals' : 'End rental');
     }
     el('start-job').hidden = !job || job.status !== 'ready';
     el('start-job').disabled = !!workerAction || renting || startingQueue || !job || job.status !== 'ready' || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || !supervision;
     el('requeue-job').hidden = !job || job.kind === 'calibration' || !['failed','cancelled'].includes(job.status) || !job.can_delete;
     el('requeue-job').disabled = !!job && (requeuingJobs.has(job.id) || deletingJobs.has(job.id));
     el('requeue-job').textContent = job && requeuingJobs.has(job.id) ? 'Preparing…' : 'Requeue';
-    const labels = {pause:'Pause queue', resume:'Start queue', end:queueState.pool_authorization ? 'End rentals' : 'End rental', recover:'Resume supervision'};
+    const labels = {pause:'Pause queue', resume:'Start queue', end:activeRentalCount > 1 || queueState.pool_authorization ? 'End all rentals' : 'End rental', recover:'Resume supervision'};
     const pendingLabels = {pause:'Pausing…', resume:'Resuming…', end:'Ending rental…', recover:'Resuming supervision…'};
     Object.keys(labels).forEach(action => {
       const button = el(action + '-worker');
@@ -2732,7 +2738,7 @@
         hours:savedPreferences.hours, budget:savedPreferences.budget, idle_seconds:savedPreferences.idle_seconds
       })});
       await refreshJobs();
-      if (!disposed) message('GPU rental started. Queued jobs remain paused until Start queue.');
+      if (!disposed) message('GPU rental started. Start queue on its rental card to run waiting jobs.');
     } catch (error) { if (!disposed) { message(error.message,true); await refreshJobs(); } }
     finally { renting=false; if (!disposed) { renderJob(); renderQueueOverview(); } }
   });
@@ -2916,6 +2922,16 @@
   }));
   ['pause', 'resume', 'end', 'recover'].forEach(action => el(action + '-worker').addEventListener('click', async () => {
     if (disposed || renting || workerAction || startingQueue) return;
+    const activeCount = workers.filter(item => !['none', 'deletion_verified'].includes(item.rental_state)).length;
+    if (action === 'end' && activeCount > 1) {
+      if (!window.PBGuiDialogs?.confirm) { message('Rental confirmation unavailable. Reload this page.', true); return; }
+      const accepted = await window.PBGuiDialogs.confirm({
+        title:'End all GPU rentals?',
+        message:'Stop and collect jobs on all ' + activeCount + ' active GPU rentals, then delete those rentals?',
+        confirmText:'End all rentals'
+      });
+      if (!accepted || disposed) return;
+    }
     if (action === 'resume' && savedPreferences && ((savedPreferences.max_rentals || 1) > 1 || queueState.pool_authorization)) {
       await startCloudQueue(); return;
     }

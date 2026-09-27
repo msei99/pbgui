@@ -1260,7 +1260,7 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
                 from vast_pool import authorize_pool
                 return authorize_pool(queue, saved.model_dump())
         current = queue.worker()
-        if current and current['rental_state'] not in ('none', 'deletion_verified'):
+        if current and current['rental_state'] not in ('none', 'deletion_verified') and not body.rent_only:
             control = queue.store.read(current['id'], 'control.json')
             if control.get('cleanup') or control.get('stop') or current['rental_state'] == 'destroy_pending':
                 raise VastError('Previous GPU rental is still being cleaned up. No new job has started; finish rental cleanup before starting again.', 409)

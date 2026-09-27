@@ -42,9 +42,9 @@ def can_remove_job(row: dict, worker: dict | None) -> bool:
     return row.get('rental_state') in ('none', 'deletion_verified') or bool(row.get('lease_id'))
 
 
-def preflight_local_metadata(store: JobStore, jobs: list[dict]) -> None:
-    """Reject a paid rental if its local market or inception cache is incomplete."""
-    from vast_inception import load_local_inception, required_markets
+def preflight_local_metadata(store: JobStore, jobs: list[dict], resolve_missing: bool = True) -> None:
+    """Validate all exported markets, resolving missing inception data locally when requested."""
+    from vast_inception import ensure_local_inception, load_local_inception, required_markets
     from vast_market_cache import _load_local_markets
 
     requirements = []
@@ -69,7 +69,7 @@ def preflight_local_metadata(store: JobStore, jobs: list[dict]) -> None:
                     raise VastError(
                         f'Local market metadata is missing {exchange}/{coin}; wait for the Market Data update', 422,
                     )
-        load_local_inception(required)
+        (ensure_local_inception if resolve_missing else load_local_inception)(required)
 
 
 
@@ -182,6 +182,15 @@ class CloudQueue:
         if rental_job_gpu_profiles and not manual:
             raise VastError('Job GPU profile selections require a manual rental', 422)
         ensure_private_directory(self.root)
+        if pool_authorization_id is not None:
+            from vast_pool import rental_needed
+            if not rental_needed(self, pool_authorization_id):
+                raise VastError('GPU pool capacity or queue authorization changed', 409)
+        # Public first-candle lookups may take time. Resolve them before holding
+        # the queue lock so running workers can keep claiming and collecting jobs.
+        preflight_jobs = self.waiting() if calibration_id is None else None
+        if preflight_jobs:
+            preflight_local_metadata(self.store, preflight_jobs)
         with advisory_file_lock(self.root / '.queue-lock'):
             watch_record = self.read().get('calibration_watch')
             if watch_record is not None:
@@ -201,8 +210,13 @@ class CloudQueue:
                 from vast_pool import rental_needed
                 if not rental_needed(self, pool_authorization_id):
                     raise VastError('GPU pool capacity or queue authorization changed', 409)
-            elif current and current['rental_state'] not in ('none', 'deletion_verified'):
+            elif current and current['rental_state'] not in ('none', 'deletion_verified') and not manual:
                 return current
+            active_workers = self.workers()
+            if manual and any(row.get('awaiting_queue_start') for row in active_workers):
+                raise VastError('Start or end the reserved GPU rental before renting another', 409)
+            if manual and any(row.get('offer_id') == offer.get('id') for row in active_workers):
+                raise VastError('Selected GPU is already rented', 409)
             if not offer_host_allowed(offer, blocked_machine_ids(self.read())):
                 raise VastError('GPU host is blocked or its machine ID is unavailable; refresh offers', 409)
             if calibration_id is not None:
@@ -213,13 +227,15 @@ class CloudQueue:
                 jobs = [calibration]
             else:
                 jobs = self.waiting()
+                if [row['id'] for row in jobs] != [row['id'] for row in preflight_jobs]:
+                    raise VastError('Cloud queue changed during local metadata preparation; retry rental', 409)
             job_profiles = validated_rental_job_profiles(
                 rental_job_gpu_profiles, {row['id'] for row in jobs if row.get('kind') != 'calibration'},
             )
             if not jobs and not manual:
                 raise VastError('Queue a cloud optimizer config first', 409)
             if jobs:
-                preflight_local_metadata(self.store, jobs)
+                preflight_local_metadata(self.store, jobs, calibration_id is not None)
             identifier = uuid.uuid4().hex
             directory = ensure_private_directory(self.root / 'jobs' / identifier)
             write_json(directory / 'state.json', {'id': identifier, 'kind': 'worker', 'status': 'ready',
@@ -232,14 +248,16 @@ class CloudQueue:
             write_json(directory / 'intent.json', {'id': identifier, 'image': IMAGE, 'pb8_revision': REVISION,
                        'bundle_bytes': sum(row.get('input_bytes', 0) for row in jobs), 'job_count': len(jobs),
                        'rental_gpu_profile': rental_gpu_profile, 'rental_job_gpu_profiles': job_profiles})
-            # Publish the worker before launching so recovery uses the same identity.
-            state = self.read()
-            state.update(worker_id=identifier, selected_offer=offer, paused=manual, idle_seconds=idle_seconds)
-            write_json(self.root / 'queue.json', state)
             # Starting the local supervisor is not proof that Vast accepted a
             # rental. Keep a waiting calibration authorized until the worker
             # reports a real contract or a verified absence permits retry.
-            return self.store.start(identifier, offer, hours, budget)
+            started = self.store.start(identifier, offer, hours, budget)
+            state = self.read()
+            state.update(worker_id=identifier, selected_offer=offer,
+                         paused=manual if not active_workers else state.get('paused', False),
+                         idle_seconds=idle_seconds)
+            write_json(self.root / 'queue.json', state)
+            return started
 
     def set_rental_gpu_profile(self, identifier: str, profile: dict | None,
                                job_profiles: dict | None = None) -> dict:
@@ -464,7 +482,7 @@ class CloudQueue:
                 from vast_calibration_watch import cancel_watch
                 cancel_watch(self, self.read()['calibration_watch']['id'], 'Waiting test cancelled with GPU queue')
             if action in {'pause', 'resume'}:
-                self.update(paused=action == 'pause')
+                self.update(paused=action == 'pause', start_worker_id=None)
             if action == 'resume':
                 # A manual Rent deliberately keeps the worker reserved.  Starting
                 # the queue must always release that gate, even if a previous start
@@ -476,7 +494,7 @@ class CloudQueue:
                 preferences = dict(state.get('gpu_preferences') or {})
                 preferences['auto_rent'] = False
                 self.update(paused=True, pool_enabled=False, pool_authorization=None,
-                            pool_error=None, gpu_preferences=preferences)
+                            pool_error=None, gpu_preferences=preferences, start_worker_id=None)
                 for worker in workers:
                     self.store.control(worker['id'], 'stop')
             if action in {'resume', 'recover', 'end'}:
@@ -500,14 +518,16 @@ class CloudQueue:
             state = self.read()
             if action == 'start':
                 self.store.update(identifier, awaiting_queue_start=False, idle_since=None)
-                # Legacy manual rental used the pool-wide pause as its start gate.
-                if worker.get('awaiting_queue_start') and len(self.workers()) == 1:
-                    self.update(paused=False)
+                if worker.get('awaiting_queue_start'):
+                    # Resume scheduling, but let the selected GPU claim first.
+                    self.update(paused=False, start_worker_id=identifier)
             else:
                 replacing = action == 'replace'
                 preferences = state.get('gpu_preferences') or {}
                 if replacing and not (state.get('pool_enabled') and preferences.get('auto_rent')):
                     raise VastError('Enable Auto rent & start before replacing a GPU automatically', 409)
+                if state.get('start_worker_id') == identifier:
+                    self.update(start_worker_id=None)
                 active_job = worker.get('active_job')
                 self.store.update(identifier, replacement_requested=replacing,
                                   replacement_job=active_job if replacing else None)
@@ -528,6 +548,8 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
         worker = store.read(identifier)
         control = store.read(identifier, 'control.json')
         if worker['rental_state'] == 'deletion_verified':
+            if queue.read().get('start_worker_id') == identifier:
+                queue.update(start_worker_id=None)
             missing = worker.get('rental_end_reason') == 'provider_instance_missing'
             from vast_job_runner import uncreated_rental_message
             creation_message = uncreated_rental_message(worker)
@@ -569,6 +591,9 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
         if control['stop'] or control['cleanup'] or now >= worker['deadline'] - 240:
             store.control(identifier, 'cleanup')
             return None
+        if worker.get('awaiting_queue_start'):
+            store.update(identifier, status='reserved', idle_since=None)
+            return None
         state = queue.read()
         calibration_job_id = worker.get('calibration_job_id')
         if calibration_job_id:
@@ -578,7 +603,9 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
                 return None
             candidates = [calibration] if calibration.get('status') == 'ready' else []
         else:
-            candidates = [] if state.get('paused') or worker.get('deadline_request') else queue.waiting()
+            preferred = state.get('start_worker_id')
+            candidates = ([] if state.get('paused') or worker.get('deadline_request')
+                          or (preferred and preferred != identifier) else queue.waiting())
         if candidates:
             from vast_deadline import effective_intent
             intent = effective_intent(store, identifier, store.read(identifier, 'intent.json'))
@@ -616,11 +643,10 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
                              convergence_config=convergence_config, setup_started_at=None)
                 store.update(identifier, active_job=candidate['id'], idle_since=None,
                              transfer_reserved_used=used + expected, status='provisioning', awaiting_queue_start=False)
+                if state.get('start_worker_id') == identifier:
+                    queue.update(start_worker_id=None)
                 return candidate['id']
         if worker.get('deadline_request'):
-            return None
-        if worker.get('awaiting_queue_start'):
-            store.update(identifier, status='reserved', idle_since=None)
             return None
         idle_since = worker.get('idle_since')
         if idle_since is None:
