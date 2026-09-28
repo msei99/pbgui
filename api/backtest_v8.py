@@ -2149,6 +2149,10 @@ def get_queue_draft(draft_id: str, session: SessionToken = Depends(require_auth)
 
 @router.get("/settings")
 def get_settings(session: SessionToken = Depends(require_auth)) -> dict:
+    try:
+        exchange_options = get_pb8_exchange_metadata()["backtest"]
+    except PB8ConfigurationError as exc:
+        raise _configuration_error("Loading PB8 backtest settings", exc, 503) from exc
     settings = load_ini_section(_QUEUE_SETTINGS_SECTION)
     cpu_max = multiprocessing.cpu_count()
     return {
@@ -2157,7 +2161,7 @@ def get_settings(session: SessionToken = Depends(require_auth)) -> dict:
         "cpu_max": cpu_max,
         "use_pbgui_market_data": str(settings.get("use_pbgui_market_data", "False")).lower() == "true",
         "hsl_signal_modes": ["coin", "pside", "unified"],
-        "exchange_options": get_pb8_exchange_metadata()["backtest"],
+        "exchange_options": exchange_options,
         "hlcvs_cleanup_enabled": str(settings.get("hlcvs_cleanup_enabled", "False")).lower() == "true",
         "hlcvs_cleanup_days": _bounded_setting(settings, "hlcvs_cleanup_days", 7, 1, 365),
         "hlcvs_cleanup_interval_h": _bounded_setting(settings, "hlcvs_cleanup_interval_h", 24, 1, 168),

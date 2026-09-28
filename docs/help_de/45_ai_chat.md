@@ -1,5 +1,7 @@
 # AI Chat
 
+Wenn der ausgewählte Anbieter nicht verbunden ist, zeigt AI Chat einen Hinweis zur Verbindung über die Seitenleiste und fragt dessen Modelle nicht ab. Beim ersten Laden wird ein verfügbarer verbundener Anbieter bevorzugt. Der Verbindungshinweis bleibt auch beim Start eines neuen Chats sichtbar, bis ein Anbieter verbunden ist.
+
 Stop funktioniert auch während eine neue Unterhaltung noch angelegt wird. Der wartende Prompt wird nach der verspäteten Antwort nicht mehr gesendet; das Eingabefeld wird wieder freigegeben.
 
 ## Zweck

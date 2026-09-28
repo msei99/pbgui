@@ -1,5 +1,7 @@
 # PBv7 Optimierung
 
+Können PB7-Metadaten wegen einer fehlenden Laufzeitabhängigkeit nicht importiert werden, liefert das Öffnen der Seite einen HTTP-503-Konfigurationsfehler mit Details zur Abhängigkeit statt eines allgemeinen Serverfehlers. Repariere die konfigurierte PB7-Installation vor einem erneuten Versuch.
+
 Die **PBv7 Optimize** Seite wird jetzt als eigenständige **FastAPI + Vanilla JS** Seite geöffnet.
 Damit lassen sich Passivbot-v7-Optimierungen über den FastAPI-Worker-Flow erstellen, einreihen und auswerten.
 Die obere **PBv7**-Navigation wechselt direkt zwischen den FastAPI-Seiten **Run**, **Backtest** und **Optimize**.

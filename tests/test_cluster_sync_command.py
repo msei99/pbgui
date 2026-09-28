@@ -1974,3 +1974,18 @@ def test_main_does_not_read_stdin_for_hello(monkeypatch, tmp_path: Path, capsys)
     assert exit_code == 0
     assert output["ok"] is True
     assert output["remote_node"] == NODE_B
+
+
+def test_credential_runtime_status_is_read_only_and_membership_gated(tmp_path, monkeypatch):
+    """The new status verb must neither project secrets nor admit unknown members."""
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster_sync_command, '_api_keys_projection_targets', lambda _root: [])
+    monkeypatch.setattr(cluster_sync_command, '_materialize_api_keys', lambda *a, **k: pytest.fail('must not write keys'))
+    result = run_command(root, NODE_B, 'credential-runtime-status')
+    assert result['runtimes'] == {}
+    assert result['node_id'] == NODE_A
+    assert result['cluster_id'] == CLUSTER_ID
+    with pytest.raises(ClusterSyncCommandError):
+        run_command(root, NODE_C, 'credential-runtime-status')
+    with pytest.raises(ClusterSyncCommandError):
+        run_command(root, NODE_B, 'credential-runtime-status extra')

@@ -1,5 +1,7 @@
 # Transfers
 
+Die Transfer-Historie wird auch bei einem fehlgeschlagenen Live-Snapshot der Börse geladen. Gespeicherte Vorgänge und ihre Reconcile-Aktionen bleiben bei Börsenausfällen zugänglich. Bei einem fehlgeschlagenen Snapshot sind neue Transfers gesperrt, bis eine aktuelle Vorschau vorliegt; automatische Aktualisierungen erhalten Betrag und ausgewählte Route. Fehler beim Laden der Historie werden statt einer endlosen Ladeanzeige angezeigt.
+
 Beim Aktualisieren der Kontovorschau bleibt die gewählte Transferroute erhalten, sofern sie verfügbar ist. Ein ungeklärter Transfer behält für einen sicheren erneuten Versuch seine ursprüngliche Route.
 
 ## Zweck

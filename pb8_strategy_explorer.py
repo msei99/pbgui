@@ -32,6 +32,12 @@ class PB8StrategyExplorerCancelledError(PB8StrategyExplorerError):
     status_code = 409
 
 
+class PB8StrategyExplorerUnavailableError(PB8StrategyExplorerError):
+    """Raised when the configured PB8 runtime is unavailable."""
+
+    status_code = 503
+
+
 BusyError = PB8StrategyExplorerBusyError
 CancelledError = PB8StrategyExplorerCancelledError
 
@@ -56,7 +62,7 @@ def _runtime() -> dict[str, Any]:
     status = pb8_runtime_status()
     if not status.get("ready"):
         detail = "; ".join(str(item) for item in status.get("errors") or [])
-        raise PB8StrategyExplorerError(detail or "PB8 runtime is not ready")
+        raise PB8StrategyExplorerUnavailableError(detail or "PB8 runtime is not ready")
     return status
 
 

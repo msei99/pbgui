@@ -4534,3 +4534,27 @@ def test_bootstrap_apply_does_not_clear_tombstones(monkeypatch, tmp_path: Path) 
     assert preview["items"][0]["action"] == "blocked_tombstone"
     assert result["result"]["counts"]["applied"] == 0
     assert result["after"]["counts"]["blocked_tombstone"] == 1
+
+
+def test_credential_runtime_route_reads_target_without_materializing(monkeypatch):
+    """The authenticated status endpoint forwards only the read-only status verb."""
+    monkeypatch.setattr(cluster, '_load_cluster_snapshot', lambda: {
+        'identity': {'node_id': NODE_A},
+        'cluster_nodes': {'nodes': {NODE_B: {'node_id': NODE_B, 'pbname': 'vps-b'}}},
+    })
+    calls = []
+
+    async def read(node, identity, verb):
+        """Capture the exact remote operation without any SSH connection."""
+        calls.append((node['node_id'], verb))
+        return {'ok': True, 'runtimes': {'pb7': {'status': 'key_arrived', 'items': []}}}
+
+    monkeypatch.setattr(cluster, '_run_remote_materialize_command', read)
+    result = asyncio.run(cluster.get_credential_runtime(NODE_B, session=None))
+    assert result['runtimes']['pb7']['status'] == 'key_arrived'
+    assert calls == [(NODE_B, 'credential-runtime-status')]
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(cluster.get_credential_runtime(NODE_C, session=None))
+    assert caught.value.status_code == 404
+    route = next(route for route in cluster.router.routes if route.path == '/credential-runtime/{node_id}')
+    assert any(dependency.call is cluster.require_auth for dependency in route.dependant.dependencies)

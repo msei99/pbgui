@@ -106,8 +106,20 @@ def _load_transaction_unlocked() -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise ApiKeyStateTransactionConflictError("API-key update journal is unreadable") from exc
     required = {"id", "old_name", "new_name", "before_marker", "after_marker", "before", "target"}
-    if not isinstance(transaction, dict) or transaction.get("version") != 1 or not required.issubset(transaction):
+    if not isinstance(transaction, dict) or transaction.get("version") not in (1, 2) or not required.issubset(transaction):
         raise ApiKeyStateTransactionConflictError("API-key update journal has an unsupported format")
+    related = transaction.get("related_updates", {})
+    if (not isinstance(related, dict)
+            or (transaction["version"] == 1 and related)
+            or (transaction["version"] == 2 and not related)):
+        raise ApiKeyStateTransactionConflictError("Invalid related API-key updates")
+    for name, markers in related.items():
+        if (not isinstance(name, str) or not name or name in (transaction["old_name"], transaction["new_name"])
+                or not isinstance(markers, dict)
+                or any(not isinstance(markers.get(key), str) or not markers[key]
+                       for key in ("before_marker", "after_marker"))
+                or name not in transaction["before"] or name not in transaction["target"]):
+            raise ApiKeyStateTransactionConflictError("Incomplete related API-key update")
     return transaction
 
 
@@ -125,8 +137,9 @@ def _remove_transaction_unlocked() -> None:
     _sync_parent(_TRANSACTION_FILE)
 
 
-def _selected_entries(users: dict[str, Any], old_name: str, new_name: str) -> dict[str, Any]:
-    names = (old_name,) if old_name == new_name else (old_name, new_name)
+def _selected_entries(users: dict[str, Any], old_name: str, new_name: str, *related_names: str) -> dict[str, Any]:
+    """Capture the exact state preimage for every account in one update."""
+    names = dict.fromkeys((old_name, new_name, *related_names))
     return {
         name: {"exists": name in users, "value": deepcopy(users.get(name))}
         for name in names
@@ -149,16 +162,21 @@ def begin_user_state_transaction(
     after_marker: str,
     clear_all: bool = False,
     clear_keys: tuple[str, ...] = (),
+    related_updates: dict[str, dict[str, str]] | None = None,
 ) -> str:
     """Persist an exact, secret-free runtime-state transition before credential replacement."""
     if not old_name or not new_name or not before_marker or not after_marker:
         raise ValueError("Incomplete API-key state transaction")
+    related_updates = deepcopy(related_updates or {})
+    for name, markers in related_updates.items():
+        if not name or name in (old_name, new_name) or not markers.get("before_marker") or not markers.get("after_marker"):
+            raise ValueError("Invalid related API-key update")
     with _locked_state():
         if _load_transaction_unlocked() is not None:
             raise ApiKeyStateTransactionConflictError("Another API-key update requires recovery")
         state = _load_state_unlocked()
         users = state.setdefault("users", {})
-        before = _selected_entries(users, old_name, new_name)
+        before = _selected_entries(users, old_name, new_name, *related_updates)
         target_users = deepcopy(users)
         current = target_users.get(old_name, {})
         next_state = dict(current) if isinstance(current, dict) else {}
@@ -173,16 +191,24 @@ def begin_user_state_transaction(
             target_users[new_name] = next_state
         else:
             target_users.pop(new_name, None)
+        for name in related_updates:
+            related_state = target_users.get(name)
+            if isinstance(related_state, dict):
+                for key in clear_keys:
+                    related_state.pop(key, None)
+                if not related_state:
+                    target_users.pop(name, None)
         transaction_id = uuid.uuid4().hex
         _write_transaction_unlocked({
-            "version": 1,
+            "version": 2 if related_updates else 1,
+            "related_updates": related_updates,
             "id": transaction_id,
             "old_name": old_name,
             "new_name": new_name,
             "before_marker": before_marker,
             "after_marker": after_marker,
             "before": before,
-            "target": _selected_entries(target_users, old_name, new_name),
+            "target": _selected_entries(target_users, old_name, new_name, *related_updates),
         })
         return transaction_id
 
@@ -204,7 +230,7 @@ def finish_user_state_transaction(transaction_id: str, *, commit: bool) -> None:
         users = state.setdefault("users", {})
         old_name = str(transaction["old_name"])
         new_name = str(transaction["new_name"])
-        current = _selected_entries(users, old_name, new_name)
+        current = _selected_entries(users, old_name, new_name, *transaction.get("related_updates", {}))
         before = transaction["before"]
         target = transaction["target"]
         if current not in (before, target):

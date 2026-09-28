@@ -1,5 +1,7 @@
 # Coin Data
 
+Progress checks run sequentially, without overlapping requests. After dismissing the progress overlay, checks slow down to every 2.5 seconds; hidden browser tabs use 5 seconds. Completion still applies the updated data automatically. Leaving the page stops its polling without cancelling the server-side job.
+
 Failed Coin Data loads display an error while cached data remains available; filters can be retried without reloading the page.
 
 The Coin Data page is now available in the FastAPI UI shell and focuses on symbol mapping quality, CoinMarketCap coverage, and exchange trading constraints without changing the underlying CoinData service logic.

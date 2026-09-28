@@ -210,6 +210,151 @@ def _wait_for_cluster_boot_sync(pbgdir: Path, *, timeout: int = 20) -> dict:
     return {"status": "timeout", "previous_status": previous_status, "waited": max(0, int(time()) - started_at)}
 
 
+def _credential_context(runner, runtime: str):
+    """Read verified account intent under the same lock as credential projection."""
+    from credential_runtime import CredentialRuntimeJournal, CredentialRuntimeSourceChanged, _name
+    from pb7_api_keys import PB7ApiKeysMergeWriter
+
+    root = getattr(runner, 'pbgdir', None)
+    runtime_dir = getattr(runner, f'{runtime}dir', None)
+    if not root or not runtime_dir:
+        return None
+    status_path = Path(root) / 'data' / 'credentials' / f'{runtime}_projection.json'
+    journal = CredentialRuntimeJournal(Path(runtime_dir) / 'api-keys.json', status_path)
+    if not journal.path.exists() and not journal.path.is_symlink():
+        return None
+    writer = PB7ApiKeysMergeWriter(journal.api_path, status_path)
+    with writer._locked():
+        try:
+            value = journal.recover(writer.read())
+        except CredentialRuntimeSourceChanged:
+            return None
+    config = getattr(runner, '_v7_config', {}) or {}
+    user = _name(str(getattr(runner, 'live_user', None) or (config.get('live') or {}).get('user') or runner.user))
+    instance = _name(str(runner.user))
+    return journal, instance, user, value['users'].get(user, {}), value['instances'].get(instance, {})
+
+
+def _credential_error(runner, exc: Exception) -> None:
+    """Rate-limit redacted diagnostics while unsafe or unreadable state blocks adoption."""
+    now = time()
+    if now >= getattr(runner, '_credential_error_after', 0):
+        _log(SERVICE, f'Credential adoption failed for {runner.user}: {type(exc).__name__}', level='ERROR')
+        runner._credential_error_after = now + 60
+
+
+def _credential_launch(runtime: str):
+    """Bind a launch acknowledgement to its pre-launch credential revision and PID."""
+    from functools import wraps
+
+    def decorate(method):
+        """Wrap existing launch gates without changing their desired-state decisions."""
+        @wraps(method)
+        def wrapped(runner, *args, **kwargs):
+            """Only a newly observed live process can acknowledge the captured revision."""
+            try:
+                context = _credential_context(runner, runtime)
+            except Exception as exc:
+                _credential_error(runner, exc)
+                return False
+            if context is None:
+                return method(runner, *args, **kwargs)
+            journal, instance, user, desired, applied = context
+            revision = desired.get('revision', '')
+            if not desired.get('present'):
+                journal.record(instance, user, revision, 'error', reason='Account credentials are unavailable')
+                return False
+            if time() < float(applied.get('retry_at', 0)):
+                return False
+            before = runner.pid()
+            before_identity = (before.pid, before.create_time()) if before else None
+            try:
+                result = method(runner, *args, **kwargs)
+                process = runner.pid()
+                identity = (process.pid, process.create_time()) if process else None
+                if identity and identity != before_identity:
+                    journal.record(instance, user, revision, 'applied', pid=identity[0], created=identity[1])
+                elif not process:
+                    journal.record(instance, user, revision, 'waiting', reason='Waiting for a successful bot start', retry_at=time() + 10)
+                return result
+            except Exception as exc:
+                _credential_error(runner, exc)
+                journal.record(instance, user, revision, 'error', reason='Bot start failed', retry_at=time() + 30)
+                return False
+        return wrapped
+    return decorate
+
+
+def _stop_for_credentials(runner, process) -> bool:
+    """Stop only the matched process gracefully, with bounded signal escalation."""
+    pid, created = process.pid, process.create_time()
+    for sig, timeout in ((signal.SIGINT, 15), (signal.SIGTERM, 5), (signal.SIGKILL, 3)):
+        current = runner.pid()
+        if current is None:
+            return not process.is_running()
+        if current.pid != pid or current.create_time() != created:
+            return False
+        try:
+            current.send_signal(sig)
+            current.wait(timeout=timeout)
+            return True
+        except psutil.NoSuchProcess:
+            return True
+        except psutil.TimeoutExpired:
+            continue
+    return False
+
+
+def _reconcile_credentials(runner, runtime: str, process=None) -> bool:
+    """Restart an affected running instance once; return whether this tick is handled."""
+    context = None
+    try:
+        context = _credential_context(runner, runtime)
+        if context is None:
+            return False
+        journal, instance, user, desired, applied = context
+        revision = desired.get('revision', '')
+        if not desired.get('present'):
+            journal.record(instance, user, revision, 'error', reason='Account credentials are unavailable')
+            return True
+        process = process or runner.pid()
+        if process is None:
+            return False
+        created = process.create_time()
+        acknowledged = (applied.get('applied_revision') == revision
+                        and applied.get('pid') == process.pid and applied.get('created') == created)
+        # Baseline entries do not restart unchanged users on rollout. A manual restart
+        # after verified projection is also an adoption, without a redundant restart.
+        if acknowledged or created > float(desired.get('ready_at', 0)):
+            journal.record(instance, user, revision, 'applied', pid=process.pid, created=created)
+            return False
+        if time() < float(applied.get('retry_at', 0)):
+            return True
+        journal.record(instance, user, revision, 'restarting', reason='Restarting after credential change')
+        _log(SERVICE, f'Restarting {runtime} {instance} after credential change', user=user)
+        if not _stop_for_credentials(runner, process):
+            journal.record(instance, user, revision, 'error', reason='Previous bot process could not be stopped', retry_at=time() + 30)
+            return True
+        if runtime == 'pb7':
+            _atomic_write_text(Path(runner.path) / 'running_version.txt', '0')
+        else:
+            runner._last_started_at = 0.0
+            runner._running_version = None
+        # Re-enter the normal start gate: a concurrent stop/reassignment must win.
+        runner.start()
+        return True
+    except Exception as exc:
+        _credential_error(runner, exc)
+        if context is not None:
+            journal, instance, user, desired, _applied = context
+            try:
+                journal.record(instance, user, desired.get('revision', ''), 'error',
+                               reason='Credential restart failed', retry_at=time() + 30)
+            except Exception as status_exc:
+                _credential_error(runner, status_exc)
+        return True
+
+
 def _kill_process(process: psutil.Process, context: str):
     try:
         process.kill()
@@ -702,6 +847,8 @@ class RunV7():
             if not self._cluster_gate_allows_run():
                 self.stop()
                 return
+            if _reconcile_credentials(self, 'pb7'):
+                return
             version_file = Path(f'{self.path}/running_version.txt')
             current_version = 0
             if version_file.exists():
@@ -765,6 +912,7 @@ class RunV7():
         version_file = Path(f'{self.path}/running_version.txt')
         _atomic_write_text(version_file, "0")
 
+    @_credential_launch("pb7")
     def start(self, *, reload_config: bool = True):
         if not self.is_running():
             pre_load_gate = self._cluster_gate_result()
@@ -1299,6 +1447,7 @@ class RunV8:
         self._last_started_at = 0.0
         _log(SERVICE, f"PB8 {self.user} exited early; retrying in {delay}s", level="WARNING")
 
+    @_credential_launch("pb8")
     def start(self, *, reload_config: bool = True) -> bool:
         """Start one validated PB8 live process in an isolated virtualenv."""
 
@@ -1377,6 +1526,8 @@ class RunV8:
 
         now = time()
         if process:
+            if _reconcile_credentials(self, 'pb8', process):
+                return
             config_changed = False
             try:
                 config_changed = self.config_path.stat().st_mtime > float(process.create_time())

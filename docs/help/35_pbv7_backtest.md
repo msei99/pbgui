@@ -1,5 +1,7 @@
 # PBv7 Backtest
 
+If the configured PB7 runtime or its Rust extension is missing, settings requests return an HTTP 503 configuration error with the missing dependency in the details. Repair the configured PB7 installation before retrying.
+
 The **PBv7 Backtest** page lets you create, run and evaluate Passivbot v7 backtests.
 It is a standalone FastAPI page — no page reload is needed. Real-time queue updates arrive via WebSocket.
 Draft handoffs from the FastAPI **Run** and **Optimize** pages now open here directly as FastAPI drafts as well, so switching between those PBv7 pages no longer needs a legacy relay path.

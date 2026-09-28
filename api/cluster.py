@@ -1434,6 +1434,7 @@ def _cluster_materialize_command(remote_pbgui_dir: str | None, local_node_id: st
         "materialize-v8-preview",
         "materialize-v8",
         "materialize-api-keys-preview",
+        "credential-runtime-status",
         "materialize-api-keys",
         "materialize-credentials-preview",
         "materialize-credentials",
@@ -5650,6 +5651,19 @@ async def join_remote_identity(node_id: str, session: SessionToken = Depends(req
         raise HTTPException(status_code=404, detail="Cluster node not found")
     result = await _run_remote_join(node, snapshot["identity"])
     return result
+
+
+@router.get("/credential-runtime/{node_id}")
+async def get_credential_runtime(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Read local or remote per-process credential adoption without triggering writes."""
+    snapshot = _load_cluster_snapshot()
+    node = _node_for_id(_node_list(snapshot["cluster_nodes"]), str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    if node_id == snapshot["identity"].get("node_id"):
+        from cluster_sync_command import _credential_runtime_status
+        return _credential_runtime_status(_cluster_root())
+    return await _run_remote_materialize_command(node, snapshot["identity"], "credential-runtime-status")
 
 
 @router.get("/remote-preview/{node_id}")

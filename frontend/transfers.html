@@ -128,7 +128,48 @@
     function renderHistory(){var host=el('history');host.replaceChildren();if(!state.operations.length){append(host,'div','No manual transfers have been recorded for this account.','empty');return}var table=document.createElement('table');table.className='history-table';var head=document.createElement('thead');var hr=document.createElement('tr');['Operation','Route','State','Requested','Received','Prepared','Resolved','Detail','Action'].forEach(function(label){append(hr,'th',label)});head.appendChild(hr);table.appendChild(head);var body=document.createElement('tbody');state.operations.forEach(function(operation){var row=document.createElement('tr');append(row,'td',operation.operation_id);append(row,'td',routeLabel(operation.route));var stateCell=document.createElement('td');append(stateCell,'span',operation.status,'state '+String(operation.status||''));row.appendChild(stateCell);append(row,'td',operation.requested_amount+' '+operation.asset);append(row,'td',operation.actual_amount?operation.actual_amount+' '+operation.asset:'-');append(row,'td',formatTime(operation.prepared_at));append(row,'td',formatTime(operation.resolved_at));append(row,'td',operationDetail(operation));var action=document.createElement('td');if(operation.can_reconcile===true){var button=append(action,'button','Reconcile','btn warning');button.type='button';button.addEventListener('click',function(){reconcile(operation.operation_id)})}else append(action,'span','-');row.appendChild(action);body.appendChild(row)});table.appendChild(body);host.appendChild(table)}
     function formatTime(value){if(!value)return'-';var date=new Date(Number(value)*1000);return Number.isNaN(date.getTime())?'-':date.toLocaleString()}
     function updateSubmit(){var route=selectedRoute();var amount=Number(el('amount').value);var minimum=Number(route&&route.minimum_amount||0);var balance=Number(route&&route.max_transferable||0);var pending=state.pendingRequest;var pendingMismatch=!!(pending&&(pending.user!==state.selected||pending.route!==String(route&&route.id||'')||String(pending.amount)!==el('amount').value.trim()));el('max-amount').disabled=state.busy||!route||!!pending||Boolean(state.preview&&state.preview.blocked_reason)||!Number.isFinite(balance)||balance<minimum||balance<=0;el('submit').disabled=state.busy||!state.selected||!route||Boolean(state.preview&&state.preview.blocked_reason)||pendingMismatch||!Number.isFinite(amount)||amount<minimum||amount>balance}
-    async function selectAccount(userName,force){if(state.busy&&!force)return;if(!state.users.some(function(user){return user.name===userName}))return;state.generation+=1;var generation=state.generation;if(state.controller)state.controller.abort();state.controller=new AbortController();state.selected=userName;state.preview=null;state.operations=[];renderUsers();renderPreview();el('history').replaceChildren();append(el('history'),'div','Loading account data...','empty');setStatus('Loading fresh balances and routes...');try{var values=await Promise.all([requestJson('/transfers/preview/'+encodeURIComponent(userName),{signal:state.controller.signal}),requestJson('/transfers/operations/'+encodeURIComponent(userName),{signal:state.controller.signal})]);if(generation!==state.generation)return;state.preview=values[0];state.operations=Array.isArray(values[1].operations)?values[1].operations:[];var pending=state.pendingRequest;if(pending&&pending.user===userName){if(state.operations.some(function(operation){return operation.operation_id===pending.operation_id}))savePendingRequest(null);else el('amount').value=String(pending.amount)}renderPreview();renderHistory();setStatus(state.preview.blocked_reason||((state.pendingRequest&&state.pendingRequest.user===userName)?'A previous response was lost. Retry only the unchanged route and amount to reuse its operation ID.':'Fresh transfer preview loaded.'),state.preview.blocked_reason?'':'ok')}catch(error){if(error.name==='AbortError'||generation!==state.generation)return;setStatus(error.message,'error')}}
+    async function loadAccountData(userName, generation, background, signal) {
+      var values = await Promise.allSettled([
+        requestJson('/transfers/preview/' + encodeURIComponent(userName), {signal:signal}),
+        requestJson('/transfers/operations/' + encodeURIComponent(userName), {signal:signal})
+      ]);
+      if (generation !== state.generation || (background && state.busy)) return;
+      var amount = el('amount').value;
+      if (background && state.preview) state.routeSelections[userName] = el('route-select').value;
+      state.preview = values[0].status === 'fulfilled' ? values[0].value : null;
+      renderPreview();
+      if (background) el('amount').value = amount;
+      if (values[1].status === 'fulfilled') {
+        state.operations = Array.isArray(values[1].value.operations) ? values[1].value.operations : [];
+        var pending = state.pendingRequest;
+        if (pending && pending.user === userName) {
+          if (state.operations.some(function(operation){return operation.operation_id===pending.operation_id})) savePendingRequest(null);
+          else if (!background) el('amount').value = String(pending.amount);
+        }
+        renderHistory();
+      } else {
+        renderHistory();
+        if (!state.operations.length) el('history').replaceChildren();
+        append(el('history'), 'div', 'Transfer history unavailable: ' + values[1].reason.message, 'empty');
+      }
+      updateSubmit();
+      var errors = values.filter(function(value){return value.status === 'rejected';});
+      if (errors.length) setStatus(errors.map(function(value){return value.reason.message;}).join(' '), 'error');
+      else setStatus(state.preview.blocked_reason || ((state.pendingRequest && state.pendingRequest.user === userName) ? 'A previous response was lost. Retry only the unchanged route and amount to reuse its operation ID.' : 'Balances and transfer history updated automatically.'), state.preview.blocked_reason ? '' : 'ok');
+    }
+    async function selectAccount(userName,force){
+      if(state.busy&&!force)return;
+      if(!state.users.some(function(user){return user.name===userName}))return;
+      state.generation+=1;
+      var generation=state.generation;
+      if(state.controller)state.controller.abort();
+      state.controller=new AbortController();
+      state.selected=userName;state.preview=null;state.operations=[];
+      renderUsers();renderPreview();el('history').replaceChildren();
+      append(el('history'),'div','Loading account data...','empty');
+      setStatus('Loading fresh balances and routes...');
+      await loadAccountData(userName,generation,false,state.controller.signal);
+    }
     async function submitTopUp(){updateSubmit();if(el('submit').disabled)return;var userName=state.selected;var route=selectedRoute();var amount=el('amount').value.trim();var accepted=await window.PBGuiDialogs.confirm({title:'Review internal transfer',message:'Move '+amount+' '+route.asset+' from '+route.source+' to '+route.destination+'?',detail:'Fixed route: '+routeLabel(route.id)+'. This does not change Profit Sweep accounting. The transfer is persisted before submission and is never blindly retried.',confirmText:'Submit transfer'});if(!accepted||userName!==state.selected||route.id!==el('route-select').value)return;var pending=state.pendingRequest||{user:userName,route:route.id,amount:amount,operation_id:newOperationId(),created_at:Date.now()};if(pending.user!==userName||pending.route!==route.id||String(pending.amount)!==amount){setStatus('Resolve the retained pending transfer before changing account, route, or amount.','error');return}savePendingRequest(pending);setBusy(true);setStatus('Submitting the reviewed internal transfer...');try{var result=await requestJson('/transfers/execute/'+encodeURIComponent(userName),{method:'POST',body:JSON.stringify({amount:amount,route:route.id,operation_id:pending.operation_id})});savePendingRequest(null);if(userName===state.selected)await selectAccount(userName,true);setStatus(result.status==='confirmed'?'Transfer confirmed.':result.status==='unknown'?'Transfer status is unknown. Use Reconcile; do not submit another transfer.':'Transfer '+String(result.status||'completed')+'.',result.status==='confirmed'?'ok':result.status==='failed'?'error':'')}catch(error){if(Number(error.status)>=400&&Number(error.status)<500)savePendingRequest(null);setStatus(error.message+(state.pendingRequest?' The same operation ID will be reused if you retry this exact request.':''),'error')}finally{setBusy(false)}}
     function newOperationId(){if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();var bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;var hex=Array.from(bytes,function(value){return value.toString(16).padStart(2,'0')}).join('');return hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20)}
     async function reconcile(operationId){if(state.busy)return;var userName=state.selected;setBusy(true);setStatus('Reconciling the existing transfer without resubmission...');try{var result=await requestJson('/transfers/operations/'+encodeURIComponent(userName)+'/'+encodeURIComponent(operationId)+'/reconcile',{method:'POST'});if(userName===state.selected)await selectAccount(userName,true);setStatus(result.status==='confirmed'?'Transfer confirmed.':'Reconciliation result: '+String(result.status||'unknown')+'.',result.status==='confirmed'?'ok':result.status==='failed'?'error':'')}catch(error){setStatus(error.message,'error')}finally{setBusy(false)}}
@@ -138,13 +179,7 @@
       if(state.busy||autoUpdating||!state.selected||document.visibilityState!=='visible')return;
       autoUpdating=true;var user=state.selected,generation=state.generation;
       try{
-        var values=await Promise.all([requestJson('/transfers/preview/'+encodeURIComponent(user)),requestJson('/transfers/operations/'+encodeURIComponent(user))]);
-        if(state.busy||generation!==state.generation)return;
-        state.preview=values[0];state.operations=values[1].operations||[];
-        state.routeSelections[user]=el('route-select').value;
-        var amount=el('amount').value;
-        renderPreview();el('amount').value=amount;updateSubmit();renderHistory();
-        setStatus(state.preview.blocked_reason||'Balances and transfer history updated automatically.');
+        await loadAccountData(user,generation,true,state.controller && state.controller.signal);
       }catch(error){if(generation===state.generation)setStatus(error.message,'error')}
       finally{autoUpdating=false}
     },5000);

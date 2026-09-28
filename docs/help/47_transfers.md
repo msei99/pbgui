@@ -1,5 +1,7 @@
 # Transfers
 
+Transfer history loads independently of a failed live exchange snapshot. Recorded operations and their Reconcile actions remain accessible during exchange outages. Failed snapshots disable new transfers until a fresh preview is available; automatic updates preserve the entered amount and selected route. A failed history request shows an error instead of an endless loading message.
+
 Refreshing an account preview preserves its selected transfer route when that route remains available. An unresolved transfer retains its original route for a safe retry.
 
 ## Purpose

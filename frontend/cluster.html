@@ -383,7 +383,7 @@
         <div class="hero-actions">
           <button class="btn warn" id="repair-all-ssh-btn" type="button">Repair All SSH</button>
           <button class="btn" id="probe-btn" type="button">Probe Active Nodes</button>
-          <button class="btn primary" id="refresh-btn" type="button">Refresh</button>
+          <span class="panel-note">Updates automatically</span>
         </div>
       </section>
 
@@ -752,6 +752,7 @@
       <div class="modal-body">
         <div id="preview-modal-message">Loading remote state preview...</div>
         <div id="preview-modal-content"></div>
+        <div class="panel-note" id="credential-runtime-status" aria-live="polite"></div>
         <div class="modal-error" id="preview-modal-error"></div>
       </div>
       <div class="modal-actions">
@@ -2076,7 +2077,65 @@
         });
       }
 
+      var credentialStatusGeneration = 0;
+      var remotePreviewGeneration = 0;
+      var credentialStatusTimer = null;
+      var credentialStatusController = null;
+      function stopCredentialStatus() {
+        credentialStatusGeneration += 1;
+        clearTimeout(credentialStatusTimer);
+        credentialStatusTimer = null;
+        if (credentialStatusController) credentialStatusController.abort();
+        credentialStatusController = null;
+      }
+      function renderCredentialStatus(payload) {
+        var host = document.getElementById('credential-runtime-status');
+        host.replaceChildren();
+        var title = document.createElement('strong');
+        title.textContent = 'Credential adoption';
+        host.appendChild(title);
+        var labels = {key_arrived:'Keys arrived; awaiting PBRun observation', pending:'Restart pending', restarting:'Restarting',
+          waiting:'Waiting for bot start', applied:'New credential version adopted', error:'Error', stale:'PBRun observation is stale',
+          not_tracked:'Not tracked yet; available after the next key save', projecting:'Key projection is in progress'};
+        Object.keys(payload.runtimes || {}).forEach(function (runtime) {
+          var info = payload.runtimes[runtime] || {};
+          var summary = document.createElement('div');
+          summary.textContent = runtime.toUpperCase() + ': ' + (labels[info.status] || 'Status unavailable');
+          host.appendChild(summary);
+          (info.items || []).forEach(function (item) {
+            var row = document.createElement('div');
+            row.textContent = item.instance + ' (' + item.user + '): ' + (labels[item.status] || 'Status unavailable')
+              + (item.reason ? ' — ' + item.reason : '');
+            host.appendChild(row);
+          });
+        });
+      }
+      function startCredentialStatus(node) {
+        stopCredentialStatus();
+        var generation = credentialStatusGeneration;
+        credentialStatusController = new AbortController();
+        var signal = credentialStatusController.signal;
+        document.getElementById('credential-runtime-status').textContent = 'Loading credential adoption status...';
+        function poll() {
+          if (generation !== credentialStatusGeneration || !pendingPreviewNode) return;
+          if (document.hidden) { credentialStatusTimer = setTimeout(poll, 5000); return; }
+          fetchJson('/credential-runtime/' + encodeURIComponent(node.node_id), {signal:signal}).then(function (payload) {
+            if (generation !== credentialStatusGeneration) return;
+            renderCredentialStatus(payload);
+          }).catch(function (error) {
+            if (generation !== credentialStatusGeneration) return;
+            document.getElementById('credential-runtime-status').textContent = 'Credential adoption status unavailable. The node may need a PBGui update.';
+          }).finally(function () {
+            if (generation === credentialStatusGeneration) credentialStatusTimer = setTimeout(poll, 5000);
+          });
+        }
+        poll();
+      }
+      window.addEventListener('pagehide', stopCredentialStatus);
+
       function closePreviewModal() {
+        remotePreviewGeneration += 1;
+        stopCredentialStatus();
         pendingPreviewNode = null;
         lastPreviewPayload = null;
         var modal = document.getElementById('preview-modal');
@@ -2460,7 +2519,7 @@
         window.PBGuiConfirm({
           title: 'Materialize Remote API Keys',
           message: 'Write api-keys.json on ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + ' from the replicated Cluster Sync secret blob?',
-          detail: 'This is a remote write to api-keys.json only. Existing differing files are backed up on master nodes only; VPS runners skip local backups. It does not deploy files or materialize V7 configs. If V7 configs are current afterward, PBRun is started automatically on VPS runners.',
+          detail: 'This writes and verifies api-keys.json. PBRun then gracefully restarts only running bots whose account credentials changed. Disabled bots stay stopped. Existing differing files are backed up on master nodes only; VPS runners skip local backups. If configs are current afterward, PBRun is started automatically on VPS runners.',
           confirmText: 'Materialize API Keys'
         }).then(function (accepted) {
           if (!accepted) return;
@@ -2488,6 +2547,8 @@
 
       function openRemotePreview(node) {
         pendingPreviewNode = node || null;
+        startCredentialStatus(node);
+        var previewGeneration = ++remotePreviewGeneration;
         lastPreviewPayload = null;
         var modal = document.getElementById('preview-modal');
         var message = document.getElementById('preview-modal-message');
@@ -2511,10 +2572,12 @@
           bindPreviewWindowDrag();
         }
         fetchJson('/remote-preview/' + encodeURIComponent(node.node_id)).then(function (payload) {
+          if (previewGeneration !== remotePreviewGeneration) return;
           if (message) message.textContent = 'Remote state preview for ' + (payload.hostname || node.pbname || node.hostname || node.node_id) + '.';
           renderRemotePreview(payload);
         }).catch(function (err) {
           if (error) {
+            if (previewGeneration !== remotePreviewGeneration) return;
             error.textContent = err.message || 'Remote preview failed.';
             error.className = 'modal-error visible';
           }
@@ -4074,7 +4137,6 @@
         });
       }
 
-      document.getElementById('refresh-btn').addEventListener('click', function () { loadCluster({ force: true }); });
       document.getElementById('repair-all-ssh-btn').addEventListener('click', repairAllClusterSsh);
       document.getElementById('probe-btn').addEventListener('click', loadRemoteStatus);
       document.getElementById('retention-report-btn').addEventListener('click', loadRetentionReport);
@@ -4123,7 +4185,10 @@
       document.getElementById('preview-materialize-api-btn').addEventListener('click', confirmAndMaterializeApiKeys);
       window.addEventListener('resize', keepPreviewModalInViewport);
       document.addEventListener('visibilitychange', function () {
-        if (!document.hidden) runClusterAutoRefresh();
+        if (!document.hidden) {
+          runClusterAutoRefresh();
+          if (pendingPreviewNode) startCredentialStatus(pendingPreviewNode);
+        }
       });
       setupClusterNavigation();
       window.PBGuiAI.registerPageContext({

@@ -51,6 +51,20 @@ def _run_frontend_node(relative_path: str, function_names: list[str], bootstrap:
     """Run Node assertions against selected inline frontend functions."""
     source = _read(relative_path)
     functions = "\n\n".join(_extract_js_function(source, name) for name in function_names)
+    if relative_path == "frontend/api_keys_editor.html" and any(
+        name in function_names for name in ("beginEditorAccount", "saveUser")
+    ):
+        # These focused tests exercise the default single-account path. The real
+        # shared-key controls/lifecycle are covered by test_hl_shared_key_browser.
+        bootstrap += """
+        let sharedKeyPreview = null;
+        function sharedKeyEligible() { return false; }
+        function stopSharedKeyPreview() {}
+        function loadSharedKeyPreview() {}
+        const originalGetElementById = document.getElementById.bind(document);
+        document.getElementById = id => id === 'sharedKeyApplyAll'
+            ? {checked: false} : originalGetElementById(id);
+        """
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');

@@ -25,6 +25,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from logging_helpers import human_log as _log
+
+SERVICE = "ClusterSync"
+
 from cluster_credentials import (
     ClusterCredentialError,
     EnvelopeValidationError,
@@ -130,6 +134,7 @@ READ_VERBS = frozenset({
     "materialize-v7-preview",
     "materialize-v8-preview",
     "materialize-api-keys-preview",
+    "credential-runtime-status",
     "materialize-credentials-preview",
     "get-checkpoint-state",
     "retention-preview",
@@ -424,6 +429,9 @@ def run_command(
         return _materialize_v7_configs(root, write=False)
     if verb == "materialize-v8-preview":
         return _materialize_pb8_configs(root, write=False)
+    if verb == "credential-runtime-status":
+        _require_arity(tokens, 1)
+        return {**_credential_runtime_status(root), "cluster_id": cluster_id, "node_id": str(identity["node_id"])}
     if verb == "materialize-api-keys-preview":
         return _materialize_api_keys(root, write=False)
     if verb == "materialize-credentials-preview":
@@ -1649,6 +1657,20 @@ def _repair_local_v7_config_blobs(
     return repaired
 
 
+def _credential_runtime_status(cluster_root: Path) -> dict[str, Any]:
+    """Read secret-free credential adoption state without probing keys or processes."""
+    from credential_runtime import CredentialRuntimeJournal
+
+    runtimes = {}
+    for runtime, target, status_path in _api_keys_projection_targets(cluster_root):
+        try:
+            runtimes[runtime] = CredentialRuntimeJournal(target, status_path).public_status()
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            _log(SERVICE, f"Credential adoption status unavailable: {type(exc).__name__}", level="WARNING")
+            runtimes[runtime] = {"status": "error", "reason": "Credential adoption status is unavailable", "items": []}
+    return {"ok": True, "runtimes": runtimes}
+
+
 def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
     """Serialize projection with saves and recover unpublished local credentials first."""
 
@@ -1743,7 +1765,8 @@ def _project_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
         "counts": counts,
         "action": "write",
         "status": "written",
-        "message": "Exchange API keys were projected for configured runtimes. No bots were restarted.",
+        "message": "Exchange API keys were verified. PBRun will restart affected running bots locally.",
+        "runtime_adoption": _credential_runtime_status(cluster_root),
     })
     return plan
 
@@ -1786,6 +1809,7 @@ def _build_materialize_api_keys_plan(cluster_root: Path, desired_state: dict[str
         "node_id": node_id,
         "path": str(target),
         "projection_paths": {name: str(path) for name, path, _status in projection_targets},
+        "runtime_adoption": _credential_runtime_status(cluster_root),
         "counts": {"write": 0, "current": 0, "error": 0, "missing": 0, "written": 0},
         "can_apply": False,
     }

@@ -1,5 +1,7 @@
 # PBv7 Backtest
 
+Fehlt die konfigurierte PB7-Laufzeit oder deren Rust-Erweiterung, liefern Einstellungsabfragen einen HTTP-503-Konfigurationsfehler mit Angaben zur fehlenden Abhängigkeit. Repariere die konfigurierte PB7-Installation vor einem erneuten Versuch.
+
 Die **PBv7 Backtest** Seite ermöglicht das Erstellen, Ausführen und Auswerten von Passivbot v7 Backtests.
 Es handelt sich um eine eigenständige FastAPI-Seite — kein Seitenneustart nötig. Queue-Updates kommen in Echtzeit per WebSocket.
 Draft-Übergaben aus den FastAPI-Seiten **Run** und **Optimize** landen jetzt ebenfalls direkt hier als FastAPI-Drafts, sodass der Wechsel zwischen diesen PBv7-Seiten keinen Legacy-Relay-Pfad mehr benötigt.

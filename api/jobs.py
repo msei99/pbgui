@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from task_queue import (
+    get_job_by_id,
     list_jobs,
     request_cancel_job,
     delete_job,
@@ -68,10 +69,9 @@ def get_job(job_id: str, session: SessionToken = Depends(require_auth)):
     Returns:
         Job dict or 404 if not found
     """
-    jobs = list_jobs(states=["pending", "running", "done", "failed"], limit=1000)
-    for j in jobs:
-        if str(j.get("id", "")).strip() == str(job_id).strip():
-            return j
+    job = get_job_by_id(job_id)
+    if job is not None:
+        return job
     raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
 

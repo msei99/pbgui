@@ -9,6 +9,7 @@ All endpoints require auth (Bearer token).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from functools import wraps
 import os
@@ -51,6 +52,8 @@ import pbgui_purefunc
 from pbgui_purefunc import PBGDIR as _PBGDIR
 
 SERVICE = "ApiKeys"
+_SHARED_KEY_PREVIEW_SECRET = os.urandom(32)
+_SHARED_KEY_PREVIEW_TTL = 600
 
 router = APIRouter()
 
@@ -96,6 +99,7 @@ class UserSummary(BaseModel):
 
 
 class UserDetail(BaseModel):
+    shared_key_updated_users: list[str] = Field(default_factory=list)
     name: str
     exchange: str
     key: Optional[str] = None
@@ -130,6 +134,13 @@ class UserCreateUpdate(BaseModel):
     options: Optional[dict] = None
     extra: Optional[dict] = None
     new_name: Optional[str] = None
+    shared_private_key_preview: Optional[str] = Field(default=None, max_length=100)
+
+
+class SharedPrivateKeyPreviewRequest(BaseModel):
+    """Select a stored Hyperliquid account without transmitting its old key."""
+
+    name: str
 
 
 class UserKeyRevealRequest(BaseModel):
@@ -497,6 +508,75 @@ def _user_record_marker(user, generation: int) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _normalized_hl_private_key(value: str | None) -> str:
+    """Normalize equivalent hex encodings without accepting empty group keys."""
+    return str(value or "").strip().lower().removeprefix("0x")
+
+
+def _shared_hl_key_members(users, name: str) -> list:
+    """Resolve the complete group using stored keys only, never client member lists."""
+    name = _validate_user_name(name)
+    source = users.find_user(name)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Hyperliquid account not found")
+    if source.exchange != "hyperliquid":
+        raise HTTPException(status_code=400, detail="Shared private-key updates require Hyperliquid")
+    old_key = _normalized_hl_private_key(source.private_key)
+    if not old_key:
+        return []
+    members = sorted((user for user in users.users
+                      if user.exchange == "hyperliquid"
+                      and _normalized_hl_private_key(user.private_key) == old_key), key=lambda user: user.name)
+    for member in members:
+        _validate_user_name(member.name)
+    return members
+
+
+def _shared_hl_preview_token(users, name: str, members: list, issued_at: int) -> str:
+    """Bind a short-lived opaque confirmation to all records and the storage generation."""
+    generation = int(users._loaded_api_serial)
+    snapshot = [name, issued_at, generation, [_user_record_marker(user, generation) for user in members]]
+    digest = hmac.new(_SHARED_KEY_PREVIEW_SECRET, json.dumps(snapshot).encode(), hashlib.sha256).hexdigest()
+    return f"{issued_at}:{digest}"
+
+
+def _confirmed_shared_hl_members(users, name: str, data: UserCreateUpdate) -> list:
+    """Fail closed if confirmation is stale, tampered with, or used for another operation."""
+    if data.shared_private_key_preview is None:
+        return []
+    if data.exchange != "hyperliquid" or not data.private_key or not _get_agent_address(data.private_key):
+        raise HTTPException(status_code=400, detail="A valid new Hyperliquid private key is required")
+    members = _shared_hl_key_members(users, name)
+    if not re.fullmatch(r"[0-9]{1,12}:[0-9a-f]{64}", data.shared_private_key_preview):
+        raise HTTPException(status_code=409, detail="Invalid shared-key preview. Review the account list and confirm again.")
+    issued_at = int(data.shared_private_key_preview.split(":", 1)[0])
+    expected = _shared_hl_preview_token(users, name, members, issued_at)
+    if (len(members) < 2 or not 0 <= time.time() - issued_at <= _SHARED_KEY_PREVIEW_TTL
+            or not hmac.compare_digest(expected, data.shared_private_key_preview)):
+        raise HTTPException(status_code=409, detail="The shared-key preview changed or expired. Review the updated account list and confirm again.")
+    if _normalized_hl_private_key(data.private_key) == _normalized_hl_private_key(members[0].private_key):
+        raise HTTPException(status_code=400, detail="The new private key must differ from the stored key")
+    return [member for member in members if member.name != name]
+
+
+@router.post("/hyperliquid/shared-key/preview")
+@_serialized_api_keys_write
+def preview_shared_hl_private_key(
+    data: SharedPrivateKeyPreviewRequest,
+    response: Response,
+    session: SessionToken = Depends(require_auth),
+) -> dict:
+    """Return only account identities and an opaque confirmation; never credential values."""
+    response.headers["Cache-Control"] = "no-store"
+    users = _get_users()
+    members = _shared_hl_key_members(users, data.name)
+    return {
+        "accounts": [{"name": user.name, "wallet_address": user.wallet_address, "is_vault": bool(user.is_vault)}
+                     for user in members],
+        "preview_token": _shared_hl_preview_token(users, data.name, members, int(time.time())) if len(members) > 1 else None,
+    }
+
+
 def _resolve_pending_user_update() -> str | None:
     """Resolve an interrupted state journal from authoritative credential storage."""
     global _hl_expiry_cache_ts, _bybit_expiry_cache_ts
@@ -513,6 +593,12 @@ def _resolve_pending_user_update() -> str | None:
         after_user = users.find_user(new_name)
         before_matches = before_user is not None and _user_record_marker(before_user, generation) == transaction["before_marker"]
         after_matches = after_user is not None and _user_record_marker(after_user, generation) == transaction["after_marker"]
+        related = transaction.get("related_updates", {})
+        for related_name, markers in related.items():
+            related_user = users.find_user(related_name)
+            marker = _user_record_marker(related_user, generation) if related_user is not None else None
+            before_matches = before_matches and marker == markers["before_marker"]
+            after_matches = after_matches and marker == markers["after_marker"]
         if after_matches and not before_matches:
             finish_user_state_transaction(str(transaction["id"]), commit=True)
             outcome = "committed"
@@ -522,12 +608,12 @@ def _resolve_pending_user_update() -> str | None:
         else:
             raise ApiKeyStateTransactionConflictError("Credential storage changed while an API-key update was pending")
         with _hl_expiry_cache_lock:
-            _hl_expiry_cache.pop(old_name, None)
-            _hl_expiry_cache.pop(new_name, None)
+            for affected_name in {old_name, new_name, *related}:
+                _hl_expiry_cache.pop(affected_name, None)
             _hl_expiry_cache_ts = 0.0
         with _bybit_expiry_cache_lock:
-            _bybit_expiry_cache.pop(old_name, None)
-            _bybit_expiry_cache.pop(new_name, None)
+            for affected_name in {old_name, new_name, *related}:
+                _bybit_expiry_cache.pop(affected_name, None)
             _bybit_expiry_cache_ts = 0.0
         return outcome
 
@@ -1207,6 +1293,8 @@ def create_user(
     session: SessionToken = Depends(require_auth),
 ) -> UserDetail:
     """Create a new API key user."""
+    if data.shared_private_key_preview is not None:
+        raise HTTPException(status_code=400, detail="Shared private-key updates require an existing account")
     from User import User
     from Exchange import Exchanges, Passphrase
 
@@ -1320,6 +1408,8 @@ def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
     if data.exchange in Passphrase.list() and not effective_passphrase:
         raise HTTPException(status_code=400, detail=f"Passphrase is required for {data.exchange}")
 
+    related_users = _confirmed_shared_hl_members(users, name, data)
+    related_original_keys = {member.name: member.private_key for member in related_users}
     old_exchange = user.exchange
     old_wallet_address = user.wallet_address
     old_is_vault = user.is_vault
@@ -1351,6 +1441,8 @@ def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
     }
     loaded_generation = int(getattr(users, "_loaded_api_serial", 0) or 0)
     before_marker = _user_record_marker(user, loaded_generation)
+    related_updates = {member.name: {"before_marker": _user_record_marker(member, loaded_generation)}
+                       for member in related_users}
     transaction_id = None
     committed_after_error = False
     try:
@@ -1382,6 +1474,9 @@ def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
         user.options = data.options
         user.extra = strip_runtime_extra(data.extra)
         after_marker = _user_record_marker(user, loaded_generation + 1)
+        for member in related_users:
+            member.private_key = data.private_key
+            related_updates[member.name]["after_marker"] = _user_record_marker(member, loaded_generation + 1)
         transaction_id = begin_user_state_transaction(
             name,
             final_name,
@@ -1389,12 +1484,17 @@ def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
             after_marker=after_marker,
             clear_all=exchange_changed,
             clear_keys=clear_keys,
+            **({"related_updates": related_updates} if related_updates else {}),
         )
     except ApiKeyStateTransactionConflictError as exc:
+        for member in related_users:
+            member.private_key = related_original_keys[member.name]
         for field, value in original_values.items():
             setattr(user, field, value)
         raise HTTPException(status_code=409, detail="Another API key update requires recovery") from exc
     except Exception as exc:
+        for member in related_users:
+            member.private_key = related_original_keys[member.name]
         for field, value in original_values.items():
             setattr(user, field, value)
         _log(
@@ -1411,6 +1511,8 @@ def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
         try:
             committed_after_error = _resolve_pending_user_update() == "committed"
         except ApiKeyStateTransactionConflictError as recovery_exc:
+            for member in related_users:
+                member.private_key = related_original_keys[member.name]
             for field, value in original_values.items():
                 setattr(user, field, value)
             raise HTTPException(status_code=409, detail="API key data changed concurrently; reload before retrying") from recovery_exc
@@ -1432,6 +1534,8 @@ def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
                         "Credentials saved; publication/projection is pending. PBCluster will retry; reload before editing again."
                     ) from None
         else:
+            for member in related_users:
+                member.private_key = related_original_keys[member.name]
             for field, value in original_values.items():
                 setattr(user, field, value)
             from User import ApiKeysPersistenceUnavailableError
@@ -1479,8 +1583,8 @@ def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
     # Invalidate expiry caches when credentials changed
     if final_name != name or exchange_changed or old_exchange == "hyperliquid" or user.exchange == "hyperliquid":
         with _hl_expiry_cache_lock:
-            _hl_expiry_cache.pop(name, None)
-            _hl_expiry_cache.pop(final_name, None)
+            for affected_name in {name, final_name, *related_updates}:
+                _hl_expiry_cache.pop(affected_name, None)
             _hl_expiry_cache_ts = 0.0
     if final_name != name or exchange_changed or old_exchange == "bybit" or user.exchange == "bybit":
         with _bybit_expiry_cache_lock:
@@ -1489,7 +1593,11 @@ def _update_user_transaction(name: str, data: UserCreateUpdate) -> UserDetail:
             _bybit_expiry_cache_ts = 0.0
 
     _log(SERVICE, f"Updated API key user: {name} -> {final_name} ({data.exchange})")
-    return _user_to_detail(user, in_use)
+    result = _user_to_detail(user, in_use)
+    if related_updates:
+        result.shared_key_updated_users = sorted([final_name, *related_updates])
+        _log(SERVICE, f"Updated shared Hyperliquid private key for {len(result.shared_key_updated_users)} accounts")
+    return result
 
 
 class RenameRequest(BaseModel):

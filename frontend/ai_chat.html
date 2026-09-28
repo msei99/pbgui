@@ -443,7 +443,11 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       var unavailable = document.createElement('option');unavailable.value = current;unavailable.textContent = current + ' · Not connected';select.appendChild(unavailable);
     }
     if (current) select.value = current;
-    else if (state.profiles.some(function (profile) { return profile.id === state.profile; })) select.value = providerValue('chatgpt');
+    else if ((state.providers.chatgpt || {}).connected) select.value = providerValue('chatgpt');
+    else {
+      var connected = ['opencode-zen', 'opencode-go', 'openrouter'].find(function (provider) { return (state.providers[provider] || {}).connected; });
+      if (connected) select.value = connected;
+    }
     await loadModels();
   }
 
@@ -459,7 +463,10 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     $('speed-select').hidden = true;
     $('speed-select').disabled = true;
     updateComposer();
-    if (!provider) return;
+    if (!provider || !(state.providers[provider] || {}).connected) {
+      setNotice('Connect the selected provider in the sidebar or choose a connected provider to start chatting.', true);
+      return;
+    }
     try {
       var result = await api('/models?provider=' + encodeURIComponent(provider));
       if (generation !== state.requestGeneration) return;
@@ -1125,7 +1132,10 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     renderConversationList();
     $('delete-chat').disabled = true;
     $('retry-turn').hidden = true;
-    setNotice('', false);
+    if ($('model-select').value) showSelectedModelNotice();
+    else if (!(state.providers[selectedProvider()] || {}).connected) {
+      setNotice('Connect the selected provider in the sidebar or choose a connected provider to start chatting.', true);
+    }
     if (!keepTransition) setTransitioning(false);
     updateComposer();
   }

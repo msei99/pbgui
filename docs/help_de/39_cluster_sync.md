@@ -259,7 +259,8 @@ Die Installation von API-Keys auf einem Node nutzt die Sicherheitsstufen der Clu
 - lokale Backups auf VPS-Runnern ueberspringen
 - neue Datei schreiben
 - Payload verifizieren
-- keine Bots neu starten und keine weiteren Dateien deployen
+- nach erfolgreicher Prüfung eine Credential-Version pro Account freigeben; der lokale PBRun startet gezielt betroffene laufende PB7/PB8-Bots geordnet neu
+- deaktivierte Bots gestoppt lassen und keine weiteren Dateien deployen
 
 CMC- und TradFi-Vault-Einträge verwenden nicht den Exchange-API-Key-Blob. Credential Protocol v2 signiert jede Operation und versiegelt jede Secret-Generation für ihre zulässigen Empfänger. CMC nutzt die Audience `cluster` (aktive Master und VPS-Replikas), TradFi die Audience `masters`. Eine VPS kann ein undurchsichtiges TradFi-Envelope validieren, speichern und weiterleiten, ist aber kein Empfänger und kann es nicht entschlüsseln.
 
@@ -410,3 +411,9 @@ Wenn **Repair All SSH** Outbound-Fehler meldet:
 - Kopierte `data/cluster/node_id` Dateien nicht auf einer anderen Installation wiederverwenden.
 - `desired_state.json` nicht manuell bearbeiten; die Datei wird aus dem Operation Log generiert.
 - Admin-SSH-Zugang für Recovery behalten, auch wenn Cluster-Replikation eingeschränkte Keys verwendet.
+
+## Übernahme nach einem Key-Wechsel
+
+PBCluster verteilt Keys automatisch. Die verifizierte Ankunft der Datei und ein laufender Bot mit der neuen Version sind getrennte Zustände. Unter **System → Cluster Sync** zeigt **Preview** beim jeweiligen Node den automatisch aktualisierten Bereich **Credential adoption**: Key angekommen, Neustart ausstehend/läuft, Warten auf Bot-Start, übernommen, Fehler oder veraltete PBRun-Beobachtung. Ältere Nodes zeigen den Status erst nach Aktualisierung ihres PBGui-Codes und PBRun an.
+
+PBRun verfolgt jede Instanz und jeden konkreten Prozess einzeln, auch wenn mehrere Instanzen denselben Account verwenden. Wiederholte Synchronisation und reine Metadatenänderungen starten unveränderte Bots nicht neu. Ein manueller Neustart nach der verifizierten Key-Ankunft wird erkannt. Ausstehende Änderungen überleben PBRun-Neustarts und unterbrochene Dateischreibvorgänge. Fehlgeschlagene Stops starten keinen zweiten Prozess; fehlgeschlagene Starts bleiben mit Wartezeit erneut ausführbar. Zuerst wird SIGINT gesendet, erst nach begrenzten Wartezeiten folgen TERM und KILL. Die Übernahme bestätigt einen laufenden Ersatzprozess; sie ist keine börsenseitige Prüfung der Zugangsdaten. Geheimnisse und Credential-Fingerprints erscheinen nicht im Status.

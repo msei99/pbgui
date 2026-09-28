@@ -787,6 +787,14 @@
                     <div class="pw-wrap">
                         <input type="password" id="editPrivateKey" />
                     </div>
+                    <div id="sharedKeyGroup" hidden style="margin-top:12px; overflow-wrap:anywhere;">
+                        <div class="form-checkbox">
+                            <input type="checkbox" id="sharedKeyApplyAll" />
+                            <label for="sharedKeyApplyAll" id="sharedKeyLabel" style="text-transform:none;">Update all accounts using this private key</label>
+                        </div>
+                        <p id="sharedKeyNotice" role="status" style="font-size:var(--fs-sm); color:var(--text-muted);"></p>
+                        <ul id="sharedKeyAccounts" hidden style="max-height:220px; overflow:auto; padding-left:20px;"></ul>
+                    </div>
                 </div>
                 <div class="form-checkbox">
                     <input type="checkbox" id="editIsVault" />
@@ -1180,11 +1188,107 @@
         if (row && userTableBody.contains(row)) handleRowKey(e, row.dataset.userName);
     }
 
+    // Shared-key previews contain account identities only; keys remain in the password input.
+    let sharedKeyPreview = null;
+    let sharedKeyGeneration = 0;
+    let sharedKeyController = null;
+    let sharedKeyTimer = null;
+
+    function stopSharedKeyPreview(clear = false) {
+        sharedKeyGeneration += 1;
+        clearTimeout(sharedKeyTimer);
+        sharedKeyTimer = null;
+        if (sharedKeyController) sharedKeyController.abort();
+        sharedKeyController = null;
+        if (clear) {
+            sharedKeyPreview = null;
+            document.getElementById("sharedKeyGroup").hidden = true;
+            document.getElementById("sharedKeyApplyAll").checked = false;
+            document.getElementById("sharedKeyAccounts").replaceChildren();
+        }
+    }
+
+    function sharedKeyEligible() {
+        const exchange = document.getElementById("editExchange");
+        return editMode === "edit" && !!editingName
+            && document.getElementById("editPanel").style.display !== "none"
+            && exchange.value === "hyperliquid" && exchange.dataset.originalExchange === "hyperliquid"
+            && !!getMaskedFieldValue("editPrivateKey");
+    }
+
+    function renderSharedKeyPreview() {
+        const checkbox = document.getElementById("sharedKeyApplyAll");
+        const list = document.getElementById("sharedKeyAccounts");
+        list.replaceChildren();
+        list.hidden = !checkbox.checked;
+        if (!checkbox.checked || !sharedKeyPreview) return;
+        for (const account of sharedKeyPreview.accounts) {
+            const item = document.createElement("li");
+            item.textContent = account.name + " — " + (account.is_vault ? "Vault" : "Main account")
+                + " — " + (account.wallet_address || "No wallet address");
+            list.appendChild(item);
+        }
+    }
+
+    async function loadSharedKeyPreview() {
+        stopSharedKeyPreview();
+        if (!sharedKeyEligible() || document.hidden) return;
+        const generation = sharedKeyGeneration;
+        const name = editingName;
+        sharedKeyController = new AbortController();
+        try {
+            const result = await apiFetch("/hyperliquid/shared-key/preview", {
+                method: "POST", body: JSON.stringify({name}), signal: sharedKeyController.signal,
+                cache: "no-store",
+            });
+            if (generation !== sharedKeyGeneration || editingName !== name || !sharedKeyEligible()) return;
+            const checkbox = document.getElementById("sharedKeyApplyAll");
+            const changed = sharedKeyPreview && JSON.stringify(sharedKeyPreview.accounts) !== JSON.stringify(result.accounts);
+            if (changed) checkbox.checked = false;
+            sharedKeyPreview = result;
+            document.getElementById("sharedKeyGroup").hidden = result.accounts.length < 2;
+            checkbox.disabled = !result.preview_token;
+            document.getElementById("sharedKeyLabel").textContent = "Update all accounts using this private key (" + result.accounts.length + ")";
+            document.getElementById("sharedKeyNotice").textContent = changed
+                ? "The account group changed. Review the updated list before enabling this option again."
+                : "Only the private key is shared. Each account keeps its own wallet address and settings.";
+            renderSharedKeyPreview();
+        } catch (error) {
+            if (generation !== sharedKeyGeneration || error.name === "AbortError") return;
+            sharedKeyPreview = sharedKeyPreview ? {...sharedKeyPreview, preview_token: null} : null;
+            document.getElementById("sharedKeyGroup").hidden = false;
+            document.getElementById("sharedKeyApplyAll").disabled = true;
+            document.getElementById("sharedKeyLabel").textContent = "Shared-key preview unavailable";
+            document.getElementById("sharedKeyNotice").textContent = error.message;
+            document.getElementById("sharedKeyAccounts").replaceChildren();
+        } finally {
+            if (generation === sharedKeyGeneration && sharedKeyEligible() && !document.hidden && !saveInFlight) {
+                sharedKeyTimer = setTimeout(loadSharedKeyPreview, 5000);
+            }
+        }
+    }
+
+    function scheduleSharedKeyPreview() {
+        stopSharedKeyPreview(true);
+        if (sharedKeyEligible() && !document.hidden && !saveInFlight) {
+            sharedKeyTimer = setTimeout(loadSharedKeyPreview, 250);
+        }
+    }
+
+    window.addEventListener("pagehide", () => stopSharedKeyPreview(true));
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) stopSharedKeyPreview();
+        else if (!saveInFlight) loadSharedKeyPreview();
+    });
+
+
     // ── Init ────────────────────────────────────────────────
     document.addEventListener("DOMContentLoaded", async () => {
         const userTableBody = document.getElementById("userTableBody");
         userTableBody.addEventListener("click", handleUserTableClick);
         userTableBody.addEventListener("keydown", handleUserTableKeydown);
+        document.getElementById("sharedKeyApplyAll").addEventListener("change", renderSharedKeyPreview);
+        document.getElementById("editPrivateKey").addEventListener("input", scheduleSharedKeyPreview);
         await loadExchanges();
         restoreUrlParams();
         // Escape closes any open panel and returns to the list
@@ -1202,12 +1306,12 @@
         document.getElementById("editPanel").addEventListener("input", (event) => {
             if (event.target.closest("#hlCreditPurchasePanel")) return;
             formDirty = true;
-            advanceEditorGeneration();
+            if (event.target.id !== "sharedKeyApplyAll") advanceEditorGeneration();
         });
         document.getElementById("editPanel").addEventListener("change", (event) => {
             if (event.target.closest("#hlCreditPurchasePanel")) return;
             formDirty = true;
-            advanceEditorGeneration();
+            if (event.target.id !== "sharedKeyApplyAll") advanceEditorGeneration();
         });
         document.getElementById("hlCreditAmount").addEventListener("input", updateHlCreditCost);
         document.getElementById("hlCreditBuyButton").addEventListener("click", buyHlRequestCredits);
@@ -1251,6 +1355,7 @@
 
     function beginEditorAccount(name) {
         const previousAccount = editorAccountName;
+        if (name !== previousAccount) stopSharedKeyPreview(true);
         if (editorController) editorController.abort();
         editorGeneration += 1;
         editorAccountName = name;
@@ -1870,6 +1975,7 @@
         refreshHlCreditOffer();
         document.getElementById("bybitExpiryInline").style.display = isBybit && editMode === "edit" ? "flex" : "none";
         document.getElementById("passphraseGroup").style.display = needsPassphrase ? "" : "none";
+        scheduleSharedKeyPreview();
     }
 
     function updateHLExpiryInline(exp) {
@@ -2097,6 +2203,7 @@
         backupsVisible = false;
         logPanelVisible = false;
         _closeLogWs();
+        stopSharedKeyPreview(true);
         editMode = null;
         editingName = null;
         history.replaceState(null, "", location.pathname + location.search);
@@ -2197,11 +2304,30 @@
         };
 
         const btnSave = document.getElementById("btnSave");
+        const bulkRequested = document.getElementById("sharedKeyApplyAll").checked && sharedKeyEligible();
+        const bulkPreview = sharedKeyPreview;
         saveInFlight = true;
+        stopSharedKeyPreview();
         setEditorSaveBusy(true);
         btnSave.innerHTML = '<span class="spinner"></span> Saving...';
 
         try {
+            if (bulkRequested) {
+                if (!bulkPreview || !bulkPreview.preview_token || bulkPreview.accounts.length < 2) {
+                    throw new Error("The shared-key preview is unavailable. Wait for the account list before saving.");
+                }
+                const confirmed = await window.PBGuiDialogs.confirm({
+                    title: "Update shared Hyperliquid private key",
+                    message: "Replace the private key for all " + bulkPreview.accounts.length + " listed accounts?",
+                    detail: bulkPreview.accounts.map(account => account.name + " — "
+                        + (account.is_vault ? "Vault" : "Main account") + " — " + (account.wallet_address || "No wallet address")).join("\n")
+                        + "\n\nAfter delivery, running bots using these accounts will restart to adopt the new key. Stopped bots stay stopped.",
+                    confirmText: "Update all " + bulkPreview.accounts.length + " accounts",
+                    cancelText: "Cancel",
+                });
+                if (!confirmed || !isCurrentEditorRequest(context)) return;
+                data.shared_private_key_preview = bulkPreview.preview_token;
+            }
             if (!isCreate && name !== originalName && !combinedUserUpdateSupported) {
                 const meta = await apiFetch("/meta", { cache: "no-store" });
                 if (!isCurrentEditorRequest(context)) return;
@@ -2228,7 +2354,10 @@
             }
             editorAccountName = name;
             const savedContext = captureEditorRequest(name);
-            showToast((isCreate ? "User created: " : "User updated: ") + name, "success");
+            const sharedUpdated = savedUser.shared_key_updated_users || [];
+            showToast(sharedUpdated.length ? "Private key updated for " + sharedUpdated.length + " accounts"
+                : (isCreate ? "User created: " : "User updated: ") + name, "success");
+            sharedUpdated.forEach(affectedName => { delete hlExpiryData[affectedName]; });
             // Clear stale expiry cache for this user so re-opening the
             // edit panel does not show an outdated "no expire" result.
             const savedName = name;
@@ -2261,6 +2390,7 @@
             saveInFlight = false;
             setEditorSaveBusy(false);
             btnSave.textContent = "Save";
+            if (sharedKeyEligible()) loadSharedKeyPreview();
         }
     }
 

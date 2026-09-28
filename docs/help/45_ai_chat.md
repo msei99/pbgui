@@ -1,5 +1,7 @@
 # AI Chat
 
+If the selected provider is not connected, AI Chat shows a connection hint in the sidebar workflow and does not request its models. On initial load, an available connected provider is preferred. Starting a new chat keeps the connection hint visible until a provider is connected.
+
 Stop also works while a new conversation is still being created. The pending prompt is not sent when the delayed creation response arrives, and the composer becomes available again.
 
 ## Purpose

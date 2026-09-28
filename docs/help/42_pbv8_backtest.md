@@ -1,5 +1,7 @@
 # PBv8 Backtest
 
+If the configured PB8 runtime is unavailable, Backtest settings and Strategy Explorer return HTTP 503 with the runtime diagnostics. Strategy Explorer still uses HTTP 422 for invalid requests. Repair the configured PB8 interpreter, CLI or Rust extension as indicated by the error.
+
 Date fields use the same input component as Optimize. Typing inside a complete date overwrites digits and skips separators; selected text and pasted dates can still be replaced normally. The calendar button remains available, including in re-backtest dialogs.
 
 On supported PB8 versions, **Additional Parameters → offline** uses cached simulation candles and metadata only. Missing inputs cause an error; prepared datasets require verified offline provenance. OHLCV Readiness also respects offline mode and disables remote preload. Other PBGui services are unaffected.

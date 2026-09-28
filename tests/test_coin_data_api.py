@@ -750,6 +750,7 @@ def test_coin_data_frontend_applies_partial_state_and_summarizes_failures() -> N
         f"""
         const assert = require('node:assert/strict');
         var busyJobId = 'partial-job';
+        var busyPollGeneration = 1;
         var applied = null;
         var status = null;
         var hidden = false;
@@ -777,7 +778,7 @@ def test_coin_data_frontend_applies_partial_state_and_summarizes_failures() -> N
         }}
         {functions}
         (async function () {{
-          await pollRefreshJob('partial-job', 'fallback');
+          await pollRefreshJob('partial-job', 'fallback', busyPollGeneration);
           assert.deepEqual(applied, {{generation: 2}});
           assert.match(status[0], /Failed: bitget/);
           assert.equal(status[1], 'warning');

@@ -1745,6 +1745,8 @@
     var loadStateController = null;
     var busyJobPollTimer = 0;
     var busyJobId = '';
+    var busyPollGeneration = 0;
+    var busyPollController = null;
     var sortState = {
       main: { key: 'market_cap', dir: 'desc' },
       unmatched: { key: 'coin', dir: 'asc' },
@@ -1860,10 +1862,13 @@
 
     function stopBusyPolling() {
       if (busyJobPollTimer) {
-        window.clearInterval(busyJobPollTimer);
+        window.clearTimeout(busyJobPollTimer);
         busyJobPollTimer = 0;
       }
       busyJobId = '';
+      busyPollGeneration += 1;
+      if (busyPollController) busyPollController.abort();
+      busyPollController = null;
     }
 
     function showBusy(title, subtle) {
@@ -2019,8 +2024,8 @@
         });
     }
 
-    function pollRefreshJob(jobId, okFallback) {
-      return fetch(buildRefreshJobUrl(jobId), { cache: 'no-store', credentials: 'same-origin' })
+    function pollRefreshJob(jobId, okFallback, generation, signal) {
+      return fetch(buildRefreshJobUrl(jobId), { cache: 'no-store', credentials: 'same-origin', signal: signal })
         .then(function (response) {
           if (!response.ok) {
             return response.json().catch(function () { return {}; }).then(function (payload) {
@@ -2031,7 +2036,7 @@
         })
         .then(function (payload) {
           var job = payload.job || {};
-          if (busyJobId !== jobId) return;
+          if (busyJobId !== jobId || generation !== busyPollGeneration) return;
           updateBusyProgress(Number(job.percent || 0), job.message || 'Working...');
           if (job.status === 'completed' || job.status === 'partial') {
             if (job.state) applyServerState(job.state);
@@ -2050,21 +2055,28 @@
     function startRefreshJobPolling(jobId, okFallback) {
       stopBusyPolling();
       busyJobId = jobId;
-      pollRefreshJob(jobId, okFallback)
-        .catch(function (error) {
-          if (busyJobId !== jobId) return;
-          setActionStatus(error.message, true);
-          hideBusy();
-        });
-      busyJobPollTimer = window.setInterval(function () {
-        pollRefreshJob(jobId, okFallback)
+      var generation = busyPollGeneration;
+      busyPollController = new AbortController();
+      var signal = busyPollController.signal;
+      function nextPoll() {
+        if (generation !== busyPollGeneration || busyJobId !== jobId) return;
+        busyJobPollTimer = 0;
+        pollRefreshJob(jobId, okFallback, generation, signal)
+          .then(function () {
+            if (generation !== busyPollGeneration || busyJobId !== jobId) return;
+            var visible = document.getElementById('busy-overlay').classList.contains('visible');
+            var delay = document.hidden ? 5000 : (visible ? 750 : 2500);
+            busyJobPollTimer = window.setTimeout(nextPoll, delay);
+          })
           .catch(function (error) {
-            if (busyJobId !== jobId) return;
+            if (generation !== busyPollGeneration || busyJobId !== jobId) return;
             setActionStatus(error.message, true);
             hideBusy();
           });
-      }, 350);
+      }
+      nextPoll();
     }
+    window.addEventListener('pagehide', stopBusyPolling);
 
     var refreshPending = false;
     function runRefresh(path, busyTitle, okFallback) {

@@ -253,7 +253,8 @@ Installing API keys on a node uses the Cluster Sync materialization safety steps
 - skip local backups on VPS runner nodes
 - write the new file
 - verify the payload
-- do not restart bots or deploy other files
+- release a per-account credential revision after successful verification; local PBRun gracefully restarts affected running PB7/PB8 bots only
+- leave disabled bots stopped and do not deploy other files
 
 CMC and TradFi vault entries do not use the exchange API-key blob. Credential protocol v2 signs each operation and seals each secret generation to its eligible recipients. CMC uses the `cluster` audience (active masters and VPS replicas); TradFi uses the `masters` audience. A VPS can validate, store, and forward an opaque TradFi envelope but is not a recipient and cannot decrypt it.
 
@@ -402,3 +403,9 @@ If **Repair All SSH** reports outbound errors:
 - Do not reuse copied `data/cluster/node_id` files on another installation.
 - Do not edit `desired_state.json` manually; it is generated from the operation log.
 - Keep admin SSH access available for recovery even though cluster replication uses restricted keys.
+
+## Credential adoption after key changes
+
+PBCluster delivers keys automatically. A verified file arrival and a running bot using the new revision are separate states. In **System → Cluster Sync**, open the node's **Preview** to see **Credential adoption** update automatically: keys arrived, restart pending/restarting, waiting for a bot start, adopted, error, or stale PBRun observation. Older nodes report status unavailable until their PBGui code and PBRun have been updated.
+
+PBRun tracks each instance and exact process separately, including multiple instances sharing one account. Repeated syncs and metadata-only edits do not restart unchanged bots. A manual restart after verified key arrival is recognized. Pending changes survive PBRun restarts and interrupted key writes. Failed stops never launch a duplicate process; failed starts remain pending with a retry delay. Stops first send SIGINT, then escalate to TERM and KILL only after bounded waits. Adoption confirms that the replacement process is running; it is not an exchange-side credential validation. No secret values or credential fingerprints appear in this status.

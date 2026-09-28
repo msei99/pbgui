@@ -112,7 +112,12 @@ class PB7ApiKeysMergeWriter:
                 )
             if _TRADFI_KEY in current:
                 exchange_payload[_TRADFI_KEY] = deepcopy(current[_TRADFI_KEY])
+            from credential_runtime import CredentialRuntimeJournal
+
+            journal = CredentialRuntimeJournal(self.api_keys_path, self.projection_status_path)
+            journal.prepare(current, exchange_payload)
             self._write_api_keys_unlocked(exchange_payload)
+            journal.recover(self._read_api_keys_unlocked())
             return deepcopy(exchange_payload)
 
     def project_tradfi(

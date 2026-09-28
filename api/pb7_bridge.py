@@ -13,6 +13,10 @@ from typing import Any
 
 import pbgui_help
 from pbgui_purefunc import pb7dir
+from pb7_config import PB7ConfigurationError
+from logging_helpers import human_log as _log
+
+SERVICE = "PB7Bridge"
 
 _OPTIMIZE_METRIC_GROUP_ORDER = (
     "Returns & Growth",
@@ -43,7 +47,12 @@ def ensure_pb7_src_importable() -> None:
 
 def _import_pb7_module(module_name: str):
     ensure_pb7_src_importable()
-    return importlib.import_module(module_name)
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as exc:
+        detail = f"Failed to import PB7 module {module_name} from {Path(pb7dir()) / 'src'}: {exc}"
+        _log(SERVICE, detail, level="WARNING")
+        raise PB7ConfigurationError(detail) from exc
 
 
 def get_template_config() -> dict[str, Any]:

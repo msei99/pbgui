@@ -11,6 +11,10 @@ from uuid import uuid4
 
 from market_data import get_market_data_root_dir
 from file_lock import advisory_file_lock
+from secure_files import read_regular_file_nofollow
+from logging_helpers import human_log as _log
+
+SERVICE = "TaskQueue"
 
 
 def _task_queue_lock():
@@ -197,6 +201,33 @@ def list_jobs(
             if limit and len(out) >= int(limit):
                 return out
     return out
+
+
+def get_job_by_id(job_id: str) -> dict[str, Any] | None:
+    """Read one job under the transition lock without scanning queue history."""
+    jid = str(job_id or "")
+    if any(ord(char) < 32 or ord(char) == 127 for char in jid):
+        return None
+    jid = jid.strip()
+    if not jid or jid in {".", ".."} or any(char in jid for char in "/\\"):
+        return None
+    root = get_tasks_root_dir()
+    if not root.exists():
+        return None
+    with _task_queue_lock():
+        for state in ("pending", "running", "done", "failed"):
+            path = get_task_state_dir(state) / f"{jid}.json"
+            try:
+                if not path.exists():
+                    continue
+                obj = json.loads(read_regular_file_nofollow(path, root))
+            except (OSError, ValueError, RuntimeError) as exc:
+                _log(SERVICE, f"Could not read job in {state}: {type(exc).__name__}", level="WARNING")
+                continue
+            if isinstance(obj, dict) and str(obj.get("id", "")).strip() == jid:
+                obj["_path"] = str(path)
+                return obj
+    return None
 
 
 def _iter_job_paths(states: list[str]) -> list[Path]:

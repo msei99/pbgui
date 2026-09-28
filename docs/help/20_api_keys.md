@@ -20,7 +20,6 @@ The page runs as a standalone FastAPI page with a full topnav for navigating to 
 | **TradFi** | Opens the TradFi Data Provider panel |
 | **🗄 Backups** | Opens the backup browser and diff viewer |
 | **📋 Logs** | Opens the live log viewer on `PBGui.log`, which contains API-key activity and other UI logs |
-| **Refresh** | Reloads the user list from disk |
 | **🟠 Restart** | Visible when the API or another managed PBGui service runs outdated code; click to review and restart affected services |
 
 ---
@@ -48,6 +47,19 @@ Usernames are rendered strictly as text and row actions use delegated browser ev
 Click a user row to open, or use **+ Add User**. The URL hash updates to `#edit/username` so a browser refresh reopens the same user.
 
 Press **Escape** to close without saving (confirms if there are unsaved changes).
+
+
+### Change a shared Hyperliquid private key
+
+When editing an existing Hyperliquid account, enter its new **Private Key**. If other Hyperliquid entries use the same stored key, **Update all accounts using this private key (N)** appears below the field. This option is off by default; leaving it off updates only the selected account.
+
+Enable it to see the complete account list, including each name, wallet/vault address and whether it is a main account or vault. Main accounts sharing the key are included too; empty keys and accounts on other exchanges are excluded. Equivalent hexadecimal keys with or without `0x` are treated as the same key.
+
+Click **Save**, review the list in the confirmation dialog, then choose **Update all N accounts**. The new private key is applied to the entire group in one atomic save. Other accounts retain their addresses and individual settings; ordinary edits to the selected account are saved with the same transaction. No old private keys are exposed by the preview.
+
+The preview updates automatically while the editor is visible, preserving unsaved edits. If group membership or displayed account details change, the option is unchecked for a fresh review. The server also checks the confirmed records when saving: a changed or expired preview is rejected without saving any of the requested changes. Review the updated list and confirm again. Cancel leaves your edits available.
+
+Saved key-expiry information is cleared for every affected account. The existing Cluster Sync delivery and PBRun credential-adoption flow then handles each affected running bot. Delivery and restarts happen per VPS after verified key arrival, not simultaneously across hosts; stopped bots stay stopped. A distribution failure can leave the complete group saved locally with publication pending, which PBCluster retries. Check Cluster Sync before assuming every VPS has adopted the key.
 
 ### Edit form fields
 
@@ -127,7 +139,7 @@ Exchange users are projected into the local `api-keys.json`. Remote exchange API
 
 When you save exchange credentials, PBGui records the updated API-key metadata and restricted secret blob in cluster state. Use **System -> Cluster Sync** to preview and explicitly materialize `api-keys.json` on a reachable node.
 
-Cluster materialization creates replacement backups only on master nodes when the target file differs. These backups are stored with the normal API-key backups in `data/api-keys/`. VPS runner nodes skip local backups, write the verified secret blob atomically, and do not restart bots or deploy any other files.
+Cluster materialization creates replacement backups only on master nodes when the target file differs. These backups are stored with the normal API-key backups in `data/api-keys/`. VPS runner nodes skip local backups and write the verified secret blob atomically. After verification, local PBRun gracefully restarts only running PB7/PB8 instances using accounts whose credentials changed. Unchanged accounts and disabled bots are unaffected; no other files are deployed.
 
 TradFi profiles use credential protocol v2 sealed envelopes instead. They are addressed only to active masters; VPS nodes may relay the ciphertext but cannot decrypt or project TradFi credentials.
 
@@ -264,3 +276,9 @@ Standard / Manual Hyperliquid accounts display both Futures and Spot USDC balanc
 The account list automatically refreshes usage when you return to its browser tab, updating **In Use** and the Delete button after a Run configuration is deleted. PB7 and PB8 instance folders both protect credentials from deletion.
 
 Transfer balances update automatically even while exchange confirmation is pending. PBGui periodically checks the history of already submitted manual transfers; it never resubmits them. The inline controls unlock once the existing operation is confirmed or failed.
+
+## Credential adoption after key changes
+
+PBCluster delivers keys automatically. A verified file arrival and a running bot using the new revision are separate states. In **System → Cluster Sync**, open the node's **Preview** to see **Credential adoption** update automatically: keys arrived, restart pending/restarting, waiting for a bot start, adopted, error, or stale PBRun observation. Older nodes report status unavailable until their PBGui code and PBRun have been updated.
+
+PBRun tracks each instance and exact process separately, including multiple instances sharing one account. Repeated syncs and metadata-only edits do not restart unchanged bots. A manual restart after verified key arrival is recognized. Pending changes survive PBRun restarts and interrupted key writes. Failed stops never launch a duplicate process; failed starts remain pending with a retry delay. Stops first send SIGINT, then escalate to TERM and KILL only after bounded waits. Adoption confirms that the replacement process is running; it is not an exchange-side credential validation. No secret values or credential fingerprints appear in this status.

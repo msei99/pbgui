@@ -1,5 +1,7 @@
 # PBv7 Optimize
 
+If PB7 metadata cannot be imported because a runtime dependency is missing, opening the page returns an HTTP 503 configuration error with the dependency details instead of a generic server error. Repair the configured PB7 installation before retrying.
+
 The **PBv7 Optimize** page now opens as a standalone **FastAPI + Vanilla JS** page.
 It lets you create, queue and inspect Passivbot v7 optimisations through the FastAPI worker flow.
 The top **PBv7** navigation switches directly between the FastAPI **Run**, **Backtest**, and **Optimize** pages.

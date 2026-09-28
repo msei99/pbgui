@@ -82,6 +82,8 @@ HUMAN_LOG_SERVICE_MODULES = {
     "hyperliquid_aws.py", "tradfi_sync.py", "api/live.py",
 }
 TIER_3_SERVICES = {
+    "PB7Bridge",
+    "TaskQueue",
     "AIChat", "OptimizerWorkload",
     "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI",
     "BalanceCalc", "BitgetUTA", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",

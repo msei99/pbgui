@@ -2,6 +2,7 @@
 
 Exchange-API-Credentials und TradFi-Provider-Profile verwalten. Exchange-User bleiben in `api-keys.json`; TradFi-Secrets werden getrennt im owner-only Credential Vault von PBGui gespeichert.
 
+
 ---
 
 ## Seitenaufbau
@@ -20,7 +21,6 @@ Die Seite läuft als eigenständige FastAPI-Seite mit vollständiger Topnav zur 
 | **TradFi** | Öffnet das TradFi-Data-Provider-Panel |
 | **🗄 Backups** | Öffnet den Backup-Browser mit Diff-Viewer |
 | **📋 Logs** | Öffnet den Live-Log-Viewer mit `PBGui.log`, das API-Key-Aktivitaet und weitere UI-Logs enthaelt |
-| **Refresh** | Lädt die User-Liste neu von der Festplatte |
 | **🟠 Restart** | Sichtbar, wenn die API oder ein anderer verwalteter PBGui-Dienst veralteten Code ausführt; Klick zeigt und startet die betroffenen Dienste neu |
 
 ---
@@ -48,6 +48,19 @@ Benutzernamen werden strikt als Text gerendert und Zeilenaktionen verwenden dele
 Klick auf eine User-Zeile öffnet das Formular, oder **+ Add User** verwenden. Der URL-Hash wechselt auf `#edit/username`, sodass ein Browser-Refresh denselben User wiederherstellt.
 
 **Escape** schließt ohne Speichern (mit Rückfrage bei ungespeicherten Änderungen).
+
+### Gemeinsamen Hyperliquid-Private-Key ändern
+
+Beim Bearbeiten eines bestehenden Hyperliquid-Kontos den neuen **Private Key** eintragen. Nutzen weitere Hyperliquid-Einträge denselben gespeicherten Key, erscheint darunter **Update all accounts using this private key (N)**. Die Option ist standardmäßig ausgeschaltet; ohne Aktivierung wird nur das ausgewählte Konto geändert.
+
+Nach Aktivierung erscheint die vollständige Kontenliste mit Name, Wallet-/Vault-Adresse und Kennzeichnung als Hauptkonto oder Vault. Hauptkonten mit demselben Key gehören ebenfalls zur Gruppe; leere Keys und Konten anderer Börsen nicht. Gleichwertige hexadezimale Keys mit oder ohne `0x` werden als derselbe Key erkannt.
+
+**Save** anklicken, die Liste im Bestätigungsdialog prüfen und **Update all N accounts** wählen. Der neue Private Key wird in einem atomaren Speichervorgang für die gesamte Gruppe übernommen. Andere Konten behalten ihre Adressen und individuellen Einstellungen; normale Änderungen am ausgewählten Konto werden in derselben Transaktion gespeichert. Die Vorschau legt keine bisherigen Private Keys offen.
+
+Die Vorschau aktualisiert sich automatisch, solange der Editor sichtbar ist, und erhält ungespeicherte Eingaben. Ändern sich Gruppenzugehörigkeit oder angezeigte Kontodetails, wird die Option zur erneuten Prüfung abgewählt. Zusätzlich prüft der Server beim Speichern die bestätigten Datensätze: Eine veränderte oder abgelaufene Vorschau wird abgewiesen, ohne die angeforderten Änderungen zu speichern. Danach die aktualisierte Liste prüfen und erneut bestätigen. Beim Abbrechen bleiben die Eingaben erhalten.
+
+Gespeicherte Ablaufdaten werden für alle betroffenen Konten gelöscht. Anschließend übernimmt der vorhandene Ablauf aus Cluster Sync und PBRun die Zustellung und Key-Übernahme der betroffenen laufenden Bots. Zustellung und Neustarts erfolgen je VPS nach verifizierter Key-Ankunft, nicht gleichzeitig auf allen Hosts; gestoppte Bots bleiben gestoppt. Bei einem Verteilungsfehler kann die vollständige Gruppe bereits lokal gespeichert sein, während die Veröffentlichung noch aussteht und von PBCluster erneut versucht wird. In Cluster Sync prüfen, ob alle VPS den neuen Key übernommen haben.
+
 
 ### Felder im Bearbeitungsformular
 
@@ -127,7 +140,7 @@ Exchange-User werden in das lokale `api-keys.json` projiziert. Remote-Schreibvor
 
 Beim Speichern von Exchange-Credentials legt PBGui die aktualisierten API-Key-Metadaten und den eingeschränkten Secret-Blob im Cluster-State ab. Verwende **System -> Cluster Sync**, um `api-keys.json` auf einem erreichbaren Node zu prüfen und explizit zu materialisieren.
 
-Die Cluster-Materialisierung erstellt Ersatz-Backups nur auf Master-Nodes, wenn sich die Zieldatei unterscheidet. Diese Backups liegen bei den normalen API-Key-Backups in `data/api-keys/`. VPS-Runner ueberspringen lokale Backups, schreiben den verifizierten Secret-Blob atomar und starten keine Bots neu.
+Die Cluster-Materialisierung erstellt Ersatz-Backups nur auf Master-Nodes, wenn sich die Zieldatei unterscheidet. Diese Backups liegen bei den normalen API-Key-Backups in `data/api-keys/`. VPS-Runner überspringen lokale Backups und schreiben den verifizierten Secret-Blob atomar. Nach der Prüfung startet der lokale PBRun gezielt nur laufende PB7/PB8-Instanzen mit geänderten Account-Zugangsdaten geordnet neu. Unveränderte Accounts und deaktivierte Bots bleiben unberührt; weitere Dateien werden nicht verteilt.
 
 TradFi-Profile verwenden stattdessen Sealed Envelopes aus Credential Protocol v2. Sie sind nur an aktive Master adressiert; VPS-Nodes können den Ciphertext weiterleiten, aber TradFi-Credentials weder entschlüsseln noch projizieren.
 
@@ -264,3 +277,9 @@ Hyperliquid-Konten im Modus Standard / Manual zeigen Futures- und Spot-USDC-Guth
 Die Kontoliste aktualisiert beim Zurückwechseln in ihren Browser-Tab automatisch den Status **In Use** und den Löschbutton, wenn eine Run-Konfiguration gelöscht wurde. Instanzordner sowohl von PB7 als auch PB8 schützen die Zugangsdaten vor dem Löschen.
 
 Transfer-Guthaben aktualisieren sich automatisch, auch solange die Börsenbestätigung aussteht. PBGui prüft die Historie bereits übermittelter manueller Transfers regelmäßig nach und sendet sie niemals erneut. Sobald der bestehende Vorgang bestätigt oder fehlgeschlagen ist, werden die Transferfelder wieder freigegeben.
+
+## Übernahme nach einem Key-Wechsel
+
+PBCluster verteilt Keys automatisch. Die verifizierte Ankunft der Datei und ein laufender Bot mit der neuen Version sind getrennte Zustände. Unter **System → Cluster Sync** zeigt **Preview** beim jeweiligen Node den automatisch aktualisierten Bereich **Credential adoption**: Key angekommen, Neustart ausstehend/läuft, Warten auf Bot-Start, übernommen, Fehler oder veraltete PBRun-Beobachtung. Ältere Nodes zeigen den Status erst nach Aktualisierung ihres PBGui-Codes und PBRun an.
+
+PBRun verfolgt jede Instanz und jeden konkreten Prozess einzeln, auch wenn mehrere Instanzen denselben Account verwenden. Wiederholte Synchronisation und reine Metadatenänderungen starten unveränderte Bots nicht neu. Ein manueller Neustart nach der verifizierten Key-Ankunft wird erkannt. Ausstehende Änderungen überleben PBRun-Neustarts und unterbrochene Dateischreibvorgänge. Fehlgeschlagene Stops starten keinen zweiten Prozess; fehlgeschlagene Starts bleiben mit Wartezeit erneut ausführbar. Zuerst wird SIGINT gesendet, erst nach begrenzten Wartezeiten folgen TERM und KILL. Die Übernahme bestätigt einen laufenden Ersatzprozess; sie ist keine börsenseitige Prüfung der Zugangsdaten. Geheimnisse und Credential-Fingerprints erscheinen nicht im Status.

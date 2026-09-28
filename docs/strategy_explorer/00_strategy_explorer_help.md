@@ -1,5 +1,7 @@
 # Strategy Explorer - Help
 
+An unavailable configured PB8 runtime is reported as HTTP 503 with details about the missing interpreter, CLI or Rust extension. Invalid request data remains HTTP 422; repair the runtime named in the error before retrying.
+
 Completed simulation plots and fills remain visible when returning to the Simulation stage. Simulation and Compare cannot run at the same time.
 
 Strategy Explorer is the shared visual debugging and analysis GUI for PB7 and PB8 strategies. Both versions use the same page shell and workflow; version-specific engines, fields, labels, and unavailable controls adapt automatically.
