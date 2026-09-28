@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PBv7 Edit</title>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=1">
-<style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
+  <style>
 /* ─── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; }
@@ -91,9 +92,9 @@ body {
 @media (max-width: 1400px) { .cols-8 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 700px) {
   #page-body { flex-direction: column; height: calc(100vh - 52px); }
-  #sidebar { width: 100% !important; min-width: 0; max-width: none; border-right: 0; border-bottom: 1px solid var(--border); }
-  #sidebar-resize { display: none; }
-  #sidebar-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+
+
   #sidebar-toolbar .sb-sep { grid-column: 1 / -1; }
   #main-content { padding: var(--sp-sm); }
   .cols-8 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -532,6 +533,8 @@ textarea.json-invalid:focus {
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -4196,22 +4199,7 @@ async function calculateBalance() {
 }
 
 /* ─── Sidebar resize ───────────────────────────────────────── */
-(function() {
-  var sidebar = document.getElementById('sidebar');
-  var handle = document.getElementById('sidebar-resize');
-  var dragging = false;
-  handle.addEventListener('mousedown', function(e) {
-    e.preventDefault(); dragging = true; handle.classList.add('active');
-  });
-  document.addEventListener('mousemove', function(e) {
-    if (!dragging) return;
-    var w = Math.max(160, Math.min(300, e.clientX));
-    sidebar.style.width = w + 'px';
-  });
-  document.addEventListener('mouseup', function() {
-    if (dragging) { dragging = false; handle.classList.remove('active'); }
-  });
-})();
+
 
 /* ─── Init ─────────────────────────────────────────────────── */
 bindStructuredEditorSync();

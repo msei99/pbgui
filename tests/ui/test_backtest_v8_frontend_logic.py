@@ -753,7 +753,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
     shell_source = (ROOT / "frontend" / "js" / "backtest_shell.js").read_text(encoding="utf-8")
     adapter_source = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
 
-    assert '/app/css/backtest_shell.css?v=8' in v7_source
+    assert '/app/css/backtest_shell.css?v=9' in v7_source
     assert '/app/js/backtest_shell.js?v=5' in v7_source
     assert '/app/js/backtest_editor_adapter.js?v=12' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
@@ -2228,13 +2228,74 @@ def test_optimize_validation_results_render_as_collapsible_candidate_groups() ->
         _expandedResultGroups.add(resultGroupKey(data[0]));
         _renderResultsTableInto(host, data, null, rth, {{showVersion: true, groupValidation: true}});
         assert.doesNotMatch(host.innerHTML, /class="result-group-member" hidden/);
+        data.filter(item => item.result_group).forEach(item => _selectedResultPaths.add(item.path));
+        _expandedResultGroups.clear();
+        _renderResultsTableInto(host, data, null, rth, {{showVersion: true, groupValidation: true}});
+        assert.match(host.innerHTML, /class="result-group-row selected"/);
+        assert.equal((host.innerHTML.match(/class="selected result-group-member" hidden/g) || []).length, 4);
         """
     )
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "groupValidation: true" in source
-    assert "tbody tr[data-path]:not([hidden])" in source
+    assert "tbody tr:not([hidden])" in source
 
+
+def test_collapsed_validation_groups_support_bulk_selection() -> None:
+    """Selecting several collapsed headers includes hidden members in bulk actions."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("setResultRowSelection", "getSelectedResults")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const _selectedResultPaths = new Set();
+        function row(path, group, groupRow = false) {{
+          const classes = new Set(groupRow ? ['result-group-row'] : ['result-group-member']);
+          return {{
+            dataset: groupRow ? {{resultGroupKey: group}} : {{path, resultGroupKey: group}},
+            hidden: !groupRow,
+            classList: {{
+              contains: name => classes.has(name),
+              toggle: (name, enabled) => enabled ? classes.add(name) : classes.delete(name)
+            }}
+          }};
+        }}
+        const first = row(null, 'v8:first', true);
+        const second = row(null, 'v8:second', true);
+        const members = [
+          row('/first/train', 'v8:first'), row('/first/full', 'v8:first'),
+          row('/second/train', 'v8:second'), row('/second/full', 'v8:second')
+        ];
+        const document = {{querySelectorAll: selector => {{
+          if (selector.includes('tr.result-group-row')) return [first, second];
+          if (selector.includes('tr.result-group-member')) return members;
+          if (selector.includes('tr[data-path].selected')) return members.filter(
+            member => member.classList.contains('selected')
+          );
+          throw new Error(selector);
+        }}}};
+        {functions}
+        setResultRowSelection(first, true);
+        setResultRowSelection(second, true);
+        assert.deepEqual(getSelectedResults(), [
+          '/first/train', '/first/full', '/second/train', '/second/full'
+        ]);
+        assert.equal(first.classList.contains('selected'), true);
+        assert.equal(second.classList.contains('selected'), true);
+        setResultRowSelection(members[0], false);
+        assert.equal(first.classList.contains('selected'), false);
+        assert.equal(second.classList.contains('selected'), true);
+        setResultRowSelection(first, true);
+        setResultRowSelection(second, false);
+        assert.deepEqual(getSelectedResults(), ['/first/train', '/first/full']);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "e.target.closest('.actions-cell, .result-group-compare, .result-group-toggle')" in source
 
 def test_collapsed_validation_group_uses_full_metrics_and_visible_columns() -> None:
     """Summaries use only the full result and stay aligned when columns are hidden."""
@@ -2278,7 +2339,7 @@ def test_collapsed_validation_group_uses_full_metrics_and_visible_columns() -> N
         const host = {{innerHTML:''}};
         const render = rows => _renderResultsTableInto(host, rows, null, rth,
           {{showVersion:true, showStrategy:true, groupValidation:true, columnContext:'results'}});
-        const summary = () => host.innerHTML.match(/<tr class="result-group-row">([\s\S]*?)<\/tr>/)[1];
+        const summary = () => host.innerHTML.match(/<tr class="result-group-row"[^>]*>([\s\S]*?)<\/tr>/)[1];
         render([full,train]);
         assert.match(summary(), /abcdef012345…/);
         assert.match(summary(), /title="Optimize validation: [a-f0-9]{{64}}"/);

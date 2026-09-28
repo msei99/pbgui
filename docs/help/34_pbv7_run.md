@@ -20,7 +20,6 @@ Sidebar actions:
 | Button | Action |
 |--------|--------|
 | **Search / Status** | Filter the shared Run table without changing instance state |
-| **Refresh** | Reload all instances and remote status |
 | **Add Instance** | Create a new blank instance |
 | **Backups** | Browse, filter, load, or delete V7 config backups |
 
@@ -125,3 +124,5 @@ Dynamic Ignore is a target-host capability, not a per-instance or per-VPS key se
 2. The bot is stopped on the VPS automatically
 
 JSON Import asks for confirmation before replacing the current editor values, including unsaved changes. Cancel keeps the editor draft and import text intact.
+
+The Run list updates automatically via its authenticated WebSocket; there is no manual Refresh button in the sidebar. Search and status filters remain selected during updates.

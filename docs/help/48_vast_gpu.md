@@ -169,7 +169,7 @@ preserve warmup; load missing data through Market Data first.
 
 ### Known, working and preferred hosts
 
-The offer list identifies **Previously used** machines from actual local rental history. **Working** means at least one exact optimization result was recorded on that machine, or you explicitly chose **Mark working**. A rental stuck downloading an image is not automatically marked Working. This is historical evidence, not a guarantee about the next rental.
+In **GPU & Offers**, matching search results show prominent **Rented before** and **Real opt run** badges beside the GPU name. PBGui matches the saved GPU model and Vast Machine ID, so another model on the same machine is not marked. The location line shows the rental and run counts. A manual **Mark working** appears separately and never creates either badge. Performance tests and rentals stuck downloading an image do not count as real optimizer runs. These badges describe local past use, not a guarantee about the next rental.
 
 Use **Prefer host** in an offer's Details, in the rental's Host card or under **Hosts**. Preferred machines are shown and considered first, ordered by price within that group. PBGui searches those machines explicitly even when they are absent from the cheapest first page. Hardware requirements, maximum price, rental duration and budget checks still apply. If no preferred machine qualifies, ordinary matching offers remain available. Manual **Rent** still rents exactly the selected offer, and a block always overrides a preference.
 

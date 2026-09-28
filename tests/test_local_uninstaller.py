@@ -979,7 +979,8 @@ def test_session_tokens_are_absent_from_browser_and_backend_urls() -> None:
     assert "document.head.appendChild(script)" in nav_source
     assert "var guideTopic = GUIDE_TOPICS[c.current] || '00_overview';" in nav_source
     assert "window.PBGuiSharedHelp.open(guideTopic" in nav_source
-    assert "window.history.back()" in help_source
+    assert 'id="sidebar"' in help_source
+    assert 'id="help-ovl"' not in help_source
 
     auth_source = Path("api/auth.py").read_text(encoding="utf-8")
     websocket_sources = [Path("PBApiServer.py"), *Path("api").glob("*.py")]

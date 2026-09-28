@@ -9,7 +9,9 @@
   }
 }());
 </script>
-<style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
+  <style>
 .restoring-optimize-editor #configs-toolbar,
 .restoring-optimize-editor #configs-list-wrap,
 .restoring-optimize-editor #sidebar-inner { display:none !important; }
@@ -17,9 +19,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - V7 Optimize</title>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
-<script src="/app/js/sidebar_resize.js?v=1"></script>
 <script src="/app/js/optimize_editor_adapter.js?v=12"></script>
 <style>
 :root {
@@ -2143,15 +2143,6 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 .lp-resize-se { bottom: -4px; right: -4px; width: 12px; height: 12px; cursor: se-resize; }
 
 @media (max-width: 1100px) {
-  #page-body {
-    flex-direction: column;
-    height: calc(100vh - 52px);
-  }
-  #sidebar {
-    width: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
   .modal-grid { grid-template-columns: 1fr; }
   .cols-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .optlog-summary-grid,
@@ -2261,7 +2252,9 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
-<link rel="stylesheet" href="/app/css/vast.css?v=19">
+<link rel="stylesheet" href="/app/css/vast.css?v=21">
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -14592,7 +14585,7 @@ function attachEventHandlers() {
 }
 
 function initSidebarResize() {
-  window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
+  window.PBGuiSidebarResize.init();
 }
 
 function initSelections() {
@@ -15416,6 +15409,6 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=3"></script>
-<script src="/app/js/vast.js?v=151"></script>
+<script src="/app/js/vast.js?v=153"></script>
 </body>
 </html>

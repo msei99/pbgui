@@ -98,3 +98,5 @@ Delete publishes `DELETE_PB8_INSTANCE` before removing the local bundle. PB8 tom
 JSON Import asks for confirmation before replacing the current editor values, including unsaved changes. Cancel keeps the editor draft and import text intact.
 
 When saving is blocked by Cluster readiness, the message distinguishes a failed connection, stale sync status, a missing handshake, and explicitly unsupported PB8 replication. Only an explicit lack of support calls for a PBGui update on the named replica. Automatic Cluster sync refreshes readiness; saving remains blocked until it is confirmed.
+
+The Run list updates automatically via its authenticated WebSocket; there is no manual Refresh button in the sidebar. Search and status filters remain selected during updates.

@@ -1,0 +1,148 @@
+/* Load after page styles: shared dimensions must win over legacy width rules.
+   Common spacing and controls are defined here; page CSS only supplies domain-specific content. */
+#sidebar {
+  width: var(--pbgui-sidebar-width, 240px);
+  min-width: 160px;
+  max-width: 420px;
+}
+#sidebar-resize { touch-action: none; }
+#sidebar-resize:hover, #sidebar-resize.active { background: rgba(77,166,255,.4); }
+#sidebar-resize:focus-visible {
+  outline: 2px solid var(--accent, #4da6ff);
+  outline-offset: -2px;
+}
+html.pbgui-sidebar-resizing,
+html.pbgui-sidebar-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* Page-sidebar appearance: shared by navigation, actions and entity lists.
+   Scoped to #sidebar so dialogs, toolbars and embedded log viewers keep their styles. */
+#sidebar {
+  padding: 0;
+  gap: 0;
+  flex-direction: column;
+  background: #0e1117;
+  border-right: 1px solid #1e2736;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 18px;
+}
+#sidebar *, #sidebar *::before, #sidebar *::after { box-sizing: border-box; }
+#sidebar :is(#sidebar-sticky, .sidebar-sticky) { padding: 8px 8px 0; flex-shrink: 0; max-height: 100%; overflow-y: auto; }
+#sidebar :is(#sidebar-header, .sidebar-header) {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 4px; padding: 4px 0 8px; border: 0;
+}
+#sidebar :is(#sidebar-toolbar, .sidebar-toolbar, #sidebar-actions, #sidebar-meta) {
+  display: flex; flex-direction: column; flex-wrap: nowrap;
+  gap: 4px; padding: 0 0 8px; border-bottom: 1px solid #1e2736;
+}
+#sidebar #sidebar-meta { padding-top: 8px; }
+#sidebar :is(#sidebar-inner, #sidebar-list, #sidebar-list-wrap) {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px; flex: 1; min-height: 0; overflow-y: auto;
+}
+#sidebar :is(.ctx-actions, #account-list) { display: flex; flex-direction: column; gap: 4px; }
+#sidebar .sb-title {
+  display: block; margin: 0; font-size: 11px; line-height: 16px;
+  text-transform: uppercase; letter-spacing: .09em; color: #64748b; font-weight: 700;
+}
+#sidebar .sb-count {
+  font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 10px;
+  background: #1a202c; border: 1px solid #2d3748; color: #94a3b8; font-weight: 600;
+}
+#sidebar :is(.sb-btn, .sb-section, .sb-item, .side-button, .account-button) {
+  --sb-control-bg: #1a202c; --sb-control-border: #2d3748; --sb-control-text: #e2e8f0;
+  --sb-control-hover: #252d3d;
+  box-sizing: border-box; width: 100%; min-width: 0; min-height: 32px; height: auto;
+  flex-shrink: 0; margin: 0; padding: 6px 10px; border: 1px solid var(--sb-control-border);
+  border-radius: 6px; background: var(--sb-control-bg); color: var(--sb-control-text);
+  font: 400 13px/18px "Segoe UI", system-ui, sans-serif;
+  text-align: left; text-decoration: none; white-space: normal; overflow-wrap: anywhere;
+  cursor: pointer; box-shadow: none; transform: none;
+  transition: background .12s, border-color .12s, color .12s;
+}
+#sidebar :is(.sb-btn, .sb-section) { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+#sidebar :is(.side-button, .account-button) { display: block; }
+#sidebar :is(.sb-btn, .sb-section, .sb-item, .side-button, .account-button):hover:not(:disabled) {
+  background: var(--sb-control-hover); border-color: #4a5568; color: var(--sb-control-text); transform: none;
+}
+#sidebar :is(.sb-btn.primary, .sb-btn.edit-mode-save) {
+  --sb-control-bg: #1a3a4a; --sb-control-border: #234e52; --sb-control-text: #5eead4; --sb-control-hover: #234e52;
+}
+#sidebar :is(.sb-btn.info, .sb-btn.view-save) {
+  --sb-control-bg: #1a2a4a; --sb-control-border: #1e3a5f; --sb-control-text: #93c5fd; --sb-control-hover: #1e3a5f;
+}
+#sidebar :is(.sb-btn.accent, .sb-btn.install) {
+  --sb-control-bg: #215f9b; --sb-control-border: #3182ce; --sb-control-text: #fff; --sb-control-hover: #2872b8;
+}
+#sidebar .sb-btn.ok {
+  --sb-control-bg: #153626; --sb-control-border: #286745; --sb-control-text: #86efac; --sb-control-hover: #204c35;
+}
+#sidebar :is(.sb-btn.warning, .sb-btn.save-needed) {
+  --sb-control-bg: #463515; --sb-control-border: #80601e; --sb-control-text: #fde68a; --sb-control-hover: #60491c;
+}
+#sidebar .sb-btn.danger {
+  --sb-control-bg: #3a1a1a; --sb-control-border: #5f1e1e; --sb-control-text: #fca5a5; --sb-control-hover: #5f1e1e;
+}
+#sidebar :is(.sb-btn, .sb-section, .sb-item, .side-button, .account-button):is(.active, .selected) {
+  background: rgba(99,179,237,.12); border-color: rgba(99,179,237,.4); color: #e2e8f0; font-weight: 600;
+}
+#sidebar :is(.sb-btn, .sb-section, .sb-item, .side-button, .account-button):is(.active, .selected):hover {
+  background: rgba(99,179,237,.18); border-color: rgba(99,179,237,.6);
+}
+#sidebar :is(.sb-btn, .sb-section, .account-button):disabled { opacity: .45; cursor: not-allowed; }
+#sidebar :is(button, a, input, select, [tabindex]):focus-visible { outline: 2px solid #63b3ed; outline-offset: -2px; }
+#sidebar .sb-section .sb-icon { font-size: 16px; width: 20px; flex-shrink: 0; text-align: center; }
+#sidebar .sb-sep { width: 100%; border: 0; border-top: 1px solid #1e2736; margin: 4px 0; flex-shrink: 0; }
+#sidebar :is(.sb-input, .sb-select, #sidebar-search) {
+  width: 100%; min-width: 0; height: 32px; padding: 0 8px;
+  border: 1px solid #2d3748; border-radius: 6px; background: #1a202c; color: #e2e8f0;
+  font: 400 13px/18px "Segoe UI", system-ui, sans-serif;
+}
+#sidebar :is(.sb-label, .side-group-title) { font-size: 11px; line-height: 16px; color: #94a3b8; }
+#sidebar :is(.sb-icon-row, .sb-button-row) { display: flex; gap: 4px; }
+/* Opt-in compact toolbar; ordinary action lists retain full-width buttons. */
+#sidebar :is(#sidebar-toolbar, .sidebar-toolbar, #sidebar-actions).sb-icon-row,
+#sidebar .sb-icon-row { flex-direction: row; flex-wrap: wrap; }
+#sidebar .sb-icon-row > .sb-btn {
+  width: 32px; height: 32px; min-height: 32px; flex: 0 0 32px;
+  padding: 0; justify-content: center; text-align: center;
+}
+#sidebar .sb-icon-btn {
+  width: 32px; height: 32px; flex: 0 0 32px; padding: 0; border-radius: 6px;
+  border: 1px solid #2d3748; background: #1a202c; color: #e2e8f0;
+}
+#sidebar .sb-icon-btn:hover { background: #252d3d; border-color: #4a5568; }
+#sidebar .sb-status-btn { min-height: 32px; padding: 6px 10px; border-radius: 6px; font: 400 13px/18px "Segoe UI", system-ui, sans-serif; }
+#sidebar #sidebar-search-wrap { padding: 8px 0; }
+#sidebar #sidebar-search { padding-left: 28px; }
+#sidebar .sb-search-icon { left: 8px; }
+/* Hidden tabs, permission-controlled actions and loading states must stay hidden. */
+#sidebar [hidden] { display: none !important; }
+
+@media (max-width: 760px) {
+  /* A fixed app viewport needs bounded flex children; height:auto clipped long pages. */
+  html body { height: 100dvh; display: flex; flex-direction: column; }
+  #shared-backtest-shell-root { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  #page-body {
+    flex-direction: column;
+    height: calc(100dvh - var(--nav-height, 52px));
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+  }
+  #sidebar {
+    display: flex !important;
+    width: 100% !important;
+    min-width: 0;
+    max-width: none;
+    max-height: 40vh;
+    overflow-y: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border, var(--line, #1e2736));
+  }
+  #page-body > #main-content,
+  #page-body > #main,
+  #page-body > #viewer-area { min-height: 0; min-width: 0; overflow-y: auto; }
+  #sidebar-resize { display: none !important; }
+}

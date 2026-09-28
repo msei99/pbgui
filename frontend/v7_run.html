@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PBv7 Run</title>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=1">
-<script src="/app/js/sidebar_resize.js?v=1"></script>
 <script src="/app/js/pbgui_dialogs.js?v=10"></script>
 <script src="/app/js/run_list_adapter.js?v=3"></script>
-<style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
+  <style>
 /* ─── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
@@ -530,14 +530,16 @@ tr.row-inactive td  { opacity: 0.45; }
 
 @media (max-width: 760px) {
   #page-body { flex-direction: column; height: calc(100vh - 52px); }
-  #sidebar { width: 100% !important; min-width: 0; max-width: none; border-right: 0; border-bottom: 1px solid var(--border); }
-  #sidebar-resize { display: none; }
-  #sidebar-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+
+
   #sidebar-toolbar .sb-label, #sidebar-toolbar .sb-input, #sidebar-toolbar .sb-sep { grid-column: 1 / -1; }
   #main-content { padding: var(--sp-sm); }
   th, td { padding: var(--sp-xs); }
 }
 </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 
@@ -576,7 +578,6 @@ tr.row-inactive td  { opacity: 0.45; }
           <option value="collecting">Collecting</option>
         </select>
         <hr class="sb-sep">
-        <button class="sb-btn" onclick="loadInstances()">&#x21bb; Refresh</button>
         <button class="sb-btn" id="add-instance-btn" onclick="addInstance()">&#x2795; Add Instance</button>
         <button class="sb-btn" onclick="openBackups()">&#x1F4BE; Backups</button>
       </div>
@@ -1694,7 +1695,7 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 }];
 
 /* ─── Sidebar resize ─────────────────────────────────────── */
-window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
+window.PBGuiSidebarResize.init();
 </script>
 
 <!-- ── Shared nav bar ── -->

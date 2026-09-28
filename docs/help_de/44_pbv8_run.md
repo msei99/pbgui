@@ -98,3 +98,5 @@ Loeschen veroeffentlicht `DELETE_PB8_INSTANCE`, bevor das lokale Bundle entfernt
 JSON Import fragt vor dem Ersetzen der aktuellen Editorwerte einschliesslich ungespeicherter Aenderungen nach einer Bestaetigung. Abbrechen behaelt den Entwurf und den Importtext bei.
 
 Bei einer Cluster-Sperre beim Speichern unterscheidet die Meldung Verbindungsfehler, veralteten Sync-Status, fehlenden Handshake und ausdrücklich fehlende PB8-Replikationsunterstützung. Nur ausdrücklich fehlende Unterstützung verlangt ein PBGui-Update auf der genannten Replik. Der automatische Cluster-Sync aktualisiert die Bereitschaft; bis zur Bestätigung bleibt das Speichern gesperrt.
+
+Die Run-Liste aktualisiert sich automatisch über ihren authentifizierten WebSocket; in der Sidebar gibt es keinen manuellen Refresh-Button. Such- und Statusfilter bleiben bei Aktualisierungen erhalten.

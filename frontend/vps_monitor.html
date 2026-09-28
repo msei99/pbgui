@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VPS Monitor</title>
-<style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <style>
 /* ─── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; }
@@ -318,41 +319,17 @@ body {
   flex: 1;
   overflow: hidden;
   min-height: 0;
-}
+}/* ─── Sidebar ──────────────────────────────────────────────── */
 
-/* ─── Sidebar ──────────────────────────────────────────────── */
-#sidebar {
-  width: 180px;
-  min-width: 140px;
-  max-width: 280px;
-  flex-shrink: 0;
-  background: var(--bg);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-}
-#sidebar-resize {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 4px;
-  cursor: col-resize; background: transparent;
-}
-#sidebar-resize:hover, #sidebar-resize.active { background: rgba(77,166,255,0.4); }
-#sidebar-sticky { flex-shrink: 0; padding: 0.5rem 0.5rem 0; }
-#sidebar-header {
-  padding: 0.3rem 0.25rem 0.4rem;
-}
+
+
+
+
 .sb-title {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em;
   color: #64748b; font-weight: 700;
 }
-#sidebar-toolbar {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.3rem 0.1rem 0.45rem;
-  border-bottom: 1px solid var(--border);
-}
+
 .sb-sep { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
 .sb-btn {
   display: inline-flex;
@@ -738,7 +715,7 @@ tr.row-inactive td { opacity: 0.45; }
 /* ─── Responsive ──────────────────────────────────────────── */
 @media (max-width: 600px) {
   .metrics-grid { grid-template-columns: repeat(2, 1fr); }
-  #sidebar { width: 120px; min-width: 100px; }
+
   .sb-btn { font-size: 11px; padding: 0.3rem 0.4rem; }
 }
 /* ── Help overlay ── */
@@ -828,6 +805,8 @@ tr.row-inactive td { opacity: 0.45; }
 .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 
@@ -2723,24 +2702,7 @@ connect();
 initMetricTooltipHandlers();
 
 // ── Sidebar resize ─────────────────────────────────────────
-(function () {
-  var resizeEl = document.getElementById('sidebar-resize');
-  var sidebar  = document.getElementById('sidebar');
-  var active   = false;
-  resizeEl.addEventListener('mousedown', function (e) {
-    e.preventDefault(); active = true; resizeEl.classList.add('active');
-  });
-  document.addEventListener('mousemove', function (e) {
-    if (!active) return;
-    var newW = e.clientX;
-    if (newW < 120) newW = 120;
-    if (newW > 320) newW = 320;
-    sidebar.style.width = newW + 'px';
-  });
-  document.addEventListener('mouseup', function () {
-    if (active) { active = false; resizeEl.classList.remove('active'); }
-  });
-}());
+
 </script>
 
 <!-- ── Help overlay JS ── -->

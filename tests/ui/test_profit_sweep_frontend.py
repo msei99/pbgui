@@ -514,12 +514,12 @@ def test_profit_sweep_sidebar_and_mobile_contracts() -> None:
     source = _source()
 
     assert 'id="account-search"' in source
-    assert '/app/css/sidebar.css?v=4' in source
-    assert '/app/js/sidebar_resize.js?v=1' in source
+    assert '/app/css/sidebar.css?v=6' in source
+    assert '/app/js/sidebar_resize.js?v=3' in source
     for sidebar_id in ('sidebar', 'sidebar-sticky', 'sidebar-header', 'sidebar-toolbar', 'sidebar-inner', 'sidebar-resize'):
         assert f'id="{sidebar_id}"' in source
     assert 'id="sidebar-resize"' in source
-    assert "window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 220, maxWidth: 520 })" in source
+    assert "window.PBGuiSidebarResize.init()" in source
     assert "className = 'account-button'" in source
     assert "button.className = 'account-button' + (user.name === state.selectedUser ? ' selected' : '')" in source
     assert "border-left-color: var(--accent)" in source

@@ -4,20 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hyperliquid Limits - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
   <style>
     :root { --bg:#0e1117; --bg2:#1a202c; --border:#2d3748; --text:#e2e8f0; --dim:#94a3b8; --accent:#63b3ed; }
     * { box-sizing:border-box; }
     html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:14px 'Segoe UI',system-ui,sans-serif; }
-    #page-body { height:calc(100vh - 52px); overflow:auto; padding:24px; }
-    main { max-width:1480px; margin:0 auto; }
+    body { overflow:hidden; }
+    #page-body { display:flex; height:calc(100vh - 52px); overflow:hidden; }
+    #main-content { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; gap:12px; padding:20px; overflow:auto; }
+    .page-heading { flex-shrink:0; }
+    .page-heading p { margin:0; line-height:1.5; }
     h1 { margin:0 0 6px; font-size:23px; }
     p { margin:0 0 18px; color:var(--dim); }
-    .summary { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px; }
-    .pill { border:1px solid var(--border); border-radius:16px; padding:6px 11px; background:var(--bg2); }
-    .toolbar { display:flex; gap:12px; align-items:center; margin-bottom:12px; }
-    .toolbar input { min-width:260px; max-width:480px; width:100%; padding:8px 10px; color:var(--text); background:var(--bg2); border:1px solid var(--border); border-radius:5px; }
-    .status { color:var(--dim); font-size:12px; }
-    .table-wrap { overflow:auto; border:1px solid var(--border); border-radius:8px; }
+    .summary { display:flex; flex-direction:column; gap:4px; }
+    .pill { border:1px solid var(--border); border-radius:6px; padding:6px 10px; background:var(--bg2); font-size:13px; }
+    .status { color:var(--dim); font-size:12px; line-height:1.5; margin:8px 0 0; }
+    .table-wrap { flex:1; min-height:180px; overflow:auto; border:1px solid var(--border); border-radius:8px; }
     table { width:100%; border-collapse:collapse; min-width:900px; }
     th { text-align:left; position:sticky; top:0; z-index:1; background:var(--bg2); border-bottom:2px solid var(--border); padding:10px; white-space:nowrap; }
     td { padding:11px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
@@ -31,7 +33,7 @@
     .positive { color:#68d391; }
     .pending { color:#f6ad55; }
     .muted { color:var(--dim); }
-    #detail { margin-top:18px; padding:16px; border:1px solid var(--border); border-radius:8px; background:#121b27; }
+    #detail { flex-shrink:0; margin:0; padding:16px; border:1px solid var(--border); border-radius:8px; background:#121b27; }
     #detail h2 { margin:0 0 4px; font-size:17px; }
     #detail p { margin-bottom:12px; }
     #chart { width:100%; height:220px; display:block; background:#0e1117; border-radius:6px; }
@@ -39,19 +41,37 @@
     .legend { display:flex; gap:18px; color:var(--dim); font-size:12px; margin-top:8px; }
     .legend span::before { content:'● '; }
     .legend .used { color:#63b3ed; } .legend .cap { color:#f6ad55; }
-    @media(max-width:700px) { #page-body { padding:12px; } .toolbar { display:block; } .status { display:block; margin-top:7px; } }
+    @media(max-width:760px) { #main-content { padding:12px; } }
   </style>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
 </head>
 <body>
   <nav id="topnav"></nav>
-  <div id="page-body"><main>
-    <h1>Hyperliquid Limits</h1>
-    <p>One row per wallet. Running bots are sampled by their VPS every five minutes. Opening a saved Hyperliquid API key performs one live read for that account.</p>
-    <div id="summary" class="summary"></div>
-    <div class="toolbar"><input id="filter" type="search" placeholder="Filter account, bot, or VPS" aria-label="Filter accounts"><span id="status" class="status">Loading…</span></div>
-    <div class="table-wrap"><table><thead><tr><th>Account</th><th>Running bots / VPS</th><th>Used</th><th>Cap</th><th>Remaining</th><th>Usage</th><th>Last sample</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div id="page-body">
+    <aside id="sidebar" aria-label="Hyperliquid limit filters">
+      <div id="sidebar-sticky">
+        <div id="sidebar-header"><span class="sb-title">Hyperliquid Limits</span></div>
+        <div id="sidebar-toolbar">
+          <label class="sb-label" for="filter">Search wallets</label>
+          <input id="filter" class="sb-input" type="search" placeholder="Account, bot, or VPS" autocomplete="off">
+        </div>
+      </div>
+      <div id="sidebar-inner">
+        <div id="summary" class="summary" aria-label="Wallet summary"></div>
+        <p id="status" class="status" role="status">Loading…</p>
+      </div>
+      <div id="sidebar-resize"></div>
+    </aside>
+    <main id="main-content">
+      <header class="page-heading">
+        <h1>Hyperliquid Limits</h1>
+        <p>One row per wallet. Running bots are sampled by their VPS every five minutes. Opening a saved Hyperliquid API key performs one live read for that account.</p>
+      </header>
     <section id="detail" hidden><h2 id="detail-title"></h2><p id="detail-meta"></p><svg id="chart" viewBox="0 0 900 220" preserveAspectRatio="none" role="img" aria-label="24-hour Hyperliquid request limit history"></svg><div class="legend"><span class="used">Used</span><span class="cap">Cap</span></div></section>
-  </main></div>
+    <div class="table-wrap"><table><thead><tr><th>Account</th><th>Running bots / VPS</th><th>Used</th><th>Cap</th><th>Remaining</th><th>Usage</th><th>Last sample</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
+    </main>
+  </div>
   <script>
     const API_BASE = "%%API_BASE%%";
     const PBGUI_VERSION = "%%VERSION%%";

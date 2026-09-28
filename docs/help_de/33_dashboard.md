@@ -263,3 +263,6 @@ Beim Abbrechen eines neuen, ungespeicherten Dashboards bleibt der Inhaltsbereich
 - 📈 **ADG** und 📊 **PNL** zusammen nutzen, um langfristiges Wachstum mit täglichen Schwankungen zu vergleichen.
 - In der Live-Ansicht können Widgets durch Ziehen an der Titelleiste umsortiert werden — ohne den Editor zu öffnen.
 - Dashboards mit vielen Zellen und `ALL`-Benutzer können langsamer laden — für bessere Performance einzelne Benutzer zuweisen.
+
+
+Die Aktionen oben in der Dashboard-Sidebar bilden eine kompakte Icon-Leiste. Die Buttons sind 32 × 32 px groß und brechen bei schmaler Sidebar in eine weitere Zeile um. Beim Überfahren eines Icons erscheint die zugehörige Aktion; der Tastaturfokus wird wie bei anderen Sidebar-Bedienelementen sichtbar umrandet.

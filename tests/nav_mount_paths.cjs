@@ -116,9 +116,9 @@ async function main() {
     assert.equal(b.requests.at(-1).input, app + '/api/vps/alerts/ack-all');
 
     b.nodes['pbgui-guide-btn'].click();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/shared_help_overlay.js?v=8');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/shared_help_overlay.js?v=9');
     b.assets.at(-1).onerror();
-    assert.equal(c.location.href, app + '/app/help.html?v=1766');
+    assert.equal(c.location.href, app + '/app/help.html?v=1768');
     b.nodes['pbgui-ai-btn'].click();
     assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=18');
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/pbgui_dialogs.js?v=10');

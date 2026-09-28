@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Market Data - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
   <style>
     :root {
       --bg: #0e1117;
@@ -55,48 +56,10 @@
       overflow: hidden;
     }
 
-    #sidebar {
-      width: 240px;
-      min-width: 170px;
-      max-width: 320px;
-      flex-shrink: 0;
-      background: var(--bg);
-      border-right: 1px solid #1e2736;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      position: relative;
-    }
 
-    #sidebar-resize {
-      position: absolute;
-      top: 0;
-      right: 0;
-      bottom: 0;
-      width: 4px;
-      cursor: col-resize;
-      background: transparent;
-      z-index: 1;
-    }
 
-    #sidebar-resize:hover,
-    #sidebar-resize.active {
-      background: rgba(99, 179, 237, 0.4);
-    }
 
-    #sidebar-sticky {
-      padding: 0.5rem 0.5rem 0;
-      flex-shrink: 0;
-    }
 
-    #sidebar-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0.3rem 0.25rem 0.5rem;
-      gap: var(--sp-xs);
-      flex-wrap: wrap;
-    }
 
     .sb-title {
       font-size: var(--fs-sm);
@@ -112,13 +75,6 @@
       margin: 2px 0;
     }
 
-    #sidebar-toolbar {
-      display: flex;
-      flex-direction: column;
-      gap: 0.35rem;
-      padding: 0.2rem 0.1rem 0.6rem;
-      border-bottom: 1px solid #1e2736;
-    }
 
     .sb-btn {
       display: inline-flex;
@@ -2769,14 +2725,8 @@
 
     @media (max-width: 700px) {
       #page-body { flex-direction: column; }
-      #sidebar {
-        width: 100% !important;
-        max-width: none;
-        min-width: 0;
-        border-right: none;
-        border-bottom: 1px solid #1e2736;
-      }
-      #sidebar-resize { display: none; }
+
+
       #main-content { padding: var(--sp-md); }
       .hero-grid,
       .bridge-grid {
@@ -2830,6 +2780,8 @@
       }
     }
   </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
   <nav id="topnav"></nav>
@@ -9847,12 +9799,7 @@
       }
 
       if (window.PBGuiSidebarResize && typeof window.PBGuiSidebarResize.init === 'function') {
-        window.PBGuiSidebarResize.init({
-          sidebarId: 'sidebar',
-          handleId: 'sidebar-resize',
-          minWidth: 170,
-          maxWidth: 320
-        });
+        window.PBGuiSidebarResize.init();
       }
 
       initHelpOverlay();

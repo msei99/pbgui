@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Logging - PBGui</title>
-<style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <style>
 /* ─── Design tokens ──────────────────────────────────────── */
 :root {
   --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px;
@@ -24,33 +25,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
   flex: 1;
   min-height: 0;
   overflow: hidden;
-}
+}/* ─── Sidebar ────────────────────────────────────────────── */
 
-/* ─── Sidebar ────────────────────────────────────────────── */
-#sidebar {
-  width: 180px;
-  min-width: 140px;
-  flex-shrink: 0;
-  background: #0e1117;
-  border-right: 1px solid #333640;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-#sidebar-header {
-  padding: 0.5rem 0.6rem 0.3rem;
-}
+
 .sb-title {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em;
   color: #64748b; font-weight: 700;
 }
-#sidebar-toolbar {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.3rem 0.4rem 0.45rem;
-  border-bottom: 1px solid #333640;
-}
+
 .sb-btn {
   display: inline-flex;
   align-items: center;
@@ -249,6 +231,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 .gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
 .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
 </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 
@@ -292,12 +276,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 
   <!-- Sidebar -->
   <div id="sidebar">
+    <div id="sidebar-resize"></div>
+    <div id="sidebar-sticky">
     <div id="sidebar-header">
       <span class="sb-title">Logging</span>
     </div>
     <div id="sidebar-toolbar">
       <button class="sb-btn active" id="btn-logs" onclick="showView('logs')">&#128203; Log Viewer</button>
       <button class="sb-btn" id="btn-settings" onclick="showView('settings')">&#9881;&#65039; Settings</button>
+    </div>
     </div>
   </div>
 

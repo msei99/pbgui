@@ -4,7 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>API Keys - PBGui</title>
-    <style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <style>
         /* ── Design tokens (tune these to resize globally) ── */
         :root {
             --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px;
@@ -22,44 +23,15 @@
             height: calc(100vh - 52px);
             overflow: hidden;
             user-select: none;
-        }
+        }/* ── Sidebar ──────────────────────────────────── */
 
-        /* ── Sidebar ──────────────────────────────────── */
-        #sidebar {
-            width: 240px;
-            min-width: 180px;
-            max-width: 340px;
-            flex-shrink: 0;
-            background: #0e1117;
-            border-right: 1px solid #1e2736;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            position: relative;
-        }
-        #sidebar-resize {
-            position: absolute; top: 0; right: 0; bottom: 0; width: 4px;
-            cursor: col-resize; background: transparent;
-        }
-        #sidebar-resize:hover, #sidebar-resize.active { background: rgba(99,179,237,0.4); }
-        #sidebar-sticky { flex-shrink: 0; padding: 0.5rem 0.5rem 0; }
-        #sidebar-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0.3rem 0.25rem 0.4rem;
-            flex-wrap: wrap;
-            gap: 4px;
-        }
+
+
+
+
         .sb-title { font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.09em; color: #64748b; font-weight: 700; }
         .sb-count { font-size: var(--fs-sm); background: #1a202c; border: 1px solid #2d3748; border-radius: 10px; padding: 0.1rem 0.5rem; color: #94a3b8; font-weight: 600; }
-        #sidebar-toolbar {
-            display: flex;
-            flex-direction: column;
-            gap: 0.3rem;
-            padding: 0.3rem 0.1rem 0.45rem;
-            border-bottom: 1px solid #1e2736;
-        }
+
         .sb-sep { border: none; border-top: 1px solid #1e2736; margin: 2px 0; }
         .sb-btn {
             display: inline-flex;
@@ -631,6 +603,8 @@
         .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
     </style>
     <script src="/app/js/log_viewer_panel.js?v=50"></script>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 
@@ -3849,26 +3823,7 @@
     }
 
     // ── Sidebar resize ──────────────────────────────────────
-    (function () {
-        var resizeEl = document.getElementById('sidebar-resize');
-        var sidebar  = document.getElementById('sidebar');
-        var active   = false;
-        resizeEl.addEventListener('mousedown', function (e) {
-            e.preventDefault();
-            active = true;
-            resizeEl.classList.add('active');
-        });
-        document.addEventListener('mousemove', function (e) {
-            if (!active) return;
-            var newW = e.clientX;
-            if (newW < 160) newW = 160;
-            if (newW > 420) newW = 420;
-            sidebar.style.width = newW + 'px';
-        });
-        document.addEventListener('mouseup', function () {
-            if (active) { active = false; resizeEl.classList.remove('active'); }
-        });
-    }());
+
 
     /* ── Help overlay ── */
     (function () {

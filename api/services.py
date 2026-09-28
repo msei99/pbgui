@@ -1441,28 +1441,23 @@ def _get_hlcvs_cleanup_worker_item() -> dict[str, Any]:
 
 
 async def _collect_worker_groups() -> list[dict[str, Any]]:
-    groups = [
-        {
-            "id": "queue",
-            "label": "Queue Workers",
-            "items": [
-                _get_task_worker_item(),
-                await _get_backtest_worker_item(),
-                _get_backtest_v8_worker_item(),
-                await _get_optimize_worker_item(),
-                _get_optimize_v8_worker_item(),
-            ],
-        },
-        {
-            "id": "internal",
-            "label": "Internal Helpers",
-            "items": [
-                _get_archive_sync_worker_item(),
-                _get_hlcvs_cleanup_worker_item(),
-            ],
-        },
+    """Inspect workers without blocking unrelated API requests on disk or process reads."""
+
+    queue_items = await asyncio.gather(
+        asyncio.to_thread(_get_task_worker_item),
+        _get_backtest_worker_item(),
+        asyncio.to_thread(_get_backtest_v8_worker_item),
+        _get_optimize_worker_item(),
+        asyncio.to_thread(_get_optimize_v8_worker_item),
+    )
+    internal_items = await asyncio.gather(
+        asyncio.to_thread(_get_archive_sync_worker_item),
+        asyncio.to_thread(_get_hlcvs_cleanup_worker_item),
+    )
+    return [
+        {"id": "queue", "label": "Queue Workers", "items": queue_items},
+        {"id": "internal", "label": "Internal Helpers", "items": internal_items},
     ]
-    return groups
 
 
 async def _find_worker(worker_id: str) -> dict[str, Any] | None:
@@ -1618,6 +1613,25 @@ def run_migration(session: SessionToken = Depends(require_auth)) -> Dict[str, An
     finally:
         for lease in reversed(leases):
             lease.release()
+
+
+@router.get("/workers/summary")
+async def get_workers_summary(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Read live worker ownership for the overview without scanning job configurations."""
+    from api import backtest_v7 as bt7, backtest_v8 as bt8
+    from api import optimize_v7 as opt7, optimize_v8 as opt8
+    from task_worker_ownership import get_task_worker_status
+
+    controllers = (
+        bt7._worker, bt8._worker, opt7._worker, opt8._worker,
+        bt7._archive_sync_worker, bt7._hlcvs_cleanup_worker,
+    )
+    task_worker = await asyncio.to_thread(get_task_worker_status)
+    running = sum(_task_active(getattr(controller, "_task", None)) for controller in controllers)
+    return {
+        "updated_ts": int(time.time()),
+        "counts": {"total": len(controllers) + 1, "running": running + int(task_worker.running)},
+    }
 
 
 @router.get("/workers/status")

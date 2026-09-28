@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui — %%BACKTEST_LABEL%% Backtest</title>
 <script src="/app/plotly.min.js?v=1"></script>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
-<script src="/app/js/sidebar_resize.js?v=1"></script>
 <script src="/app/js/backtest_shell.js?v=5"></script>
 <script src="/app/js/backtest_editor_adapter.js?v=12"></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
-<style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
+  <style>
 /* ── Design Tokens ─────────────────────────────── */
 :root {
   --bg: #0e1117;       --bg2: #1a1d24;
@@ -721,10 +721,12 @@ textarea.json-invalid:focus {
 .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
-<link rel="stylesheet" href="/app/css/backtest_shell.css?v=8">
+<link rel="stylesheet" href="/app/css/backtest_shell.css?v=9">
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script src="/app/js/date_overwrite.js?v=2"></script>
 <script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 
@@ -6271,6 +6273,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     if (_selectedResultPaths.has(r.path)) rowClasses.push('selected');
     if (grouped) rowClasses.push('result-group-member');
     html += '\x3Ctr data-idx="' + i + '" data-path="' + esc(r.path) + '"' +
+      (grouped ? ' data-result-group-key="' + esc(resultGroupKey(r)) + '"' : '') +
       (rowClasses.length ? ' class="' + rowClasses.join(' ') + '"' : '') +
       (hidden ? ' hidden' : '') + liqStyle + '>' +
       (showVersion && hasColumn('backtest_version') ? '\x3Ctd>PB' + esc((r.backtest_version || '').toUpperCase()) + '\x3C/td>' : '') +
@@ -6328,7 +6331,8 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     var coinsText = summary.coins_text || (Array.isArray(summary.coins) ? summary.coins.join(', ') : '');
     var exchangeText = Array.isArray(summary.exchanges) ? summary.exchanges.join(', ') : '';
     function summaryMetric(key, decimals) { return fullResult ? fmt(fullResult[key], decimals) : '—'; }
-    html += '\x3Ctr class="result-group-row">' +
+    var groupSelected = members.every(function(member) { return member.path && _selectedResultPaths.has(member.path); });
+    html += '\x3Ctr class="result-group-row' + (groupSelected ? ' selected' : '') + '" data-result-group-key="' + esc(groupKey) + '">' +
       (showVersion && hasColumn('backtest_version') ? '\x3Ctd>PB' + esc((summary.backtest_version || '').toUpperCase()) + '\x3C/td>' : '') +
       '\x3Ctd class="result-group-name" title="' + esc(groupLabel) + '">' +
         '\x3Cdiv class="result-group-header">' +
@@ -6337,11 +6341,11 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
         '\x3Cbutton type="button" class="result-group-toggle" data-result-group-key="' + esc(groupKey) + '"' +
           ' aria-expanded="' + (expanded ? 'true' : 'false') + '" onclick="toggleResultGroup(this)"' +
           ' title="Optimize validation: ' + esc(groupLabel) + (fullResult ? '' : ' — Full result unavailable') + '"' +
-          ' aria-label="Optimize validation: ' + esc(groupLabel) + ', ' + esc(countLabel) + '">' +
+          ' aria-label="Toggle optimize validation group: ' + esc(groupLabel) + ', ' + esc(countLabel) + '">' +
           '\x3Cspan class="result-group-chevron" aria-hidden="true">' + (expanded ? '▼' : '▶') + '\x3C/span>' +
-          '\x3Cstrong>' + esc(shortLabel) + '\x3C/strong>' +
-          '\x3Cspan class="result-group-count">' + esc(countLabel) + (fullResult ? '' : ' · No full result') + '\x3C/span>' +
         '\x3C/button>' +
+        '\x3Cstrong>' + esc(shortLabel) + '\x3C/strong>' +
+        '\x3Cspan class="result-group-count">' + esc(countLabel) + (fullResult ? '' : ' · No full result') + '\x3C/span>' +
         '\x3C/div>' +
       '\x3C/td>' +
       (showStrategy && hasColumn('strategy') ? '\x3Ctd class="mono">' + esc(summary.strategy || '-') + '\x3C/td>' : '') +
@@ -6527,16 +6531,38 @@ var _cfgDragMode = null;
 /* ── Results row selection: click to toggle, drag to multi-select ── */
 function setResultRowSelection(row, selected) {
   if (!row) return;
+  if (row.classList.contains('result-group-row')) {
+    var groupKey = row.dataset.resultGroupKey;
+    document.querySelectorAll('#results-list .tbl tbody tr.result-group-member').forEach(function(member) {
+      if (member.dataset.resultGroupKey !== groupKey) return;
+      member.classList.toggle('selected', !!selected);
+      if (selected) _selectedResultPaths.add(member.dataset.path);
+      else _selectedResultPaths.delete(member.dataset.path);
+    });
+    row.classList.toggle('selected', !!selected);
+    return;
+  }
   row.classList.toggle('selected', !!selected);
   var path = String(row.dataset.path || '');
   if (!path) return;
   if (selected) _selectedResultPaths.add(path);
   else _selectedResultPaths.delete(path);
+  var groupKey = row.dataset.resultGroupKey;
+  if (groupKey) {
+    document.querySelectorAll('#results-list .tbl tbody tr.result-group-row').forEach(function(groupRow) {
+      if (groupRow.dataset.resultGroupKey !== groupKey) return;
+      var members = Array.from(document.querySelectorAll('#results-list .tbl tbody tr.result-group-member'))
+        .filter(function(member) { return member.dataset.resultGroupKey === groupKey; });
+      groupRow.classList.toggle('selected', members.length > 0 && members.every(function(member) {
+        return _selectedResultPaths.has(member.dataset.path);
+      }));
+    });
+  }
 }
 
 (function() {
   function rowsOfRes() {
-    return Array.from(document.querySelectorAll('#results-list .tbl tbody tr[data-path]:not([hidden])'));
+    return Array.from(document.querySelectorAll('#results-list .tbl tbody tr:not([hidden])'));
   }
   function rowIdxAtY(rows, y) {
     var idx = 0;
@@ -6559,7 +6585,8 @@ function setResultRowSelection(row, selected) {
   document.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
     var tr = e.target.closest('#results-list .tbl tbody tr');
-    if (!tr || !tr.dataset.path || e.target.closest('.actions-cell')) return;
+    if (!tr || (!tr.dataset.path && !tr.classList.contains('result-group-row')) ||
+        e.target.closest('.actions-cell, .result-group-compare, .result-group-toggle')) return;
     e.preventDefault(); /* prevent text-selection / drag cursor */
     _rowDragStart = { tr: tr, y: e.clientY };
     _rowDragSelecting = false;
@@ -6812,7 +6839,7 @@ function deselectAllResults() {
 function getSelectedResults() {
   var sel = [];
   document.querySelectorAll('#results-list .tbl tbody tr[data-path].selected').forEach(function(tr) { sel.push(tr.dataset.path); });
-  return sel;
+  return Array.from(new Set(sel));
 }
 
 function setSelectedResults(paths) {
@@ -11188,7 +11215,7 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 
 <!-- ── Sidebar resize ──────────────────────────── -->
 <script>
-window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
+window.PBGuiSidebarResize.init();
 </script>
 <!-- ── Help overlay logic ─────────────────────── -->
 <script>

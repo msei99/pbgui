@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - Strategy Explorer</title>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <script src="/static/plotly.min.js"></script>
-<script src="/app/js/sidebar_resize.js?v=1"></script>
-<style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
+  <style>
 :root {
   --bg: #0e1117;
   --bg2: #1a1d24;
@@ -38,8 +38,8 @@ html, body { height: 100%; margin: 0; color: var(--text); background: var(--bg);
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 #page-body { display: flex; height: calc(100vh - 52px); min-height: 0; }
-#sidebar { min-width: 0; border-right: 1px solid var(--border); }
-#sidebar-inner { display: flex; flex-direction: column; gap: var(--sp-sm); padding-bottom: var(--sp-lg); }
+
+
 #main-content { flex: 1; min-width: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: var(--sp-lg); display: flex; flex-direction: column; gap: var(--sp-lg); }
 .page-title { display: flex; justify-content: space-between; gap: var(--sp-lg); align-items: flex-start; }
 .page-title h1 { margin: 0 0 4px; font-size: var(--fs-xl); }
@@ -179,6 +179,8 @@ input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius:
   .shared-controls-grid { grid-template-columns: 1fr; }
 }
 </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 <nav id="topnav"></nav>

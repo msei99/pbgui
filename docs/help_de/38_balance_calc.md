@@ -26,7 +26,7 @@ Die PB8-Initialgroesse folgt dem aktiven Strategie-Schema: Trailing-Strategien v
 | Bereich | Inhalt |
 |---------|--------|
 | Linke Spalte | Bearbeitbares Konfigurations-JSON |
-| Toolbar | Optionale versionsgekennzeichnete PBv7-/PBv8-Instanz, Exchange-Auswahl und Calculate-Schaltfläche |
+| Sidebar | Optionale versionsgekennzeichnete PBv7-/PBv8-Instanz, Exchange-Auswahl und Calculate-Schaltfläche |
 | Rechte Spalte | Empfehlung, Guthaben je Seite und Coin-Mindestorderinformationen |
 
 ## Workflow
@@ -69,3 +69,5 @@ Die API akzeptiert auch `config_file` unter `data/run_v7/` oder `data/run_v8/` u
 - **Ungueltige Berechnungsparameter**: Positionszahl, Exposure-Limit und initiale Entry-Groesse muessen endliche, nichtnegative Zahlen sein. Null deaktiviert eine Seite; NaN, Infinity, negative Werte und numerischer Ueber-/Unterlauf werden statt einer irrefuehrenden Empfehlung abgewiesen.
 - **CoinData nicht konfiguriert**: Unter **System -> Services -> PBCoinData -> Pool** einen CMC-Pool-Key anlegen oder aktivieren und die lokale Materialisierung abwarten.
 - **Unerwartete PBv7-Coin-Liste**: Bei aktiviertem Dynamic Ignore können CoinData-Einstellungen die Approved Coins filtern.
+
+Instanz- und Exchange-Auswahl, Calculate sowie der Berechnungsstatus stehen in der gemeinsamen verstellbaren Sidebar. Ihre im Browser gespeicherte Breite gilt seitenübergreifend. Config-Editor und Ergebnisse nutzen die verbleibende Breite und stehen bei wenig Platz untereinander; auf Mobilgeräten steht die Sidebar darüber. Berechnung und PB7/PB8-Config-Übergaben funktionieren wie bisher.

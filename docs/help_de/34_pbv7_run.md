@@ -20,7 +20,6 @@ Sidebar-Aktionen:
 | Schaltfläche | Aktion |
 |--------|--------|
 | **Search / Status** | Gemeinsame Run-Tabelle filtern, ohne Instanzzustände zu ändern |
-| **Refresh** | Alle Instanzen und Remote-Status neu laden |
 | **Add Instance** | Neue leere Instanz erstellen |
 | **Backups** | V7-Config-Backups durchsuchen, filtern, laden oder löschen |
 
@@ -125,3 +124,5 @@ Dynamic Ignore ist eine Capability des Ziel-Hosts und keine Key-Einstellung pro 
 2. Der Bot wird automatisch auf dem VPS gestoppt
 
 JSON Import fragt vor dem Ersetzen der aktuellen Editorwerte einschliesslich ungespeicherter Aenderungen nach einer Bestaetigung. Abbrechen behaelt den Entwurf und den Importtext bei.
+
+Die Run-Liste aktualisiert sich automatisch über ihren authentifizierten WebSocket; in der Sidebar gibt es keinen manuellen Refresh-Button. Such- und Statusfilter bleiben bei Aktualisierungen erhalten.

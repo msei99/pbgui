@@ -6,7 +6,7 @@ Die Services-Seite zeigt und steuert alle PBGui-Hintergrunddienste an einem Ort.
 
 ## Service-Übersicht
 
-Die Seite öffnet mit einem Kachel-Raster, das alle Services auf einen Blick zeigt. Jede Kachel zeigt:
+Die Seite öffnet mit einem Kachel-Raster, das alle Services auf einen Blick zeigt. Während der Dienststatus lädt, zeigen die Kacheln „Loading status…“; Aktionsschaltflächen erscheinen nach Eingang des Status. Jede Kachel zeigt:
 
 - Den Service-Namen
 - Einen Status-Indikator (grüner Punkt = läuft, roter Punkt = gestoppt)
@@ -15,6 +15,8 @@ Die Seite öffnet mit einem Kachel-Raster, das alle Services auf einen Blick zei
 Klicke auf eine Kachel, um das Detail-Panel des Service zu öffnen.
 
 Die Übersicht enthält jetzt auch eine eigene **Workers**-Kachel. Sie öffnet den nur für Administration gedachten Worker-Bereich für Queue-Worker, Sync-/Watcher-Worker und interne Helper-Tasks.
+
+Die Übersicht liest den aktuellen Worker-Status direkt; detaillierte Warteschlangenstatistiken werden beim Öffnen von Workers geladen. Statusänderungen werden automatisch aktualisiert.
 
 | Service | Funktion |
 |---|---|

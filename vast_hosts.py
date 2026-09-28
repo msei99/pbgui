@@ -55,7 +55,8 @@ def host_history(store, state: dict) -> dict[int, dict]:
         """Create one public host record with independent evidence and marks."""
         machine = positive_id(machine)
         return profiles.setdefault(machine, dict(machine_id=machine, used=False, working=False,
-            working_detected=False, working_marked=False, preferred=False, rentals=0))
+            working_detected=False, working_marked=False, preferred=False, rentals=0,
+            opt_runs=0, gpu_names=[], gpu_history=[]))
 
     for machine, flags in marks.items():
         row = profile(int(machine))
@@ -64,6 +65,7 @@ def host_history(store, state: dict) -> dict[int, dict]:
     rows = store.list()
     by_id = {job_id(row['id']): row for row in rows}
     machines = {}
+    rental_offers = {}
     used_rentals = set()
     for row in rows:
         rental_id = job_id(row.get('lease_id') or row['id'])
@@ -74,20 +76,35 @@ def host_history(store, state: dict) -> dict[int, dict]:
                 continue
             path = store.directory(rental_id) / 'intent.json'
             intent = store.read(rental_id, 'intent.json') if path.exists() else {}
-            machines[rental_id] = (intent.get('offer') or {}).get('machine_id') or rental.get('host_machine_id')
+            offer = intent.get('offer') or {}
+            rental_offers[rental_id] = offer
+            machines[rental_id] = offer.get('machine_id') or rental.get('host_machine_id')
         machine = machines[rental_id]
         if machine is None:
             continue
         record = profile(machine)
         rental = by_id[rental_id]
-        # A worker reaching idle/completed alone does not prove optimization worked.
-        evaluated = row.get('kind') != 'worker' and type(row.get('exact_completed')) in (int, float) and row['exact_completed'] > 0
+        gpu_name = rental_offers[rental_id].get('gpu_name') or rental.get('gpu_name')
+        gpu_name = gpu_name.strip() if isinstance(gpu_name, str) and gpu_name.strip() else 'GPU model not recorded'
+        card = next((item for item in record['gpu_history'] if item['gpu_name'] == gpu_name), None)
+        # Performance tests and an idle worker are not evidence of a real optimizer run.
+        evaluated = (row.get('kind') not in {'worker', 'calibration'}
+            and type(row.get('exact_completed')) in (int, float) and row['exact_completed'] > 0)
         used = (type(rental.get('instance_id')) is int and rental['instance_id'] > 0) or bool(row.get('worker_ready')) or evaluated
+        if used and card is None:
+            card = dict(gpu_name=gpu_name, rentals=0, opt_runs=0)
+            record['gpu_history'].append(card)
         if used and rental_id not in used_rentals:
             record['rentals'] += 1
+            card['rentals'] += 1
             used_rentals.add(rental_id)
+            if gpu_name != 'GPU model not recorded' and gpu_name not in record['gpu_names']:
+                record['gpu_names'].append(gpu_name)
         record['used'] |= used
-        record['working_detected'] |= evaluated
+        if evaluated:
+            record['opt_runs'] += 1
+            card['opt_runs'] += 1
+            record['working_detected'] = True
         record['working'] = record['working_marked'] or record['working_detected']
     return profiles
 

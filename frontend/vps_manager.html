@@ -6,6 +6,7 @@
   <title>VPS Manager - PBGui</title>
   <script src='/app/vendor/marked.min.js?v=1'></script>
   <script src='/app/vendor/purify.min.js?v=1'></script>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
   <style>
     :root {
       --fs-xs: 11px;
@@ -65,25 +66,7 @@
       overflow: hidden;
     }
 
-    #sidebar {
-      width: 320px;
-      max-width: 42vw;
-      min-width: 250px;
-      flex-shrink: 0;
-      border-right: 1px solid rgba(255, 255, 255, 0.07);
-      background: linear-gradient(180deg, rgba(7, 12, 20, 0.95), rgba(7, 12, 20, 0.88));
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      backdrop-filter: blur(12px);
-    }
 
-    #sidebar-header {
-      padding: 18px 18px 14px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-      display: grid;
-      gap: 8px;
-    }
 
     .eyebrow {
       font-size: var(--fs-xs);
@@ -105,23 +88,8 @@
       line-height: 1.5;
     }
 
-    #sidebar-actions,
-    #sidebar-meta,
-    #sidebar-list {
-      padding: 16px 18px;
-    }
 
-    #sidebar-actions {
-      display: grid;
-      gap: 8px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    }
 
-    #sidebar-meta {
-      display: grid;
-      gap: 8px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    }
 
     .mini-card {
       background: rgba(18, 29, 48, 0.9);
@@ -147,14 +115,6 @@
       font-weight: 600;
     }
 
-    #sidebar-list {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      display: grid;
-      gap: 10px;
-      align-content: start;
-    }
 
     .side-group {
       display: grid;
@@ -566,7 +526,15 @@
     .master-status-grid {
       display: grid;
       gap: 12px;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    @media (max-width: 780px) {
+      .master-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 480px) {
+      .master-status-grid { grid-template-columns: 1fr; }
     }
 
     .status-item {
@@ -866,14 +834,19 @@
 
     .resource-meter {
       display: grid;
-      gap: var(--sp-xs);
+      gap: 8px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: rgba(13, 22, 36, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.06);
     }
 
     .resource-meter-title {
       color: var(--text);
-      font-size: var(--fs-base);
+      font-size: var(--fs-sm);
       font-weight: 600;
       line-height: 1.4;
+      margin-bottom: 2px;
     }
 
     .resource-meter-sub {
@@ -904,7 +877,7 @@
     }
 
     .resource-track {
-      height: 8px;
+      height: 10px;
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.08);
       overflow: hidden;
@@ -1234,6 +1207,27 @@
       min-height: 36px;
       padding: 6px 10px;
       text-align: center;
+    }
+
+    .agent-cache-section-title {
+      margin: 0;
+      color: var(--text);
+      font-size: var(--fs-sm);
+      font-weight: 700;
+    }
+
+    .agent-cache-panel .table-small { min-width: 600px; }
+    .agent-cache-panel .table-small th:nth-child(1),
+    .agent-cache-panel .table-small td:nth-child(1) { width: 32%; }
+    .agent-cache-panel .table-small th:nth-child(2),
+    .agent-cache-panel .table-small td:nth-child(2) { width: 15%; text-align: center; }
+    .agent-cache-panel .table-small th:nth-child(3),
+    .agent-cache-panel .table-small td:nth-child(3) { width: 23%; }
+    .agent-cache-panel .table-small th:nth-child(4),
+    .agent-cache-panel .table-small td:nth-child(4) { width: 30%; overflow-wrap: anywhere; }
+    .agent-cache-panel .table-small td.code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: 0.02em;
     }
 
     .table-small {
@@ -1956,24 +1950,14 @@
       .field.span-2 { grid-column: span 1; }
     }
 
-    @media (max-width: 980px) {
+    @media (max-width: 760px) {
       #page-body {
         flex-direction: column;
         height: auto;
         min-height: calc(100vh - 52px);
       }
 
-      #sidebar {
-        width: 100%;
-        min-width: 0;
-        max-width: none;
-        border-right: none;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-      }
 
-      #sidebar-list {
-        max-height: 32vh;
-      }
 
       #main {
         min-height: 0;
@@ -2006,45 +1990,10 @@
       background: var(--shell-bg);
     }
 
-    #sidebar {
-      width: 240px;
-      min-width: 180px;
-      max-width: 340px;
-      background: var(--shell-bg);
-      border-right: 1px solid var(--shell-border);
-      position: relative;
-      backdrop-filter: none;
-    }
 
-    #sidebar-resize {
-      position: absolute;
-      top: 0;
-      right: 0;
-      bottom: 0;
-      width: 4px;
-      cursor: col-resize;
-      background: transparent;
-      z-index: 2;
-    }
 
-    #sidebar-resize:hover,
-    #sidebar-resize.active {
-      background: rgba(99, 179, 237, 0.4);
-    }
 
-    #sidebar-sticky {
-      flex-shrink: 0;
-      padding: 0.5rem 0.5rem 0;
-    }
 
-    #sidebar-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 4px;
-      padding: 0.3rem 0.25rem 0.4rem;
-      border-bottom: none;
-    }
 
     #sidebar-header .eyebrow,
     #sidebar-header .sidebar-title,
@@ -2135,30 +2084,8 @@
       opacity: 1;
     }
 
-    #sidebar-actions {
-      display: flex;
-      flex-direction: column;
-      gap: 0.3rem;
-      padding: 0.3rem 0.1rem 0.45rem;
-      border-bottom: 1px solid var(--shell-border);
-    }
 
-    #sidebar-meta {
-      display: grid;
-      gap: 0.35rem;
-      padding: 0.35rem 0.1rem 0.45rem;
-      border-bottom: 1px solid var(--shell-border);
-    }
 
-    #sidebar-list {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 0.4rem;
-      padding: 0.5rem;
-    }
 
     .sb-field {
       display: grid;
@@ -2978,6 +2905,8 @@
       flex-direction: column;
     }
   </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
   <nav id='topnav'></nav>
@@ -4917,7 +4846,9 @@
             <div class='status-item'><div class='status-label'>Package status</div><div class='status-value'>${levelTag(packageModel.tone === 'error' ? 'error' : packageModel.tone === 'warning' ? 'warning' : 'ok', packageModel.label)}</div><div class='status-sub'>${esc(packageValueLabel)}: ${esc(packageValue)} · Reboot: ${esc(rebootValue)} · Age: ${esc(formatAgentAge(packageStatus.age))}</div>${packageStatus.error ? `<div class='status-sub'>${esc(packageStatus.error)}</div>` : ''}</div>
             <div class='status-item'><div class='status-label'>Agent provenance</div><div class='status-value'>Agent cache</div><div class='status-sub'>Effective age: ${esc(formatAgentAge(effectiveAgentAge(agent)))}</div>${agent.error ? `<div class='status-sub'>${esc(agent.error)}</div>` : ''}</div>
           </div>
+          <div><h3 class='agent-cache-section-title'>Cache files</h3><div class='field-help'>Presence, validity, and age of each saved agent file.</div></div>
           <div class='status-grid'>${fileCards}</div>
+          <div><h3 class='agent-cache-section-title'>Collector loops</h3><div class='field-help'>Last successful run and error for each collector.</div></div>
           <div class='table-wrap'><table class='table-small'><thead><tr><th>Collector loop</th><th>State</th><th>Effective age</th><th>Last error</th></tr></thead><tbody>${loopRows || `<tr><td colspan='4'>No collector loop status reported.</td></tr>`}</tbody></table></div>
           ${remediation}
         </div>
@@ -13536,7 +13467,7 @@
 
     function initSidebarResize() {
       if (window.PBGuiSidebarResize && typeof window.PBGuiSidebarResize.init === 'function') {
-        window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 220, maxWidth: 420 });
+        window.PBGuiSidebarResize.init();
       }
     }
 

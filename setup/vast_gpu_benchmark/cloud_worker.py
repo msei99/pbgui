@@ -799,8 +799,8 @@ def status() -> dict:
                 except ValueError:
                     continue
                 result["exact_completed"] = max(result["exact_completed"], int(event.get("exact_completed") or 0))
-                if event.get("generation"):
-                    result["gpu_candidates"] = int(event["generation"]) * int(event.get("population_size") or 0)
+                if event.get("generation") and event.get("population_size"):
+                    result["gpu_candidates"] = int(event["generation"]) * int(event["population_size"])
     return result
 
 

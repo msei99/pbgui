@@ -416,3 +416,42 @@ def test_restart_status_identifies_running_api_instance(monkeypatch):
 def isolated_cloud_supervisor_discovery(monkeypatch):
     """Existing API tests must not inspect actual user rental processes."""
     monkeypatch.setattr(PBApiServer, '_vast_supervisor_restart_state', lambda: [])
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_restart_inspection_does_not_block_other_api_requests(monkeypatch, stream) -> None:
+    """Slow daemon inspection must yield the event loop for ordinary status requests."""
+    import time
+
+    def slow_status():
+        """Simulate a slow synchronous process or file inspection."""
+        time.sleep(0.2)
+        return {'needs_restart': True}
+
+    async def unblocked():
+        """Supply an isolated restart guard result."""
+        return False, ''
+
+    monkeypatch.setattr(PBApiServer, '_restart_status_payload', slow_status)
+    monkeypatch.setattr(PBApiServer, '_restart_block_state', unblocked)
+    monkeypatch.setattr(PBApiServer, 'auth_runtime_status', lambda: {})
+    monkeypatch.setattr(PBApiServer, '_local_master_name', lambda: 'test')
+
+    async def scenario():
+        iterator = None
+        if stream:
+            response = await PBApiServer.server_status_stream(session=object())
+            iterator = response.body_iterator
+            task = asyncio.create_task(anext(iterator))
+        else:
+            task = asyncio.create_task(PBApiServer.server_status(session=object()))
+        try:
+            await asyncio.sleep(0.02)
+            assert not task.done(), 'Restart inspection blocked the event loop'
+            await task
+        finally:
+            await asyncio.gather(task, return_exceptions=True)
+            if iterator is not None:
+                await iterator.aclose()
+
+    asyncio.run(scenario())

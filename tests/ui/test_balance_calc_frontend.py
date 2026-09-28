@@ -74,7 +74,7 @@ def test_async_config_loading_cannot_overwrite_drafts_or_expose_stale_config() -
     """Draft and instance loads must be ordered, visible, and safe to calculate."""
     page = (ROOT / "frontend" / "balance_calc.html").read_text(encoding="utf-8")
 
-    assert '<select id="sel-exchange"><option value="">' in page
+    assert '<select class="sb-input" id="sel-exchange"><option value="">' in page
     assert "if (!DRAFT_ID) loadInstanceConfig(d);" in page
     assert "var configLoadGeneration = 0;" in page
     assert "generation !== configLoadGeneration" in page

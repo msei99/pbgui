@@ -4,7 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PBGui - Welcome</title>
-    <style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <style>
         :root {
             --fs-xs: 11px;
             --fs-sm: 13px;
@@ -39,46 +40,10 @@
             user-select: none;
         }
 
-        #sidebar {
-            width: 240px;
-            min-width: 180px;
-            max-width: 340px;
-            flex-shrink: 0;
-            background: #0e1117;
-            border-right: 1px solid #1e2736;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            position: relative;
-        }
 
-        #sidebar-resize {
-            position: absolute;
-            top: 0;
-            right: 0;
-            bottom: 0;
-            width: 4px;
-            cursor: col-resize;
-            background: transparent;
-        }
 
-        #sidebar-resize:hover,
-        #sidebar-resize.active {
-            background: rgba(99, 179, 237, 0.4);
-        }
 
-        #sidebar-sticky {
-            flex-shrink: 0;
-            padding: 0.5rem 0.5rem 0;
-        }
 
-        #sidebar-header {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: var(--sp-sm);
-            padding: 0.3rem 0.25rem 0.5rem;
-        }
 
         .sb-title {
             font-size: var(--fs-sm);
@@ -105,13 +70,6 @@
             font-weight: 600;
         }
 
-        #sidebar-toolbar {
-            display: flex;
-            flex-direction: column;
-            gap: 0.3rem;
-            padding: 0.3rem 0.1rem 0.45rem;
-            border-bottom: 1px solid #1e2736;
-        }
 
         .sb-sep {
             border: none;
@@ -723,10 +681,6 @@
         }
 
         @media (max-width: 980px) {
-            #sidebar {
-                display: none;
-            }
-
             .hero-grid,
             .grid-two,
             .field-grid,
@@ -739,6 +693,8 @@
             }
         }
     </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
     <nav id="topnav"></nav>
@@ -1571,28 +1527,7 @@
         });
         document.getElementById("main-content").addEventListener("scroll", updateActiveSectionFromScroll);
 
-        (function () {
-            var resizeEl = document.getElementById("sidebar-resize");
-            var sidebar = document.getElementById("sidebar");
-            var active = false;
-            resizeEl.addEventListener("mousedown", function (event) {
-                event.preventDefault();
-                active = true;
-                resizeEl.classList.add("active");
-            });
-            document.addEventListener("mousemove", function (event) {
-                if (!active) return;
-                var newWidth = event.clientX;
-                if (newWidth < 160) newWidth = 160;
-                if (newWidth > 420) newWidth = 420;
-                sidebar.style.width = newWidth + "px";
-            });
-            document.addEventListener("mouseup", function () {
-                if (!active) return;
-                active = false;
-                resizeEl.classList.remove("active");
-            });
-        }());
+
 
         window.PBGUI_AI_PAGE_CONTEXT = function () {
             return { section: state.activeSection === 'password' ? 'Authentication settings' : state.activeSection };

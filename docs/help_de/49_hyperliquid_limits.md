@@ -9,3 +9,5 @@ Ein Klick auf einen aktiven Account zeigt den 24-Stunden-Verlauf für Used und C
 Die Zähler betreffen das adressbezogene Aktionslimit von Hyperliquid, nicht das separate IP-REST-Gewichtslimit. Die Seite aktualisiert sich automatisch und hat keinen manuellen Refresh-Button.
 
 Konten ohne Messwert zeigen bei Verbleibend einen neutralen Strich. Ein einzelner Verlaufswert erscheint als Punkt mit einer Zeitangabe.
+
+Die Seite verwendet die gemeinsame verstellbare Sidebar. Dort nach Account, Bot oder VPS suchen; darunter stehen Wallet-Zähler und der Status der automatischen Aktualisierung. Die Tabelle nutzt die verbleibende Seitenbreite und lässt sich mit feststehenden Spaltenüberschriften scrollen. Der Verlauf eines ausgewählten Accounts erscheint oberhalb der Tabelle. Sidebar-Breite, Suchfilter und ausgewählter Account bleiben nach einem Browser-Neuladen erhalten. Auf schmalen Bildschirmen steht die Sidebar über dem Inhalt.

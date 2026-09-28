@@ -11,7 +11,7 @@ SOURCE = (Path(__file__).resolve().parents[2] / 'frontend/help.html').read_text(
 @pytest.mark.parametrize('mode', ['topic', 'topic_error', 'language', 'index_error', 'cache'])
 def test_out_of_order_help_responses(mode):
     """Execute actual topic/index/cache loaders with manually resolved requests."""
-    topic = SOURCE[SOURCE.index('      function loadTopic('):SOURCE.index('      function setOverlayVisible(')]
+    topic = SOURCE[SOURCE.index('      function loadTopic('):SOURCE.index('      function openHelp(')]
     cache = SOURCE[SOURCE.index('      function ensureTopicCached('):SOURCE.index('      function renderGlobalResults(')]
     script = 'const mode=%r;\n' % mode + topic + cache + r'''
 const assert=require('node:assert/strict');
@@ -21,6 +21,7 @@ const helpContent={innerHTML:''},helpTocList={innerHTML:''},helpSearchCount={},h
 const requests=[];
 function appPath(path){return path;}
 function renderToc(){}
+function saveHelpLocation(){}
 function renderMarkdown(text){return text;}
 function fetch(url){return new Promise((resolve,reject)=>requests.push({url,resolve,reject}));}
 async function reply(index,data){requests[index].resolve({ok:true,json:async()=>data});await flush();}

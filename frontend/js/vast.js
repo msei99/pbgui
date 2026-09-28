@@ -23,7 +23,7 @@
   let workers = [];
   let worker = null, queueState = {}, selectedOffer = null, renting = false;
   let hostBlockBusy = false, offerRows = [];
-  let hostProfiles = new Map(), hostGeneration = 0;
+  let hostProfiles = new Map(), hostGeneration = 0, hostHistoryLoaded = false;
   let calibrationInfo = null, calibrationGeneration = 0, calibrationStarting = false, watchCancelling = false;
   let calibrationWorkerAvailable = false;
   let gpuRecommendation = null, gpuRecommendationGeneration = 0;
@@ -127,6 +127,7 @@
       button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
     });
     if (view === 'performance') performanceView?.show(); else performanceView?.hide();
+    if (view === 'offers' && hostHistoryLoaded) void refreshHostHistory();
     if (view !== 'account') clearSecrets();
   }
   el('vast-settings-nav').querySelectorAll('[data-vast-view]').forEach(button => {
@@ -280,7 +281,11 @@
         fmt(offer.inet_down_mbps, 0) + ' / ' + fmt(offer.inet_up_mbps, 0), offer.location + (offer.verified ? ' · verified' : ''),
         offer.reliability == null ? 'Unknown' : fmt(offer.reliability * 100, 1) + '%', offerDuration(offer.duration_seconds), reasons.length ? reasons.join(' · ') : 'Compatible'];
       values.forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell); });
-      const secondary = (cell, value) => { const line = document.createElement('div'); line.className = 'muted offer-secondary'; line.textContent = value; cell.appendChild(line); };
+      const badges = document.createElement('div');
+      badges.className = 'offer-history-badges';
+      badges.dataset.offerBadges = '';
+      row.cells[0].appendChild(badges);
+      const secondary = (cell, value) => { const line = document.createElement('div'); line.className = 'muted offer-secondary'; line.textContent = value; cell.appendChild(line); return line; };
       secondary(row.cells[0], offer.tflops == null ? 'TFLOPS unknown' : fmt(offer.tflops, 1) + ' TFLOPS');
       secondary(row.cells[0], 'Vast power limit: ' + (Number(offer.gpu_max_power_watts) > 0
         ? fmt(offer.gpu_max_power_watts, 0) + ' W' : 'not reported'));
@@ -289,7 +294,9 @@
       secondary(row.cells[2], offer.cpu_name || 'CPU model unknown');
       secondary(row.cells[6], offer.machine_id ? 'Machine ' + offer.machine_id : 'Machine ID unavailable');
       const history = hostProfiles.get(offer.machine_id) || {};
-      secondary(row.cells[6], hostStatus(history));
+      const historyLine = secondary(row.cells[6], offerHistoryStatus(history, offer.gpu_name));
+      historyLine.dataset.offerHistory = '';
+      applyOfferEvidence(row, offer, history);
       secondary(row.cells[9], 'CUDA ' + fmt(offer.cuda_max_good, 1));
       row.cells[9].classList.add(reasons.length ? 'offer-incompatible' : 'offer-compatible');
       row.cells[9].title = 'Marketplace compatibility check. Requirements are checked again at rental start.';
@@ -944,8 +951,46 @@
       profile.working ? 'Working' : '', profile.preferred ? 'Preferred' : ''].filter(Boolean).join(' · ');
   }
 
+  function offerCardHistory(profile, gpuName) {
+    return (Array.isArray(profile.gpu_history) ? profile.gpu_history : [])
+      .find(card => card.gpu_name === gpuName);
+  }
+
+  function offerHistoryStatus(profile, gpuName) {
+    const card = offerCardHistory(profile, gpuName);
+    const rentals = Number(card?.rentals) || 0;
+    const runs = Number(card?.opt_runs) || 0;
+    const rentalText = rentals ? 'Rented ' + rentals + '×'
+      : profile.used ? 'Machine rented before · This GPU model not recorded' : 'No recorded rental';
+    const runText = runs ? runs + ' real opt run' + (runs === 1 ? '' : 's')
+      : profile.working_marked ? 'Manually marked working' : 'No real opt runs';
+    return [rentalText, runText, profile.preferred ? 'Preferred' : ''].filter(Boolean).join(' · ');
+  }
+
+  function applyOfferEvidence(row, offer, profile) {
+    const card = offerCardHistory(profile, offer.gpu_name);
+    const badges = row.querySelector('[data-offer-badges]');
+    badges.replaceChildren();
+    const addBadge = (label, kind) => {
+      const badge = document.createElement('span');
+      badge.className = 'offer-history-badge ' + kind;
+      badge.textContent = label;
+      badges.appendChild(badge);
+    };
+    if (Number(card?.rentals) > 0) addBadge('✓ Rented before', 'rented');
+    if (Number(card?.opt_runs) > 0) addBadge('✓ Real opt run', 'opt-run');
+    row.querySelector('[data-offer-history]').textContent = offerHistoryStatus(profile, offer.gpu_name);
+  }
+
   function acceptHostProfiles(data) {
-    if (Array.isArray(data.hosts)) hostProfiles = new Map(data.hosts.map(profile => [profile.machine_id, profile]));
+    if (!Array.isArray(data.hosts)) return;
+    hostProfiles = new Map(data.hosts.map(profile => [profile.machine_id, profile]));
+    hostHistoryLoaded = true;
+    el('offers-body').querySelectorAll('tr[data-offer]').forEach(row => {
+      const offer = offerRows.find(item => String(item.id) === row.dataset.offer);
+      if (!offer) return;
+      applyOfferEvidence(row, offer, hostProfiles.get(offer.machine_id) || {});
+    });
   }
 
   function hostPreferenceControls(machineId, rentalId) {
@@ -1602,7 +1647,12 @@
       const previousResults = new Map(jobRows.map(job => [job.id, [job.result_path, job.last_backup_at, job.result_partial].join('|')]));
       const resultsChanged = data.jobs.some(job => job.result_path && previousResults.get(job.id) !==
         [job.result_path, job.last_backup_at, job.result_partial].join('|'));
+      const previouslyEvaluated = new Set(jobRows.filter(job => Number(job.exact_completed) > 0).map(job => job.id));
+      const newOptRun = data.jobs.some(job => !['worker', 'calibration'].includes(job.kind)
+        && Number(job.exact_completed) > 0 && !previouslyEvaluated.has(job.id));
+      const previousRentalIds = new Set(workers.filter(item => Number(item.instance_id) > 0).map(item => item.id));
       jobRows = data.jobs; workers = data.workers || (data.worker && !['none','deletion_verified'].includes(data.worker.rental_state) ? [data.worker] : []); worker = workers[0] || data.worker; queueState = data.queue; supervision = data.supervision_available; calibrationWorkerAvailable = data.calibration_worker_available === true;
+      const newRental = workers.some(item => Number(item.instance_id) > 0 && !previousRentalIds.has(item.id));
       const globalMessage = el('message');
       if (globalMessage?.textContent?.startsWith('Preparing the canonical calibration input')
           && jobRows.some(job => job.kind === 'calibration' && job.status !== 'preparing')) message('');
@@ -1626,6 +1676,7 @@
       renderQueueOverview();
       void refreshActiveGpuProfile();
       if (typeof selectedOffer !== 'undefined' && selectedOffer) void refreshCalibration();
+      if (newOptRun || newRental) void refreshHostHistory();
       if (resultsChanged && typeof refreshLiveResultsDuringRun === 'function') await refreshLiveResultsDuringRun(true);
     } catch (error) {
       if (!disposed && current === jobGeneration) {

@@ -16,6 +16,14 @@ This rule is mandatory everywhere in PBGui, across all existing and future pages
 - Automatic updates must also preserve the user's current location, selections, and in-progress edits rather than rebuilding or resetting the interface unnecessarily.
 - Persist only non-secret navigation state. If the current destination no longer exists or is no longer accessible, explain that and use the nearest valid context instead of silently resetting navigation.
 
+## Mandatory UI Design Guide
+
+Before creating or modifying pages, top navigation, sidebars, main views, or page/Guide entry points, read and follow [docs/design_guide.md](docs/design_guide.md).
+
+- Use its shared page shell and explicit full-width versus compact-icon control variants; do not introduce page-local replacements for shared sidebar geometry or behavior.
+- Follow its verification checklist, including the real menu path, separate Guide overlay behavior, minimum/maximum sidebar widths, overflow checks, dynamic controls, state restoration and cache versions.
+- When introducing an approved reusable layout/control variant, update the shared implementation and this guide together.
+
 ## Project Architecture
 
 ### Stack

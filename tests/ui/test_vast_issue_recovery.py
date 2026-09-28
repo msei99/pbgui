@@ -114,15 +114,22 @@ def test_upload_retry_status_shows_wait_and_retained_data(cloud_page):
 def test_known_host_badges_and_preference_reorder_offers(cloud_page):
     """Mark a proven host preferred and preserve its status across reloads."""
     page, data, calls, overrides, _ = cloud_page
-    known = dict(machine_id=7, used=True, working=True, working_detected=True, rentals=2, preferred=False)
+    known = dict(machine_id=7, used=True, working=True, working_detected=True,
+                 rentals=2, opt_runs=1, gpu_names=['RTX 5090'],
+                 gpu_history=[dict(gpu_name='RTX 5090', rentals=2, opt_runs=1)], preferred=False)
     offers = [dict(id=i, machine_id=machine, gpu_name='RTX 5090', price_hour_usd=price,
                    cuda_max_good=13, duration_seconds=86400, location='Test')
               for i, machine, price in [(1, 8, .1), (2, 7, .3)]]
+    offers.append(dict(offers[1], id=3, gpu_name='RTX 3060', price_hour_usd=.4))
     overrides['/api/vast/offers'] = (200, json.dumps(dict(offers=offers, hosts=[known])), {'Content-Type': 'application/json'})
     page.locator('#find-offers').click()
     row = page.locator('#offers-body tr[data-offer="2"]')
     row.wait_for()
-    assert 'Previously used · Working' in row.inner_text()
+    assert 'Rented 2× · 1 real opt run' in row.inner_text()
+    assert row.locator('.offer-history-badge.rented').inner_text() == '✓ Rented before'
+    assert row.locator('.offer-history-badge.opt-run').inner_text() == '✓ Real opt run'
+    assert page.locator('#offers-body tr[data-offer="3"] .offer-history-badge').count() == 0
+    assert page.locator('#offer-rental-history').count() == 0
     row.get_by_role('button', name='Details', exact=True).click()
     preferred = dict(known, preferred=True)
     overrides['/api/vast/host-preferences'] = (200, json.dumps(dict(hosts=[preferred])), {'Content-Type': 'application/json'})
@@ -151,6 +158,15 @@ def test_manual_working_mark_does_not_invent_usage(cloud_page):
     assert pending.value.post_data_json == {'machine_id': 7, 'working': True}
     page.locator('#known-hosts-list').get_by_role('button', name='Clear working mark').wait_for()
     assert 'No recorded use · Working' in page.locator('#known-hosts-list').inner_text()
+    overrides['/api/vast/offers'] = (200, json.dumps(dict(
+        hosts=[profile], offers=[dict(id=2, machine_id=7, gpu_name='RTX 3060',
+                                     price_hour_usd=.2, cuda_max_good=13, location='Test')])),
+        {'Content-Type': 'application/json'})
+    page.locator('[data-vast-view=offers]').click()
+    page.locator('#find-offers').click()
+    assert 'Manually marked working' in page.locator('#offers-body tr[data-offer="2"]').inner_text()
+    assert page.locator('#offers-body tr[data-offer="2"] .offer-history-badge').count() == 0
+    page.locator('[data-vast-view=hosts]').click()
     overrides['/api/vast/host-preferences'] = (200, json.dumps(dict(hosts=[])), {'Content-Type': 'application/json'})
     page.locator('#known-hosts-list').get_by_role('button', name='Clear working mark').click()
     page.wait_for_function("document.getElementById('known-hosts-list').textContent.includes('No identified')")

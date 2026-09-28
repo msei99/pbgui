@@ -263,3 +263,6 @@ Cancelling an unsaved new dashboard returns to an idle content area without a lo
 - Use 📈 **ADG** and 📊 **PNL** together to compare long-term growth with day-to-day fluctuations.
 - In the live view, rearrange widgets by dragging their title bars — no need to open the editor.
 - Dashboards with many cells using `ALL` users may load slower — assign specific users for better performance.
+
+
+Dashboard sidebar actions use a compact icon toolbar. Buttons are 32 × 32 px and wrap onto another row when the sidebar is narrow. Hover over an icon to see its action; keyboard focus uses the same visible outline as other sidebar controls.

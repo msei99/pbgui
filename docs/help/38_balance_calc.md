@@ -26,7 +26,7 @@ PB8 initial sizing follows the active strategy schema: trailing strategies use `
 | Area | Content |
 |------|---------|
 | Left column | Editable config JSON |
-| Toolbar | Optional version-labelled PBv7/PBv8 instance, exchange selector, and Calculate button |
+| Sidebar | Optional version-labelled PBv7/PBv8 instance, exchange selector, and Calculate button |
 | Right column | Recommendation, per-side balances, and coin minimum-order information |
 
 ## Workflow
@@ -69,3 +69,5 @@ The API also accepts `config_file` below `data/run_v7/` or `data/run_v8/` and us
 - **Invalid calculation parameters**: position count, exposure limit, and initial entry size must be finite non-negative numbers. Zero disables a side; NaN, Infinity, negative values, and numeric overflow/underflow are rejected instead of producing a misleading recommendation.
 - **CoinData not configured**: add or activate a CMC pool key under **System -> Services -> PBCoinData -> Pool** and wait for local materialization.
 - **Unexpected PBv7 coin list**: if Dynamic Ignore is enabled, CoinData settings may filter the approved coins.
+
+Instance and exchange selectors, Calculate, and calculation status are in the shared resizable sidebar. Its browser-local width is restored across pages. The config editor and results use the remaining width and stack when that area becomes narrow; on mobile the sidebar moves above them. Calculation and PB7/PB8 config handoffs work as before.

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DB Tools - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
   <style>
     :root {
       --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 15px; --fs-lg: 18px; --fs-xl: 24px;
@@ -15,7 +16,7 @@
     html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: var(--fs-base); }
     * { box-sizing: border-box; }
     #page-body { display: flex; height: calc(100vh - 52px); overflow: hidden; }
-    #sidebar { width: 230px; min-width: 190px; flex-shrink: 0; border-right: 1px solid var(--line); background: #0b101a; padding: var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-sm); }
+
     .sb-title { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .08em; font-weight: 700; margin-bottom: var(--sp-xs); }
     .sb-btn { width: 100%; text-align: left; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); padding: .55rem .7rem; cursor: pointer; font: inherit; transition: background .12s, color .12s, border-color .12s; }
     .sb-btn:hover { background: #151d2d; color: var(--text); }
@@ -139,20 +140,28 @@
     #confirm-msg { color: var(--text); line-height: 1.45; }
     #confirm-detail { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
     #confirm-actions { display: flex; justify-content: flex-end; gap: var(--sp-sm); }
-    @media (max-width: 760px) { #page-body { flex-direction: column; } #sidebar { width: 100%; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); } .sb-title { display: none; } .sb-btn { white-space: nowrap; } }
+    @media (max-width: 760px) { #page-body { flex-direction: column; }
+ .sb-title { display: none; } .sb-btn { white-space: nowrap; } }
   </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
   <nav id="topnav"></nav>
   <div id="page-body">
     <aside id="sidebar">
-      <div class="sb-title">DB Tools</div>
+      <div id="sidebar-resize"></div>
+      <div id="sidebar-sticky">
+        <div id="sidebar-header"><span class="sb-title">DB Tools</span></div>
+        <div id="sidebar-toolbar">
       <button class="sb-btn active" data-panel="cleanup">Cleanup</button>
       <button class="sb-btn" data-panel="copy-users">Copy Users</button>
       <button class="sb-btn" data-panel="copy-db">Copy Database</button>
       <button class="sb-btn" data-panel="sync-jobs">Sync Jobs</button>
       <button class="sb-btn" data-panel="backups">Backup Manager</button>
       <button class="sb-btn" data-panel="copy-dashboards">Dashboards</button>
+        </div>
+      </div>
     </aside>
     <main id="main-content">
       <div class="page-head">

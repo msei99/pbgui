@@ -1583,7 +1583,7 @@
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
-    'help':               '/app/help.html?v=1766',
+    'help':               '/app/help.html?v=1768',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
@@ -1944,13 +1944,6 @@
       }
     });
 
-    function visibleRestartServices(status, services) {
-      if (!status || !status.vast_activity || status.vast_activity.state !== 'idle') return services;
-      return services.filter(function (item) {
-        return item && item.service !== 'VastPool' && item.service !== 'VastSupervisor';
-      });
-    }
-
     function vastRestartContext(status, services) {
       var hasVast = services.some(function (item) {
         return item && (item.service === 'VastPool' || item.service === 'VastSupervisor');
@@ -2159,6 +2152,13 @@
 
     /* First probe after PBGUI_RESTART_DELAY (3s) + a small buffer */
     setTimeout(probe, 4000);
+  }
+
+  function visibleRestartServices(status, services) {
+    if (!status || !status.vast_activity || status.vast_activity.state !== 'idle') return services;
+    return services.filter(function (item) {
+      return item && item.service !== 'VastPool' && item.service !== 'VastSupervisor';
+    });
   }
 
   function updateRestartButtonState(state) {

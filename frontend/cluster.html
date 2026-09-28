@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cluster Sync - PBGui</title>
-  <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
-  <script src="/app/js/sidebar_resize.js?v=1"></script>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
   <style>
     :root {
       --bg: #0e1117;
@@ -334,6 +334,8 @@
       .table-wrap { max-width: 100%; }
     }
   </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
   <nav id="topnav"></nav>
@@ -988,7 +990,7 @@
         });
         setClusterSection(initialClusterSection(), { persist: false, scroll: false });
         if (window.PBGuiSidebarResize && typeof window.PBGuiSidebarResize.init === 'function') {
-          window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
+          window.PBGuiSidebarResize.init();
         }
       }
 

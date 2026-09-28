@@ -351,3 +351,35 @@ assert.equal(press().prevented,true); assert.equal(helpOvl.classList.contains('v
 assert.equal(press().prevented,false);
 """
     _run_node(script)
+
+
+def test_overview_renders_while_status_request_is_pending() -> None:
+    """Show cards before the service request settles without guessing a status."""
+
+    source = PAGE.read_text(encoding="utf-8")
+    code = _extract_function(source, "renderOverviewCards")
+    script = """
+const assert = require('node:assert/strict');
+const grid = {innerHTML: ''};
+const document = {getElementById: (id) => id === 'overview-grid' ? grid : null};
+const SERVICES = [{id: 'pbrun', label: 'PBRun'}];
+const _status = {};
+const _workers = {counts: {total: 0, running: 0}};
+const _migrationStatus = null;
+let _statusRequestState = 'loading';
+const esc = (value) => String(value);
+const migrationStatusMeta = () => ({cls: '', text: 'Not loaded'});
+const serviceStatusClass = () => 'running';
+const serviceStatusText = () => 'Running';
+const serviceStatusTitle = () => '';
+const renderServiceButtons = () => '<button>Stop</button>';
+""" + code + """
+renderOverviewCards();
+assert.match(grid.innerHTML, /Loading status/);
+assert.doesNotMatch(grid.innerHTML, /<button>Stop<\\/button>/);
+_statusRequestState = 'ready';
+renderOverviewCards();
+assert.match(grid.innerHTML, /Running/);
+assert.match(grid.innerHTML, /<button>Stop<\\/button>/);
+"""
+    _run_node(script)

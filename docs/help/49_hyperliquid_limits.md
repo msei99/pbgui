@@ -9,3 +9,5 @@ Open an active account row to see its 24-hour Used and Cap history. History is c
 These counters describe Hyperliquid's address-based action quota, not the separate IP REST weight limit. The page updates automatically and has no manual refresh control.
 
 Accounts without a sample show a neutral dash for Remaining. A single history sample appears as a point with one time label.
+
+The page uses the shared resizable sidebar. Search wallets by account, bot, or VPS in the sidebar; wallet totals and the automatic-update status are shown below the search. The table fills the remaining page width and scrolls with a sticky column header. Selecting an account opens its history above the table. Sidebar width, search, and the selected account are restored after a browser reload. On narrow screens, the sidebar stacks above the content.

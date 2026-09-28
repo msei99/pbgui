@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Balance Calculator</title>
+<link rel="stylesheet" href="/app/css/sidebar.css?v=6">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
@@ -43,61 +44,25 @@ body {
   flex-direction: column;
 }
 
-/* ─── Page content ─────────────────────────────────────────── */
-#page-content {
-  height: calc(100vh - 52px);
-  overflow-y: auto;
-  padding: var(--sp-lg);
-}
-
-/* ─── Tool bar ─────────────────────────────────────────────── */
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-md);
-  padding-bottom: var(--sp-md);
-  border-bottom: 1px solid var(--border);
-  margin-bottom: var(--sp-lg);
-  flex-wrap: wrap;
-}
-.toolbar label {
-  font-size: var(--fs-sm);
-  color: var(--text-dim);
-  font-weight: 600;
-}
-.toolbar select, .toolbar button {
-  height: var(--input-h);
-  font-size: var(--fs-base);
-  font-family: var(--font);
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg2);
-  color: var(--text);
-  padding: 0 var(--sp-sm);
-  cursor: pointer;
-}
-.toolbar select:focus, .toolbar button:focus { outline: none; border-color: var(--accent); }
-.toolbar select { min-width: 140px; }
-#btn-calc {
-  background: var(--accent);
-  color: #000;
-  font-weight: 700;
-  border: none;
-  padding: 0 var(--sp-lg);
-  transition: background .15s;
-}
-#btn-calc:hover { background: #6bbfff; }
-#btn-calc:disabled { opacity: .5; cursor: not-allowed; }
+/* Shared page shell; calculation controls live in the sidebar. */
+body { overflow: hidden; }
+#page-body { display: flex; flex: 1; min-height: 0; height: calc(100vh - 52px); overflow: hidden; }
+#main-content { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: var(--sp-lg); container-type: inline-size; }
+#main-content h1 { font-size: 23px; margin-bottom: var(--sp-md); }
+#calc-status { font-size: var(--fs-sm); color: var(--text-dim); overflow-wrap: anywhere; }
 
 /* ─── Two-column layout ───────────────────────────────────── */
 .main-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--sp-lg);
 }
-@media (max-width: 900px) {
+@container (max-width: 800px) {
   .main-grid { grid-template-columns: 1fr; }
 }
+
+.main-grid > * { min-width: 0; }
+@media (max-width: 760px) { #main-content { padding: var(--sp-md); } }
 
 /* ─── Config editor ────────────────────────────────────────── */
 #config-editor {
@@ -209,32 +174,36 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
+<link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
+<script src="/app/js/sidebar_resize.js?v=3"></script>
 </head>
 <body>
 
 <!-- Navigation bar (injected by pbgui_nav.js) -->
 <nav id="topnav"></nav>
 
-<!-- Page content -->
-<div id="page-content">
-
-  <!-- Toolbar -->
-  <div class="toolbar">
-    <label for="sel-instance">PB7 / PB8 Instance:</label>
-    <select id="sel-instance"><option value="">— load from instance —</option></select>
-
-    <label for="sel-exchange">Exchange:</label>
-    <select id="sel-exchange"><option value="">— select exchange —</option></select>
-
-    <button id="btn-calc">Calculate</button>
-    <span id="calc-status"></span>
-  </div>
-
+<div id="page-body">
+  <aside id="sidebar" aria-label="Balance calculator controls">
+    <div id="sidebar-sticky">
+      <div id="sidebar-header"><span class="sb-title">Balance Calculator</span></div>
+      <div id="sidebar-toolbar">
+        <label class="sb-label" for="sel-instance">PB7 / PB8 Instance:</label>
+        <select class="sb-input" id="sel-instance"><option value="">— load from instance —</option></select>
+        <label class="sb-label" for="sel-exchange">Exchange:</label>
+        <select class="sb-input" id="sel-exchange"><option value="">— select exchange —</option></select>
+        <button class="sb-btn primary" id="btn-calc">Calculate</button>
+      </div>
+    </div>
+    <div id="sidebar-inner"><span id="calc-status" role="status"></span></div>
+    <div id="sidebar-resize"></div>
+  </aside>
+  <main id="main-content">
+    <h1>Balance Calculator</h1>
   <!-- Two-column layout -->
   <div class="main-grid">
     <!-- Left: Config editor -->
     <div>
-      <textarea id="config-editor" spellcheck="false"></textarea>
+      <textarea id="config-editor" aria-label="PB7 or PB8 configuration JSON" spellcheck="false"></textarea>
     </div>
 
     <!-- Right: Results -->
@@ -242,6 +211,7 @@ body {
       <div class="msg-info">Select a PB7 or PB8 instance, or paste a PB7/PB8 config, choose an exchange, and click <b>Calculate</b>.</div>
     </div>
   </div>
+  </main>
 </div>
 
 <!-- Globals injected server-side -->

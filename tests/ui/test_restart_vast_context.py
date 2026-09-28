@@ -12,7 +12,8 @@ def test_vast_restart_context_reports_local_activity_without_hiding_stale_servic
     source = NAV.read_text(encoding="utf-8")
     assert "visibleRestartServices(_restartStatus, restartServices)" in source
     assert "visibleRestartServices(state, services)" in source
-    helper = source[source.index("    function visibleRestartServices("):source.index("    /* Restart button */")]
+    helper = source[source.index("  function visibleRestartServices("):source.index("  function updateRestartButtonState(")]
+    helper += source[source.index("    function vastRestartContext("):source.index("    /* Restart button */")]
     script = "const assert = require('node:assert/strict');\n" + helper + r"""
 const services = [{service: 'VastPool', label: 'Vast GPU Pool'}];
 assert.deepEqual(visibleRestartServices({vast_activity: {state: 'idle'}}, services), []);

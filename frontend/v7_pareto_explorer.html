@@ -4,11 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - V7 Pareto Explorer</title>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/static/plotly.min.js"></script>
-<script src="/app/js/sidebar_resize.js?v=1"></script>
-<style>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
+  <style>
 :root {
   --bg: #0e1117;
   --bg2: #1a1d24;
@@ -57,16 +57,7 @@ a:hover { text-decoration: underline; }
   overflow: hidden;
 }
 
-#sidebar {
-  min-width: 0;
-  border-right: 1px solid var(--border);
-}
 
-#sidebar-inner {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sm);
-}
 
 #main-content {
   flex: 1;
@@ -1040,24 +1031,12 @@ input[type="range"]::-moz-range-thumb {
 }
 
 @media (max-width: 1100px) {
-  #page-body {
-    flex-direction: column;
-    height: calc(100vh - 52px);
-  }
-  #sidebar {
-    width: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
   .detail-block.half {
     grid-column: span 12;
   }
 }
 
 @media (max-width: 900px) {
-  #sidebar {
-    display: none;
-  }
   .metric-grid {
     grid-template-columns: 1fr;
   }
@@ -1092,6 +1071,8 @@ input[type="range"]::-moz-range-thumb {
   #main-content { padding: 16px; }
 }
 </style>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 <nav id="topnav"></nav>
@@ -1114,7 +1095,7 @@ input[type="range"]::-moz-range-thumb {
 
       <hr class="sb-sep">
 
-      <div class="ctx-actions" style="display:block">
+      <div class="ctx-actions">
         <button class="sb-btn" id="btn-back-optimize">← Back to Optimize</button>
         <button class="sb-btn" id="btn-run-backtest">🚀 Queue Backtest</button>
         <select class="sb-input" id="explorer-validation-mode" aria-label="Validation periods" title="Create standalone backtests using the saved training and Holdout periods">
@@ -4539,7 +4520,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function initSidebarResize() {
     if (!window.PBGuiSidebarResize || typeof window.PBGuiSidebarResize.init !== 'function') return;
-    window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
+    window.PBGuiSidebarResize.init();
   }
 
   function applyLoadData(data) {

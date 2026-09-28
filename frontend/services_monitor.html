@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Services - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
   <style>
     /* ── Design tokens ── */
     :root {
@@ -16,17 +17,11 @@
     * { box-sizing: border-box; }
 
     /* ── Layout ── */
-    #page-body { display: flex; height: calc(100vh - 52px); overflow: hidden; }
+    #page-body { display: flex; height: calc(100vh - 52px); overflow: hidden; }/* ── Sidebar ── */
 
-    /* ── Sidebar ── */
-    #sidebar {
-      width: 200px; min-width: 150px; max-width: 300px;
-      flex-shrink: 0; background: #0e1117; border-right: 1px solid #1e2736;
-      display: flex; flex-direction: column; overflow: hidden; position: relative;
-    }
-    #sidebar-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 4px; cursor: col-resize; background: transparent; z-index: 1; }
-    #sidebar-resize:hover, #sidebar-resize.active { background: rgba(99,179,237,0.4); }
-    #sidebar-inner { display: flex; flex-direction: column; gap: 2px; padding: 0.5rem; overflow-y: auto; flex: 1; }
+
+
+
     .sb-btn {
       width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
       color: #94a3b8; padding: 0.4rem 0.6rem; border-radius: 6px; cursor: pointer;
@@ -392,7 +387,7 @@
 
     /* ── Responsive ── */
     @media (max-width: 640px) {
-      #sidebar { width: 140px; min-width: 100px; }
+
       .sb-btn { font-size: 11px; padding: 0.3rem 0.4rem; }
       .overview-grid { grid-template-columns: 1fr; }
       .cmc-pool-wrap { padding:0.75rem; }
@@ -471,6 +466,8 @@
     .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
   </style>
   <script src="/app/js/log_viewer_panel.js?v=50"></script>
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
 <body>
 <!-- ── Prices overlay ── -->
@@ -574,7 +571,6 @@
           <span class="status-label" id="sl-workers">loading…</span>
         </div>
         <span style="flex:1"></span>
-        <button class="ctrl-btn" type="button" onclick="fetchWorkers(true)">&#8635; Refresh</button>
       </div>
       <div class="workers-shell">
         <div class="workers-groups" id="workers-groups">
@@ -1147,6 +1143,7 @@ window.PBGUI_NAV_CONFIG = {
   window._servicesGuideKeyword = 'services_overview';
 
   var _status = {};
+  var _statusRequestState = 'loading';
   var _logViewers = {};
   var _workerLogViewer = null;
   var _workerLogViewerActive = false;
@@ -1200,8 +1197,14 @@ window.PBGUI_NAV_CONFIG = {
   function fetchStatus() {
     fetch(API_BASE + '/status', authOptions())
       .then(function (r) { return r.json(); })
-      .then(function (data) { _status = data; updateStatusUI(); scheduleStatus(); })
-      .catch(function () { scheduleStatus(); });
+      .then(function (data) { _status = data; _statusRequestState = 'ready'; updateStatusUI(); scheduleStatus(); })
+      .catch(function () {
+        if (_statusRequestState !== 'ready') {
+          _statusRequestState = 'unavailable';
+          renderOverviewCards();
+        }
+        scheduleStatus();
+      });
   }
 
   function scheduleStatus() {
@@ -1325,15 +1328,20 @@ window.PBGUI_NAV_CONFIG = {
 
   window.fetchWorkers = function (force) {
     var generation = ++_workersGeneration;
-    return fetch(API_BASE + '/workers/status', authOptions())
+    var summaryOnly = _currentPanelId !== 'workers';
+    return fetch(API_BASE + (summaryOnly ? '/workers/summary' : '/workers/status'), authOptions())
       .then(function (response) { return workerResponseJson(response, 'Worker status request failed.'); })
       .then(function (data) {
         if (generation !== _workersGeneration) return;
-        _workers = data || { counts: { total: 0, running: 0 }, groups: [] };
-        rebuildWorkerIndex();
+        if (summaryOnly) {
+          _workers.counts = data.counts;
+        } else {
+          _workers = data || { counts: { total: 0, running: 0 }, groups: [] };
+          rebuildWorkerIndex();
+          renderWorkers();
+        }
         updateWorkersSummary();
         renderOverviewCards();
-        renderWorkers();
         scheduleWorkers();
       })
       .catch(function (error) {
@@ -1354,7 +1362,7 @@ window.PBGUI_NAV_CONFIG = {
 
   function scheduleWorkers() {
     clearTimeout(_workersTimer);
-    if (_currentPanelId === 'workers' && Object.keys(_workerActionPending).length === 0) {
+    if (Object.keys(_workerActionPending).length === 0) {
       _workersTimer = setTimeout(function () { window.fetchWorkers(false); }, 5000);
     }
   }
@@ -1891,10 +1899,11 @@ window.PBGUI_NAV_CONFIG = {
     var html = '';
     SERVICES.forEach(function (svc) {
       var item = _status[svc.id] || {};
-      var cls = serviceStatusClass(item);
-      var label = serviceStatusText(item, svc.id);
-      var title = serviceStatusTitle(item);
-      var btns = renderServiceButtons(svc, item, true);
+      var awaitingStatus = _statusRequestState !== 'ready';
+      var cls = awaitingStatus ? '' : serviceStatusClass(item);
+      var label = awaitingStatus ? (_statusRequestState === 'loading' ? 'Loading status…' : 'Status unavailable') : serviceStatusText(item, svc.id);
+      var title = awaitingStatus ? label : serviceStatusTitle(item);
+      var btns = awaitingStatus ? '' : renderServiceButtons(svc, item, true);
       html += '<div class="svc-card ' + cls + '" onclick="selectPanel(\'' + svc.id + '\')">'
             +  '<div class="card-name">' + svc.label + '</div>'
             +  '<div class="card-status-row" title="' + esc(title) + '"><span class="card-dot ' + cls + '"></span>' + esc(label) + '</div>'
@@ -1934,7 +1943,7 @@ window.PBGUI_NAV_CONFIG = {
     clearInterval(_fetchSummaryTimer); _fetchSummaryTimer = null;
     clearInterval(_pollerMetricsTimer); _pollerMetricsTimer = null;
     if (panelId === 'pbcoindata') loadCmcPool();
-    if (panelId === 'workers') window.fetchWorkers(true);
+    window.fetchWorkers(panelId === 'workers');
     if (panelId === 'migration') loadMigrationStatus(true);
     /* update guide keyword for the active panel */
     var svc = SERVICES.find(function (s) { return s.id === panelId; });
@@ -3665,26 +3674,12 @@ window.PBGUI_NAV_CONFIG = {
   }());
 
   /* ── Sidebar resize ────────────────────────────────────── */
-  (function () {
-    var sb = document.getElementById('sidebar');
-    var rz = document.getElementById('sidebar-resize');
-    var active = false, startX, startW;
-    rz.addEventListener('mousedown', function (e) {
-      active = true; startX = e.clientX; startW = sb.offsetWidth;
-      rz.classList.add('active'); document.body.style.cursor = 'col-resize';
-    });
-    document.addEventListener('mousemove', function (e) {
-      if (!active) return;
-      sb.style.width = Math.max(150, Math.min(300, startW + e.clientX - startX)) + 'px';
-    });
-    document.addEventListener('mouseup', function () {
-      if (active) { active = false; rz.classList.remove('active'); document.body.style.cursor = ''; }
-    });
-  }());
+
 
   /* ── Init ──────────────────────────────────────────────── */
+  renderOverviewCards();
   fetchStatus();
-  window.fetchWorkers(false);
+  if (_workersGeneration === 0) window.fetchWorkers(false);
   loadMigrationStatus(false);
   window.PBGuiAI.registerPageContext({
     id: 'services',

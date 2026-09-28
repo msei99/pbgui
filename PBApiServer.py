@@ -1667,7 +1667,7 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
     async def event_gen():
         try:
             # Send initial state immediately
-            payload = _restart_status_payload()
+            payload = await asyncio.to_thread(_restart_status_payload)
             payload["auth"] = auth_runtime_status()
             last_sent = json.dumps(payload, sort_keys=True)
             yield f"data: {json.dumps(payload)}\n\n"
@@ -1682,7 +1682,7 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
                 except asyncio.TimeoutError:
                     pass
 
-                payload = _restart_status_payload()
+                payload = await asyncio.to_thread(_restart_status_payload)
                 payload["auth"] = auth_runtime_status()
                 current_state = json.dumps(payload, sort_keys=True)
                 if force_send or current_state != last_sent:
@@ -1711,8 +1711,9 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
 async def server_status(session: SessionToken = Depends(require_auth)):
     """Return current restart-detector state for nav fallback checks."""
     restart_blocked, restart_block_reason = await _restart_block_state()
+    payload = await asyncio.to_thread(_restart_status_payload)
     return {
-        **_restart_status_payload(),
+        **payload,
         "restart_blocked": restart_blocked,
         "restart_block_reason": restart_block_reason,
         "master_name": _local_master_name(),

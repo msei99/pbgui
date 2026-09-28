@@ -35,18 +35,37 @@ def save_record(queue, identifier, state, offer=None):
 
 def test_history_requires_real_usage_and_exact_results(queue):
     """Provisioning is not working; shared jobs count one rental and survive hiding."""
-    save_record(queue, 'a'*32, dict(kind='worker', instance_id=10), {'machine_id': 7})
+    save_record(queue, 'a'*32, dict(kind='worker', instance_id=10), {'machine_id': 7, 'gpu_name': 'RTX 3060'})
     save_record(queue, 'b'*32, dict(lease_id='a'*32, status='failed', exact_completed=0))
     save_record(queue, 'c'*32, dict(lease_id='a'*32, status='cancelled', exact_completed=12, deleted_at=99))
-    save_record(queue, 'd'*32, dict(kind='worker', instance_id=11, status='completed'), {'machine_id': 8})
+    save_record(queue, 'd'*32, dict(kind='worker', instance_id=11, status='completed'), {'machine_id': 8, 'gpu_name': 'RTX 3090'})
     save_record(queue, 'e'*32, dict(kind='worker', status='provisioning'), {'machine_id': 9})
     save_record(queue, 'f'*32, dict(status='completed', exact_completed=25), {'gpu_name': 'RTX 5090'})
+    save_record(queue, '1'*32, dict(lease_id='a'*32, status='completed', exact_completed=4))
+    save_record(queue, '2'*32, dict(lease_id='a'*32, kind='calibration', status='completed', exact_completed=8))
     history = host_history(queue.store, queue.read())
     assert history[7]['used'] and history[7]['working_detected'] and history[7]['working']
     assert history[7]['rentals'] == 1
+    assert history[7]['gpu_names'] == ['RTX 3060'] and history[7]['opt_runs'] == 2
+    assert history[7]['gpu_history'] == [{'gpu_name': 'RTX 3060', 'rentals': 1, 'opt_runs': 2}]
     assert history[8]['used'] and not history[8]['working']
+    assert history[8]['gpu_names'] == ['RTX 3090'] and history[8]['opt_runs'] == 0
     assert not history[9]['used'] and not history[9]['working']
     assert set(history) == {7, 8, 9}
+
+
+def test_history_keeps_optimizer_evidence_on_the_rented_gpu_model(queue):
+    """A successful run on one model does not certify another GPU on the same machine."""
+    save_record(queue, 'a'*32, dict(kind='worker', instance_id=10),
+                {'machine_id': 7, 'gpu_name': 'RTX 3060'})
+    save_record(queue, 'b'*32, dict(lease_id='a'*32, exact_completed=8))
+    save_record(queue, 'c'*32, dict(kind='worker', instance_id=11),
+                {'machine_id': 7, 'gpu_name': 'RTX 3090'})
+    save_record(queue, 'd'*32, dict(lease_id='c'*32, exact_completed=0))
+    profile = host_history(queue.store, queue.read())[7]
+    assert profile['rentals'] == 2 and profile['opt_runs'] == 1
+    assert {row['gpu_name']: (row['rentals'], row['opt_runs'])
+            for row in profile['gpu_history']} == {'RTX 3060': (1, 1), 'RTX 3090': (1, 0)}
 
 
 def test_independent_marks_persist_without_claiming_usage(queue):

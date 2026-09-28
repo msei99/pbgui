@@ -6,7 +6,7 @@ The Services page shows and controls all PBGui background services in one place.
 
 ## Service overview
 
-The page opens with a card grid showing all services at a glance. Each card displays:
+The page opens with a card grid showing all services at a glance. While the service status is loading, cards show “Loading status…” and action buttons appear after the status arrives. Each card displays:
 
 - The service name
 - A status indicator (green dot = running, red dot = stopped)
@@ -15,6 +15,8 @@ The page opens with a card grid showing all services at a glance. Each card disp
 Click a card to open that service's detail panel.
 
 The Overview also includes a dedicated **Workers** card. It opens the admin-only worker area for queue workers, sync/watcher workers, and internal helper tasks.
+
+Overview reads live worker state directly; detailed queue statistics are loaded when opening Workers. Status updates run automatically.
 
 | Service | Purpose |
 |---|---|

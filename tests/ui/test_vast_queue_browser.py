@@ -51,7 +51,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
             elif route == '/api/vast/jobs':
                 data = json.dumps({'jobs':jobs,'worker':None,'queue':{},'supervision_available':True})
             elif route == '/api/vast/offers':
-                data = json.dumps({'offers':[{'id':1,'gpu_name':'RTX 3090','disk_gb':40,'price_hour_usd':.15,'gpu_max_power_watts':200,
+                data = json.dumps({'offers':[{'id':1,'machine_id':101,'gpu_name':'RTX 3090','disk_gb':40,'price_hour_usd':.15,'gpu_max_power_watts':200,
                     'cpu_name':'Xeon test','gpu_mem_bw_gbps':805,'pci_gen':3,'gpu_lanes':8,'pcie_bw_gbps':5.5,'disk_name':'NVMe test','disk_bw_mbps':1810,'duration_seconds':172800,
                     'cpu_cores':8,'ram_gb':32,'vram_gb':24,'cuda_max_good':13,'location':'test','verified':True}]})
             else:
