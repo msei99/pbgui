@@ -223,7 +223,7 @@ def test_chat_only_tool_protocol_leakage_is_detected() -> None:
 
 @pytest.mark.parametrize(
     ("protocol", "method_name"),
-    [("responses", "_go_responses_agent"), ("messages", "_go_messages_agent")],
+    [("responses", "_go_responses_agent"), ("messages", "_go_messages_agent"), ("chat", "_go_chat_completion_agent")],
 )
 def test_go_chat_routes_tool_capable_protocols_to_native_agents(
     tmp_path: Path, monkeypatch, protocol: str, method_name: str

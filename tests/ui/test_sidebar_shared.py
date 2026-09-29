@@ -287,7 +287,7 @@ def test_dashboard_real_toolbar_supports_compact_icons_in_both_modes(browser):
         for editing in (False, True):
             page.evaluate('(edit) => window.renderAuditToolbar(edit)', editing)
             buttons = page.locator('#sidebar-toolbar .sb-btn')
-            assert buttons.count() == (3 if editing else 6)
+            assert buttons.count() == (3 if editing else 5)
             for i in range(buttons.count()):
                 button = buttons.nth(i)
                 assert button.get_attribute('title')

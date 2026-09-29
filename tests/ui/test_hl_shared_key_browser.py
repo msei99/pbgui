@@ -177,3 +177,39 @@ def test_default_single_save_and_unavailable_selected_preview(editor):
     expect(page.locator('#userListView')).to_be_visible()
     assert len(writes) == 1
     assert 'shared_private_key_preview' not in writes[0]
+
+
+def test_account_runtime_hosts_and_automatic_updates(editor):
+    """The real account table shows hosts, polls state and retains deletion protection."""
+    page, _, _, _, _ = editor
+    users = [dict(name='vault-a', exchange='hyperliquid', in_use=True,
+                  bot_runtime=[dict(pb_version=7, running_on=['manibot63'], status='synced'),
+                               dict(pb_version=8, running_on=[], status='disabled')]),
+             dict(name='vault-b', exchange='hyperliquid', in_use=True,
+                  bot_runtime=[dict(pb_version=8, running_on=[], status='disabled')]),
+             dict(name='main', exchange='hyperliquid', in_use=False, bot_runtime=[])]
+    page.route('**/prefix/api/api-keys/', lambda route: route.fulfill(json=users))
+    page.evaluate('backToList()')
+    row = page.locator('tr[data-user-name="vault-a"]')
+    expect(row).to_contain_text('manibot63')
+    expect(row).not_to_contain_text('Disabled')
+    expect(row.locator('.badge-in-use')).to_have_count(1)
+    expect(row.locator('.badge-in-use')).to_have_attribute('title', 'PB7 running on manibot63')
+    disabled = page.locator('tr[data-user-name="vault-b"]')
+    expect(disabled).to_contain_text('Disabled')
+    expect(disabled.locator('[data-user-action="delete"]')).to_have_count(0)
+    expect(page.locator('tr[data-user-name="main"]')).to_contain_text('Unused')
+    page.locator('#userFilter').fill('vault')
+    users[0]['bot_runtime'][0].update(running_on=[], status='activate_needed', enabled_on='manibot63')
+    page.clock.fast_forward(15001)
+    expect(row).to_contain_text('Stopped')
+    expect(row).not_to_contain_text('manibot63')
+    expect(page.locator('#userFilter')).to_have_value('vault')
+    users[0]['bot_runtime'][0].update(running_on=['<img src=x onerror=alert(1)>'], status='synced')
+    page.clock.fast_forward(15001)
+    expect(row).to_contain_text('<img src=x onerror=alert(1)>')
+    expect(row.locator('img')).to_have_count(0)
+    row.click()
+    page.locator('#editWallet').fill('unsaved-value')
+    page.clock.fast_forward(30001)
+    expect(page.locator('#editWallet')).to_have_value('unsaved-value')

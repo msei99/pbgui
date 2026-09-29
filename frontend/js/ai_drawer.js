@@ -587,9 +587,12 @@
       var removed = !!requestedId && !available;
       state.current = available ? requestedId : (state.conversations.length ? state.conversations[0].conversation_id : '');
       renderHistory();
-      if (state.current) await loadConversation(state.current);
-      if (removed) setStatus('Selected conversation is no longer available. Showing the nearest available chat.', false);
-      else {
+      if (state.current) {
+        var selectedId = state.current;
+        await loadConversation(selectedId);
+        if (generation !== state.listGeneration || selectedId !== state.current) return;
+        if (removed) setStatus('Selected conversation is no longer available. Showing the nearest available chat.', false);
+      } else {
         stopPoll();
         renderMessages([]);
         renderReasoningSummary('');
@@ -597,9 +600,9 @@
         renderProposals([]);
         renderContext(collectDisplayContext());
         setBusy(false);
-        setStatus('', false);
+        setStatus(removed ? 'Selected conversation is no longer available. No saved chats remain.' : '', false);
       }
-    } catch (error) { setStatus(error.message, true); }
+    } catch (error) { if (generation === state.listGeneration) setStatus(error.message, true); }
   }
 
   function renderHistory() {
@@ -634,21 +637,25 @@
       } else if (messages.length || !conversation.busy) {
         state.messageSnapshots[id] = messages.slice();
       }
+      var box = root.querySelector('.pai-messages');
+      var savedScroll = window.PBGuiAIMessageView.capture(box, state.messageConversationId !== id);
       if (state.messageConversationId !== id) {
         state.messageConversationId = id;
         state.messageSignature = '';
       }
       renderMessages(messages);
+      if (window.PBGuiAIResearch) window.PBGuiAIResearch.render(root.querySelector('.pai-messages'), conversation, apiBase);
       renderReasoningSummary(conversation.reasoning_summary || '');
       renderActivityHistory(conversation.activity_history || []);
-      var uiActions = conversation.ui_actions || [];
+      var uiActions = conversation.analysis_only ? [] : (conversation.ui_actions || []);
       dispatchUiActions(id, uiActions, !!conversation.busy);
+      window.PBGuiAIMessageView.restore(box, savedScroll);
       if (conversation.retry_message) state.retryMessages[id] = conversation.retry_message;
       renderContext(collectDisplayContext());
       setBusy(!!conversation.busy);
       var retry = root.querySelector('.pai-retry');
       retry.hidden = !conversation.last_error || !state.retryMessages[id] || conversation.busy;
-      setStatus(conversation.busy ? (conversation.activity || 'Model is working...') : (conversation.last_error || ''), !!conversation.last_error);
+      setStatus(conversation.busy ? (conversation.activity || 'Model is working...') : (conversation.last_error || (conversation.analysis_only ? 'Analysis only' : '')), !!conversation.last_error);
       if (!state.selectionDirty) {
         state.profile = conversation.chatgpt_profile || 'default';
         var providerValue = conversation.provider === 'chatgpt' ? 'chatgpt:' + state.profile : conversation.provider;
@@ -759,7 +766,9 @@
     }
     messages.forEach(function (message, index) {
       var row = el('div', 'pai-message ' + (message.role === 'user' ? 'user' : 'assistant'));
+      row.dataset.messageIndex = String(index);
       var bubble = el('div', 'pai-bubble', message.content || '');
+      if (message.role !== 'user') window.PBGuiAIMessageView.render(bubble, message.content || '');
       if (message.role !== 'user') appendDetectedQuickReplies(bubble, message.content || '');
       row.appendChild(bubble);
       var actions = el('div', 'pai-message-actions');
@@ -848,6 +857,7 @@
   }
 
   function proposalActionLabel(action) {
+    if (action === 'reviewed_config_change') return 'Review config change';
     if (action === 'save') return 'Save PB8 optimizer config';
     if (action === 'save_and_queue') return 'Save PB8 config and add to queue';
     if (action === 'queue') return 'Add PB8 config to optimizer queue';
@@ -861,6 +871,7 @@
   }
 
   function proposalDetail(preview) {
+    if (preview.action === 'reviewed_config_change') return String(preview.version || '') + ' · ' + String(preview.kind || '') + ' · ' + String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
     if (preview.action === 'jev_analysis') return String(preview.version || '') + ' ' + String(preview.run_name || '') + ' - ' + String(preview.candidate_count || 0) + ' candidates assessed - ' + (preview.max_candidates == null ? 'Jev decides how many to mark' : 'mark at most ' + String(preview.max_candidates)) + ' - USD ' + String(preview.max_cost_usd || '') + ' maximum';
     if (preview.action === 'python_analysis') return String(preview.code_bytes || 0) + ' bytes of code - ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
     if (preview.action === 'queue_backtests') {
@@ -999,7 +1010,20 @@
     overlay.hidden = true; overlay.querySelector('.pai-review-content').textContent = ''; overlay.querySelector('.pai-review-actions').textContent = '';
   }
 
-  function openProposalReview(proposal, card) {
+  async function openProposalReview(proposal, card) {
+    var reviewToken = '';
+    if ((proposal.preview || {}).action === 'reviewed_config_change') {
+      var selectedConversation = state.current;
+      try {
+        var reviewed = await api('/proposals/' + encodeURIComponent(proposal.proposal_id) + '/review', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({payload_digest: proposal.payload_digest, conversation_id: selectedConversation})
+        });
+        if (selectedConversation !== state.current || !card.isConnected) return;
+        proposal = reviewed.proposal;
+        reviewToken = reviewed.review_token;
+      } catch (error) { setStatus(error.message, true); return; }
+    }
     var preview = proposal.preview || {}, overlay = document.querySelector('.pai-review-overlay'), content = overlay.querySelector('.pai-review-content'), actions = overlay.querySelector('.pai-review-actions');
     content.textContent = ''; actions.textContent = '';
     content.appendChild(el('h3', '', proposalActionLabel(preview.action) + (preview.name ? ': ' + String(preview.name) : '')));
@@ -1010,7 +1034,7 @@
       var raw = el('details', 'pai-proposal-raw'); raw.appendChild(el('summary', '', 'Raw JSON')); raw.appendChild(el('pre', 'pai-review-raw', proposalReviewText(proposal))); content.appendChild(raw);
     }
     var reject = el('button', '', 'Reject'); reject.type = 'button'; reject.addEventListener('click', async function () { closeProposalReview(); await resolveProposal(proposal, false, card); }); actions.appendChild(reject);
-    var approve = el('button', 'primary', 'Approve'); approve.type = 'button'; approve.addEventListener('click', async function () { closeProposalReview(); await resolveProposal(proposal, true, card); }); actions.appendChild(approve);
+    var approve = el('button', 'primary', 'Approve'); approve.type = 'button'; approve.addEventListener('click', async function (event) { if (preview.action === 'reviewed_config_change' && !event.isTrusted) return; closeProposalReview(); await resolveProposal(proposal, true, card, reviewToken); }); actions.appendChild(approve);
     overlay.hidden = false;
     var closeButton = overlay.querySelector('[aria-label="Close proposal review"]');
     if (closeButton) closeButton.focus();
@@ -1046,16 +1070,17 @@
       actions.appendChild(reject);
       var approve = el('button', 'primary', 'Review changes');
       approve.type = 'button';
-      approve.addEventListener('click', function () { openProposalReview(proposal, card); });
+      approve.addEventListener('click', function (event) { if (preview.action === 'reviewed_config_change' && !event.isTrusted) return; openProposalReview(proposal, card); });
       actions.appendChild(approve);
       card.appendChild(actions);
       list.appendChild(card);
     });
   }
 
-  async function resolveProposal(proposal, approve, card) {
+  async function resolveProposal(proposal, approve, card, reviewToken) {
     var conversationId = state.current;
     var preview = proposal.preview || {};
+    if (approve && preview.action === 'reviewed_config_change' && !reviewToken) return;
     var proposalId = String(proposal.proposal_id || '');
     var buttons = Array.from(card.querySelectorAll('button'));
     buttons.forEach(function (button) { button.disabled = true; });
@@ -1063,7 +1088,9 @@
     card.hidden = true;
     renderProposals([]);
     if (approve) {
-      var approvalDetail = preview.action === 'python_analysis'
+      var approvalDetail = preview.action === 'reviewed_config_change'
+        ? String(preview.effect || '') + '. This approval applies only to the displayed changes; the chat remains analysis-only.'
+        : preview.action === 'python_analysis'
         ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
         : preview.action === 'start_optimize_queue'
           ? 'Start ' + String(preview.job_count || 0) + ' exact reviewed PB8 optimizer queue jobs immediately. Proposal integrity and current queued status are verified before execution.'
@@ -1090,7 +1117,7 @@
       var result = await api('/proposals/' + encodeURIComponent(proposal.proposal_id) + (approve ? '/approve' : '/reject'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payload_digest: proposal.payload_digest, conversation_id: conversationId })
+        body: JSON.stringify({ payload_digest: proposal.payload_digest, conversation_id: conversationId, ...(reviewToken ? {review_token: reviewToken} : {}) })
       });
       if (result.status === 'executed' && result.action === 'python_analysis') appendAnalysisResult(result);
       if (result.status === 'executed') {
@@ -1156,7 +1183,8 @@
     if (override == null) prompt.value = '';
     var turnContext = root.querySelector('#pai-context-toggle').checked ? collectContext() : null;
     renderContext(turnContext || {});
-    var localResult = window.PBGuiAI && typeof window.PBGuiAI.tryLocalCommand === 'function'
+    var securitySnapshot = await api('/conversations/' + encodeURIComponent(conversationId));
+    var localResult = securitySnapshot.conversation_id === conversationId && securitySnapshot.analysis_only === false && window.PBGuiAI && typeof window.PBGuiAI.tryLocalCommand === 'function'
       ? window.PBGuiAI.tryLocalCommand(message)
       : { handled: false };
     if (localResult.handled) {

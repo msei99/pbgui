@@ -32,3 +32,6 @@ asyncssh>=2.13.0,<2.24.0
 aiohttp==3.13.1
 cryptography>=42.0.0,<47.0.0
 openai-codex-cli-bin==0.157.1
+
+# Offline token estimate proxy; vocabulary is bundled under vendor/ai_tokenizer.
+tiktoken==0.12.0

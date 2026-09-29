@@ -1,5 +1,9 @@
 # API Keys
 
+If an account has both running and disabled PB7/PB8 configurations, the status column shows only the running hosts.
+
+The Status column shows the reported running host(s) for PB7/PB8 bots. Hover for the runtime version. Without a running bot it shows Disabled, Stopped, Blocked, Collecting or Unknown; Unused means no local bot configuration references the account. Status updates automatically while the list is visible. Disabled bots still protect their credentials from deletion.
+
 Manage exchange API credentials and TradFi provider profiles. Exchange users remain in `api-keys.json`; TradFi secrets are stored separately in PBGui's owner-only credential vault.
 
 ---

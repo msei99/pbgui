@@ -245,6 +245,12 @@ window.PBGUI_VERSION = "%%VERSION%%";
 window.PBGUI_SERIAL = "%%SERIAL%%";
 window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authenticated: true };
 </script>
+<link rel="stylesheet" href="/app/css/ai_message_view.css?v=1">
+<script src="/app/vendor/marked.min.js?v=1"></script>
+<script src="/app/vendor/purify.min.js?v=1"></script>
+<script src="/app/js/ai_message_view.js?v=2"></script>
+<link rel="stylesheet" href="/app/css/ai_research.css?v=3">
+<script src="/app/js/ai_research.js?v=9"></script>
 <script src="/app/js/ai_usage.js?v=2"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <script src="/app/js/pbgui_dialogs.js?v=10"></script>
@@ -615,7 +621,9 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     row.className = 'message ' + role;
     var bubble = document.createElement('div');
     bubble.className = 'bubble';
-    bubble.textContent = text;
+    if (Number.isInteger(messageIndex)) row.dataset.messageIndex = String(messageIndex);
+    if (role === 'user') bubble.textContent = text;
+    else window.PBGuiAIMessageView.render(bubble, text);
     if (role !== 'user') appendDetectedQuickReplies(bubble, text);
     row.appendChild(bubble);
     var actions = document.createElement('div');
@@ -713,10 +721,15 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
 
   function applyConversationSnapshot(conversation) {
     if (!conversation || conversation.conversation_id !== state.conversationId) return;
+    var box = $('messages');
+    var savedScroll = window.PBGuiAIMessageView.capture(box, box.dataset.conversationId !== conversation.conversation_id);
+    box.dataset.conversationId = conversation.conversation_id;
     state.busy = !!conversation.busy;
     if (!state.busy) { state.pendingMessage = ''; stopActivityPolling(); }
     renderConversationMessages(conversation.messages || []);
-    renderUiActions(conversation.conversation_id, conversation.ui_actions || [], state.busy);
+    if (window.PBGuiAIResearch) window.PBGuiAIResearch.render($('messages'), conversation, window.API_BASE);
+    renderUiActions(conversation.conversation_id, conversation.analysis_only ? [] : (conversation.ui_actions || []), state.busy);
+    window.PBGuiAIMessageView.restore(box, savedScroll);
     $('reasoning-summary-text').textContent = String(conversation.reasoning_summary || '');
     $('reasoning-summary').hidden = !$('reasoning-summary-text').textContent;
     $('activity-history-text').textContent = (conversation.activity_history || []).map(function (item) { return String(item.message || ''); }).filter(Boolean).join('\n');
@@ -725,7 +738,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     $('delete-chat').disabled = !state.conversationId || state.transitioning;
     $('retry-turn').hidden = !conversation.last_error || !state.retryMessages[conversation.conversation_id] || state.busy;
     if (conversation.busy) setNotice(conversation.activity || 'Model is working...', false, true);
-    else setNotice(conversation.last_error || '', !!conversation.last_error, false);
+    else setNotice(conversation.last_error || (conversation.analysis_only ? 'Analysis only' : ''), !!conversation.last_error, false);
     updateComposer();
     var summary = state.conversations.find(function (item) { return item.conversation_id === conversation.conversation_id; });
     if (summary) Object.assign(summary, conversation);
@@ -873,7 +886,24 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       var approve = document.createElement('button');
       approve.className = 'primary';
       approve.textContent = 'Review & approve';
-      approve.addEventListener('click', function () { resolveProposal(proposal, true, card); });
+      var reviewToken = '';
+      approve.addEventListener('click', async function (event) {
+        if ((proposal.preview || {}).action !== 'reviewed_config_change') { resolveProposal(proposal, true, card); return; }
+        if (!event.isTrusted) return;
+        if (reviewToken) { var token = reviewToken; reviewToken = ''; await resolveProposal(proposal, true, card, token); return; }
+        var selectedConversation = state.conversationId;
+        approve.disabled = true;
+        try {
+          var reviewed = await api('/proposals/' + encodeURIComponent(proposal.proposal_id) + '/review', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({payload_digest: proposal.payload_digest, conversation_id: selectedConversation})
+          });
+          if (selectedConversation !== state.conversationId || !card.isConnected) return;
+          proposal = reviewed.proposal; reviewToken = reviewed.review_token;
+          review.open = true; approve.textContent = 'Apply reviewed changes';
+        } catch (error) { setNotice(error.message, true); }
+        finally { approve.disabled = false; }
+      });
       actions.appendChild(reject);
       actions.appendChild(approve);
       card.appendChild(main);
@@ -883,6 +913,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
   }
 
   function proposalActionLabel(action) {
+    if (action === 'reviewed_config_change') return 'Review config change';
     if (action === 'save') return 'Save PB8 optimizer config';
     if (action === 'save_and_queue') return 'Save PB8 config and add to queue';
     if (action === 'queue') return 'Add PB8 config to optimizer queue';
@@ -896,6 +927,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
   }
 
   function proposalDetail(preview) {
+    if (preview.action === 'reviewed_config_change') return String(preview.version || '') + ' · ' + String(preview.kind || '') + ' · ' + String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
     if (preview.action === 'jev_analysis') return String(preview.version || '') + ' ' + String(preview.run_name || '') + ' · ' + String(preview.candidate_count || 0) + ' candidates assessed · ' + (preview.max_candidates == null ? 'Jev decides how many to mark' : 'mark at most ' + String(preview.max_candidates)) + ' · USD ' + String(preview.max_cost_usd || '') + ' maximum';
     if (preview.action === 'python_analysis') {
       return String(preview.code_bytes || 0) + ' bytes of code · ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
@@ -945,8 +977,9 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     return 'Python analysis ' + String(result.analysis_status || 'completed') + ' (exit ' + String(result.exit_code) + ').\n\n' + rendered + (stderr ? '\n\nstderr:\n' + stderr : '') + ((result.stdout_truncated || result.stderr_truncated) ? '\n\nOutput was truncated by PBGui limits.' : '');
   }
 
-  async function resolveProposal(proposal, approve, card) {
+  async function resolveProposal(proposal, approve, card, reviewToken) {
     var preview = proposal.preview || {};
+    if (approve && preview.action === 'reviewed_config_change' && !reviewToken) return;
     var generation = state.chatGeneration;
     var conversationId = state.conversationId;
     var proposalId = String(proposal.proposal_id || '');
@@ -955,7 +988,9 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     state.resolvingProposalIds.add(proposalId);
     card.hidden = true;
     if (approve) {
-      var approvalDetail = preview.action === 'python_analysis'
+      var approvalDetail = preview.action === 'reviewed_config_change'
+        ? String(preview.effect || '') + '. This approval applies only to the displayed changes; the chat remains analysis-only.'
+        : preview.action === 'python_analysis'
         ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
         : preview.action === 'start_optimize_queue'
           ? 'Start ' + String(preview.job_count || 0) + ' exact reviewed PB8 optimizer queue jobs immediately. Proposal integrity and current queued status are verified before execution.'
@@ -984,7 +1019,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       var result = await api('/proposals/' + encodeURIComponent(proposal.proposal_id) + suffix, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payload_digest: proposal.payload_digest, conversation_id: conversationId })
+        body: JSON.stringify({ payload_digest: proposal.payload_digest, conversation_id: conversationId, ...(reviewToken ? {review_token: reviewToken} : {}) })
       });
       var executed = result.status === 'executed';
       if (executed && result.action === 'python_analysis') addMessage('assistant', analysisResultText(result));

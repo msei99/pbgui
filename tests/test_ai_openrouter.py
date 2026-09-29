@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+from ai_token_budget import estimate_jev_input_tokens, JEV_CONTEXT_TOKENS
 
 from ai_chat import AICredentialStore, AIChatService, AIChatError, owner_key
 from ai_openrouter import JEV_MODEL, OpenRouterDecisionError, check_jev_budget, _noul_answers, _user_options, decide_backtest_candidates, decide_backtest_results, decide_general_choice, decide_user_jev_request, parse_structured_jev_request
@@ -38,6 +39,13 @@ class _PricingResponse:
         """Leave the pricing response."""
         return False
 
+    async def readexactly(self, size):
+        """Simulate EOF after the complete bounded response."""
+        raw = await self.read(size)
+        if len(raw) < size:
+            raise asyncio.IncompleteReadError(raw, size)
+        return raw
+
     async def read(self, size):
         """Return one bounded provider-reported model price."""
         return json.dumps(self.payload).encode()[:size]
@@ -62,7 +70,7 @@ def test_jev_usd_budget_checks_current_model_price_before_send() -> None:
     request = {"model": JEV_MODEL, "state": {"data": "x" * 10000},
                "questions": {"q": {"type": "noul", "instructions": "Choose"}}}
     with pytest.raises(OpenRouterDecisionError, match="configured USD budget"):
-        asyncio.run(check_jev_budget(session, "test-key", [request], 0.0001))
+        asyncio.run(check_jev_budget(session, "test-key", [request], 0.000001))
     assert len(session.requests) == 1
     assert session.requests[0][0].endswith("/v1/model/typesafe/jev-1.13")
     asyncio.run(check_jev_budget(session, "test-key", [request], 0.01))
@@ -119,6 +127,13 @@ class _FakeContent:
 
     def __init__(self, payload) -> None:
         self.payload = json.dumps(payload).encode()
+
+    async def readexactly(self, size):
+        """Simulate EOF after the complete bounded response."""
+        raw = await self.read(size)
+        if len(raw) < size:
+            raise asyncio.IncompleteReadError(raw, size)
+        return raw
 
     async def read(self, size):
         """Return the simulated response body."""
@@ -196,7 +211,7 @@ def test_jev_profiles_all_candidates_with_bounded_payloads() -> None:
     assert all(request["json"]["state"]["candidates"] for _, request in session.requests)
     assert all(request["json"]["state"]["metrics_considered"] == 4 for _, request in session.requests)
     assert all("unusual_metric" in request["json"]["state"]["metric_names"] for _, request in session.requests)
-    assert all(len(json.dumps(request["json"], ensure_ascii=False, separators=(",", ":")).encode()) <= 30_000
+    assert all(estimate_jev_input_tokens(request["json"]) <= JEV_CONTEXT_TOKENS
                for _, request in session.requests)
     assert not any(name == "rank_optimizer_run_candidates" for name, _ in capabilities.calls)
     assert [args["offset"] for name, args in capabilities.calls if name == "get_optimizer_run_analysis"] == list(range(0, 204, 24))
@@ -275,7 +290,7 @@ def test_jev_high_dimension_run_has_small_preflighted_requests() -> None:
     assert all(request["json"]["state"]["metrics_considered"] == 212 for _, request in session.requests)
     assert all(len(request["json"]["state"]["metric_names"]) <= 24 for _, request in session.requests)
     assert all(request["json"]["state"]["profiled_distinct_metrics"] > 0 for _, request in session.requests)
-    assert all(len(json.dumps(request["json"], ensure_ascii=False, separators=(",", ":")).encode()) <= 30_000
+    assert all(estimate_jev_input_tokens(request["json"]) <= JEV_CONTEXT_TOKENS
                for _, request in session.requests)
 
 
@@ -298,10 +313,10 @@ def test_jev_total_transfer_uses_usd_budget_instead_of_old_byte_ceiling() -> Non
     assert preview['candidate_count'] == 500
     assert sum(len(request['questions']) for request in requests) == 500
     assert sum(sizes) > 100_000
-    assert max(sizes) <= 30_000
+    assert all(estimate_jev_input_tokens(request) <= JEV_CONTEXT_TOKENS for request in requests)
     pricing = _PricingSession()
     with pytest.raises(OpenRouterDecisionError, match='configured USD budget'):
-        asyncio.run(check_jev_budget(pricing, 'test-key', requests, 0.01))
+        asyncio.run(check_jev_budget(pricing, 'test-key', requests, 0.00001))
     assert len(pricing.requests) == 1  # Only the model-price lookup occurred.
 
 
@@ -651,6 +666,8 @@ def test_jev_accepts_all_three_user_supplied_question_types() -> None:
     })
     reply = asyncio.run(decide_user_jev_request(session, "test-key", JEV_MODEL, spec))
     assert "technical" in reply and "1.20" in reply and "15%" in reply
+    timeout = session.requests[0][1]["timeout"]
+    assert timeout.total is None and timeout.sock_read == 180 and timeout.connect == 30
     request = session.requests[0][1]["json"]
     assert request["state"] == spec["state"]
     assert request["questions"] == spec["questions"]

@@ -1,5 +1,15 @@
 # Public PB8 GPU worker image
 
+## Published official PB8 worker (2026-09-29)
+
+- PB8 revision: `7b639e1180fa6bfe02e110429d4f931933c73089` (official master after PRs #1832 and #1834).
+- The base Dockerfile checks out that exact upstream commit without applying either local PB8 patch.
+- Local base and PBGui wrapper images built successfully; the official checkout is clean and the worker file SHA256 is `3803a47bd0d2eb36546d807a3296dbb0205f4f35aae7179b37ba37f5223cff19`.
+- Network-disabled container checks passed for the revision, Rust fingerprint, both merged fixes and PBGui worker import. The exported GPU metric contract exactly matches the checked-in contract (157 supported, 460 allowed, 65 exact-only metrics and all three source hashes).
+- Published tag: `ghcr.io/msei99/pbgui-pb8-worker:7b639e1-upstream-v1`; immutable manifest: `sha256:3fadf2220b4b19ee58aff6df95fa62a5e27e30d5a8058015e326ad4c229f55e0`; config: `sha256:a0c1c6542c1d38fbf0c0b06d086c530e63987bb0407a93a69be44f424c877137`.
+- The public manifest was fetched anonymously and its SHA256 verified. It has 26 layers totaling 3,778,546,919 compressed bytes.
+- PBGui pins this digest for new rentals and calibration. Existing rental intents keep their original image and PB8 revision. Old calibration evidence remains readable, but PBGui does not reuse performance profiles across PB8 revisions. No paid rental or bot host was changed.
+
 ## Multi-venue BTC source fix worker (2026-09-27)
 
 - Base: exact-progress worker at `sha256:a1a458b296653e438d2dac5a1cbfd4fa990045ce28cd4a2f70684fc2a404a0bf`.
@@ -10,9 +20,9 @@
 - The published manifest has 30 compressed layers; sizes are recorded in `vast_image_layers.py`. Anonymous manifest access and an offline container import were verified.
 
 `Dockerfile.multi-venue-btc` applies the source patch and checks the revision,
-source hash, and import. New rentals use this image after the PBGui API loads
-its updated pin. Existing rental intents retain their exact image. The PB8 PR
-is open; this image includes its patch without waiting for a merge.
+source hash, and import. At publication, new rentals used this image after
+the PBGui API loaded its pin. Existing rental intents retain their exact image.
+The PB8 PR was open when this historical image was published.
 
 ## Temporary exact-progress test worker (2026-09-27)
 

@@ -277,6 +277,14 @@ def _go_instructions(model: str, *, tools_enabled: bool = False) -> str:
     return (
         f"{_GO_INSTRUCTIONS} The selected model identifier for this conversation is exactly "
         f"'{model}'. When asked which model or version you are, answer with that identifier."
+        " OpenCode Go and Zen support PBGui's isolated web-research workflow. "
+        "When web research is requested and capability tools are available, identify the public "
+        "research subject with minimal reads, then call propose_web_research. It prepares an inline "
+        "prompt for user approval; only after approval does a separate run use the same selected "
+        "model and public web search. Do not claim this connection lacks web research. "
+        "Do not prepare a Python proposal as a fallback, invent risk scores, or switch providers. "
+        "If this conversation has no capability tools, explain that research needs a tool-enabled "
+        "chat. A different local analysis requires the user's explicit request."
         f"{capability_text}\n\n{rules}"
     )
 
@@ -496,6 +504,8 @@ class CodexRuntime:
         self.last_used = time.monotonic()
         self.closing = False
         self.tool_handler = tool_handler
+        self.research_mode = False
+        self.research_web_calls = 0
         self.tool_results: dict[tuple[str, str, str], dict[str, Any]] = {}
         self.active_tool_calls = 0
         self.active_tool_signatures: dict[tuple[str, str], int] = {}
@@ -836,11 +846,34 @@ class CodexRuntime:
             "sandbox": "read-only",
             "serviceName": "PBGui AI MVP",
         }
+        if self.research_mode:
+            from ai_research import RESEARCH_INSTRUCTIONS
+            if dynamic_tools:
+                raise AIChatError("Research cannot have PBGui tools")
+            params["cwd"] = getattr(self, "research_cwd", str(self.workspace))
+            params["baseInstructions"] = RESEARCH_INSTRUCTIONS
+            params["developerInstructions"] = ""
+            params["config"].update({
+                "web_search": "live", "project_doc_max_bytes": 0,
+                "developer_instructions": "",
+            })
+            params["config"]["features"].update({
+                "standalone_web_search": True, "apply_patch_freeform": False,
+            })
+        if self.research_mode and getattr(self, "research_analysis_only", False):
+            from ai_research_summary import SUMMARY_INSTRUCTIONS
+            params["baseInstructions"] = SUMMARY_INSTRUCTIONS
+            params["config"]["web_search"] = "disabled"
+            params["config"]["features"]["standalone_web_search"] = False
         if model:
             params["model"] = model
         if dynamic_tools:
             params["dynamicTools"] = dynamic_tools
         result = await self.request("thread/start", params, timeout=30)
+        if self.research_mode and result.get("instructionSources"):
+            raise AIChatError("Research loaded unexpected local instructions; request stopped")
+        if self.research_mode and result.get("model") != model:
+            raise AIChatError("Research model selection was not honored; request stopped")
         thread = result.get("thread") if isinstance(result, dict) else None
         thread_id = str(thread.get("id") or "") if isinstance(thread, dict) else ""
         if not thread_id:
@@ -883,20 +916,53 @@ class CodexRuntime:
                 if effort.lower() in {"high", "xhigh", "ultra"}
                 else _CHAT_TIMEOUT_SECONDS
             )
+            if self.research_mode:
+                from ai_research import IDLE_TIMEOUT
+                timeout_seconds = IDLE_TIMEOUT
+            timeout_message = (f"Research inactive for {timeout_seconds:g} seconds"
+                               if self.research_mode else "ChatGPT response timed out")
             deadline = asyncio.get_running_loop().time() + timeout_seconds
             try:
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
-                        raise AIChatError("ChatGPT response timed out")
+                        raise AIChatError(timeout_message)
                     try:
                         event = await asyncio.wait_for(self.notifications.get(), timeout=remaining)
                     except asyncio.TimeoutError as exc:
-                        raise AIChatError("ChatGPT response timed out") from exc
+                        raise AIChatError(timeout_message) from exc
                     method = str(event.get("method") or "")
                     payload = event.get("params") if isinstance(event.get("params"), dict) else {}
                     if not self._matches_turn(payload, turn_id):
                         continue
+                    if self.research_mode and method == "model/rerouted":
+                        raise AIChatError("Research provider changed the selected model; request stopped")
+                    if self.research_mode and method == "item/started":
+                        item = payload.get("item") or {}
+                        kind = item.get("type")
+                        if kind == "webSearch" and getattr(self, "research_analysis_only", False):
+                            raise AIChatError("Unexpected tool in isolated analysis; analysis stopped")
+                        if kind == "webSearch":
+                            # Observability only: multi-asset research can need many searches.
+                            # The idle deadline and isolated tool allowlist still apply.
+                            self.research_web_calls += 1
+                        elif kind not in {"userMessage", "agentMessage", "reasoning", "contextCompaction"}:
+                            raise AIChatError("Unexpected tool in isolated research; research stopped")
+                    if self.research_mode:
+                        # Only progress belonging to this turn extends the idle deadline.
+                        # Heartbeats, errors, empty deltas and unrelated turns cannot keep it alive.
+                        item = payload.get("item") or {}
+                        progress = (
+                            method in {"item/started", "item/completed"}
+                            and isinstance(item, dict)
+                            and item.get("type") in {"webSearch", "agentMessage", "reasoning", "contextCompaction"}
+                        ) or (
+                            method in {"item/agentMessage/delta", "item/reasoning/textDelta",
+                                       "item/reasoning/summaryTextDelta"}
+                            and isinstance(payload.get("delta"), str) and bool(payload["delta"])
+                        )
+                        if progress:
+                            deadline = asyncio.get_running_loop().time() + timeout_seconds
                     if method == "error":
                         last_turn_error = payload.get("error")
                     elif method == "item/agentMessage/delta":
@@ -1153,6 +1219,7 @@ class Conversation:
     reasoning_summary: str = ""
     activity_history: list[dict[str, Any]] = field(default_factory=list)
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
+    research_items: list[dict[str, Any]] = field(default_factory=list)
     chatgpt_profile: str = "default"
 
 
@@ -1191,10 +1258,14 @@ class AIChatService:
         self.preference_root = ensure_private_directory(self.root / "preferences")
         self.preference_lock_target = self.preference_root / ".write"
         self.capabilities = get_ai_capability_service()
+        self.analysis_policy = self.capabilities
+        from ai_research import ResearchService
+        self.research = ResearchService(self)
 
     async def shutdown(self) -> None:
         """Cancel active chats and close all provider resources."""
         self.accepting_turns = False
+        await self.research.shutdown()
         tasks = list(self.active_tasks.values())
         if self.reaper_task is not None and not self.reaper_task.done():
             self.reaper_task.cancel()
@@ -1441,6 +1512,7 @@ class AIChatService:
             state_key = self._provider_state_key(owner, "openrouter")
             self.provider_disconnecting.add(state_key)
             try:
+                await self.research.cancel_openrouter(owner)
                 await self._cancel_provider(owner, "openrouter")
                 self.credentials.delete_openrouter_key(owner)
             finally:
@@ -1453,6 +1525,7 @@ class AIChatService:
             state_key = self._provider_state_key(*key)
             self.provider_disconnecting.add(state_key)
             try:
+                await self.research.cancel_opencode(owner)
                 await self._cancel_provider(owner, "opencode-zen")
                 await self._cancel_provider(*key)
                 self.credentials.delete_go_key(owner)
@@ -1498,6 +1571,7 @@ class AIChatService:
         """Log out only the selected subscription, retaining its conversations."""
         async with self._provider_lock(owner, "chatgpt"):
             self._require_profile(owner, profile)
+            await self.research.cancel_profile(owner, profile)
             await self._ensure_owner_loaded(owner)
             selected = [item for item in self.conversations.values()
                         if item.owner == owner and item.provider == "chatgpt" and item.chatgpt_profile == profile]
@@ -1986,6 +2060,7 @@ class AIChatService:
     async def delete_conversation(self, owner: str, conversation_id: str) -> None:
         """Remove one persistent conversation after cancelling active work."""
         await self.capabilities.reject_conversation(owner, conversation_id)
+        await self.research.cancel_conversation(owner, conversation_id)
         async with self.state_lock:
             conversation = self._owned_conversation(owner, conversation_id)
             conversation.closed = True
@@ -2019,6 +2094,9 @@ class AIChatService:
             restored_prompt = str(
                 selected.get("display_content", selected.get("content", "")) or ""
             )[:_MAX_MESSAGE_CHARS]
+            visible_index = sum(1 for item in conversation.messages[:message_index] if not item.get('hidden'))
+            await self.research.cancel_conversation(owner, conversation_id, visible_index)
+            conversation.research_items = [item for item in conversation.research_items if item.get('message_index', 0) < visible_index]
             conversation.messages = conversation.messages[:message_index]
             conversation.ui_actions = []
             conversation.last_error = ""
@@ -2190,6 +2268,8 @@ class AIChatService:
         self, owner: str, conversation_id: str, result: object
     ) -> None:
         """Persist one typed browser action emitted by a trusted capability handler."""
+        if self.analysis_policy.analysis_only(owner, conversation_id):
+            return
         action = result.get("ui_action") if isinstance(result, dict) else None
         if not isinstance(action, dict) or action.get("type") not in {
             "optimize.select_paretos",
@@ -2410,6 +2490,7 @@ class AIChatService:
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist one browser-completed UI action without contacting a provider."""
+        self.analysis_policy.require_action_context(owner, conversation_id)
         await self._ensure_owner_loaded(owner)
         clean_message = self._validate_message(message)
         async with self.state_lock:
@@ -2840,9 +2921,11 @@ class AIChatService:
             "context": copy.deepcopy(conversation.context),
             "reasoning_summary": conversation.reasoning_summary,
             "activity_history": copy.deepcopy(conversation.activity_history),
-            "ui_actions": copy.deepcopy(conversation.ui_actions),
+            "analysis_only": self.analysis_policy.analysis_only(conversation.owner, conversation.id),
+            "ui_actions": [] if self.analysis_policy.analysis_only(conversation.owner, conversation.id) else copy.deepcopy(conversation.ui_actions),
         }
         if include_messages:
+            payload["research_items"] = self.research.conversation_items(conversation)
             payload["messages"] = [
                 {
                     "role": item.get("role", ""),
@@ -2894,6 +2977,7 @@ class AIChatService:
             "reasoning_summary": conversation.reasoning_summary,
             "activity_history": conversation.activity_history,
             "ui_actions": conversation.ui_actions,
+            "research_items": conversation.research_items,
         }
         encoded = json.dumps(payload, indent=4, allow_nan=False) + "\n"
         if len(encoded.encode("utf-8")) > 4 * 1024 * 1024:
@@ -2944,6 +3028,7 @@ class AIChatService:
                             reasoning_summary=str(data.get("reasoning_summary") or "")[:8000],
                             activity_history=list(data.get("activity_history") or [])[-20:],
                             ui_actions=self._restore_ui_actions(data.get("ui_actions")),
+                            research_items=[item for item in (data.get("research_items") or [])[-8:] if isinstance(item, dict)],
                         )
                         self._compact_persisted_user_messages(conversation.messages)
                         if conversation.id + ".json" != path.name:
@@ -2993,6 +3078,7 @@ class AIChatService:
                 "reasoning": bool(metadata.get("reasoning")),
                 "reasoning_variants": copy.deepcopy(metadata.get("reasoning_variants") or []),
                 "context": int(metadata.get("context") or 0),
+                "output_limit": int(metadata.get("output_limit") or 0),
                 "tools": bool(metadata.get("tools", metadata.get("protocol") == "chat")),
             }
             for model_id, metadata in catalog.items()
@@ -3085,6 +3171,7 @@ class AIChatService:
                         raw_metadata, protocol, model_id, output_limit
                     ),
                     "context": int(limit.get("context") or 0) if isinstance(limit, dict) else 0,
+                    "output_limit": output_limit,
                 }
             if discovered:
                 fallback.update(discovered)
@@ -3152,6 +3239,8 @@ class AIChatService:
             session = await self._http_session()
             api_key = self.credentials.load_openrouter_key(owner)
             budget = min(self.get_preferences(owner)["jev_max_cost_usd"], budget_override) if budget_override is not None else self.get_preferences(owner)["jev_max_cost_usd"]
+            if self.analysis_policy.analysis_only(owner, conversation_id) and expected_payload_digest:
+                self.analysis_policy.require_action_context(owner, conversation_id)
             if expected_payload_digest:
                 return await decide_backtest_candidates(
                     self.capabilities, session, api_key, owner, conversation_id, model,
@@ -3169,6 +3258,8 @@ class AIChatService:
             options = _user_options(message)
             if options:
                 return await decide_general_choice(session, api_key, model, message, options, context, max_cost_usd=budget)
+            if self.analysis_policy.analysis_only(owner, conversation_id):
+                raise AIChatError("Research analysis requires typed Jev questions; PBGui selection actions are disabled.")
             entities = context.get("entities", []) if isinstance(context, dict) else []
             if any(isinstance(entity, dict) and entity.get("kind") == "optimizer_run" for entity in entities) or re.search(r"\b(pareto|optimi[sz]e|optimier)\w*\b", message, re.I):
                 return await decide_backtest_candidates(
@@ -3218,6 +3309,7 @@ class AIChatService:
                     key,
                     history,
                     str((variant or {}).get("value") or ""),
+                    available[model],
                 )
             if selected_protocol == "responses":
                 return await self._go_responses_agent(
@@ -3228,6 +3320,7 @@ class AIChatService:
                     key,
                     history,
                     variant,
+                    available[model],
                 )
             if selected_protocol == "messages":
                 return await self._go_messages_agent(
@@ -3238,6 +3331,7 @@ class AIChatService:
                     key,
                     history,
                     variant,
+                    available[model],
                 )
         endpoint, headers, request_body, protocol = self._go_request_spec(
             model,
@@ -3247,6 +3341,7 @@ class AIChatService:
             conversation_id,
         )
         self._apply_reasoning_variant(request_body, protocol, model, variant)
+        output_budget = self._apply_opencode_output_budget(request_body, protocol, available[model])
         session = await self._http_session()
         try:
             async with session.post(
@@ -3260,6 +3355,7 @@ class AIChatService:
             raise
         except Exception as exc:
             raise AIChatError("OpenCode Go request failed") from exc
+        self._validate_opencode_completion(payload, protocol, output_budget)
         if protocol == "responses":
             text = self._response_text(payload)
         elif protocol == "chat":
@@ -3283,10 +3379,15 @@ class AIChatService:
         conversation_id: str,
         name: str,
         arguments: object,
-        seen_requests: set[str],
+        seen_requests: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
-        """Execute one unique bounded agent capability and publish safe activity labels."""
-        args = arguments if isinstance(arguments, dict) else {}
+        """Replay exact results without repeating effects; let corrected requests execute."""
+        if not isinstance(arguments, dict):
+            return {
+                "success": False,
+                "error": "Capability arguments must be a valid JSON object; correct the arguments and try again.",
+            }
+        args = arguments
         try:
             request_key = json.dumps(
                 {"name": name, "arguments": args},
@@ -3297,11 +3398,7 @@ class AIChatService:
         except (TypeError, ValueError) as exc:
             raise AIChatError("OpenCode agent returned invalid capability arguments") from exc
         if request_key in seen_requests:
-            return {
-                "success": False,
-                "error": "This capability request was already completed; use its previous result.",
-            }
-        seen_requests.add(request_key)
+            return seen_requests[request_key]
         await self._set_activity(
             owner,
             conversation_id,
@@ -3320,6 +3417,7 @@ class AIChatService:
                 name, "PBGui capability complete; model is processing results"
             ),
         )
+        seen_requests[request_key] = output
         return output
 
     async def _go_responses_agent(
@@ -3331,6 +3429,7 @@ class AIChatService:
         api_key: str,
         history: list[dict[str, str]],
         variant: dict[str, Any] | None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Run one bounded native Responses capability loop."""
         try:
@@ -3343,6 +3442,7 @@ class AIChatService:
                     api_key,
                     history,
                     variant,
+                    metadata,
                 ),
                 timeout=_CHAT_TIMEOUT_SECONDS,
             )
@@ -3358,6 +3458,7 @@ class AIChatService:
         api_key: str,
         history: list[dict[str, str]],
         variant: dict[str, Any] | None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Run stateless Responses function calls with bounded result replay."""
         input_items: list[dict[str, Any]] = copy.deepcopy(history)
@@ -3368,7 +3469,7 @@ class AIChatService:
         total_calls = 0
         total_result_bytes = 0
         seen_calls: set[str] = set()
-        seen_requests: set[str] = set()
+        seen_requests: dict[str, dict[str, Any]] = {}
         round_limit = self._capability_round_limit(history)
         for round_index in range(round_limit + 1):
             final_round = round_index == round_limit or total_calls >= _MAX_CAPABILITY_CALLS
@@ -3390,7 +3491,6 @@ class AIChatService:
                 "model": model,
                 "instructions": instructions,
                 "input": input_items,
-                "max_output_tokens": 4096,
                 "store": False,
             }
             self._apply_reasoning_variant(request_body, "responses", model, variant)
@@ -3400,6 +3500,7 @@ class AIChatService:
                 request_body["prompt_cache_key"] = conversation_id
             if not final_round:
                 request_body["tools"] = tools
+            output_budget = self._apply_opencode_output_budget(request_body, "responses", metadata)
             payload = None
             for attempt in range(_OPENCODE_REQUEST_ATTEMPTS):
                 try:
@@ -3434,6 +3535,7 @@ class AIChatService:
                     raise AIChatError("OpenCode Responses agent request failed") from exc
             if payload is None:
                 raise AIChatError("OpenCode Responses agent request failed")
+            self._validate_opencode_completion(payload, "responses", output_budget)
             output_items = payload.get("output") if isinstance(payload, dict) else None
             if not isinstance(output_items, list):
                 raise AIChatError("OpenCode Responses agent returned invalid data")
@@ -3476,7 +3578,7 @@ class AIChatService:
                 try:
                     arguments = json.loads(raw_arguments)
                 except json.JSONDecodeError:
-                    arguments = {}
+                    arguments = None
                 if total_calls >= _MAX_CAPABILITY_CALLS:
                     output = {
                         "success": False,
@@ -3509,6 +3611,7 @@ class AIChatService:
         api_key: str,
         history: list[dict[str, str]],
         variant: dict[str, Any] | None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Run one bounded native Anthropic Messages capability loop."""
         try:
@@ -3521,6 +3624,7 @@ class AIChatService:
                     api_key,
                     history,
                     variant,
+                    metadata,
                 ),
                 timeout=_CHAT_TIMEOUT_SECONDS,
             )
@@ -3536,6 +3640,7 @@ class AIChatService:
         api_key: str,
         history: list[dict[str, str]],
         variant: dict[str, Any] | None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Run Messages tool_use/tool_result calls with bounded result replay."""
         messages: list[dict[str, Any]] = copy.deepcopy(history)
@@ -3546,7 +3651,7 @@ class AIChatService:
         total_calls = 0
         total_result_bytes = 0
         seen_calls: set[str] = set()
-        seen_requests: set[str] = set()
+        seen_requests: dict[str, dict[str, Any]] = {}
         round_limit = self._capability_round_limit(history)
         for round_index in range(round_limit + 1):
             final_round = round_index == round_limit or total_calls >= _MAX_CAPABILITY_CALLS
@@ -3568,11 +3673,11 @@ class AIChatService:
                 "model": model,
                 "system": system,
                 "messages": messages,
-                "max_tokens": 4096,
             }
             self._apply_reasoning_variant(request_body, "messages", model, variant)
             if not final_round:
                 request_body["tools"] = tools
+            output_budget = self._apply_opencode_output_budget(request_body, "messages", metadata)
             try:
                 async with session.post(
                     f"{base_url}/messages",
@@ -3587,6 +3692,7 @@ class AIChatService:
                 raise
             except Exception as exc:
                 raise AIChatError("OpenCode Messages agent request failed") from exc
+            self._validate_opencode_completion(payload, "messages", output_budget)
             content = payload.get("content") if isinstance(payload, dict) else None
             if not isinstance(content, list):
                 raise AIChatError("OpenCode Messages agent returned invalid data")
@@ -3661,6 +3767,7 @@ class AIChatService:
         api_key: str,
         history: list[dict[str, str]],
         effort: str,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Run one provider tool loop under a hard total time budget."""
         try:
@@ -3673,6 +3780,7 @@ class AIChatService:
                     api_key,
                     history,
                     effort,
+                    metadata,
                 ),
                 timeout=180,
             )
@@ -3688,6 +3796,7 @@ class AIChatService:
         api_key: str,
         history: list[dict[str, str]],
         effort: str = "",
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Run a bounded Chat Completions tool loop using PBGui capabilities."""
         messages: list[dict[str, Any]] = [
@@ -3701,7 +3810,7 @@ class AIChatService:
         total_calls = 0
         total_result_bytes = 0
         seen_calls: set[str] = set()
-        seen_requests: set[str] = set()
+        seen_requests: dict[str, dict[str, Any]] = {}
         round_limit = self._capability_round_limit(history)
         for round_index in range(round_limit + 1):
             final_round = round_index == round_limit or total_calls >= _MAX_CAPABILITY_CALLS
@@ -3726,12 +3835,12 @@ class AIChatService:
             request_body: dict[str, Any] = {
                 "model": model,
                 "messages": messages,
-                "max_tokens": 4096,
             }
             if effort:
                 request_body["reasoning_effort"] = effort
             if not final_round:
                 request_body["tools"] = tools
+            output_budget = self._apply_opencode_output_budget(request_body, "chat", metadata)
             try:
                 async with session.post(
                     f"{base_url}/chat/completions",
@@ -3751,10 +3860,13 @@ class AIChatService:
             assistant = choice.get("message") if isinstance(choice, dict) else None
             if not isinstance(assistant, dict):
                 raise AIChatError("OpenCode agent returned invalid data")
+            self._validate_opencode_completion(payload, "chat", output_budget)
             calls = assistant.get("tool_calls")
             if not isinstance(calls, list) or not calls:
                 text = self._chat_completion_text(payload)
                 if not text:
+                    if assistant.get("reasoning_content"):
+                        raise AIChatError("OpenCode returned reasoning without an answer or capability call")
                     raise AIChatError("OpenCode agent returned an empty response")
                 if len(text) > _MAX_REPLY_CHARS:
                     raise AIChatError("OpenCode agent response is too large")
@@ -3792,38 +3904,16 @@ class AIChatService:
                 try:
                     arguments = json.loads(raw_arguments)
                 except json.JSONDecodeError:
-                    arguments = {}
-                request_key = json.dumps(
-                    {"name": name, "arguments": arguments},
-                    allow_nan=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
+                    arguments = None
                 if total_calls >= _MAX_CAPABILITY_CALLS:
                     output = {
                         "success": False,
                         "error": "PBGui capability budget exhausted; answer using the results already provided.",
                     }
-                elif request_key in seen_requests:
-                    output = {
-                        "success": False,
-                        "error": "This capability request was already completed; use its previous result.",
-                    }
                 else:
-                    seen_requests.add(request_key)
-                    await self._set_activity(
-                        owner,
-                        conversation_id,
-                        _CAPABILITY_ACTIVITY.get(name, "Using a PBGui capability"),
+                    output = await self._agent_capability_result(
+                        owner, conversation_id, name, arguments, seen_requests
                     )
-                    try:
-                        result = await self.capabilities.dispatch(
-                            owner, conversation_id, name, arguments
-                        )
-                        await self._capture_ui_action(owner, conversation_id, result)
-                        output = {"success": True, "result": result}
-                    except AICapabilityError as exc:
-                        output = {"success": False, "error": str(exc)}
                 output_text = json.dumps(output, allow_nan=False, separators=(",", ":"))
                 total_result_bytes += len(output_text.encode("utf-8"))
                 if total_result_bytes > 1024 * 1024:
@@ -3837,6 +3927,56 @@ class AIChatService:
                 )
                 total_calls += 1
         raise AIChatError("OpenCode agent could not complete the response")
+
+    @staticmethod
+    def _apply_opencode_output_budget(
+        body: dict[str, Any], protocol: str, metadata: dict[str, Any] | None,
+    ) -> int:
+        """Budget every productive request after input, tools and reasoning are present."""
+        limits = metadata or {}
+        advertised = limits.get("output_limit")
+        budget = advertised if type(advertised) is int and advertised > 0 else 32768
+        # Never count an old output setting as input or send competing limit fields.
+        for key in ("max_tokens", "max_output_tokens", "max_completion_tokens"):
+            body.pop(key, None)
+        context = limits.get("context")
+        if type(context) is int and context > 0:
+            reserve = len(json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")) + 1024
+            budget = min(budget, context - reserve)
+        thinking = body.get("thinking") or {}
+        thinking_budget = thinking.get("budget_tokens", 0)
+        if budget < 1 or budget <= thinking_budget:
+            raise AIChatError("OpenCode input/tools and reasoning budget leave no output room for this model")
+        body["max_output_tokens" if protocol == "responses" else "max_tokens"] = budget
+        return budget
+
+    @staticmethod
+    def _validate_opencode_completion(payload: object, protocol: str, budget: int) -> None:
+        """Reject partial replies before parsing or executing any returned tool calls."""
+        if not isinstance(payload, dict):
+            raise AIChatError("OpenCode returned invalid response data")
+        limited = False
+        if protocol == "responses":
+            status = payload.get("status")
+            limited = status == "incomplete" and (payload.get("incomplete_details") or {}).get("reason") == "max_output_tokens"
+            if status in {"failed", "cancelled", "incomplete"} and not limited:
+                raise AIChatError("OpenCode provider stopped the response before completion")
+        elif protocol == "messages":
+            limited = payload.get("stop_reason") == "max_tokens"
+            if payload.get("stop_reason") == "refusal":
+                raise AIChatError("OpenCode provider declined the response")
+        else:
+            for choice in payload.get("choices", []):
+                if not isinstance(choice, dict):
+                    continue
+                limited = limited or choice.get("finish_reason") == "length"
+                if choice.get("finish_reason") == "content_filter":
+                    raise AIChatError("OpenCode response was stopped by the provider content filter")
+        if limited:
+            raise AIChatError(
+                f"OpenCode response reached the output limit ({budget} tokens, including reasoning); "
+                "incomplete capability calls were not executed"
+            )
 
     @staticmethod
     def _selected_reasoning_variant(
@@ -4078,7 +4218,6 @@ class AIChatService:
                 {
                     "model": model,
                     "messages": [{"role": "system", "content": instructions}, *history],
-                    "max_tokens": 4096,
                 },
                 selected_protocol,
             )
@@ -4087,7 +4226,7 @@ class AIChatService:
         return (
             "messages",
             AIChatService._opencode_request_headers(api_key, session_id, selected_protocol),
-            {"model": model, "system": instructions, "messages": history, "max_tokens": 4096},
+            {"model": model, "system": instructions, "messages": history},
             selected_protocol,
         )
 
@@ -4666,6 +4805,7 @@ class AIChatService:
             while True:
                 await asyncio.sleep(60)
                 await self._cleanup_conversations()
+                self.research._prune()
                 await self._close_idle_codex_runtimes()
         except asyncio.CancelledError:
             return

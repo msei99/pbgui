@@ -1,0 +1,12 @@
+.pbgui-ai-transcript { overflow-anchor:none; }
+.pbgui-ai-markdown { min-width:0; white-space:normal; }
+.pbgui-ai-markdown > :first-child { margin-top:0; }
+.pbgui-ai-markdown > :last-child { margin-bottom:0; }
+.pbgui-ai-markdown pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.pbgui-ai-markdown code { font-family:monospace; }
+.pbgui-ai-markdown a { color:#63b3ed; }
+.pbgui-ai-table-scroll { max-width:100%; overflow:auto; margin:10px 0; border:1px solid #334155; border-radius:6px; }
+.pbgui-ai-table-scroll table { border-collapse:collapse; width:100%; font:inherit; }
+.pbgui-ai-table-scroll th,.pbgui-ai-table-scroll td { padding:8px 10px; text-align:left; vertical-align:top; border-bottom:1px solid #334155; min-width:70px; }
+.pbgui-ai-table-scroll th { position:sticky; top:0; background:var(--bg2,#162235); border-bottom:2px solid var(--border,#334155); font-weight:600; }
+.pbgui-ai-table-scroll tbody tr:nth-child(even) { background:rgba(148,163,184,.04); }

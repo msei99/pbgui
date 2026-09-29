@@ -148,7 +148,7 @@
 
   function aiControlVisible(element) {
     if (!element || !element.isConnected || element.disabled || element.hidden) return false;
-    if (element.closest('#pbgui-ai-drawer,[aria-hidden="true"]')) return false;
+    if (element.closest('#pbgui-ai-drawer,.pbgui-research-card,[aria-hidden="true"]')) return false;
     var style = window.getComputedStyle(element);
     if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
     var rect = element.getBoundingClientRect();
@@ -1853,6 +1853,28 @@
       link.href = _appPath('/app/css/ai_drawer.css?v=18');
       document.head.appendChild(link);
       function loadDrawerScript() {
+        var dependencies = [
+          ['marked', '/app/vendor/marked.min.js?v=1'],
+          ['DOMPurify', '/app/vendor/purify.min.js?v=1'],
+          ['PBGuiAIMessageView', '/app/js/ai_message_view.js?v=2']
+        ];
+        var missing = dependencies.find(function (entry) {return !window[entry[0]];});
+        if (missing) {
+          if (missing[0] === 'PBGuiAIMessageView') {
+            var messageStyle = document.createElement('link'); messageStyle.rel = 'stylesheet';
+            messageStyle.href = _appPath('/app/css/ai_message_view.css?v=1'); document.head.appendChild(messageStyle);
+          }
+          var dependency = document.createElement('script'); dependency.src = _appPath(missing[1]);
+          dependency.onload = loadDrawerScript; dependency.onerror = function () {_aiDrawerLoading = false;};
+          document.head.appendChild(dependency); return;
+        }
+        if (!window.PBGuiAIResearch) {
+          var researchStyle = document.createElement('link'); researchStyle.rel = 'stylesheet';
+          researchStyle.href = _appPath('/app/css/ai_research.css?v=3'); document.head.appendChild(researchStyle);
+          var researchScript = document.createElement('script'); researchScript.src = _appPath('/app/js/ai_research.js?v=9');
+          researchScript.onload = loadDrawerScript; researchScript.onerror = function () { _aiDrawerLoading = false; };
+          document.head.appendChild(researchScript); return;
+        }
         if (!window.PBGuiAIUsage) {
           var usage = document.createElement('script');
           usage.src = _appPath('/app/js/ai_usage.js?v=2');
@@ -1870,7 +1892,7 @@
           return;
         }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=54');
+        script.src = _appPath('/app/js/ai_drawer.js?v=60');
         script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);

@@ -2145,6 +2145,16 @@
             noData.textContent = 'No open positions.';
             root.appendChild(noData);
             container.appendChild(root);
+            container._dpUpdate = function (newPositions, source) {
+                if (newPositions.length) {
+                    container._dpUpdate = null;
+                    buildPositions(container, {positions: newPositions, source: source}, opts);
+                    return;
+                }
+                container._dpStatusSource = source || 'db';
+                container._dpStatusTs = Date.now();
+                updatePositionsStatus();
+            };
             return;
         }
 
@@ -4048,7 +4058,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20260927a',
+        VERSION:            '20260929a',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

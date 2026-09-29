@@ -13,17 +13,74 @@ from typing import Any
 
 import aiohttp
 
+from ai_token_budget import JEV_CONTEXT_TOKENS, estimate_jev_input_tokens
 from logging_helpers import human_log as _log
 
 SERVICE = "AIOpenRouter"
 JEV_MODEL = "typesafe/jev-1.13"
 OPENROUTER_API = "https://openrouter.ai/api"
 DEFAULT_JEV_BUDGET_USD = 0.01
-_JEV_MAX_REQUEST_BYTES = 30_000  # Below Jev 1.13's 32K-token context even at one token per byte.
+_JEV_MAX_INPUT_BYTES = 1_000_000  # Application memory bound, separate from model context.
 
 
 class OpenRouterDecisionError(RuntimeError):
     """A safe, user-facing Jev decision error."""
+
+
+class JevBudgetExceeded(OpenRouterDecisionError):
+    """A safe cost estimate requiring a new explicit user approval before sending."""
+
+    def __init__(self, estimated_cost_usd: float):
+        super().__init__("Jev analysis exceeds the configured USD budget; no data was sent")
+        self.estimated_cost_usd = estimated_cost_usd
+
+
+def _jev_input_tokens(request: dict) -> int:
+    """Return a local estimate or fail explicitly; never fall back to bytes-as-tokens."""
+    try:
+        return estimate_jev_input_tokens(request)
+    except (ImportError, OSError, ValueError) as exc:
+        raise OpenRouterDecisionError("Local token estimator unavailable; verify installed requirements and bundled vocabulary") from exc
+
+
+async def _read_bounded_body(content, maximum):
+    """Wait for EOF, including fragmented responses, without unbounded buffering."""
+    try:
+        raw = await content.readexactly(maximum + 1)
+    except asyncio.IncompleteReadError as exc:
+        raw = exc.partial
+    if len(raw) > maximum:
+        raise OpenRouterDecisionError("OpenRouter response is too large")
+    return raw
+
+
+async def check_jev_connection(session, api_key):
+    """Read-only authentication/quota/pricing preflight; never submit a billed decision."""
+    try:
+        async with session.get(f"{OPENROUTER_API}/v1/key",
+                headers={"Authorization": f"Bearer {api_key}"}, allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=15)) as response:
+            if response.status != 200:
+                raise OpenRouterDecisionError(f"Jev preflight failed: OpenRouter authentication/access HTTP {response.status}; research not started")
+            payload = json.loads(await _read_bounded_body(response.content, 64 * 1024))
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict) or "limit_remaining" not in data:
+            raise OpenRouterDecisionError("Jev preflight returned invalid key information; research not started")
+        remaining = data["limit_remaining"]
+        if remaining is not None:
+            if isinstance(remaining, bool) or not isinstance(remaining, (int, float)) or not math.isfinite(remaining):
+                raise OpenRouterDecisionError("Jev preflight returned invalid quota information; research not started")
+            if remaining <= 0:
+                raise OpenRouterDecisionError("OpenRouter key spending limit exhausted; research not started")
+        await check_jev_budget(session, api_key, [], 0)
+    except OpenRouterDecisionError:
+        raise
+    except TimeoutError as exc:
+        raise OpenRouterDecisionError("Jev preflight timed out; research not started") from exc
+    except aiohttp.ClientError as exc:
+        raise OpenRouterDecisionError("Jev preflight connection failed; research not started") from exc
+    except (ValueError, TypeError) as exc:
+        raise OpenRouterDecisionError("Jev preflight returned invalid JSON; research not started") from exc
 
 
 async def check_jev_budget(
@@ -32,8 +89,8 @@ async def check_jev_budget(
 ) -> None:
     """Fail closed before billing when current provider pricing exceeds the budget.
 
-    UTF-8 bytes conservatively bound text tokens; a second factor covers
-    provider-side framing. This is a preflight estimate, not reported spend.
+    Use the same local token estimate and safety reserve as request packing.
+    This is a preflight estimate, not reported spend or an exact Jev token count.
     """
     try:
         async with session.get(
@@ -44,7 +101,7 @@ async def check_jev_budget(
         ) as response:
             if response.status != 200:
                 raise OpenRouterDecisionError("Jev pricing is unavailable; no data was sent")
-            raw = await response.content.read(64 * 1024 + 1)
+            raw = await _read_bounded_body(response.content, 64 * 1024)
             if len(raw) > 64 * 1024:
                 raise OpenRouterDecisionError("Jev pricing response is too large; no data was sent")
             model = json.loads(raw)
@@ -55,10 +112,12 @@ async def check_jev_budget(
         if not (math.isfinite(prompt_price) and prompt_price >= 0
                 and math.isfinite(completion_price) and completion_price == 0):
             raise OpenRouterDecisionError("Jev pricing cannot be verified; no data was sent")
-        total_bytes = sum(len(json.dumps(request, allow_nan=False, ensure_ascii=False,
-                                         separators=(",", ":")).encode("utf-8")) for request in requests)
-        if total_bytes * 2 * prompt_price > max_cost_usd:
-            raise OpenRouterDecisionError("Jev analysis exceeds the configured USD budget; no data was sent")
+        estimated_tokens = sum(_jev_input_tokens(request) for request in requests)
+        estimated_cost = estimated_tokens * prompt_price
+        if not math.isfinite(estimated_cost):
+            raise OpenRouterDecisionError("Jev pricing cannot be verified; no data was sent")
+        if estimated_cost > max_cost_usd:
+            raise JevBudgetExceeded(estimated_cost)
     except OpenRouterDecisionError:
         raise
     except (aiohttp.ClientError, TimeoutError, ValueError, TypeError, KeyError) as exc:
@@ -173,8 +232,14 @@ def _valid_probability(value: object) -> bool:
 
 def _validated_jev_questions(value: object) -> dict[str, dict[str, Any]]:
     """Bound the three documented Jev question shapes."""
-    if not isinstance(value, dict) or not 1 <= len(value) <= 8:
-        raise OpenRouterDecisionError("Jev needs 1 to 8 structured questions")
+    if not isinstance(value, dict) or not value:
+        raise OpenRouterDecisionError("Jev needs at least one structured question")
+    try:
+        size = len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise OpenRouterDecisionError("Jev questions must be valid JSON") from exc
+    if size > 1_000_000:
+        raise OpenRouterDecisionError("Jev question data exceeds the 1 MB application safety bound")
     questions = {}
     for name, question in value.items():
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,31}", name) or not isinstance(question, dict):
@@ -210,6 +275,28 @@ def _validated_jev_questions(value: object) -> dict[str, dict[str, Any]]:
             normalized["criteria"] = {key: criteria[key].strip() for key in ("true", "false")}
         questions[name] = normalized
     return questions
+
+
+def research_jev_question_schema() -> dict[str, Any]:
+    """Describe exact typed questions, including per-asset classification, to models."""
+    description = {"type": "string", "minLength": 1, "maxLength": 500}
+    options = {"type": "object", "minProperties": 2, "maxProperties": 20,
+               "propertyNames": {"pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"},
+               "additionalProperties": description}
+    variants = []
+    for kind, criteria in (("choice", options), ("score", {"type": "array", "minItems": 2,
+            "maxItems": 10, "items": description}), ("noul", {"type": "object",
+            "properties": {"true": description, "false": description},
+            "required": ["true", "false"], "additionalProperties": False})):
+        variants.append({"type": "object", "properties": {
+            "type": {"type": "string", "enum": [kind]},
+            "instructions": {"type": "string", "minLength": 5, "maxLength": 1000},
+            "criteria": criteria}, "required": ["type", "instructions"] + ([] if kind == "noul" else ["criteria"]),
+            "additionalProperties": False})
+    return {"type": "object", "minProperties": 1,
+            "propertyNames": {"pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"},
+            "additionalProperties": {"anyOf": variants},
+            "description": 'One question per asset, keyed by ID (e.g. BTC). For classification use type choice and criteria as an object mapping option IDs to descriptions, e.g. {"low":"Low risk backed by evidence","high":"High risk backed by evidence","unknown":"Insufficient evidence"}. Coins are questions, NOT choice options. All questions are sent together where size permits; PBGui splits only when the estimated token budget requires it and checks the total estimated cost before sending. No fixed coin-count limit.'}
 
 
 def _format_structured_jev_answers(payload: object, questions: dict[str, dict[str, Any]]) -> str:
@@ -283,8 +370,10 @@ def prepare_user_jev_payload(
         encoded = json.dumps(request, allow_nan=False, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     except (TypeError, ValueError) as exc:
         raise OpenRouterDecisionError("Jev state is not valid JSON data") from exc
-    if len(encoded) > 24_000:
-        raise OpenRouterDecisionError("Jev data exceeds 24 KB; narrow the PBGui sources")
+    if len(encoded) > _JEV_MAX_INPUT_BYTES:
+        raise OpenRouterDecisionError("Jev input exceeds the 1 MB application safety bound")
+    if _jev_input_tokens(request) > JEV_CONTEXT_TOKENS:
+        raise OpenRouterDecisionError("Jev input exceeds the estimated 32,000-token context budget")
     return request
 
 
@@ -303,12 +392,17 @@ async def decide_user_jev_request(
         if request != approved_payload:
             raise OpenRouterDecisionError("Jev approval no longer matches the request")
     await check_jev_budget(session, api_key, [request], max_cost_usd)
+    return await _send_structured_jev_request(session, api_key, request)
+
+
+async def _send_structured_jev_request(session, api_key, request):
+    """Send a validated request only after its caller has checked the complete budget."""
     try:
-        async with session.post(f"{OPENROUTER_API}/alpha/decisions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=request, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=60)) as response:
+        async with session.post(f"{OPENROUTER_API}/alpha/decisions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=request, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=None, connect=30, sock_read=180)) as response:
             if response.status != 200:
                 _log(SERVICE, f"OpenRouter Jev structured request failed with HTTP {response.status}", level="WARNING")
-                raise OpenRouterDecisionError("OpenRouter could not complete the Jev decision")
-            raw = await response.content.read(2 * 1024 * 1024 + 1)
+                raise OpenRouterDecisionError(f"Jev request failed (OpenRouter HTTP {response.status})")
+            raw = await _read_bounded_body(response.content, 2 * 1024 * 1024)
             if len(raw) > 2 * 1024 * 1024:
                 raise OpenRouterDecisionError("OpenRouter decision response is too large")
             payload = json.loads(raw)
@@ -316,8 +410,69 @@ async def decide_user_jev_request(
         raise
     except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
         _log(SERVICE, f"OpenRouter Jev structured request failed: {type(exc).__name__}", level="WARNING")
-        raise OpenRouterDecisionError("OpenRouter Jev is temporarily unavailable") from exc
+        if isinstance(exc, TimeoutError):
+            message = "Jev response timed out; no automatic retry was sent"
+        elif isinstance(exc, ValueError):
+            message = "Jev returned invalid JSON; no automatic retry was sent"
+        else:
+            message = "Jev connection failed; no automatic retry was sent"
+        raise OpenRouterDecisionError(message) from exc
     return _format_structured_jev_answers(payload, request["questions"])
+
+
+def prepare_research_jev_payloads(state, questions):
+    """Pack by estimated tokens, retaining the whole report and every question."""
+    normalized = _validated_jev_questions(questions)
+    items = list(normalized.items())
+    requests, offset, planned_bytes = [], 0, 0
+
+    def candidate(end):
+        return {"model": JEV_MODEL, "state": state, "questions": dict(items[offset:end])}
+
+    def fits(request):
+        encoded = json.dumps(request, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        return len(encoded) <= _JEV_MAX_INPUT_BYTES and _jev_input_tokens(request) <= JEV_CONTEXT_TOKENS
+
+    while offset < len(items):
+        # Try the whole remainder first; only split when the token estimate requires it.
+        end = len(items)
+        if not fits(candidate(end)):
+            if not fits(candidate(offset + 1)):
+                raise OpenRouterDecisionError("The report plus one Jev question exceeds the estimated token budget; prepare a shorter report for review")
+            low, high = offset + 1, end - 1
+            while low < high:
+                middle = (low + high + 1) // 2
+                if fits(candidate(middle)):
+                    low = middle
+                else:
+                    high = middle - 1
+            end = low
+        request = prepare_user_jev_payload(JEV_MODEL, {"state": state, "questions": dict(items[offset:end])})
+        planned_bytes += len(json.dumps(request, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8"))
+        if planned_bytes > 4_000_000:
+            raise OpenRouterDecisionError("Jev transfer plan exceeds the 4 MB application safety bound; prepare a shorter shared report")
+        requests.append(request)
+        offset = end
+    return requests
+
+
+async def decide_research_jev_requests(session, api_key, requests, max_cost_usd):
+    """Preflight the complete plan before running any size-required requests."""
+    await check_jev_budget(session, api_key, requests, max_cost_usd)
+    semaphore = asyncio.Semaphore(2)
+
+    async def send(request):
+        async with semaphore:
+            return await _send_structured_jev_request(session, api_key, request)
+
+    tasks = [asyncio.create_task(send(request)) for request in requests]
+    try:
+        return "\n\n".join(await asyncio.gather(*tasks))
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def decide_general_choice(
@@ -611,7 +766,7 @@ async def decide_backtest_candidates(
     for record in records:
         expanded = [*batch, record]
         expanded_size = payload_size(expanded)
-        if expanded_size <= _JEV_MAX_REQUEST_BYTES:
+        if expanded_size <= _JEV_MAX_INPUT_BYTES and _jev_input_tokens(make_request(expanded)) <= JEV_CONTEXT_TOKENS:
             batch, batch_size = expanded, expanded_size
             continue
         if not batch:
@@ -621,7 +776,7 @@ async def decide_backtest_candidates(
         planned.append((batch, batch_size))
         batch = [record]
         batch_size = payload_size(batch)
-        if batch_size > _JEV_MAX_REQUEST_BYTES:
+        if batch_size > _JEV_MAX_INPUT_BYTES or _jev_input_tokens(make_request(batch)) > JEV_CONTEXT_TOKENS:
             raise OpenRouterDecisionError(
                 "One candidate exceeds Jev's context-safe request size; no data was sent"
             )

@@ -76,6 +76,7 @@ function mainContext(html = source('dashboard_main.html')) {
         window, document, location, encodeURIComponent, Date,
         currentDash: 'old', selectedDashboards: ['old'], DASHBOARDS: ['old'],
         editMode: false, viewDirty: false, API_BASE: '/api', dashboardCreatedGeneration: 0,
+        listGeneration: 0, persistNavigation() {},
         contentFrame: new Element(), contentLoading: new Element(), editBanner: new Element(),
         tplOverlay: new Element(), tplIframe: new Element(),
         renderToolbar() {}, renderList() {}, updateCount() {}, updateViewSaveBtn() {},
@@ -265,7 +266,9 @@ async function charts() {
     window.Plotly = Plotly;
     const ctx = vm.createContext({window, document, Plotly,
         setTimeout(fn) { timers.set(++timerId, fn); return timerId; },
-        clearTimeout(id) { timers.delete(id); }
+        clearTimeout(id) { timers.delete(id); },
+        setInterval() { return ++timerId; },
+        clearInterval() {}
     });
     vm.runInContext(source('dashboard_render.js'), ctx);
     const data = {rows: [['user', 'BTC', 2]],
@@ -319,6 +322,17 @@ async function charts() {
     assert.deepEqual(dates(), ['2026-09-01', '2026-09-02', '2026-09-03']);
     assert.equal(arrow(), ' \u25b2');
     assert.deepEqual(rows.map(row => row.id), [1, 3, 2], 'sorting must not mutate API rows');
+    const positions = new Element();
+    positions.connected = true;
+    window.DashRender.buildPositions(positions, {positions: [], source: 'db'}, {});
+    assert.equal(positions.querySelector('.dt-nodata').textContent, 'No open positions.');
+    const livePosition = {user: 'u', symbol: 'AAVEUSDC', side: 'long', size: 0.24,
+        upnl: 0.29, entry: 164.25, price: 165.47, dca: 0, next_dca: 0,
+        next_tp: 0, pos_value: 39.71};
+    positions._dpUpdate([livePosition], 'live');
+    assert.equal(positions.querySelector('.dt-nodata'), null);
+    assert.equal(positions.querySelector('tbody').children.length, 1);
+    assert.equal(positions.querySelector('tbody').children[0].children[1].textContent, 'AAVEUSDC');
     for (const name of fs.readdirSync(path.join(__dirname, '..', 'frontend')).filter(n => /^dashboard.*\.html$/.test(n))) {
         const html = source(name);
         if (!html.includes('/app/dashboard_render.js?v=')) continue;
@@ -375,6 +389,67 @@ async function cards() {
         await tick();
         assert.equal(rendered.children[0], existing, name + ' must preserve existing data on refresh failure');
     }
+}
+
+
+async function emptyOrders() {
+    const position = {user: 'u', symbol: 'AAVEUSDC', side: 'long'};
+    const responses = [[], [{t: 1, o: 1, h: 1, l: 1, c: 1, v: 1}]];
+    async function fetchOrders() {
+        const candles = responses.shift();
+        assert.ok(candles, 'unexpected Orders fetch');
+        return {ok: true, json: async () => ({candles})};
+    }
+    const timers = new Map();
+    let nextTimer = 0;
+    const setTimeoutFake = fn => { const id = ++nextTimer; timers.set(id, fn); return id; };
+    const clearTimeoutFake = id => timers.delete(id);
+    const runRetry = () => {
+        assert.equal(timers.size, 1, 'empty Orders must schedule one retry');
+        const [id, fn] = [...timers][0];
+        timers.delete(id);
+        fn();
+    };
+    let charts = 0;
+    const DashRender = {buildOrders(_container, data) {
+        if (data && data.candles && data.candles.length) { charts++; return {destroy() {}}; }
+        return null;
+    }};
+    const standalone = vm.createContext({
+        window: {}, container: new Element(), selectedPosition: position,
+        chartCtrl: null, loadSeq: 0, _tfFetchId: 0, currentTimeframe: '4h',
+        emptyRetryTimer: null, _emptyTimerKey: 'empty',
+        isCurrentGeneration: () => true, reportHeight() {}, connectCandleWs() {},
+        _tfLimit: () => 500, API_BASE: '/api', POSITION: '1_1',
+        encodeURIComponent, fetch: fetchOrders, DashRender,
+        setTimeout: setTimeoutFake, clearTimeout: clearTimeoutFake
+    });
+    standalone.container.connected = true;
+    vm.runInContext(functionCode(source('dashboard_orders.html'), 'load'), standalone);
+    standalone.load();
+    await tick(); await tick();
+    runRetry();
+    await tick(); await tick();
+    assert.equal(charts, 1, 'standalone Orders must render candles after an empty first response');
+
+    responses.push([], [{t: 2, o: 2, h: 2, l: 2, c: 2, v: 2}]);
+    const document = new Element();
+    const container = new Element();
+    container.connected = true;
+    const inline = vm.createContext({
+        window: {}, document, state: {dashboard_orders_1_1: 'view_orders_1_2'},
+        API_BASE: '/api', encodeURIComponent, fetch: fetchOrders, DashRender,
+        _ensureRenderScript: fn => fn(), _widgetIcon: () => '',
+        _makeDeleteCb: () => () => {}, _attachViewDrag() {}, reportHeight() {},
+        setTimeout: setTimeoutFake, clearTimeout: clearTimeoutFake
+    });
+    vm.runInContext(functionCode(source('dashboard_editor.html'), 'buildOrdersInline'), inline);
+    inline.buildOrdersInline(container, 1, 1);
+    document.dispatch('dash-pos-selected', {detail: {pos: '1_2', data: position}});
+    await tick(); await tick();
+    runRetry();
+    await tick(); await tick();
+    assert.equal(charts, 2, 'inline Orders must render candles after an empty first response');
 }
 
 async function messages() {
@@ -592,7 +667,7 @@ async function page() {
     }
 }
 
-({creation, templates, cancel, resize, charts, cards, messages, assets, page})[process.argv[2]]().catch(error => {
+({creation, templates, cancel, resize, charts, cards, emptyOrders, messages, assets, page})[process.argv[2]]().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

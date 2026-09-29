@@ -20,10 +20,12 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | **Online** | ✅ reachable / ❌ offline |
 | **Bots** | Count of unique running bots currently reported for that VPS |
 | **Started** | Last boot time |
-| **Updates** | Pending Linux package updates; click a non-zero count to review package names, installed/candidate versions, source, and Security/Kernel/Routine classification |
+| **Updates** | Security updates in red / normal (non-security) updates in blue, for example **3 / 2**. Click the counts for package details. **0 / 0** means no pending updates; **? / ?** means classification is incomplete (the pending total remains visible), and **N/A** means no usable count. When APT defers packages, known security/normal counts remain visible and a separate notice identifies the unclassified deferred updates. |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installed version, branch, and whether it matches GitHub origin |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7 version, branch, and whether it matches GitHub origin |
 | **PB8 / PB8 Branch / PB8 GitHub** | PB8 version, branch, and whether it matches the current upstream PB8 revision |
+
+The Linux Updates dialog closes with either **×** in its header or **Close** at the bottom. A previous password-validation dialog no longer leaves its close button disabled. Normal updates include non-security kernel upgrades; new installations and package removals are listed separately in the details. Stale cached counts retain their visible stale warning.
 
 Overview interactions:
 
@@ -98,6 +100,8 @@ The **Master** content area also contains:
 - **PB8 Branch Management** for installed PB8 checkouts, with independent branch/commit selection and optional custom remote / fork URL support
 - a **Monitor** section with server metrics plus runtime-labelled PB7 and PB8 activity from live processes and Cluster Sync desired state
 - a **Progress** section with separate status buckets; when a sidebar action starts a master ansible task, the main pane switches to the shared **Command Log Viewer** for the full output, and **Home** returns to the normal master overview
+
+The bot tables in **Monitor** and **Remote Monitor** show a **PB7** or **PB8** badge beside every bot name, including after live updates. This identifies the runtime even when PB7 and PB8 bots share a name.
 
 Changing a PB7 or PB8 local branch immediately updates the displayed source and target and enables **Switch Local Branch** when they differ. The selected remote branch may remain **Use local branch target**; in that mode PBGui fetches the same branch name from the selected remote.
 

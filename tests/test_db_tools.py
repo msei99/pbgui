@@ -905,6 +905,44 @@ def test_assert_known_target_uses_monitor_state(monkeypatch) -> None:
         monkeypatch.setattr(db_tools, "_monitor", original_monitor)
 
 
+def test_connected_master_without_monitor_role_is_verified_read_only(monkeypatch) -> None:
+    """A connected master remains usable while monitor role metadata is temporarily absent."""
+    from fastapi import HTTPException
+
+    class FakePool:
+        """Expose one configured and connected remote host."""
+
+        def get_connection(self, hostname: str):
+            return object() if hostname == "manibot02" else None
+
+        def connected_hosts(self) -> list[str]:
+            return ["manibot02"]
+
+    calls = []
+
+    async def probe(hostname: str):
+        """Return a read-only confirmation of the remote role."""
+        calls.append(hostname)
+        return {"id": hostname, "role": "master"}
+
+    monkeypatch.setattr(db_tools, "_monitor", SimpleNamespace(pool=FakePool(), store=SimpleNamespace(host_meta={})))
+    monkeypatch.setattr(db_tools, "_monitor_host_meta", lambda: {})
+    monkeypatch.setattr(db_tools, "_probe_remote_master", probe)
+    asyncio.run(db_tools._assert_known_target("manibot02"))
+    assert calls == ["manibot02"]
+
+    async def unverified(hostname: str):
+        """Simulate an unavailable or non-master role probe."""
+        calls.append(hostname)
+        return None
+
+    monkeypatch.setattr(db_tools, "_probe_remote_master", unverified)
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(db_tools._assert_known_target("manibot02"))
+    assert exc_info.value.status_code == 503
+    assert "could not be verified" in exc_info.value.detail
+
+
 def test_known_targets_falls_back_to_monitor_snapshot(tmp_path: Path, monkeypatch) -> None:
     """Target listing uses the persisted monitor snapshot when live host metadata is empty."""
 

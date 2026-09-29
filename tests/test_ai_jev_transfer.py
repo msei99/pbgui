@@ -114,9 +114,9 @@ def test_jev_approved_payload_is_the_exact_provider_request() -> None:
         status = 200
         class Content:
             """Bounded response body."""
-            async def read(self, size):
-                """Return one typed Noul answer."""
-                return b'{"answers":{"safe":{"type":"noul","noul":0.7}}}'
+            async def readexactly(self, size):
+                """Model EOF after the complete typed answer."""
+                raise asyncio.IncompleteReadError(b'{"answers":{"safe":{"type":"noul","noul":0.7}}}', size)
         content = Content()
         async def __aenter__(self):
             """Enter response."""
@@ -128,9 +128,9 @@ def test_jev_approved_payload_is_the_exact_provider_request() -> None:
         """Return the pinned model's official per-token pricing shape."""
         class Content:
             """Provide one bounded model-pricing body."""
-            async def read(self, size):
-                """Return free-output Jev pricing."""
-                return b'{"data":{"pricing":{"prompt":"0.000000042","completion":"0"}}}'
+            async def readexactly(self, size):
+                """Model EOF after the complete pricing response."""
+                raise asyncio.IncompleteReadError(b'{"data":{"pricing":{"prompt":"0.000000042","completion":"0"}}}', size)
         content = Content()
     class Session:
         """Record model-price checks and JSON sent to the provider."""

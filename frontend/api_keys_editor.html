@@ -1477,9 +1477,49 @@
         if (document.visibilityState === "visible" && list && list.style.display !== "none") loadUsers(true);
     });
 
+    let usersRefreshTimer = null;
+    function scheduleUsersRefresh() {
+        clearTimeout(usersRefreshTimer);
+        usersRefreshTimer = null;
+        const list = document.getElementById("userListView");
+        if (!document.hidden && list && list.style.display !== "none") {
+            usersRefreshTimer = setTimeout(() => loadUsers(true), 15000);
+        }
+    }
+    window.addEventListener("pagehide", () => {
+        clearTimeout(usersRefreshTimer);
+        usersRefreshTimer = null;
+        ++usersRequestGeneration;
+    });
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) { clearTimeout(usersRefreshTimer); usersRefreshTimer = null; }
+        else {
+            const list = document.getElementById("userListView");
+            if (list && list.style.display !== "none") loadUsers(true);
+        }
+    });
+
+    function accountRuntimeBadges(user) {
+        const labels = {disabled: "Disabled", activate_needed: "Stopped", collecting: "Collecting",
+            blocked: "Blocked", conflicted: "Conflict", config_error: "Config error", tombstoned: "Disabled"};
+        const items = Array.isArray(user.bot_runtime) ? user.bot_runtime : [];
+        if (!items.length) return [{text: user.in_use ? "Unknown" : "Unused", active: false, title: "Bot runtime status"}];
+        const runningItems = items.filter(item => Array.isArray(item.running_on) && item.running_on.length > 0);
+        // Account-level status: running hosts take precedence over inactive runtime copies.
+        const visibleItems = runningItems.length ? runningItems : items;
+        return visibleItems.flatMap(item => {
+            const hosts = Array.isArray(item.running_on) ? item.running_on : [];
+            const runtime = "PB" + item.pb_version;
+            return hosts.length ? hosts.map(host => ({text: String(host), active: true, title: runtime + " running on " + host}))
+                : [{text: labels[item.status] || "Unknown", active: false,
+                    title: runtime + (item.enabled_on && item.enabled_on !== "disabled" ? " configured for " + item.enabled_on : "") }];
+        });
+    }
+
     // ── Load users ──────────────────────────────────────────
     let usersRequestGeneration = 0;
     async function loadUsers(quiet = false) {
+        clearTimeout(usersRefreshTimer);
         const generation = ++usersRequestGeneration;
         const tbody = document.getElementById("userTableBody");
         if (!quiet) {
@@ -1508,6 +1548,8 @@
                 escapeHtml(e.message) + '</td></tr>';
             document.getElementById("sb-count").textContent = "Error";
             document.getElementById("sb-inuse").style.display = "none";
+        } finally {
+            if (generation === usersRequestGeneration) scheduleUsersRefresh();
         }
     }
 
@@ -1532,7 +1574,7 @@
                 let va, vb;
                 if (sortCol === "name")     { va = (a.name || "").toLowerCase();     vb = (b.name || "").toLowerCase(); }
                 if (sortCol === "exchange") { va = (a.exchange || "").toLowerCase(); vb = (b.exchange || "").toLowerCase(); }
-                if (sortCol === "status")   { va = a.in_use ? 0 : 1;                vb = b.in_use ? 0 : 1; }
+                if (sortCol === "status")   { va = accountRuntimeBadges(a).map(item => item.text).join(", "); vb = accountRuntimeBadges(b).map(item => item.text).join(", "); }
                 if (sortCol === "hl_expiry") {
                     const expirySortKey = u => {
                         if (u.exchange === "hyperliquid") {
@@ -1610,9 +1652,9 @@
                 }
             }
 
-            const inUseHtml = u.in_use
-                ? '<span class="badge-in-use active">In Use</span>'
-                : '<span class="badge-in-use">Unused</span>';
+            const inUseHtml = accountRuntimeBadges(u).map(item =>
+                '<span class="badge-in-use' + (item.active ? ' active' : '') + '" title="' + escapeAttr(item.title) + '">' +
+                escapeHtml(item.text) + '</span>').join(' ');
 
             html += '<tr tabindex="0" data-user-name="' + escapeAttr(u.name) + '" style="cursor:pointer;">';
             html += '<td><strong>' + escapeHtml(u.name) + '</strong></td>';
@@ -2212,6 +2254,7 @@
         document.getElementById("btnTradfi").classList.remove("active");
         document.getElementById("btnBackups").classList.remove("active");
         document.getElementById("btnLogs").classList.remove("active");
+        loadUsers(true);
         setTimeout(() => { const f = document.getElementById("userFilter"); if (f) f.focus(); }, 50);
     }
 

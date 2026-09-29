@@ -26,6 +26,14 @@ Top navigation (#topnav)
 - Do not add outside-click dismissal to dialogs. Retain explicit close actions.
 - Embedded components, such as an internal LogViewerPanel sidebar, keep their component layout. Do not give them duplicate page-shell IDs or the global page-sidebar width.
 
+### Concise UI text and on-demand help
+
+- Keep the GUI focused on controls, data and short, clear labels. Do not add long feature explanations, instructional paragraphs or permanent explanatory banners to pages, panels, forms or dialogs.
+- Put field-specific explanations behind the existing **…** help control beside the field. Show that help only on request; do not duplicate it as always-visible text below the field.
+- Put detailed feature descriptions, workflows, examples and background information in the relevant **Guide / Help** topic. Guide / Help is the primary place for product documentation; keep its English and German topics in sync.
+- Keep necessary validation errors, current status and information needed for an explicit decision visible, but brief and specific. They must not turn into general feature tutorials.
+- Apply this rule to new UI and when updating existing UI. Move explanatory prose into field help or Guide / Help instead of adding another explanation block.
+
 ## 2. Shared files and stylesheet order
 
 | File | Responsibility |
@@ -185,7 +193,7 @@ Use isolated data and intercept browser requests; never run production actions m
 3. **Widths:** check default, minimum 160 px and maximum 420 px sidebars, and viewport widths on both sides of 760 px. Verify resize persistence after page navigation and reload.
 4. **Overflow:** assert `scrollWidth <= clientWidth` for sidebar controls/compact rows. Verify both EN/DE buttons remain visible and aligned. Check access to the bottom of long lists/actions and the main content.
 5. **Real dynamic controls:** exercise actual renderers for view/edit modes and conditional actions, including Save/Delete, badges, disabled controls and hidden controls. Synthetic buttons alone are insufficient.
-6. **Content:** verify all original data fields and interactions remain available, including filters, selections and edits during updates.
+6. **Content:** verify all original data fields and interactions remain available, including filters, selections and edits during updates. Keep visible UI copy concise: field explanations belong behind **…**, and detailed feature help belongs in Guide / Help.
 7. **Interaction:** test pointer/keyboard resizing, focus, long labels, compact icon wrapping and embedded-frame boundaries when relevant.
 8. **Navigation state:** reload a non-default destination with filters/search and verify restoration. Test asynchronous topic/language changes where applicable.
 9. **Mounted routes:** confirm API and asset requests retain the application prefix.

@@ -92,6 +92,7 @@ class UserSummary(BaseModel):
     has_private_key: bool = False
     is_vault: bool = False
     in_use: bool = False
+    bot_runtime: list[dict] = Field(default_factory=list)
     hl_valid_until: Optional[int] = None
     hl_valid_until_iso: Optional[str] = None
     hl_days_remaining: Optional[int] = None
@@ -298,6 +299,34 @@ def _get_in_use_names() -> set[str]:
             _log(SERVICE, f"Could not check {runtime_dir} credential usage: {exc}", level="ERROR")
             raise HTTPException(status_code=503, detail="Cannot verify live instance credential usage") from exc
     return names
+
+
+def _get_bot_runtime() -> dict[str, list[dict]]:
+    """Project existing PB7/PB8 observations into non-secret account status rows."""
+    from api import v7_instances, v8_instances
+
+    result: dict[str, list[dict]] = {}
+    providers = (
+        (7, lambda: v7_instances._enrich_with_vps_data(v7_instances._load_local_instances())),
+        (8, v8_instances._list_instances),
+    )
+    for version, load in providers:
+        try:
+            instances = load()
+        except Exception as exc:
+            _log(SERVICE, f"Could not read PB{version} account runtime status ({type(exc).__name__})", level="ERROR")
+            continue
+        for instance in instances:
+            account = str(instance.get("user") or instance.get("name") or "")
+            if not account:
+                continue
+            result.setdefault(account, []).append({
+                "pb_version": version,
+                "running_on": sorted(set(str(host) for host in instance.get("running_on", []) if host)),
+                "status": str(instance.get("status") or "unknown"),
+                "enabled_on": str(instance.get("enabled_on") or "disabled"),
+            })
+    return result
 
 
 def _hl_expiry_from_state(user) -> dict:
@@ -1020,9 +1049,12 @@ def list_users(
     _recover_user_update_or_409()
     users = _get_users()
     in_use_names = _get_in_use_names()
+    runtime = _get_bot_runtime()
     result = []
     for user in users:
-        result.append(_user_to_summary(user, user.name in in_use_names))
+        summary = _user_to_summary(user, user.name in in_use_names)
+        summary.bot_runtime = runtime.get(user.name, [])
+        result.append(summary)
     return result
 
 

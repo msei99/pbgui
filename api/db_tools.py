@@ -1054,10 +1054,18 @@ async def _assert_known_target(target: str) -> None:
     host_meta = _monitor_host_meta()
     meta = host_meta.get(target) if isinstance(host_meta, dict) else {}
     role = str((meta or {}).get("role") or "").strip().lower()
-    if role != "master":
+    if role and role != "master":
         raise HTTPException(status_code=400, detail=f"Target is not a known master: {target}")
     if target not in set(_pool().connected_hosts()):
         raise HTTPException(status_code=503, detail=f"Target master is not connected: {target}")
+    if role == "master":
+        return
+    try:
+        if await _probe_remote_master(target):
+            return
+    except Exception as exc:
+        _log(SERVICE, f"Could not verify master role for '{target}': {type(exc).__name__}", level="WARNING")
+    raise HTTPException(status_code=503, detail=f"Target master role could not be verified: {target}")
 
 
 def _load_sync_jobs() -> None:

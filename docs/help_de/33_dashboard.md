@@ -1,5 +1,7 @@
 # Dashboards
 
+Ein Browser-Refresh behält das ausgewählte Dashboard, den Anzeige-/Bearbeitungsmodus und den Seitenleistenfilter bei und lädt aktuelle Inhalte. Die Dashboard-Liste aktualisiert sich automatisch; ein manueller Listen-Refresh ist nicht nötig. Ist das ausgewählte Dashboard nicht mehr vorhanden, zeigt die Seite einen Hinweis und die Dashboard-Liste.
+
 Beim Löschen des aktiven Dashboards wird dessen Inhaltsrahmen geleert, bevor der leere Zustand angezeigt wird.
 
 Cancel verwirft den Layout-Entwurf nach Abschluss laufender automatischer Speicherungen. Schlägt das Verwerfen fehl, bleibt der Editor für einen erneuten Versuch geöffnet.

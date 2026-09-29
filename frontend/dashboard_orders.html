@@ -25,6 +25,7 @@
     var _candleWsKey = '_dordCandWs_' + POSITION;
     var _timerKey    = '_dordReconnTimer_' + POSITION;
     var _candleTimerKey = '_dordCandReconnTimer_' + POSITION;
+    var _emptyTimerKey = '_dordEmptyRetry_' + POSITION;
     var _generationKey = '_dordGeneration_' + POSITION;
     var generation = (window[_generationKey] || 0) + 1;
     window[_generationKey] = generation;
@@ -45,6 +46,7 @@
     }
     if (window[_timerKey]) { clearTimeout(window[_timerKey]); window[_timerKey] = null; }
     if (window[_candleTimerKey]) { clearTimeout(window[_candleTimerKey]); window[_candleTimerKey] = null; }
+    if (window[_emptyTimerKey]) { clearTimeout(window[_emptyTimerKey]); window[_emptyTimerKey] = null; }
 
     var ws            = null;
     var candleWs      = null;
@@ -57,6 +59,7 @@
     var chartCtrl        = null;   /* returned by buildOrders / renderOrders */
     var _tfFetchId       = 0;     /* monotonic counter to discard stale timeframe fetches */
     var loadSeq          = 0;
+    var emptyRetryTimer  = null;
 
     /* Extract linked positions grid position */
     var linkedGridPos = '';
@@ -167,6 +170,9 @@
 
     function load(onDone) {
         var seq = ++loadSeq;
+        if (emptyRetryTimer) clearTimeout(emptyRetryTimer);
+        emptyRetryTimer = null;
+        window[_emptyTimerKey] = null;
         ++_tfFetchId;
         if (!selectedPosition) {
             if (chartCtrl && chartCtrl.destroy) chartCtrl.destroy();
@@ -263,6 +269,15 @@
                 reportHeight();
                 /* Connect candle WS for live updates */
                 connectCandleWs();
+                if (!d.candles || d.candles.length === 0) {
+                    emptyRetryTimer = setTimeout(function () {
+                        emptyRetryTimer = null;
+                        window[_emptyTimerKey] = null;
+                        if (seq === loadSeq && isCurrentGeneration() &&
+                            selectedPosition === requestPosition && currentTimeframe === requestTimeframe) load();
+                    }, 5000);
+                    window[_emptyTimerKey] = emptyRetryTimer;
+                }
                 if (onDone) onDone();
             })
             .catch(function (e) {
@@ -306,7 +321,7 @@
         };
     }
 
-    var DR_VERSION = '20260927a';
+    var DR_VERSION = '20260929a';
 
     function _loadRenderScript(cb) {
         if (window.DashRender && window.DashRender.VERSION !== DR_VERSION) {

@@ -1004,7 +1004,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     reportHeight();
   }
 
-   var DR_VERSION = '20260927a';
+   var DR_VERSION = '20260929a';
 
   /* ── lazy-load shared render module ── */
   function _ensureRenderScript(cb) {
@@ -2017,6 +2017,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
     /* Clean up previous listener if any */
     var _listenerKey = '_ordInlineListener_' + pos;
+    var _emptyTimerKey = '_ordInlineEmptyRetry_' + pos;
+    if (window[_emptyTimerKey]) { clearTimeout(window[_emptyTimerKey]); window[_emptyTimerKey] = null; }
     if (window[_listenerKey]) {
       document.removeEventListener('dash-pos-selected', window[_listenerKey]);
       window[_listenerKey] = null;
@@ -2066,6 +2068,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
     function loadOrders() {
       var seq = ++window[_loadSeqKey];
+      if (window[_emptyTimerKey]) { clearTimeout(window[_emptyTimerKey]); window[_emptyTimerKey] = null; }
       ++_tfFetchId;
       if (!selectedPosition) {
         showMessage('Select a position in the linked Positions widget', seq);
@@ -2141,6 +2144,13 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             });
             _attachViewDrag(container, r, c);
             reportHeight();
+            if (!d.candles || d.candles.length === 0) {
+              window[_emptyTimerKey] = setTimeout(function () {
+                window[_emptyTimerKey] = null;
+                if (seq === window[_loadSeqKey] && container.isConnected &&
+                    selectedPosition === requestPosition && currentTimeframe === requestTimeframe) loadOrders();
+              }, 5000);
+            }
           });
         })
         .catch(function (e) {

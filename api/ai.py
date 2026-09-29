@@ -100,6 +100,7 @@ class ProposalDecisionRequest(BaseModel):
 
     payload_digest: str = Field(min_length=71, max_length=71)
     conversation_id: str = Field(min_length=32, max_length=32)
+    review_token: str = Field(default="", max_length=64)
 
 
 def _owner(session: SessionToken) -> str:
@@ -577,6 +578,25 @@ async def action_history(
         raise _provider_error("action_history", exc) from exc
 
 
+@router.post("/proposals/{proposal_id}/review")
+async def review_config_change(
+    proposal_id: str,
+    body: ProposalDecisionRequest,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Browser-only review capability; never exposed as a model tool."""
+    try:
+        service = get_ai_chat_service()
+        await service._ensure_owner_loaded(_owner(session))
+        conversation = service._owned_conversation(_owner(session), body.conversation_id)
+        if conversation.busy:
+            raise AIChatError("Wait until the current analysis completes before reviewing changes")
+        return _json(await get_ai_capability_service().reviewed_changes.review(
+            _owner(session), proposal_id, body.conversation_id, body.payload_digest))
+    except Exception as exc:
+        raise _provider_error("review_config_change", exc) from exc
+
+
 @router.post("/proposals/{proposal_id}/approve")
 async def approve_proposal(
     proposal_id: str,
@@ -586,8 +606,11 @@ async def approve_proposal(
     """Execute one exact proposal after explicit browser approval."""
     try:
         result = await get_ai_capability_service().approve(
-            _owner(session), proposal_id, body.payload_digest, body.conversation_id
+            _owner(session), proposal_id, body.payload_digest, body.conversation_id,
+            **({"review_token": body.review_token} if body.review_token else {})
         )
+        if result.get("action") == "reviewed_config_change":
+            return _json(result)  # No agent continuation and no restored action permissions.
         if result.get("status") == "executed":
             chat_service = get_ai_chat_service()
             continuation_result = {
@@ -651,3 +674,57 @@ async def reject_proposal(
         return _json(result)
     except Exception as exc:
         raise _provider_error("reject_proposal", exc) from exc
+
+
+class ResearchPreviewRequest(BaseModel):
+    """An edited inline prompt; model selection comes only from the owning chat."""
+
+    model_config = {"extra": "forbid"}
+    prompt: str = Field(min_length=1, max_length=12000)
+
+
+class ResearchApprovalRequest(BaseModel):
+    """Approve a pinned preview; no replacement prompt or model is accepted."""
+
+    model_config = {"extra": "forbid"}
+    digest: str = Field(min_length=64, max_length=64)
+
+
+@router.post("/conversations/{conversation_id}/research/preview")
+async def preview_research(conversation_id: str, body: ResearchPreviewRequest, session: SessionToken = Depends(require_auth)):
+    """Prepare isolated research for review, without generating a model answer."""
+    try:
+        return _json(await get_ai_chat_service().research.propose(_owner(session), conversation_id, body.prompt))
+    except Exception as exc:
+        raise _provider_error("research preview", exc) from exc
+
+
+@router.post("/research/{research_id}/start")
+async def start_research(research_id: str, body: ResearchApprovalRequest, session: SessionToken = Depends(require_auth)):
+    """Start only the exact owner-scoped approved preview."""
+    try:
+        return _json(await get_ai_chat_service().research.approve(_owner(session), research_id, body.digest))
+    except Exception as exc:
+        raise _provider_error("research start", exc) from exc
+
+
+@router.get("/research/{research_id}")
+async def get_research(research_id: str, session: SessionToken = Depends(require_auth)):
+    """Read a display-only result without exposing it to model message history."""
+    try:
+        service = get_ai_chat_service()
+        await service._ensure_owner_loaded(_owner(session))
+        return _json(service.research.get(_owner(session), research_id))
+    except Exception as exc:
+        raise _provider_error("research status", exc) from exc
+
+
+@router.post("/research/{research_id}/cancel")
+async def cancel_research(research_id: str, session: SessionToken = Depends(require_auth)):
+    """Cancel an owned research task and await cleanup."""
+    try:
+        service = get_ai_chat_service()
+        await service._ensure_owner_loaded(_owner(session))
+        return _json(await service.research.cancel(_owner(session), research_id))
+    except Exception as exc:
+        raise _provider_error("research cancel", exc) from exc

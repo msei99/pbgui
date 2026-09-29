@@ -63,6 +63,11 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "get_capability_registry",
         "list_optimizer_configs",
         "get_optimizer_config",
+        "list_run_configs",
+        "get_run_config",
+        "list_backtest_configs",
+        "get_backtest_config",
+        "get_backtest_result_config",
         "get_optimizer_metadata",
         "preview_pb8_scenario_template",
         "list_optimizer_runs",
@@ -90,6 +95,11 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "propose_dashboard_from_template",
         "propose_dashboard_layout",
         "propose_jev_optimizer_analysis",
+        "propose_web_research",
+        "propose_reviewed_config_change",
+        "list_research_results",
+        "read_research_result",
+        "propose_research_jev_analysis",
         "propose_python_analysis",
         "propose_optimizer_run_python_analysis",
         "propose_workspace_python_analysis",
@@ -796,6 +806,14 @@ def test_dashboard_income_layout_accepts_zero_last_n_for_chart_mode(tmp_path: Pa
     assert projection["cells"][0]["last_n"] == 0
     assert last_n_schema["minimum"] == 0
     assert "0 shows the cumulative chart" in last_n_schema["description"]
+    assert last_n_schema["maximum"] == 9999
+    for last_n in (1, 100, 101, 500, 9999):
+        _, _, table_config, _ = service._prepare_dashboard_layout(
+            {"name": "portfolio", "create": False,
+             "cells": [{"row": 1, "column": 1, "last_n": last_n}]}
+        )
+        assert table_config["dashboard_income_last_1_1"] == last_n
+        assert service._dashboard_layout_projection("portfolio", table_config)["cells"][0]["last_n"] == last_n
 
     existing.pop("dashboard_income_last_1_1")
     _, _, prepared_default, _ = service._prepare_dashboard_layout(
@@ -809,7 +827,7 @@ def test_dashboard_income_layout_accepts_zero_last_n_for_chart_mode(tmp_path: Pa
     assert service._dashboard_layout_projection("portfolio", existing)["cells"][0]["last_n"] == 0
 
 
-@pytest.mark.parametrize("last_n", [-1, 101])
+@pytest.mark.parametrize("last_n", [-1, 10000])
 def test_dashboard_income_layout_rejects_last_n_outside_range(
     tmp_path: Path,
     monkeypatch,

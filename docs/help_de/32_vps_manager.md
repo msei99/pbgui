@@ -20,10 +20,12 @@ Die Hauptansicht zeigt eine Tabelle mit allen Servern (Master + VPS) und ihrem a
 | **Online** | ✅ erreichbar / ❌ offline |
 | **Bots** | Anzahl eindeutig laufender Bots, die aktuell für diesen VPS per Telemetrie gemeldet werden |
 | **Started** | Letzter Boot-Zeitpunkt |
-| **Updates** | Ausstehende Linux-Paketupdates; ein Klick auf eine Anzahl größer null zeigt Paketnamen, installierte/neue Version, Quelle und die Einordnung Security/Kernel/Routine |
+| **Updates** | Security-Updates in Rot / normale Updates ohne Security-Einstufung in Blau, z. B. **3 / 2**. Ein Klick öffnet die Paketdetails. **0 / 0** bedeutet keine ausstehenden Updates; **? / ?** kennzeichnet eine unvollständige Einordnung (die Gesamtzahl bleibt sichtbar), **N/A** eine fehlende nutzbare Anzahl. Wenn APT Pakete zurückstellt, bleiben die bekannten Security-/Normal-Zahlen sichtbar; ein separater Hinweis nennt die noch nicht klassifizierten zurückgestellten Updates. |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installierte Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7-Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
 | **PB8 / PB8 Branch / PB8 GitHub** | PB8-Version, Branch und ob sie mit der aktuellen Upstream-PB8-Revision uebereinstimmt |
+
+Der Dialog Linux Updates lässt sich über **×** im Kopf oder **Close** unten schließen. Eine vorherige Passwortprüfung lässt den Schließen-Knopf nicht mehr gesperrt zurück. Normale Updates umfassen auch Kernel-Upgrades ohne Security-Einstufung; Neuinstallationen und Paketentfernungen stehen separat in den Details. Veraltete Cache-Werte behalten ihren sichtbaren Warnhinweis.
 
 Interaktionen in der Übersicht:
 
@@ -96,6 +98,8 @@ Der **Master**-Inhaltsbereich enthält zusätzlich:
 - **PB8 Branch Management** fuer installierte PB8-Checkouts mit unabhaengiger Branch-/Commit-Auswahl und optionaler Custom-Remote- / Fork-URL
 - einen **Monitor**-Bereich mit Server-Metriken plus runtime-gekennzeichneter PB7-/PB8-Aktivitaet aus laufenden Prozessen und Cluster-Sync-Zielzustand
 - einen **Progress**-Bereich mit getrennten Status-Buckets; sobald eine Sidebar-Aktion einen Master-Ansible-Task startet, schaltet die Hauptfläche auf den gemeinsamen **Command Log Viewer** um, und **Home** bringt zurück zur normalen Master-Ansicht
+
+Die Bot-Tabellen unter **Monitor** und **Remote Monitor** zeigen neben jedem Bot-Namen ein **PB7**- oder **PB8**-Badge, auch nach Live-Aktualisierungen. Damit bleibt die Runtime auch bei gleichnamigen PB7- und PB8-Bots erkennbar.
 
 Das Aendern eines lokalen PB7- oder PB8-Branches aktualisiert sofort die angezeigte Source und das Target und aktiviert **Switch Local Branch**, wenn sie abweichen. Der Remote-Branch darf auf **Use local branch target** bleiben; in diesem Modus holt PBGui denselben Branch-Namen vom ausgewaehlten Remote.
 

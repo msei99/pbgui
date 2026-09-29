@@ -10,7 +10,8 @@ def test_usage_refresh_discards_stale_response():
     function = source[start:source.index('\n    function renderUserTable()', start)]
     script = r'''
 const assert = require('assert');
-let usersRequestGeneration = 0, currentUsers = [], rendered = [];
+let usersRequestGeneration = 0, usersRefreshTimer = null, currentUsers = [], rendered = [];
+const scheduleUsersRefresh = () => {};
 const nodes = new Map();
 const document = {getElementById: id => {if (!nodes.has(id)) nodes.set(id, {style:{}}); return nodes.get(id);}};
 const pending = [];

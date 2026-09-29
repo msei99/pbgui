@@ -206,6 +206,7 @@ def test_linux_update_counts_open_escaped_package_details() -> None:
           alertModalOverlay: {{classList: {{add() {{}}}}}}
         }};
         global.document = {{getElementById(id) {{ return nodes[id]; }}}};
+        function resetAlertModalWindow() {{}}
         function prepareAlertModalWindow() {{}}
         function formatAgentAge() {{ return '3h'; }}
         function levelTag(tone, label) {{ return '<span>' + esc(label) + '</span>'; }}
@@ -292,6 +293,12 @@ def test_manager_renderers_keep_host_and_bot_payloads_out_of_inline_code() -> No
         assert.match(cells.name.html, /&#39;/);
 
         const pb8Cells = _renderServiceRowCells({{name: 'pb8_bot'}}, 'pb-host', '8');
+        assert.match(cells.name.html, />PB7<[/]span>/);
+        assert.match(pb8Cells.name.html, />PB8<[/]span>/);
+        const sameNamePb7 = _renderServiceRowCells({{name: 'pb8_bot'}}, 'pb-host', '7');
+        assert.match(sameNamePb7.name.html, />PB7<[/]span>/);
+        assert.notEqual(sameNamePb7.name.sig, pb8Cells.name.sig);
+        assert.match(pb8Cells.name.html, /data-pb-version='8'/);
         assert.match(pb8Cells.cpu.html, /data-cpu-history-bot='8:pb8_bot'/);
         assert.match(pb8Cells.memory_mb.html, /data-history-bot='8:pb8_bot'/);
         assert.match(pb8Cells.swap_mb.html, /data-history-bot='8:pb8_bot'/);

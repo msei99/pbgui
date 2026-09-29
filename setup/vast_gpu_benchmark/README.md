@@ -8,11 +8,12 @@ The current integration is in **PB8 Optimize**, with Cloud setup in Queue and GP
 selection in the editor. Multiple jobs share one rental and cached market data.
 See the [user guide](../../docs/help/48_vast_gpu.md).
 
-Active worker image: `ghcr.io/msei99/pbgui-pb8-worker:903ed11-btc-source-fix-v1`
-(pinned by manifest digest in PBGui). It keeps official `enarjord/passivbot`
-commit `903ed11153ce82d1b6760604eaa3a553309a752a` and layers the
-multi-venue BTC source fix from [PB8 PR #1834](https://github.com/enarjord/passivbot/pull/1834)
-over the exact-progress worker. Build with `Dockerfile.multi-venue-btc`.
+Active worker image: `ghcr.io/msei99/pbgui-pb8-worker:7b639e1-upstream-v1`
+(pinned by manifest digest in PBGui). It uses the unmodified official
+`enarjord/passivbot` commit `7b639e1180fa6bfe02e110429d4f931933c73089`, which contains
+[PB8 PR #1832](https://github.com/enarjord/passivbot/pull/1832) and
+[PB8 PR #1834](https://github.com/enarjord/passivbot/pull/1834). Build the
+base with `Dockerfile` and add the PBGui worker with `Dockerfile.calibration`.
 Existing rentals retain their own image and process state; see the
 [image release review](../../docs/plans/vast-worker-image-release.md).
 

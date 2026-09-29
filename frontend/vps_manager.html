@@ -1203,10 +1203,10 @@
     .table-button:hover { color: #83d4ff; }
 
     .update-count-button {
-      min-width: 36px;
-      min-height: 36px;
-      padding: 6px 10px;
-      text-align: center;
+      font-family: inherit;
+      font-size: inherit;
+      line-height: inherit;
+      white-space: nowrap;
     }
 
     .agent-cache-section-title {
@@ -6233,7 +6233,10 @@
       modalBox.style.width = '';
       modalBox.style.height = '';
       modalBody.className = 'notice';
-      if (closeButton) closeButton.style.display = '';
+      if (closeButton) {
+        closeButton.style.display = '';
+        closeButton.disabled = false;
+      }
     }
 
     function prepareAlertModalWindow(widthPx, heightPx) {
@@ -10130,6 +10133,7 @@
         ? `<div class='notice warning'><strong>Stale cache:</strong> these are last-known package details from ${esc(formatAgentAge(status.age))} ago. Refresh the agent cache before making an urgency decision.</div>`
         : '';
 
+      resetAlertModalWindow();
       prepareAlertModalWindow(1120, 820);
       document.getElementById('alertModalTitle').textContent = 'Linux Updates — ' + (host || 'Host');
       const box = document.getElementById('alertModalBody');
@@ -10199,13 +10203,51 @@
         if (column.key === 'updates') {
           const packageStatus = row.package_status || {};
           const model = agentStateModel(packageStatus.state);
-          const updates = packageStatus.available === true ? String(packageStatus.upgrades) : 'N/A';
+          const total = packageStatus.available === true ? Number(packageStatus.upgrades) : NaN;
+          const totalKnown = Number.isInteger(total) && total >= 0;
+          let security = packageStatus.security_updates == null ? NaN : Number(packageStatus.security_updates);
+          let splitKnown = totalKnown && packageStatus.classification_complete === true;
+          if (splitKnown && (Number(packageStatus.new_installs || 0) > 0 || Number(packageStatus.removals || 0) > 0)) {
+            // Count upgrades only; new installations and removals are separate apt actions.
+            const upgrades = (Array.isArray(packageStatus.packages) ? packageStatus.packages : []).filter(function (item) {
+              return !item.removed && String(item.installed_version || '').trim();
+            });
+            splitKnown = upgrades.length === total;
+            security = upgrades.filter(function (item) { return item.security === true; }).length;
+          }
+          splitKnown = splitKnown && Number.isInteger(security) && security >= 0 && security <= total;
+          if (totalKnown && total === 0) { splitKnown = true; security = 0; }
+          let unclassified = 0;
+          const deferred = Number(packageStatus.deferred_updates || 0);
+          if (!splitKnown && totalKnown && Number.isInteger(deferred) && deferred > 0 && deferred < total
+              && packageStatus.details_truncated !== true) {
+            const upgrades = (Array.isArray(packageStatus.packages) ? packageStatus.packages : []).filter(function (item) {
+              return !item.removed && String(item.installed_version || '').trim();
+            });
+            // Deferred packages are absent from the apt transaction details. Keep known counts visible.
+            if (upgrades.length === total - deferred && upgrades.every(function (item) { return typeof item.security === 'boolean'; })) {
+              security = upgrades.filter(function (item) { return item.security; }).length;
+              splitKnown = true;
+              unclassified = deferred;
+            }
+          }
+          const classificationNote = unclassified > 0
+            ? `${unclassified} deferred update${unclassified === 1 ? '' : 's'} unclassified`
+            : (!splitKnown && totalKnown ? `${total} pending; classification unavailable` : '');
+          const securityText = splitKnown ? String(security) : '?';
+          const normalText = splitKnown ? String(total - unclassified - security) : '?';
+          const updates = totalKnown
+            ? `<span data-update-kind='security' style='color:var(--danger)'>${securityText}</span> / <span data-update-kind='normal' style='color:var(--accent)'>${normalText}</span>`
+            : 'N/A';
+          const countTitle = splitKnown
+            ? `${securityText} security updates / ${normalText} normal (non-security) updates.${classificationNote ? ` ${classificationNote}.` : ''} Show Linux update details.`
+            : `${totalKnown ? total + ' pending updates. ' : ''}Security/normal classification unavailable. Show Linux update details.`;
           const statusLine = model.state === 'ok'
             ? ''
             : `<div class='status-sub'>${levelTag(model.tone === 'error' ? 'error' : 'warning', model.label)}${model.state === 'stale' ? ' · Last-known' : ''}</div>`;
-          const updateValue = packageStatus.available === true && Number.parseInt(String(packageStatus.upgrades), 10) > 0
-            ? `<button class='table-button update-count-button' type='button' data-vps-action='package-updates' data-host='${escAttr(row.hostname || '')}' title='Show Linux update details'>${esc(updates)}</button>`
-            : esc(updates);
+          const updateValue = totalKnown && total > 0
+            ? `<button class='table-button update-count-button' type='button' data-vps-action='package-updates' data-host='${escAttr(row.hostname || '')}' title='${escAttr(countTitle)}' aria-label='${escAttr(countTitle)}'>${updates}</button>${classificationNote ? `<div class='field-help'>${esc(classificationNote)}</div>` : ''}`
+            : `<span title='${escAttr(countTitle)}'>${updates}</span>`;
           return `<div>${updateValue} ${packageStatus.reboot_required === true ? levelTag('warning', 'Reboot') : ''}</div>${statusLine}`;
         }
         if (column.key === 'pbgui') return renderOverviewVersionCell(row.pbgui, row.pbgui_github);
@@ -13156,7 +13198,7 @@
       const pnlsHistTotal = Number(item.pnls_hist_total || 0);
       return {
         name: {
-          html: `<div><button class='tag table-button' type='button' style='cursor:pointer;color:var(--accent);background:rgba(93,196,255,0.12)' data-vps-action='open-bot-log' data-host='${escAttr(host)}' data-bot='${escAttr(item.name || '')}' data-pb-version='${escAttr(pbVersion)}' title='Open bot log'>${esc(item.name || '-')}</button></div><div class='field-help' title='Bot start time'>${esc(item.start_time || '-')}</div>`,
+          html: `<div><span class='tag' title='Passivbot runtime'>PB${esc(pbVersion)}</span> <button class='tag table-button' type='button' style='cursor:pointer;color:var(--accent);background:rgba(93,196,255,0.12)' data-vps-action='open-bot-log' data-host='${escAttr(host)}' data-bot='${escAttr(item.name || '')}' data-pb-version='${escAttr(pbVersion)}' title='Open bot log'>${esc(item.name || '-')}</button></div><div class='field-help' title='Bot start time'>${esc(item.start_time || '-')}</div>`,
           sig: [host, pbVersion, String(item.name || ''), String(item.start_time || '')].join('|')
         },
         hl_limit: _hlLimitCell(item, host, pbVersion),

@@ -1,5 +1,7 @@
 # Dashboards
 
+Browser reload keeps the selected dashboard, view/edit mode and sidebar filter, while loading current dashboard content. The sidebar list updates automatically; there is no manual list-refresh button. If the selected dashboard no longer exists, the page explains this and offers the dashboard list.
+
 Deleting the active dashboard clears its content frame before showing the empty state.
 
 Cancel discards the editor’s pending layout after outstanding autosaves finish. If discarding fails, the editor stays open so you can retry.

@@ -759,7 +759,8 @@ html, body {
   var DASHBOARDS = %%DASHBOARDS_JSON%%;
 
   /* ── state ── */
-  var currentDash = CURRENT || '';
+  var navigation = new URL(window.location.href);
+  var currentDash = navigation.searchParams.get('current') || CURRENT || '';
   var editMode    = false;
   var viewDirty   = false;
   var selectedDashboards = currentDash ? [currentDash] : [];
@@ -776,6 +777,20 @@ html, body {
   var contentLoading = document.getElementById('content-loading');
   var contentFrame   = document.getElementById('content-frame');
 
+  searchInput.value = navigation.searchParams.get('filter') || '';
+
+  function persistNavigation() {
+    var url = new URL(window.location.href);
+    if (currentDash) url.searchParams.set('current', currentDash);
+    else url.searchParams.delete('current');
+    if (editMode) url.searchParams.set('mode', 'edit');
+    else url.searchParams.delete('mode');
+    if (searchInput.value) url.searchParams.set('filter', searchInput.value);
+    else url.searchParams.delete('filter');
+    window.history.replaceState(window.history.state, '', url);
+  }
+  searchInput.addEventListener('input', persistNavigation);
+
   /* ── API helpers ── */
   function apiFetch(path, opts) {
     opts = opts || {};
@@ -790,6 +805,7 @@ html, body {
     currentDash = name;
     if (selectedDashboards.length <= 1) selectedDashboards = [name];
     editMode = false;
+    persistNavigation();
     viewDirty = false;
     updateViewSaveBtn();
     editBanner.classList.remove('visible');
@@ -812,6 +828,7 @@ html, body {
   function loadEditor(name) {
     currentDash = name || '';
     editMode = true;
+    persistNavigation();
     editBanner.classList.add('visible');
     contentLoading.style.display = 'flex';
     contentFrame.classList.remove('visible');
@@ -828,20 +845,25 @@ html, body {
   }
 
   /* ── Refresh dashboard list from API ── */
+  var listGeneration = 0;
   function refreshList(thenLoad) {
+    var generation = ++listGeneration;
     apiFetch('/dashboards')
-      .then(function (r) { return r.ok ? r.json() : { dashboards: [] }; })
+      .then(function (r) { if (!r.ok) throw new Error('Dashboard list unavailable'); return r.json(); })
       .then(function (d) {
+        if (generation !== listGeneration) return;
+        var previous = JSON.stringify(DASHBOARDS);
         DASHBOARDS = (d.dashboards || []).sort(function (a, b) {
           return a.toLowerCase().localeCompare(b.toLowerCase());
         });
-        pruneSelectedDashboards();
-        renderList();
-        renderToolbar();
-        updateCount();
+        if (previous !== JSON.stringify(DASHBOARDS) || thenLoad) {
+          pruneSelectedDashboards();
+          renderList();
+          renderToolbar();
+        }
         if (thenLoad) thenLoad();
       })
-      .catch(function () {});
+      .catch(function (error) { console.warn('Dashboard list update failed:', error.message); });
   }
 
   /* ── Show/hide view-layout save button next to templates btn ── */
@@ -888,14 +910,10 @@ html, body {
       });
     } else {
       sidebarToolbar.innerHTML =
-        '<button class="sb-btn" id="sb-refresh"   title="Refresh list">&#x21BB;</button>' +
         '<button class="sb-btn" id="sb-new"       title="New dashboard">&#x2795;</button>' +
         (currentDash ? '<button class="sb-btn" id="sb-edit" title="Edit current dashboard">&#x270E;</button>' : '') +
         (deleteTargets.length ? '<button class="sb-btn danger" id="sb-del" title="Delete ' + (deleteTargets.length > 1 ? 'selected dashboards' : 'selected dashboard') + '">&#128465;</button>' : '') +
         '<button class="sb-btn" id="sb-templates" title="Templates">&#128203;</button>';
-      document.getElementById('sb-refresh').addEventListener('click', function () {
-        refreshList();
-      });
       document.getElementById('sb-new').addEventListener('click', function () {
         openNewDashDialog();
       });
@@ -1107,6 +1125,7 @@ html, body {
         loadView(origName);
       } else {
         currentDash = '';
+        persistNavigation();
         editBanner.classList.remove('visible');
         renderToolbar();
         renderList();
@@ -1228,7 +1247,9 @@ html, body {
         refreshList(function () {
           if (deletedCurrent) {
             currentDash = '';
+        persistNavigation();
             editMode = false;
+            persistNavigation();
             editBanner.classList.remove('visible');
             contentLoading.style.display = 'flex';
             contentFrame.classList.remove('visible');
@@ -1301,11 +1322,30 @@ html, body {
 
   /* ── Initial render ── */
   renderToolbar();
-  refreshList(function () {
-    if (CURRENT && DASHBOARDS.indexOf(CURRENT) !== -1) {
-      loadView(CURRENT);
-    }
-  });
+  var initialDashboard = currentDash;
+  var initialEditing = navigation.searchParams.get('mode') === 'edit';
+  var initialNavigationRestored = false;
+  function restoreInitialNavigation() {
+    initialNavigationRestored = true;
+    if (currentDash !== initialDashboard || editMode) return;
+    if (initialDashboard && DASHBOARDS.indexOf(initialDashboard) !== -1) {
+      if (initialEditing) loadEditor(initialDashboard);
+      else loadView(initialDashboard);
+    } else if (initialDashboard) {
+      currentDash = '';
+      persistNavigation();
+      contentLoading.querySelector('span').textContent = 'Dashboard is no longer available. Select another dashboard.';
+      renderToolbar();
+    } else if (initialEditing) loadEditor('');
+  }
+  function updateDashboardList() {
+    if (!document.hidden && !sidebarDrag) refreshList(initialNavigationRestored ? null : restoreInitialNavigation);
+  }
+  refreshList(restoreInitialNavigation);
+  var listTimer = setInterval(updateDashboardList, 15000);
+  window.addEventListener('focus', updateDashboardList);
+  document.addEventListener('visibilitychange', updateDashboardList);
+  window.addEventListener('pagehide', function () { clearInterval(listTimer); listGeneration += 1; });
 
   /* ════════════════════════════════════
      HELP OVERLAY

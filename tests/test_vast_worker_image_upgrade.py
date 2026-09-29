@@ -10,8 +10,8 @@ from tests.test_vast_jobs import job, Provider
 def test_published_worker_build_uses_pinned_official_pb8():
     """The published worker build must not inherit an obsolete PB8 image."""
     root = Path(__file__).resolve().parents[1] / 'setup' / 'vast_gpu_benchmark'
-    revision = '903ed11153ce82d1b6760604eaa3a553309a752a'
-    base_tag = 'pbgui-pb8-worker:upstream-903ed11-base'
+    revision = '7b639e1180fa6bfe02e110429d4f931933c73089'
+    base_tag = 'pbgui-pb8-worker:upstream-7b639e1-base'
     base = (root / 'Dockerfile').read_text()
     assert 'git clone https://github.com/enarjord/passivbot.git' in base
     assert f'ARG PB8_REVISION={revision}' in base
@@ -34,7 +34,29 @@ def test_current_image_has_offline_layer_sizes():
     """The active immutable image keeps byte-weighted pull progress available."""
     from vast_image_layers import IMAGE_LAYERS
     assert IMAGE in IMAGE_LAYERS
-    assert len(IMAGE_LAYERS[IMAGE]) == 30
+    assert len(IMAGE_LAYERS[IMAGE]) == 26
+
+
+def test_new_calibration_pin_keeps_previous_worker_image_known():
+    """Calibration selects the new image while recognizing old image records."""
+    from vast_calibration import CALIBRATION_WORKER_DIGEST, COMPATIBLE_CALIBRATION_IMAGES, calibration_worker_available
+    old_image = "ghcr.io/msei99/pbgui-pb8-worker@sha256:d715bf7596215f9664ab3c439b463f7cc265753775a226f23e308db38ed0676d"
+    assert IMAGE.endswith(CALIBRATION_WORKER_DIGEST)
+    assert calibration_worker_available(IMAGE)
+    assert IMAGE in COMPATIBLE_CALIBRATION_IMAGES
+    assert old_image in SUPPORTED_RENTAL_IMAGE_REVISIONS
+    assert old_image in COMPATIBLE_CALIBRATION_IMAGES
+
+
+@pytest.mark.parametrize('digest', [
+    'd715bf7596215f9664ab3c439b463f7cc265753775a226f23e308db38ed0676d',
+    'a1a458b296653e438d2dac5a1cbfd4fa990045ce28cd4a2f70684fc2a404a0bf',
+    '09cb0f9ba004db44f3ca02a7b3b03ea3211fd9e6c3c9ea33794cd4c6d24dee30',
+])
+def test_old_worker_images_keep_their_original_pb8_revision(digest):
+    """Published pre-merge images remain bound to their own PB8 commit."""
+    image = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:' + digest
+    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[image] == '903ed11153ce82d1b6760604eaa3a553309a752a'
 
 
 @pytest.mark.parametrize('image', SUPPORTED_RENTAL_IMAGES)

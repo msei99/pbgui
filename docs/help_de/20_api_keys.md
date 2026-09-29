@@ -1,5 +1,9 @@
 # API-Keys
 
+Wenn ein Konto gleichzeitig laufende und deaktivierte PB7/PB8-Konfigurationen hat, zeigt die Statusspalte nur die Laufhosts.
+
+Die Statusspalte zeigt die gemeldeten Laufhosts der PB7/PB8-Bots. Der Tooltip nennt die Bot-Version. Ohne laufenden Bot erscheint Disabled, Stopped, Blocked, Collecting oder Unknown; Unused bedeutet, dass keine lokale Bot-Konfiguration das Konto verwendet. Die sichtbare Liste aktualisiert sich automatisch. Auch deaktivierte Bots schützen ihre Zugangsdaten vor dem Löschen.
+
 Exchange-API-Credentials und TradFi-Provider-Profile verwalten. Exchange-User bleiben in `api-keys.json`; TradFi-Secrets werden getrennt im owner-only Credential Vault von PBGui gespeichert.
 
 
