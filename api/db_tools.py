@@ -1915,6 +1915,63 @@ def _fetch_sync_rows_from_paths(
         conn.close()
 
 
+def _apply_balance_state_rows(
+    conn: sqlite3.Connection,
+    users: list[str],
+    source_columns: list[str],
+    source_rows: list[list[Any]],
+) -> dict[str, Any]:
+    """Refresh selected balances without replacing existing SQLite rowids."""
+    if not {"user", "timestamp", "balance"}.issubset(source_columns):
+        raise ValueError("Balance sync payload is missing required columns")
+    selected = set(users)
+    source_users: set[str] = set()
+    applied = 0
+    skipped = 0
+    for row in source_rows:
+        values = dict(zip(source_columns, row))
+        user = values["user"]
+        if user not in selected:
+            skipped += 1
+            continue
+        source_users.add(user)
+        cursor = conn.execute(
+            'UPDATE balances SET timestamp = ?, balance = ? WHERE user = ?',
+            (values["timestamp"], values["balance"], user),
+        )
+        if cursor.rowcount == 0:
+            conn.execute(
+                'INSERT INTO balances(timestamp, balance, user) VALUES (?, ?, ?)',
+                (values["timestamp"], values["balance"], user),
+            )
+        elif cursor.rowcount > 1:
+            conn.execute(
+                'DELETE FROM balances WHERE user = ? AND id != '
+                '(SELECT MAX(id) FROM balances WHERE user = ?)',
+                (user, user),
+            )
+        applied += 1
+    if source_users:
+        cursor = conn.execute(
+            f'DELETE FROM balances WHERE user IN ({_placeholders(users)}) '
+            f'AND user NOT IN ({_placeholders(sorted(source_users))})',
+            [*users, *sorted(source_users)],
+        )
+    else:
+        cursor = conn.execute(
+            f'DELETE FROM balances WHERE user IN ({_placeholders(users)})',
+            users,
+        )
+    conn.commit()
+    return {
+        "fetched": len(source_rows),
+        "inserted": applied,
+        "skipped": skipped,
+        "deleted": int(cursor.rowcount or 0),
+        "inserted_users": sorted(source_users),
+    }
+
+
 def _apply_sync_rows_to_paths(
     db_paths: dict[str, Path],
     spec: TableSpec,
@@ -1933,6 +1990,8 @@ def _apply_sync_rows_to_paths(
         fetched = len(source_rows)
         if spec.user_col not in columns:
             return {"fetched": fetched, "inserted": 0, "skipped": fetched, "deleted": 0, "inserted_users": []}
+        if mode == "state" and spec.db_name == MAIN_DB_NAME and spec.table == "balances":
+            return _apply_balance_state_rows(conn, users, source_columns, source_rows)
         deleted = 0
         if mode == "state":
             cur = conn.execute(
@@ -2110,7 +2169,12 @@ async def _verify_sync_target(source: str, target: str, users: list[str]) -> dic
         target_count = int(target_entry.get("count") or 0)
         source_max = int(source_entry.get("max_timestamp") or 0)
         target_max = int(target_entry.get("max_timestamp") or 0)
-        table_ok = source_count == target_count and (not spec.timestamp_col or source_max == target_max)
+        if _sync_table_mode(spec) == "append":
+            # Append-only targets may retain older rows that no longer exist on
+            # the source; syncing must not delete those local history rows.
+            table_ok = target_count >= source_count and (not spec.timestamp_col or target_max >= source_max)
+        else:
+            table_ok = source_count == target_count and (not spec.timestamp_col or source_max == target_max)
         ok = ok and table_ok
         tables[key] = {
             "ok": table_ok,

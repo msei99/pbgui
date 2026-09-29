@@ -60,6 +60,7 @@ def test_adg_balance_updates_do_not_accumulate_snapshots(monkeypatch, legacy, us
         db.create_tables()
         for timestamp in range(1, 51):
             db.update_balance(conn, [timestamp, 1000.0, "alice"])
+        assert conn.execute("SELECT id FROM balances WHERE user = 'alice'").fetchone() == (1,)
         db.update_balance(conn, [51, 500.0, "bob"])
         assert len(db.fetch_balances(["alice", "bob"])) == 2
         monkeypatch.setattr(db, "select_pnl", lambda *_: [("2026-09-01", 20.0)])

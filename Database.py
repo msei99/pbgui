@@ -1135,8 +1135,6 @@ class Database():
                     raise
 
     def update_balance(self, conn: sqlite3.Connection, balance: list):
-        sql = '''INSERT OR REPLACE INTO balances(timestamp,balance,user)
-                VALUES(?,?,?) '''
         try:
             if not balance or len(balance) < 3:
                 _human_log(SERVICE, f"DB update_balance called with invalid balance data: {balance}", level='WARNING')
@@ -1163,28 +1161,26 @@ class Database():
                     _human_log(SERVICE, f"DB update_balance aborting: cannot coerce balance for user={balance[2]}: {payload}", level='WARNING', user=balance[2])
                     return
             cur = conn.cursor()
-            cur.execute(sql, balance)
-
-            # Robust cleanup: keep only the newest row (by timestamp, then by id)
-            # for this user and delete any other rows. This handles cases where
-            # the DB schema did not previously enforce UNIQUE(user) or when
-            # older duplicate rows exist from imports/migrations.
-            try:
+            # Preserve the rowid on every refresh. REPLACE deletes the old row
+            # and inserts another one, causing unnecessary B-tree churn.
+            cur.execute(
+                'UPDATE balances SET timestamp = ?, balance = ? WHERE user = ?',
+                (balance[0], balance[1], balance[2]),
+            )
+            if cur.rowcount == 0:
+                cur.execute(
+                    'INSERT INTO balances(timestamp, balance, user) VALUES (?, ?, ?)',
+                    balance,
+                )
+            elif cur.rowcount > 1:
+                # Legacy tables may lack UNIQUE(user). Keep one updated row.
                 user = str(balance[2])
-                cleanup_sql = '''
-                DELETE FROM balances
-                WHERE user = ?
-                  AND id NOT IN (
-                    SELECT id FROM balances WHERE user = ? ORDER BY timestamp DESC, id DESC LIMIT 1
-                  )
-                '''
-                cur.execute(cleanup_sql, (user, user))
-                removed = cur.rowcount
-                if removed and removed > 0:
-                    _human_log(SERVICE, f"DB update_balance removed {removed} older balances for user={user}", level='INFO', user=user)
-            except sqlite3.Error as e:
-                # Log but don't raise; allow normal flow to continue
-                _human_log(SERVICE, f"DB update_balance cleanup error {e} user={balance[2]}", level='WARNING', user=balance[2])
+                cur.execute(
+                    'DELETE FROM balances WHERE user = ? AND id != '
+                    '(SELECT MAX(id) FROM balances WHERE user = ?)',
+                    (user, user),
+                )
+                _human_log(SERVICE, f"DB update_balance removed {cur.rowcount} older balances for user={user}", level='INFO', user=user)
 
             conn.commit()
         except sqlite3.Error as e:
