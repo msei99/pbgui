@@ -17,6 +17,7 @@ from file_lock import advisory_file_lock
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from pbgui_purefunc import pb8_runtime_status
 from pbgui_purefunc import PBGDIR
+from secure_files import read_regular_file_nofollow
 
 
 class PB8ConfigurationError(RuntimeError):
@@ -569,6 +570,23 @@ def prepare_pb8_config(config: dict, *, base_config_path: str = "") -> dict:
         config=config,
         base_config_path=base_config_path,
     )["config"]
+
+
+def read_pb8_backup_metadata(path: Path | str) -> dict:
+    """Read archival metadata without migrating or validating the saved bot schema.
+
+    Backups must preserve legacy configs even when the installed PB8 runtime
+    cannot load them. This metadata is only for versioning and bundle membership;
+    it must never be used as a prepared runtime config.
+    """
+    source = Path(path)
+    try:
+        config = json.loads(read_regular_file_nofollow(source, source.parent))
+        if not isinstance(config, dict):
+            raise ValueError("PB8 backup config must be a JSON object")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise PB8ConfigurationError(f"Cannot read PB8 backup metadata: {exc}") from exc
+    return {key: config[key] for key in ("pbgui", "coin_overrides") if key in config}
 
 
 def load_pb8_config(path: Path | str) -> dict:

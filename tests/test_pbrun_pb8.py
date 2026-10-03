@@ -803,3 +803,77 @@ def test_pbrun_controller_shutdown_does_not_stop_managed_bots(
     pbrun.main()
 
     assert stopped == []
+
+
+@pytest.mark.parametrize("entrypoint", ["start", "watch"])
+@pytest.mark.parametrize("changed", [False, True])
+def test_runv8_new_version_retries_without_old_backoff(tmp_path, monkeypatch, entrypoint, changed):
+    """Only a new config version unlocks an immediate start after repeated crashes."""
+    instance = _write_pb8_instance(tmp_path)
+    runner = _runner(tmp_path, instance)
+    monkeypatch.setattr(pbrun, "time", lambda: 1000.0)
+    monkeypatch.setattr(pbrun, "_log", lambda *args, **kwargs: None)
+    assert runner.load()
+    runner._crash_count = 8
+    runner._next_start_at = 1300.0
+    runner._last_started_at = 999.0
+    monkeypatch.setattr(runner, "pid", lambda: None)
+    monkeypatch.setattr(runner, "is_running", lambda: False)
+    monkeypatch.setattr(runner, "_cluster_gate_result", lambda: {"ok": True})
+    monkeypatch.setattr(runner, "_runtime_ready", lambda: True)
+    calls = []
+
+    def launch(*args, **kwargs):
+        """Record an attempted launch without starting a real bot."""
+        calls.append(args)
+        raise OSError("isolated launch failure")
+
+    monkeypatch.setattr(pbrun.subprocess, "Popen", launch)
+    if changed:
+        config = json.loads(runner.config_path.read_text())
+        config["pbgui"]["version"] = 4
+        runner.config_path.write_text(json.dumps(config))
+    getattr(runner, entrypoint)()
+    assert len(calls) == int(changed)
+    if changed:
+        assert runner._crash_count == 1
+        assert runner._next_start_at == 1000.0 + pbrun.PB8_BACKOFF_INITIAL_SECONDS
+    else:
+        assert runner._next_start_at >= 1300.0
+
+
+def test_runv8_invalid_load_does_not_forget_retry_version(tmp_path, monkeypatch):
+    """A failed read followed by the same config must not bypass restart backoff."""
+    instance = _write_pb8_instance(tmp_path)
+    runner = _runner(tmp_path, instance)
+    monkeypatch.setattr(pbrun, "_log", lambda *args, **kwargs: None)
+    assert runner.load()
+    original = runner.config_path.read_bytes()
+    runner._crash_count = 8
+    runner._next_start_at = 1300.0
+    runner.config_path.write_text('{broken')
+    assert not runner.load()
+    runner.config_path.write_bytes(original)
+    assert runner.load()
+    assert runner._crash_count == 8
+    assert runner._next_start_at == 1300.0
+
+
+def test_runv8_new_version_does_not_bypass_cluster_gate(tmp_path, monkeypatch):
+    """A fresh version clears backoff but still cannot start against desired state."""
+    instance = _write_pb8_instance(tmp_path)
+    runner = _runner(tmp_path, instance)
+    monkeypatch.setattr(pbrun, "_log", lambda *args, **kwargs: None)
+    assert runner.load()
+    runner._next_start_at = float("inf")
+    config = json.loads(runner.config_path.read_text())
+    config["pbgui"]["version"] = 4
+    runner.config_path.write_text(json.dumps(config))
+    monkeypatch.setattr(runner, "is_running", lambda: False)
+    monkeypatch.setattr(runner, "_cluster_gate_result", lambda: {
+        "ok": False, "status": "version_mismatch", "reason": "not synced",
+    })
+    monkeypatch.setattr(pbrun.subprocess, "Popen", lambda *a, **k: pytest.fail("blocked launch"))
+    assert runner.start() is False
+    assert runner._next_start_at == 0
+    assert runner.cluster_gate == "version_mismatch"

@@ -53,6 +53,7 @@ from pb8_config import (
     load_pb8_editor_config,
     preview_pb8_hsl_migration,
     prepare_pb8_config,
+    read_pb8_backup_metadata,
     save_prepared_pb8_config,
     validate_pb8_override_bundle,
 )
@@ -338,7 +339,7 @@ def _snapshot_v8_bundle_unlocked(name: str, instance_dir: Path) -> str:
     if config_path.is_symlink() or not config_path.is_file():
         raise HTTPException(status_code=404, detail=f"PB8 instance '{name}' has no safe config.json")
     try:
-        config = load_pb8_config(config_path)
+        config = read_pb8_backup_metadata(config_path)
     except PB8ConfigurationError as exc:
         raise _configuration_http_error(f"Backing up PB8 instance '{name}'", exc) from exc
     pbgui = config.get("pbgui") if isinstance(config.get("pbgui"), dict) else {}

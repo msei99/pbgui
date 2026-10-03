@@ -1086,6 +1086,7 @@ class RunV8:
         self._next_start_at = 0.0
         self._crash_count = 0
         self._running_version = None
+        self._retry_config_version = None
         self._block_log_key = None
         self._block_log_ts = 0.0
 
@@ -1148,6 +1149,13 @@ class RunV8:
                 raise ValueError("live.user is absent from PB8 api-keys.json")
 
             self.version = int(raw_version)
+            if self._retry_config_version is not None and self._retry_config_version != self.version:
+                self._crash_count = 0
+                self._next_start_at = 0.0
+                self._last_started_at = 0.0
+                _log(SERVICE, f"PB8 {self.user} config version changed "
+                     f"{self._retry_config_version} -> {self.version}; cleared restart backoff")
+            self._retry_config_version = self.version
             self.live_user = live_user
             return True
         except Exception as exc:
@@ -1451,9 +1459,11 @@ class RunV8:
     def start(self, *, reload_config: bool = True) -> bool:
         """Start one validated PB8 live process in an isolated virtualenv."""
 
-        if self.is_running() or time() < self._next_start_at:
+        if self.is_running():
             return False
         if reload_config and not self.load():
+            return False
+        if time() < self._next_start_at:
             return False
         gate = self._cluster_gate_result()
         self.cluster_gate = str(gate.get("status") or "")

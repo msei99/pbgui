@@ -1472,3 +1472,54 @@ def test_log_placement_does_not_load_or_migrate_trading_config(monkeypatch, tmp_
     assert result['version'] == '7'
     assert result['source'] == ('backup' if use_backup else 'current')
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("hsl_enabled", [True, False])
+def test_save_migrated_config_backs_up_legacy_hsl_verbatim(monkeypatch, tmp_path, hsl_enabled):
+    """Saving a migrated draft archives legacy HSL without the current PB8 loader."""
+    _configure_root(monkeypatch, tmp_path)
+    prepared_calls = _install_test_pipeline(monkeypatch)
+    bundle = tmp_path / "data/run_v8/alice"
+    bundle.mkdir(parents=True)
+    legacy = _payload()["config"]
+    legacy["config_version"] = "v8.5.0"
+    legacy["pbgui"]["version"] = 1
+    legacy["bot"]["long"]["hsl"] = {
+        "enabled": hsl_enabled,
+        "no_restart_drawdown_threshold": 1,
+        "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+        "tier_ratios": {"orange": 0.75, "yellow": 0.5},
+    }
+    legacy["coin_overrides"] = {"BTC": {"override_config_path": "BTC.json"}}
+    original = (json.dumps(legacy, indent=2) + "\n").encode()
+    override = b'{"bot": {"long": {"risk": {"n_positions": 1}}}}\n'
+    (bundle / "config.json").write_bytes(original)
+    (bundle / "BTC.json").write_bytes(override)
+    loader_calls = []
+
+    def rejecting_loader(path):
+        """Simulate the installed runtime rejecting the original HSL schema."""
+        loader_calls.append(path)
+        raise v8_instances.PB8ConfigurationError(
+            "pre-v8.6 HSL configuration requires explicit migration with passivbot tool migrate-hsl"
+        )
+
+    monkeypatch.setattr(v8_instances, "load_pb8_config", rejecting_loader)
+    payload = _payload(note="migrated")
+    payload["config"]["config_version"] = "v8.6.0"
+    payload["config"]["bot"]["long"]["hsl"] = {"enabled": hsl_enabled}
+    payload["expected_version"] = 1
+    result = asyncio.run(v8_instances.save_v8_instance_config("alice", payload, False, session=None))
+
+    assert result["ok"] is True
+    assert result["version"] == 2
+    assert result["backup_id"] == "1"
+    assert loader_calls == []
+    assert len(prepared_calls) == 1
+    assert prepared_calls[0]["config_version"] == "v8.6.0"
+    backup = tmp_path / "data/backup/v8/alice/1"
+    assert (backup / "config.json").read_bytes() == original
+    assert (backup / "BTC.json").read_bytes() == override
+    saved = json.loads((bundle / "config.json").read_bytes())
+    assert saved["config_version"] == "v8.6.0"
+    assert saved["bot"]["long"]["hsl"] == {"enabled": hsl_enabled}

@@ -852,3 +852,37 @@ def test_optimize_basis_contract_supports_legacy_and_reducer_pb8() -> None:
         "limit_basis_field": "reducer",
         "scoring_basis_field": "reducer",
     }
+
+
+def test_backup_metadata_does_not_require_runtime_or_normalize_config(tmp_path, monkeypatch):
+    """Archival metadata remains readable with no working PB8 installation."""
+    def unavailable(*args, **kwargs):
+        """Fail if archival reads accidentally invoke native config preparation."""
+        pytest.fail("Backup metadata must not invoke PB8")
+
+    monkeypatch.setattr(pb8_config, "_call_helper", unavailable)
+    monkeypatch.setattr(pb8_config, "_call_migration_helper", unavailable)
+    path = tmp_path / "config.json"
+    original = b'{"pbgui":{"version":3},"coin_overrides":{},"bot":{"hsl":"legacy"}}\n'
+    path.write_bytes(original)
+    assert pb8_config.read_pb8_backup_metadata(path) == {"pbgui": {"version": 3}, "coin_overrides": {}}
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("content", [b"{broken", b"[]", b"null", b"\xff"])
+def test_backup_metadata_rejects_invalid_json(tmp_path, content):
+    """Invalid archival configs fail explicitly rather than producing empty backups."""
+    path = tmp_path / "config.json"
+    path.write_bytes(content)
+    with pytest.raises(pb8_config.PB8ConfigurationError, match="backup metadata"):
+        pb8_config.read_pb8_backup_metadata(path)
+
+
+def test_backup_metadata_rejects_symlink(tmp_path):
+    """Archival reads must not follow a config symlink outside its bundle."""
+    target = tmp_path / "target.json"
+    target.write_text('{"pbgui":{"version":1}}')
+    link = tmp_path / "config.json"
+    link.symlink_to(target)
+    with pytest.raises(pb8_config.PB8ConfigurationError, match="backup metadata"):
+        pb8_config.read_pb8_backup_metadata(link)
