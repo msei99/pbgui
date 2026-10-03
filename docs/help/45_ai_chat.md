@@ -2,6 +2,8 @@
 
 Opening or reopening the AI drawer restores the saved conversation and keeps its messages visible without sending a new question. Running requests continue updating automatically.
 
+Provider, ChatGPT profile, model, reasoning effort and speed are saved automatically per PBGui account. They survive page changes, browser reloads and API restarts. Restoring an older conversation keeps its transcript but does not replace your saved model selection. If the saved model becomes unavailable, select an available model explicitly; PBGui does not silently substitute another model. New AI Loop runs and **Continue** use this current selection; existing runs keep their recorded model.
+
 If the selected provider is not connected, AI Chat shows a connection hint in the sidebar workflow and does not request its models. On initial load, an available connected provider is preferred. Starting a new chat keeps the connection hint visible until a provider is connected.
 
 Stop also works while a new conversation is still being created. The pending prompt is not sent when the delayed creation response arrives, and the composer becomes available again.

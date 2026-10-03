@@ -12,7 +12,7 @@ from pathlib import Path
 from file_lock import advisory_file_lock
 from secure_files import ensure_private_directory, read_regular_file_nofollow
 from vast_jobs import JobStore, IMAGE, PROJECT, REVISION, TERMINAL, job_id, write_json
-from vast_provider import VastError, positive_id
+from vast_provider import VastError, positive_id, gpu_name_matches
 
 SERVICE = "VastRunner"
 
@@ -159,18 +159,19 @@ class CloudQueue:
             write_json(self.root / 'queue.json', state)
             return state['blocked_machine_ids']
 
-    def waiting(self) -> list[dict]:
+    def waiting(self, loop_id: str | None = None) -> list[dict]:
         """Use FIFO ordering for prepared cloud jobs, independently of local CPUs."""
-        return sorted((row for row in self.store.list() if row.get('kind') not in {'worker', 'calibration'} and row['status'] == 'ready'),
+        return sorted((row for row in self.store.list() if row.get('kind') not in {'worker', 'calibration'} and row['status'] == 'ready' and row.get('loop_id') == loop_id),
                       key=lambda row: (row.get('created_at', 0), row['id']))
 
     def start(self, offer: dict, hours: float, budget: float, idle_seconds: int, *, manual: bool = False,
               pool_authorization_id: str | None = None, calibration_id: str | None = None,
               calibration_watch_id: str | None = None, rental_gpu_profile: dict | None = None,
-              rental_job_gpu_profiles: dict | None = None) -> dict:
+              rental_job_gpu_profiles: dict | None = None, loop_id: str | None = None,
+              loop_owner: str | None = None, loop_limits: dict | None = None) -> dict:
         """Rent once for the queue; duplicate starts return the existing worker."""
-        if idle_seconds not in (-1, 0, 300, 1800, 3600):
-            raise VastError('Choose deadline retention, immediate cleanup or an idle retention period', 422)
+        if type(idle_seconds) is not int or idle_seconds < -1:
+            raise VastError('Idle timeout must be -1 for deadline retention or nonnegative whole seconds', 422)
         if rental_gpu_profile is not None:
             if not manual:
                 raise VastError('Rental GPU overrides require a manual rental', 422)
@@ -188,7 +189,7 @@ class CloudQueue:
                 raise VastError('GPU pool capacity or queue authorization changed', 409)
         # Public first-candle lookups may take time. Resolve them before holding
         # the queue lock so running workers can keep claiming and collecting jobs.
-        preflight_jobs = self.waiting() if calibration_id is None else None
+        preflight_jobs = self.waiting(loop_id) if calibration_id is None else None
         if preflight_jobs:
             preflight_local_metadata(self.store, preflight_jobs)
         with advisory_file_lock(self.root / '.queue-lock'):
@@ -210,9 +211,22 @@ class CloudQueue:
                 from vast_pool import rental_needed
                 if not rental_needed(self, pool_authorization_id):
                     raise VastError('GPU pool capacity or queue authorization changed', 409)
-            elif current and current['rental_state'] not in ('none', 'deletion_verified') and not manual:
+            elif loop_id is None and current and current['rental_state'] not in ('none', 'deletion_verified') and not manual:
                 return current
             active_workers = self.workers()
+            if loop_id is not None:
+                from pb8_loop_store import LoopStore, identifier, ACTIVE
+                from api.vast import RentalPreferences
+                loop = LoopStore(PROJECT / 'data/loop_optimizer').read(identifier(loop_owner), identifier(loop_id))
+                frozen = loop['settings'].get('vast') or {}
+                current_limits = RentalPreferences.model_validate(self.read().get('gpu_preferences') or {}).model_dump()
+                if (loop['status'] not in ACTIVE or time.time() >= loop['deadline'] - 60
+                        or frozen != loop_limits or hours != frozen.get('hours') or budget != frozen.get('budget')
+                        or idle_seconds != frozen.get('idle_seconds')
+                        or len(active_workers) >= min(frozen.get('max_rentals', 1), current_limits['max_rentals'])
+                        or not offer.get('num_gpus') == 1
+                        or not gpu_name_matches(offer.get('gpu_name', ''), frozen.get('gpu_name', ''))):
+                    raise VastError('Loop rental authorization or resource limits changed', 409)
             if manual and any(row.get('awaiting_queue_start') for row in active_workers):
                 raise VastError('Start or end the reserved GPU rental before renting another', 409)
             if manual and any(row.get('offer_id') == offer.get('id') for row in active_workers):
@@ -226,7 +240,7 @@ class CloudQueue:
                     raise VastError('GPU calibration is no longer ready to start', 409)
                 jobs = [calibration]
             else:
-                jobs = self.waiting()
+                jobs = self.waiting(loop_id)
                 if [row['id'] for row in jobs] != [row['id'] for row in preflight_jobs]:
                     raise VastError('Cloud queue changed during local metadata preparation; retry rental', 409)
             job_profiles = validated_rental_job_profiles(
@@ -243,7 +257,8 @@ class CloudQueue:
                        'created_at': time.time(), 'generation': 0, 'idle_seconds': idle_seconds,
                        'awaiting_queue_start': manual, 'rental_gpu_profile': rental_gpu_profile,
                        'rental_job_gpu_profiles': job_profiles,
-                       **({'calibration_job_id': calibration_id} if calibration_id else {})})
+                       **({'calibration_job_id': calibration_id} if calibration_id else {}),
+                       **({'loop_id': loop_id, 'loop_owner': loop_owner} if loop_id else {})})
             write_json(directory / 'control.json', {'stop': False, 'cleanup': False})
             write_json(directory / 'intent.json', {'id': identifier, 'image': IMAGE, 'pb8_revision': REVISION,
                        'bundle_bytes': sum(row.get('input_bytes', 0) for row in jobs), 'job_count': len(jobs),
@@ -252,6 +267,8 @@ class CloudQueue:
             # rental. Keep a waiting calibration authorized until the worker
             # reports a real contract or a verified absence permits retry.
             started = self.store.start(identifier, offer, hours, budget)
+            if loop_id is not None:
+                return started
             state = self.read()
             state.update(worker_id=identifier, selected_offer=offer,
                          paused=manual if not active_workers else state.get('paused', False),
@@ -595,6 +612,7 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
             store.update(identifier, status='reserved', idle_since=None)
             return None
         state = queue.read()
+        retain_loop_worker = False
         calibration_job_id = worker.get('calibration_job_id')
         if calibration_job_id:
             calibration = store.read(job_id(calibration_job_id))
@@ -604,8 +622,19 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
             candidates = [calibration] if calibration.get('status') == 'ready' else []
         else:
             preferred = state.get('start_worker_id')
-            candidates = ([] if state.get('paused') or worker.get('deadline_request')
-                          or (preferred and preferred != identifier) else queue.waiting())
+            if worker.get('loop_id'):
+                from pb8_loop_store import LoopStore, ACTIVE
+                try:
+                    loop = LoopStore(PROJECT / 'data/loop_optimizer').read(worker['loop_owner'], worker['loop_id'])
+                    allowed = loop['status'] in ACTIVE and now < loop['deadline'] - 60
+                    # Validation and AI decisions are part of the same rental workflow.
+                    retain_loop_worker = allowed and loop['status'] == 'running'
+                except (OSError, ValueError, KeyError):
+                    allowed = False
+                candidates = queue.waiting(worker['loop_id']) if allowed and not worker.get('deadline_request') else []
+            else:
+                candidates = ([] if state.get('paused') or worker.get('deadline_request')
+                              or (preferred and preferred != identifier) else queue.waiting())
         if candidates:
             from vast_deadline import effective_intent
             intent = effective_intent(store, identifier, store.read(identifier, 'intent.json'))
@@ -647,6 +676,9 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
                     queue.update(start_worker_id=None)
                 return candidate['id']
         if worker.get('deadline_request'):
+            return None
+        if retain_loop_worker:
+            store.update(identifier, status='reserved', idle_since=None)
             return None
         idle_since = worker.get('idle_since')
         if idle_since is None:

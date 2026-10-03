@@ -62,6 +62,8 @@ from pb8_config import (
     get_pb8_exchange_metadata,
     interrupt_pb8_migration_helper,
     load_pb8_config,
+    load_pb8_editor_config,
+    preview_pb8_hsl_migration,
     migrate_pb7_config,
     prepare_pb8_migration_helper_startup,
     prepare_pb8_config,
@@ -174,6 +176,11 @@ _OPT_LOG_GPU_RE = re.compile(
     r"GPU optimize\s*\|\s*gen=(?P<generation>\d+)\s+proxy=(?P<proxy>\d+)\s+\((?P<rate>[0-9.]+)/s\)\s+exact=(?P<exact>\d+)\s+inflight=(?P<inflight>\d+)",
     re.IGNORECASE,
 )
+_OPT_LOG_GPU_PROGRESS_RE = re.compile(
+    r"GPU optimizer progress\s*\|\s*gen=(?P<generation>\d+)\s+phase=(?P<stage>\w+)\s*\|\s*"
+    r"evolution_proxy_completed_run=(?P<proxy>\d+)(?=\s|$)[^\n]*?\bevolution_exact=(?P<exact>\d+)/\d+(?=\s|$)"
+    r"[^\n]*?\bevolution_pending=(?P<pending>\d+)(?=\s|$)", re.IGNORECASE,
+)
 _OPT_LOG_GPU_DISPATCH_RE = re.compile(
     r"GPU proxy dispatch progress\s*\|\s*strategy=(?P<strategy>\S+)\s+chunks=(?P<chunks_done>\d+)/(?P<chunks_total>\d+)\s+candidates=(?P<candidates_done>\d+)/(?P<candidates_total>\d+)\s+elapsed=(?P<elapsed>[0-9.]+)s\s+eta=(?P<eta>[0-9.]+)s",
     re.IGNORECASE,
@@ -193,7 +200,7 @@ _OPT_LOG_GPU_HALVING_RE = re.compile(
     re.IGNORECASE,
 )
 _OPT_LOG_GPU_RESUME_RE = re.compile(
-    r"Resumed GPU optimizer at generation\s+(?P<generation>\d+)\s+with\s+(?P<exact>\d+)\s+exact evaluations",
+    r"Resumed GPU optimizer at generation\s+(?P<generation>\d+)\s+with\s+(?:(?P<seed>\d+)\s+seed\s+and\s+)?(?P<exact>\d+)\s+exact evaluations",
     re.IGNORECASE,
 )
 _OPT_LOG_GPU_COMPLETE_RE = re.compile(
@@ -825,6 +832,7 @@ def _launch_optimizer_runner(filename: str, command: list[str], cwd: Path, log_p
                 f"--property=StandardOutput=append:{log_path}",
                 f"--property=StandardError=append:{log_path}",
                 f"--setenv=PATH={Path(command[0]).parent}{os.pathsep}{os.environ.get('PATH', '')}",
+                "--setenv=PASSIVBOT_GPU_PROFILE=1",
                 "--",
                 *command,
             ],
@@ -845,7 +853,7 @@ def _launch_optimizer_runner(filename: str, command: list[str], cwd: Path, log_p
             "cwd": str(cwd),
             "stdout": log_file,
             "stderr": log_file,
-            "env": {**os.environ, "PATH": str(Path(command[0]).parent) + os.pathsep + os.environ.get("PATH", "")},
+            "env": {**os.environ, "PASSIVBOT_GPU_PROFILE": "1", "PATH": str(Path(command[0]).parent) + os.pathsep + os.environ.get("PATH", "")},
             "close_fds": True,
         }
         if platform.system() == "Windows":
@@ -1424,6 +1432,7 @@ def _queue_item(path: Path) -> dict:
     options = data.get("launch_options") if isinstance(data.get("launch_options"), dict) else {}
     return {
         "filename": filename,
+        "loop_id": data.get("loop_id"),
         "estimated_coin_candles": estimate_snapshot(_snapshot_file(filename), _queue_dir()),
         "name": str(data.get("name") or filename),
         "exchange": data.get("exchange") or [],
@@ -3182,7 +3191,7 @@ class OptimizeV8Worker:
                     with _queue_lock():
                         items = _load_queue()
                         if not any(item["status"] == "running" and item.get("automatic") for item in items):
-                            queued = next((item for item in items if item["status"] == "queued"), None)
+                            queued = next((item for item in items if item["status"] == "queued" and not item.get("loop_id")), None)
                             if queued and claim_autostart("v8", queued["filename"]):
                                 filename = queued["filename"]
                     if filename:
@@ -3213,7 +3222,7 @@ class OptimizeV8Worker:
             except asyncio.CancelledError:
                 break
 
-    def launch(self, filename: str, launch_options: dict | None = None, automatic: bool = False) -> dict:
+    def launch(self, filename: str, launch_options: dict | None = None, automatic: bool = False, loop_id: str | None = None) -> dict:
         """Validate an immutable queue snapshot and launch one detached PB8 optimizer."""
         filename = _validate_name(filename)
         with _queue_lock():
@@ -3221,11 +3230,14 @@ class OptimizeV8Worker:
             if not queue_path.is_file():
                 raise HTTPException(status_code=404, detail="Queue item not found")
             data = _read_json(queue_path)
+            if data.get("loop_id"):
+                from pb8_loop_store import authorize_native_job
+                authorize_native_job(Path(PBGDIR), data, loop_id)
             status, _pid = _queue_status(data)
             if status != "queued":
                 raise HTTPException(status_code=409, detail=f"Queue item is already {status}")
             if automatic:
-                first_queued = next((item for item in _load_queue() if item["status"] == "queued"), None)
+                first_queued = next((item for item in _load_queue() if item["status"] == "queued" and not item.get("loop_id")), None)
                 if first_queued is None or first_queued["filename"] != filename:
                     raise HTTPException(status_code=409, detail="Queue order changed; automatic launch will retry")
             snapshot = _snapshot_file(filename)
@@ -3399,7 +3411,7 @@ async def ws_optimize(websocket: WebSocket) -> None:
             payload = await asyncio.to_thread(
                 lambda: {
                     "type": "queue_update",
-                    "items": _load_queue(),
+                    "items": [row for row in _load_queue() if not row.get("loop_id")],
                     "settings": load_ini_section(_QUEUE_SETTINGS_SECTION),
                 }
             )
@@ -3708,15 +3720,32 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)) -> dict
         with _config_lock():
             if not path.is_file() or path.is_symlink():
                 raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
-            config = load_pb8_config(path)
+            editor_payload = load_pb8_editor_config(path, loader=load_pb8_config)
+            config = editor_payload["config"]
             return {
+                **editor_payload,
                 "name": name,
                 "config": config,
-                "param_status": {},
+                "param_status": editor_payload.get("param_status", {}),
                 "override_configs": _load_override_payloads(config, path.parent),
             }
     except PB8ConfigurationError as exc:
         raise _configuration_error(f"Loading PB8 optimize config {name}", exc) from exc
+
+
+@router.post("/configs/{name}/migrate-hsl")
+def preview_hsl_migration(name: str, body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Preview the native HSL migration; the existing config remains untouched."""
+    path = _config_file(_validate_name(name))
+    with _config_lock():
+        if not path.is_file() or path.is_symlink() or path.parent.is_symlink():
+            raise HTTPException(status_code=404, detail="Config not found")
+        try:
+            editor_payload = load_pb8_editor_config(path, loader=load_pb8_config)
+            _load_override_payloads(editor_payload["config"], path.parent)
+            return preview_pb8_hsl_migration(path, body)
+        except PB8ConfigurationError as exc:
+            raise _configuration_error("Previewing PB8 HSL migration", exc) from exc
 
 
 @router.put("/configs/{name}")
@@ -3908,7 +3937,7 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
 
 @router.get("/queue")
 def get_queue(session: SessionToken = Depends(require_auth)) -> dict:
-    return {"items": _load_queue()}
+    return {"items": [row for row in _load_queue() if not row.get("loop_id")]}
 
 
 @router.post("/queue/reorder")
@@ -4245,6 +4274,8 @@ def clear_finished(session: SessionToken = Depends(require_auth)) -> dict:
     removed = 0
     with _queue_lock():
         for item in _load_queue():
+            if item.get("loop_id"):
+                continue
             if item["status"] == "complete" and _remove_queue_item(item["filename"], require_exists=False):
                 removed += 1
     return {"ok": True, "removed": removed}
@@ -4330,6 +4361,8 @@ def _parse_optimize_log_status(text: str) -> dict:
         "replay": {},
         "halving": {},
     }
+    proxy_generation = 0
+    proxy_total = 0
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line == "...":
@@ -4381,6 +4414,62 @@ def _parse_optimize_log_status(text: str) -> dict:
                 exact_inflight=int(gpu.group("inflight")),
                 evaluations=int(gpu.group("exact")),
             )
+            proxy_generation = summary["generation"]
+            proxy_total = summary["proxy_evaluations"]
+        progress = _OPT_LOG_GPU_PROGRESS_RE.search(message)
+        if progress:
+            # Current PB8 emits authoritative per-run evolution counters even
+            # when optional JSON profiling is disabled. Seed/pending counters
+            # never count toward the user's completed proxy-work allowance.
+            summary.update(
+                backend="gpu", algorithm="nsga2", phase="optimizing",
+                stage=progress.group("stage"), generation=int(progress.group("generation")),
+                proxy_evaluations=int(progress.group("proxy")), proxy_rate=None,
+                exact_evaluations=int(progress.group("exact")), evaluations=int(progress.group("exact")),
+                exact_inflight=int(progress.group("pending")),
+            )
+            front = re.search(r"\bfront=(\d+)(?=\s|$)", message)
+            if front:
+                summary["front"] = int(front.group(1))
+            proxy_generation, proxy_total = summary["generation"], summary["proxy_evaluations"]
+        if '[gpu-profile]' in message:
+            try:
+                profile = json.loads(message.split('[gpu-profile]', 1)[1].strip())
+            except (ValueError, TypeError):
+                profile = None
+            if isinstance(profile, dict):
+                event = profile.get('event')
+                exact = profile.get('exact_completed')
+                if type(exact) is int and exact >= 0:
+                    summary.update(exact_evaluations=exact, evaluations=exact)
+                if event == 'generation':
+                    generation = profile.get('generation')
+                    population = profile.get('population_size')
+                    reused = profile.get('seed_proxy_reused', 0)
+                    screening = profile.get('screening') or []
+                    count = None
+                    if isinstance(screening, list) and screening:
+                        counts = [item.get('candidate_count') if isinstance(item, dict) else None for item in screening]
+                        if all(type(value) is int and value >= 0 for value in counts):
+                            count = sum(counts)
+                    elif (screening == [] and type(population) is int and population > 0
+                          and type(reused) is int and 0 <= reused <= population):
+                        count = population - reused
+                    # Native PB8 increments this exact quantity per generation.
+                    # Never infer missing generations from generation * population.
+                    if type(generation) is int and generation == proxy_generation + 1 and count is not None:
+                        proxy_generation = generation
+                        proxy_total += count
+                        summary.update(backend='gpu', algorithm='nsga2', phase='optimizing',
+                                       generation=generation, proxy_evaluations=proxy_total)
+                elif event == 'complete':
+                    proxy = profile.get('proxy_evaluations')
+                    if type(proxy) is int and proxy >= 0:
+                        proxy_total = proxy
+                        summary.update(proxy_evaluations=proxy, phase='complete')
+                inflight = profile.get('exact_inflight')
+                if type(inflight) is int and inflight >= 0:
+                    summary['exact_inflight'] = inflight
         dispatch = _OPT_LOG_GPU_DISPATCH_RE.search(message)
         if dispatch:
             summary.update(backend="gpu", algorithm="nsga2", phase="optimizing", stage="proxy_dispatch")
@@ -4454,11 +4543,14 @@ def _parse_optimize_log_status(text: str) -> dict:
         resumed = _OPT_LOG_GPU_RESUME_RE.search(message)
         if resumed:
             exact = int(resumed.group("exact"))
+            proxy_generation = int(resumed.group("generation"))
+            proxy_total = 0  # PB8 restarts its proxy counter when resuming a checkpoint.
             summary.update(
                 backend="gpu",
                 algorithm="nsga2",
                 phase="optimizing",
                 stage="resumed",
+                proxy_evaluations=0,
                 generation=int(resumed.group("generation")),
                 exact_evaluations=exact,
                 evaluations=exact,

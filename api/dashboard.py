@@ -2925,6 +2925,43 @@ async def manage_position(
     }
 
 
+@router.get("/candles_data")
+def get_candles_data(
+    user: str = Query(...),
+    symbol: str = Query(..., min_length=1, max_length=128),
+    timeframe: str = Query(default="4h", pattern=r"^(1m|5m|15m|30m|1h|2h|4h|6h|12h|1d|1w)$"),
+    limit: int = Query(default=500, ge=1, le=1500),
+    session: SessionToken = Depends(require_auth),
+):
+    """Fetch an authoritative public candle snapshot, bypassing the live cache.
+
+    Closed candles can miss their final WebSocket update. This endpoint also
+    repairs the REST cache without requesting private positions or orders.
+    """
+    user_obj = _get_users().find_user(user)
+    if not user_obj:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        exchange = _get_exchange(user_obj)
+        ohlcv = exchange.fetch_ohlcv(
+            _symbol_to_ccxt(symbol), "futures", timeframe=timeframe, limit=limit
+        ) or []
+        # The in-flight current candle may already have a newer WS update.
+        # Reconcile closed history only; the live stream owns its latest bar.
+        if len(ohlcv) > 1:
+            _ohlcv_cache_put(user, symbol, timeframe, ohlcv[:-1])
+        return {"candles": [
+            {"t": c[0], "o": c[1], "h": c[2], "l": c[3], "c": c[4], "v": c[5]}
+            for c in ohlcv
+        ]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(SERVICE, "Candle reconciliation failed", level="WARNING",
+             meta={"exception_type": type(exc).__name__})
+        raise HTTPException(status_code=502, detail="Candle data unavailable") from None
+
+
 # ---------------------------------------------------------------- /orders_data
 
 @router.get("/orders_data")

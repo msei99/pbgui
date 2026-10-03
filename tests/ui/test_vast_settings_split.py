@@ -107,3 +107,40 @@ def test_queue_settings_and_five_vast_views_are_separate(cloud_page):
         '(button) => button.classList.contains("active")'
     )
     assert page.locator('#vast-settings-nav').is_visible()
+
+
+def test_custom_idle_timeout_saves_and_restores(cloud_page):
+    """Custom minutes persist as seconds and restore without resetting navigation."""
+    page, _, _, _, _ = cloud_page
+    page.locator('[data-vast-view=rental]').click()
+    assert page.locator('#worker-idle-custom').is_hidden()
+    page.locator('#worker-idle').select_option('custom')
+    assert page.locator('#worker-idle-custom').is_visible()
+    page.locator('#worker-idle-custom').fill('15')
+    with page.expect_request('**/gpu-preferences') as pending:
+        page.locator('#save-rental-preferences').click()
+    assert pending.value.post_data_json['idle_seconds'] == 900
+    page.wait_for_function("!document.getElementById('save-rental-preferences').disabled")
+    page.reload()
+    page.wait_for_function("document.getElementById('worker-idle').value === 'custom'")
+    page.locator('[data-vast-view=rental]').click()
+    assert page.locator('#worker-idle-custom').input_value() == '15'
+    page.locator('#worker-idle').select_option('-1')
+    assert page.locator('#worker-idle-custom').is_hidden()
+    assert page.locator('#worker-idle-custom').is_disabled()
+
+
+def test_custom_idle_timeout_preserves_inflight_edits(cloud_page):
+    """A late save cannot replace newly typed custom timeout values."""
+    page, _, _, overrides, held = cloud_page
+    page.locator('[data-vast-view=rental]').click()
+    page.locator('#worker-idle').select_option('custom')
+    page.locator('#worker-idle-custom').fill('15')
+    overrides['/api/vast/gpu-preferences'] = 'hold'
+    with page.expect_request('**/gpu-preferences') as pending:
+        page.locator('#save-rental-preferences').click()
+    page.locator('#worker-idle-custom').fill('17.5')
+    held.pop().fulfill(json={**pending.value.post_data_json,'idle_seconds':900})
+    page.wait_for_function("!document.getElementById('save-rental-preferences').disabled")
+    assert page.locator('#worker-idle').input_value() == 'custom'
+    assert page.locator('#worker-idle-custom').input_value() == '17.5'

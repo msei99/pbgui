@@ -15,6 +15,52 @@ def line(seconds, proxy, exact, *, complete=False, reported_rate=9999.0):
     return (prefix + text + '\n').encode()
 
 
+def modern_line(seconds, proxy, exact, phase='generation_complete'):
+    """Emit current PB8 progress with separate seed and completed evolution counters."""
+    return (f'2026-09-16T10:{seconds // 60:02}:{seconds % 60:02}Z INFO '
+            f'GPU optimizer progress | gen=2 phase={phase} | '
+            f'evolution_proxy_completed_run={proxy} seed_proxy=999 seed_exact=99 '
+            f'evolution_exact={exact}/10000000 evolution_pending=64 front=47\n').encode()
+
+
+def test_current_pb8_progress_measures_completed_evolution_work():
+    """Current progress uses logged work rather than seeds, pending tasks or population."""
+    raw=modern_line(0,8192,64)+b'2026-09-16T10:00:00Z INFO GPU optimizer progress | gen=2 phase=generation_complete | run_elapsed=58s\n'+modern_line(60,16384,128)
+    result=parse_throughput(raw)
+    assert result['proxy_total']==16384 and result['exact_total']==128
+    assert result['proxy_per_minute']==8192 and result['exact_per_minute']==64
+    assert result['proxy_per_exact']==128 and result['window_seconds']==60
+
+
+def test_current_progress_phases_resume_completion_and_legacy_logs():
+    """Phase changes and terminal progress retain compatible timestamped histories."""
+    previous=parse_throughput(line(0,100,10))
+    current=parse_throughput(modern_line(60,700,40,'gpu_proxy'),previous)
+    assert current['proxy_per_minute']==600 and current['exact_per_minute']==30
+    assert parse_throughput(modern_line(0,100,10),current)==current
+    final=parse_throughput(modern_line(120,1300,70,'complete'),current)
+    assert final['proxy_per_minute']==600 and final['exact_per_minute']==30
+    assert parse_throughput(modern_line(120,1300,70,'complete'),final)==final
+    reset=parse_throughput(modern_line(150,0,0),final)
+    assert reset['proxy_per_minute'] is None and reset['exact_per_minute'] is None
+    assert len(reset['samples'])==1
+
+
+@pytest.mark.parametrize('counters',[
+    'evolution_proxy_completed_run=8192',
+    'evolution_exact=64/10000000',
+    'population=8192 seed_proxy=8192 seed_exact=64 evolution_pending=64',
+    'evolution_proxy_completed_run=-1 evolution_exact=64/10000000',
+    'evolution_proxy_completed_run=1.5 evolution_exact=64/10000000',
+    'evolution_proxy_completed_run=8192 evolution_exact=-1/10000000',
+    'evolution_proxy_completed_run=8192 evolution_exact=1.5/10000000',
+    f'evolution_proxy_completed_run={2**54} evolution_exact=64/10000000',
+])
+def test_current_progress_rejects_partial_invalid_and_estimated_work(counters):
+    """Only complete browser-safe native count pairs can establish a measurement."""
+    assert parse_throughput(('2026-09-16T10:00:00Z INFO GPU optimizer progress | gen=1 phase=gpu_proxy | '+counters+'\n').encode()) is None
+
+
 def test_rates_use_counter_deltas_not_reported_rate_or_total_runtime():
     """Use the last minute of actual counters, including nonzero resume baselines."""
     result = parse_throughput(line(0, 10000, 100) + line(30, 14000, 120)

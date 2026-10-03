@@ -862,7 +862,7 @@ class CodexRuntime:
             })
         if self.research_mode and getattr(self, "research_analysis_only", False):
             from ai_research_summary import SUMMARY_INSTRUCTIONS
-            params["baseInstructions"] = SUMMARY_INSTRUCTIONS
+            params["baseInstructions"] = getattr(self, "loop_instructions", SUMMARY_INSTRUCTIONS)
             params["config"]["web_search"] = "disabled"
             params["config"]["features"]["standalone_web_search"] = False
         if model:
@@ -885,6 +885,9 @@ class CodexRuntime:
     ) -> str:
         """Run one text-only turn and collect streamed response text."""
         async with self.turn_lock:
+            loop_diagnostics = getattr(self, "loop_request_diagnostics", None)
+            if isinstance(loop_diagnostics, dict):
+                loop_diagnostics["phase"] = "starting_turn"
             params: dict[str, Any] = {
                 "threadId": thread_id,
                 "input": [{"type": "text", "text": message, "text_elements": []}],
@@ -903,6 +906,8 @@ class CodexRuntime:
             if not turn_id:
                 raise AIChatError("ChatGPT turn did not start")
             self.active_turn_id = turn_id
+            if isinstance(loop_diagnostics, dict):
+                loop_diagnostics.update(phase="turn_started", turn_started_at=time.time(), last_progress_at=time.time())
             self.active_tool_calls = 0
             self.active_tool_signatures = {}
             self.active_tool_cache = {}
@@ -918,19 +923,25 @@ class CodexRuntime:
             )
             if self.research_mode:
                 from ai_research import IDLE_TIMEOUT
-                timeout_seconds = IDLE_TIMEOUT
+                timeout_seconds = max(timeout_seconds, IDLE_TIMEOUT) if isinstance(loop_diagnostics, dict) else IDLE_TIMEOUT
             timeout_message = (f"Research inactive for {timeout_seconds:g} seconds"
                                if self.research_mode else "ChatGPT response timed out")
             deadline = asyncio.get_running_loop().time() + timeout_seconds
+            def inactive_error():
+                """Report only nonsecret execution milestones for an isolated Loop."""
+                if isinstance(loop_diagnostics, dict):
+                    return AIChatError(f"AI Loop model inactive for {timeout_seconds:g} seconds "
+                                       f"(last activity: {loop_diagnostics['phase']})")
+                return AIChatError(timeout_message)
             try:
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
-                        raise AIChatError(timeout_message)
+                        raise inactive_error()
                     try:
                         event = await asyncio.wait_for(self.notifications.get(), timeout=remaining)
                     except asyncio.TimeoutError as exc:
-                        raise AIChatError(timeout_message) from exc
+                        raise inactive_error() from exc
                     method = str(event.get("method") or "")
                     payload = event.get("params") if isinstance(event.get("params"), dict) else {}
                     if not self._matches_turn(payload, turn_id):
@@ -963,12 +974,22 @@ class CodexRuntime:
                         )
                         if progress:
                             deadline = asyncio.get_running_loop().time() + timeout_seconds
+                            if isinstance(loop_diagnostics, dict):
+                                activity = item.get("type") if isinstance(item, dict) else None
+                                if activity is None:
+                                    activity = "reasoning" if "/reasoning/" in method else "agentMessage"
+                                loop_diagnostics.update(phase=activity, last_progress_at=time.time(),
+                                    progress_events=loop_diagnostics.get("progress_events", 0) + 1)
                     if method == "error":
                         last_turn_error = payload.get("error")
                     elif method == "item/agentMessage/delta":
                         delta = payload.get("delta")
                         if isinstance(delta, str):
                             chunks.append(delta)
+                            if getattr(self, "loop_output_tokens", None):
+                                from ai_token_budget import _proxy_encoding
+                                if len(_proxy_encoding().encode_ordinary("".join(chunks))) > self.loop_output_tokens:
+                                    raise AIChatError("Loop response exceeded the reserved output allowance")
                             if sum(len(chunk) for chunk in chunks) > _MAX_REPLY_CHARS:
                                 raise AIChatError("ChatGPT response is too large")
                     elif method == "item/completed":
@@ -2167,6 +2188,7 @@ class AIChatService:
         """Read one preference file while the cross-process lock is held."""
         if not path.is_file() or path.is_symlink():
             return {"drawer_width": 460, "drawer_open": False, "drawer_pinned": False, "jev_max_cost_usd": DEFAULT_JEV_BUDGET_USD}
+        stored = {}
         try:
             raw = read_regular_file_nofollow(path, self.preference_root)
             if len(raw) > 16 * 1024:
@@ -2185,12 +2207,34 @@ class AIChatService:
             drawer_open = False
             drawer_pinned = False
             jev_budget = DEFAULT_JEV_BUDGET_USD
-        return {
+        result = {
             "jev_max_cost_usd": max(0.000001, min(1.0, jev_budget)),
             "drawer_width": max(180, min(100_000, width)),
             "drawer_open": drawer_open,
             "drawer_pinned": drawer_pinned,
         }
+        if isinstance(stored, dict) and stored.get("selection") is not None:
+            try:
+                result["selection"] = self._validate_selection_preference(stored["selection"])
+            except AIChatError:
+                _log(SERVICE, "Ignoring invalid saved AI model selection", level="WARNING")
+        return result
+
+    @staticmethod
+    def _validate_selection_preference(selection: dict[str, Any]) -> dict[str, str]:
+        """Keep only bounded nonsecret model identifiers in owner preferences."""
+        limits = {"provider": 32, "profile": 64, "model": 200, "effort": 32, "service_tier": 32}
+        if not isinstance(selection, dict) or set(selection) - limits.keys():
+            raise AIChatError("Invalid AI model selection")
+        result = {}
+        for key, limit in limits.items():
+            value = selection.get(key, "default" if key == "profile" else "")
+            if not isinstance(value, str) or len(value) > limit or any(ord(char) < 32 for char in value):
+                raise AIChatError("Invalid AI model selection")
+            result[key] = value
+        if result["provider"] not in {"chatgpt", "opencode-go", "opencode-zen", "openrouter"} or not result["model"]:
+            raise AIChatError("Invalid AI model selection")
+        return result
 
     def save_preferences(
         self,
@@ -2199,9 +2243,10 @@ class AIChatService:
         drawer_open: bool | None = None,
         drawer_pinned: bool | None = None,
         jev_max_cost_usd: float | None = None,
+        selection: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Atomically save bounded owner-scoped AI UI preferences."""
-        if drawer_width is None and drawer_open is None and drawer_pinned is None and jev_max_cost_usd is None:
+        if drawer_width is None and drawer_open is None and drawer_pinned is None and jev_max_cost_usd is None and selection is None:
             raise AIChatError("No AI preferences supplied")
         width = None
         if drawer_width is not None:
@@ -2220,6 +2265,7 @@ class AIChatService:
                 or not 0.000001 <= jev_max_cost_usd <= 1.0):
             raise AIChatError("Jev USD budget must be between $0.000001 and $1")
         path = self._preference_path(owner)
+        selected = self._validate_selection_preference(selection) if selection is not None else None
         with advisory_file_lock(self.preference_lock_target):
             payload = self._read_preferences_unlocked(path)
             if width is not None:
@@ -2230,6 +2276,8 @@ class AIChatService:
                 payload["drawer_pinned"] = drawer_pinned
             if jev_max_cost_usd is not None:
                 payload["jev_max_cost_usd"] = float(jev_max_cost_usd)
+            if selected is not None:
+                payload["selection"] = selected
             atomic_write_private_text(
                 path, json.dumps(payload, indent=4, allow_nan=False) + "\n"
             )
@@ -3075,6 +3123,7 @@ class AIChatService:
                 "retention": metadata.get("retention", ""),
                 "training": bool(metadata.get("training")),
                 "free": bool(metadata.get("free")),
+                "cost": copy.deepcopy(metadata.get("cost") or {}),
                 "reasoning": bool(metadata.get("reasoning")),
                 "reasoning_variants": copy.deepcopy(metadata.get("reasoning_variants") or []),
                 "context": int(metadata.get("context") or 0),
@@ -3165,6 +3214,7 @@ class AIChatService:
                     ),
                     "training": training,
                     "free": free,
+                    "cost": cost if isinstance(cost, dict) else {},
                     "reasoning": bool(raw_metadata.get("reasoning")),
                     "tools": raw_metadata.get("tool_call") is not False,
                     "reasoning_variants": self._reasoning_variants(
@@ -4969,8 +5019,6 @@ class AIChatService:
         except (UnicodeDecodeError, json.JSONDecodeError):
             pass
         normalized = message.lower()
-        if status == 429 or "rate limit" in normalized:
-            return "AI provider rate limit reached"
         if any(
             value in normalized
             for value in (
@@ -5037,6 +5085,8 @@ class AIChatService:
             )
         ):
             return "AI provider authentication failed"
+        if status == 429 or "rate limit" in normalized:
+            return "AI provider rate limit reached"
         if status >= 500 or "provider overloaded" in normalized:
             return "AI provider is temporarily unavailable"
         if status == 400:

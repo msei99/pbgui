@@ -7,6 +7,8 @@ This is the central Help page for PBGui. It contains general documentation and t
 - Use the **Contents** list to choose specific topics.
 - Languages supported: EN / DE
 
+The top navigation works like an application menu: click a menu to open it, then move the mouse across the other menu headings to switch directly. Clicking outside closes the menu. On touch screens, tap each menu heading to open or close it.
+
 Help content is sanitized before display. Links and images accept only HTTP(S) URLs, and search highlights are built as text nodes rather than executable HTML. The Help page and overlay retain the configured ASGI mount prefix for local assets and API requests.
 
 On pages with a sidebar, drag its right edge to set the width. PBGui saves one sidebar width in this browser and restores it across pages and refreshes. The focused resize handle also supports Left/Right arrow keys and Home/End. Narrow screens use a full-width stacked sidebar with independently scrollable navigation and content.

@@ -592,6 +592,24 @@ def load_pb8_config(path: Path | str) -> dict:
         return copy.deepcopy(config)
 
 
+def load_pb8_editor_config(path: Path | str, *, loader=None) -> dict:
+    """Open legacy HSL as an unsaved native migration draft with change markers."""
+    try:
+        return {"config": (loader or load_pb8_config)(path)}
+    except PB8ConfigurationError as exc:
+        if "migrate-hsl" not in str(exc):
+            raise
+        return _call_migration_helper("load_hsl_editor", config_path=str(Path(path).resolve()))
+
+
+def preview_pb8_hsl_migration(path: Path | str, choices: dict) -> dict:
+    """Preview PB8's official HSL migration without writing or starting a bot."""
+    return _call_migration_helper(
+        "migrate_hsl", config_path=str(Path(path).resolve()),
+        restart_policies=choices.get("restart_policies"), portfolio=choices.get("portfolio"),
+    )
+
+
 def save_pb8_config(config: dict, path: Path | str) -> dict:
     """Validate and atomically persist a canonical PB8 config."""
     destination = Path(path)

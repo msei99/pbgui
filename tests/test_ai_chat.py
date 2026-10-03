@@ -355,6 +355,9 @@ def test_reasoning_variant_uses_protocol_correct_wire_shape(protocol, expected) 
     [
         (400, "Model is unavailable.", "Selected AI model is currently unavailable"),
         (429, "Rate limit exceeded.", "AI provider rate limit reached"),
+        (429, "Monthly limit reached.", "AI provider usage limit reached"),
+        (429, "Insufficient balance.", "OpenCode billing or spending limit prevents this request"),
+        (429, "Invalid API key", "AI provider authentication failed"),
         (403, "Invalid API key", "AI provider authentication failed"),
         (400, "Region not allowed", "Selected AI model is not available in this region"),
         (
@@ -2219,7 +2222,10 @@ def test_codex_models_preserve_dynamic_reasoning_variants(tmp_path: Path, monkey
             assert method == "model/list"
             assert params["limit"] == 100
             if params.get("cursor") == "next":
-                return {"data": [{"model": "gpt-6-sol", "displayName": "GPT-6 Sol"}]}
+                return {"data": [
+                    {"model": "gpt-6-sol", "displayName": "GPT-6 Sol"},
+                    {"model": "gpt-6.1-sol", "displayName": "GPT-6.1-Sol"},
+                ]}
             return {
                 "nextCursor": "next",
                 "data": [
@@ -2248,7 +2254,8 @@ def test_codex_models_preserve_dynamic_reasoning_variants(tmp_path: Path, monkey
         ]
         assert models[0]["reasoning_variants"][2]["description"] == "Custom"
         assert models[0]["default_effort"] == "ultra"
-        assert [model["id"] for model in models] == ["gpt-test", "gpt-6-sol"]
+        assert [model["id"] for model in models] == ["gpt-test", "gpt-6-sol", "gpt-6.1-sol"]
+        assert models[2]["name"] == "GPT-6.1-Sol"
         assert models[0]["service_tiers"] == [
             {"id": "priority", "label": "Fast", "description": "Uses more credits"}
         ]

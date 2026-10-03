@@ -279,7 +279,7 @@ def test_delete_dashboard_clears_iframe_handler():
     execute(r'''
 const assert=require('node:assert/strict');let click,currentDash='old',editMode=true,selectedDashboards=['old'];
 const _pendingDelete=['old'],contentFrame={onload:()=>{},classList:{remove(){}}},contentLoading={style:{}},editBanner={classList:{remove(){}}},delDialog={classList:{remove(){}}};
-const document={getElementById:()=>({addEventListener:(type,fn)=>click=fn})},apiFetch=async()=>({ok:true});function renderToolbar(){}function refreshList(fn){fn();}
+const document={getElementById:()=>({addEventListener:(type,fn)=>click=fn})},apiFetch=async()=>({ok:true});function persistNavigation(){}function renderToolbar(){}function refreshList(fn){fn();}
 '''+source[start:end]+r'''
 (async()=>{click();await new Promise(setImmediate);assert.equal(contentFrame.src,'about:blank');assert.equal(contentFrame.onload,null);assert.equal(currentDash,'');})().catch(e=>{console.error(e);process.exitCode=1;});
 ''')

@@ -8,11 +8,10 @@ The current integration is in **PB8 Optimize**, with Cloud setup in Queue and GP
 selection in the editor. Multiple jobs share one rental and cached market data.
 See the [user guide](../../docs/help/48_vast_gpu.md).
 
-Active worker image: `ghcr.io/msei99/pbgui-pb8-worker:7b639e1-upstream-v1`
+Active worker image: `ghcr.io/msei99/pbgui-pb8-worker:061e472-upstream-v1`
 (pinned by manifest digest in PBGui). It uses the unmodified official
-`enarjord/passivbot` commit `7b639e1180fa6bfe02e110429d4f931933c73089`, which contains
-[PB8 PR #1832](https://github.com/enarjord/passivbot/pull/1832) and
-[PB8 PR #1834](https://github.com/enarjord/passivbot/pull/1834). Build the
+`enarjord/passivbot` commit `061e472e3d400cb3a740583d52f9d46e02eaf781`, with
+config schema v8.6.0 and the native HSL controller. Build the
 base with `Dockerfile` and add the PBGui worker with `Dockerfile.calibration`.
 Existing rentals retain their own image and process state; see the
 [image release review](../../docs/plans/vast-worker-image-release.md).
@@ -23,6 +22,23 @@ content/license checks and anonymous access validation. The same image runs
 ordinary rentals and GPU calibration; normal users do
 not build or publish images. Publishing a new version is a maintainer release
 operation, not part of creating a queue job.
+
+### Rebuilding the schema v8.6 worker
+
+The recipes target the official source revision of the published worker.
+Its verified immutable manifest is
+`sha256:32d7ee7a00330e01e4a2b8856275289eb8ee4b067542b09cfdce5e81c3b3691c`.
+Build locally:
+
+```sh
+docker build -f setup/vast_gpu_benchmark/Dockerfile -t pbgui-pb8-worker:upstream-061e472-base setup/vast_gpu_benchmark
+docker build -f setup/vast_gpu_benchmark/Dockerfile.calibration -t pbgui-pb8-worker:upstream-061e472-calibration setup/vast_gpu_benchmark
+```
+
+Verify the native config loader, Rust source stamp, worker import and GPU metric
+contract with networking disabled before publication. On activation, update job,
+validation and calibration pins together, record the new layer sizes and metric
+contract, and retain the existing image/revision allowlist entries for recovery.
 
 The base `Dockerfile` also retains historical benchmark tooling. The
 rental/template helpers below are not the live queue's lifecycle controller.

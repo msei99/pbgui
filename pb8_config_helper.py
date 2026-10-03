@@ -651,13 +651,15 @@ def _leaf_metadata(value, prefix: str = "") -> list[dict]:
 
 
 def _override_leaf_metadata(value) -> dict:
-    """Describe one PB8 scalar override leaf without accepting null."""
+    """Describe a PB8 scalar, including the nullable cooldown ceiling."""
     if isinstance(value, bool):
         value_type = "boolean"
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
         value_type = "number"
     elif isinstance(value, str):
         value_type = "string"
+    elif value is None:
+        value_type = "number_or_null"
     else:
         raise TypeError(f"PB8 override leaf has unsupported default type {type(value).__name__}")
     return {"type": value_type, "default": copy.deepcopy(value)}
@@ -676,7 +678,7 @@ def _coin_override_metadata(modules: dict, payload: dict) -> dict:
     for side in ("long", "short"):
         side_policy = policy["bot"][side]
         canonical = {}
-        for group in ("risk", "unstuck", "hsl"):
+        for group in ("risk", "unstuck", "hsl", "entry_cooldown", "forager"):
             if isinstance(side_policy.get(group), dict):
                 canonical[group] = side_policy[group]
         canonical["strategy"] = {strategy_kind: side_policy["strategy"][strategy_kind]}
@@ -838,7 +840,7 @@ def _validate_optimizer_overrides(modules: dict, config: dict, base_config_path:
     prepared = _prepare(modules, config, base_config_path)
     overrides = prepared.get("optimize", {}).get("enable_overrides", [])
     candidate = modules["apply_optimizer_overrides"](overrides, copy.deepcopy(prepared), None)
-    for pside in sorted(candidate.get("bot", {})):
+    for pside in (side for side in ("long", "short") if side in candidate.get("bot", {})):
         candidate = modules["apply_optimizer_overrides"](overrides, candidate, pside)
 
 
@@ -854,11 +856,175 @@ def _optimizer_warmup(configs: list) -> dict:
                         for config in configs]}
 
 
+def _validate_migration_references(source, source_path):
+    """Constrain native migration file reads to the managed config bundle."""
+    if source.get("live", {}).get("coin_flags") and not source.get("coin_overrides"):
+        from config.overrides import parse_old_coin_flags
+        references = parse_old_coin_flags(source)
+    else:
+        references = source.get("coin_overrides", {})
+
+    def visit(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "override_config_path" and child is not None:
+                    if (not isinstance(child, str) or not child.endswith(".json")
+                            or child.startswith(".") or child in ("config.json", "migration_report.json") or any(c in child for c in ("/", "\\"))
+                            or any(ord(c) < 32 or ord(c) == 127 for c in child)):
+                        raise ValueError("Invalid migration override filename")
+                    path = source_path.parent / child
+                    if path.is_symlink() or not path.is_file():
+                        raise ValueError("Migration override must be a regular file in the config directory")
+                else:
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+    visit(references)
+    visit(source)
+
+
+def _canonicalize_editor_fixed_params(source):
+    """Repair PBGui's former flattened forager selectors using native paths."""
+    optimize = source.get("optimize", {})
+    selectors = optimize.get("fixed_params") if isinstance(optimize, dict) else None
+    if not isinstance(selectors, list):
+        return
+    result = []
+    for selector in selectors:
+        parts = selector.split(".") if isinstance(selector, str) else []
+        if parts and parts[0] in ("long", "short"):
+            parts.insert(0, "bot")
+        if (len(parts) == 4 and parts[0] == "bot" and parts[1] in ("long", "short")
+                and parts[2] == "forager" and parts[3].startswith("score_weights_")):
+            from config.param_paths import resolve_optimizer_key_path
+            path = resolve_optimizer_key_path(source, f"{parts[1]}_forager_{parts[3]}")
+            if path and len(path) == 5 and path[:4] == ("bot", parts[1], "forager", "score_weights"):
+                selector = ".".join(path)
+        result.append(selector)
+    optimize["fixed_params"] = result
+
+
+def _migrate_editor_hsl(source, source_path, modules):
+    """Use native migration for an unsaved draft, retaining unresolved choices."""
+    from tools.migrate_hsl_config import migrate
+
+    original = copy.deepcopy(source)
+    source = copy.deepcopy(source)
+    pbgui = source.pop("pbgui", None)
+    if pbgui is not None and not isinstance(pbgui, dict):
+        raise TypeError("pbgui must be an object")
+    _canonicalize_editor_fixed_params(source)
+    bot = source.get("bot", {})
+    mode = str(source.get("live", {}).get("hsl_signal_mode", "coin")).strip().lower()
+    scopes = ["portfolio"] if mode == "unified" else ["long", "short"]
+    choices, unresolved = {}, []
+    portfolio = None
+    if mode == "unified" and "hsl" not in bot:
+        # A temporary disabled native template permits structural normalization.
+        # None of its portfolio values are returned as a user's policy.
+        portfolio = copy.deepcopy(modules["get_template_config"]()["bot"]["long"]["hsl"])
+        portfolio["enabled"] = False
+        portfolio["restart_after_red_policy"] = None
+        unresolved.extend("bot.hsl." + key for key in portfolio)
+    for scope in scopes:
+        block = bot.get("hsl", {}) if scope == "portfolio" else bot.get(scope, {}).get("hsl", {})
+        policy = block.get("restart_after_red_policy")
+        normalized = policy.strip().lower() if isinstance(policy, str) else policy
+        if block.get("enabled") is True and normalized in (None, "threshold"):
+            # The tool requires a choice to normalize an enabled scope. Its
+            # placeholder is removed before the draft leaves this helper.
+            choices[scope] = "always"
+            unresolved.append("bot.hsl.restart_after_red_policy" if scope == "portfolio"
+                              else f"bot.{scope}.hsl.restart_after_red_policy")
+    migrated = migrate(source, restart_policies=choices, portfolio=portfolio,
+                       base_config_path=str(source_path))
+    for path in unresolved:
+        parts = path.split(".")
+        node = migrated
+        for key in parts[:-1]:
+            node = node[key]
+        node[parts[-1]] = None
+        fixed = migrated.get("optimize", {}).get("fixed_runtime_overrides", {})
+        if path in fixed:
+            authored = original.get("optimize", {}).get("fixed_runtime_overrides", {}).get(path)
+            if authored in ("always", "never"):
+                fixed[path] = authored
+            else:
+                del fixed[path]  # Inherit the policy the user selects in the draft.
+    if pbgui is not None:
+        migrated["pbgui"] = pbgui
+
+    def flatten(value, prefix=""):
+        result = {}
+        if isinstance(value, dict) and value:
+            for key, child in value.items():
+                result.update(flatten(child, f"{prefix}.{key}" if prefix else key))
+        else:
+            result[prefix] = value
+        return result
+
+    before, after = flatten(original), flatten(migrated)
+    changes = []
+    config_changes = {}
+    status = {"long": {}, "short": {}}
+    for path in sorted(before.keys() | after.keys()):
+        if path in before and path in after and before[path] == after[path]:
+            continue
+        change = {"path": path, "removed": path not in after, "added": path not in before,
+                  "before": before.get(path), "after": after.get(path), "requires_choice": path in unresolved}
+        config_changes[path] = change
+        if not path.startswith(("bot.long.hsl.", "bot.short.hsl.", "bot.hsl.", "live.hsl_")):
+            continue
+        changes.append(change)
+        parts = path.split(".")
+        if len(parts) >= 4 and parts[0] == "bot" and parts[1] in status and parts[2] == "hsl":
+            key = ".".join(parts[2:])
+            # Keep deleted leaves and their authored values available for the
+            # read-only diff beside the editor; they must not reenter config.
+            status[parts[1]][key] = ({"status": "removed", "before": before[path]}
+                                      if path not in after else "review_line")
+    status["config_changes"] = config_changes
+    return {"config": migrated, "param_status": status, "migration_changes": changes,
+            "migration_unresolved": unresolved, "hsl_migration_required": False}
+
+
 def handle(payload: dict) -> dict:
     """Dispatch one JSON request and return a JSON-compatible result."""
     pb8_dir = Path(str(payload.get("pb8_dir") or "")).resolve()
     modules = _load_pb8_modules(pb8_dir)
     operation = str(payload.get("operation") or "")
+
+    if operation in {"load_hsl_editor", "migrate_hsl"}:
+        source_path = Path(str(payload.get("config_path") or "")).resolve()
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        if not isinstance(source, dict):
+            raise TypeError("config must be an object")
+        _validate_migration_references(source, source_path)
+        if operation == "load_hsl_editor":
+            try:
+                modules["load_prepared_config"](
+                    str(source_path), verbose=False, target="canonical", runtime=None, log_info=False,
+                )
+            except ValueError as exc:
+                if "migrate-hsl" not in str(exc):
+                    raise
+                return _migrate_editor_hsl(source, source_path, modules)
+            raise ValueError("This config does not require HSL migration")
+        from tools.migrate_hsl_config import migrate
+
+        pbgui = source.pop("pbgui", None)
+        if pbgui is not None and not isinstance(pbgui, dict):
+            raise TypeError("pbgui must be an object")
+        _canonicalize_editor_fixed_params(source)
+        migrated = migrate(
+            source, restart_policies=payload.get("restart_policies"),
+            portfolio=payload.get("portfolio"), base_config_path=str(source_path),
+        )
+        if pbgui is not None:
+            migrated["pbgui"] = pbgui
+        return {"config": migrated, "hsl_migration_required": False,
+                "migration_notice": "HSL behavior changed. Re-backtest before live use. Save explicitly to apply."}
 
     if operation == "optimizer_warmup":
         return _optimizer_warmup(payload.get('configs'))

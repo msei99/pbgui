@@ -14,7 +14,7 @@ Die Cloud-Optimierung ist direkt in **PB8 Optimize** integriert. Eine separate
 Vast-Seite unter System gibt es nicht mehr. Jeder Nutzer verwendet sein eigenes
 Vast-Konto und Mietguthaben.
 
-Das Log-Dashboard zeigt **Proxy / min**, **Exact / min**, **Proxy / exact** und **Exact / USD (estimate)**. Proxy verwendet Zählerdifferenzen mit Zeitstempeln, soweit vorhanden, sonst die zuletzt von PB8 gemeldete native Proxy-Rate; Exact verwendet den kumulierten nativen Exact-Fortschritt über mindestens 10 Sekunden. Messintervall und Alter werden angezeigt; die zuletzt gültig gemessenen Raten bleiben bis zu neueren Zählern sichtbar. Beendete Jobs zeigen das letzte gemessene Intervall, keinen Gesamtdurchschnitt. Proxy/Exact beschreibt den kumulierten Auswahlaufwand, keine Ergebnisqualität oder Annahmequote. Exact/USD verwendet den Mietpreis pro Stunde und berücksichtigt weder Transfers noch Start- und Leerlaufzeiten. Fehlende Zähler bleiben unbekannt; die Populationsgröße dient nicht als Ersatz. PBGui liest die letzten 512 KiB des entfernten Optimizer-Logs und speichert bei den Job-Abfragen eine begrenzte Messhistorie, die beim Ersetzen des Log-Ausschnitts sowie beim Neuladen der Seite oder API erhalten bleibt. Ein Update des entfernten Workers ist nicht erforderlich.
+Das Log-Dashboard zeigt **Proxy / min**, **Exact / min**, **Proxy / exact** und **Exact / USD (estimate)**. Proxy verwendet Zählerdifferenzen mit Zeitstempeln, soweit vorhanden, sonst die zuletzt von PB8 gemeldete native Proxy-Rate; Exact verwendet den kumulierten nativen Exact-Fortschritt über mindestens 10 Sekunden. Messintervall und Alter werden angezeigt; die zuletzt gültig gemessenen Raten bleiben bis zu neueren Zählern sichtbar. Beendete Jobs zeigen das letzte gemessene Intervall, keinen Gesamtdurchschnitt. Proxy/Exact beschreibt den kumulierten Auswahlaufwand, keine Ergebnisqualität oder Annahmequote. Exact/USD verwendet den Mietpreis pro Stunde und berücksichtigt weder Transfers noch Start- und Leerlaufzeiten. Fehlende Zähler bleiben unbekannt; die Populationsgröße dient nicht als Ersatz. PBGui liest die letzten 512 KiB des entfernten Optimizer-Logs und speichert bei den Job-Abfragen eine begrenzte Messhistorie, die beim Ersetzen des Log-Ausschnitts sowie beim Neuladen der Seite oder API erhalten bleibt. Ein Update des entfernten Workers ist nicht erforderlich. Aktuelle PB8-Fortschrittsmeldungen verwenden die protokollierten abgeschlossenen Evolution-Zaehler, auch in Generations-, Exact-Warte- und Abschlussphasen. Separate Seed- und Pending-Zaehler werden nicht addiert. Aeltere GPU-Logformate bleiben unterstuetzt.
 
 ## Performance History
 
@@ -81,6 +81,14 @@ Quellen: [Vast-Key-Einrichtung](https://docs.vast.ai/guides/reference/api-keys) 
 `ghcr.io/msei99/pbgui-pb8-worker` benötigt weder GitHub-Konto noch Registry-Key.
 PBGui prüft vor einer bezahlten Miete den anonymen Zugriff auf den festen Digest.
 Das Image enthält Software, keine Nutzerkonfigurationen, Kursdaten oder Keys.
+
+Neue Mieten und Kalibrierungen verwenden den Worker für PB8-Schema v8.6.0 mit
+festem Manifest-Digest. Bestehende Mieten behalten ihr gespeichertes Image und
+ihre PB8-Revision; eine Änderung des Pins aktualisiert keinen laufenden Container.
+Frühere Kalibrierungsergebnisse bleiben lesbar, Profile werden jedoch nicht über
+PB8-Revisionen hinweg wiederverwendet. Nach einem Worker-Update aktiviert die
+angezeigte PBGui-API-Neustart-Schaltfläche den neuen Pin für anschließend
+eingereihte Jobs.
 
 ## GPU & Offers
 
@@ -249,7 +257,7 @@ in PB8 Results/Paretos importiert; der genaue lokale Pfad wird angezeigt.
 Ohne passende Arbeit bleibt die Instanz standardmässig bis zum Ende der Mietfrist
 erhalten, damit hochgeladene Daten und der Worker-Cache für Folgeläufe verfügbar
 bleiben. Sofortige Bereinigung sowie 5 Minuten, 30 Minuten oder 1 Stunde Leerlauf
-bleiben auswählbar. Die GPU-Karte zeigt die aktive Regel und verbleibende Zeit.
+bleiben auswählbar. Mit **Custom** unter **When idle** lässt sich eine eigene Leerlaufzeit in Minuten eingeben (auf ganze Sekunden gerundet). Eine frühere Mietfrist beendet die Miete weiterhin. Die GPU-Karte zeigt die aktive Regel und verbleibende Zeit.
 Neue passende Jobs heben einen laufenden Countdown auf. Auch eine
 pausierte Queue unterliegt dieser Leerlaufregel. Erst **deletion_verified**
 bestätigt die Löschung; blosses Stoppen kann weitere Speicherkosten verursachen.

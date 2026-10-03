@@ -70,6 +70,8 @@ from pb8_config import (
     get_pb8_optimize_metadata,
     get_pb8_template_config,
     load_pb8_config,
+    load_pb8_editor_config,
+    preview_pb8_hsl_migration,
     migrate_pb7_config,
     prepare_pb8_config,
     validate_pb8_override_bundle,
@@ -1122,6 +1124,7 @@ def _queue_item(path: Path) -> dict:
     status, pid = _queue_status({**data, "filename": filename})
     return {
         "filename": filename,
+        "loop_id": data.get("loop_id"),
         "name": str(data.get("name") or filename),
         "exchange": data.get("exchange") or [],
         "status": status,
@@ -1833,7 +1836,7 @@ class BacktestV8Worker:
                 items = _load_queue()
                 running = sum(item["status"] == "running" for item in items)
                 for item in items:
-                    if item["status"] != "queued" or running >= cpu_limit:
+                    if item["status"] != "queued" or item.get("loop_id") or running >= cpu_limit:
                         continue
                     if not claim_backtest_slot("v8", item["filename"], cpu_limit):
                         break
@@ -1867,10 +1870,16 @@ class BacktestV8Worker:
                 meta={"traceback": traceback.format_exc()},
             )
 
-    def launch(self, filename: str) -> dict:
+    def launch(self, filename: str, loop_id: str | None = None) -> dict:
         """Validate the queued snapshot and launch the configured PB8 CLI."""
         _validate_name(filename)
         with _queue_lock():
+            path = _queue_file(filename)
+            if path.is_file():
+                data = _read_json(path)
+                if data.get("loop_id"):
+                    from pb8_loop_store import authorize_native_job
+                    authorize_native_job(Path(PBGDIR), data, loop_id)
             return self._launch_locked(filename)
 
     def _launch_locked(self, filename: str, *, restart: bool = False) -> dict:
@@ -2418,15 +2427,32 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)) -> dict
         with _config_lock():
             if not path.is_file() or path.is_symlink():
                 raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
-            config = load_pb8_config(path)
+            editor_payload = load_pb8_editor_config(path, loader=load_pb8_config)
+            config = editor_payload["config"]
             return {
+                **editor_payload,
                 "name": name,
                 "config": config,
-                "param_status": {},
+                "param_status": editor_payload.get("param_status", {}),
                 "override_configs": _load_override_payloads(config, path.parent),
             }
     except PB8ConfigurationError as exc:
         raise _configuration_error(f"Loading PB8 config {name}", exc) from exc
+
+
+@router.post("/configs/{name}/migrate-hsl")
+def preview_hsl_migration(name: str, body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Preview the native HSL migration; the existing config remains untouched."""
+    path = _config_file(_validate_name(name))
+    with _config_lock():
+        if not path.is_file() or path.is_symlink() or path.parent.is_symlink():
+            raise HTTPException(status_code=404, detail="Config not found")
+        try:
+            editor_payload = load_pb8_editor_config(path, loader=load_pb8_config)
+            _load_override_payloads(editor_payload["config"], path.parent)
+            return preview_pb8_hsl_migration(path, body)
+        except PB8ConfigurationError as exc:
+            raise _configuration_error("Previewing PB8 HSL migration", exc) from exc
 
 
 @router.put("/configs/{name}")
@@ -2653,7 +2679,7 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
 
 @router.get("/queue")
 def get_queue(session: SessionToken = Depends(require_auth)) -> dict:
-    return {"items": _load_queue()}
+    return {"items": [row for row in _load_queue() if not row.get("loop_id")]}
 
 
 @router.websocket("/ws/bt8")
@@ -2669,7 +2695,7 @@ async def ws_backtest(websocket: WebSocket) -> None:
             )
             payload = {
                 "type": "queue_update",
-                "items": items,
+                "items": [row for row in items if not row.get("loop_id")],
                 "settings": {
                     "autostart": str(settings.get("autostart", "False")).lower() == "true",
                     "cpu": _cpu_limit(settings),
@@ -2822,8 +2848,10 @@ def restart_queue_item(filename: str, session: SessionToken = Depends(require_au
         path = _queue_file(filename)
         if not path.is_file():
             raise HTTPException(status_code=404, detail="Queue item not found")
-        _terminate_verified(filename)
         data = _read_json(path)
+        if data.get("loop_id"):
+            raise HTTPException(status_code=409, detail="Loop backtests are scheduled and counted by their owning loop; manual restart is unavailable")
+        _terminate_verified(filename)
         data.pop("started_at", None)
         data.pop("status_override", None)
         atomic_write_json(path, data)
@@ -2872,6 +2900,8 @@ def clear_finished(session: SessionToken = Depends(require_auth)) -> dict:
     removed = 0
     with _queue_lock():
         for item in _load_queue():
+            if item.get("loop_id"):
+                continue
             if item["status"] not in {"complete", "error", "stopped"}:
                 continue
             current = _queue_item(_queue_file(item["filename"]))

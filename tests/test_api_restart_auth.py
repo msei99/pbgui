@@ -353,7 +353,7 @@ def test_root_restart_lock_order_is_global_service_then_update(monkeypatch) -> N
 
 def test_restart_blockers_keep_local_registry_reads_on_event_loop(monkeypatch) -> None:
     """Only the blocking VPS deployment inspection is delegated to a worker thread."""
-    from api import cluster, coin_data, dashboard, db_tools, pareto_explorer, vps_manager
+    from api import cluster, coin_data, dashboard, db_tools, pareto_explorer, vps_manager, loop_optimizer_v8
 
     event_loop_thread = threading.get_ident()
     local_threads: list[int] = []
@@ -368,6 +368,7 @@ def test_restart_blockers_keep_local_registry_reads_on_event_loop(monkeypatch) -
     monkeypatch.setattr(PBApiServer, "profit_sweep_restart_block_reason", local_reason)
     monkeypatch.setattr(PBApiServer, "ai_restart_block_reason", local_reason)
     monkeypatch.setattr(PBApiServer, "credential_migration_restart_block_reason", local_reason)
+    monkeypatch.setattr(loop_optimizer_v8, "restart_block_reason", local_reason)
 
     def inspect_deploys() -> dict[str, bool]:
         external_threads.append(threading.get_ident())
@@ -380,7 +381,7 @@ def test_restart_blockers_keep_local_registry_reads_on_event_loop(monkeypatch) -
     )
 
     assert asyncio.run(PBApiServer._restart_block_state()) == (False, "")
-    assert local_threads == [event_loop_thread] * 8
+    assert local_threads == [event_loop_thread] * 9
     assert len(external_threads) == 1
     assert external_threads[0] != event_loop_thread
 

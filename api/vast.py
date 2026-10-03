@@ -279,7 +279,7 @@ class RentalPreferences(GpuPreferences):
     """Persist the shared rental limits alongside marketplace requirements."""
     hours: float = Field(default=1, ge=.25, le=24)
     budget: float = Field(default=1, ge=.1, le=100)
-    idle_seconds: Literal[-1, 0, 300, 1800, 3600] = -1
+    idle_seconds: int = Field(default=-1, ge=-1, strict=True)
     max_rentals: int = Field(default=1, ge=1, le=16, strict=True)
     auto_rent: bool = False
     convergence_enabled: bool = False
@@ -394,7 +394,7 @@ class StartJobRequest(BaseModel):
     hours: float = Field(default=1, ge=.25, le=24)
     budget: float = Field(default=1, ge=.1, le=100)
     accept_rental_and_cleanup: bool = False
-    idle_seconds: Literal[-1, 0, 300, 1800, 3600] = -1
+    idle_seconds: int = Field(default=-1, ge=-1, strict=True)
 
 
 @router.get("/gpu-preferences")

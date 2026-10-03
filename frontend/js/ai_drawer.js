@@ -16,6 +16,9 @@
     modelGeneration: 0,
     modelsLoading: false,
     selectionDirty: false,
+    savedSelection: null,
+    selectionWrite: Promise.resolve(),
+    selectionSaveError: '',
     listGeneration: 0,
     proposalGeneration: 0,
     history: false,
@@ -60,6 +63,8 @@
     setStatus('Confirmation dialog is unavailable. Reload PBGui and try again.', true);
     return false;
   }
+
+  var selectionReady;
 
   function build() {
     if (root) return;
@@ -118,23 +123,23 @@
         renderHistory();
       }
       state.selectionDirty = true;
-      loadModels();
+      selectionReady = loadModels().then(function (loaded) { if (loaded) return persistSelection(); });
     });
     toolbar.appendChild(provider);
     var model = el('select');
     model.id = 'pai-model';
-    model.addEventListener('change', function () { state.selectionDirty = true; rebuildEfforts(); rebuildSpeeds(); });
+    model.addEventListener('change', function () { state.selectionDirty = true; rebuildEfforts(); rebuildSpeeds(); persistSelection(); });
     toolbar.appendChild(model);
     var effort = el('select');
     effort.id = 'pai-effort';
-    effort.addEventListener('change', function () { state.selectionDirty = true; });
+    effort.addEventListener('change', function () { state.selectionDirty = true; persistSelection(); });
     toolbar.appendChild(effort);
     var speed = el('select');
     speed.id = 'pai-speed';
     speed.setAttribute('aria-label', 'Speed');
     speed.title = 'Fast mode uses more ChatGPT credits';
     speed.hidden = true;
-    speed.addEventListener('change', function () { state.selectionDirty = true; });
+    speed.addEventListener('change', function () { state.selectionDirty = true; persistSelection(); });
     toolbar.appendChild(speed);
     var fresh = el('button', 'pai-new', 'New');
     fresh.type = 'button';
@@ -198,7 +203,7 @@
     document.body.appendChild(root);
     document.body.appendChild(buildReviewOverlay());
     renderContext(collectDisplayContext());
-    refreshAll();
+    selectionReady = refreshAll();
   }
 
   function collectContext(options) {
@@ -337,7 +342,21 @@
       notifyLayoutChange();
       var status = await api('/status');
       state.providers = status.providers || {};
-      await rebuildProviders();
+      var saved = !state.selectionDirty && preferences.selection;
+      if (saved) {
+        state.savedSelection = saved;
+        state.selectionDirty = true;
+        state.profile = saved.profile || 'default';
+        var restoring = rebuildProviders(saved.provider === 'chatgpt' ? 'chatgpt:' + state.profile : saved.provider, saved.model, true);
+        var restoreGeneration = state.modelGeneration;
+        await restoring;
+        if (restoreGeneration === state.modelGeneration && state.savedSelection === saved) {
+          rebuildEfforts(saved.effort || '');
+          rebuildSpeeds(saved.service_tier || '');
+        }
+      } else {
+        await rebuildProviders();
+      }
       await loadConversations();
     } catch (error) { setStatus(error.message, true); }
   }
@@ -396,6 +415,28 @@
     });
   }
 
+  function currentSelection() {
+    return {provider: selectedProvider(), profile: selectedProfile() || 'default',
+      model: root.querySelector('#pai-model').value, effort: root.querySelector('#pai-effort').value,
+      service_tier: root.querySelector('#pai-speed').hidden ? '' : root.querySelector('#pai-speed').value};
+  }
+
+  function persistSelection() {
+    if (state.modelsLoading) return state.selectionWrite;
+    var selection = currentSelection();
+    if (!selection.model || !state.models[selection.model]) return state.selectionWrite;
+    state.savedSelection = selection;
+    // Serialize snapshots so older writes cannot overwrite a newer choice.
+    state.selectionWrite = state.selectionWrite.then(function () {
+      return api('/preferences', {method: 'PUT', keepalive: true,
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({selection: selection})});
+    }).then(function () { state.selectionSaveError = ''; }, function (error) {
+      state.selectionSaveError = 'AI selection could not be saved: ' + error.message;
+      setStatus(state.selectionSaveError, true);
+    });
+    return state.selectionWrite;
+  }
+
   function bindResize(handle) {
     handle.addEventListener('mousedown', function (event) {
       if (window.innerWidth <= 760 || event.button !== 0 || state.resizing) return;
@@ -441,7 +482,7 @@
     return value.startsWith('chatgpt:') ? value.slice(8) : state.profile;
   }
 
-  function rebuildProviders(preferred, preferredModel) {
+  function rebuildProviders(preferred, preferredModel, strictModel) {
     var select = root.querySelector('#pai-provider');
     var current = preferred || select.value;
     select.textContent = '';
@@ -463,10 +504,10 @@
       select.appendChild(missing);
     }
     if (current) select.value = current;
-    return loadModels(preferredModel);
+    return loadModels(preferredModel, strictModel);
   }
 
-  async function loadModels(preferred) {
+  async function loadModels(preferred, strictModel) {
     var provider = selectedProvider();
     var profile = selectedProfile();
     root.querySelector('.pai-compose textarea').placeholder = provider === 'openrouter'
@@ -514,10 +555,18 @@
         select.appendChild(empty);
       }
       if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
+      else if (strictModel && current) {
+        var missing = el('option', '', 'Unavailable model: ' + current);
+        missing.value = current;
+        select.appendChild(missing);
+        select.value = current;
+        setStatus('The saved AI model is unavailable. Select a connected model.', true);
+      }
       rebuildEfforts();
       rebuildSpeeds();
       state.modelsLoading = false;
       setBusy(state.busy);
+      return true;
     } catch (error) {
       if (generation !== state.modelGeneration || provider !== selectedProvider() || profile !== selectedProfile()) return;
       state.models = {};
@@ -655,8 +704,8 @@
       setBusy(!!conversation.busy);
       var retry = root.querySelector('.pai-retry');
       retry.hidden = !conversation.last_error || !state.retryMessages[id] || conversation.busy;
-      setStatus(conversation.busy ? (conversation.activity || 'Model is working...') : (conversation.last_error || (conversation.analysis_only ? 'Analysis only' : '')), !!conversation.last_error);
-      if (!state.selectionDirty) {
+      setStatus(state.selectionSaveError || (conversation.busy ? (conversation.activity || 'Model is working...') : (conversation.last_error || (conversation.analysis_only ? 'Analysis only' : ''))), !!state.selectionSaveError || !!conversation.last_error);
+      if (!state.selectionDirty && !state.savedSelection) {
         state.profile = conversation.chatgpt_profile || 'default';
         var providerValue = conversation.provider === 'chatgpt' ? 'chatgpt:' + state.profile : conversation.provider;
         if (root.querySelector('#pai-provider').value !== providerValue) {
@@ -666,7 +715,7 @@
         }
       }
       if (id !== state.current || generation !== state.requestGeneration) return;
-      if (!state.selectionDirty) {
+      if (!state.selectionDirty && !state.savedSelection) {
         rebuildEfforts(conversation.effort || '');
         rebuildSpeeds(conversation.service_tier || '');
       }
@@ -1316,7 +1365,7 @@
     var button = document.getElementById('pbgui-ai-btn');
     if (button) button.setAttribute('aria-expanded', 'true');
     saveDrawerPreferences(true).catch(function (error) { setStatus(error.message, true); });
-    loadConversations();
+    selectionReady.then(function () { return loadConversations(); }).catch(function (error) { setStatus(error.message, true); });
   }
 
   function closeDrawer() {
@@ -1334,6 +1383,17 @@
   }
 
   var facade = window.PBGuiAI || {};
+  facade.getSelection = async function () {
+    build();
+    await selectionReady;
+    var write;
+    do { write = state.selectionWrite; await write; } while (write !== state.selectionWrite);
+    if (state.selectionSaveError) throw new Error(state.selectionSaveError);
+    if (state.modelsLoading) throw new Error('AI models are still loading. Try again shortly.');
+    var model = root.querySelector('#pai-model').value;
+    if (!model || !state.models[model]) throw new Error('Select a connected model in the PBGui AI assistant.');
+    return currentSelection();
+  };
   facade.open = openDrawer;
   facade.close = closeDrawer;
   facade.toggle = function () { state.open ? closeDrawer() : openDrawer(); };

@@ -2,14 +2,102 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import textwrap
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 HTML_PATH = ROOT / "frontend" / "vps_manager.html"
 LOG_VIEWER_PATH = ROOT / "frontend" / "js" / "log_viewer_panel.js"
+
+
+@pytest.mark.parametrize("command,scope,has_pb8,notice", [
+    ("master-update-pb8", "master", True, True),
+    ("master-update-pbgui-pb8", "master", True, True),
+    ("master-update-pb7", "master", True, False),
+    ("vps-update-pb8", "vps", True, True),
+    ("vps-update-pbgui-pb8", "vps", True, True),
+    ("vps-update-pb7", "vps", True, False),
+    ("vps-update-runtime", "bulk", True, True),
+    ("vps-update-pbgui-runtime", "bulk", True, True),
+    ("vps-update-runtime", "bulk", False, False),
+    ("vps-update-pbgui-runtime", "bulk", False, False),
+    ("vps-update", "bulk", True, False),
+])
+def test_pb8_update_notice_preserves_actions(command, scope, has_pb8, notice):
+    """Only PB8 updates wait for one notice; cancel sends nothing and retains state."""
+    bootstrap = """
+        const caseData = %s;
+        const calls = [], dialogs = [];
+        let resolveDialog;
+        const window = { PBGuiDialogs: { confirm(options) {
+          dialogs.push(options);
+          return new Promise(resolve => { resolveDialog = resolve; });
+        } } };
+        const store = { state: { config: { vps_deploy: { action: 'old' } } } };
+        const selected = ['vps1', 'vps2'];
+        const getManagedRows = () => [{hostname:'vps1', pb8_installed:caseData.has_pb8},
+                                      {hostname:'vps2', pb8_installed:false}];
+        const getSelectedOverviewHosts = () => selected.slice();
+        const getVpsDeployConfig = () => ({mode:'parallel',debug:true});
+        const overviewDeployNeedsPassword = () => false;
+        const toast = (...args) => calls.push(['toast',...args]);
+        const selectView = (...args) => calls.push(['view',...args]);
+        const send = payload => calls.push(['send',payload]);
+        const openMasterTaskLog = (...args) => calls.push(['master-log',...args]);
+        const runMaster = (...args) => calls.push(['master-run',...args]);
+        const openVpsTaskLog = (...args) => calls.push(['vps-log',...args]);
+        const runVps = (...args) => calls.push(['vps-run',...args]);
+    """ % json.dumps(dict(command=command, scope=scope, has_pb8=has_pb8, notice=notice))
+    assertions = r"""
+        (async () => {
+          const extra = {branch:'master',commit:'abc'};
+          const action = () => caseData.scope === 'master'
+            ? runMasterWithLog(caseData.command,'Update',extra)
+            : caseData.scope === 'vps'
+              ? runVpsWithLog('vps1',caseData.command,'Update',extra,false)
+              : deploySelectedVpsAction(caseData.command,'Update');
+          let pending = action();
+          if (caseData.notice) {
+            assert.equal(dialogs.length,1);
+            assert.equal(calls.length,0);
+            assert.equal(store.state.config.vps_deploy.action,'old');
+            assert.match(dialogs[0].message,/click Save/);
+            assert.match(dialogs[0].detail,/VPS with no PB8 bots first/);
+            resolveDialog(false);
+            await pending;
+            assert.equal(calls.length,0);
+            assert.equal(store.state.config.vps_deploy.action,'old');
+            pending = action();
+            assert.equal(dialogs.length,2); // One dialog per attempted update, never per host.
+            resolveDialog(true);
+          } else {
+            assert.equal(dialogs.length,0);
+          }
+          await pending;
+          if (caseData.scope === 'master') {
+            assert.deepEqual(calls,[['master-log',caseData.command,'Update'],
+                                    ['master-run',caseData.command,'Update',extra]]);
+          } else if (caseData.scope === 'vps') {
+            assert.deepEqual(calls,[['vps-log','vps1',caseData.command,'Update'],
+                                    ['vps-run','vps1',caseData.command,'Update',extra,false]]);
+          } else {
+            assert.deepEqual(calls,[['view','deploys-vps-logging'],['send',{
+              cmd:'run_vps_deploy',hostnames:['vps1','vps2'],command:caseData.command,
+              mode:'parallel',extra_vars:caseData.command === 'vps-update'
+                ? {reboot:false,reboot_requested:false} : null,debug:true
+            }]]);
+          }
+        })().catch(error => { console.error(error); process.exitCode=1; });
+    """
+    _run_node_assertions(
+        ["withPb8UpdateNotice", "runMasterWithLog", "runVpsWithLog", "deploySelectedVpsAction"],
+        bootstrap=bootstrap, assertions=assertions,
+    )
 
 
 def test_unknown_ssh_host_confirmation_uses_exact_fingerprint() -> None:

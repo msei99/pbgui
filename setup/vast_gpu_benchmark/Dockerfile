@@ -7,7 +7,7 @@ ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends git build-essential && rm -rf /var/lib/apt/lists/*
 # Official enarjord/passivbot source, pinned independently of dependency wheels.
-ARG PB8_REVISION=7b639e1180fa6bfe02e110429d4f931933c73089
+ARG PB8_REVISION=061e472e3d400cb3a740583d52f9d46e02eaf781
 RUN git clone https://github.com/enarjord/passivbot.git /opt/passivbot \
     && cd /opt/passivbot && git checkout --detach "$PB8_REVISION" \
     && git rev-parse HEAD > /opt/pb8-revision \

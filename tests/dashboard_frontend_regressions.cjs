@@ -667,7 +667,82 @@ async function page() {
     }
 }
 
-({creation, templates, cancel, resize, charts, cards, emptyOrders, messages, assets, page})[process.argv[2]]().catch(error => {
+async function candles() {
+    const document = new Element();
+    document.createElement = tag => new Element(tag);
+    document.getElementById = () => new Element();
+    const timers = new Map(), requests = [], candleRows = [], volumeRows = [];
+    let timerId = 0, removed = false, fitCount = 0;
+    const visible = {from: 300, to: 900};
+    let restored;
+    const scale = {fitContent() {fitCount++;}, getVisibleRange() {return visible;},
+        setVisibleRange(range) {restored = range;}};
+    const line = {applyOptions() {}};
+    const price = {setData(rows) {candleRows.splice(0, candleRows.length, ...rows);},
+        update(row) {const i = candleRows.findIndex(c => c.time === row.time);
+            if (i < 0) candleRows.push(row); else candleRows[i] = row;},
+        applyOptions() {}, createPriceLine() {return line;}};
+    const volume = {setData(rows) {volumeRows.splice(0, volumeRows.length, ...rows);},
+        update(row) {const i = volumeRows.findIndex(c => c.time === row.time);
+            if (i < 0) volumeRows.push(row); else volumeRows[i] = row;}};
+    const chart = {addCandlestickSeries() {return price;}, addHistogramSeries() {return volume;},
+        timeScale() {return scale;}, priceScale() {return {applyOptions() {}};},
+        applyOptions() {}, remove() {removed = true;}};
+    const window = {LightweightCharts: {createChart() {return chart;}, CrosshairMode: {Normal: 0},
+        LineStyle: {Solid: 0, Dotted: 1, Dashed: 2}}};
+    const ctx = vm.createContext({window, document, AbortController, console, encodeURIComponent,
+        requestAnimationFrame() {}, cancelAnimationFrame() {},
+        setTimeout(fn, delay) {timers.set(++timerId, {fn, delay}); return timerId;},
+        clearTimeout(id) {timers.delete(id);},
+        fetch(url, options) {return new Promise(resolve => requests.push({url, options, resolve}));}
+    });
+    vm.runInContext(source('dashboard_render.js'), ctx);
+    const container = new Element(); container.connected = true;
+    const row = (t, close, vol) => ({t, o: 5, h: 6, l: 4, c: close, v: vol});
+    const ctrl = window.DashRender.renderOrders(container, {
+        user: 'alice', symbol: 'NEARUSDC', candles: [row(300000, 5, 10), row(600000, 5, 20)]
+    }, {apiBase: '/pbgui/api', timeframe: '5m'});
+    const runReconcile = delay => {
+        const match = [...timers].find(([, timer]) => timer.delay === delay);
+        assert.ok(match, 'automatic candle reconciliation scheduled');
+        timers.delete(match[0]); match[1].fn();
+    };
+    runReconcile(0);
+    assert.ok(requests[0].url.startsWith('/pbgui/api/dashboard/candles_data?'));
+    assert.ok(requests[0].url.includes('timeframe=5m'));
+    ctrl.updateCandle([600000, 5, 7, 4, 6, 25]);
+    ctrl.updateCandle([900000, 6, 8, 5, 7, 30]);
+    ctrl.prependData([row(0, 4, 3)]);
+    assert.equal(candleRows.at(-1).close, 7, 'history loading must retain appended live candle');
+    assert.equal(volumeRows.at(-1).value, 30, 'history loading must retain live volume');
+    requests[0].resolve({ok: true, json: async () => ({candles: [row(300000, 5.2, 12), row(600000, 5.1, 21)]})});
+    await tick();
+    assert.equal(candleRows.find(c => c.time === 300).close, 5.2, 'missed final closed value repaired');
+    assert.equal(volumeRows.find(c => c.time === 300).value, 12);
+    assert.equal(candleRows.find(c => c.time === 600).close, 6, 'in-flight snapshot cannot undo newer WS update');
+    assert.equal(candleRows[0].time, 0, 'loaded older history retained');
+    assert.deepEqual(restored, visible, 'visible range retained');
+    assert.equal(fitCount, 0, 'reconciliation must not fit/reset zoom');
+    runReconcile(30000);
+    const oldRequest = requests[1];
+    ctrl.setData([row(1800000, 8, 50)], '30m');
+    assert.equal(oldRequest.options.signal.aborted, true);
+    oldRequest.resolve({ok: true, json: async () => ({candles: [row(300000, 99, 999)]})});
+    await tick();
+    assert.deepEqual(candleRows.map(c => c.time), [1800], 'old timeframe response discarded');
+    runReconcile(0);
+    assert.ok(requests[2].url.includes('timeframe=30m'));
+    ctrl.destroy();
+    assert.equal(requests[2].options.signal.aborted, true);
+    assert.equal(document.count('visibilitychange'), 0);
+    assert.ok(removed);
+    assert.equal([...timers].filter(([, t]) => [0, 30000].includes(t.delay)).length, 0);
+    requests[2].resolve({ok: true, json: async () => ({candles: [row(1800000, 99, 999)]})});
+    await tick();
+    assert.equal(candleRows.at(-1).close, 8, 'destroyed chart ignores pending snapshot');
+}
+
+({creation, templates, cancel, resize, charts, cards, emptyOrders, messages, assets, candles, page})[process.argv[2]]().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

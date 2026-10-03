@@ -1315,7 +1315,8 @@ function _covParseParamValue(rawValue, metadata, key) {
     if (boolRaw === 'false') return false;
     throw new Error('must be true or false');
   }
-  if (type === 'number') {
+  if (type === 'number' || type === 'number_or_null') {
+    if (type === 'number_or_null' && (!raw || raw === 'null')) return null;
     if (!raw) throw new Error('must be a number');
     var number = Number(raw);
     if (!Number.isFinite(number)) throw new Error('must be a number');

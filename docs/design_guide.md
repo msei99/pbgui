@@ -19,6 +19,7 @@ Top navigation (#topnav)
 ```
 
 - **Top navigation:** application destinations, account/global status, Guide and About. Use `frontend/pbgui_nav.js` and `PBGUI_NAV_CONFIG`. Do not build another navigation bar.
+- **Application menus:** open the first top-level menu by click or keyboard. While one menu is open, moving the mouse over another top-level menu switches to it immediately; hovering alone does not open a closed menu bar. Touch remains tap-to-toggle, and outside clicks close dropdowns without dismissing detail dialogs.
 - **Sidebar:** page navigation, entity selection, filters, context actions and compact status information. Use meaningful page controls; do not add an empty decorative sidebar.
 - **Main view:** the actual table, editor, chart, results or documentation. It fills the remaining width. Do not center the entire application inside a narrow fixed-width container.
 - **Dialog:** a temporary interaction layered over the current page. A menu destination must not become a floating dialog over an otherwise empty background.
@@ -166,6 +167,47 @@ For static pages under `/app/`, preserve mounted deployments with relative asset
 - Do not solve clipping by hiding overflow while leaving controls outside the visible area.
 - Keep existing fields, columns, status meanings, selected rows and contextual actions when changing presentation.
 
+### Main content conventions from existing pages
+
+Use the established editor/table hierarchy, as in Optimize (`v7_optimize.html`, also the PB8 adapter), Backtest (`v7_backtest.html`) and Run Config (`v7_edit.html`). Monitoring pages use the same full-width main view with a toolbar and scrollable data area.
+
+- A main view uses the available width and the page's `--bg` background. Its padding comes from `--sp-lg` (mobile `--sp-md`), not a separate narrow wrapper.
+- Use an `.editor-shell` for vertically arranged editor sections; use `.section-title` for section headings with the existing font size, spacing and bottom divider. Do not mix unstyled h3/h4 headings with editor sections.
+- Fields use the existing `.form-row` grid, column/span variants and `.form-group` controls. Arrange configuration/input, objectives, execution limits and actions in that order. Adapt grids to the remaining content width, including a wide sidebar.
+- Use `.panel-toolbar` for contextual actions, selections and compact status. Use regular `.btn` controls for primary workflow actions. `.act-btn`/`.tiny-btn` are compact table actions, not the default for a whole workflow or window tabs.
+- Main data tables use the existing `.tbl` presentation: sticky dark header, uppercase muted column labels, 2 px header separator, standard row spacing and selection highlight. Keep tables in bordered overflow containers. Report prose/diffs belong in a detail window reached from a row or action.
+- Show summary values using the editor's grid/field hierarchy or the page's existing status controls. Do not invent a second dashboard-card style inside an editor.
+- Preserve the shell, all fields/actions, automatic updates and navigation/edit state when reorganizing the main content.
+- Config compatibility changes use the shared `editor_shared.js` markers: amber outlines on the exact mapped structured fields, and amber highlights at exact paths in Raw JSON. JSON syntax errors retain red priority. Preserve focus, selection and scroll; annotations never enter saved config data. The Long/Short JSON editors keep their individual HSL review markers instead of coloring unrelated blocks.
+
+### Windows and detail dialogs
+
+An inventory on 2026-10-01 found 18 existing window-bearing frontend implementations using centered overlays; the AI Loop native `<dialog>` was the outlier. Reference implementations include Optimize `.modal-backdrop`/`.modal`/`.modal-head`/`.modal-body`, Backtest `.modal-overlay`/`.modal-box`, Run Config import windows, Jobs Monitor and the shared `pbgui_dialogs.js`/Guide overlay. Their common geometry defines the rule below; historical class names may differ.
+
+- Open a full-viewport fixed overlay with a dim backdrop and a **centered** window. The main view remains at its current position behind it. Do not rely on native `<dialog>` user-agent margins/positioning: the global CSS reset can place it in the top-left corner.
+- The window uses `--bg2`, `--border`, existing text/font/spacing tokens, an 8–10 px radius, and the established shadow. The title/header is visually separated by a bottom border. Put the explicit close action at the top right.
+- Use `frontend/css/modals_shared.css` sizing tokens: wide detail windows `--pbg-modal-wide-width` (1100 px bounded by viewport), settings windows `--pbg-modal-settings-max-width` (760 px), and `--pbg-modal-max-h`. Keep viewport margins on narrow/short screens; no off-screen controls.
+- New interactive detail windows use the reusable `.pbg-modal-overlay` → `.pbg-modal-window` shell from `modals_shared.css`, with `.pbg-modal-head`, optional `.pbg-modal-tabs` and `.pbg-modal-body`. Domain CSS may style content, not replace the shared positioning/header/body geometry. Existing modal families remain valid; do not mass-migrate unrelated pages.
+- The header and tabs stay visible; only the content body scrolls. Wide content tables scroll inside their own container. Use regular-size tabs with an active state, not miniature action buttons. Do not force a large empty window for a short message.
+- Confirmation, warning and prompt workflows use `PBGuiDialogs`. Detail windows use safe DOM rendering (`textContent`), `role="dialog"`, `aria-modal="true"` and a labelled title. Keep keyboard focus inside the window; restore focus to the trigger on close. Escape and the close control are explicit close actions. **Never close on backdrop/outside clicks.**
+- Updates must preserve the open window, active tab, selection and scroll position. Persist non-secret report navigation for browser reload where appropriate. Do not duplicate full report text in the main view.
+- Interactive report/detail windows must be **draggable by the title bar and resizable at their edges/corners**, like the existing log, chart and Guide windows. Centering describes only the initial placement. Preserve chosen position/size across tabs and automatic updates; clamp the window to the viewport after browser resizing. Use `frontend/js/floating_window.js` for the shared detail-window shell. Simple confirmation/prompt dialogs remain a separate interaction type. Do not classify movable report windows as optional special cases.
+
+Minimal detail-window shell (opened by adding `.is-open` and setting `aria-hidden="false"` on the overlay):
+
+```html
+<div class="pbg-modal-overlay" aria-hidden="true">
+  <div class="pbg-modal-window" role="dialog" aria-modal="true" aria-labelledby="report-title">
+    <div class="pbg-modal-head">
+      <h3 id="report-title">Report</h3>
+      <button class="pbg-modal-close" type="button" aria-label="Close">×</button>
+    </div>
+    <div class="pbg-modal-tabs" role="tablist"><!-- Accessible tabs --></div>
+    <div class="pbg-modal-body"><!-- Report content --></div>
+  </div>
+</div>
+```
+
 ## 6. Navigation, loading and state
 
 - Register normal pages in `FASTAPI_PAGES`, the correct navigation group and `GUIDE_TOPICS`, with EN/DE guide coverage.
@@ -194,7 +236,7 @@ Use isolated data and intercept browser requests; never run production actions m
 4. **Overflow:** assert `scrollWidth <= clientWidth` for sidebar controls/compact rows. Verify both EN/DE buttons remain visible and aligned. Check access to the bottom of long lists/actions and the main content.
 5. **Real dynamic controls:** exercise actual renderers for view/edit modes and conditional actions, including Save/Delete, badges, disabled controls and hidden controls. Synthetic buttons alone are insufficient.
 6. **Content:** verify all original data fields and interactions remain available, including filters, selections and edits during updates. Keep visible UI copy concise: field explanations belong behind **…**, and detailed feature help belongs in Guide / Help.
-7. **Interaction:** test pointer/keyboard resizing, focus, long labels, compact icon wrapping and embedded-frame boundaries when relevant.
+7. **Interaction:** test pointer/keyboard resizing, focus, long labels, compact icon wrapping and embedded-frame boundaries when relevant. For windows, assert centered placement (not just lack of overflow), bounded geometry, header/close visibility, focus containment/return, actual title-bar dragging and edge/corner resizing, geometry persistence across tabs/updates/reload, Escape and no backdrop dismissal; test long content and short viewports.
 8. **Navigation state:** reload a non-default destination with filters/search and verify restoration. Test asynchronous topic/language changes where applicable.
 9. **Mounted routes:** confirm API and asset requests retain the application prefix.
 10. **Finish:** update EN/DE user guides and `releases/unreleased.md`; report changed areas and tests actually performed. Do not claim that an isolated component test proves the real menu works.

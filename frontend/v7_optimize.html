@@ -19,8 +19,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - V7 Optimize</title>
-<link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
-<script src="/app/js/optimize_editor_adapter.js?v=12"></script>
+<link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
+<script src="/app/js/optimize_editor_adapter.js?v=14"></script>
+<script src="/app/js/floating_window.js?v=1"></script>
+<script src="/app/js/pb8_loop_instructions.js?v=2"></script>
+<script src="/app/js/pb8_loop_optimizer.js?v=42"></script>
+<link rel="stylesheet" href="/app/css/pb8_loop_optimizer.css?v=14">
 <style>
 :root {
   --bg: #0e1117;
@@ -2251,7 +2255,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
-<script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=5"></script>
 <link rel="stylesheet" href="/app/css/vast.css?v=21">
   <script src="/app/js/sidebar_resize.js?v=3"></script>
   <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
@@ -2757,7 +2761,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <div id="toast-stack"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=15"></script>
+<script src="/app/js/editor_shared.js?v=17"></script>
 <script src="/app/js/date_overwrite.js?v=2"></script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
 <script src="/app/js/scenario_visual_editor.js?v=23"></script>
@@ -6835,6 +6839,8 @@ function renderOptimizeRuntimeOverridesEditor() {
     }
     var groups = { long: [], short: [], other: [] };
     (OPT_FIXED_RUNTIME_OVERRIDE_FIELDS || []).forEach(function(field) {
+      var modeNode = el('opted-hsl-signal-mode');
+      if (!optimizeEditorAdapter.activeHslPath(field.key, modeNode ? modeNode.value : 'coin')) return;
       var side = field.side || ((String(field.key || '').match(/^bot\.(long|short)\./) || [])[1]);
       groups[side === 'long' || side === 'short' ? side : 'other'].push(field);
     });
@@ -7131,7 +7137,12 @@ function collectOptimizeRuntimeOverrides(opts) {
     ? normalizeOptimizeRuntimeOverrideMap(Object.assign({}, fallback, state.runtimeOverrideValues || {}))
     : {};
   if (optimizeEditorAdapter.isV8) {
+    var mode = opts.hslSignalMode || 'coin';
+    Object.keys(result).forEach(function(key) {
+      if (!optimizeEditorAdapter.activeHslPath(key, mode)) delete result[key];
+    });
     OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.forEach(function(field) {
+      if (!optimizeEditorAdapter.activeHslPath(field.key, mode)) return;
       if (field.storage === 'bot_hsl') {
         delete result[field.key];
         return;
@@ -8927,7 +8938,8 @@ function setOptBotParamStatus(paramStatus) {
   var nextStatus = paramStatus || {};
   _optBotParamStatus = {
     long: nextStatus.long || {},
-    short: nextStatus.short || {}
+    short: nextStatus.short || {},
+    config_changes: nextStatus.config_changes || {}
   };
   var longTa = el('opted-bot-long');
   if (longTa) _applyBotJsonHighlight(longTa, _optBotParamStatus.long);
@@ -9783,6 +9795,10 @@ function populateOptimizeEditor(config, opts) {
   el('opted-vol-mcap').value = pbgui.vol_mcap == null ? '' : String(pbgui.vol_mcap);
   el('opted-min-coin-age').value = live.minimum_coin_age_days == null ? '' : String(live.minimum_coin_age_days);
   el('opted-hsl-signal-mode').value = normalizeOptimizeHslSignalModeValue(live.hsl_signal_mode);
+  el('opted-hsl-signal-mode').onchange = function() {
+    renderOptimizeRuntimeOverridesEditor();
+    scheduleStructuredEditorSync();
+  };
   var enableOverrides = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, live.strategy_kind);
   optimize.enable_overrides = enableOverrides;
   el('opted-enable-lossless-close-trailing').checked = enableOverrides.indexOf('lossless_close_trailing') >= 0;
@@ -9801,6 +9817,7 @@ function populateOptimizeEditor(config, opts) {
   el('opted-short-npos').value = String(optimizeEditorAdapter.getBotValue(bot.short || {}, 'n_positions', ''));
   el('opted-bot-long').value = prettyJson(bot.long || {});
   el('opted-bot-short').value = prettyJson(bot.short || {});
+
   if (optimizeEditorAdapter.isV8) initializeOptimizeStrategyState(cfg);
   setOptimizeBoundsData(
     optimizeEditorAdapter.isV8 ? getOptimizeStrategyBoundsView(live.strategy_kind) : optimizeEditorAdapter.getBounds(optimize),
@@ -10051,6 +10068,7 @@ function collectEditorConfig(baseConfig, opts) {
   var cfg = baseConfig == null ? editorBaseConfig(false) : deepClone(baseConfig);
   var backtest = ensureObjectSection(cfg, 'backtest');
   var bot = ensureObjectSection(cfg, 'bot');
+
   var live = ensureObjectSection(cfg, 'live');
   var optimize = ensureObjectSection(cfg, 'optimize');
   var pbgui = ensureObjectSection(cfg, 'pbgui');
@@ -10173,6 +10191,7 @@ function collectEditorConfig(baseConfig, opts) {
     : normalizeOptimizeFixedParamKeys(state.optimizeFixedParams);
   optimize.fixed_runtime_overrides = collectOptimizeRuntimeOverrides({
     strict: strict,
+    hslSignalMode: el('opted-hsl-signal-mode').value,
     fallbackValue: optimize.fixed_runtime_overrides
   });
   var longBot = parseEditorSectionJson('opted-bot-long', 'bot.long', '{}', {
@@ -10320,8 +10339,11 @@ function syncRawJsonHighlightOverlay(error, detail) {
   window.PBGuiEditorShared.syncExistingHighlightOverlay({
     textarea: 'opted-raw-json',
     overlay: 'opted-raw-json-highlight',
-    errorLine: detail && detail.line
+    errorLine: detail && detail.line,
+    pathChanges: _optBotParamStatus.config_changes || {}
   });
+  var raw = document.getElementById('opted-raw-json');
+  if (raw) window.PBGuiEditorShared.applyConfigMigrationMarkers('configs-editor', _optBotParamStatus.config_changes || {}, raw.value, 'optimize');
 }
 
 function revealRawJsonError() {
@@ -10462,6 +10484,7 @@ function _applyBotJsonHighlight(ta, sideStatus) {
     var blockStatus = null;
     var blockDepth = 0;
     var depth = 0;
+    var hslDepth = null;
     var validationErrorLine = ta && ta._jsonValidationError ? ta._jsonValidationError.line : null;
     var statusMap = ta._botHighlightStatusMap || {};
     return text.split('\n').map(function(line, index) {
@@ -10478,7 +10501,18 @@ function _applyBotJsonHighlight(ta, sideStatus) {
         status = match ? (statusMap[match[1]] || null) : null;
       }
 
-      if (status && opens > closes) {
+      var hslKey = line.match(/^\s*"([^"]+)":/);
+      if (hslKey && hslKey[1] === 'hsl' && depthBefore === 1 && opens > closes) {
+        hslDepth = depthBefore;
+      }
+      if (hslKey && hslDepth !== null) {
+        var hslPath = depthBefore === hslDepth ? 'hsl'
+          : depthBefore === hslDepth + 1 ? 'hsl.' + hslKey[1] : '';
+        if (hslPath && statusMap[hslPath] === 'review_line') status = 'review_line';
+      }
+      if (hslDepth !== null && depth <= hslDepth) hslDepth = null;
+
+      if (status && status !== 'review_line' && opens > closes) {
         blockStatus = status;
         blockDepth = depthBefore;
       }
@@ -10490,7 +10524,7 @@ function _applyBotJsonHighlight(ta, sideStatus) {
       var styles = ['display:block'];
       if (status === 'neutralized') {
         styles.push('background:color-mix(in srgb,#f0a500 16%,transparent)', 'border-radius:2px');
-      } else if (status === 'pb_default') {
+      } else if (status === 'pb_default' || status === 'review_line') {
         styles.push('background:color-mix(in srgb,#e05252 16%,transparent)', 'border-radius:2px');
       }
       if (validationErrorLine === index + 1) {
@@ -10510,6 +10544,8 @@ function _applyBotJsonHighlight(ta, sideStatus) {
     nextWrapper.appendChild(ta);
     wrapper = nextWrapper;
   }
+
+  window.PBGuiEditorShared.renderHslMigrationRemovals(ta, sideStatus);
 
   var pre = ta._botHighlightPre || wrapper.querySelector('.bot-json-highlight-pre');
   if (!pre) {
@@ -11354,6 +11390,7 @@ function setPanel(panel, vastView) {
   el('ctx-settings').style.display = optimizeEditorAdapter.isV8 && ['queue','settings','vast'].includes(panel) ? '' : 'none';
   el('ctx-results').style.display = panel === 'results' ? '' : 'none';
   el('ctx-paretos').style.display = panel === 'paretos' ? '' : 'none';
+  window.PBGuiLoopOptimizer?.onPanel();
   location.hash = panel === 'vast' && state.vastView ? 'vast-' + state.vastView : panel;
   if (panel === 'vast') window.PBGuiVast?.showSettings?.(vastView || state.vastView);
   refreshLiveResultsDuringRun().catch(handleError).finally(function() {
@@ -12444,7 +12481,12 @@ async function openNewConfig() {
 }
 
 async function openConfigEditor(name) {
+  var generation = (openConfigEditor.loadGeneration || 0) + 1;
+  openConfigEditor.loadGeneration = generation;
   var data = await apiFetch('/configs/' + encodeURIComponent(name));
+  if (generation !== openConfigEditor.loadGeneration) return;
+
+  if (generation !== openConfigEditor.loadGeneration) return;
   state.editorMigrationReport = null;
   openEditorWithConfig(data, name, name);
 }
@@ -13521,13 +13563,16 @@ function initPlotModalWindow() {
   window.addEventListener('resize', clampPlotModalWindow);
 }
 
-function ensureLogViewer() {
+function ensureLogViewer(options) {
+  options = options || {};
   if (state.logViewer) return state.logViewer;
   state.logViewer = new LogViewerPanel({
     containerId: 'log-viewer-target',
     wsBase: WS_BASE,
     defaultHost: 'local',
-    defaultFile: '',
+    defaultFile: options.file || '',
+    localFileFilter: options.file ? function(file) { return file === options.file; } : null,
+    needsState: !options.file,
     presets: 'system',
     showRestart: false,
     height: '100%'
@@ -13537,14 +13582,16 @@ function ensureLogViewer() {
 
 function openLogPanel(filename, name, options) {
   options = options || {};
+  if (options.backtest && !/^[0-9a-f-]{32,36}$/.test(filename)) throw new Error('Invalid backtest log identifier.');
   stopOptimizeLogStatusPolling();
   if (window.PBGuiVast) window.PBGuiVast.closeLog();
   state.cloudLogId = options.cloud ? filename : null;
-  state.logFile = options.cloud ? (options.hasLog ? 'optimizes_v8/vast_' + filename + '.log' : (options.hasProviderLog ? 'optimizes_v8/vast_' + filename + '_provider.log' : '')) : optimizeEditorAdapter.queueLogFile(filename);
-  state.logFilename = options.cloud ? null : filename;
+  state.logFile = options.backtest ? 'backtests_v8/' + filename + '.log' : options.cloud ? (options.hasLog ? 'optimizes_v8/vast_' + filename + '.log' : (options.hasProviderLog ? 'optimizes_v8/vast_' + filename + '_provider.log' : '')) : optimizeEditorAdapter.queueLogFile(filename);
+  state.logFilename = options.cloud || options.backtest ? null : filename;
   state.logResultName = name || '';
   var panel = el('log-panel');
-  el('log-panel-title').textContent = 'Optimize log - ' + (name || filename);
+  el('log-panel-title').textContent = (options.backtest ? 'Backtest log - ' : 'Optimize log - ') + (name || filename);
+  el('opt-log-dashboard').classList.remove('visible');
   if (state.logViewer) {
     state.logViewer.close();
     state.logViewer = null;
@@ -13553,7 +13600,7 @@ function openLogPanel(filename, name, options) {
   el('log-viewer-target').hidden = !state.logFile;
   el('log-waiting').hidden = !!state.logFile;
   if (state.logFile) {
-    var viewer = ensureLogViewer();
+    var viewer = ensureLogViewer({file: options.backtest ? state.logFile : ''});
     viewer.open();
     viewer.setHost('local');
     viewer.setFile(state.logFile);
@@ -13565,7 +13612,7 @@ function openLogPanel(filename, name, options) {
     panel.style.top = '';
   }
   panel.classList.add('visible');
-  if (!options.cloud) startOptimizeLogStatusPolling(filename);
+  if (!options.cloud && !options.backtest) startOptimizeLogStatusPolling(filename);
   if (!panel._dragBound) {
     panel._dragBound = true;
     el('log-panel-header').addEventListener('mousedown', function(event) {
@@ -14914,12 +14961,14 @@ async function handleOpenConfigParam() {
 async function init() {
   try {
     optimizeEditorAdapter.configureUi();
+    window.PBGuiLoopOptimizer?.mount();
     attachEventHandlers();
     initSelections();
     initSidebarResize();
     initPlotModalWindow();
     initOptimizeOhlcvPreflightController();
     var initialPanel = location.hash.replace('#', '');
+    if (initialPanel === 'loops') initialPanel = new URL(location.href).searchParams.has('loop_id') ? 'loops-results' : 'loops-config';
     if (/^vast-(offers|rental|hosts|performance|account)$/.test(initialPanel)) setPanel('vast', initialPanel.slice(5));
     if (PANEL_META[initialPanel]) setPanel(initialPanel);
     var initialUrl = new URL(window.location.href);
@@ -15409,6 +15458,6 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=3"></script>
-<script src="/app/js/vast.js?v=153"></script>
+<script src="/app/js/vast.js?v=156"></script>
 </body>
 </html>

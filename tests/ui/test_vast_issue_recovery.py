@@ -964,10 +964,15 @@ def test_host_management_uses_existing_optimizer_sidebar(cloud_page):
 def test_optimizer_statistics_rates_cost_and_sample_age(cloud_page, status, age, available):
     """Keep the last valid interval visible with its age, including on running jobs."""
     import time
+    from datetime import datetime, timezone
+    from vast_throughput import parse_throughput
     page, data, _, _, _ = cloud_page
-    data['jobs'][0].update(status=status, throughput=dict(sampled_at=time.time()-age,
-        window_seconds=60, proxy_total=12000, exact_total=120,
-        proxy_per_minute=6000, exact_per_minute=60, proxy_per_exact=100))
+    sampled_at=time.time()-age
+    lines=[]
+    for offset,proxy,exact in [(-60,6000,60),(0,12000,120)]:
+        stamp=datetime.fromtimestamp(sampled_at+offset,timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        lines.append(f'{stamp} INFO GPU optimizer progress | gen=2 phase=generation_complete | evolution_proxy_completed_run={proxy} seed_proxy=0 seed_exact=0 evolution_exact={exact}/10000000 evolution_pending=64\n')
+    data['jobs'][0].update(status=status, throughput=parse_throughput(''.join(lines).encode()))
     data['jobs'][0]['rental']['offer']['price_hour_usd'] = .5
     page.reload()
     page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')

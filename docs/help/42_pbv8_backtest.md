@@ -1,5 +1,13 @@
 # PBv8 Backtest
 
+**Results** from an AI Loop opens the native **Compare** chart directly with all available scenario results of that Backtest job selected. A single result shows its equity/balance curves; missing results are reported explicitly. Browser reload restores the comparison, while closing it through Compare keeps it closed on reload. This also applies to the separate automatic Holdout/Full Time Range jobs under **User evaluation**; their Results open Compare and **Back to AI Loop** restores that tab.
+
+**Compare all Holdouts** and **Compare all Full Time Ranges** in AI Loops open this same view for every completed evaluation of that type in the selected run, including the unchanged start. Only matching native jobs are loaded; failed/incomplete evaluations are excluded. Curve labels include the round, comparison candidate and exchange. Newly completed jobs appear automatically, while a narrowed selection survives updates and browser reload. Starting a new “Compare all” action selects all eligible results again.
+
+An AI Loop Results link takes priority over the previously stored Backtest panel on arrival. Browser reload still preserves any panel you subsequently choose.
+
+When opened from AI Loops, **Back to AI Loop** returns directly to the originating run/round and report tab. It remains available across Backtest navigation and browser reload. Log actions in AI Loops open only the specific native file over the Loop view.
+
 If the configured PB8 runtime is unavailable, Backtest settings and Strategy Explorer return HTTP 503 with the runtime diagnostics. Strategy Explorer still uses HTTP 422 for invalid requests. Repair the configured PB8 interpreter, CLI or Rust extension as indicated by the error.
 
 Date fields use the same input component as Optimize. Typing inside a complete date overwrites digits and skips separators; selected text and pasted dates can still be replaced normally. The calendar button remains available, including in re-backtest dialogs.
@@ -116,3 +124,17 @@ PBv8 uses the same Archive panel and configured Git archives as PBv7. Results ar
 When backtesting an imported Vast result locally, PBGui removes its container-only HLCV dataset path before launch. The local market-data setting then applies, allowing training and holdout date ranges to use local data. Other custom dataset paths are preserved. This also applies when retrying an existing queue item.
 
 In the visual scenario editor, zoom stays within the configured dates. A successful retry clears earlier errors, and cancelling scenario replacement leaves the open editor unchanged.
+
+## PB8 8.6: HSL and adaptive entry cooldown
+
+Opening a saved pre-8.6 HSL config automatically creates an unsaved draft using the installed PB8 migration tool. The existing Long/Short JSON editors mark changed HSL lines. Raw JSON marks all compatibility changes by their exact parameter paths, including cooldown/EMA moves, added defaults and optimizer changes; removed parameters mark their surviving parent line. Corresponding structured GUI fields have an amber outline. These marks remain while editing and clear after a successful save. Removed HSL fields appear with their exact old values directly below the corresponding JSON editor; they are read-only and are not saved back into the config. Unchanged fields remain unmarked. Existing valid restart choices are preserved. An active `threshold` policy needs `always` or `never`, selected directly in the editor. Missing unified portfolio values remain blank for explicit entry. Only **Save** validates and writes the draft. HSL behavior changed: re-backtest before live use. Invalid optimizer or override references still require correction.
+
+In `unified` mode, author and review the portfolio policy in `bot.hsl` in **Raw JSON**. PBGui does not automatically promote a side policy. Its required fields are `enabled`, `red_threshold`, `ema_span_minutes`, `cooldown_minutes_after_red`, `restart_after_red_policy` (`always` or `never`) and `panic_close_order_type` (`limit` or `market`). Coin and pside modes use `bot.long.hsl` and `bot.short.hsl`. Retired engine/recovery controls are hidden when absent from the installed runtime.
+
+HSL, entry cooldown and Forager parameters are edited in the existing Long/Short JSON editors. Adaptive cooldown uses `entry_cooldown.base_duration_minutes`, `min_duration_minutes`, optional `max_duration_minutes`, and `weights_minutes.exposure_ratio` / `adverse_directionality`. Use JSON `null` for an unlimited maximum; enabling either weight requires a finite maximum. Forager adds `score_weights.unilateralness` and `unilateralness_ema_span_1m`; a zero weight disables its score contribution. Supported cooldown leaves are also available as typed sparse Coin Overrides. Optimizer bounds come from the installed runtime; PBGui no longer adds retired no-restart threshold fields to current metadata.
+
+For PB8 8.6 results, the hard-stop chart reads native `hsl_report.json` samples and controller transitions, including per-coin and portfolio scopes. Enable `backtest.hsl_detailed_report` before running the backtest. Missing reports and metrics-only runs display a concrete explanation; PBGui does not reconstruct their HSL signal from aggregate equity or draw yellow/orange tiers. Older result charts retain their legacy behavior.
+
+### AI Loop comparison: Top X
+
+Opening a Loop comparison loads the result list without requesting comparison curves. Curves load only after **Apply comparison**; reloading an explicitly started comparison restores it. In the native Loop comparison, choose **All** or **Top X**, enter the candidate count and click **Apply comparison**. Top X ranks complete scored evaluations by target compliance first, then evaluation score (highest first). Each selected candidate includes all its exchange results, so there may be more than X curves. Holdout and Full Time Range use their own evaluation scores. Evaluations with missing scores or missing native results are excluded from Top X. Selection persists on reload and updates automatically as results arrive.

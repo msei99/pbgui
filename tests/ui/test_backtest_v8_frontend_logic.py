@@ -772,6 +772,7 @@ def test_delayed_config_load_does_not_replace_results_sidebar() -> None:
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
+        const backtestEditorAdapter = {{isV8: false}};
         let currentPanel = 'configs';
         let editingConfig = null;
         let pendingResolve;
@@ -998,6 +999,7 @@ def test_results_load_in_one_compact_request_and_use_server_config_filter() -> N
         let _resultsEmptyRetryTimer = null;
         let _resultsEmptyRetryCount = 0;
         let currentPanel = 'results';
+        function loopEvaluationSelection() {{ return null; }}
         function selectedResultsVersion() {{ return 'v8'; }}
         function backtestApiBase(version) {{ return '/api/backtest-' + version; }}
         function hideResultsCountLabel() {{ nodes['results-count-label'].style.display = 'none'; }}

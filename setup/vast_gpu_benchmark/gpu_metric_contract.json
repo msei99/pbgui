@@ -658,8 +658,6 @@
         "hard_stop_restarts",
         "hard_stop_restarts_long",
         "hard_stop_restarts_short",
-        "hard_stop_time_in_orange_pct",
-        "hard_stop_time_in_yellow_pct",
         "hard_stop_triggers",
         "hard_stop_triggers_long",
         "hard_stop_triggers_short",
@@ -689,8 +687,8 @@
         "strategy_eq_underwater_pct_median"
     ],
     "source_sha256": {
-        "config.metrics": "50995573260a1880175e5525dc0d76ec378ab3de884b1568b7550ec78bba079d",
-        "optimization.gpu.metrics": "f757ea8db3a32c16fa57c8762c5d0037f1fd3b62993043775e4c98b36a85f01d",
-        "optimization.gpu.metric_registry": "0cfd78e733aabc650b58939981977c6ae535bd1625a2ffe2647edba0b425f0b0"
+        "config.metrics": "907d413215697bb3efe02d6a327cc25ced45df29f87d1fe18c042caa67fe6aa1",
+        "optimization.gpu.metrics": "dc5a8c1a58dc37488393c8bab4191330460cefcaa26291e67072a59e9c75b8ee",
+        "optimization.gpu.metric_registry": "caf009466e0bd81a50033f11ee66cff795db004e47e7e108d6d2ae63249a7ff9"
     }
 }

@@ -84,7 +84,7 @@ HUMAN_LOG_SERVICE_MODULES = {
 TIER_3_SERVICES = {
     "PB7Bridge",
     "TaskQueue",
-    "AIChat", "OptimizerWorkload",
+    "AIChat", "AIResearch", "PB8Loop", "OptimizerWorkload",
     "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI",
     "BalanceCalc", "BitgetUTA", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",

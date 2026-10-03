@@ -207,6 +207,7 @@ Einrichtung:
 Steuerung:
 - **Timeframe-Schaltflächen** (1m 5m 15m 30m 1h 2h 4h 6h 12h 1d 1w) — Kerzenauflösung ändern.
 - **Nach links scrollen** im Chart lädt ältere historische Kerzen.
+- Die Kerzenhistorie wird alle 30 Sekunden und beim Zurückkehren zur Seite automatisch mit der Börse abgeglichen. Verpasste Abschlusswerte werden korrigiert, ohne Zoom oder nachgeladene Historie zurückzusetzen.
 
 ---
 

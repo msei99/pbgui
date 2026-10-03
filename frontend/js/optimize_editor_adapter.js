@@ -155,7 +155,15 @@
       canonicalFixedParam: function (value) {
         var clean = String(value || '').trim();
         if (!isV8 || !clean) return clean;
-        return /^(?:long|short)(?:\.|$)/.test(clean) ? 'bot.' + clean : clean;
+        clean = clean.replace(/^(bot\.)?(long|short)\.forager\.score_weights_(volume|ema_readiness|volatility|unilateralness)$/, '$1$2.forager.score_weights.$3');
+        return /^(?:long|short|hsl)(?:\.|$)/.test(clean) ? 'bot.' + clean : clean;
+      },
+      activeHslPath: function (key, mode) {
+        if (!isV8) return true;
+        var clean = String(key || '').replace(/^bot\./, '');
+        if (/^(long|short)\.hsl(?:\.|$)/.test(clean)) return mode !== 'unified';
+        if (/^hsl(?:\.|$)/.test(clean)) return mode === 'unified';
+        return true;
       },
       metadataApiBase: function () {
         return apiBase.replace(/\/optimize-v[78]$/, isV8 ? '/v8' : '/v7');
@@ -312,8 +320,9 @@
               ? normalized.label
               : sideLabel + ' HSL restart after RED';
             normalized.type = 'string';
-            normalized.choices = ['always', 'threshold', 'never'];
-            normalized.tip = normalized.tip || 'Restart policy after an HSL RED episode: always restarts after cooldown, threshold stops restarting after the no-restart drawdown threshold is breached, and never permanently halts after RED.';
+            normalized.choices = Object.prototype.hasOwnProperty.call(object(object(bot.long).hsl), 'no_restart_drawdown_threshold')
+              ? ['always', 'threshold', 'never'] : ['always', 'never'];
+            normalized.tip = normalized.tip || 'Restart after HSL RED: always resumes after cooldown; never halts permanently. PB8 8.6 requires an explicit choice and re-backtesting.';
           }
           var index = runtimeOverrides.findIndex(function (existing) { return existing.key === normalized.key; });
           if (index >= 0) runtimeOverrides[index] = normalized;
@@ -333,7 +342,7 @@
               defaultValue: hsl.enabled === true,
               tip: 'Enable ' + side + '-side equity hard stop behavior during optimizer evaluations.'
             });
-            mergeRuntimeOverride({
+            if (Object.prototype.hasOwnProperty.call(hsl, 'no_restart_drawdown_threshold')) mergeRuntimeOverride({
               key: 'bot.' + side + '.hsl.no_restart_drawdown_threshold',
               label: sideLabel + ' HSL no-restart drawdown threshold',
               side: side,

@@ -319,6 +319,7 @@ def test_api_key_edit_loads_ignore_stale_edit_create_back_and_hash_results() -> 
         function apiFetch(path) {
           return new Promise(function(resolve, reject) { pending.set(path, { resolve, reject }); });
         }
+        function loadUsers() {}
         function showEditPanel(user) { rendered.push(user.name); }
         function showToast() {}
         function clearTradfiRevealedApiKey() {}

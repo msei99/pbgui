@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui — %%BACKTEST_LABEL%% Backtest</title>
 <script src="/app/plotly.min.js?v=1"></script>
-<link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
+<link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
 <script src="/app/js/backtest_editor_adapter.js?v=12"></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
@@ -724,7 +724,7 @@ textarea.json-invalid:focus {
 <link rel="stylesheet" href="/app/css/backtest_shell.css?v=9">
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script src="/app/js/date_overwrite.js?v=2"></script>
-<script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=5"></script>
   <script src="/app/js/sidebar_resize.js?v=3"></script>
   <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
@@ -879,6 +879,15 @@ textarea.json-invalid:focus {
 
   <!-- ── Main Content ────────────────── -->
   <div id="main-content">
+    <div id="loop-return-toolbar" class="bt-panel-toolbar" hidden style="flex-shrink:0;display:none;flex-wrap:wrap">
+      <button type="button" class="btn" id="loop-return-button">← Back to AI Loop</button>
+      <div id="loop-evaluation-controls" hidden style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;flex:1 1 300px">
+        <label for="loop-evaluation-mode">Compare</label>
+        <select id="loop-evaluation-mode" title="Top candidates ranked by target compliance, then evaluation score"><option value="all">All</option><option value="top">Top X</option></select>
+        <input id="loop-evaluation-count" aria-label="Top candidate count" type="number" required min="1" max="1000" step="1" value="5" style="width:80px" disabled>
+        <button type="button" class="btn" id="loop-evaluation-apply">Apply comparison</button>
+      </div>
+    </div>
 
     <!-- CONFIGS panel -->
     <div id="panel-configs" class="view-panel active">
@@ -1086,7 +1095,8 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=15"></script>
+<script src="/app/js/editor_shared.js?v=17"></script>
+<script src="/app/js/pb8_hsl_report.js?v=1"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=4"></script>
 <script src="/app/js/pbgui_dialogs.js?v=10"></script>
@@ -1738,7 +1748,7 @@ function selectPanel(id, opts) {
     if (opts.deferResultsLoad) {
       if (results.length > 0) renderResults();
     } else {
-      loadResults('', { keepVisible: results.length > 0 });
+      loadResults(new URL(location.href).searchParams.get('result_filter') || '', { keepVisible: results.length > 0 });
     }
     loadArchives();
   }
@@ -2027,8 +2037,12 @@ function sortFn(a, b) {
 }
 
 function editConfig(name) {
-  apiFetch('/configs/' + encodeURIComponent(name)).then(function(data) {
-    if (currentPanel !== 'configs') return;
+  var generation = (editConfig.loadGeneration || 0) + 1;
+  editConfig.loadGeneration = generation;
+  apiFetch('/configs/' + encodeURIComponent(name)).then(async function(data) {
+    if (generation !== editConfig.loadGeneration || currentPanel !== 'configs') return;
+
+    if (generation !== editConfig.loadGeneration || currentPanel !== 'configs') return;
     editingConfig = data && data.name ? data.name : name;
     showConfigEditor(editingConfig, (data && data.config) || {}, null, (data && data.param_status) || {});
   }).catch(function(e) { toast('Load failed: ' + e.message, 'err'); });
@@ -2709,8 +2723,153 @@ async function openInitialBacktestQueueDraftFromUrl() {
   }
 }
 
-async function initializeBacktestPageFromUrl() {
-  var url = new URL(window.location.href);
+var _loopEvaluationComparison = {key:'',paths:[],signature:''};
+function loopEvaluationSelection(url) {
+  if (!backtestEditorAdapter.isV8) return null;
+  url = url || new URL(window.location.href);
+  var run=url.searchParams.get('result_loop'),kind=url.searchParams.get('result_evaluation');
+  if (!/^[0-9a-f]{32}$/.test(run||'') || !['observer_holdout','observer_full_range'].includes(kind) || (url.hash && url.hash!=='#results')) return null;
+  var rawTop=url.searchParams.get('result_top')||'',top=/^[1-9][0-9]{0,3}$/.test(rawTop)&&Number(rawTop)<=1000?Number(rawTop):0;
+  return {run:run,kind:kind,top:top,key:run+':'+kind+(top?':top:'+top:'')};
+}
+function initializeLoopEvaluationControls() {
+  var selection=loopEvaluationSelection(),group=document.getElementById('loop-evaluation-controls');
+  group.hidden=!selection;group.style.display=selection?'flex':'none';
+  if(!selection)return;
+  var mode=document.getElementById('loop-evaluation-mode'),count=document.getElementById('loop-evaluation-count');
+  mode.value=selection.top?'top':'all';count.value=selection.top||5;count.disabled=!selection.top;
+  mode.onchange=function(){count.disabled=mode.value!=='top';};
+  document.getElementById('loop-evaluation-apply').onclick=function(){
+    if(mode.value==='top'&&!count.reportValidity())return;
+    var url=new URL(window.location.href);
+    if(mode.value==='top')url.searchParams.set('result_top',String(Number(count.value)));else url.searchParams.delete('result_top');
+    url.searchParams.set('result_compare','1');
+    try{sessionStorage.removeItem('pbgui.loopEvaluationComparison');}catch(_){}
+    _loopEvaluationComparison={key:'',paths:[],signature:''};
+    history.replaceState(null,'',url);loadResults('',{keepVisible:true});
+  };
+}
+function saveLoopEvaluationSelection() {
+  var url=new URL(window.location.href);url.hash='';
+  var selection=loopEvaluationSelection(url),previous=_loopEvaluationComparison;
+  if(!selection||selection.key!==previous.key)return;
+  var chosen=getSelectedResults(),all=chosen.length===previous.paths.length&&previous.paths.every(function(path){return chosen.includes(path);});
+  try{sessionStorage.setItem('pbgui.loopEvaluationComparison',JSON.stringify({key:selection.key,all:all,paths:all?[]:chosen}));}catch(_){}
+}
+window.addEventListener('pagehide',saveLoopEvaluationSelection);
+
+async function loadLoopEvaluationResults(selection, filterName, options) {
+  var generation=++_resultsLoadGeneration,failed=false;
+  if (_resultsEmptyRetryTimer) {clearTimeout(_resultsEmptyRetryTimer);_resultsEmptyRetryTimer=null;}
+  function current(){var next=loopEvaluationSelection();return !failed&&currentPanel==='results'&&generation===_resultsLoadGeneration&&next&&next.key===selection.key;}
+  if (!options.keepVisible) document.getElementById('results-list').textContent='Loading Loop evaluations…';
+  try {
+    var run=await apiFetchFrom(String(API_BASE).replace(/\/backtest-v8$/, '/optimize-v8/loops'), '/'+selection.run);
+    if(!current())return results;
+    var jobs=(run.observer_jobs||[]).filter(function(job){return job.kind===selection.kind&&job.simulation_complete&&['complete','completed'].includes(job.status)&&job.log_available;});
+    jobs.sort(function(a,b){return a.round-b.round||a.name.localeCompare(b.name);});
+    var loaded=new Array(jobs.length),cursor=0;
+    async function worker(){
+      while(current()&&cursor<jobs.length){
+        var index=cursor++,job=jobs[index],offset=0,items=[];
+        while(current()){
+          var page=await apiFetchFrom(API_BASE,'/results?name='+encodeURIComponent(job.name)+'&offset='+offset+'&limit='+RESULTS_PAGE_SIZE);
+          if(!current())return;
+          (page.results||[]).forEach(function(result){if(result.config_name===job.name)items.push(Object.assign({},result,{backtest_version:'v8',loop_compare_label:(job.round<0?'Unchanged start':'Loop '+(job.round+1))+' · '+(job.comparison_label||job.candidate_id||'')+' · '+(result.exchange_dir||result.exchange||result.result_name||result.path)}));});
+          if(!page.pagination||!page.pagination.has_more)break;
+          var next=Number(page.pagination.next_offset);
+          if(!Number.isFinite(next)||next<=offset)throw new Error('Invalid backtest result pagination');
+          offset=next;
+        }
+        loaded[index]=items;
+      }
+    }
+    await Promise.all(Array.from({length:Math.min(4,jobs.length)},worker));
+    if(!current())return results;
+    var seen=new Set(),matches=loaded.flat().filter(function(item){if(seen.has(item.path))return false;seen.add(item.path);return true;}),paths=matches.map(function(item){return item.path;});
+    var previous=_loopEvaluationComparison,chosen=getSelectedResults();
+    var all=previous.key!==selection.key || (chosen.length===previous.paths.length&&previous.paths.every(function(path){return chosen.includes(path);}));
+    if(previous.key!==selection.key){
+      try{var saved=JSON.parse(sessionStorage.getItem('pbgui.loopEvaluationComparison')||'null');if(saved&&saved.key===selection.key&&saved.all===false&&Array.isArray(saved.paths)){chosen=saved.paths.filter(function(path){return typeof path==='string';});all=false;}}catch(_){}
+    }
+    _applyResultsData(matches,filterName);
+    if(selection.top){
+      var availableNames=new Set(matches.map(function(item){return item.config_name;}));
+      var ranked=jobs.filter(function(job){return availableNames.has(job.name)&&typeof job.evaluation_score==='number'&&Number.isFinite(job.evaluation_score);});
+      ranked.sort(function(a,b){return Number(b.evaluation_targets_met===true)-Number(a.evaluation_targets_met===true)||b.evaluation_score-a.evaluation_score||a.round-b.round||a.name.localeCompare(b.name);});
+      var topNames=new Set(ranked.slice(0,selection.top).map(function(job){return job.name;}));
+      setSelectedResults(matches.filter(function(item){return topNames.has(item.config_name);}).map(function(item){return item.path;}));
+    }else setSelectedResults(all?paths:chosen.filter(function(path){return seen.has(path);}));
+    var area=document.getElementById('compare-chart-area'),selected=getSelectedResults();
+    var signature=JSON.stringify([selection.key,selected,matches.map(function(item){return [item.path,item.modified];})]);
+    _loopEvaluationComparison={key:selection.key,paths:paths,signature:signature};
+    if(new URL(window.location.href).searchParams.get('result_compare')==='1' && (previous.signature!==signature||!document.getElementById('compare-chart-div'))){
+      if(selected.length)await _compareResultPaths(selected,matches,area,'compare-chart-div',function(){return current()&&new URL(window.location.href).searchParams.get('result_compare')==='1';});
+      else {area.style.display='';area.textContent=selection.top&&jobs.length?'No complete evaluations with a valid score are available for Top X.':jobs.length?'No native results remain for these Loop evaluations.':'No completed evaluations are available for this Loop run.';}
+    }
+    return results;
+  } catch(error){
+    if(current()){failed=true;document.getElementById('results-list').textContent='Could not load Loop evaluations: '+error.message;toast('Loop comparison failed: '+error.message,'err');}
+    return results;
+  }
+}
+
+async function openLoopResultComparison(configName, loadGeneration) {
+  function current() { var url = new URL(window.location.href); return currentPanel === 'results' && loadGeneration === _resultsLoadGeneration && url.searchParams.get('result_compare') === '1' && url.searchParams.get('result_filter') === configName; }
+  if (!current()) return;
+  var matches = results.filter(function(result) { return result.backtest_version === 'v8' && result.config_name === configName; });
+  var paths = Array.from(new Set(matches.map(function(result) { return result.path; })));
+  var area = document.getElementById('compare-chart-area');
+  setSelectedResults(paths);
+  if (!paths.length) {
+    area.style.display = '';
+    area.textContent = 'No results are available for this backtest job.';
+  } else {
+    await _compareResultPaths(paths, matches, area, 'compare-chart-div', current);
+  }
+  if (current()) area.scrollIntoView({block:'start'});
+}
+
+function getBacktestLoopReturnUrl() {
+  if (!backtestEditorAdapter.isV8) return null;
+  var origin = new URL(window.location.href);
+  var value = origin.searchParams.get('loop_return');
+  if (!value) return null;
+  try {
+    var target = new URL(value, origin);
+    var expectedPath=origin.pathname.replace(/\/backtest-v8\/main_page$/, '/optimize-v8/main_page');
+    if (target.origin !== origin.origin || target.username || target.password || target.pathname !== expectedPath) return null;
+    if (!/^[0-9a-f]{32}$/.test(target.searchParams.get('loop_id') || '') || !['#loops-results','#loops-queue'].includes(target.hash)) return null;
+    var validators = {loop_id:/^[0-9a-f]{32}$/,loop_view:/^(run|cycle|initial)$/,loop_cycle:/^\d{1,4}$/,loop_tab:/^(overview|goals|backtests|performance|changes|analysis)$/,loop_variant:/^[0-9a-f]{32}$/,loop_compare:/^(initial|[0-9a-f]{32})$/,loop_log_run:/^[0-9a-f]{32}$/,loop_log:/^[0-9a-f]{32}$/};
+    for (var pair of target.searchParams) { if (!validators[pair[0]] || !validators[pair[0]].test(pair[1])) return null; }
+    return target;
+  } catch (error) { return null; }
+}
+
+function initializeBacktestLoopReturn() {
+  var target = getBacktestLoopReturnUrl();
+  var toolbar = document.getElementById('loop-return-toolbar');
+  toolbar.hidden = !target;
+  toolbar.style.display = target ? '' : 'none';
+  document.getElementById('loop-return-button').onclick = target ? function() { window.location.assign(target.href); } : null;
+}
+
+async function initializeBacktestPageFromUrl(arrivalUrl) {
+  initializeBacktestLoopReturn();
+  var url = arrivalUrl || new URL(window.location.href);
+  var nativeLog=url.searchParams.get('native_log');
+  if(backtestEditorAdapter.isV8&&nativeLog&&/^[0-9a-f-]{32,36}$/.test(nativeLog))showLog(nativeLog);
+  if (backtestEditorAdapter.isV8 && url.searchParams.get('panel')==='results' && /^[0-9a-f]{32}$/.test(url.searchParams.get('result_loop')||'') && ['observer_holdout','observer_full_range'].includes(url.searchParams.get('result_evaluation')) && (!url.hash||url.hash==='#results')) {
+    selectPanel('results',{deferResultsLoad:true});await loadResults(url.searchParams.get('result_filter')||'');return;
+  }
+  if (backtestEditorAdapter.isV8 && url.searchParams.get('panel') === 'results' && url.searchParams.get('result_filter') && (!url.hash || url.hash === '#results')) {
+    selectPanel('results', {deferResultsLoad:true});
+    var filter = url.searchParams.get('result_filter');
+    var loading = loadResults(filter), loadGeneration = _resultsLoadGeneration;
+    await loading;
+    if (url.searchParams.get('result_compare') === '1') await openLoopResultComparison(filter, loadGeneration);
+    return;
+  }
   if (url.searchParams.get('panel') === 'queue') {
     selectPanel('queue');
     return;
@@ -2802,7 +2961,8 @@ function setCfgBotParamStatus(paramStatus) {
   var nextStatus = paramStatus || {};
   _cfgBotParamStatus = {
     long: nextStatus.long || {},
-    short: nextStatus.short || {}
+    short: nextStatus.short || {},
+    config_changes: nextStatus.config_changes || {}
   };
 }
 
@@ -3446,6 +3606,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   '</div>';
 
   ed.innerHTML = html;
+
   if (_pendingMigrationReviewDraft) {
     showMigrationReviewNotice(_pendingMigrationReviewDraft);
     _pendingMigrationReviewDraft = null;
@@ -3574,8 +3735,11 @@ function syncRawJsonHighlightOverlay(error, detail) {
   window.PBGuiEditorShared.syncExistingHighlightOverlay({
     textarea: 'cfg-raw-json',
     overlay: 'cfg-raw-json-highlight',
-    errorLine: detail && detail.line
+    errorLine: detail && detail.line,
+    pathChanges: _cfgBotParamStatus.config_changes || {}
   });
+  var raw = document.getElementById('cfg-raw-json');
+  if (raw) window.PBGuiEditorShared.applyConfigMigrationMarkers('configs-editor', _cfgBotParamStatus.config_changes || {}, raw.value, 'backtest');
 }
 
 function revealRawJsonError() {
@@ -5073,6 +5237,7 @@ function _applyBotJsonHighlight(ta, sideStatus) {
     var blockStatus = null;
     var blockDepth = 0;
     var depth = 0;
+    var hslDepth = null;
     var validationErrorLine = ta && ta._jsonValidationError ? ta._jsonValidationError.line : null;
     var statusMap = ta._botHighlightStatusMap || {};
     return text.split('\n').map(function(line, index) {
@@ -5089,7 +5254,18 @@ function _applyBotJsonHighlight(ta, sideStatus) {
         status = m ? (statusMap[m[1]] || null) : null;
       }
 
-      if (status && opens > closes) {
+      var hslKey = line.match(/^\s*"([^"]+)":/);
+      if (hslKey && hslKey[1] === 'hsl' && depthBefore === 1 && opens > closes) {
+        hslDepth = depthBefore;
+      }
+      if (hslKey && hslDepth !== null) {
+        var hslPath = depthBefore === hslDepth ? 'hsl'
+          : depthBefore === hslDepth + 1 ? 'hsl.' + hslKey[1] : '';
+        if (hslPath && statusMap[hslPath] === 'review_line') status = 'review_line';
+      }
+      if (hslDepth !== null && depth <= hslDepth) hslDepth = null;
+
+      if (status && status !== 'review_line' && opens > closes) {
         blockStatus = status;
         blockDepth  = depthBefore;
       }
@@ -5101,7 +5277,7 @@ function _applyBotJsonHighlight(ta, sideStatus) {
       var styles = ['display:block'];
       if (status === 'neutralized') {
         styles.push('background:color-mix(in srgb,#f0a500 16%,transparent)', 'border-radius:2px');
-      } else if (status === 'pb_default' || status === 'review') {
+      } else if (status === 'pb_default' || status === 'review' || status === 'review_line') {
         styles.push('background:color-mix(in srgb,#e05252 16%,transparent)', 'border-radius:2px');
       }
       if (validationErrorLine === index + 1) {
@@ -5121,6 +5297,8 @@ function _applyBotJsonHighlight(ta, sideStatus) {
     nextWrapper.appendChild(ta);
     wrapper = nextWrapper;
   }
+
+  window.PBGuiEditorShared.renderHslMigrationRemovals(ta, sideStatus);
 
   var pre = ta._botHighlightPre || wrapper.querySelector('.bot-json-highlight-pre');
   if (!pre) {
@@ -5299,6 +5477,7 @@ function collectConfig() {
 
   // Bot config — try parsing JSON textareas, fall back to TWE/npos values
   if (!cfg.bot) cfg.bot = {};
+
   try { cfg.bot.long = JSON.parse(document.getElementById('cfg-bot-long').value); } catch(e) {
     if (!cfg.bot.long) cfg.bot.long = {};
   }
@@ -5906,6 +6085,7 @@ function showLog(filename) {
 }
 
 function closeLogPanel() {
+  var url=new URL(location.href);if(url.searchParams.has('native_log')){url.searchParams.delete('native_log');history.replaceState(null,'',url);}
   document.getElementById('log-panel').classList.remove('visible');
   if (_btLogViewer) { _btLogViewer.close(); _btLogViewer = null; }
 }
@@ -5953,6 +6133,8 @@ function _applyResultsData(resultItems, filterName) {
 
 function loadResults(filterName, loadOptions) {
   loadOptions = loadOptions || {};
+  var evaluation=loopEvaluationSelection();
+  if(evaluation)return loadLoopEvaluationResults(evaluation,typeof filterName==='string'?filterName:undefined,loadOptions);
   var selectedFilter = typeof filterName === 'string' ? filterName : _pendingResultFilter;
   _pendingResultFilter = '';
   if (!loadOptions.emptyRetry) _resultsEmptyRetryCount = 0;
@@ -6058,6 +6240,7 @@ function refreshResults() { loadResults(); }
 
 function changeResultsConfigFilter() {
   var cfgSel = document.getElementById('results-config-filter');
+  var url=new URL(location.href);if(cfgSel&&cfgSel.value)url.searchParams.set('result_filter',cfgSel.value);else url.searchParams.delete('result_filter');history.replaceState(null,'',url);
   if (cfgSel && cfgSel.value === '') loadResults('');
   else renderResults();
 }
@@ -7958,6 +8141,16 @@ function _hardStopTriggerIndices(score, redThreshold) {
 function renderHardStopDrawdownChart(cd, be, config) {
   var el = document.getElementById(cd.id);
   if (!el) return;
+  if (backtestEditorAdapter.isV8 && /^v?8\.(?:[6-9]|[1-9]\d+)\./.test(String(config.config_version || ''))) {
+    resultApiFetch(cd.result, '/results/hsl_report.json?path=' + encodeURIComponent(cd.path)).then(function(report) {
+      if (!document.getElementById(cd.id) || document.getElementById(cd.id) !== el) return;
+      window.PB8HslReport.render(el, report);
+    }).catch(function(error) {
+      if (!document.getElementById(cd.id) || document.getElementById(cd.id) !== el) return;
+      el.textContent = 'Native HSL report unavailable. Enable backtest.hsl_detailed_report and re-backtest. ' + error.message;
+    });
+    return;
+  }
   var sideConfigs = ['long', 'short'].map(function(side) { return _hardStopSideConfig(config, side); }).filter(Boolean);
   if (!sideConfigs.length) {
     el.innerHTML = '<div style="color:var(--text-dim);padding:var(--sp-md)">Equity hard stop is not enabled for this result</div>';
@@ -8453,7 +8646,7 @@ function _compareLegendLayout(traces, chartWidth) {
   return { marginTop: marginTop, height: 800 + marginTop - 40 };
 }
 
-function _compareResultPaths(paths, resultSet, compareEl, chartId) {
+function _compareResultPaths(paths, resultSet, compareEl, chartId, isCurrent) {
   compareEl.style.display = '';
   compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">Loading equity data for comparison…\x3C/div>';
 
@@ -8472,11 +8665,13 @@ function _compareResultPaths(paths, resultSet, compareEl, chartId) {
   });
 
   return Promise.all(promises).then(function(allData) {
+    if (isCurrent && !isCurrent()) return false;
     var traces = [];
     var colors = ['#4da6ff', '#21c354', '#ff8c00', '#ff4b4b', '#b366ff', '#ffcc00', '#00cccc', '#ff66b2'];
     allData.forEach(function(item, i) {
       if (!item.be.time.length) return;
-      var label = 'PB' + item.version.toUpperCase() + ' ' + item.path.split('/').slice(-3).join('/');
+      var reference=resultSet.find(function(result){return result.path===item.path;});
+      var label = reference&&reference.loop_compare_label || 'PB' + item.version.toUpperCase() + ' ' + item.path.split('/').slice(-3).join('/');
       traces.push({ x: item.be.time, y: item.be.equity, name: 'eq ' + label, line: { width: 0.75, color: colors[i % colors.length] } });
       traces.push({ x: item.be.time, y: item.be.balance, name: 'bal ' + label, line: { width: 2.5, color: colors[i % colors.length], dash: 'dot' } });
     });
@@ -8750,6 +8945,10 @@ function compareSelected() {
   if (compareEl.style.display !== 'none' && compareEl.innerHTML !== '') {
     compareEl.style.display = 'none';
     compareEl.innerHTML = '';
+    if (backtestEditorAdapter.isV8) {
+      var url = new URL(window.location.href);
+      if (url.searchParams.has('result_compare')) { url.searchParams.delete('result_compare'); history.replaceState(null, '', url); }
+    }
     return;
   }
 
@@ -11014,6 +11213,7 @@ function fmtDate(iso) {
 /* ════════════════════════════════════════════════
    INIT
    ════════════════════════════════════════════════ */
+var loopReturnToolbar = document.getElementById('loop-return-toolbar');
 backtestShell = window.PBGuiBacktestShell.upgradeLegacy({
   source: document.getElementById('page-body'),
   navItems: backtestEditorAdapter.navItems(),
@@ -11028,9 +11228,13 @@ backtestShell = window.PBGuiBacktestShell.upgradeLegacy({
     changeResultsVersion: function() { loadResults(''); }
   }
 });
+document.getElementById('main-content').prepend(loopReturnToolbar);
+initializeLoopEvaluationControls();
 document.getElementById('results-version-filter').value = backtestEditorAdapter.version;
 backtestEditorAdapter.configureUi();
 // Restore panel/archive state from URL hash or localStorage.
+// Capture arrival intent before selectPanel persists the restored panel into the hash.
+var initialBacktestUrl = new URL(window.location.href);
 var initialViewState = loadStoredBacktestViewState();
 applyBacktestSortState(initialViewState.sorts);
 loadSettings().catch(function(error) { console.error('Failed to load Backtest settings:', error); });
@@ -11043,7 +11247,7 @@ if (initialViewState.panel === 'archive' && initialViewState.archive) {
   archiveResultsMode = archiveModeFromValue(initialViewState.archiveMode);
 }
 if (backtestEditorAdapter.initialPanels.indexOf(initialViewState.panel) >= 0) selectPanel(initialViewState.panel);
-initializeBacktestPageFromUrl();
+initializeBacktestPageFromUrl(initialBacktestUrl);
 </script>
 
 <!-- ── Nav bar ──────────────────────────────────── -->
@@ -11153,7 +11357,7 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=2">
 <script src="/app/js/scenario_visual_editor.js?v=6"></script>
 <script src="/app/js/suite_editor.js?v=43"></script>
-<script src="/app/js/coin_overrides_editor.js?v=26"></script>
+<script src="/app/js/coin_overrides_editor.js?v=27"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
 (function() {

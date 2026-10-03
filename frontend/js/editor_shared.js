@@ -339,11 +339,76 @@
     }
   }
 
-  function buildLineHighlightHtml(text, errorLine) {
+  function jsonPathSpans(text) {
+    // Read positions from valid JSON tokens rather than counting braces in
+    // lines: strings, duplicate leaf names and multiline arrays stay exact.
+    var spans = Object.create(null);
+    try { JSON.parse(text); } catch (error) { return spans; }
+    var tokens = [];
+    var pattern = /"(?:\\.|[^"\\])*"|[{}\[\]:,]|[^\s{}\[\]:,]+/g;
+    var match, previous = 0, line = 1;
+    while ((match = pattern.exec(text))) {
+      line += text.slice(previous, match.index).split('\n').length - 1;
+      tokens.push({ value: match[0], line: line });
+      previous = pattern.lastIndex;
+    }
+    var position = 0;
+    function visit(path, keyLine) {
+      var first = tokens[position++];
+      if (first.value === '{') {
+        while (tokens[position].value !== '}') {
+          var key = tokens[position++];
+          position++; // colon
+          visit(path ? path + '.' + JSON.parse(key.value) : JSON.parse(key.value), key.line);
+          if (tokens[position].value === ',') position++;
+        }
+        position++;
+      } else if (first.value === '[') {
+        var index = 0;
+        while (tokens[position].value !== ']') {
+          visit(path + '.' + index++);
+          if (tokens[position].value === ',') position++;
+        }
+        position++;
+      }
+      spans[path] = { start: keyLine || first.line, end: tokens[position - 1].line };
+    }
+    visit('');
+    return spans;
+  }
+
+  function migrationLines(text, changes) {
+    if (!changes || !Object.keys(changes).length) return Object.create(null);
+    var spans = jsonPathSpans(text);
+    var lines = Object.create(null);
+    Object.keys(changes || {}).forEach(function(path) {
+      var change = changes[path];
+      var span = spans[path];
+      if (change.removed) {
+        // A deleted leaf no longer has a JSON line. Its surviving parent marks
+        // the location; the HSL removal annotation retains the exact old value.
+        var parent = path;
+        while (!span && parent.includes('.')) {
+          parent = parent.slice(0, parent.lastIndexOf('.'));
+          span = spans[parent];
+        }
+        if (span) lines[span.start] = true;
+      } else if (span) {
+        for (var line = span.start; line <= span.end; line++) lines[line] = true;
+      }
+    });
+    return lines;
+  }
+
+  function buildLineHighlightHtml(text, errorLine, pathChanges) {
+    var changedLines = migrationLines(String(text || ''), pathChanges);
     return String(text || '').split('\n').map(function(line, index) {
       var lineEsc = escapeHtml(line);
       if (!lineEsc) lineEsc = '&nbsp;';
       var style = 'display:block';
+      if (changedLines[index + 1]) {
+        style += ';background:rgba(240,165,0,.16);border-radius:2px';
+      }
       if (errorLine === index + 1) {
         style += ';background:rgba(255,75,75,0.16);box-shadow:inset 3px 0 0 rgba(255,75,75,0.95);border-radius:2px';
       }
@@ -390,12 +455,12 @@
     var textarea = resolveElement(opts.textarea);
     var overlay = ensureExistingHighlightOverlay(textarea, opts.overlay);
     if (!textarea || !overlay) return null;
-    if (!opts.errorLine) {
+    if (!opts.errorLine && !Object.keys(opts.pathChanges || {}).length) {
       overlay.innerHTML = '';
       overlay.style.display = 'none';
       return overlay;
     }
-    overlay.innerHTML = buildLineHighlightHtml(opts.text != null ? opts.text : textarea.value, opts.errorLine);
+    overlay.innerHTML = buildLineHighlightHtml(opts.text != null ? opts.text : textarea.value, opts.errorLine, opts.pathChanges);
     overlay.style.display = 'block';
     return overlay;
   }
@@ -2591,7 +2656,129 @@
     return api;
   }
 
+  function applyConfigMigrationMarkers(rootTarget, changes, rawText, editor) {
+    var root = resolveElement(rootTarget);
+    if (!root) return;
+    var config;
+    try { config = JSON.parse(rawText); } catch (error) { return; }
+    root.querySelectorAll('[data-config-migration]').forEach(function(node) {
+      node.classList.remove('config-migration-changed');
+      delete node.dataset.configMigration;
+    });
+    var paths = Object.keys(changes || {});
+    if (!paths.length) return;
+    if (!document.getElementById('config-migration-marker-style')) {
+      var style = document.createElement('style');
+      style.id = 'config-migration-marker-style';
+      style.textContent = '.config-migration-changed{outline:1px solid #f0a500;outline-offset:1px}';
+      document.head.appendChild(style);
+    }
+    function changed(path) {
+      return paths.some(function(key) { return key === path || key.startsWith(path + '.'); });
+    }
+    function mark(node, path) {
+      if (!changed(path)) return;
+      node.classList.add('config-migration-changed');
+      node.dataset.configMigration = path;
+    }
+    var help = window.PBGuiPB8ParameterHelp;
+    var entries = Object.create(null);
+    function collect(node, path) {
+      if (path) {
+        var canonical = help ? help.canonicalPath(path) : path;
+        if (!entries[canonical]) entries[canonical] = { paths: [] };
+        entries[canonical].paths.push(path);
+      }
+      if (node && typeof node === 'object' && !Array.isArray(node)) {
+        Object.keys(node).forEach(function(key) { collect(node[key], path ? path + '.' + key : key); });
+      }
+    }
+    collect(config, '');
+    paths.forEach(function(path) {
+      var canonical = help ? help.canonicalPath(path) : path;
+      if (!entries[canonical]) entries[canonical] = { paths: [] };
+      if (!entries[canonical].paths.includes(path)) entries[canonical].paths.push(path);
+    });
+    root.querySelectorAll('input,select,textarea').forEach(function(node) {
+      // The existing side JSON editors retain their individual HSL markers;
+      // raw JSON is highlighted by path, never by a whole-textarea outline.
+      if (/-(?:raw-json|long-json|short-json|bot-long|bot-short)$/.test(node.id)) return;
+      if (node.closest('.optimize-bound-row')) return;
+      var path = node.getAttribute('data-config-path') || node.getAttribute('data-param-path')
+        || node.getAttribute('data-runtime-override');
+      var botField = node.id.match(/^(?:f|cfg|opted)-(long|short)-(twe|npos)$/);
+      var reversedBotField = node.id.match(/^(?:cfg|opted)-(twe|npos)-(long|short)$/);
+      if (botField || reversedBotField) {
+        var side = botField ? botField[1] : reversedBotField[2];
+        var field = botField ? botField[2] : reversedBotField[1];
+        path = 'bot.' + side + '.risk.' + (field === 'twe' ? 'total_wallet_exposure_limit' : 'n_positions');
+      }
+      var section = node.getAttribute('data-extra-param-section');
+      var key = node.getAttribute('data-extra-param-key');
+      if (section && key) path = section + '.' + key;
+      if (node.id.startsWith('extra-bt-')) path = 'backtest.' + node.id.slice(9);
+      if (path) { mark(node, path); return; }
+      if (!help) return;
+      var group = node.closest('.form-group, .runtime-override-field');
+      var label = group && group.querySelector('label, .runtime-override-label');
+      var matched = help.resolveHelp(entries, { id: node.id, label: label ? label.textContent : '' }, editor);
+      if (!matched) return;
+      var side = node.id.match(/^(?:f|cfg|opted)-(long|short)-/);
+      var candidates = matched.paths.filter(function(candidate) {
+        return !side || candidate.startsWith('bot.' + side[1] + '.');
+      });
+      if (candidates.length === 1) mark(node, candidates[0]);
+    });
+    root.querySelectorAll('.optimize-bound-row').forEach(function(row) {
+      var label = row.querySelector('.bound-key-text');
+      if (!label) return;
+      var key = label.textContent.trim();
+      mark(row, 'optimize.bounds.' + key);
+      var fixedChange = (changes || {})['optimize.fixed_params'];
+      if (fixedChange && Array.isArray(fixedChange.before) && Array.isArray(fixedChange.after)) {
+        var adapter = window.optimizeEditorAdapter;
+        var selector = adapter && adapter.canonicalFixedParam ? adapter.canonicalFixedParam(key) : 'bot.' + key;
+        if (fixedChange.before.includes(selector) !== fixedChange.after.includes(selector)) {
+          var checkbox = row.querySelector('.optimize-bound-fixed input');
+          if (checkbox) mark(checkbox, 'optimize.fixed_params');
+        }
+      }
+    });
+  }
+
+  function renderHslMigrationRemovals(textarea, sideStatus) {
+    // Deleted JSON leaves have no editable line. Show their exact old values
+    // next to the editor without adding them to the textarea or saved config.
+    var wrapper = textarea.parentNode;
+    var entries = Object.entries(sideStatus || {}).filter(function(entry) {
+      return entry[0].startsWith('hsl.') && entry[1] && entry[1].status === 'removed';
+    });
+    var panel = textarea._hslRemovalPanel;
+    if (!entries.length) {
+      if (panel) panel.remove();
+      textarea._hslRemovalPanel = null;
+      return;
+    }
+    if (!panel || panel.parentNode !== wrapper.parentNode) {
+      panel = document.createElement('div');
+      panel.className = 'hsl-migration-removals';
+      panel.style.cssText = 'margin-top:4px;padding:6px;min-width:0;border-radius:2px;background:rgba(224,82,82,.12);font-size:12px';
+      wrapper.after(panel);
+      textarea._hslRemovalPanel = panel;
+    }
+    var label = document.createElement('div');
+    label.textContent = 'Removed by HSL migration';
+    var lines = document.createElement('pre');
+    lines.style.cssText = 'margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:inherit';
+    lines.textContent = entries.map(function(entry) {
+      return '- ' + JSON.stringify(entry[0]) + ': ' + JSON.stringify(entry[1].before);
+    }).join('\n');
+    panel.replaceChildren(label, lines);
+  }
+
   global.PBGuiEditorShared = {
+    applyConfigMigrationMarkers: applyConfigMigrationMarkers,
+    renderHslMigrationRemovals: renderHslMigrationRemovals,
     escapeHtml: escapeHtml,
     formatJsonParseMessage: formatJsonParseMessage,
     getJsonErrorLocation: getJsonErrorLocation,

@@ -13,7 +13,7 @@ During image download, the progress bar uses compressed layer sizes from the pin
 Cloud optimization is integrated into **PB8 Optimize**. There is no separate
 Vast system page. Each installation uses its own Vast account and rental credit.
 
-The log dashboard shows **Proxy / min**, **Exact / min**, **Proxy / exact** and **Exact / USD (estimate)**. Proxy uses timestamped counter differences when available or PB8's last reported native proxy rate; Exact uses cumulative native Exact progress over at least 10 seconds. The interval and sample age are displayed; the last valid measured rates remain visible until newer counters arrive. Finished jobs show the last recorded interval, not a whole-run average. Proxy/exact is cumulative screening workload, not result quality or acceptance rate. Exact/USD uses the rental hourly price and excludes transfers, startup and idle time. Missing counters remain unavailable; population size is never used as a substitute. PBGui reads the latest 512 KiB of the remote optimizer log and saves a bounded observation history while polling jobs, so counter samples survive log-tail replacement and page/API reloads. No remote worker update is required.
+The log dashboard shows **Proxy / min**, **Exact / min**, **Proxy / exact** and **Exact / USD (estimate)**. Proxy uses timestamped counter differences when available or PB8's last reported native proxy rate; Exact uses cumulative native Exact progress over at least 10 seconds. The interval and sample age are displayed; the last valid measured rates remain visible until newer counters arrive. Finished jobs show the last recorded interval, not a whole-run average. Proxy/exact is cumulative screening workload, not result quality or acceptance rate. Exact/USD uses the rental hourly price and excludes transfers, startup and idle time. Missing counters remain unavailable; population size is never used as a substitute. Current PB8 progress uses the logged completed evolution counters, including generation, Exact-wait and completion phases; separate seed and pending counts are excluded. Older GPU log formats remain supported. PBGui reads the latest 512 KiB of the remote optimizer log and saves a bounded observation history while polling jobs, so counter samples survive log-tail replacement and page/API reloads. No remote worker update is required.
 
 ## Performance History
 
@@ -82,6 +82,13 @@ The versioned `ghcr.io/msei99/pbgui-pb8-worker` image is public. No GitHub accou
 or registry token is required. PBGui verifies anonymous access to the pinned
 manifest before starting a paid rental. The image contains runtime software,
 not user configurations, course data or credentials.
+
+New rentals and calibration use the PB8 schema v8.6.0 worker, pinned to an
+immutable manifest digest. Existing rentals retain their recorded image and PB8
+revision; changing the pin does not upgrade a running container. Earlier
+calibration evidence remains readable, but profiles are not reused across PB8
+revisions. After a worker update, use the displayed PBGui API restart control to
+activate the new pin before queuing.
 
 ## GPU & Offers
 
@@ -242,7 +249,7 @@ sweep metadata are imported into PB8 Results/Paretos; the exact path is shown.
 
 When no eligible work remains, the worker is kept until its rental deadline by
 default so uploaded data and the worker cache remain available for follow-up runs.
-Immediate cleanup and 5-minute, 30-minute or 1-hour idle periods remain selectable.
+Immediate cleanup and 5-minute, 30-minute or 1-hour idle periods remain selectable. Choose **Custom** under **When idle** to enter your own idle timeout in minutes (rounded to whole seconds). The rental deadline still ends the rental if it comes first.
 The GPU card shows the active retention policy and remaining time. New eligible
 work cancels a running countdown.
 A paused queue also follows the idle cleanup policy. Confirm **deletion_verified**;

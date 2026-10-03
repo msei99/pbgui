@@ -207,6 +207,7 @@ Setup:
 Controls:
 - **Timeframe buttons** (1m 5m 15m 30m 1h 2h 4h 6h 12h 1d 1w) — change candle resolution.
 - **Scroll left** on the chart to load older historical candles.
+- Candle history is automatically reconciled with the exchange every 30 seconds and when returning to the page. Missed final candle updates are corrected without resetting zoom or loaded history.
 
 ---
 

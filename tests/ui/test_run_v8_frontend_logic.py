@@ -566,14 +566,14 @@ def test_v7_forced_mode_aliases_select_the_visible_editor_options() -> None:
     assert "forcedModeSelectValue(live.forced_mode_short)" in populate
 
 
-def test_log_panel_waits_for_remote_assignment_before_opening() -> None:
-    """PB8 log opening must wait until enabled_on is populated from the config."""
+def test_pb7_log_panel_retains_assignment_wait_while_pb8_uses_smart_lookup() -> None:
+    """PB7 retains its form dependency; PB8 resolves placement through log-smart."""
 
     page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
     open_log_panel = _page_function(page, "openLogPanel")
 
     assert "async function openLogPanel()" in page
-    assert "await _editorInitPromise" in open_log_panel
+    assert "if (!runEditorAdapter.isV8 && _editorInitPromise) await _editorInitPromise" in open_log_panel
     assert "if (_logPanelOpen) return" in open_log_panel
     assert "_editorInitPromise = init();" in page
 
@@ -752,6 +752,7 @@ def test_collect_config_writes_every_managed_field_and_preserves_unknown_json() 
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
+        const window = {{}};
         const values = {json.dumps(values)};
         const raw = {json.dumps(raw)};
         const nodes = {{
@@ -1127,4 +1128,37 @@ def test_backup_renderer_shows_rollback_only_for_existing_pb8_instances() -> Non
         }})().catch(error => {{ console.error(error); process.exit(1); }});
         """
     )
+    _run_node(script)
+
+
+def test_pb8_logs_open_while_editor_load_is_pending_and_ignore_closed_lookup():
+    """The viewer remains available independently of migration and late callbacks."""
+    page = (ROOT / 'frontend/v7_edit.html').read_text()
+    script = "const assert=require('node:assert/strict');\n" + _exact_page_function(page, 'openLogPanel') + '\n' + _exact_page_function(page, 'closeLogPanel')
+    script += r'''
+    const nodes = {};
+    const document = {getElementById(id) {return nodes[id] ||= {style:{}, offsetWidth:240, classList:{add(){},remove(){}}};}};
+    const runEditorAdapter = {isV8:true};
+    const INSTANCE_NAME='alice', MASTER_NAME='master', WS_BASE='ws://fixture';
+    const _editorInitPromise = new Promise(()=>{});
+    let _logPanelOpen=false, _logPanelGeneration=0, _runLogViewer=null;
+    const getVal=()=>'';
+    let resolveLookup, requests=0, opens=0, chosenHost='';
+    let apiFetch=()=>{requests++;return new Promise(resolve=>{resolveLookup=resolve;});};
+    function LogViewerPanel(opts){chosenHost=opts.defaultHost;this.open=()=>{opens++;};this.close=()=>{};}
+    (async()=>{
+      await Promise.race([openLogPanel(),new Promise((_,reject)=>setTimeout(()=>reject(Error('Waited for config initialization')),500))]);
+      assert.equal(requests,1);
+      closeLogPanel();
+      resolveLookup({ok:true,json:async()=>({host:'old-worker',master:'master'})});
+      await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(opens,0);
+      apiFetch=async()=>({ok:true,json:async()=>({host:'worker-a',master:'master',version:7})});
+      await openLogPanel();
+      await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(opens,1);
+      assert.equal(chosenHost,'worker-a');
+      closeLogPanel();
+    })().catch(error=>{console.error(error);process.exit(1);});
+    '''
     _run_node(script)

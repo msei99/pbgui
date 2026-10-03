@@ -147,7 +147,7 @@
     if (!/^[a-z][a-z0-9_.*]*$/.test(label)) return null;
     var exact = canonicalPath(label);
     if (entries[exact]) return entries[exact];
-    if (/^(risk|strategy|forager|unstuck|hsl)\./.test(exact)) return entries['bot.*.' + exact] || null;
+    if (/^(risk|strategy|forager|unstuck|hsl|entry_cooldown)\./.test(exact)) return entries['bot.*.' + exact] || null;
     var scope = editor === 'run' ? 'live' : editor === 'backtest' ? 'backtest' : 'optimize';
     if (/^opted-gpu-/.test(field.id || '')) {
       scope = /^opted-gpu-halving-/.test(field.id) ? 'optimize.gpu.successive_halving' : 'optimize.gpu';

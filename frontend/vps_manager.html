@@ -3705,23 +3705,25 @@
       const deployConfig = getVpsDeployConfig();
       const nextCommand = String(command || deployConfig.action || 'vps-deploy-logging');
       const nextCommandText = String(commandText || deployConfig.action_text || 'Deploy Settings');
-      const mode = String(deployConfig.mode || 'parallel');
-      const extraVars = nextCommand === 'vps-update'
-        ? { reboot: !!deployConfig.reboot_requested, reboot_requested: !!deployConfig.reboot_requested }
-        : null;
-      store.vpsLoggingDeployHosts = selected.slice();
-      if (store.state && store.state.config) {
-        store.state.config.vps_deploy = Object.assign({}, deployConfig, {
-          action: nextCommand,
-          action_text: nextCommandText
-        });
-      }
-      if (overviewDeployNeedsPassword(nextCommand)) {
-        startOverviewDeployPasswordFlow(selected, nextCommand, nextCommandText, mode, !!deployConfig.debug, extraVars);
-        return;
-      }
-      selectView('deploys-vps-logging');
-      send({ cmd: 'run_vps_deploy', hostnames: selected, command: nextCommand, mode: mode, extra_vars: extraVars, debug: !!deployConfig.debug });
+      return withPb8UpdateNotice(nextCommand, selected, function () {
+        const mode = String(deployConfig.mode || 'parallel');
+        const extraVars = nextCommand === 'vps-update'
+          ? { reboot: !!deployConfig.reboot_requested, reboot_requested: !!deployConfig.reboot_requested }
+          : null;
+        store.vpsLoggingDeployHosts = selected.slice();
+        if (store.state && store.state.config) {
+          store.state.config.vps_deploy = Object.assign({}, deployConfig, {
+            action: nextCommand,
+            action_text: nextCommandText
+          });
+        }
+        if (overviewDeployNeedsPassword(nextCommand)) {
+          startOverviewDeployPasswordFlow(selected, nextCommand, nextCommandText, mode, !!deployConfig.debug, extraVars);
+          return;
+        }
+        selectView('deploys-vps-logging');
+        send({ cmd: 'run_vps_deploy', hostnames: selected, command: nextCommand, mode: mode, extra_vars: extraVars, debug: !!deployConfig.debug });
+      });
     }
 
     function runtimeBranchKeys(runtime) {
@@ -9070,9 +9072,33 @@
       renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
     }
 
+    function withPb8UpdateNotice(command, hostnames, onContinue) {
+      const pb8Update = ['master-update-pb8', 'master-update-pbgui-pb8',
+        'vps-update-pb8', 'vps-update-pbgui-pb8'].includes(command);
+      const mixedUpdate = ['vps-update-runtime', 'vps-update-pbgui-runtime'].includes(command)
+        && getManagedRows().some(function (row) {
+          return hostnames.includes(row.hostname) && !!row.pb8_installed;
+        });
+      if (!pb8Update && !mixedUpdate) return onContinue();
+      if (!window.PBGuiDialogs || typeof window.PBGuiDialogs.confirm !== 'function') {
+        toast('Update notice unavailable. Reload the page.', 'warning');
+        return;
+      }
+      return window.PBGuiDialogs.confirm({
+        title: 'PB8 config migration',
+        message: 'After updating, open affected PB8 Run configs, review the marked migration changes and click Save. Old HSL configs may fail to restart until the new config reaches the updated host. Yellow and orange HSL tiers are removed; re-backtest active HSL configs.',
+        detail: 'Optional: update a VPS with no PB8 bots first, move bots there and save their migrated configs, then update the vacated VPS. Repeat for the remaining hosts.',
+        confirmText: 'Continue update'
+      }).then(function (confirmed) {
+        if (confirmed) return onContinue();
+      });
+    }
+
     function runMasterWithLog(command, commandText, extraVars) {
-      openMasterTaskLog(command, commandText);
-      runMaster(command, commandText, extraVars);
+      return withPb8UpdateNotice(command, [], function () {
+        openMasterTaskLog(command, commandText);
+        runMaster(command, commandText, extraVars);
+      });
     }
 
     function masterActionWithSudo(command, commandText, extraVars) {
@@ -9752,8 +9778,10 @@
     }
 
     function runVpsWithLog(hostname, command, commandText, extraVars, saveConfigFirst) {
-      openVpsTaskLog(hostname, command, commandText);
-      runVps(hostname, command, commandText, extraVars, saveConfigFirst);
+      return withPb8UpdateNotice(command, [hostname], function () {
+        openVpsTaskLog(hostname, command, commandText);
+        runVps(hostname, command, commandText, extraVars, saveConfigFirst);
+      });
     }
 
     function openVpsHostLogs(hostname) {

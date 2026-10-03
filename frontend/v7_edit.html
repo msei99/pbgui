@@ -532,7 +532,7 @@ textarea.json-invalid:focus {
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
-<script defer src="/app/js/pb8_parameter_help.js?v=4"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=5"></script>
   <script src="/app/js/sidebar_resize.js?v=3"></script>
   <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
@@ -1240,11 +1240,11 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=15"></script>
+<script src="/app/js/editor_shared.js?v=17"></script>
 <script src="/app/js/pbgui_dialogs.js?v=10"></script>
 <script src="/app/js/run_editor_adapter.js?v=10"></script>
 <script src="/app/js/log_viewer_panel.js?v=50"></script>
-<script src="/app/js/coin_overrides_editor.js?v=26"></script>
+<script src="/app/js/coin_overrides_editor.js?v=27"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
 var API_BASE       = "%%API_BASE%%";
@@ -1473,8 +1473,11 @@ function syncRawJsonHighlightOverlay(error, detail) {
   window.PBGuiEditorShared.syncExistingHighlightOverlay({
     textarea: 'cfg-raw-json',
     overlay: 'cfg-raw-json-highlight',
-    errorLine: detail && detail.line
+    errorLine: detail && detail.line,
+    pathChanges: paramStatus.config_changes || {}
   });
+  var raw = document.getElementById('cfg-raw-json');
+  if (raw) window.PBGuiEditorShared.applyConfigMigrationMarkers('main-content', paramStatus.config_changes || {}, raw.value, 'run');
 }
 
 function revealRawJsonError() {
@@ -2014,6 +2017,7 @@ async function init() {
           || Array.isArray(cfgResp.config) || Object.keys(cfgResp.config).length === 0) {
         throw new Error('Could not load config: invalid or empty configuration response.');
       }
+
       cfg = cfgResp.config;
       paramStatus = cfgResp.param_status || {};
       draftOverrideConfigs = cfgResp.override_configs || {};
@@ -2664,6 +2668,7 @@ function populateForm(opts) {
   document.getElementById('f-long-json').value = JSON.stringify(longCfg, null, 2);
   document.getElementById('f-short-json').value = JSON.stringify(shortCfg, null, 2);
 
+
   // Param-status highlight (amber=neutralized, red=pb_default) for newly injected params
   refreshBotParamStatusLabels();
   _applyBotJsonHighlight(document.getElementById('f-long-json'), paramStatus.long);
@@ -2741,6 +2746,7 @@ function populateForm(opts) {
         group.appendChild(field);
       }
       field.id = fieldId;
+      field.setAttribute('data-config-path', 'live.' + k);
       field.dataset.extraLiveType = t === 'object' || Array.isArray(v) ? 'json' : v === null ? 'null' : t;
       row.appendChild(group);
       if (field.tagName === 'TEXTAREA') autoResizeTa(field);
@@ -3042,6 +3048,7 @@ function collectConfig() {
     optimize: baseOptimize,
   });
   if (runEditorAdapter.isV8) {
+
     var structuredLive = Object.assign({}, result.live, {
       custom_endpoints_path: getVal('f-custom-endpoints-path').trim() || null,
       enable_forager_ws_candles: getChk('f-enable-forager-ws'),
@@ -3535,6 +3542,7 @@ async function doImport() {
 
 /* ─── Log Panel (unified LogViewerPanel) ───────────────────── */
 var _logPanelOpen = false;
+var _logPanelGeneration = 0;
 var _runLogViewer = null;
 
 function toggleLogPanel() {
@@ -3542,9 +3550,10 @@ function toggleLogPanel() {
 }
 
 async function openLogPanel() {
-  if (_editorInitPromise) await _editorInitPromise;
+  if (!runEditorAdapter.isV8 && _editorInitPromise) await _editorInitPromise;
   if (_logPanelOpen) return;
   _logPanelOpen = true;
+  var generation = ++_logPanelGeneration;
   var panel = document.getElementById('log-panel');
   var sb = document.getElementById('sidebar');
   panel.style.left = (sb ? sb.offsetWidth : 200) + 'px';
@@ -3569,6 +3578,7 @@ async function openLogPanel() {
   }
 
   function _initViewer(host, defaultFile) {
+    if (!_logPanelOpen || generation !== _logPanelGeneration) return;
     if (_runLogViewer) { _runLogViewer.close(); _runLogViewer = null; }
     var isLocal = (!host || host === 'local');
     function remoteBotLogServices(viewHost, state) {
@@ -3611,6 +3621,7 @@ async function openLogPanel() {
     apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/log-smart?lines=1')
     .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(function(data) {
+      if (!_logPanelOpen || generation !== _logPanelGeneration) return;
       var masterHost = data.master || MASTER_NAME || '';
       var host = data.host || '';
       if (data.backup_file) {
@@ -3625,6 +3636,7 @@ async function openLogPanel() {
       _initViewer(isLocal ? 'local' : host);
     })
     .catch(function() {
+      if (!_logPanelOpen || generation !== _logPanelGeneration) return;
       var isCurrentLocal = !!MASTER_NAME && enabledOn === MASTER_NAME;
       badge.textContent = enabledOn === 'disabled' ? 'local' : enabledOn;
       badge.className = isCurrentLocal || enabledOn === 'disabled' ? 'disabled' : 'connected';
@@ -3668,6 +3680,7 @@ async function openLogPanel() {
 }
 
 function closeLogPanel() {
+  _logPanelGeneration++;
   _logPanelOpen = false;
   document.getElementById('log-panel').classList.remove('visible');
   document.getElementById('btn-log').classList.remove('active');
@@ -3834,6 +3847,7 @@ function _applyBotJsonHighlight(ta, sideStatus) {
     var blockStatus = null;
     var blockDepth = 0;
     var depth = 0;
+    var hslDepth = null;
     var validationErrorLine = ta && ta._jsonValidationError ? ta._jsonValidationError.line : null;
     var statusMap = ta._botHighlightStatusMap || {};
     return text.split('\n').map(function(line, index) {
@@ -3850,7 +3864,18 @@ function _applyBotJsonHighlight(ta, sideStatus) {
         status = m ? (statusMap[m[1]] || null) : null;
       }
 
-      if (status && opens > closes) {
+      var hslKey = line.match(/^\s*"([^"]+)":/);
+      if (hslKey && hslKey[1] === 'hsl' && depthBefore === 1 && opens > closes) {
+        hslDepth = depthBefore;
+      }
+      if (hslKey && hslDepth !== null) {
+        var hslPath = depthBefore === hslDepth ? 'hsl'
+          : depthBefore === hslDepth + 1 ? 'hsl.' + hslKey[1] : '';
+        if (hslPath && statusMap[hslPath] === 'review_line') status = 'review_line';
+      }
+      if (hslDepth !== null && depth <= hslDepth) hslDepth = null;
+
+      if (status && status !== 'review_line' && opens > closes) {
         blockStatus = status;
         blockDepth = depthBefore;
       }
@@ -3862,7 +3887,7 @@ function _applyBotJsonHighlight(ta, sideStatus) {
       var styles = ['display:block'];
       if (status === 'neutralized') {
         styles.push('background:color-mix(in srgb,#f0a500 16%,transparent)', 'border-radius:2px');
-      } else if (status === 'pb_default' || status === 'review') {
+      } else if (status === 'pb_default' || status === 'review' || status === 'review_line') {
         styles.push('background:color-mix(in srgb,#e05252 16%,transparent)', 'border-radius:2px');
       }
       if (validationErrorLine === index + 1) {
@@ -3882,6 +3907,8 @@ function _applyBotJsonHighlight(ta, sideStatus) {
     nextWrapper.appendChild(ta);
     wrapper = nextWrapper;
   }
+
+  window.PBGuiEditorShared.renderHslMigrationRemovals(ta, sideStatus);
 
   var pre = ta._botHighlightPre || wrapper.querySelector('.bot-json-highlight-pre');
   if (!pre) {

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("case", ["creation", "templates", "cancel", "resize", "charts", "cards", "emptyOrders", "messages", "assets"])
+@pytest.mark.parametrize("case", ["creation", "templates", "cancel", "resize", "charts", "cards", "emptyOrders", "messages", "assets", "candles"])
 def test_dashboard_frontend_regressions(case: str) -> None:
     """Execute the real frontend handlers against isolated DOM and HTTP doubles."""
     script = Path(__file__).with_name("dashboard_frontend_regressions.cjs")

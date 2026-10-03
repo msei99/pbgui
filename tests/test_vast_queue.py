@@ -126,6 +126,67 @@ def test_deadline_idle_policy_keeps_reusable_worker(queue):
     assert not queue.store.read(worker, 'control.json')['cleanup']
 
 
+@pytest.mark.parametrize('phase', ['validate', 'evaluate', 'select', 'optimize', 'baseline', 'bootstrap'])
+def test_active_loop_reserves_worker_between_rounds(queue, monkeypatch, phase):
+    """Local comparisons and AI decisions retain the rental past its idle timeout."""
+    from pb8_loop_store import LoopStore
+    queue, worker = queue
+    loop_id, owner = 'd'*32, 'e'*32
+    loop = {'status':'running', 'phase':phase, 'deadline':9000}
+    monkeypatch.setattr(LoopStore, 'read', lambda self, found_owner, found_id: loop)
+    queue.store.update(worker, loop_id=loop_id, loop_owner=owner, idle_seconds=0)
+    for job in queue.waiting():
+        queue.store.update(job['id'], status='completed')
+    for now in [100, 1000]:
+        assert worker_step(queue, worker, now=now) is None
+        assert queue.store.read(worker)['status']=='reserved'
+        assert queue.store.read(worker)['idle_since'] is None
+        assert not queue.store.read(worker, 'control.json')['cleanup']
+    queue.store.update('b'*32, status='ready', loop_id=loop_id, loop_owner=owner)
+    assert worker_step(queue, worker, now=1100)=='b'*32
+    assert queue.store.read('b'*32)['lease_id']==worker
+    assert queue.store.read(worker)['deadline']==10000
+
+
+@pytest.mark.parametrize('status', ['paused', 'finishing', 'completed', 'failed', 'stopping', 'stopped'])
+def test_inactive_loop_resumes_worker_idle_policy(queue, monkeypatch, status):
+    """Finishing or pausing a loop does not retain an idle rental indefinitely."""
+    from pb8_loop_store import LoopStore
+    queue, worker = queue
+    loop = {'status':'running', 'deadline':9000}
+    monkeypatch.setattr(LoopStore, 'read', lambda *args: loop)
+    queue.store.update(worker, loop_id='d'*32, loop_owner='e'*32)
+    for job in queue.waiting():
+        queue.store.update(job['id'], status='completed')
+    worker_step(queue, worker, now=100)
+    loop['status']=status
+    worker_step(queue, worker, now=1000)
+    assert queue.store.read(worker)['idle_since']==1000
+    worker_step(queue, worker, now=1300)
+    assert queue.store.read(worker, 'control.json')['cleanup']
+
+
+@pytest.mark.parametrize('boundary', ['stop', 'cleanup', 'rental_deadline', 'loop_deadline', 'missing_loop'])
+def test_loop_retention_honors_cleanup_and_deadlines(queue, monkeypatch, boundary):
+    """Retention cannot bypass a stop, a deadline, or missing loop authorization."""
+    from pb8_loop_store import LoopStore
+    queue, worker = queue
+    loop = {'status':'running', 'deadline':150 if boundary=='loop_deadline' else 9000}
+    def read_loop(*args):
+        """Resolve isolated loop state or simulate deleted authorization."""
+        if boundary=='missing_loop':
+            raise FileNotFoundError('Loop removed')
+        return loop
+    monkeypatch.setattr(LoopStore, 'read', read_loop)
+    queue.store.update(worker, loop_id='d'*32, loop_owner='e'*32, idle_seconds=0)
+    for job in queue.waiting():
+        queue.store.update(job['id'], status='completed')
+    if boundary in {'stop','cleanup'}:
+        queue.store.control(worker, boundary)
+    worker_step(queue, worker, now=9800 if boundary=='rental_deadline' else 100)
+    assert queue.store.read(worker, 'control.json')['cleanup']
+
+
 def test_stop_job_does_not_mark_complete_before_collection(queue):
     """Cancellation cannot release the GPU while an old process still runs."""
     queue, worker = queue
@@ -799,3 +860,26 @@ def test_global_pause_cancels_selected_gpu_claim(queue, monkeypatch):
     assert queue.read()['start_worker_id'] is None
     assert worker_step(queue, worker, now=100) is None
     assert queue.store.read('b' * 32)['status'] == 'ready'
+
+
+@pytest.mark.parametrize('seconds', [12,900,5400])
+def test_custom_idle_timeout_obeys_saved_duration(queue, seconds):
+    """Custom delays are enforced exactly like presets without provider operations."""
+    queue, worker = queue
+    for job in queue.waiting():
+        queue.store.update(job['id'], status='completed')
+    queue.store.update(worker,idle_seconds=seconds)
+    worker_step(queue,worker,now=100)
+    worker_step(queue,worker,now=100+seconds-1)
+    assert not queue.store.read(worker,'control.json')['cleanup']
+    worker_step(queue,worker,now=100+seconds)
+    assert queue.store.read(worker,'control.json')['cleanup']
+
+
+@pytest.mark.parametrize('seconds', [-2,True,1.5,'900'])
+def test_worker_start_rejects_invalid_custom_idle_delay(queue,seconds):
+    """Direct worker starts enforce integer idle policies before any rental action."""
+    from vast_provider import VastError
+    queue,_ = queue
+    with pytest.raises(VastError,match='Idle timeout'):
+        queue.start({'id':123},1,1,seconds)

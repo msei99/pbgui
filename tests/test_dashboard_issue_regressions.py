@@ -51,6 +51,8 @@ def test_adg_balance_updates_do_not_accumulate_snapshots(monkeypatch, legacy, us
     """Real balance writes replace snapshots, including cleanup for a legacy schema."""
     from Database import Database
 
+    # Keep THIS_MONTH deterministic instead of depending on the wall-clock month.
+    monkeypatch.setattr(dashboard, "_period_to_range", lambda _: (0, 0, "2026-09-01", "2026-09-03"))
     db = Database.__new__(Database)
     with closing(sqlite3.connect(":memory:")) as conn:
         monkeypatch.setattr(db, "_connect", lambda: conn)

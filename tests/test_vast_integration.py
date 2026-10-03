@@ -474,7 +474,9 @@ def test_start_uses_persisted_rental_settings(client, monkeypatch, tmp_path):
     retained = http.post('/api/vast/gpu-preferences', json={'idle_seconds':-1})
     assert retained.status_code == 200
     assert retained.json()['idle_seconds'] == -1
-    assert http.post('/api/vast/gpu-preferences', json={'idle_seconds':12}).status_code == 422
+    custom = http.post('/api/vast/gpu-preferences', json={'idle_seconds':900})
+    assert custom.status_code == 200 and custom.json()['idle_seconds'] == 900
+    assert http.post('/api/vast/gpu-preferences', json={'idle_seconds':-2}).status_code == 422
 
 
 def test_requeue_is_idempotent_under_concurrent_requests(tmp_path, monkeypatch):
@@ -760,7 +762,8 @@ def test_deadline_route_requires_explicit_valid_request(client, monkeypatch):
     assert http.post('/api/vast/queue/deadline', json=dict(worker_id='a'*32, expected_deadline=8000, minutes=1441)).status_code == 422
 
 
-def test_jobs_statistics_use_existing_local_log_without_remote_access(client, monkeypatch, tmp_path):
+@pytest.mark.parametrize('modern', [False, True])
+def test_jobs_statistics_use_existing_local_log_without_remote_access(client, monkeypatch, tmp_path, modern):
     """Existing rentals gain measured throughput through the authenticated job snapshot."""
     from secure_files import ensure_private_directory
     from vast_jobs import JobStore, write_json
@@ -776,9 +779,11 @@ def test_jobs_statistics_use_existing_local_log_without_remote_access(client, mo
     folder = ensure_private_directory(queue.root / 'jobs' / identifier)
     write_json(folder / 'state.json', {'id':identifier, 'status':'running', 'rental_state':'none'})
     logfile = logs / f'vast_{identifier}.log'
-    logfile.write_text('2026-09-16T10:00:00Z INFO GPU optimize | gen=1 proxy=100 (1.0/s) exact=10 inflight=0\n'
+    first_counter=('GPU optimizer progress | gen=1 phase=gpu_proxy | evolution_proxy_completed_run=100 seed_proxy=0 seed_exact=0 evolution_exact=10/10000000 evolution_pending=64' if modern else 'GPU optimize | gen=1 proxy=100 (1.0/s) exact=10 inflight=0')
+    last_counter=('GPU optimizer progress | gen=2 phase=generation_complete | evolution_proxy_completed_run=700 seed_proxy=0 seed_exact=0 evolution_exact=40/10000000 evolution_pending=64' if modern else 'GPU optimize | gen=2 proxy=700 (1.0/s) exact=40 inflight=0')
+    logfile.write_text('2026-09-16T10:00:00Z INFO '+first_counter+'\n'
                       + 'unrelated log line\n' * 6000
-                      + '2026-09-16T10:01:00Z INFO GPU optimize | gen=2 proxy=700 (1.0/s) exact=40 inflight=0\n')
+                      + '2026-09-16T10:01:00Z INFO '+last_counter+'\n')
     first = http.get('/api/vast/jobs').json()['jobs'][0]['throughput']
     assert first['proxy_per_minute'] == 600
     assert first['exact_per_minute'] == 30

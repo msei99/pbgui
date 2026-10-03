@@ -1163,13 +1163,29 @@
       if (preferenceGroups.offers.includes(key)) renderCalibration();
     }));
   });
+  function syncIdleInput() {
+    const custom = el('worker-idle').value === 'custom';
+    el('worker-idle-custom-field').hidden = !custom;
+    el('worker-idle-custom').disabled = !custom;
+    el('worker-idle-custom').required = custom;
+  }
+  el('worker-idle').addEventListener('change', syncIdleInput);
+  ['input','change'].forEach(event => el('worker-idle-custom').addEventListener(event, () => { preferenceEdits.idle_seconds++; }));
   function applyPreferences(data, keys, editSnapshot) {
     data = {max_rentals:1, auto_rent:false, min_tflops:0, convergence_enabled:false, convergence_min_exact:512, convergence_patience:512, convergence_tolerance_pct:0.25, ...data};
     savedPreferences = {...data};
     el('saved-rental-policy').textContent = 'Saved rental limits: auto rent & start ' + (data.auto_rent ? 'on' : 'off') + ' · up to ' + data.max_rentals + ' concurrent GPUs · maximum simultaneous budget targets $' + fmt(data.max_rentals * data.budget, 2) + ' · per GPU: up to ' + data.hours + ' hours · budget target $' + fmt(data.budget, 2) + ' · ' + idlePolicyLabel(data.idle_seconds) + '. Change these in Rental & Automation.';
     (keys || Object.keys(preferenceFields)).forEach(key => {
-      if (!editSnapshot || preferenceEdits[key] === editSnapshot[key]) el(preferenceFields[key]).value = data[key] == null ? '' : String(data[key]);
+      if (editSnapshot && preferenceEdits[key] !== editSnapshot[key]) return;
+      if (key === 'idle_seconds') {
+        const seconds = data[key] == null ? -1 : Number(data[key]);
+        const preset = [-1,0,300,1800,3600].includes(seconds);
+        el('worker-idle').value = preset ? String(seconds) : 'custom';
+        if (!preset) el('worker-idle-custom').value = String(seconds / 60);
+      } else el(preferenceFields[key]).value = data[key] == null ? '' : String(data[key]);
+
     });
+    syncIdleInput();
     el('saved-requirements').textContent = 'Saved: ' + (data.gpu_name || 'any GPU type') + ' · max $' + fmt(data.max_price, 4) + '/hour · ' + data.min_vram + ' GB VRAM / ' + data.min_ram + ' GB RAM / ' + data.min_cpu + ' CPU cores / min ' + fmt(data.min_tflops || 0, 1) + ' TFLOPS. Current matching offers are selected only at start.';
     renderJob();
   }
@@ -1184,7 +1200,8 @@
     const keys = preferenceGroups[group], values = {}, edits = {...preferenceEdits};
     keys.forEach(key => {
       const value = el(preferenceFields[key]).value;
-      values[key] = key === 'gpu_name' ? value.trim() : ['verified_only','auto_rent','convergence_enabled'].includes(key) ? value === 'true' : Number(value);
+      values[key] = key === 'idle_seconds' && value === 'custom' ? Math.round(Number(el('worker-idle-custom').value) * 60)
+        : key === 'gpu_name' ? value.trim() : ['verified_only','auto_rent','convergence_enabled'].includes(key) ? value === 'true' : Number(value);
     });
     if (group === 'rental' && values.auto_rent) {
       if (!window.PBGuiDialogs?.confirm) { message('Rental confirmation unavailable. Reload this page.', true); return; }
@@ -1597,7 +1614,7 @@
       });
       banner.hidden = !active.length && !queueState.pool_enabled;
     }
-    if (window.state) window.state.cloudQueueCount = jobRows.length;
+    if (window.state) window.state.cloudQueueCount = jobRows.filter(job => !job.loop_id).length;
     if (typeof renderQueueMaybeDeferred === 'function') renderQueueMaybeDeferred();
     else if (typeof updateMetaCounts === 'function') updateMetaCounts();
   }
@@ -2425,7 +2442,7 @@
   }
 
   function cloudQueueItems() {
-    return jobRows.map(job => ({cloudJob:job, filename:'vast:' + job.id, name:job.config_name,
+    return jobRows.filter(job => !job.loop_id).map(job => ({cloudJob:job, filename:'vast:' + job.id, name:job.config_name,
       status:({ready:'queued',completed:'complete',failed:'error'})[job.status] || job.status,
       exchange:job.exchange || '', created:job.created_at ? new Date(job.created_at * 1000).toISOString() : ''}));
   }
@@ -2555,6 +2572,14 @@
 
   window.PBGuiVast = {
     closeLog,
+    openJobLog: async function (id, isCurrent) {
+      let job = jobRows.find(row => row.id === id);
+      if (!job) { await pollJobs(); job = jobRows.find(row => row.id === id); }
+      if (isCurrent && !isCurrent()) return false;
+      if (!job) throw new Error('The Vast.ai optimizer job is no longer available.');
+      openCloudLog(job);
+      return true;
+    },
     deleteQueueItems: deleteCloudQueueItems,
     queueItems: cloudQueueItems,
     queueRow: cloudQueueRow,

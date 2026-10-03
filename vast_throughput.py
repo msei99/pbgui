@@ -10,7 +10,9 @@ LOG_TAIL_BYTES = 512 * 1024
 _STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?Z\b")
 _COUNTERS = re.compile(
     r"GPU (?:optimize\s*\|\s*gen=\d+\s+proxy=(\d+)\s+\([0-9.]+/s\)\s+exact=(\d+)"
-    r"|optimization complete\s*\|\s*generations=\d+\s+proxy=(\d+)\s+exact=(\d+))"
+    r"|optimization complete\s*\|\s*generations=\d+\s+proxy=(\d+)\s+exact=(\d+)"
+    r"|optimizer progress\s*\|[^\n]*?\bevolution_proxy_completed_run=(\d+)(?=\s|$)"
+    r"[^\n]*?\bevolution_exact=(\d+)/\d+(?=\s|$))"
 )
 _REPORTED_PROXY_RATE = re.compile(r"GPU optimize\s*\|[^\n]*?\bproxy=\d+\s+\(([0-9.]+)/s\)")
 
@@ -38,7 +40,8 @@ def parse_throughput(raw_log: bytes, previous: dict | None = None) -> dict | Non
         try:
             sampled_at = datetime.strptime(stamp[1], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
             if counts is not None:
-                proxy, exact = (int(value) for value in ((counts[1], counts[2]) if counts[1] is not None else (counts[3], counts[4])))
+                pair = next((counts[index], counts[index + 1]) for index in (1, 3, 5) if counts[index] is not None)
+                proxy, exact = (int(value) for value in pair)
             else:
                 exact = progress.get('exact_completed')
                 if type(exact) is not int or exact < 0:

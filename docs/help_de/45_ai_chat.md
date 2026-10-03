@@ -2,6 +2,8 @@
 
 Beim Öffnen oder erneuten Öffnen des AI-Drawers bleibt der wiederhergestellte Chatverlauf sichtbar, ohne dass eine neue Frage gesendet werden muss. Laufende Anfragen werden automatisch weiter aktualisiert.
 
+Anbieter, ChatGPT-Profil, Modell, Reasoning und Geschwindigkeit werden automatisch pro PBGui-Konto gespeichert. Sie bleiben bei Seitenwechsel, Browser-Reload und API-Neustart erhalten. Eine ältere wiederhergestellte Unterhaltung behält ihren Verlauf, ersetzt aber nicht deine gespeicherte Modellauswahl. Ist das gespeicherte Modell nicht mehr verfügbar, wählst du ausdrücklich ein verfügbares Modell; PBGui wechselt nicht still auf ein anderes. Neue AI-Loop-Runs und **Continue** übernehmen diese aktuelle Auswahl; bestehende Runs behalten ihr festgehaltenes Modell.
+
 Wenn der ausgewählte Anbieter nicht verbunden ist, zeigt AI Chat einen Hinweis zur Verbindung über die Seitenleiste und fragt dessen Modelle nicht ab. Beim ersten Laden wird ein verfügbarer verbundener Anbieter bevorzugt. Der Verbindungshinweis bleibt auch beim Start eines neuen Chats sichtbar, bis ein Anbieter verbunden ist.
 
 Stop funktioniert auch während eine neue Unterhaltung noch angelegt wird. Der wartende Prompt wird nach der verspäteten Antwort nicht mehr gesendet; das Eingabefeld wird wieder freigegeben.

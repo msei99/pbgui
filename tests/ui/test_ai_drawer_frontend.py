@@ -12,7 +12,7 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=60" in NAV
+    assert "/app/js/ai_drawer.js?v=62" in NAV
     assert "/app/js/ai_usage.js?v=2" in NAV
     assert "/app/js/jev_transfer_preview.js?v=1" in NAV
     assert "jev_preview_id: jevPreviewId || null" in DRAWER
@@ -63,7 +63,7 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "prepareNewSelection" not in DRAWER
     assert "state.selectionDirty = true;" in DRAWER
     assert "state.selectionDirty = true; rebuildEfforts();" in DRAWER
-    assert "if (!state.selectionDirty)" in DRAWER
+    assert "if (!state.selectionDirty && !state.savedSelection)" in DRAWER
     assert "await rebuildProviders(providerValue, conversation.model)" in DRAWER
     assert "Loading models..." in DRAWER
     assert "Models unavailable" in DRAWER

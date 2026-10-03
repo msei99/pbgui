@@ -3375,11 +3375,11 @@
 
         /* Fit content after the browser has laid out the container.
            Two-phase: rAF for first paint, setTimeout for autoSize ResizeObserver settling. */
-        requestAnimationFrame(function () {
-            chart.timeScale().fitContent();
+        var _initialFitFrame = requestAnimationFrame(function () {
+            if (!_destroyed) chart.timeScale().fitContent();
         });
-        setTimeout(function () {
-            chart.timeScale().fitContent();
+        var _initialFitTimer = setTimeout(function () {
+            if (!_destroyed) chart.timeScale().fitContent();
         }, 200);
 
         /* ── Lazy history loading: fire onLoadMore when user scrolls near left edge ── */
@@ -3408,13 +3408,100 @@
 
         /* autoSize:true handles responsive resizing — no manual ResizeObserver needed */
 
+        var _candleRevision = 0;
+        var _candleRevisions = {};
+        var _reconcileTimer = null;
+        var _reconcileAbort = null;
+        var _destroyed = false;
+        var _currentTimeframe = opts.timeframe || '4h';
+
+        function _mergeCandles(newCandles, revision) {
+            var range = chart.timeScale().getVisibleRange();
+            var byTime = lwData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
+            var volumeByTime = _volData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
+            newCandles.forEach(function (c) {
+                var t = Math.floor(c.t / 1000);
+                // Do not roll back a WS update received after this request began.
+                if (revision !== undefined && (_candleRevisions[t] || 0) > revision) return;
+                byTime[t] = {time: t, open: c.o, high: c.h, low: c.l, close: c.c};
+                volumeByTime[t] = {time: t, value: c.v,
+                    color: c.c >= c.o ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)'};
+            });
+            lwData = Object.values(byTime).sort(function (a, b) { return a.time - b.time; });
+            _volData = Object.values(volumeByTime).sort(function (a, b) { return a.time - b.time; });
+            series.setData(lwData);
+            volSeries.setData(_volData);
+            if (range) chart.timeScale().setVisibleRange(range);
+            if (lwData.length) {
+                _lastClose = lwData[lwData.length - 1].close;
+                if (_priceLine) _priceLine.applyOptions({price: _lastClose});
+                if (_entryLine && pos && pos.entry) {
+                    _entryLine.applyOptions({color: positionEntryColor(_lastClose, pos.entry, pos.side)});
+                }
+                if (opts.onCandleSnapshot) opts.onCandleSnapshot(_lastClose);
+            }
+        }
+
+        function _scheduleReconcile(delay) {
+            clearTimeout(_reconcileTimer);
+            if (!_destroyed && opts.apiBase && data.user && data.symbol) {
+                _reconcileTimer = setTimeout(_reconcileCandles, delay);
+            }
+        }
+
+        async function _reconcileCandles() {
+            if (_destroyed) return;
+            if (!chartDiv.isConnected) { controller.destroy(); return; }
+            if (document.hidden || _reconcileAbort) { _scheduleReconcile(30000); return; }
+            var gen = _dataGen;
+            var revision = _candleRevision;
+            // Only updates during this request need to be retained for race protection.
+            _candleRevisions = {};
+            var abort = new AbortController();
+            _reconcileAbort = abort;
+            try {
+                var url = opts.apiBase + '/dashboard/candles_data?user=' + encodeURIComponent(data.user)
+                    + '&symbol=' + encodeURIComponent(data.symbol)
+                    + '&timeframe=' + encodeURIComponent(_currentTimeframe)
+                    + '&limit=' + ((_currentTimeframe === '1d' || _currentTimeframe === '1w') ? 1500 : 500);
+                var response = await fetch(url, {signal: abort.signal});
+                if (!response.ok) throw new Error('Candle snapshot unavailable');
+                var snapshot = await response.json();
+                if (!_destroyed && gen === _dataGen && chartDiv.isConnected && !abort.signal.aborted) {
+                    _mergeCandles(snapshot.candles || [], revision);
+                }
+            } catch (err) {
+                if (err.name !== 'AbortError') console.warn('Dashboard candle snapshot unavailable');
+            } finally {
+                if (_reconcileAbort === abort) {
+                    _reconcileAbort = null;
+                    _scheduleReconcile(30000);
+                }
+            }
+        }
+
+        function _onCandleVisibility() {
+            if (!document.hidden) _scheduleReconcile(0);
+        }
+        document.addEventListener('visibilitychange', _onCandleVisibility);
+
         /* Return controller object for live updates */
-        return {
+        var controller = {
             chart: chart,
             series: series,
             updateCandle: function (candle) {
                 /* candle: [t, o, h, l, c, v] (raw exchange format) */
                 var t = Math.floor(candle[0] / 1000);
+                if (_destroyed || (lwData.length && t < lwData[lwData.length - 1].time)) return;
+                _candleRevisions[t] = ++_candleRevision;
+                // Keep the backing arrays current so loading history cannot undo live updates.
+                var candleRow = {time: t, open: candle[1], high: candle[2], low: candle[3], close: candle[4]};
+                var volumeRow = {time: t, value: candle[5],
+                    color: candle[4] >= candle[1] ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)'};
+                if (lwData.length && lwData[lwData.length - 1].time === t) {
+                    lwData[lwData.length - 1] = candleRow;
+                    _volData[_volData.length - 1] = volumeRow;
+                } else { lwData.push(candleRow); _volData.push(volumeRow); }
                 _lastClose = candle[4];
                 series.update({
                     time: t, open: candle[1], high: candle[2],
@@ -3509,7 +3596,11 @@
                 _volData = Object.values(existingVol).sort(function (a, b) { return a.time - b.time; });
                 volSeries.setData(_volData);
             },
-            setData: function (newCandles) {
+            setData: function (newCandles, timeframe) {
+                if (_reconcileAbort) { _reconcileAbort.abort(); _reconcileAbort = null; }
+                _currentTimeframe = timeframe || _currentTimeframe;
+                _candleRevisions = {};
+                _scheduleReconcile(0);
                 /* Full candle replacement (e.g. timeframe switch) — no chart rebuild */
                 _dataGen++;          /* invalidate any in-flight prependData calls */
                 _loadingMore = false; /* allow fresh onLoadMore triggers */
@@ -3545,10 +3636,19 @@
             },
             _gen: function () { return _dataGen; },
             destroy: function () {
+                if (_destroyed) return;
+                _destroyed = true;
+                clearTimeout(_initialFitTimer);
+                cancelAnimationFrame(_initialFitFrame);
+                clearTimeout(_reconcileTimer);
+                document.removeEventListener('visibilitychange', _onCandleVisibility);
+                if (_reconcileAbort) { _reconcileAbort.abort(); _reconcileAbort = null; }
                 chart.remove();
             },
             chartInstance: chart
         };
+        _scheduleReconcile(0);
+        return controller;
     }
 
     function buildOrders(container, data, opts) {
@@ -3700,7 +3800,7 @@
         root.appendChild(chartWrap);
         container.appendChild(root);
 
-        var ctrl = renderOrders(chartWrap, data, opts);
+        var ctrl = renderOrders(chartWrap, data, Object.assign({}, opts, {onCandleSnapshot: _refreshUpnl}));
 
         /* ── Live uPnL tracking: recalculate on every candle/position update ── */
         var _posState = (data && data.position) ? {
@@ -4058,7 +4158,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20260929a',
+        VERSION:            '20260930b',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

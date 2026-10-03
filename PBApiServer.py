@@ -117,6 +117,7 @@ from api.backtest_v8 import startup as bt8_startup, shutdown as bt8_shutdown
 from api.cluster import router as cluster_router, shutdown as cluster_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
+from api.loop_optimizer_v8 import router as loop_optimizer_v8_router, startup as loop8_startup, shutdown as loop8_shutdown, configure_restart_gate as loop8_configure_restart_gate
 from api.optimize_v8 import router as optimize_v8_router
 from api.vast import router as vast_router
 from api.optimize_v8 import startup as opt8_startup, shutdown as opt8_shutdown
@@ -175,6 +176,7 @@ _runtime_restart_reasons: list[str] = []
 _sse_subscribers: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
 _SSE_CLOSE = object()
 _api_restart_lease = None
+loop8_configure_restart_gate(lambda: _api_restart_lease is not None)
 
 
 def _read_serial() -> int:
@@ -353,6 +355,7 @@ async def _restart_block_state() -> tuple[bool, str]:
     from api.pareto_explorer import restart_block_reason as pareto_restart_block_reason
     from api.vps_manager import restart_block_reason as vps_manager_restart_block_reason
     from vast_guard_migration import restart_block_reason as vast_guard_restart_block_reason
+    from api.loop_optimizer_v8 import restart_block_reason as loop8_restart_block_reason
 
     local_reasons = [
         reason
@@ -366,6 +369,7 @@ async def _restart_block_state() -> tuple[bool, str]:
             vast_guard_restart_block_reason(),
             profit_sweep_restart_block_reason(),
             ai_restart_block_reason(),
+            loop8_restart_block_reason(),
             credential_migration_restart_block_reason(Path(PBGDIR)),
         )
         if reason
@@ -932,6 +936,7 @@ async def _lifespan(app: FastAPI):
         strategy_explorer_v8_startup()
         profit_sweep_startup()
         await ai_capabilities_startup()
+        loop8_startup()
 
         lifecycle_tasks = [
             asyncio.create_task(_deferred_startup(), name="deferred-startup"),
@@ -945,6 +950,11 @@ async def _lifespan(app: FastAPI):
                 task.cancel()
         if lifecycle_tasks:
             await asyncio.gather(*lifecycle_tasks, return_exceptions=True)
+
+        try:
+            await loop8_shutdown()
+        except Exception as exc:
+            _log(SERVICE, f"[lifespan] pb8-loop shutdown failed: {type(exc).__name__}", level="ERROR", meta={"traceback": traceback.format_exc()})
 
         shutdown_steps = (
             ("auth", auth_shutdown),
@@ -1100,6 +1110,7 @@ app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtes
 app.include_router(backtest_v8_router, prefix="/api/backtest-v8", tags=["backtest-v8"])
 app.include_router(cluster_router, prefix="/api/cluster", tags=["cluster"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
+app.include_router(loop_optimizer_v8_router, prefix="/api/optimize-v8/loops", tags=["pb8-loops"])
 app.include_router(optimize_v8_router, prefix="/api/optimize-v8", tags=["optimize-v8"])
 app.include_router(vast_router, prefix="/api/vast", tags=["vast"])
 app.include_router(pareto_explorer_router, prefix="/api/pareto-explorer", tags=["pareto-explorer"])
@@ -1818,15 +1829,18 @@ async def server_restart(session: SessionToken = Depends(require_auth)):
         _log(SERVICE, f"[restart] could not reserve lifecycle: {exc}", level="ERROR")
         raise HTTPException(status_code=500, detail=f"Could not reserve PBGui restart: {exc}") from exc
     restart_lease = leases[-1]
+    # Close AI admission before any awaited blocker inspection or handoff work.
+    _api_restart_lease = restart_lease
     try:
         restart_blocked, restart_block_reason = await _restart_block_state()
         if restart_blocked:
             detail = restart_block_reason or "An API-owned mutable operation is still running."
             raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {detail}")
-    except Exception:
+    except BaseException:
+        if _api_restart_lease is restart_lease:
+            _api_restart_lease = None
         await asyncio.to_thread(_release_api_restart_leases, leases)
         raise
-    _api_restart_lease = restart_lease
     try:
         restart_state = await asyncio.to_thread(_restart_status_payload)
     except Exception as exc:

@@ -87,6 +87,7 @@ class AIPreferencesRequest(BaseModel):
     drawer_open: bool | None = None
     drawer_pinned: bool | None = None
     jev_max_cost_usd: float | None = Field(default=None, ge=0.000001, le=1.0)
+    selection: dict[str, str] | None = Field(default=None, max_length=5)
 
 
 class ConversationRewindRequest(BaseModel):
@@ -203,7 +204,8 @@ async def save_preferences(
     try:
         return _json(
             get_ai_chat_service().save_preferences(
-                _owner(session), body.drawer_width, body.drawer_open, body.drawer_pinned, body.jev_max_cost_usd
+                _owner(session), body.drawer_width, body.drawer_open, body.drawer_pinned, body.jev_max_cost_usd,
+                **({"selection": body.selection} if body.selection is not None else {})
             )
         )
     except Exception as exc:

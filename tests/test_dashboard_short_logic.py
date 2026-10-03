@@ -119,7 +119,7 @@ def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket() -> None:
         window.location = {{ protocol: 'http:', host: 'localhost', href: 'http://localhost/app/dashboard_top.html' }};
         global.document = {{ getElementById: function () {{ return {{}}; }} }};
         global.DashRender = {{
-            VERSION: '20260927a',
+            VERSION: '20260930b',
             injectCSS: function () {{}}
         }};
         window.DashRender = global.DashRender;
@@ -216,7 +216,7 @@ def test_dashboard_top_older_fetch_cannot_overwrite_newer_render() -> None:
             createTextNode: function () {{ return {{}}; }}
         }};
         global.DashRender = {{
-            VERSION: '20260927a',
+            VERSION: '20260930b',
             injectCSS: function () {{}},
             buildTop: function (target, data) {{ renders.push(data.id); }}
         }};
@@ -293,7 +293,7 @@ def test_dashboard_positions_waits_for_live_before_rendering_db_fallback() -> No
         window.location = {{ protocol: 'http:', host: 'localhost', href: 'http://localhost/app/dashboard_positions.html' }};
         global.document = {{ getElementById: function () {{ return container; }} }};
         global.DashRender = {{
-            VERSION: '20260927a',
+            VERSION: '20260930b',
             injectCSS: function () {{}},
             buildPositions: function (target, data) {{ renders.push(data.id); }}
         }};

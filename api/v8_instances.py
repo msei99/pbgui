@@ -50,6 +50,8 @@ from pb8_config import (
     get_pb8_coin_override_metadata,
     get_pb8_exchange_metadata,
     load_pb8_config,
+    load_pb8_editor_config,
+    preview_pb8_hsl_migration,
     prepare_pb8_config,
     save_prepared_pb8_config,
     validate_pb8_override_bundle,
@@ -1089,18 +1091,27 @@ def _backup_log_info(name: str) -> dict[str, str]:
     return {}
 
 
+def _read_v8_log_placement(path: Path) -> dict[str, Any]:
+    """Read only PBGui placement metadata, without loading a trading strategy."""
+    if not path.is_file() or path.is_symlink() or path.parent.is_symlink():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _log(SERVICE, f"Cannot read PB8 log placement metadata: {exc.__class__.__name__}", level="WARNING")
+        return {}
+    metadata = payload.get("pbgui") if isinstance(payload, dict) else None
+    if not isinstance(metadata, dict):
+        return {}
+    return {key: metadata.get(key) for key in ("enabled_on", "version")}
+
+
 def _last_active_v8_host(name: str) -> dict[str, Any]:
     """Resolve current or historical PB8 placement without treating it as live proof."""
 
     master = _master_hostname()
     config_path = _config_path(name)
-    current_config: dict[str, Any] = {}
-    if config_path.is_file() and not config_path.is_symlink():
-        try:
-            current_config = load_pb8_config(config_path)
-        except PB8ConfigurationError:
-            current_config = {}
-    pbgui = current_config.get("pbgui") if isinstance(current_config.get("pbgui"), dict) else {}
+    pbgui = _read_v8_log_placement(config_path)
     enabled_on = str(pbgui.get("enabled_on") or "disabled")
     if enabled_on != "disabled":
         return {"name": name, "host": enabled_on, "version": str(pbgui.get("version") or ""), "master": master, "source": "current"}
@@ -1125,11 +1136,7 @@ def _last_active_v8_host(name: str) -> dict[str, Any]:
         with _backup_lock():
             backup_dirs = _backup_dirs_unlocked(backup_instance_root)
     for backup_dir in backup_dirs:
-        try:
-            backup_config = load_pb8_config(backup_dir / "config.json")
-        except PB8ConfigurationError:
-            continue
-        backup_pbgui = backup_config.get("pbgui") if isinstance(backup_config.get("pbgui"), dict) else {}
+        backup_pbgui = _read_v8_log_placement(backup_dir / "config.json")
         host = str(backup_pbgui.get("enabled_on") or "disabled")
         if host != "disabled":
             result = {"name": name, "host": host, "version": backup_dir.name, "master": master, "source": "backup"}
@@ -1175,14 +1182,22 @@ def _list_instances() -> list[dict[str, Any]]:
             try:
                 config = load_pb8_config(config_path)
             except Exception as exc:
-                _log(SERVICE, f"PB8 loader could not canonicalize live config '{directory.name}': {exc}", level="WARNING")
+                # The local schema gate says nothing about a running VPS using
+                # an earlier PB8 version. Let observed host state classify this
+                # row; editor/save/start validation remains strict.
+                local_hsl_migration = (
+                    isinstance(exc, PB8ConfigurationError)
+                    and "pre-v8.6 HSL configuration requires explicit migration" in str(exc)
+                )
+                if not local_hsl_migration:
+                    _log(SERVICE, f"PB8 loader could not canonicalize live config '{directory.name}': {exc}", level="WARNING")
                 try:
                     config = json.loads(config_path.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
                     continue
                 if not isinstance(config, dict):
                     continue
-                load_error = str(exc)
+                load_error = "" if local_hsl_migration else str(exc)
             else:
                 load_error = ""
             live = config.get("live") if isinstance(config.get("live"), dict) else {}
@@ -1620,15 +1635,32 @@ def get_v8_instance_config(name: str, session: SessionToken = Depends(require_au
         raise HTTPException(status_code=404, detail=f"PB8 instance '{name}' not found")
     try:
         with _run_lock():
-            config = load_pb8_config(path)
+            editor_payload = load_pb8_editor_config(path, loader=load_pb8_config)
+            config = editor_payload["config"]
             return {
+                **editor_payload,
                 "name": name,
                 "config": config,
-                "param_status": {},
+                "param_status": editor_payload.get("param_status", {}),
                 "override_configs": _override_payloads_by_coin(path.parent, config),
             }
     except PB8ConfigurationError as exc:
         raise _configuration_http_error(f"Loading PB8 instance '{name}'", exc) from exc
+
+
+@router.post("/instances/{name}/migrate-hsl")
+def preview_hsl_migration(name: str, body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Preview the native HSL migration; the existing config remains untouched."""
+    path = _config_path(name)
+    with _run_lock():
+        if _run_root().is_symlink() or not path.is_file() or path.is_symlink() or path.parent.is_symlink():
+            raise HTTPException(status_code=404, detail="Config not found")
+        try:
+            editor_payload = load_pb8_editor_config(path, loader=load_pb8_config)
+            _override_payloads_by_coin(path.parent, editor_payload["config"])
+            return preview_pb8_hsl_migration(path, body)
+        except PB8ConfigurationError as exc:
+            raise _configuration_http_error("Previewing PB8 HSL migration", exc) from exc
 
 
 @router.post("/instances/{name}/restart")

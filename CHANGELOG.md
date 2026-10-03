@@ -3,6 +3,7 @@
 Release notes live in dedicated files under `releases/`.
 
 - [Unreleased](releases/unreleased.md)
+- [v2.08.1 — includes Experimental AI Loop Optimizer](releases/v2.08.1.md)
 - [v2.07.3](releases/v2.07.3.md)
 - [v2.07.2](releases/v2.07.2.md)
 - [v2.07.1](releases/v2.07.1.md)

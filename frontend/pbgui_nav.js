@@ -1583,7 +1583,7 @@
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
-    'help':               '/app/help.html?v=1768',
+    'help':               '/app/help.html?v=1769',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
@@ -1776,6 +1776,13 @@
 
     /* group dropdown toggles */
     document.querySelectorAll('.nav-group-btn').forEach(function (btn) {
+      btn.addEventListener('pointerenter', function (e) {
+        if (e.pointerType !== 'mouse') return;
+        var grp = btn.closest('.nav-group');
+        if (grp.classList.contains('open') || !document.querySelector('.nav-group.open')) return;
+        document.querySelectorAll('.nav-group.open').forEach(function (g) { g.classList.remove('open'); });
+        grp.classList.add('open');
+      });
       btn.addEventListener('click', function (e) {
         e.stopPropagation();
         var grp = btn.closest('.nav-group');
@@ -1841,9 +1848,9 @@
     scheduleAlerts();
 
     var aiBtn = document.getElementById('pbgui-ai-btn');
-    if (aiBtn) aiBtn.addEventListener('click', function () {
+    function loadAIDrawer(show) {
       if (window.PBGuiAI && typeof window.PBGuiAI.toggle === 'function') {
-        window.PBGuiAI.toggle();
+        if (show) window.PBGuiAI.toggle();
         return;
       }
       if (_aiDrawerLoading) return;
@@ -1892,8 +1899,8 @@
           return;
         }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=60');
-        script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
+        script.src = _appPath('/app/js/ai_drawer.js?v=62');
+        script.onload = function () { _aiDrawerLoading = false; if (show && window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); window.dispatchEvent(new Event('pbgui:ai-ready')); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);
       }
@@ -1906,7 +1913,21 @@
       dialogs.onload = loadDrawerScript;
       dialogs.onerror = loadDrawerScript;
       document.head.appendChild(dialogs);
-    });
+    }
+    if (aiBtn) aiBtn.addEventListener('click', function () { loadAIDrawer(true); });
+    window.PBGuiAI = window.PBGuiAI || {};
+    window.PBGuiAI.ensureSelection = async function () {
+      if (!window.PBGuiAI.getSelection) {
+        await new Promise(function (resolve, reject) {
+          var timeout;
+          function ready() { clearTimeout(timeout); window.removeEventListener('pbgui:ai-ready', ready); resolve(); }
+          window.addEventListener('pbgui:ai-ready', ready);
+          timeout = setTimeout(function () { window.removeEventListener('pbgui:ai-ready', ready); reject(new Error('PBGui AI could not be loaded.')); }, 15000);
+          loadAIDrawer(false);
+        });
+      }
+      return window.PBGuiAI.getSelection();
+    };
     var pendingAIAction = new URL(window.location.href).searchParams.get('pbgui_ai_action') === '1';
     if (aiBtn && pendingAIAction) {
       var cleanUrl = new URL(window.location.href);

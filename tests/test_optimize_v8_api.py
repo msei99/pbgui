@@ -772,6 +772,7 @@ def test_linux_optimizer_uses_separate_transient_systemd_unit(optimize_v8_roots,
     assert any(part.startswith("--unit=pbgui-pb8-optimize-persistent-job-") for part in launched)
     assert "--property=Type=exec" in launched
     assert f"--property=StandardOutput=append:{log_path}" in launched
+    assert "--setenv=PASSIVBOT_GPU_PROFILE=1" in launched
     assert launched[-3:] == command
     assert kwargs["timeout"] == 15
     assert log_path.read_text(encoding="utf-8") == ""
@@ -3293,3 +3294,91 @@ def test_worker_loop_retries_unexpected_iteration_error(monkeypatch) -> None:
     asyncio.run(worker._loop())
 
     assert calls == 2
+
+
+@pytest.mark.parametrize('screening,reused,expected', [([], 0, 90112), ([], 100, 90012),
+    ([{'candidate_count':8192},{'candidate_count':2048},{'candidate_count':512}], 0, 92672)])
+def test_gpu_generation_profiles_advance_actual_proxy_count(screening, reused, expected):
+    """Each generation advances native counted work between sparse summary lines."""
+    profile = {'event':'generation','generation':11,'population_size':8192,'seed_proxy_reused':reused,
+               'screening':screening,'exact_completed':700,'exact_inflight':64}
+    line = '[gpu-profile] ' + json.dumps(profile) + '\n'
+    parsed = optimize_v8._parse_optimize_log_status(
+        'GPU optimize | gen=10 proxy=81920 (200.0/s) exact=640 inflight=0\n' + line + line)
+    assert parsed['proxy_evaluations'] == expected
+    assert parsed['generation'] == 11
+    assert parsed['exact_evaluations'] == 700 and parsed['exact_inflight'] == 64
+
+
+def test_gpu_generation_profiles_never_estimate_missing_work():
+    """A log gap needs a new native counter anchor before accumulation can resume."""
+    profile = lambda generation: '[gpu-profile] ' + json.dumps(
+        {'event':'generation','generation':generation,'population_size':4000,'exact_completed':1000}) + '\n'
+    text = 'GPU optimize | gen=10 proxy=81920 (200.0/s) exact=640 inflight=0\n' + profile(12) + profile(13)
+    assert optimize_v8._parse_optimize_log_status(text)['proxy_evaluations'] == 81920
+    parsed = optimize_v8._parse_optimize_log_status(text +
+        'GPU optimize | gen=20 proxy=160000 (200.0/s) exact=1200 inflight=0\n' + profile(21))
+    assert parsed['proxy_evaluations'] == 164000
+
+
+@pytest.mark.parametrize('profile', [{'event':'generation','generation':11,'population_size':True},
+    {'event':'generation','generation':11,'population_size':8192,'seed_proxy_reused':8193},
+    {'event':'generation','generation':11,'population_size':8192,'screening':[{'candidate_count':-1}]},
+    {'event':'generation','generation':11,'population_size':8192,'screening':[{'candidate_count':'8192'}]}])
+def test_invalid_gpu_generation_profiles_cannot_trigger_budget_stop(profile):
+    """Invalid counted-work fields cannot fabricate quota exhaustion."""
+    parsed = optimize_v8._parse_optimize_log_status(
+        'GPU optimize | gen=10 proxy=81920 (200.0/s) exact=640 inflight=0\n[gpu-profile] ' + json.dumps(profile))
+    assert parsed['proxy_evaluations'] == 81920
+
+
+def test_detached_local_optimizer_enables_gpu_generation_profiles(optimize_v8_roots, monkeypatch):
+    """Local GPU limit supervision needs native generation events in detached launches."""
+    calls = []
+    monkeypatch.setattr(optimize_v8, '_systemd_user_manager_available', lambda: False)
+    monkeypatch.setattr(optimize_v8.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(optimize_v8.subprocess, 'Popen', lambda command, **kwargs:calls.append((command,kwargs)))
+    optimize_v8._launch_optimizer_runner('profile-job', ['/venv/bin/python','runner.py'],
+                                         Path('/pb8'), optimize_v8._log_dir() / 'profile-job.log')
+    assert calls[0][1]['env']['PASSIVBOT_GPU_PROFILE'] == '1'
+    assert calls[0][1]['start_new_session'] is True
+
+
+@pytest.mark.parametrize('counts', ['128 exact evaluations', '16 seed and 128 exact evaluations'])
+def test_gpu_resume_restarts_proxy_counter_before_generation_profiles(counts):
+    """Current and older checkpoint logs anchor a new native proxy budget at zero."""
+    parsed = optimize_v8._parse_optimize_log_status(
+        'GPU optimize | gen=100 proxy=999999 (200.0/s) exact=10000 inflight=0\n'
+        'Resumed GPU optimizer at generation 20 with ' + counts + '\n'
+        '[gpu-profile] ' + json.dumps({'event':'generation','generation':21,'population_size':1024}))
+    assert parsed['proxy_evaluations'] == 1024 and parsed['generation'] == 21
+
+
+@pytest.mark.parametrize('stage', ['gpu_proxy', 'generation_complete', 'exact_wait'])
+def test_current_gpu_progress_restores_absolute_proxy_limit_counter(stage):
+    """Modern cumulative counters survive tail-only logs without JSON profiling."""
+    text = (f'2026-10-03T00:24:35Z INFO GPU optimizer progress | gen=115 phase={stage} | '
+            'evolution_proxy_completed_run=117760 seed_proxy=999999 seed_exact=99 '
+            'evolution_exact=3648/10000000 evolution_pending=32 front=997 feasible=997\n')
+    parsed = optimize_v8._parse_optimize_log_status(text)
+    assert parsed['proxy_evaluations'] == 117760
+    assert parsed['exact_evaluations'] == 3648
+    assert parsed['exact_inflight'] == 32
+    assert parsed['generation'] == 115 and parsed['front'] == 997
+    assert parsed['backend'] == 'gpu' and parsed['stage'] == stage
+    # A matching optional profile must not add the generation population twice.
+    text += '[gpu-profile] {"event":"generation","generation":115,"population_size":1024,"exact_completed":3648}\n'
+    assert optimize_v8._parse_optimize_log_status(text)['proxy_evaluations'] == 117760
+
+
+@pytest.mark.parametrize('counter', [
+    'evolution_proxy_completed_run=-1 seed_proxy=999 evolution_exact=2/10000000 evolution_pending=64',
+    'evolution_proxy_completed_run=1.5 seed_proxy=999 evolution_exact=2/10000000 evolution_pending=64',
+    'evolution_proxy_completed_run=42 seed_proxy=999 evolution_exact=-2/10000000 evolution_pending=64',
+    'evolution_proxy_completed_run=42 seed_proxy=999 evolution_exact=2/10000000 evolution_pending=-64',
+    'seed_proxy=999 seed_exact=99 evolution_exact=2/10000000 evolution_pending=64',
+])
+def test_invalid_current_gpu_progress_cannot_authorize_proxy_stop(counter):
+    """Seeds and malformed counters cannot silently consume the run allowance."""
+    parsed = optimize_v8._parse_optimize_log_status('GPU optimizer progress | gen=1 phase=gpu_proxy | '+counter)
+    assert parsed['proxy_evaluations'] is None

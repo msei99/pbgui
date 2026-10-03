@@ -1287,7 +1287,7 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
     assert '"%%OPTIMIZE_VERSION%%": "v8"' in api_v8
     assert '"%%OPTIMIZE_NAV_CURRENT%%": "v8_optimize"' in api_v8
     assert not (ROOT / "frontend" / "v8_optimize.html").exists()
-    assert '/app/js/optimize_editor_adapter.js?v=12' in page
+    assert '/app/js/optimize_editor_adapter.js?v=14' in page
     assert "PBGuiOptimizeEditorAdapter.create(OPTIMIZE_VERSION" in page
     assert 'backtestVersion: BACKTEST_VERSION' in page
     for panel in ("panel-configs", "panel-queue", "panel-results", "panel-paretos"):
@@ -1568,6 +1568,13 @@ def test_adapter_preserves_v7_and_round_trips_nested_v8_paths() -> None:
         assert.equal(v8.backtestApiBase(), 'https://example.test/api/backtest-v8');
         assert.equal(v8.metadataApiBase(), 'https://example.test/api/v8');
         assert.equal(v8.canonicalFixedParam('long.strategy.*'), 'bot.long.strategy.*');
+        for (const side of ['long','short']) {
+          for (const weight of ['volume','ema_readiness','volatility','unilateralness']) {
+            assert.equal(v8.canonicalFixedParam(side+'.forager.score_weights_'+weight),'bot.'+side+'.forager.score_weights.'+weight);
+            assert.equal(v8.canonicalFixedParam('bot.'+side+'.forager.score_weights_'+weight),'bot.'+side+'.forager.score_weights.'+weight);
+          }
+        }
+        assert.equal(v8.canonicalFixedParam('long.forager.volume_ema_span_1m'),'bot.long.forager.volume_ema_span_1m');
         assert.equal(v8.canonicalFixedParam('bot.long.strategy.*'), 'bot.long.strategy.*');
 
         const metadata = v8.normalizeMetadata({
@@ -1586,9 +1593,7 @@ def test_adapter_preserves_v7_and_round_trips_nested_v8_paths() -> None:
         assert.deepEqual(metadata.hslSignalModes, ['coin', 'pside', 'unified']);
         assert.deepEqual(metadata.runtimeOverrides.map(field => field.key), [
           'bot.long.hsl.enabled',
-          'bot.long.hsl.no_restart_drawdown_threshold',
           'bot.short.hsl.enabled',
-          'bot.short.hsl.no_restart_drawdown_threshold',
           'future.runtime.option'
         ]);
         const runtimeMetadata = v8.normalizeMetadata({template: {
@@ -2135,7 +2140,7 @@ def test_pb8_hsl_controls_write_bot_config_and_not_runtime_overrides() -> None:
         const state = {{runtimeOverrideValues: {{'bot.long.hsl.restart_after_red_policy': 'always'}}}};
         const OPT_FIXED_RUNTIME_OVERRIDE_FIELDS = fields;
         const optimizeEditorAdapter = {{
-          isV8: true,
+          isV8: true, activeHslPath: () => true,
           setBotHslValue: (root, key, value) => {{ root.hsl ||= {{}}; root.hsl[key] = value; }}
         }};
         const el = id => id === 'opted-bot-long' ? textarea : null;
@@ -2521,7 +2526,7 @@ def test_seed_runtime_unknown_overrides_and_pymoo_auto_execute_page_logic() -> N
         function ensureObjectSection(root, key) {{ if (!root[key] || typeof root[key] !== 'object') root[key] = {{}}; return root[key]; }}
         function normalizeOptimizePositiveInteger(value) {{ const parsed = Number(value); return Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : null; }}
         function normalizeOptimizeBackendValue(value) {{ return String(value || '').toLowerCase(); }}
-        const optimizeEditorAdapter = {{isV8: true}};
+        const optimizeEditorAdapter = {{isV8: true, activeHslPath: () => true}};
         const OPTIMIZE_PB8_NSGA2_AUTO_POPULATION = 250;
         const OPTIMIZE_NSGA3_AUTO_REF_DIR_BUDGET = 500;
         const OPT_FIXED_RUNTIME_OVERRIDE_FIELDS = [{{key: 'known', type: 'number'}}];

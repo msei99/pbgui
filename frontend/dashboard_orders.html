@@ -210,6 +210,7 @@
                 chartCtrl = DashRender.buildOrders(container, d, {
                     position:  POSITION,
                     timeframe: requestTimeframe,
+                    apiBase: API_BASE,
                     onTimeframeChange: function (tf) {
                         currentTimeframe = tf;
                         /* In-place update: fetch new candles and swap series data
@@ -227,7 +228,7 @@
                                 /* Discard if user switched again while this fetch was in flight */
                                 if (_fetchId !== _tfFetchId || seq !== loadSeq || !isCurrentGeneration()) return;
                                 if (chartCtrl && chartCtrl.setData && d.candles) {
-                                    chartCtrl.setData(d.candles);
+                                    chartCtrl.setData(d.candles, tf);
                                     /* Reconnect WS for the new timeframe */
                                     connectCandleWs();
                                 } else {
@@ -321,7 +322,7 @@
         };
     }
 
-    var DR_VERSION = '20260929a';
+    var DR_VERSION = '20260930b';
 
     function _loadRenderScript(cb) {
         if (window.DashRender && window.DashRender.VERSION !== DR_VERSION) {
