@@ -3,6 +3,7 @@
 Release notes live in dedicated files under `releases/`.
 
 - [Unreleased](releases/unreleased.md)
+- [v2.08.4 — Polling and queue I/O performance fixes](releases/v2.08.4.md)
 - [v2.08.3 — AI, optimizer, dashboard and restart fixes](releases/v2.08.3.md)
 - [v2.08.2 — PB8 save and restart fixes](releases/v2.08.2.md)
 - [v2.08.1 — includes Experimental AI Loop Optimizer](releases/v2.08.1.md)

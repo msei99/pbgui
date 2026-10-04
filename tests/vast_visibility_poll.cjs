@@ -17,6 +17,7 @@ const visibilityCode = source.slice(listenerStart, listenerEnd);
 const timers = [];
 const listeners = {};
 let requests = 0;
+let nextResponse = null;
 let deferNext = null;
 const document = {
     hidden: false,
@@ -55,7 +56,9 @@ const context = vm.createContext({
             deferNext = null;
             return deferred.promise;
         }
-        return Promise.resolve({jobs: [], workers: [], queue: {}, supervision_available: false});
+        const response = nextResponse || {jobs: [], workers: [], queue: {}, supervision_available: false};
+        nextResponse = null;
+        return Promise.resolve(response);
     },
 });
 vm.runInContext(pollCode + '\n' + visibilityCode, context);
@@ -65,7 +68,8 @@ const activeTimers = () => timers.filter(timer => !timer.cleared);
     await vm.runInContext('pollJobs()', context);
     assert.equal(requests, 1);
     assert.equal(activeTimers().length, 1);
-    assert.equal(activeTimers()[0].delay, 10000);
+    // Only finished work (here: none) backs off to the idle interval.
+    assert.equal(activeTimers()[0].delay, 30000);
 
     document.hidden = true;
     listeners.visibilitychange();
@@ -99,4 +103,9 @@ const activeTimers = () => timers.filter(timer => !timer.cleared);
     await new Promise(setImmediate);
     assert.equal(requests, 5);
     assert.equal(activeTimers().length, 1);
+
+    nextResponse = {jobs: [{id: 'job', status: 'running'}], workers: [], queue: {}, supervision_available: false};
+    await vm.runInContext('refreshJobs()', context);
+    assert.equal(activeTimers().length, 1);
+    assert.equal(activeTimers()[0].delay, 10000);
 })().catch(error => { console.error(error); process.exitCode = 1; });

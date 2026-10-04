@@ -891,3 +891,44 @@ def test_performance_collector_lifecycle_is_owned_and_idempotent(monkeypatch, tm
     assert not staged.exists()
     assert not legacy.exists()
     assert not (logs / ('vast_' + 'b' * 32 + '.log')).exists()
+
+
+def test_jobs_poll_does_not_reparse_unchanged_terminal_logs(client, monkeypatch, tmp_path):
+    """Finished jobs without throughput parse their log once and skip moot control reads (#392)."""
+    from secure_files import ensure_private_directory
+    from vast_jobs import JobStore, write_json
+    from vast_queue import CloudQueue
+    import vast_throughput
+    http, _, _ = client
+    queue = CloudQueue(JobStore(tmp_path / 'queue'))
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
+    monkeypatch.setattr(vast, 'services_available', lambda: True)
+    monkeypatch.setattr(vast, '_THROUGHPUT_LOG_SEEN', {})
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    monkeypatch.setattr(vast, 'CLOUD_LOG_ROOT', logs)
+    identifier = 'd' * 32
+    folder = ensure_private_directory(queue.root / 'jobs' / identifier)
+    write_json(folder / 'state.json', {'id': identifier, 'status': 'completed', 'rental_state': 'none'})
+    write_json(folder / 'control.json', {'stop': True})
+    logfile = logs / f'vast_{identifier}.log'
+    logfile.write_text('no throughput markers in this log\n')
+    observed = []
+    original_observe = vast_throughput.observe_throughput
+    monkeypatch.setattr(vast_throughput, 'observe_throughput',
+                        lambda *args: observed.append(args[1]) or original_observe(*args))
+    reads = []
+    original_read = queue.store.read
+    monkeypatch.setattr(queue.store, 'read', lambda ident, name='state.json': reads.append(name) or original_read(ident, name))
+
+    for _ in range(3):
+        row = http.get('/api/vast/jobs').json()['jobs'][0]
+        assert row.get('throughput') is None
+        assert row['stop_requested'] is False
+    assert observed == [identifier]
+    assert 'control.json' not in reads
+
+    with logfile.open('a') as stream:
+        stream.write('another line\n')
+    http.get('/api/vast/jobs')
+    assert observed == [identifier, identifier]

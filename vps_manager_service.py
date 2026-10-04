@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import configparser
+import copy
 import getpass
 import hashlib
 import ipaddress
@@ -112,6 +113,7 @@ SECRET_FIELDS = (
 )
 
 ROLLING_PEAK_WINDOW_SECONDS = 60.0
+_HOST_INVENTORY_CACHE_LOCK = threading.Lock()
 VPS_LOGGING_SERVICES = ("PBRun", "PBCluster", "PBCoinData", "sync", "vps_cleanup", "tradfi_sync")
 VPS_LOGGING_DEFAULT_MB = 1
 VPS_LOGGING_CLEANUP_MB = 64 / 1024
@@ -2393,6 +2395,32 @@ class VPSManagerService:
             raise ValueError("VPS user password expired or missing. Please enter it again.")
         return value
 
+    def _read_host_inventory(self, host_file: Path) -> dict[str, Any]:
+        """Parse one host inventory file, reusing the last parse while the file is unchanged."""
+        info = host_file.stat()
+        signature = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        key = str(host_file)
+        with _HOST_INVENTORY_CACHE_LOCK:
+            cache = getattr(self, "_host_inventory_cache", None)
+            if cache is None:
+                cache = {}
+                self._host_inventory_cache = cache
+            cached = cache.get(key)
+        if cached is None or cached[0] != signature:
+            with open(host_file, "r", encoding="utf-8") as handle:
+                cached = (signature, json.load(handle))
+            with _HOST_INVENTORY_CACHE_LOCK:
+                cache[key] = cached
+        # Each VPS keeps references into its config, so never share the cached objects.
+        return copy.deepcopy(cached[1])
+
+    def _prune_host_inventory_cache(self, host_files: list[Path]) -> None:
+        keep = {str(path) for path in host_files}
+        with _HOST_INVENTORY_CACHE_LOCK:
+            cache = getattr(self, "_host_inventory_cache", None) or {}
+            for key in [key for key in cache if key not in keep]:
+                del cache[key]
+
     def _sync_vps_inventory(self) -> None:
         pattern = str(Path(f"{PBGDIR}/data/vpsmanager/hosts/*/*.json"))
         host_files = sorted(Path(path) for path in __import__("glob").glob(pattern, recursive=False))
@@ -2400,8 +2428,9 @@ class VPSManagerService:
         next_items: list[VPS] = []
         existing_hosts: set[str] = set()
         for host_file in host_files:
+            config = self._read_host_inventory(host_file)
             loaded = VPS()
-            loaded.load(str(host_file))
+            loaded.apply_config(copy.deepcopy(config), str(host_file))
             if not loaded.hostname:
                 continue
             existing_hosts.add(loaded.hostname)
@@ -2415,23 +2444,25 @@ class VPSManagerService:
                     or _status_running(current_item.setup_status)
                     or _status_running(current_item.update_status)
                 ):
-                    current_item.load(str(host_file))
+                    current_item.apply_config(config, str(host_file))
             next_items.append(current_item)
         for item in self.vpsmanager.vpss:
             if item.hostname and item.hostname not in existing_hosts:
                 if _status_running(item.init_status) or _status_running(item.setup_status) or _status_running(item.update_status):
                     next_items.append(item)
         self.vpsmanager.vpss = sorted(next_items, key=lambda entry: entry.hostname or "")
+        self._prune_host_inventory_cache(host_files)
         if not _status_running(self.vpsmanager.update_status):
             self.vpsmanager.load_master()
 
-    def refresh(self, *, force: bool = False) -> None:
+    def refresh(self, *, force: bool = False) -> bool:
+        """Sync inventory unless a concurrent non-forced refresh holds the lock; return whether it ran."""
         lock = getattr(self, "_refresh_lock", None)
         if lock is None:
             lock = threading.Lock()
             self._refresh_lock = lock
         if not lock.acquire(blocking=force):
-            return
+            return False
         try:
             self._sync_vps_inventory()
             self._refresh_completed_linux_updates()
@@ -2441,6 +2472,7 @@ class VPSManagerService:
                     monitor.request_upstream_release_refresh()
         finally:
             lock.release()
+        return True
 
     def _cluster_nodes_for_vps_import(self) -> tuple[list[dict[str, Any]], str]:
         """Return materialized Cluster nodes and the local node id for VPS import."""
@@ -3332,8 +3364,9 @@ class VPSManagerService:
         })
         return verified
 
-    def build_state(self) -> dict[str, Any]:
-        self._sync_vps_inventory()
+    def build_state(self, *, sync_inventory: bool = True) -> dict[str, Any]:
+        if sync_inventory:
+            self._sync_vps_inventory()
         monitor_state = self._get_monitor_state()
         overview_rows = self._build_overview_rows(monitor_state)
         vps_logging = self.get_vps_logging_config()

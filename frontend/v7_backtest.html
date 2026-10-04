@@ -1553,7 +1553,11 @@ function connectWS() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   var url = WS_BASE + backtestEditorAdapter.websocketPath;
   ws = new WebSocket(url);
-  ws.onopen = function() { wsReconnectDelay = 1000; setBanner('ok'); };
+  ws.onopen = function() {
+    wsReconnectDelay = 1000;
+    setBanner('ok');
+    if (document.hidden) wsSendVisibility();
+  };
   ws.onmessage = function(ev) {
     try {
       var msg = JSON.parse(ev.data);
@@ -1621,6 +1625,14 @@ function wsRefresh() {
     ws.send(JSON.stringify({ type: 'refresh' }));
   }
 }
+
+// Hidden tabs pause server-side queue scans until they become visible again.
+function wsSendVisibility() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'visibility', hidden: document.hidden }));
+  }
+}
+document.addEventListener('visibilitychange', wsSendVisibility);
 
 function archiveModeFromValue(value) {
   return value === 'optimize' || value === 'schedules' ? value : 'backtests';

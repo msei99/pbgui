@@ -1020,6 +1020,37 @@ def _cached_display_estimate(path: Path, root: Path, ctime_ns: int, mtime_ns: in
     return estimate_snapshot(path, root)
 
 
+_TERMINAL_JOB_STATES = frozenset({'completed', 'failed', 'cancelled'})
+# job id -> (log signature, whether that log yielded a throughput snapshot)
+_THROUGHPUT_LOG_SEEN: dict[str, tuple[tuple[int, int, int, int], bool]] = {}
+_THROUGHPUT_LOG_LOCK = RLock()
+
+
+def _observe_log_throughput(store: JobStore, row: dict, log: Path) -> None:
+    """Parse a job log tail only when it changed or a lost snapshot can be restored from it."""
+    from vast_throughput import LOG_TAIL_BYTES, observe_throughput
+    try:
+        info = log.stat()
+        signature = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        with _THROUGHPUT_LOG_LOCK:
+            seen = _THROUGHPUT_LOG_SEEN.get(row['id'])
+        if seen is not None and seen[0] == signature and (row.get('throughput') or not seen[1]):
+            return
+        with log.open('rb') as stream:
+            stream.seek(max(0, os.fstat(stream.fileno()).st_size - LOG_TAIL_BYTES))
+            row['throughput'] = observe_throughput(store, row['id'], stream.read(LOG_TAIL_BYTES))
+        with _THROUGHPUT_LOG_LOCK:
+            _THROUGHPUT_LOG_SEEN[row['id']] = (signature, bool(row['throughput']))
+    except OSError:
+        _log(SERVICE, 'Optimizer throughput snapshot unavailable', level='WARNING')
+
+
+def _prune_throughput_log_seen(job_ids: set) -> None:
+    with _THROUGHPUT_LOG_LOCK:
+        for identifier in [key for key in _THROUGHPUT_LOG_SEEN if key not in job_ids]:
+            del _THROUGHPUT_LOG_SEEN[identifier]
+
+
 @router.get("/jobs")
 def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> dict:
     """List durable job state without starting any process or rental."""
@@ -1083,7 +1114,9 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
                         estimate = current
             row = dict(row, estimated_coin_candles=estimate, exchange=', '.join(queue.store.exchanges(row)),
                        has_log=log.is_file() and not log.is_symlink(), can_delete=can_remove_job(row, worker_by_id.get(row.get('lease_id'), worker)))
-            control_exists = (queue.store.directory(row['id']) / 'control.json').exists()
+            is_terminal = row.get('status') in _TERMINAL_JOB_STATES
+            # Stop requests are moot once a job has finished; skip the control file read.
+            control_exists = not is_terminal and (queue.store.directory(row['id']) / 'control.json').exists()
             row['stop_requested'] = bool(queue.store.read(row['id'], 'control.json').get('stop')) if control_exists else False
             row['has_provider_log'] = provider_log.is_file() and not provider_log.is_symlink()
             if row['has_provider_log'] and row.get('status') == 'provisioning':
@@ -1106,17 +1139,10 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
                 row['cost_estimate'] = _run_cost_estimate(row, rentals[lease], time.time())
             if isinstance(row.get('throughput'), dict):
                 row['throughput'] = {key: value for key, value in row['throughput'].items() if key != 'samples'}
-            if (row['has_log'] and len(rows) < 100
-                    and (row.get('status') not in {'completed', 'failed', 'cancelled'}
-                         or not row.get('throughput'))):
-                from vast_throughput import LOG_TAIL_BYTES, observe_throughput
-                try:
-                    with log.open('rb') as stream:
-                        stream.seek(max(0, os.fstat(stream.fileno()).st_size - LOG_TAIL_BYTES))
-                        row['throughput'] = observe_throughput(queue.store, row['id'], stream.read(LOG_TAIL_BYTES))
-                except OSError:
-                    _log(SERVICE, 'Optimizer throughput snapshot unavailable', level='WARNING')
+            if row['has_log'] and len(rows) < 100 and (not is_terminal or not row.get('throughput')):
+                _observe_log_throughput(queue.store, row, log)
             rows.append(row)
+        _prune_throughput_log_seen({row.get('id') for row in stored})
         from vast_calibration import calibration_worker_available
         from vast_jobs import IMAGE
         return {"jobs": rows[:100],

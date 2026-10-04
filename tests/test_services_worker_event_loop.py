@@ -64,3 +64,78 @@ def test_overview_summary_reads_live_workers_without_loading_queues(monkeypatch)
     result = asyncio.run(services.get_workers_summary(session=object()))
     assert result['counts'] == {'total': 7, 'running': 5}
     assert time.monotonic() - start < 1.0
+
+
+def test_worker_status_polls_share_snapshot_until_worker_action(monkeypatch) -> None:
+    """Concurrent polls share one queue inspection; worker actions invalidate it (#394)."""
+    scans = []
+
+    async def counted_scan():
+        scans.append(1)
+        await asyncio.sleep(0.01)
+        return [{"id": "queue", "label": "Queue Workers", "items": [{"id": "backtest-queue", "running": True}]}]
+
+    async def no_op(_worker_id):
+        return None
+
+    async def found(worker_id):
+        return {"id": worker_id}
+
+    monkeypatch.setattr(services, "_collect_worker_groups", counted_scan)
+    monkeypatch.setattr(services, "_start_worker", no_op)
+    monkeypatch.setattr(services, "_find_worker", found)
+
+    async def verify() -> None:
+        monkeypatch.setattr(services, "_workers_status_lock", asyncio.Lock())
+        services._invalidate_workers_status()
+        results = await asyncio.gather(*(services.get_workers_status(session=object()) for _ in range(5)))
+        assert len(scans) == 1
+        assert all(result["counts"] == {"total": 1, "running": 1} for result in results)
+        await services.get_workers_status(session=object())
+        assert len(scans) == 1
+        await services.worker_action("backtest-queue", "start", session=object())
+        await services.get_workers_status(session=object())
+        assert len(scans) == 2
+
+    asyncio.run(verify())
+    services._invalidate_workers_status()
+
+
+def test_worker_status_scan_started_before_action_is_not_cached(monkeypatch) -> None:
+    """A scan that began before a worker action cannot repopulate the cache with stale state."""
+    state = {"running": False}
+    scans = []
+    gate = {}
+
+    async def scan():
+        scans.append(state["running"])
+        snapshot = state["running"]
+        if len(scans) == 1:
+            await gate["release"].wait()
+        return [{"id": "queue", "label": "Queue Workers",
+                 "items": [{"id": "backtest-queue", "running": snapshot}]}]
+
+    async def start(_worker_id):
+        state["running"] = True
+
+    async def found(worker_id):
+        return {"id": worker_id}
+
+    monkeypatch.setattr(services, "_collect_worker_groups", scan)
+    monkeypatch.setattr(services, "_start_worker", start)
+    monkeypatch.setattr(services, "_find_worker", found)
+
+    async def verify() -> None:
+        gate["release"] = asyncio.Event()
+        monkeypatch.setattr(services, "_workers_status_lock", asyncio.Lock())
+        services._invalidate_workers_status()
+        stale_poll = asyncio.create_task(services.get_workers_status(session=object()))
+        await asyncio.sleep(0)
+        await services.worker_action("backtest-queue", "start", session=object())
+        gate["release"].set()
+        await stale_poll
+        fresh = await services.get_workers_status(session=object())
+        assert fresh["counts"]["running"] == 1
+
+    asyncio.run(verify())
+    services._invalidate_workers_status()

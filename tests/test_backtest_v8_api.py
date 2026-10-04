@@ -2072,3 +2072,88 @@ def test_pb8_cache_cleanup_respects_active_materialized_operation_lock(tmp_path,
     assert result["skipped_locked"] == 1
     assert run_dir.exists()
     assert operation_lock.exists()
+
+
+def _reset_ws_snapshot(monkeypatch) -> None:
+    import asyncio
+    monkeypatch.setattr(backtest_v8, "_ws_snapshot_lock", asyncio.Lock())
+    monkeypatch.setattr(backtest_v8, "_ws_snapshot", None)
+    monkeypatch.setattr(backtest_v8, "_ws_snapshot_until", 0.0)
+    monkeypatch.setattr(backtest_v8, "_ws_clients", set())
+
+
+def test_queue_websocket_clients_share_one_scan_and_refresh_forces_rescan(monkeypatch) -> None:
+    """Concurrent clients share one queue scan; an explicit refresh bypasses it (#396)."""
+    import asyncio
+    _reset_ws_snapshot(monkeypatch)
+    scans = []
+    rows = [{"filename": "job", "status": "queued"}, {"filename": "loop", "loop_id": "abc"}]
+    monkeypatch.setattr(backtest_v8, "_load_queue", lambda: scans.append(1) or [dict(row) for row in rows])
+    monkeypatch.setattr(backtest_v8, "load_ini_section", lambda _section: {"autostart": "False"})
+
+    async def exercise() -> None:
+        payloads = await asyncio.gather(*(backtest_v8._queue_ws_snapshot() for _ in range(5)))
+        assert len(scans) == 1
+        assert payloads[0]["items"] == [rows[0]]
+        assert backtest_v8._queue_ws_interval(payloads[0]) == backtest_v8._WS_IDLE_INTERVAL_S
+        rows[0]["status"] = "running"
+        refreshed = await backtest_v8._queue_ws_snapshot(force=True)
+        assert len(scans) == 2
+        assert refreshed["items"][0]["status"] == "running"
+        assert backtest_v8._queue_ws_interval(refreshed) == backtest_v8._WS_ACTIVE_INTERVAL_S
+
+    asyncio.run(exercise())
+
+
+def test_queue_websocket_suppresses_unchanged_frames_and_pauses_when_hidden(monkeypatch) -> None:
+    """Identical snapshots are not resent and a hidden tab stops scanning until visible (#396)."""
+    import asyncio
+    from fastapi import WebSocketDisconnect
+    _reset_ws_snapshot(monkeypatch)
+    scans = []
+    monkeypatch.setattr(backtest_v8, "_load_queue", lambda: scans.append(1) or [])
+    monkeypatch.setattr(backtest_v8, "load_ini_section", lambda _section: {"autostart": "False"})
+
+    async def authenticated(_websocket):
+        return object()
+
+    monkeypatch.setattr(backtest_v8, "authenticate_websocket", authenticated)
+    messages = [
+        None,  # idle timeout -> rescan, unchanged frame suppressed
+        json.dumps({"type": "visibility", "hidden": True}),
+        json.dumps({"type": "visibility", "hidden": False}),
+        json.dumps({"type": "refresh"}),
+    ]
+    timeouts = []
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.sent = []
+
+        async def send_json(self, payload) -> None:
+            self.sent.append(payload)
+
+        async def receive_text(self) -> str:
+            if not messages:
+                raise WebSocketDisconnect()
+            message = messages.pop(0)
+            if message is None:
+                raise asyncio.TimeoutError()
+            return message
+
+    async def fake_wait_for(awaitable, timeout):
+        timeouts.append(timeout)
+        if timeout is None:
+            assert len(scans) == 2, "hidden tab triggered a queue scan"
+        backtest_v8._ws_snapshot_until = 0.0
+        return await awaitable
+
+    monkeypatch.setattr(backtest_v8.asyncio, "wait_for", fake_wait_for)
+    websocket = FakeWebSocket()
+    asyncio.run(backtest_v8.ws_backtest(websocket))
+
+    assert len(websocket.sent) == 1
+    assert timeouts == [backtest_v8._WS_IDLE_INTERVAL_S, backtest_v8._WS_IDLE_INTERVAL_S, None,
+                        backtest_v8._WS_IDLE_INTERVAL_S, backtest_v8._WS_IDLE_INTERVAL_S]
+    assert len(scans) == 4
+    assert backtest_v8._ws_clients == set()

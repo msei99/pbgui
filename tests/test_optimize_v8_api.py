@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import os
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -3392,3 +3393,264 @@ def test_invalid_current_gpu_progress_cannot_authorize_proxy_stop(counter):
     """Seeds and malformed counters cannot silently consume the run allowance."""
     parsed = optimize_v8._parse_optimize_log_status('GPU optimizer progress | gen=1 phase=gpu_proxy | '+counter)
     assert parsed['proxy_evaluations'] is None
+
+
+def test_log_terminal_status_reuses_unchanged_log_tail(optimize_v8_roots, monkeypatch) -> None:
+    """Finished logs are read once until they are written again (#400)."""
+    monkeypatch.setattr(optimize_v8, "_log_terminal_status_cache", {})
+    log_path = optimize_v8._log_dir() / "cached-log.log"
+    log_path.write_text("Optimization complete\n", encoding="utf-8")
+    opened = []
+    original_open = Path.open
+
+    def counting_open(self, mode="r", *args, **kwargs):
+        if self == log_path and mode == "rb":
+            opened.append(self)
+        return original_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    assert optimize_v8._read_log_terminal_status("cached-log") == "complete"
+    assert optimize_v8._read_log_terminal_status("cached-log") == "complete"
+    assert len(opened) == 1
+
+    log_path.write_text("crashed\n", encoding="utf-8")
+    assert optimize_v8._read_log_terminal_status("cached-log") == "error"
+    assert len(opened) == 2
+
+
+def test_automatic_launch_order_check_skips_full_queue_load(optimize_v8_roots, monkeypatch) -> None:
+    """The autostart recheck neither reloads display rows nor estimates candles (#400)."""
+    _write_queue_job("head", 0)
+    _write_queue_job("tail", 1)
+    monkeypatch.setattr(optimize_v8, "_load_queue", lambda: pytest.fail("launch reloaded the full queue"))
+    monkeypatch.setattr(optimize_v8, "estimate_snapshot", lambda *_args: pytest.fail("launch estimated candles"))
+    checked = []
+    original_status = optimize_v8._queue_status
+    monkeypatch.setattr(optimize_v8, "_queue_status", lambda data: checked.append(data["filename"]) or original_status(data))
+
+    assert optimize_v8._autostart_candidate() == "head"
+    checked.clear()
+    assert optimize_v8._first_manual_queued_filename() == "head"
+    assert checked == ["head"]
+    with pytest.raises(HTTPException) as exc_info:
+        optimize_v8.OptimizeV8Worker().launch("tail", None, True)
+    assert exc_info.value.status_code == 409
+    assert "order changed" in str(exc_info.value.detail).lower()
+
+
+def test_worker_stop_during_autostart_claim_releases_late_claim(monkeypatch) -> None:
+    """A claim that completes after stop() is released instead of blocking autostart forever."""
+    started = threading.Event()
+    proceed = threading.Event()
+    released = []
+
+    def slow_claim():
+        started.set()
+        proceed.wait(5)
+        return "claimed-job"
+
+    monkeypatch.setattr(optimize_v8, "load_ini_section", lambda _section: {"autostart": "True"})
+    monkeypatch.setattr(optimize_v8.OptimizeV8Worker, "_claim_autostart_candidate", staticmethod(slow_claim))
+    monkeypatch.setattr(optimize_v8, "release_autostart", lambda version, job: released.append((version, job)))
+    worker = optimize_v8.OptimizeV8Worker()
+    monkeypatch.setattr(worker, "launch", lambda *_args: pytest.fail("stopped worker launched a job"))
+
+    async def scenario() -> None:
+        worker._running = True
+        worker._task = asyncio.create_task(worker._loop())
+        await asyncio.to_thread(started.wait, 5)
+        stopping = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.05)
+        assert not stopping.done(), "stop() returned while the claim thread could still reserve the slot"
+        proceed.set()
+        await asyncio.wait_for(stopping, 5)
+
+    asyncio.run(scenario())
+    assert released == [("v8", "claimed-job")]
+    assert worker._task is None
+
+
+def test_concurrent_worker_stops_wait_for_claim_and_release_it(monkeypatch) -> None:
+    """A second stop() cannot interrupt claim cleanup; both stops wait for it (two browser tabs)."""
+    started = threading.Event()
+    proceed = threading.Event()
+    released = []
+
+    def slow_claim():
+        started.set()
+        proceed.wait(5)
+        return "claimed-job"
+
+    monkeypatch.setattr(optimize_v8, "load_ini_section", lambda _section: {"autostart": "True"})
+    monkeypatch.setattr(optimize_v8.OptimizeV8Worker, "_claim_autostart_candidate", staticmethod(slow_claim))
+    monkeypatch.setattr(optimize_v8, "release_autostart", lambda version, job: released.append((version, job)))
+    worker = optimize_v8.OptimizeV8Worker()
+    monkeypatch.setattr(worker, "launch", lambda *_args: pytest.fail("stopped worker launched a job"))
+
+    async def scenario() -> None:
+        worker._running = True
+        worker._task = asyncio.create_task(worker._loop())
+        await asyncio.to_thread(started.wait, 5)
+        first = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.05)
+        second = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.05)
+        assert not first.done() and not second.done(), "a stop returned while the claim thread was still running"
+        proceed.set()
+        await asyncio.wait_for(asyncio.gather(first, second), 5)
+
+    asyncio.run(scenario())
+    assert released == [("v8", "claimed-job")]
+    assert worker._task is None
+
+
+@pytest.mark.parametrize("launch_fails", [False, True])
+def test_worker_stop_during_autostart_launch_settles_claim(monkeypatch, launch_fails) -> None:
+    """Stopping mid-launch returns promptly; the late launch publishes ownership or releases its claim."""
+    launching = threading.Event()
+    proceed = threading.Event()
+    events = []
+
+    def slow_launch(filename, _options, automatic):
+        assert automatic is True
+        launching.set()
+        proceed.wait(5)
+        if launch_fails:
+            raise RuntimeError("runner exited")
+        return {"pid": 4321, "create_time": 1.0}
+
+    monkeypatch.setattr(optimize_v8, "load_ini_section", lambda _section: {"autostart": "True"})
+    monkeypatch.setattr(optimize_v8.OptimizeV8Worker, "_claim_autostart_candidate", staticmethod(lambda: "job"))
+    monkeypatch.setattr(optimize_v8, "release_autostart", lambda version, job: events.append(("release", job)))
+    monkeypatch.setattr(optimize_v8, "publish_autostart_process", lambda version, job, pid, *_args: events.append(("publish", job, pid)))
+    monkeypatch.setattr(optimize_v8, "_record_launch_failure", lambda job, exc: events.append(("failure", job)) or False)
+    monkeypatch.setattr(optimize_v8, "_launch_config_file", lambda job: Path("/tmp") / f"{job}.json")
+    monkeypatch.setattr(optimize_v8, "_log", lambda *_args, **_kwargs: None)
+    worker = optimize_v8.OptimizeV8Worker()
+    monkeypatch.setattr(worker, "launch", slow_launch)
+
+    async def scenario() -> None:
+        worker._running = True
+        worker._task = asyncio.create_task(worker._loop())
+        await asyncio.to_thread(launching.wait, 5)
+        await asyncio.wait_for(asyncio.gather(worker.stop(), worker.stop()), 1)
+        assert events == []
+        proceed.set()
+        for _ in range(100):
+            if events:
+                break
+            await asyncio.sleep(0.01)
+        await worker.drain_autostart_launches()
+
+    asyncio.run(scenario())
+    expected = [("release", "job"), ("failure", "job")] if launch_fails else [("publish", "job", 4321)]
+    assert events == expected
+
+
+@pytest.mark.parametrize("launch_fails", [False, True])
+def test_autostart_launch_settles_after_event_loop_closes(monkeypatch, launch_fails) -> None:
+    """Closing the event loop cannot discard a running launch's success or failure."""
+    launching = threading.Event()
+    proceed = threading.Event()
+    settled = threading.Event()
+    events = []
+    loop_errors = []
+
+    def slow_launch(*_args):
+        launching.set()
+        assert proceed.wait(5)
+        if launch_fails:
+            raise RuntimeError("runner exited")
+        return {"pid": 4321, "create_time": 1.0}
+
+    def publish(*_args):
+        events.append("publish")
+        settled.set()
+
+    def log(*_args, **_kwargs):
+        events.append("log")
+        settled.set()
+
+    monkeypatch.setattr(optimize_v8, "load_ini_section", lambda _section: {"autostart": "True"})
+    monkeypatch.setattr(optimize_v8, "release_autostart", lambda *_args: events.append("release"))
+    monkeypatch.setattr(optimize_v8, "publish_autostart_process", publish)
+    monkeypatch.setattr(optimize_v8, "_record_launch_failure", lambda *_args: events.append("failure") or False)
+    monkeypatch.setattr(optimize_v8, "_launch_config_file", lambda _job: Path("/tmp/unused-launch-config.json"))
+    monkeypatch.setattr(optimize_v8, "_log", log)
+    worker = optimize_v8.OptimizeV8Worker()
+    monkeypatch.setattr(worker, "_claim_autostart_candidate", lambda: "job")
+    monkeypatch.setattr(worker, "launch", slow_launch)
+    unblock = threading.Timer(0.1, proceed.set)
+
+    async def scenario() -> None:
+        asyncio.get_running_loop().set_exception_handler(lambda _loop, context: loop_errors.append(context))
+        worker.start()
+        assert await asyncio.to_thread(launching.wait, 5)
+        await worker.stop()
+        unblock.start()
+        # asyncio.run now cancels remaining tasks and closes this event loop.
+
+    try:
+        asyncio.run(scenario())
+        assert settled.wait(5), "launch result was lost when the event loop closed"
+        assert events == (["release", "failure", "log"] if launch_fails else ["publish"])
+        assert loop_errors == []
+    finally:
+        proceed.set()
+        unblock.cancel()
+        if unblock.ident is not None:
+            unblock.join()
+        asyncio.run(worker.drain_autostart_launches())
+
+
+@pytest.mark.parametrize("launch_fails", [False, True])
+def test_api_shutdown_drains_autostart_launch_before_resource_cleanup(monkeypatch, launch_fails) -> None:
+    """API shutdown joins launch controllers before closing dependencies, preserving detached jobs."""
+    launching = threading.Event()
+    proceed = threading.Event()
+    events = []
+
+    def slow_launch(*_args):
+        launching.set()
+        assert proceed.wait(5)
+        if launch_fails:
+            raise RuntimeError("runner exited")
+        return {"pid": 4321, "create_time": 1.0}
+
+    monkeypatch.setattr(optimize_v8, "load_ini_section", lambda _section: {"autostart": "True"})
+    monkeypatch.setattr(optimize_v8, "release_autostart", lambda *_args: events.append("release"))
+    monkeypatch.setattr(optimize_v8, "publish_autostart_process", lambda *_args: events.append("publish"))
+    monkeypatch.setattr(optimize_v8, "_record_launch_failure", lambda *_args: events.append("failure") or False)
+    monkeypatch.setattr(optimize_v8, "_launch_config_file", lambda _job: Path("/tmp/unused-launch-config.json"))
+    monkeypatch.setattr(optimize_v8, "_log", lambda *_args, **_kwargs: None)
+    for name in (
+        "_stop_all_dash_sessions", "shutdown_pb8_ohlcv_start_date_jobs",
+        "_shutdown_active_evaluation_scans", "interrupt_pb8_migration_helper",
+        "shutdown_pb8_migration_helper",
+    ):
+        monkeypatch.setattr(optimize_v8, name, lambda: events.append("cleanup"))
+    monkeypatch.setattr(optimize_v8, "_migration_helper_warmup_task", None)
+    worker = optimize_v8.OptimizeV8Worker()
+    monkeypatch.setattr(optimize_v8, "_worker", worker)
+    monkeypatch.setattr(worker, "_claim_autostart_candidate", lambda: "job")
+    monkeypatch.setattr(worker, "launch", slow_launch)
+
+    async def scenario() -> None:
+        worker.start()
+        assert await asyncio.to_thread(launching.wait, 5)
+        closing = asyncio.create_task(optimize_v8.shutdown())
+        second_closing = asyncio.create_task(optimize_v8.shutdown())
+        try:
+            await asyncio.sleep(0.05)
+            assert not closing.done() and not second_closing.done(), "API shutdown returned while its launch was still running"
+            assert events == [], "dependencies were closed before launch settlement"
+        finally:
+            proceed.set()
+            await asyncio.wait_for(asyncio.gather(closing, second_closing), 5)
+        await optimize_v8.shutdown()  # Repeated shutdown is harmless.
+
+    asyncio.run(scenario())
+    expected = ["release", "failure"] if launch_fails else ["publish"]
+    assert events[:len(expected)] == expected
+    assert events[len(expected):] == ["cleanup"] * 15
+    assert worker._launch_executor is None

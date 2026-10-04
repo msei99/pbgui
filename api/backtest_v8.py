@@ -2682,40 +2682,109 @@ def get_queue(session: SessionToken = Depends(require_auth)) -> dict:
     return {"items": [row for row in _load_queue() if not row.get("loop_id")]}
 
 
+_ws_clients: set[WebSocket] = set()
+_ws_snapshot_lock = asyncio.Lock()
+_ws_snapshot: Optional[dict] = None
+_ws_snapshot_until = 0.0
+_WS_ACTIVE_INTERVAL_S = 3.0
+_WS_IDLE_INTERVAL_S = 8.0
+
+
+def _queue_ws_payload() -> dict:
+    """Build one queue_update message from a single queue scan."""
+    items = _load_queue()
+    settings = load_ini_section(_QUEUE_SETTINGS_SECTION)
+    return {
+        "type": "queue_update",
+        "items": [row for row in items if not row.get("loop_id")],
+        "settings": {
+            "autostart": str(settings.get("autostart", "False")).lower() == "true",
+            "cpu": _cpu_limit(settings),
+            "use_pbgui_market_data": str(settings.get("use_pbgui_market_data", "False")).lower() == "true",
+            "hlcvs_cleanup_enabled": str(settings.get("hlcvs_cleanup_enabled", "False")).lower() == "true",
+            "hlcvs_cleanup_days": _bounded_setting(settings, "hlcvs_cleanup_days", 7, 1, 365),
+            "hlcvs_cleanup_interval_h": _bounded_setting(settings, "hlcvs_cleanup_interval_h", 24, 1, 168),
+        },
+    }
+
+
+def _queue_ws_interval(payload: dict) -> float:
+    """Poll quickly only while jobs run or autostart can pick up queued work."""
+    items = payload["items"]
+    if any(item.get("status") == "running" for item in items):
+        return _WS_ACTIVE_INTERVAL_S
+    if payload["settings"]["autostart"] and any(item.get("status") == "queued" for item in items):
+        return _WS_ACTIVE_INTERVAL_S
+    return _WS_IDLE_INTERVAL_S
+
+
+async def _queue_ws_snapshot(force: bool = False) -> dict:
+    """Share one bounded queue scan across all Backtest WebSocket clients."""
+    global _ws_snapshot, _ws_snapshot_until
+    async with _ws_snapshot_lock:
+        if not force and _ws_snapshot is not None and time.monotonic() < _ws_snapshot_until:
+            return _ws_snapshot
+        scan = asyncio.create_task(asyncio.to_thread(_queue_ws_payload))
+        try:
+            payload = await asyncio.shield(scan)
+        except asyncio.CancelledError:
+            await asyncio.gather(scan, return_exceptions=True)
+            raise
+        _ws_snapshot = payload
+        _ws_snapshot_until = time.monotonic() + _queue_ws_interval(payload)
+        return payload
+
+
+def _apply_ws_client_message(raw: str, hidden: bool) -> tuple[bool, bool]:
+    """Return (hidden, force_refresh) after one client control message."""
+    try:
+        message = json.loads(raw)
+    except (TypeError, ValueError):
+        return hidden, False
+    if not isinstance(message, dict):
+        return hidden, False
+    if message.get("type") == "visibility":
+        return bool(message.get("hidden")), False
+    return hidden, message.get("type") == "refresh"
+
+
 @router.websocket("/ws/bt8")
 @router.websocket("/ws/bt7")
 async def ws_backtest(websocket: WebSocket) -> None:
-    """Push the V8 queue in the same message contract consumed by the shared page."""
+    """Push changed V8 queue state only, sharing scans and pausing for hidden tabs."""
+    global _ws_snapshot, _ws_snapshot_until
     if await authenticate_websocket(websocket) is None:
         return
+    _ws_clients.add(websocket)
+    last_payload = None
+    hidden = False
+    force = False
     try:
         while True:
-            items, settings = await asyncio.to_thread(
-                lambda: (_load_queue(), load_ini_section(_QUEUE_SETTINGS_SECTION))
-            )
-            payload = {
-                "type": "queue_update",
-                "items": [row for row in items if not row.get("loop_id")],
-                "settings": {
-                    "autostart": str(settings.get("autostart", "False")).lower() == "true",
-                    "cpu": _cpu_limit(settings),
-                    "use_pbgui_market_data": str(settings.get("use_pbgui_market_data", "False")).lower() == "true",
-                    "hlcvs_cleanup_enabled": str(settings.get("hlcvs_cleanup_enabled", "False")).lower() == "true",
-                    "hlcvs_cleanup_days": _bounded_setting(settings, "hlcvs_cleanup_days", 7, 1, 365),
-                    "hlcvs_cleanup_interval_h": _bounded_setting(settings, "hlcvs_cleanup_interval_h", 24, 1, 168),
-                },
-            }
-            await websocket.send_json(payload)
+            timeout = None
+            if not hidden:
+                payload = await _queue_ws_snapshot(force=force)
+                force = False
+                if payload != last_payload:
+                    await websocket.send_json(payload)
+                    last_payload = payload
+                timeout = _queue_ws_interval(payload)
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=3)
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
             except asyncio.TimeoutError:
-                pass
+                continue
+            hidden, force = _apply_ws_client_message(raw, hidden)
     except (WebSocketDisconnect, RuntimeError):
         return
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         _log(SERVICE, f"V8 queue WebSocket failed: {exc}", level="WARNING")
+    finally:
+        _ws_clients.discard(websocket)
+        if not _ws_clients:
+            _ws_snapshot = None
+            _ws_snapshot_until = 0.0
 
 
 @router.post("/queue")

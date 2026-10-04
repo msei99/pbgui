@@ -357,6 +357,10 @@ class VPS:
     def load(self, file_path):
         with open(file_path, "r", encoding="utf-8") as handle:
             config = json.load(handle)
+        self.apply_config(config, file_path)
+
+    def apply_config(self, config, file_path):
+        """Apply an already parsed host inventory file to this VPS."""
         try:
             self._inventory_revision = max(int(config.get("_revision") or 0), 0)
         except (TypeError, ValueError):

@@ -609,7 +609,7 @@ def import_passivbot_rust():
     return pbr
 
 PBGDIR = Path(__file__).resolve().parent
-PBGUI_VERSION = "v2.08.3"
+PBGUI_VERSION = "v2.08.4"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 
@@ -1170,14 +1170,30 @@ def get_git_branch_remote(repo_dir: str, branch_name: str, timeout_sec: int = 10
 
 
 def get_git_branch_remotes(repo_dir: str, branch_names: list[str], timeout_sec: int = 10) -> dict[str, str]:
-    """Get configured tracking remote names for a set of local branches."""
+    """Get configured tracking remote names for a set of local branches with one git call."""
+    repo_dir = (repo_dir or "").strip()
+    wanted = {str(name or "").strip() for name in branch_names or []} - {""}
+    if not repo_dir or not wanted:
+        return {}
+    try:
+        res = subprocess.run(
+            ["git", "-C", repo_dir, "config", "--get-regexp", r"^branch\..*\.remote$"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except Exception:
+        return {}
+    # Exit code 1 means no branch has a tracking remote configured.
+    if res.returncode != 0:
+        return {}
     remotes: dict[str, str] = {}
-    for branch_name in branch_names or []:
-        branch = str(branch_name or "").strip()
-        if not branch:
-            continue
-        remote_name = get_git_branch_remote(repo_dir, branch, timeout_sec=timeout_sec)
-        if remote_name:
+    for line in (res.stdout or "").splitlines():
+        key, _, remote_name = line.partition(" ")
+        branch = key[len("branch."):-len(".remote")] if key.startswith("branch.") and key.endswith(".remote") else ""
+        remote_name = remote_name.strip()
+        if branch in wanted and remote_name:
             remotes[branch] = remote_name
     return remotes
 

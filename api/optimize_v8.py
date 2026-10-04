@@ -12,6 +12,7 @@ import platform
 import re
 import secrets
 import signal
+import stat
 import socket
 import subprocess
 import threading
@@ -20,10 +21,11 @@ import traceback
 import uuid
 
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path, PurePath
 from shutil import copy2, rmtree, which
-from typing import Optional
+from typing import Callable, Optional
 
 import psutil
 import httpx
@@ -893,10 +895,25 @@ def _read_runner_state(filename: str) -> dict | None:
         return None
 
 
+_LOG_TERMINAL_STATUS_CACHE_MAX = 1024
+_log_terminal_status_cache: dict[str, tuple[tuple[int, int, int, int], str | None]] = {}
+_log_terminal_status_lock = threading.Lock()
+
+
 def _read_log_terminal_status(filename: str) -> str | None:
     path = _safe_path(_log_dir() / f"{filename}.log", _log_dir())
-    if not path.is_file() or path.is_symlink():
+    try:
+        info = path.lstat()
+    except OSError:
         return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    # Finished logs never change, so re-read the 64 KiB tail only after a write or rotation.
+    signature = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    with _log_terminal_status_lock:
+        cached = _log_terminal_status_cache.get(str(path))
+    if cached is not None and cached[0] == signature:
+        return cached[1]
     try:
         with path.open("rb") as handle:
             handle.seek(0, 2)
@@ -905,10 +922,16 @@ def _read_log_terminal_status(filename: str) -> str | None:
     except OSError:
         return None
     if "optimization complete" in tail or "successfully processed optimize_results" in tail:
-        return "complete"
-    if tail.strip():
-        return "error"
-    return None
+        status = "complete"
+    elif tail.strip():
+        status = "error"
+    else:
+        status = None
+    with _log_terminal_status_lock:
+        if len(_log_terminal_status_cache) >= _LOG_TERMINAL_STATUS_CACHE_MAX:
+            _log_terminal_status_cache.clear()
+        _log_terminal_status_cache[str(path)] = (signature, status)
+    return status
 
 
 def _clear_stale_process_record(filename: str, record: dict | None = None) -> None:
@@ -1423,12 +1446,54 @@ def _apply_queue_launch_settings(
     return prepared
 
 
-def _queue_item(path: Path) -> dict:
+def _read_queue_record(path: Path) -> tuple[dict, str]:
+    """Return one persisted queue entry with its validated filename and creation stamp."""
     data = _read_json(_safe_path(path, _queue_dir()))
     filename = str(data.get("filename") or path.stem)
     if filename != path.stem:
         raise RuntimeError("Persisted queue filename does not match its file")
-    status, pid = _queue_status({**data, "filename": filename})
+    created = datetime.datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    return {**data, "filename": filename}, created
+
+
+def _queue_records() -> list[tuple[Path, dict, str]]:
+    """Read each queue file once and return (path, data, created) in queue order."""
+    ensure_private_directory(_queue_dir())
+    records = []
+    for path in _queue_dir().glob("*.json"):
+        try:
+            records.append((path, *_read_queue_record(path)))
+        except Exception as exc:
+            _log(SERVICE, f"Failed to load PB8 optimize queue item {path.name}: {exc}", level="WARNING")
+    pending_order = _pending_reorder_filenames()
+    pending_rank = {filename: index for index, filename in enumerate(pending_order)}
+    return sorted(
+        records,
+        key=lambda record: (
+            pending_rank.get(record[1]["filename"], 10**18)
+            if pending_rank
+            else int(record[1]["order"]) if isinstance(record[1].get("order"), int) else 10**18,
+            record[2],
+            record[1]["filename"],
+        ),
+    )
+
+
+def _queue_record_status(path: Path, data: dict) -> tuple[str, int | None] | None:
+    try:
+        return _queue_status(data)
+    except Exception as exc:
+        _log(SERVICE, f"Failed to load PB8 optimize queue item {path.name}: {exc}", level="WARNING")
+        return None
+
+
+def _queue_item(path: Path) -> dict:
+    data, created = _read_queue_record(path)
+    return _queue_record_item(data, created, *_queue_status(data))
+
+
+def _queue_record_item(data: dict, created: str, status: str, pid: int | None) -> dict:
+    filename = data["filename"]
     options = data.get("launch_options") if isinstance(data.get("launch_options"), dict) else {}
     return {
         "filename": filename,
@@ -1438,7 +1503,7 @@ def _queue_item(path: Path) -> dict:
         "exchange": data.get("exchange") or [],
         "status": status,
         "pid": pid,
-        "created": datetime.datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+        "created": created,
         "started_at": data.get("started_at"),
         "order": data.get("order"),
         "launch_mode": options.get("mode") or "fresh",
@@ -1452,25 +1517,41 @@ def _queue_item(path: Path) -> dict:
 
 
 def _load_queue() -> list[dict]:
-    ensure_private_directory(_queue_dir())
     items = []
-    for path in _queue_dir().glob("*.json"):
+    for path, data, created in _queue_records():
+        result = _queue_record_status(path, data)
+        if result is None:
+            continue
         try:
-            items.append(_queue_item(path))
+            items.append(_queue_record_item(data, created, *result))
         except Exception as exc:
             _log(SERVICE, f"Failed to load PB8 optimize queue item {path.name}: {exc}", level="WARNING")
-    pending_order = _pending_reorder_filenames()
-    pending_rank = {filename: index for index, filename in enumerate(pending_order)}
-    return sorted(
-        items,
-        key=lambda item: (
-            pending_rank.get(item["filename"], 10**18)
-            if pending_rank
-            else int(item["order"]) if isinstance(item.get("order"), int) else 10**18,
-            item["created"],
-            item["filename"],
-        ),
-    )
+    return items
+
+
+def _first_manual_queued_filename() -> str | None:
+    """Return the queue head eligible for autostart, evaluating only jobs ahead of it."""
+    for path, data, _created in _queue_records():
+        if data.get("loop_id"):
+            continue
+        result = _queue_record_status(path, data)
+        if result is not None and result[0] == "queued":
+            return data["filename"]
+    return None
+
+
+def _autostart_candidate() -> str | None:
+    """Return the next autostart job unless an automatic job is already running."""
+    candidate = None
+    for path, data, _created in _queue_records():
+        result = _queue_record_status(path, data)
+        if result is None:
+            continue
+        if result[0] == "running" and data.get("automatic"):
+            return None
+        if candidate is None and result[0] == "queued" and not data.get("loop_id"):
+            candidate = data["filename"]
+    return candidate
 
 
 def _pending_reorder_filenames() -> list[str]:
@@ -3162,6 +3243,8 @@ class OptimizeV8Worker:
     def __init__(self) -> None:
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        self._launch_lock = threading.Lock()
+        self._launch_executor: ThreadPoolExecutor | None = None
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -3187,31 +3270,12 @@ class OptimizeV8Worker:
                 if str(settings.get("autostart", "False")).lower() != "true":
                     delay = 5
                 else:
-                    filename = None
-                    with _queue_lock():
-                        items = _load_queue()
-                        if not any(item["status"] == "running" and item.get("automatic") for item in items):
-                            queued = next((item for item in items if item["status"] == "queued" and not item.get("loop_id")), None)
-                            if queued and claim_autostart("v8", queued["filename"]):
-                                filename = queued["filename"]
+                    filename = await self._claim_next_autostart()
+                    if filename and not self._running:
+                        release_autostart("v8", filename)
+                        break
                     if filename:
-                        try:
-                            record = await asyncio.to_thread(self.launch, filename, None, True)
-                            publish_autostart_process(
-                                "v8",
-                                filename,
-                                record["pid"],
-                                record["create_time"],
-                                [str(Path(PBGDIR) / "pb8_optimize_runner.py"), str(_launch_config_file(filename).resolve())],
-                            )
-                        except Exception as exc:
-                            release_autostart("v8", filename)
-                            transient = _record_launch_failure(filename, exc)
-                            _log(
-                                SERVICE,
-                                f"PB8 automatic optimize launch failed: {exc}",
-                                level="WARNING" if transient else "ERROR",
-                            )
+                        await self._launch_autostart(filename)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -3221,6 +3285,55 @@ class OptimizeV8Worker:
                 await asyncio.sleep(delay)
             except asyncio.CancelledError:
                 break
+
+    async def _claim_next_autostart(self) -> str | None:
+        """Claim off the event loop; a claim finishing after cancellation is released, not leaked."""
+        claim = asyncio.ensure_future(asyncio.to_thread(self._claim_autostart_candidate))
+        # The thread cannot be interrupted, so every stop() waits until it is settled.
+        if not await _wait_through_cancellation(claim):
+            return claim.result()
+        if claim.exception() is None and claim.result():
+            try:
+                release_autostart("v8", claim.result())
+            except Exception as exc:
+                _log(SERVICE, f"Failed to release PB8 autostart claim after stop: {exc}", level="ERROR")
+        raise asyncio.CancelledError
+
+    async def _launch_autostart(self, filename: str) -> None:
+        """Own a launch whose thread settles its claim even after the event loop closes."""
+        with self._launch_lock:
+            try:
+                if self._launch_executor is None:
+                    self._launch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="optimize-v8-launch")
+                launch = self._launch_executor.submit(_settle_autostart_launch, filename, self.launch)
+            except Exception:
+                release_autostart("v8", filename)
+                raise
+        # Cancellation stops the controller, not the submitted launch or its claim settlement.
+        await asyncio.shield(asyncio.wrap_future(launch))
+
+    async def drain_autostart_launches(self) -> None:
+        """Join launch threads during API shutdown without terminating detached optimizer jobs."""
+        with self._launch_lock:
+            executor = self._launch_executor
+        if executor is not None:
+            closing = asyncio.create_task(
+                asyncio.to_thread(executor.shutdown, wait=True), name="optimize-v8-launch-shutdown",
+            )
+            await _wait_through_cancellation(closing)
+            closing.result()
+            with self._launch_lock:
+                if self._launch_executor is executor:
+                    self._launch_executor = None
+
+    @staticmethod
+    def _claim_autostart_candidate() -> str | None:
+        """Pick and claim the next autostart job off the event loop."""
+        with _queue_lock():
+            filename = _autostart_candidate()
+            if filename and claim_autostart("v8", filename):
+                return filename
+        return None
 
     def launch(self, filename: str, launch_options: dict | None = None, automatic: bool = False, loop_id: str | None = None) -> dict:
         """Validate an immutable queue snapshot and launch one detached PB8 optimizer."""
@@ -3237,8 +3350,7 @@ class OptimizeV8Worker:
             if status != "queued":
                 raise HTTPException(status_code=409, detail=f"Queue item is already {status}")
             if automatic:
-                first_queued = next((item for item in _load_queue() if item["status"] == "queued" and not item.get("loop_id")), None)
-                if first_queued is None or first_queued["filename"] != filename:
+                if _first_manual_queued_filename() != filename:
                     raise HTTPException(status_code=409, detail="Queue order changed; automatic launch will retry")
             snapshot = _snapshot_file(filename)
             if not snapshot.is_file() or snapshot.is_symlink():
@@ -3356,6 +3468,42 @@ class OptimizeV8Worker:
                 runtime_lease.release()
 
 
+async def _wait_through_cancellation(future: asyncio.Future) -> bool:
+    """Wait until a thread-backed future finishes, even across repeated cancellation; return if cancelled."""
+    cancelled = False
+    while not future.done():
+        try:
+            await asyncio.wait({future})
+        except asyncio.CancelledError:
+            cancelled = True
+    return cancelled
+
+
+def _settle_autostart_launch(filename: str, launcher: Callable[[str, dict | None, bool], dict]) -> None:
+    """Launch and persist claim ownership in one thread, independently of asyncio cancellation."""
+    try:
+        try:
+            record = launcher(filename, None, True)
+            publish_autostart_process(
+                "v8",
+                filename,
+                record["pid"],
+                record["create_time"],
+                [str(Path(PBGDIR) / "pb8_optimize_runner.py"), str(_launch_config_file(filename).resolve())],
+            )
+        except Exception as exc:
+            release_autostart("v8", filename)
+            transient = _record_launch_failure(filename, exc)
+            _log(
+                SERVICE,
+                f"PB8 automatic optimize launch failed: {exc}",
+                level="WARNING" if transient else "ERROR",
+            )
+    except Exception as exc:
+        _log(SERVICE, f"Failed to settle PB8 autostart claim for {filename}: {exc}", level="ERROR",
+             meta={"traceback": traceback.format_exc()})
+
+
 _worker = OptimizeV8Worker()
 _ws_clients: set[WebSocket] = set()
 _ws_snapshot_lock = asyncio.Lock()
@@ -3418,6 +3566,7 @@ async def shutdown() -> None:
     with _dash_lock:
         _dash_admission_open = False
     await _worker.stop()
+    await _worker.drain_autostart_launches()
     await asyncio.to_thread(_stop_all_dash_sessions)
     await asyncio.to_thread(shutdown_pb8_ohlcv_start_date_jobs)
     await asyncio.to_thread(_shutdown_active_evaluation_scans)

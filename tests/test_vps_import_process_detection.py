@@ -4029,3 +4029,105 @@ def test_vps_deploy_shutdown_joins_controller_without_stopping_remote_job() -> N
             debug=False,
             extra_vars=None,
         )
+
+
+def test_vps_inventory_sync_parses_unchanged_host_files_once(tmp_path, monkeypatch) -> None:
+    """Repeated inventory syncs reuse unchanged host files but still re-apply disk state (#387)."""
+    from contextlib import nullcontext
+
+    host_file = tmp_path / "data" / "vpsmanager" / "hosts" / "vps-1" / "vps-1.json"
+    host_file.parent.mkdir(parents=True)
+    host_file.write_text(json.dumps({"_hostname": "vps-1", "ip": "10.0.0.1", "firewall_ssh_ips": ["1.1.1.1"]}), encoding="utf-8")
+    monkeypatch.setattr(service_mod, "PBGDIR", str(tmp_path))
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(vpss=[], update_status="", load_master=lambda: None)
+    service._host_task_start_lock = lambda _hostname: nullcontext()
+    reads: list[str] = []
+    original_open = builtins.open
+
+    def counting_open(file, *args, **kwargs):
+        if str(file) == str(host_file):
+            reads.append(str(file))
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", counting_open)
+
+    service._sync_vps_inventory()
+    vps = service.vpsmanager.vpss[0]
+    vps.ip = "changed-in-memory"
+    vps.firewall_ssh_ips.append("2.2.2.2")
+    service._sync_vps_inventory()
+    service._sync_vps_inventory()
+
+    assert len(reads) == 1
+    assert service.vpsmanager.vpss[0] is vps
+    assert vps.ip == "10.0.0.1"
+    assert vps.firewall_ssh_ips == ["1.1.1.1"]
+
+    host_file.write_text(json.dumps({"_hostname": "vps-1", "ip": "10.0.0.2"}), encoding="utf-8")
+    service._sync_vps_inventory()
+    assert len(reads) == 2
+    assert vps.ip == "10.0.0.2"
+
+    host_file.unlink()
+    service._sync_vps_inventory()
+    assert service._host_inventory_cache == {}
+
+
+def test_git_branch_remotes_use_one_git_process(monkeypatch) -> None:
+    """Tracking remotes for many branches are read with one batched git call (#387)."""
+    import pbgui_purefunc
+
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="branch.main.remote origin\nbranch.release.1.0.remote fork\nbranch.other.remote origin\n",
+        )
+
+    monkeypatch.setattr(pbgui_purefunc.subprocess, "run", fake_run)
+    remotes = pbgui_purefunc.get_git_branch_remotes("/repo", ["main", "release.1.0", "missing", ""])
+
+    assert remotes == {"main": "origin", "release.1.0": "fork"}
+    assert len(calls) == 1
+    assert calls[0][:4] == ["git", "-C", "/repo", "config"]
+    assert pbgui_purefunc.get_git_branch_remotes("/repo", []) == {}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("refresh_synced", [True, False])
+def test_vps_push_loop_syncs_inventory_once_per_tick(monkeypatch, refresh_synced) -> None:
+    """Each tick applies disk state exactly once, also when another refresh holds the lock (#387)."""
+    calls: list[object] = []
+    service = SimpleNamespace(
+        refresh=lambda force=False: calls.append(("refresh", force)) or refresh_synced,
+        build_state=lambda sync_inventory=True: calls.append(("state", sync_inventory)) or {"ok": True},
+    )
+
+    class FakeWebSocket:
+        async def send_json(self, payload) -> None:
+            calls.append(("send", payload["type"]))
+
+    async def stop_after_first_tick(_delay):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(vps_manager_api.asyncio, "sleep", stop_after_first_tick)
+    asyncio.run(vps_manager_api._push_loop(FakeWebSocket(), service, {"view": "overview"}))
+
+    assert calls == [("refresh", False), ("state", not refresh_synced), ("send", "state")]
+
+
+def test_vps_refresh_reports_whether_it_synced_inventory() -> None:
+    """A non-forced refresh skipped by lock contention tells callers that nothing was synced."""
+    calls: list[str] = []
+    service = object.__new__(VPSManagerService)
+    service._refresh_lock = threading.Lock()
+    service._sync_vps_inventory = lambda: calls.append("inventory")
+    service._refresh_completed_linux_updates = lambda: None
+
+    assert service.refresh() is True
+    with service._refresh_lock:
+        assert service.refresh() is False
+    assert calls == ["inventory"]

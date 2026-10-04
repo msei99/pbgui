@@ -1247,13 +1247,13 @@ async def _push_loop(websocket: WebSocket, service: VPSManagerService, context: 
             else:
                 last_detail = ""
 
-            state = await asyncio.to_thread(service.build_state)
+            # Apply disk state once per tick: refresh() syncs unless another refresh holds its lock.
+            synced = await asyncio.to_thread(service.refresh, force=False)
+            state = await asyncio.to_thread(service.build_state, sync_inventory=not synced)
             encoded_state = json.dumps(state, sort_keys=True, default=str)
             if encoded_state != last_state:
                 await websocket.send_json({"type": "state", "data": state})
                 last_state = encoded_state
-
-            await asyncio.to_thread(service.refresh, force=False)
 
             await asyncio.sleep(1)
     except asyncio.CancelledError:

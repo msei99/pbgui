@@ -1233,12 +1233,15 @@ window.PBGUI_NAV_CONFIG = {
 
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) {
-      // Drop the pending poll so a hidden tab never fetches.
+      // Drop the pending polls so a hidden tab never fetches.
       clearTimeout(_statusTimer);
       _statusTimer = null;
-    } else if (!_statusInFlight) {
-      fetchStatus();
+      clearTimeout(_workersTimer);
+      _workersTimer = null;
+      return;
     }
+    if (!_statusInFlight) fetchStatus();
+    if (Object.keys(_workerActionPending).length === 0) window.fetchWorkers(false);
   });
 
   function serviceSkipped(item) {
@@ -1391,9 +1394,12 @@ window.PBGUI_NAV_CONFIG = {
 
   function scheduleWorkers() {
     clearTimeout(_workersTimer);
-    if (Object.keys(_workerActionPending).length === 0) {
-      _workersTimer = setTimeout(function () { window.fetchWorkers(false); }, 5000);
-    }
+    _workersTimer = null;
+    // Hidden tabs stop polling; visibilitychange resumes immediately.
+    if (document.hidden || Object.keys(_workerActionPending).length > 0) return;
+    // The full worker status scans every queue, so poll it less often than the cheap summary.
+    var delay = _currentPanelId === 'workers' ? 10000 : 5000;
+    _workersTimer = setTimeout(function () { window.fetchWorkers(false); }, delay);
   }
 
   function rebuildWorkerIndex() {

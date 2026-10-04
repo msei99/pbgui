@@ -1702,8 +1702,14 @@
         if (pollError) pollError.dataset.jobPollError = error.message;
       }
     } finally {
-      if (!disposed && !document.hidden && current === jobGeneration) jobTimer = setTimeout(pollJobs, 10000);
+      if (!disposed && !document.hidden && current === jobGeneration) jobTimer = setTimeout(pollJobs, jobPollDelay());
     }
+  }
+
+  // Poll every 10s while cloud work is in flight; back off to 30s when only finished jobs remain.
+  function jobPollDelay() {
+    const busy = workers.length > 0 || jobRows.some(job => !['completed','failed','cancelled'].includes(job.status));
+    return busy ? 10000 : 30000;
   }
 
   async function pollJobs() {
