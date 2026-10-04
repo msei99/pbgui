@@ -409,15 +409,16 @@ class LoopController:
                           and item['operation'] not in validated_sources]
                 results = {}
                 for job in jobs + missed:
-                    if job['status'] in {'complete', 'completed'} or job.get('limit_reached'):
+                    if (job['status'] in {'complete', 'completed'} or job.get('limit_reached')
+                            or (job['status'] == 'failed' and job.get('backend'))):
                         try:
                             found = await owned_thread(self.backend.candidates, record, job)
                             candidates.extend(found)
                             results[job['operation']] = {'results_consumed': True, 'result_count': len(found), 'result_error': None}
                         except ValueError as exc:
-                            if not job.get('limit_reached'):
+                            if not job.get('limit_reached') and job['status'] != 'failed':
                                 raise
-                            _log(SERVICE, f'Limited optimizer {job["operation"]} has no usable results: {exc}', level='WARNING')
+                            _log(SERVICE, f'Stopped optimizer {job["operation"]} has no usable results: {exc}', level='WARNING')
                             results[job['operation']] = {'result_error': str(exc)[:1000]}
                 def collected(row):
                     for item in row['jobs']:
@@ -427,8 +428,11 @@ class LoopController:
                         row.update(phase='select', candidates=candidates, repair_error=None)
                     else:
                         failures = [item['result_error'] for item in results.values() if item.get('result_error')]
+                        failures.extend(item['error'] for item in jobs if item.get('error'))
+                        if row.get('repair_error'):
+                            failures.append(row['repair_error'])
                         row.update(phase='evaluate', observations=[],
-                                   repair_error='; '.join(failures)[:1000] or 'All optimizer attempts failed')
+                                   repair_error='; '.join(dict.fromkeys(failures))[:1000] or 'All optimizer attempts failed')
                 self.commit(record, collected)
                 return
             observations = []
@@ -512,7 +516,8 @@ class LoopController:
                 if observations:
                     await owned_thread(self.store.remember, record, record['id'] + ':rejected:' + str(record['round']), {'status': 'rejected_exact', 'goals': record['settings']['goals'], 'observations': observations, 'uncertainty': 'Incomplete or incomparable simulations cannot qualify a winner or authorize a next round.'})
                 self.commit(record, lambda row: row.update(rejected_observations=observations, status='failed',
-                    reason='Next cycle blocked: no successful comparable validation backtests for this cycle',
+                    reason=('Next cycle blocked: ' + record['repair_error']) if record.get('repair_error') else
+                           'Next cycle blocked: no successful comparable validation backtests for this cycle',
                     last_error=record.get('repair_error') or 'Exact comparison backtests are required before continuing'))
                 return
             rank = lambda item: (item['assessment'].get('hard_targets_met', True), item['assessment']['score'])

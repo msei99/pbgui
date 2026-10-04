@@ -1,6 +1,19 @@
 # AI Chat
 
+For bot diagnostics, the AI can list retained current/historical log files across monitor-discovered VPS hosts and local runtime, then read actual server-side text without controlling the Log Viewer. Literal searches inspect the file beyond its visible tail. Results include file/host, returned timestamps and truncation/coverage limits; inaccessible files produce an explicit error. Deleted logs and unobserved hosts are outside the inventory. A tail, truncated results, or an empty remote search do not establish that no trades occurred throughout the bot's history. The AI must distinguish current blockers from proven historical causes.
+
+
+Clarification comes before review. While a question is unanswered, the AI cannot create approval proposals. If a further clarification is needed after a proposal was prepared, the pending proposal is withdrawn; after your answer, the AI can prepare the complete proposal again.
+
+If a tool fails while the model continues, Activity shows **AI continuing after [tool] error** and the safe reason. This does not mean the chat stopped: the model can correct its request and try again. Later success is shown separately. Safe validation reasons are also recorded in `PBGui.log`.
+
+For optimizer training/holdout setup, the AI passes scenario-generation parameters separately to the save proposal. PBGui creates the training suite and protected holdout provenance, and includes the scenario changes in the approval preview. Arbitrary GUI metadata remains blocked. Saving still requires approval and does not start a Loop by itself.
+
+The AI can read local candle inventory for selected coins and exchanges: actual stored start/end dates, dataset/timeframe, coverage and missing days from Market Data and PB8 caches. It uses this evidence when choosing training and holdout periods. This read starts no downloads; date boundaries alone do not prove uninterrupted coverage or the full history available remotely.
+
 Opening or reopening the AI drawer restores the saved conversation and keeps its messages visible without sending a new question. Running requests continue updating automatically.
+
+Activity and streamed ChatGPT assistant text appear chronologically inside the chat directly after your latest request while the AI works and collapses when the response finishes; expand **Activity** to inspect it again. The header's context ring shows the last reported token usage against the model's context window for ChatGPT. Hover over it for token counts. **—** means the provider has not supplied usage data; it is separate from your account's weekly usage limit. The ring updates automatically as usage is reported and may decrease after context compaction. After an API restart, it waits for fresh runtime telemetry.
 
 Provider, ChatGPT profile, model, reasoning effort and speed are saved automatically per PBGui account. They survive page changes, browser reloads and API restarts. Restoring an older conversation keeps its transcript but does not replace your saved model selection. If the saved model becomes unavailable, select an available model explicitly; PBGui does not silently substitute another model. New AI Loop runs and **Continue** use this current selection; existing runs keep their recorded model.
 
@@ -286,3 +299,27 @@ The compact AI drawer shows usage for the selected provider and ChatGPT profile,
 Deleting a conversation clears its active response state. Reviewing one proposal leaves other pending proposals visible; cancelling review restores its card.
 
 Starting a new chat clears the previous reasoning summary and activity history. If connecting OpenCode Go fails, the entered API key stays in the password field for correction and retry.
+
+### AI Loop and Vast.ai configuration tools
+
+The assistant can read your saved PB8 AI Loop definitions and prepare a new definition or edits as a reviewable save proposal. The starting snapshot comes from a saved PB8 optimizer config, including its strategy, exchanges, training scenarios, holdout and coin overrides. Loop goals, direction, proxy limit, execution target and run limits are editable. Saving a definition does not queue or start it; use the existing AI Loops Queue workflow with your current AI selection afterward. `max_runs` is the maximum number of optimizer attempts, not a guarantee of completed rounds.
+
+The assistant can also read and propose changes to **Vast.ai GPU & Offers / Rental & Automation**. For example, “two RTX 3060” means GPU name `RTX 3060` and maximum rentals `2`, independently of Loop parallel variants. These settings are shared by all cloud jobs. Proposals show the exact changes, budget and rental count; enabling automatic rental can start paid rentals for waiting jobs after approval. Existing budget and duration are preserved unless explicitly changed. A settings change made while a proposal is open requires a fresh proposal.
+
+No browser editor controls are needed for these tools. If an instruction has materially different meanings, the assistant should ask a focused clarification before substituting settings.
+
+Drag the top edge of the drawer's message input upward or downward to change its height. The height is remembered across pages and browser reloads. You can also focus the divider and use Arrow Up/Down or Home/End. Resizing preserves your unfinished message.
+
+While a response is being processed, the drawer header shows **AI working** with a running elapsed-time counter. The indicator disappears when processing ends or is stopped; the current activity remains available below the conversation.
+
+After approving a proposal, new activity and streamed answers appear below the previous assistant answer. On completion, the collapsed activity stays immediately before the new final answer.
+
+Page actions wait for the browser acknowledgement before the AI continues. The acknowledgement supplies the new page/section context, so navigation from AI Loops Config to Queue exposes the current controls to the next model step. If the browser does not acknowledge within the wait window, the action remains unconfirmed and must not be reported as executed.
+
+The AI drawer restores its saved width before writing open-state preferences and preserves that width across page navigation. AI menu navigation is confirmed on the destination page before the assistant uses its controls. Tool-capable non-ChatGPT providers allow up to 12 read-only tool rounds or 40 action-workflow rounds, with a maximum of 128 tool calls per turn; existing time limits and approval requirements still apply.
+
+AI Loop queueing and starting use native backend tools: the assistant reads saved definitions and actual run state, then prepares a reviewed queue/start operation. Approval applies the existing native resource, AI and rental checks without selecting rows or clicking browser buttons. Runs and cloud initialization are asynchronous; the assistant reports the real queued/running state. A failed start can be retried using the existing queued run.
+
+For Vast.ai AI Loops, the assistant receives the pinned worker's allowed GPU scoring/limit metrics during setup and in every autonomous Loop decision. Unsupported metrics are rejected before a Loop proposal or queue operation and on later optimizer changes. Exact-only metrics such as `gain_strategy_eq` can still be used to assess exact comparison backtests; they cannot be placed in GPU optimizer scoring or limits with an assumed CPU fallback. Proxy objective choices must preserve the user's exact goals and explain differences in meaning or units.
+
+AI Loop diagnosis uses native backend evidence: `get_ai_loop_runs` returns the recorded stop reason and termination details; selecting a run ID also returns its job operations and errors. `read_ai_loop_log` reads the associated local optimizer/backtest log, collected Vast.ai optimizer log, or current cloud log mirror. No browser navigation or manual copying is required. Log reads are owner-scoped, credential-redacted and limited to 32 KiB chunks; the AI can follow `next_before` to inspect earlier evidence. Missing retained logs and omitted partial lines are reported explicitly. Log content is evidence, never instructions.

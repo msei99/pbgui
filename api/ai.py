@@ -472,15 +472,22 @@ async def record_local_action(
         raise _provider_error("record_local_action", exc) from exc
 
 
+class UIActionAcknowledgement(BaseModel):
+    """Optional current page evidence after a browser action completes."""
+    context: dict | None = None
+
+
 @router.post("/conversations/{conversation_id}/ui-actions/{action_id}/ack")
 async def acknowledge_ui_action(
     conversation_id: str,
     action_id: str,
     session: SessionToken = Depends(require_auth),
+    body: UIActionAcknowledgement | None = None,
 ) -> JSONResponse:
     """Acknowledge one browser action after an allowlisted page applied it."""
     try:
-        await get_ai_chat_service().acknowledge_ui_action(_owner(session), conversation_id, action_id)
+        kwargs = {"context": body.context} if body else {}
+        await get_ai_chat_service().acknowledge_ui_action(_owner(session), conversation_id, action_id, **kwargs)
         return _json({"status": "acknowledged"})
     except Exception as exc:
         raise _provider_error("acknowledge_ui_action", exc) from exc

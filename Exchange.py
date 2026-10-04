@@ -1,6 +1,7 @@
 import ccxt
 import ccxt.pro as ccxt_pro
 import bitget_uta
+from exchange_open_orders import fetch_account_open_orders
 from User import User
 from enum import Enum
 from functools import wraps
@@ -1072,10 +1073,13 @@ class Exchange:
         return prices
 
     @_serialize_bitget_client
-    def fetch_all_open_orders(self, symbol: str):
+    def fetch_all_open_orders(self, symbol: str | None, *, settle_coins=("USDT", "USDC")):
+        """Read symbol orders as before, or a complete supported account snapshot."""
         if not self.instance: self.connect()
         if self.id == 'bitget' and self.ensure_bitget_account_mode():
             return self._read_bitget_uta(bitget_uta.fetch_open_orders, symbol)
+        if symbol is None:
+            return fetch_account_open_orders(self.instance, self.id, settle_coins)
         orders = self.instance.fetch_open_orders(symbol=symbol)
         return orders
 

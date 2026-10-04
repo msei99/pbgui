@@ -41,7 +41,7 @@ function browser(apiBase = prefix + '/api/balance-calc', mount = prefixArg) {
   location.replace = value => redirects.push(value);
   location.reload = () => {};
   const context = {
-    URL, console, WeakMap, Map, Set,
+    URL, console, WeakMap, Map, Set, AbortController,
     location, API_BASE: apiBase,
     PBGUI_NAV_CONFIG: {current: 'info_balance_calc', authenticated: true},
     sessionStorage: {getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key)},
@@ -59,7 +59,7 @@ function browser(apiBase = prefix + '/api/balance-calc', mount = prefixArg) {
       close() { this.closed = true; }
     },
     document: {
-      readyState: 'loading', body: element(), head: {appendChild: item => assets.push(item)},
+      readyState: 'loading', visibilityState: 'visible', body: element(), head: {appendChild: item => assets.push(item)},
       createElement: () => element(), getElementById: id => nodes[id] || null,
       querySelectorAll: selector => selector === '.nav-item[data-page]' ? navItems : [],
       addEventListener(name, handler) { documentListeners[name] = handler; }
@@ -118,9 +118,9 @@ async function main() {
     b.nodes['pbgui-guide-btn'].click();
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/shared_help_overlay.js?v=9');
     b.assets.at(-1).onerror();
-    assert.equal(c.location.href, app + '/app/help.html?v=1769');
+    assert.equal(c.location.href, app + '/app/help.html?v=1770');
     b.nodes['pbgui-ai-btn'].click();
-    assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=18');
+    assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=22');
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/pbgui_dialogs.js?v=10');
     b.assets.at(-1).onload();
     // Follow the current local dependency chain before the drawer's usage module.
@@ -140,7 +140,7 @@ async function main() {
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/jev_transfer_preview.js?v=1');
     c.PBGuiJevTransferPreview = {review() {}};
     b.assets.at(-1).onload();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=62');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=69');
     b.nodes['pbgui-notify-btn'].click();
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/log_viewer_panel.js?v=50');
     let viewerOptions;

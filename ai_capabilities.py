@@ -29,6 +29,7 @@ from uuid import uuid4
 
 import psutil
 from fastapi import HTTPException
+from pb8_config import PB8ConfigurationError
 
 from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
@@ -188,6 +189,8 @@ class AICapabilityService:
         self.approval_semaphore = asyncio.Semaphore(_MAX_ACTIVE_APPROVALS)
         from ai_reviewed_changes import ReviewedConfigChanges
         self.reviewed_changes = ReviewedConfigChanges(self)
+        from ai_loop_tools import AILoopTools
+        self.loop_tools = AILoopTools(self)
 
     def _analysis_marker(self, owner: str, conversation_id: str) -> Path:
         """Use an opaque, owner-bound monotonic security marker across processes."""
@@ -354,16 +357,28 @@ class AICapabilityService:
             "search_passivbot_docs", "search_passivbot_source", "read_passivbot_source",
             "list_research_results", "read_research_result", "propose_research_jev_analysis",
             "propose_web_research", "propose_reviewed_config_change",
+            "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "get_candle_inventory", "list_bot_logs", "read_bot_log",
         }:
             self.require_action_context(owner, conversation_id)
         args = arguments if isinstance(arguments, dict) else {}
         encoded = json.dumps(args, allow_nan=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > _MAX_CONFIG_BYTES:
             raise AICapabilityError("Tool arguments are too large")
+        from ai_bot_log_tools import query as bot_log_query
         handlers = {
+            "list_bot_logs": lambda owner, cid, args: bot_log_query(args),
+            "read_bot_log": lambda owner, cid, args: bot_log_query(args, read=True),
             "get_capability_registry": lambda unused: self.capability_registry(owner),
+            "get_ai_loop_configs": self.loop_tools.read_loop,
+            "get_ai_loop_runs": self.loop_tools.read_runs,
+            "read_ai_loop_log": self.loop_tools.read_log,
+            "propose_ai_loop_run": self.loop_tools.propose_run,
+            "get_vast_preferences": self.loop_tools.read_vast,
+            "propose_ai_loop_config": self.loop_tools.propose_loop,
+            "propose_vast_preferences": self.loop_tools.propose_vast,
             "list_optimizer_configs": self._list_optimizer_configs,
             "get_optimizer_config": self._get_optimizer_config,
+            "get_candle_inventory": self._get_candle_inventory,
             "list_run_configs": lambda args: self._list_managed_configs('run', args),
             "get_run_config": lambda args: self._get_managed_config('run', args),
             "list_backtest_configs": lambda args: self._list_managed_configs('backtest', args),
@@ -421,19 +436,27 @@ class AICapabilityService:
             raise AICapabilityError("PBGui capability capacity is busy") from exc
         try:
             try:
-                if tool.startswith("propose_") or tool in {"get_python_analysis_result", "list_research_results", "read_research_result"}:
+                if tool.startswith("propose_") or tool in {"get_python_analysis_result", "list_research_results", "read_research_result", "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "list_bot_logs", "read_bot_log"}:
                     result = await handler(owner, conversation_id, args)
                 elif tool in {"list_config_drafts", "get_config_draft", "create_config_draft", "update_config_draft"}:
                     result = await self._to_thread_uncancellable(handler, owner, args)
                 else:
                     result = await self._to_thread_uncancellable(handler, args)
-            except AICapabilityError:
-                raise
+            except AICapabilityError as exc:
+                detail = self._path_free_error(str(exc))
+                _log(SERVICE, f"AI tool {tool} rejected: {detail}", level="WARNING")
+                raise AICapabilityError(detail) from exc
             except HTTPException as exc:
-                raise AICapabilityError(self._safe_detail(exc.detail)) from exc
+                detail = self._path_free_error(self._safe_detail(exc.detail))
+                _log(SERVICE, f"AI tool {tool} rejected (HTTP {exc.status_code}): {detail}", level="WARNING")
+                raise AICapabilityError(detail) from exc
+            except PB8ConfigurationError as exc:
+                detail = self._path_free_error(str(exc))
+                _log(SERVICE, f"AI tool {tool} failed PB8 validation: {detail}", level="WARNING")
+                raise AICapabilityError(f"PB8 validation failed: {detail}") from exc
             except Exception as exc:
                 _log(SERVICE, f"AI capability {tool} failed: {type(exc).__name__}", level="ERROR")
-                raise AICapabilityError("PBGui capability failed") from exc
+                raise AICapabilityError(f"Internal error in {tool} ({type(exc).__name__}); see PBGui.log") from exc
         finally:
             self.semaphore.release()
         self._require_bounded_result(result)
@@ -515,7 +538,7 @@ class AICapabilityService:
                     )
                     if durable.get("status") != "awaiting_approval":
                         raise AICapabilityError("Proposal is no longer pending")
-                    if proposal.action not in {"python_analysis", "jev_analysis", "reviewed_config_change"}:
+                    if proposal.action not in {"python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"}:
                         self._write_private_json(
                             self.journal_root / f"{proposal.id}.json",
                             self._journal_payload(proposal, phase="prepared"),
@@ -559,7 +582,7 @@ class AICapabilityService:
                 self._persist_history(proposal)
             return {"proposal_id": proposal.id, "status": proposal.status}
 
-    async def reject_conversation(self, owner: str, conversation_id: str) -> None:
+    async def reject_conversation(self, owner: str, conversation_id: str, *, preserve_configurations: bool = False) -> None:
         """Reject all durable pending proposals when their conversation branch advances."""
         async with self.state_lock:
             self._load_proposals_for_owner(owner)
@@ -569,6 +592,7 @@ class AICapabilityService:
                     proposal.owner == owner
                     and proposal.conversation_id == conversation_id
                     and proposal.status == "awaiting_approval"
+                    and not (preserve_configurations and proposal.action in {"save_ai_loop_config", "save_vast_preferences", "run_ai_loop"})
                 ):
                     proposal.status = "rejected"
                     self._persist_proposal(proposal)
@@ -584,6 +608,8 @@ class AICapabilityService:
                     result = await self._execute_python_analysis(proposal)
                 elif proposal.action == "jev_analysis":
                     result = await self._execute_jev_analysis(proposal)
+                elif proposal.action == "run_ai_loop":
+                    result = await self.loop_tools.execute_run(proposal)
                 else:
                     result = await asyncio.to_thread(self._execute_proposal, proposal)
         except asyncio.CancelledError:
@@ -634,6 +660,78 @@ class AICapabilityService:
                     projected["resource"] = f"pbgui://optimizer-config/{version}/{quote(name, safe='')}"
             configs.append(projected)
         return {"version": version, "configs": configs, "returned": len(configs)}
+
+    def _get_candle_inventory(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Read bounded local candle coverage through the native Market Data inventory."""
+        from api import market_data
+        from market_data_integrity import SUPPORTED_EXCHANGES
+        from pbgui_purefunc import coin_from_symbol_code
+
+        exchanges = args.get("exchanges")
+        coins = args.get("coins")
+        if not isinstance(exchanges, list) or not 1 <= len(exchanges) <= 5:
+            raise AICapabilityError("exchanges must contain 1 to 5 supported exchanges")
+        if not isinstance(coins, list) or not 1 <= len(coins) <= 20:
+            raise AICapabilityError("coins must contain 1 to 20 base coin identifiers")
+        normalized_exchanges = []
+        for value in exchanges:
+            if not isinstance(value, str):
+                raise AICapabilityError("Invalid exchange")
+            ex = market_data._normalize_settings_exchange(value)
+            storage_ex = "binanceusdm" if ex == "binance" else ex
+            if storage_ex not in SUPPORTED_EXCHANGES:
+                raise AICapabilityError("Unsupported candle exchange")
+            if ex not in normalized_exchanges:
+                normalized_exchanges.append(ex)
+        normalized_coins = []
+        for value in coins:
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", value):
+                raise AICapabilityError("Invalid base coin identifier")
+            if value.upper() not in normalized_coins:
+                normalized_coins.append(value.upper())
+
+        results = []
+        for exchange in normalized_exchanges:
+            views = ["1m", "pb8_cache"]
+            if exchange == "hyperliquid":
+                views.insert(1, "1m_api")
+            records = []
+            for view in views:
+                for row in market_data._collect_inventory_rows(exchange, view):
+                    stored_coin = str(row.get("coin") or "").upper()
+                    base = str(coin_from_symbol_code(stored_coin) or "").upper()
+                    if stored_coin.startswith("XYZ-"):
+                        base = stored_coin.split("_", 1)[0]
+                    coin = stored_coin if stored_coin in normalized_coins else base
+                    if coin not in normalized_coins:
+                        continue
+                    projected = {key: row.get(key) for key in (
+                        "timeframe", "oldest_day", "newest_day", "n_days", "n_files",
+                        "coverage_pct", "missing_days_count", "missing_days_sample",
+                    ) if key in row}
+                    projected.update(coin=coin, source=view)
+                    projected.setdefault("timeframe", "1m")
+                    records.append(projected)
+            for coin in normalized_coins:
+                rows = [row for row in records if row["coin"] == coin]
+                spans = []
+                for row in rows:
+                    try:
+                        start = date.fromisoformat(str(row.get("oldest_day") or ""))
+                        end = date.fromisoformat(str(row.get("newest_day") or ""))
+                    except ValueError:
+                        continue
+                    if start <= end:
+                        spans.append((start, end))
+                results.append({"exchange": exchange, "coin": coin,
+                    "available": bool(spans), "datasets": rows[:30],
+                    "datasets_truncated": len(rows) > 30,
+                    "start_date": min(span[0] for span in spans).isoformat() if spans else None,
+                    "end_date": max(span[1] for span in spans).isoformat() if spans else None})
+        return {"scope": "local_candle_inventory", "results": results,
+            "notes": ["Dates are stored-data boundaries, not exchange listing dates or proof of uninterrupted coverage.",
+                      "No downloads are started. Missing local data does not mean remote history is unavailable.",
+                      "Review each dataset's coverage and gaps before choosing training and holdout dates."]}
 
     def _get_optimizer_config(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return one managed optimizer config with secrets and host paths removed."""
@@ -1863,8 +1961,8 @@ class AICapabilityService:
     @staticmethod
     def _path_free_error(value: object) -> str:
         """Return actionable validation text unless it appears to contain a host path."""
-        text = str(value or "")[:1000]
-        if re.search(r"(?:^|\s)(?:/[^\s]+|[A-Za-z]:\\[^\s]+)", text):
+        text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))[:1000]
+        if re.search(r"(?:^|[\s'\"(=])(?:/[^\s]+|[A-Za-z]:\\[^\s]+)", text):
             return "Installed runtime rejected the config; host path details were withheld"
         return text or "Installed runtime rejected the config"
 
@@ -1894,12 +1992,30 @@ class AICapabilityService:
         if not isinstance(config, dict):
             raise AICapabilityError("config must be an object")
         self._require_safe_draft(config)
+        scenario = None
+        if "scenario_template" in args:
+            parameters = args["scenario_template"]
+            if not isinstance(parameters, dict):
+                raise AICapabilityError("scenario_template must contain template parameters")
+            self._require_safe_draft(parameters)
+            scenario = self._preview_pb8_scenario_template(parameters)
+            config = copy.deepcopy(config)
+            backtest = config.setdefault("backtest", {})
+            backtest["suite_enabled"] = True
+            backtest["scenarios"] = scenario["training_scenarios"]
+            backtest["reducer"] = scenario["reducer"]
+            backtest.pop("aggregate", None)
+            config.setdefault("pbgui", {})["scenario_template"] = scenario["provenance"]
         prepared = await self._to_thread_uncancellable(self._validate_pb8_config, name, config)
         current, _overrides, _digest = await self._to_thread_uncancellable(
             self._current_pb8_bundle, name
         )
         if isinstance(current, dict):
             self._preserve_protected_config_fields(current, prepared)
+        if scenario is not None:
+            # Authorize only metadata generated by PBGui from typed scenario
+            # parameters; arbitrary model-authored pbgui fields stay forbidden.
+            prepared.setdefault("pbgui", {})["scenario_template"] = copy.deepcopy(scenario["provenance"])
         return await self._create_proposal(
             owner,
             conversation_id,
@@ -3491,6 +3607,15 @@ class AICapabilityService:
             raise AICapabilityError("AI overwrite proposals do not support existing sparse overrides")
         changed = self._changed_paths(current or {}, config or current or {})
         changes = self._changed_entries(current or {}, config or current or {})
+        scenario_metadata = ((config or {}).get("pbgui") or {}).get("scenario_template")
+        if isinstance(scenario_metadata, dict) and scenario_metadata.get("contract_version") == 1:
+            old_metadata = ((current or {}).get("pbgui") or {}).get("scenario_template")
+            scenario_changes = self._changed_entries(
+                {"scenario_template": self._sanitize_config(old_metadata)},
+                {"scenario_template": self._sanitize_config(scenario_metadata)},
+            )
+            changes.extend(scenario_changes)
+            changed.extend(item["path"] for item in scenario_changes)
         if len(changes) > 200:
             raise AICapabilityError("Proposal changes are too broad for safe review")
         settings = load_ini_section("optimize_v7")
@@ -3509,6 +3634,8 @@ class AICapabilityService:
             "may_start_immediately": action in {"queue", "save_and_queue"}
             and str(settings.get("autostart", "False")).lower() == "true",
         }
+        if isinstance(scenario_metadata, dict) and scenario_metadata.get("contract_version") == 1:
+            preview["generated_scenario_template"] = copy.deepcopy(scenario_metadata)
         payload_digest = self._digest(
             {
                 "action": action,
@@ -3556,6 +3683,12 @@ class AICapabilityService:
 
     def _execute_proposal(self, proposal: ActionProposal) -> dict[str, Any]:
         """Revalidate config state and execute one already approved PB8 action."""
+        from ai_loop_tools import ACTIONS as LOOP_ACTIONS
+        if proposal.action in LOOP_ACTIONS:
+            journal = self._load_journal(proposal.id) or self._journal_payload(proposal, phase="prepared")
+            result = self.loop_tools.checked(self.loop_tools.execute, proposal)
+            self._complete_journal(journal, result)
+            return result
         if proposal.action in {"queue_backtests", "create_dashboard", "save_dashboard_layout", "start_optimize_queue"}:
             journal = self._load_journal(proposal.id) or self._journal_payload(proposal, phase="prepared")
             self._write_private_json(self.journal_root / f"{proposal.id}.json", journal)
@@ -3880,7 +4013,11 @@ class AICapabilityService:
                 return None, {}, None
             if not path.is_file() or path.is_symlink():
                 raise AICapabilityError("PB8 config target is unsafe")
-            config = optimize_v8.load_pb8_config(path)
+            # Match the editor/read capability: legacy configs are migrated in
+            # memory before proposals and approval digests are constructed.
+            config = optimize_v8.load_pb8_editor_config(
+                path, loader=optimize_v8.load_pb8_config
+            )["config"]
             overrides = optimize_v8._load_override_payloads(config, optimize_v8._config_dir(name))
             return config, overrides, self._digest({"config": config, "overrides": overrides})
 
@@ -3971,7 +4108,7 @@ class AICapabilityService:
                 if status == "executing":
                     status = (
                         "interrupted"
-                        if payload.get("action") in {"python_analysis", "jev_analysis", "reviewed_config_change"}
+                        if payload.get("action") in {"python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"}
                         else "approved_recovery"
                     )
                 self.proposals[proposal_id] = ActionProposal(
@@ -4013,8 +4150,19 @@ class AICapabilityService:
             return
         before = copy.deepcopy(proposal.config)
         self._preserve_protected_config_fields(current, proposal.config)
+        authorized_template = proposal.preview.get("generated_scenario_template")
+        if (isinstance(authorized_template, dict)
+                and ((before.get("pbgui") or {}).get("scenario_template") == authorized_template)):
+            proposal.config.setdefault("pbgui", {})["scenario_template"] = copy.deepcopy(authorized_template)
         changes = self._changed_entries(current, proposal.config)
         changed_paths = self._changed_paths(current, proposal.config)
+        if isinstance(authorized_template, dict):
+            scenario_changes = self._changed_entries(
+                {"scenario_template": self._sanitize_config((current.get("pbgui") or {}).get("scenario_template"))},
+                {"scenario_template": self._sanitize_config((proposal.config.get("pbgui") or {}).get("scenario_template"))},
+            )
+            changes.extend(scenario_changes)
+            changed_paths.extend(item["path"] for item in scenario_changes)
         if (
             before == proposal.config
             and proposal.preview.get("changes") == changes
@@ -4155,7 +4303,7 @@ class AICapabilityService:
                         continue
                     try:
                         payload = self._read_private_json(path, self.proposal_root)
-                        if payload.get("action") not in {"python_analysis", "jev_analysis", "reviewed_config_change"} or payload.get("status") not in {
+                        if payload.get("action") not in {"python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"} or payload.get("status") not in {
                             "executing",
                             "approved_recovery",
                         }:
@@ -4362,8 +4510,12 @@ class AICapabilityService:
     def _tool_specs(self) -> list[dict[str, Any]]:
         """Return the dynamic model-visible capability catalog."""
         from ai_openrouter import research_jev_question_schema
+        from ai_loop_tools import tool_specs as loop_tool_specs
+        from ai_bot_log_tools import tool_specs as bot_log_tool_specs
         version_schema = {"type": "string", "enum": ["v7", "v8"]}
         return [
+            *loop_tool_specs(),
+            *bot_log_tool_specs(),
             {
                 "name": "propose_web_research",
                 "description": "When the user asks for internet/web research or current public evidence, draft a public-information-only research prompt and show it for approval inside this chat. Uses the current configured model/provider; unsupported connections return an explicit error without fallback. Does NOT search or execute anything. Exclude secrets, private account/host names, wallets, positions and complete configs. Results are initially display-only. If the user also requests Jev, include jev_questions for an automatic tool-free Jev analysis after research, covered by the same approval. For subsequent chat analysis use read_research_result; it permanently disables PBGui actions in this chat.",
@@ -4397,6 +4549,16 @@ class AICapabilityService:
                     {"version": version_schema, "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
                     ["version"],
                 ),
+            },
+            {
+                "name": "get_candle_inventory",
+                "description": "Read actual locally stored candle date boundaries and coverage for base coins on selected exchanges, using Market Data 1m, Hyperliquid 1m API and PB8 caches. Use this to inspect available history before selecting training and holdout windows; config dates are not coverage evidence. Does not download data or prove full remote-history availability. Dates span stored datasets and may contain gaps.",
+                "schema": self._object_schema({
+                    "exchanges": {"type": "array", "minItems": 1, "maxItems": 5,
+                        "items": {"type": "string", "enum": ["binance", "binanceusdm", "bybit", "okx", "bitget", "hyperliquid"]}},
+                    "coins": {"type": "array", "minItems": 1, "maxItems": 20,
+                        "items": {"type": "string", "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"}},
+                }, ["exchanges", "coins"]),
             },
             {
                 "name": "get_optimizer_config",
@@ -4712,12 +4874,13 @@ class AICapabilityService:
             },
             {
                 "name": "propose_pb8_optimizer_config",
-                "description": "Validate a complete PB8 optimizer config and propose save or save-and-queue. Never executes without user approval.",
+                "description": "Validate a complete PB8 optimizer config and propose save or save-and-queue. For training and holdout windows, pass scenario_template generation parameters (same as preview_pb8_scenario_template) separately; PBGui generates and saves authoritative holdout metadata. Do not put pbgui metadata in config or a draft. Never executes without user approval.",
                 "schema": AICapabilityService._object_schema(
                     {
                         "name": {"type": "string", "maxLength": 128},
                         "config": {"type": "object"},
                         "draft_id": {"type": "string", "minLength": 32, "maxLength": 32},
+                        "scenario_template": {"type": "object", "description": "Scenario generation parameters: template, start_date, end_date, window_days, stride_days, training_windows, holdout_windows, exchange_mode and exchanges. Use the same validated parameters as preview_pb8_scenario_template."},
                         "action": {"type": "string", "enum": ["save", "save_and_queue"]},
                     },
                     ["name", "action"],

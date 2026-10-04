@@ -12,12 +12,12 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=62" in NAV
+    assert "/app/js/ai_drawer.js?v=69" in NAV
     assert "/app/js/ai_usage.js?v=2" in NAV
     assert "/app/js/jev_transfer_preview.js?v=1" in NAV
     assert "jev_preview_id: jevPreviewId || null" in DRAWER
     assert "PBGuiAIUsage.renderOpenRouter(container, usage)" in DRAWER
-    assert "/app/css/ai_drawer.css?v=18" in NAV
+    assert "/app/css/ai_drawer.css?v=22" in NAV
     assert "/app/js/pbgui_dialogs.js?v=10" in NAV
     loader = NAV.split("function loadDrawerScript", 1)[1].split("var pendingAIAction", 1)[0]
     assert loader.index("pbgui_dialogs.js?v=10") < loader.index("dialogs.onload = loadDrawerScript")
@@ -76,7 +76,10 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "pagehide" in DRAWER
     pagehide = DRAWER.split("pagehide", 1)[1]
     assert "/cancel" not in pagehide
-    assert "localStorage" not in DRAWER
+    resize = DRAWER.split("function bindComposeResize", 1)[1].split("function collectContext", 1)[0]
+    assert "var key = 'pbgui.ai.compose.height'" in resize
+    assert "localStorage.setItem(key, String(Math.round(prompt.getBoundingClientRect().height)))" in resize
+    assert "localStorage" not in DRAWER.replace(resize, '')
     assert "sessionStorage" not in DRAWER
     assert "Authorization" not in DRAWER
     assert "document.cookie" not in DRAWER
@@ -92,6 +95,7 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "pbgui:ai-action-completed" in DRAWER
     assert "pbgui:ai-ui-action" in DRAWER
     assert "/ui-actions/" in DRAWER
+    assert "body: JSON.stringify({ context: collectContext() })" in DRAWER
     assert "Promise.resolve(action.browser_completion).then" in DRAWER
     assert "if (action.browser_error) setStatus" in DRAWER
     assert "pendingPageAction" in DRAWER
@@ -102,7 +106,7 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "state.resizing" in DRAWER
     assert "pai-resize-shield" in DRAWER
     assert "window.addEventListener('blur', finish)" in DRAWER
-    assert "if (!state.resizing) applyWidth(preferences.drawer_width)" in DRAWER
+    assert "if (!state.resizing && !state.drawerWidthDirty) applyWidth(preferences.drawer_width)" in DRAWER
     assert "drawer_open: drawerOpen == null ? state.open : !!drawerOpen" in DRAWER
     assert "drawer_pinned: state.drawerPinned" in DRAWER
     assert "preferences.drawer_pinned === true" in DRAWER

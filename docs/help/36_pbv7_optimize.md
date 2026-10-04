@@ -1,5 +1,9 @@
 # PBv7 Optimize
 
+Queue state updates automatically when it changes. Background tabs defer queue rendering and results requests; returning to the tab updates the current view while preserving selections and unfinished edits. Active Results and Pareto views continue updating while a run is in progress, even if its queue status stays unchanged.
+
+The limit editor supports both older PB7 statistics and current suite reducers from the installed Passivbot revision.
+
 If PB7 metadata cannot be imported because a runtime dependency is missing, opening the page returns an HTTP 503 configuration error with the dependency details instead of a generic server error. Repair the configured PB7 installation before retrying.
 
 The **PBv7 Optimize** page now opens as a standalone **FastAPI + Vanilla JS** page.

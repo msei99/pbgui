@@ -113,6 +113,7 @@
   }
 
   var _aiActionNavigationStorageKey = 'pbgui.ai.pending-navigation';
+  var _aiNavigationReceiptKey = 'pbgui.ai.navigation-receipt';
 
   function continuePageAction(url, actionId) {
     var normalizedActionId = aiContextText(actionId, 64);
@@ -142,6 +143,7 @@
     try {
       if (window.sessionStorage.getItem(_aiActionNavigationStorageKey) === normalizedActionId) {
         window.sessionStorage.removeItem(_aiActionNavigationStorageKey);
+        window.sessionStorage.removeItem(_aiNavigationReceiptKey);
       }
     } catch (_) {}
   }
@@ -181,6 +183,11 @@
     }
     if (!label && (element.tagName === 'TEXTAREA' || element.tagName === 'SELECT' || element.isContentEditable)) {
       label = element.placeholder || element.name || element.id || element.tagName;
+    }
+    if (!label && element.matches('.sb-section[data-panel]')) {
+      var navigationLabel = element.cloneNode(true);
+      navigationLabel.querySelectorAll('.sb-count').forEach(function (counter) { counter.remove(); });
+      label = navigationLabel.textContent;
     }
     if (!label) label = element.textContent || element.name || element.id || element.tagName;
     return aiContextText(label, 160).replace(/\s+/g, ' ');
@@ -283,6 +290,12 @@
       descriptor.options = Array.from(element.options).filter(aiSelectOptionAvailable).slice(0, 128).map(function (option) {
         return { value: aiContextText(option.value, 160), label: aiContextText(option.textContent, 160) };
       }).filter(function (option) { return !!option.label; });
+    }
+    if (element.matches('.sb-section[data-panel],.nav-item[data-page],.nav-group-btn')) {
+      // Navigation does not act on the selected config. Background list changes
+      // must not invalidate a menu/section control already supplied to the AI.
+      pageIdentity = JSON.stringify({page_key: String(cfg().current || ''),
+        navigation: element.getAttribute('data-panel') || element.getAttribute('data-page') || element.id || descriptor.name});
     }
     descriptor.id = aiControlId(element, JSON.stringify([
       pageIdentity,
@@ -504,6 +517,15 @@
     var target = request.target && typeof request.target === 'object' ? request.target : {};
     var payload = request.payload && typeof request.payload === 'object' ? request.payload : {};
     var entity = payload.entity && typeof payload.entity === 'object' ? payload.entity : {};
+    // A menu navigation is completed on its destination, not in the departing DOM.
+    try {
+      var receipt = JSON.parse(window.sessionStorage.getItem(_aiNavigationReceiptKey) || 'null');
+      if (receipt && receipt.action_id === request.action_id && receipt.page_key === String(cfg().current || '') &&
+          window.sessionStorage.getItem(_aiActionNavigationStorageKey) === request.action_id) {
+        event.preventDefault();
+        return;
+      }
+    } catch (_) {}
     if (String(target.page_key || '') !== String(cfg().current || '')) {
       var route = FASTAPI_PAGES[String(target.page_key || '')];
       if (route) route = _appPath(route);
@@ -531,6 +553,19 @@
         });
     if (!exposed) return;
     try {
+      if (entity.kind === 'ui_control' && payload.action === 'activate' ||
+          entity.kind === 'ui_control_label' && payload.action === 'activate_by_label') {
+        var control = entity.kind === 'ui_control'
+          ? resolveAIControl(entity.name, 'activate') : resolveAIControlByName(entity.name, 'activate');
+        var destination = control.matches('.nav-item[data-page]') ? control.getAttribute('data-page') : '';
+        if (destination && FASTAPI_PAGES[destination]) {
+          window.sessionStorage.setItem(_aiNavigationReceiptKey, JSON.stringify({action_id: request.action_id, page_key: destination}));
+          request.browser_navigation = true;
+          event.preventDefault();
+          continuePageAction(_getAppBase() + FASTAPI_PAGES[destination], request.action_id);
+          return;
+        }
+      }
       var result = registration.run(entity.name, entity, payload);
       if (result === false) return;
       if (result && typeof result.then === 'function') request.browser_completion = Promise.resolve(result);
@@ -963,6 +998,9 @@
   var _notifyViewer = null;
   var _navAlerts = { items: [], history: [], summary: { new_count: 0, ack_count: 0, total_active: 0 } };
   var _alertsTimer = null;
+  var _alertsRequest = null;
+  var _alertsGeneration = 0;
+  var _alertsStarted = false;
   var _navConfirmResolve = null;
   var _navConfirmReturnFocus = null;
   var _notifyHookTimer = null;
@@ -1314,25 +1352,58 @@
   }
 
   function fetchAlerts() {
+    if (document.visibilityState !== 'visible' || _alertsRequest) return;
+    var controller = new AbortController();
+    _alertsRequest = controller;
+    var generation = ++_alertsGeneration;
     var apiOrigin = _getAppBase();
-    fetch(apiOrigin + '/api/vps/alerts', authOptions({ cache: 'no-store' }))
+    return fetch(apiOrigin + '/api/vps/alerts', authOptions({ cache: 'no-store', signal: controller.signal }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('alerts failed');
         return resp.json();
       })
       .then(function (data) {
+        if (generation !== _alertsGeneration || document.visibilityState !== 'visible') return;
         _navAlerts = data || { items: [], history: [], summary: { new_count: 0, ack_count: 0, total_active: 0 } };
         updateAlertButton();
         var ovl = document.getElementById('pbgui-alert-ovl');
         if (ovl && ovl.classList.contains('visible')) renderAlertOverlay();
       })
-      .catch(function () {});
+      .catch(function () {})
+      .finally(function () {
+        if (_alertsRequest === controller) _alertsRequest = null;
+      });
   }
 
   function scheduleAlerts() {
+    _alertsStarted = true;
     clearInterval(_alertsTimer);
-    _alertsTimer = setInterval(fetchAlerts, 10000);
+    _alertsTimer = document.visibilityState === 'visible' ? setInterval(fetchAlerts, 10000) : null;
   }
+
+  function stopAlerts() {
+    clearInterval(_alertsTimer);
+    _alertsTimer = null;
+    ++_alertsGeneration;
+    if (_alertsRequest) _alertsRequest.abort();
+    _alertsRequest = null;
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!_alertsStarted) return;
+    stopAlerts();
+    if (document.visibilityState === 'visible') {
+      fetchAlerts();
+      scheduleAlerts();
+    }
+  });
+  window.addEventListener('pagehide', stopAlerts);
+  window.addEventListener('pageshow', function (event) {
+    if (_alertsStarted && event.persisted) {
+      fetchAlerts();
+      scheduleAlerts();
+    }
+  });
 
   function ackAlert(alertId) {
     var apiOrigin = _getAppBase();
@@ -1583,7 +1654,7 @@
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
-    'help':               '/app/help.html?v=1769',
+    'help':               '/app/help.html?v=1770',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
@@ -1857,7 +1928,7 @@
       _aiDrawerLoading = true;
       var link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = _appPath('/app/css/ai_drawer.css?v=18');
+      link.href = _appPath('/app/css/ai_drawer.css?v=22');
       document.head.appendChild(link);
       function loadDrawerScript() {
         var dependencies = [
@@ -1899,7 +1970,7 @@
           return;
         }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=62');
+        script.src = _appPath('/app/js/ai_drawer.js?v=69');
         script.onload = function () { _aiDrawerLoading = false; if (show && window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); window.dispatchEvent(new Event('pbgui:ai-ready')); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);
@@ -2042,11 +2113,12 @@
           if (!confirmed) return;
           _restartInFlight = true;
           var previousInstance = _restartStatus.api_instance_id || '';
+          var targetSerial = _restartStatus.current_serial;
           var origin2 = _getAppBase();
           restartBtn.disabled = true;
           restartBtn.classList.add('disabled');
           restartBtn.innerHTML = '<span class="nav-restart-dot"></span>Restarting...';
-          showRestartOverlay(origin2, restartServices, previousInstance, true);
+          showRestartOverlay(origin2, restartServices, previousInstance, true, targetSerial);
           fetch(origin2 + '/api/server-restart', authOptions({ method: 'POST' })).then(function(resp) {
             if (!resp.ok) {
               return resp.json().catch(function () { return {}; }).then(function (data) {
@@ -2058,11 +2130,11 @@
             }
             return resp.json().catch(function () { return {}; });
           }).then(function(data) {
-            showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : [], (data && data.api_instance_id) || previousInstance);
+            showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : [], (data && data.api_instance_id) || previousInstance, false, targetSerial);
           }).catch(function(err) {
             if (!err.restartRejected) {
               // A lost response may mean the API is already shutting down. Never resubmit.
-              showRestartOverlay(origin2, restartServices, previousInstance);
+              showRestartOverlay(origin2, restartServices, previousInstance, false, targetSerial);
               return;
             }
             _restartInFlight = false;
@@ -2098,7 +2170,7 @@
     });
   }
 
-  function showRestartOverlay(origin, requestedServices, previousInstance, awaitingResponse) {
+  function showRestartOverlay(origin, requestedServices, previousInstance, awaitingResponse, targetSerial) {
     /* Remove any existing overlay first */
     var existing = document.getElementById('pbgui-restart-overlay');
     if (existing) existing.remove();
@@ -2119,6 +2191,8 @@
     var attempts = 0;
     var maxAttempts = 60;
     var remainingRestartRequested = false;
+    var lastWaitReason = '';
+    var restartTargetSerial = Number(targetSerial);
     var requestedRestartServices = {};
     (requestedServices || []).forEach(function (item) {
       var label = typeof item === 'string' ? item : String((item || {}).label || (item || {}).service || '');
@@ -2144,8 +2218,23 @@
                   return label && !requestedRestartServices[label];
                 })
               : [];
-            if (data && !remainingRestartRequested && data.service_restart_required && !data.api_restart_required && newlyDiscovered.length) {
+            var serialAdvanced = data && Number.isFinite(restartTargetSerial) &&
+              Number(data.current_serial) > restartTargetSerial;
+            var replacementRunning = data && data.api_instance_id && data.api_instance_id !== previousInstance;
+            var outdatedServices = data && Array.isArray(data.restart_services) ? data.restart_services : [];
+            lastWaitReason = data && data.restart_inspection_error
+              ? 'Service inspection unavailable: ' + String(data.restart_inspection_error)
+              : outdatedServices.map(function (item) {
+                  var label = String((item || {}).label || (item || {}).service || 'Unknown service');
+                  return label + (item.running_serial != null && item.current_serial != null
+                    ? ' (code ' + item.running_serial + ' → ' + item.current_serial + ')' : '');
+                }).join(', ');
+            if (!lastWaitReason) lastWaitReason = 'Waiting for the replacement API instance';
+            if (statusEl) statusEl.textContent = 'Waiting: ' + lastWaitReason + ' (' + attempts + '/' + maxAttempts + ')';
+            if (data && replacementRunning && !data.restart_inspection_error && !remainingRestartRequested &&
+                (serialAdvanced || (data.service_restart_required && !data.api_restart_required && newlyDiscovered.length))) {
               remainingRestartRequested = true;
+              restartTargetSerial = Number(data.current_serial);
               newlyDiscovered.forEach(function (item) {
                 var label = String((item || {}).label || (item || {}).service || '');
                 if (label) requestedRestartServices[label] = true;
@@ -2176,7 +2265,7 @@
     }
 
     function _overlayFail(message) {
-      if (statusEl) statusEl.textContent = message || 'The service restart could not be verified. Check service status before trying again.';
+      if (statusEl) statusEl.textContent = message || 'The service restart could not be verified. ' + (lastWaitReason || 'The API is unreachable.') + '. Check service status before trying again.';
       if (!document.getElementById('pbgui-restart-close')) {
         var closeButton = document.createElement('button');
         closeButton.id = 'pbgui-restart-close';

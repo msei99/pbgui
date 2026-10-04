@@ -1,5 +1,15 @@
 # Public PB8 GPU worker image
 
+## Temporary GPU suite metric fix (2026-10-04)
+
+- Upstream fix: [Passivbot PR #1871](https://github.com/enarjord/passivbot/pull/1871), commit `83d18f0af`. The worker backport matches this patch.
+- Public tag: `ghcr.io/msei99/pbgui-pb8-worker:061e472-suite-metrics-v1`.
+- Immutable manifest: `sha256:792a11f40098a3fffe9365c46e38f60c7bddaa35179c9bc608d130b5e1449dbe`; reviewed image ID: `sha256:0406be0ececcc8dffad1b4128dcc1cb0a0be738325c11424d44f727c032cc04d`. Anonymous manifest retrieval matches both digests.
+- Derived from the preceding official worker. PB8 revision stays `061e472e3d400cb3a740583d52f9d46e02eaf781`; Rust, metric definitions, GPU metric contract, and worker wrapper stay unchanged.
+- `Dockerfile.suite-metrics` applies the checked-in Python-only patch with `git apply --check`. GPU suite metric aggregation errors receive the existing CPU invalid-candidate penalty instead of terminating the whole batch. Unrelated errors still propagate.
+- Five synthetic regressions passed inside the read-only, network-disabled worker; 895 focused upstream optimizer/backend tests passed with 6 skipped. All 1,231 focused PBGui image, job, cloud validation, calibration and help checks passed. No real CUDA performance run was performed.
+- PBGui selects the patched digest for new rentals; previous rental ownership and calibration evidence remain recognized. Existing rentals keep their original image. Replace this temporary backport when upgrading to an upstream revision containing the fix.
+
 ## Published schema v8.6 worker (2026-10-02)
 
 - Official PB8 revision: `061e472e3d400cb3a740583d52f9d46e02eaf781`, matching the installed local PB8 and schema `v8.6.0`. No upstream source patch is applied.

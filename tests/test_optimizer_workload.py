@@ -1,9 +1,74 @@
 """Pure workload estimates use explicit scenario dates and distinct coin lists."""
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
+import os
 
 import pytest
 
 from optimizer_workload import estimate_coin_candles, estimate_snapshot
+
+
+def test_snapshot_estimate_is_shared_and_invalidated_by_replacement(tmp_path, monkeypatch):
+    """Concurrent polls parse once; same-size replacements with restored mtime reload."""
+    import pb8_config
+    root = tmp_path / 'jobs'
+    root.mkdir()
+    path = root / 'job.json'
+    path.write_text('{}')
+    calls = []
+
+    def load(path):
+        """Record normalized config reads without calling any runtime helper."""
+        calls.append(path)
+        source = config()
+        if len(calls) > 1:
+            source['backtest']['end_date'] = '2026-01-03'
+        return source
+
+    monkeypatch.setattr(pb8_config, 'load_pb8_config', load)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert list(pool.map(lambda _: estimate_snapshot(path, root), range(16))) == [11520] * 16
+    assert len(calls) == 1
+    before = path.stat()
+    replacement = root / 'replacement.json'
+    replacement.write_text('[]')
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    replacement.replace(path)
+    assert estimate_snapshot(path, root) == 17280
+    assert len(calls) == 2
+    path.unlink()
+    assert estimate_snapshot(path, root) is None
+
+
+def test_cached_snapshot_still_checks_containment_and_symlinks(tmp_path, monkeypatch):
+    """A cached estimate cannot bypass a different root or a symlink selector."""
+    import pb8_config
+    root = tmp_path / 'jobs'
+    root.mkdir()
+    path = root / 'job.json'
+    path.write_text('{}')
+    monkeypatch.setattr(pb8_config, 'load_pb8_config', lambda _: config())
+    assert estimate_snapshot(path, root) == 11520
+    assert estimate_snapshot(path, tmp_path / 'other-root') is None
+    link = root / 'link.json'
+    link.symlink_to(path)
+    assert estimate_snapshot(link, root) is None
+
+
+def test_snapshot_parse_failure_can_recover_without_file_change(tmp_path, monkeypatch):
+    """Transient helper errors must not cache an unknown estimate indefinitely."""
+    import pb8_config
+    path = tmp_path / 'job.json'
+    path.write_text('{}')
+
+    def unavailable(_):
+        """Simulate a transient helper startup failure."""
+        raise RuntimeError('helper unavailable')
+
+    monkeypatch.setattr(pb8_config, 'load_pb8_config', unavailable)
+    assert estimate_snapshot(path, tmp_path) is None
+    monkeypatch.setattr(pb8_config, 'load_pb8_config', lambda _: config())
+    assert estimate_snapshot(path, tmp_path) == 11520
 
 
 def config():

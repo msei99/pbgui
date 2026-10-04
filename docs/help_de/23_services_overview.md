@@ -100,3 +100,5 @@ Während des Speicherns sind die Einstellungen gegen doppelte Anfragen gesperrt.
 Die Restart-Aktion in der Navigation zeigt direkt nach der Bestätigung den Fortschritt und verhindert doppelte Anfragen. PBGui verbindet sich automatisch neu und prüft vor dem Neuladen der aktuellen Seite, ob eine neue API-Instanz läuft. Bei verlorener Antwort wird der Status geprüft, ohne den Neustart automatisch erneut anzufordern.
 
 Mit Escape schließt sich der aktive Hilfe-, Preis-, Ergebnis-, CMC-Schlüssel- oder CMC-Authority-Dialog im Services Monitor. Während einer laufenden CMC-Änderung bleibt der entsprechende Dialog geöffnet.
+
+Ändert sich die Code-Version während eines Neustarts, führt PBGui nach Verfügbarkeit der neuen API einmalig einen weiteren Neustart durch. Die Fortschrittsanzeige nennt Dienste, die noch mit älterem Code laufen. Dauerhafte Fehler bleiben sichtbar, statt Dienste wiederholt neu zu starten.

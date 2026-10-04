@@ -38,6 +38,11 @@ Do not infer the cause of missing results or cancellation without supplied diagn
 Direction "config" means preserve the active Long/Short sides of the supplied initial config,
 including its optimizer bounds and runtime overrides; do not activate a disabled side.
 You may adjust the entire optimizer configuration; no optimizer parameter allowlist exists.
+Honor optimizer_metric_policy when supplied: optimize.scoring and optimize.limits may use only
+its allowed_metrics. Never put exact_only_metrics into GPU optimizer objectives or limits, and do
+not assume they will be deferred to exact CPU validation. These restrictions do not apply to the
+exact comparison rubric: preserve user goals and evaluate them using exact backtest metrics.
+Explain any proxy-objective choice; do not silently change a goal, threshold or its units.
 optimizer_start contains the retained best bot from exact fixed-comparison backtests, or the original
 bot until a candidate strictly improves on its baseline. The controller seeds every new optimizer
 with that bot and its coin override bundle, even if your variant repeats older bot parameters.
@@ -313,6 +318,9 @@ class LoopAI:
                    'training_exclusions': record.get('training_exclusions', record.get('holdouts', [])), 'initial_overrides': record['initial_overrides'], 'rubric': record['rubric'],
                    'optimizer_start': optimizer_start_candidate({**record, 'best': evidence.get('best', record.get('best'))}),
                    'knowledge': self.store.context(record), 'evidence': evidence}
+        if settings['execution'] == 'vast':
+            from pb8_loop_store import cloud_loop_metric_contract
+            content['optimizer_metric_policy'] = cloud_loop_metric_contract()
         encoded = json.dumps(content, allow_nan=False)
         instructions = instructions_for_run(record)['text']
         from ai_token_budget import _proxy_encoding

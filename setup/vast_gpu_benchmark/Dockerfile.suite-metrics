@@ -1,0 +1,11 @@
+# Temporary Python-only backport; remove after upgrading to the upstream fix.
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:32d7ee7a00330e01e4a2b8856275289eb8ee4b067542b09cfdce5e81c3b3691c
+COPY patches/gpu-suite-invalid-metrics.patch /opt/pbgui/patches/gpu-suite-invalid-metrics.patch
+RUN test "$(cat /opt/pb8-revision)" = "061e472e3d400cb3a740583d52f9d46e02eaf781" \
+    && cd /opt/passivbot \
+    && git apply --check /opt/pbgui/patches/gpu-suite-invalid-metrics.patch \
+    && git apply /opt/pbgui/patches/gpu-suite-invalid-metrics.patch \
+    && python -m py_compile src/optimization/backends/gpu_backend.py
+LABEL org.opencontainers.image.title="PBGui PB8 GPU Worker with Suite Metric Candidate Fix"
+LABEL org.opencontainers.image.source="https://github.com/msei99/pbgui"
+LABEL pbgui.passivbot.patch="gpu-suite-invalid-metrics-v1"

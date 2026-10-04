@@ -163,3 +163,102 @@ def test_build_runtime_status_merges_log_progress_with_runtime_metadata(monkeypa
     assert payload["system"]["cpu_percent"] == 73.2
     assert payload["queue"] == {"queued": 1, "running": 1, "error": 1, "complete": 0}
     assert payload["log"]["size_bytes"] > 0
+
+
+def test_runtime_status_reuses_parsed_log_until_file_changes(monkeypatch, tmp_path):
+    """Status polls reparse the log and config only after the files change (#399)."""
+    config_path = tmp_path / "job.json"
+    config_path.write_text(json.dumps({"optimize": {"iters": 100}}))
+    log_path = tmp_path / "job.log"
+    log_path.write_text(LOG_SAMPLE)
+    reads = {"log": 0, "config": 0}
+    real_read = optimize_v7._read_optimize_log_excerpt
+
+    def counting_read(path, **kwargs):
+        reads["log"] += 1
+        return real_read(path, **kwargs)
+
+    def counting_config(path):
+        reads["config"] += 1
+        return json.loads(Path(path).read_text())
+
+    monkeypatch.setattr(optimize_v7, "_read_optimize_log_excerpt", counting_read)
+    monkeypatch.setattr(optimize_v7, "load_pb7_config", counting_config)
+    monkeypatch.setattr(optimize_v7, "_collect_optimize_process_stats", lambda pid: {})
+    monkeypatch.setattr(optimize_v7, "_collect_optimize_system_stats", lambda: {})
+    monkeypatch.setattr(optimize_v7, "_load_queue_sync", lambda: (_ for _ in ()).throw(AssertionError("full scan")))
+    monkeypatch.setattr(optimize_v7._store, "_migrate_old_log", lambda filename, path: None)
+    item = {"filename": "job", "status": "optimizing", "json": str(config_path), "log_path": str(log_path)}
+
+    first = optimize_v7._build_optimize_runtime_status(item, [item])
+    second = optimize_v7._build_optimize_runtime_status(item, [item])
+    assert reads == {"log": 1, "config": 1}
+    assert first["progress"] == second["progress"]
+
+    with log_path.open("a") as handle:
+        handle.write("\n")
+    optimize_v7._build_optimize_runtime_status(item, [item])
+    assert reads == {"log": 2, "config": 1}
+
+
+def test_system_stats_do_not_sleep_for_cpu_sampling(monkeypatch):
+    """CPU utilisation is read non-blocking instead of sleeping per request (#399)."""
+    intervals = []
+
+    def fake_cpu_percent(interval=None, percpu=False):
+        intervals.append(interval)
+        return [10.0, 30.0] if percpu else 20.0
+
+    monkeypatch.setattr(optimize_v7.psutil, "cpu_percent", fake_cpu_percent)
+    stats = optimize_v7._collect_optimize_system_stats()
+    assert intervals == [None]
+    assert stats["cpu_percent"] == 20.0
+    assert stats["cpu_per_core"] == [10.0, 30.0]
+
+
+def test_runtime_status_retries_config_after_load_failure(monkeypatch, tmp_path):
+    """A failed config read is not cached; the next poll reads it again (#399)."""
+    config_path = tmp_path / "retry.json"
+    config_path.write_text(json.dumps({"optimize": {"iters": 100, "n_cpus": 4}}))
+    attempts = []
+
+    def flaky_config(path):
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise OSError("temporarily unreadable")
+        return json.loads(Path(path).read_text())
+
+    monkeypatch.setattr(optimize_v7, "load_pb7_config", flaky_config)
+    monkeypatch.setattr(optimize_v7, "_collect_optimize_process_stats", lambda pid: {})
+    monkeypatch.setattr(optimize_v7, "_collect_optimize_system_stats", lambda: {})
+    monkeypatch.setattr(optimize_v7._store, "_migrate_old_log", lambda filename, path: None)
+    item = {"filename": "retry", "status": "optimizing", "json": str(config_path), "log_path": str(tmp_path / "none.log")}
+
+    first = optimize_v7._build_optimize_runtime_status(item, [item])
+    second = optimize_v7._build_optimize_runtime_status(item, [item])
+    assert first["progress"]["target_iters"] is None
+    assert second["progress"]["target_iters"] == 100
+    assert second["runtime"]["config_n_cpus"] == 4
+
+
+def test_runtime_status_retries_log_after_read_failure(monkeypatch, tmp_path):
+    """A failed log read is not cached as an empty summary (#399)."""
+    log_path = tmp_path / "retry.log"
+    log_path.write_text(LOG_SAMPLE)
+    real_read = optimize_v7._read_optimize_log_excerpt
+    attempts = []
+
+    def flaky_read(path, **kwargs):
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise OSError("temporarily unreadable")
+        return real_read(path, **kwargs)
+
+    monkeypatch.setattr(optimize_v7, "_read_optimize_log_excerpt", flaky_read)
+    monkeypatch.setattr(optimize_v7, "_collect_optimize_process_stats", lambda pid: {})
+    monkeypatch.setattr(optimize_v7, "_collect_optimize_system_stats", lambda: {})
+    monkeypatch.setattr(optimize_v7._store, "_migrate_old_log", lambda filename, path: None)
+    item = {"filename": "retry", "status": "optimizing", "json": "", "log_path": str(log_path)}
+
+    assert optimize_v7._build_optimize_runtime_status(item, [item])["progress"]["eval"] is None
+    assert optimize_v7._build_optimize_runtime_status(item, [item])["progress"]["eval"] == 4601

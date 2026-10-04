@@ -33,7 +33,8 @@ class _ReadCapabilities:
         return {"backtests": [{"name": "run-a", "drawdown": 0.12, "api_key": "secret",
                                "path": "/private/result"}]}
 
-    async def reject_conversation(self, owner: str, conversation_id: str) -> None:
+    async def reject_conversation(self, owner: str, conversation_id: str, *,
+                                  preserve_configurations: bool = False) -> None:
         """Allow a new turn to advance the isolated conversation."""
         return None
 

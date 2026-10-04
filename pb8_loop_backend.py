@@ -46,6 +46,21 @@ def migrate_loop_bundle(bundle):
     return {'config': config, 'override_configs': overrides}
 
 
+def normalize_suite_coins(config):
+    """Mirror a disabled side's coin selection without changing trading direction."""
+    if not config.get('backtest', {}).get('suite_enabled'):
+        return
+    approved = config.get('live', {}).get('approved_coins')
+    if not isinstance(approved, dict) or approved.get('long') == approved.get('short'):
+        return
+    direction = configured_direction(config)
+    if direction == 'both':
+        raise ValueError('PB8 Suite requires identical live.approved_coins.long and .short lists. '
+                         'Both directions are active; select a common coin universe before starting.')
+    disabled = 'short' if direction == 'long' else 'long'
+    approved[disabled] = copy.deepcopy(approved.get(direction, []))
+
+
 class LoopBackend:
     """Use existing managed PB8 APIs without modifying a user's source configuration."""
     def __init__(self, root, store):
@@ -101,6 +116,7 @@ class LoopBackend:
                 if not isinstance(config['live'].get('approved_coins'), dict):
                     config['live']['approved_coins'] = {}
                 config['live'].setdefault('approved_coins', {})[side] = goals['coins'] if active else []
+        normalize_suite_coins(config)
         runtime = opt.pb8_runtime_status()
         if not runtime.get('ready'):
             raise ValueError('PB8 runtime is not ready')
@@ -452,6 +468,7 @@ class LoopBackend:
             config['backtest']['end_date'] = max(row['end_date'] for row in record['holdouts'])
         # Validate all requested coins/directions on the fixed reference conditions.
         config['live']['approved_coins'] = copy.deepcopy(record['initial_config']['live'].get('approved_coins'))
+        normalize_suite_coins(config)
         return config
 
     def observer_config(self, record, candidate, kind):

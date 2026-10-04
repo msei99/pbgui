@@ -260,14 +260,22 @@ def _live_position_size(position: dict) -> float:
     return abs(contracts * contract_size)
 
 
-def _live_position_price(position: dict, exchange: Any, symbol_ccxt: str) -> float:
-    """Return a fresh-ish position price, preferring exchange position fields."""
+def _position_payload_price(position: dict) -> float:
+    """Return the price carried by the position payload itself, or 0.0."""
     info = position.get("info", {}) if isinstance(position.get("info"), dict) else {}
     for source in (position, info):
         for key in ("markPrice", "mark_price", "lastPrice", "last_price", "indexPrice", "oraclePrice"):
             price = _safe_float(source.get(key), 0.0)
             if price > 0.0:
                 return price
+    return 0.0
+
+
+def _live_position_price(position: dict, exchange: Any, symbol_ccxt: str) -> float:
+    """Return a fresh-ish position price, preferring exchange position fields."""
+    price = _position_payload_price(position)
+    if price > 0.0:
+        return price
     try:
         ticker = exchange.instance.fetch_ticker(symbol_ccxt)
         for key in ("last", "mark", "bid", "ask"):
@@ -328,16 +336,8 @@ def _hyperliquid_open_orders(user_obj: Any, symbol: str | None = None) -> list[d
     return result
 
 
-def _live_open_orders_for_symbol(user_obj: Any, symbol: str) -> list[dict[str, Any]]:
-    """Fetch normalized live open orders for a dashboard symbol."""
-    if str(getattr(user_obj, "exchange", "")).lower() == "hyperliquid":
-        return _hyperliquid_open_orders(user_obj, symbol)
-    exchange = _get_exchange(user_obj)
-    symbol_ccxt = _symbol_to_ccxt(symbol)
-    if str(user_obj.exchange).lower() == "bitget":
-        raw_orders = exchange.fetch_all_open_orders(symbol_ccxt)
-    else:
-        raw_orders = exchange.instance.fetch_open_orders(symbol=symbol_ccxt)
+def _normalize_live_open_orders(raw_orders: Any) -> list[dict[str, Any]]:
+    """Keep open CCXT orders and normalize their price, amount and side fields."""
     result = []
     for order in raw_orders or []:
         if str(order.get("status") or "open").lower() not in {"open", "new"}:
@@ -351,6 +351,65 @@ def _live_open_orders_for_symbol(user_obj: Any, symbol: str) -> list[dict[str, A
         })
         result.append(normalized_order)
     return result
+
+
+def _live_open_orders_for_symbol(user_obj: Any, symbol: str) -> list[dict[str, Any]]:
+    """Fetch normalized live open orders for a dashboard symbol."""
+    if str(getattr(user_obj, "exchange", "")).lower() == "hyperliquid":
+        return _hyperliquid_open_orders(user_obj, symbol)
+    exchange = _get_exchange(user_obj)
+    symbol_ccxt = _symbol_to_ccxt(symbol)
+    if str(user_obj.exchange).lower() == "bitget":
+        raw_orders = exchange.fetch_all_open_orders(symbol_ccxt)
+    else:
+        raw_orders = exchange.instance.fetch_open_orders(symbol=symbol_ccxt)
+    return _normalize_live_open_orders(raw_orders)
+
+
+def _hyperliquid_dashboard_symbol(coin: str) -> str:
+    """Map a Hyperliquid coin to the dashboard symbol used for its positions."""
+    coin = str(coin or "").strip().upper()
+    if not coin:
+        return ""
+    return coin if coin.endswith(("USDT", "USDC")) else f"{coin}USDC"
+
+
+def _live_open_orders_by_symbol(
+    user_obj: Any, exchange: Any = None, *, settle_coins=("USDT", "USDC"),
+) -> dict[str, list[dict[str, Any]]] | None:
+    """Group a complete account order snapshot; failures use the per-symbol fallback."""
+    exchange_id = str(getattr(user_obj, "exchange", "")).lower()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    try:
+        if exchange_id == "hyperliquid":
+            for order in _hyperliquid_open_orders(user_obj):
+                symbol = _hyperliquid_dashboard_symbol((order.get("info") or {}).get("coin"))
+                if symbol:
+                    grouped.setdefault(symbol, []).append(order)
+            return grouped
+        if exchange_id not in {"bitget", "bybit", "okx", "binance"}:
+            return None
+        exchange = exchange or _get_exchange(user_obj)
+        if exchange_id == "bitget" and exchange.ensure_bitget_account_mode() is True:
+            raw_orders = exchange.fetch_all_open_orders(None)
+        else:
+            raw_orders = exchange.fetch_all_open_orders(None, settle_coins=settle_coins)
+    except Exception as exc:
+        _log(SERVICE, f"Batch open orders fetch failed, using per-symbol reads: {type(exc).__name__}", level="WARNING", user=user_obj.name)
+        return None
+    for order in _normalize_live_open_orders(raw_orders):
+        symbol = _dashboard_symbol_from_ccxt(order.get("symbol"))
+        if symbol:
+            grouped.setdefault(symbol, []).append(order)
+    return grouped
+
+
+def _classify_live_orders(live_orders: list[dict[str, Any]], side: str) -> tuple[int, float, float]:
+    """Classify DCA/TP for one position leg from normalized live open orders."""
+    filtered, unknown = _filter_live_orders_for_side(live_orders, side)
+    if not filtered and unknown:
+        filtered = [_build_order_line(order) for order in live_orders]
+    return _classify_position_orders(_order_rows_from_live_orders(filtered), side)
 
 
 def _order_rows_from_live_orders(orders: list[dict[str, Any]]) -> list[list[Any]]:
@@ -383,20 +442,27 @@ def _classify_orders_for_position(user_obj: Any, db: Any, symbol: str, side: str
     """Classify DCA/TP from live open orders with DB fallback."""
     if live:
         try:
-            live_orders = _live_open_orders_for_symbol(user_obj, symbol)
-            filtered, unknown = _filter_live_orders_for_side(live_orders, side)
-            if not filtered and unknown:
-                filtered = [_build_order_line(order) for order in live_orders]
-            return _classify_position_orders(_order_rows_from_live_orders(filtered), side)
+            return _classify_live_orders(_live_open_orders_for_symbol(user_obj, symbol), side)
         except Exception as exc:
             _log(SERVICE, f"Live order classification failed for '{user_obj.name}/{symbol}', falling back to DB: {exc}", level="WARNING", user=user_obj.name)
     orders = db.fetch_orders_by_symbol(user_obj.name, symbol) or []
     return _classify_position_orders(orders, side)
 
 
-def _hyperliquid_live_positions_for_user(user_obj: Any, db: Any) -> list[dict[str, Any]]:
-    """Build dashboard positions from Hyperliquid's authoritative account state."""
-    state = _hyperliquid_user_state(user_obj)
+def _hyperliquid_live_positions_for_user(
+    user_obj: Any,
+    db: Any,
+    detailed: bool = True,
+    state: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Build dashboard positions from Hyperliquid's authoritative account state.
+
+    ``detailed=False`` skips open-order classification (DCA/TP stay zero) for
+    callers that only need size, entry and uPnL.
+    """
+    if state is None:
+        state = _hyperliquid_user_state(user_obj)
+    orders_by_symbol: dict[str, list[dict[str, Any]]] | None = None
     result: list[dict[str, Any]] = []
     for item in state.get("assetPositions") or []:
         position = item.get("position", {}) if isinstance(item, dict) else {}
@@ -408,7 +474,7 @@ def _hyperliquid_live_positions_for_user(user_obj: Any, db: Any) -> list[dict[st
         coin = str(position.get("coin") or "").strip().upper()
         if not coin:
             continue
-        symbol = coin if coin.endswith(("USDT", "USDC")) else f"{coin}USDC"
+        symbol = _hyperliquid_dashboard_symbol(coin)
         side = "long" if raw_size > 0.0 else "short"
         size = abs(raw_size)
         entry = _safe_float(position.get("entryPx"), 0.0)
@@ -418,10 +484,16 @@ def _hyperliquid_live_positions_for_user(user_obj: Any, db: Any) -> list[dict[st
         dca = 0
         next_dca = 0.0
         next_tp = 0.0
-        try:
-            dca, next_dca, next_tp = _classify_orders_for_position(user_obj, db, symbol, side, live=True)
-        except Exception:
-            pass
+        if detailed:
+            if orders_by_symbol is None:
+                orders_by_symbol = _live_open_orders_by_symbol(user_obj)
+            try:
+                if orders_by_symbol is not None:
+                    dca, next_dca, next_tp = _classify_live_orders(orders_by_symbol.get(symbol, []), side)
+                else:
+                    dca, next_dca, next_tp = _classify_orders_for_position(user_obj, db, symbol, side, live=True)
+            except Exception:
+                pass
         result.append({
             "user":     user_obj.name,
             "exchange": user_obj.exchange,
@@ -439,9 +511,10 @@ def _hyperliquid_live_positions_for_user(user_obj: Any, db: Any) -> list[dict[st
     return result
 
 
-def _hyperliquid_live_balance_for_user(user_obj: Any) -> tuple[float, float]:
+def _hyperliquid_live_balance_for_user(user_obj: Any, state: dict[str, Any] | None = None) -> tuple[float, float]:
     """Return Hyperliquid wallet balance and uPnL from authoritative account state."""
-    state = _hyperliquid_user_state(user_obj)
+    if state is None:
+        state = _hyperliquid_user_state(user_obj)
     account_value = _safe_float((state.get("marginSummary") or {}).get("accountValue"), 0.0)
     upnl = 0.0
     for item in state.get("assetPositions") or []:
@@ -453,24 +526,32 @@ def _hyperliquid_live_balance_for_user(user_obj: Any) -> tuple[float, float]:
 
 def _live_balance_for_user(user_obj: Any, db: Any) -> tuple[float, float, float]:
     """Return live balance, uPnL and position entry exposure for a dashboard user."""
+    # Balance only needs size/entry/uPnL, so skip order and ticker reads (#397).
     if str(getattr(user_obj, "exchange", "")).lower() == "hyperliquid":
-        balance, upnl = _hyperliquid_live_balance_for_user(user_obj)
-        positions = _hyperliquid_live_positions_for_user(user_obj, db)
+        state = _hyperliquid_user_state(user_obj)
+        balance, upnl = _hyperliquid_live_balance_for_user(user_obj, state=state)
+        positions = _hyperliquid_live_positions_for_user(user_obj, db, detailed=False, state=state)
     else:
         exchange = _get_exchange(user_obj)
         balance = _safe_float(exchange.fetch_balance("swap"), 0.0)
-        positions = _live_positions_for_user(user_obj, db)
+        positions = _live_positions_for_user(user_obj, db, detailed=False)
         upnl = sum(_safe_float(pos.get("upnl"), 0.0) for pos in positions)
     pprices = sum(abs(_safe_float(pos.get("size"), 0.0) * _safe_float(pos.get("entry"), 0.0)) for pos in positions)
     return balance, upnl, pprices
 
 
-def _live_positions_for_user(user_obj: Any, db: Any) -> list[dict[str, Any]]:
-    """Fetch open positions directly from the user's exchange for dashboard display."""
+def _live_positions_for_user(user_obj: Any, db: Any, detailed: bool = True) -> list[dict[str, Any]]:
+    """Fetch open positions directly from the user's exchange for dashboard display.
+
+    ``detailed=False`` skips open-order classification and ticker lookups; price
+    then falls back to entry when the position payload carries no mark price.
+    """
     if str(getattr(user_obj, "exchange", "")).lower() == "hyperliquid":
-        return _hyperliquid_live_positions_for_user(user_obj, db)
+        return _hyperliquid_live_positions_for_user(user_obj, db, detailed=detailed)
     exchange = _get_exchange(user_obj)
     raw_positions = exchange.fetch_positions() or []
+    orders_by_symbol: dict[str, list[dict[str, Any]]] | None = None
+    batch_attempted = False
     result: list[dict[str, Any]] = []
     for position in raw_positions:
         if not isinstance(position, dict):
@@ -485,14 +566,27 @@ def _live_positions_for_user(user_obj: Any, db: Any) -> list[dict[str, Any]]:
         side = _live_position_side(position)
         entry = _safe_float(position.get("entryPrice") or position.get("entry_price"), 0.0)
         upnl = _safe_float(position.get("unrealizedPnl") or position.get("unrealisedPnl"), 0.0)
-        price = _live_position_price(position, exchange, symbol_ccxt or _symbol_to_ccxt(symbol))
         dca = 0
         next_dca = 0.0
         next_tp = 0.0
-        try:
-            dca, next_dca, next_tp = _classify_orders_for_position(user_obj, db, symbol, side, live=True)
-        except Exception:
-            pass
+        if detailed:
+            price = _live_position_price(position, exchange, symbol_ccxt or _symbol_to_ccxt(symbol))
+            if not batch_attempted:
+                batch_attempted = True
+                settle_coins = tuple(sorted({
+                    str(pos.get("symbol") or "").rsplit(":", 1)[-1]
+                    for pos in raw_positions if isinstance(pos, dict) and _live_position_size(pos) > 0
+                }))
+                orders_by_symbol = _live_open_orders_by_symbol(user_obj, exchange, settle_coins=settle_coins)
+            try:
+                if orders_by_symbol is not None:
+                    dca, next_dca, next_tp = _classify_live_orders(orders_by_symbol.get(symbol, []), side)
+                else:
+                    dca, next_dca, next_tp = _classify_orders_for_position(user_obj, db, symbol, side, live=True)
+            except Exception:
+                pass
+        else:
+            price = _position_payload_price(position) or entry
         result.append({
             "user":     user_obj.name,
             "exchange": user_obj.exchange,
@@ -2663,16 +2757,18 @@ def get_positions_data(
         positions = db.fetch_positions(user_obj) or []
         prices = db.fetch_prices(user_obj) or []
         used_db = True
+        price_by_symbol = {p[1]: p[3] for p in prices}
+        orders_by_symbol: dict[str, list] = {}
+        if positions:
+            for order in db.fetch_orders(user_obj) or []:
+                orders_by_symbol.setdefault(order[1], []).append(order)
         for pos in positions:
             symbol = pos[1]
             uname = pos[6]
             side = _db_position_side(pos)
-            orders = db.fetch_orders_by_symbol(uname, symbol) or []
+            orders = orders_by_symbol.get(symbol, [])
             dca, next_dca, next_tp = _classify_position_orders(orders, side)
-            price = 0.0
-            for p in prices:
-                if p[1] == symbol:
-                    price = p[3]
+            price = price_by_symbol.get(symbol, 0.0)
             pos_value = abs(_safe_float(pos[3], 0.0) * _safe_float(price, 0.0))
             all_positions.append({
                 "user":     uname,

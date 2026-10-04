@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import time
@@ -12,6 +13,172 @@ import pytest
 
 import ai_capabilities
 from ai_capabilities import AICapabilityError, AICapabilityService, restart_block_reason
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_optimizer_save_generates_reviewable_holdout_metadata(tmp_path, monkeypatch, existing):
+    """Fresh and existing proposals save generated provenance without relaxing pbgui protection."""
+    from scenario_templates import generate_scenario_template
+    parameters = {"template": "walk_forward", "start_date": "2025-01-01", "end_date": "2026-06-01",
+                  "window_days": 90, "stride_days": 90, "training_windows": 4, "holdout_windows": 1}
+    expected = generate_scenario_template(parameters)
+    current = {"pbgui": {"note": "preserve"}, "optimize": {}} if existing else None
+    monkeypatch.setattr(ai_capabilities, "load_ini_section", lambda section: {})
+
+    async def scenario():
+        """Inspect the immutable approval payload before any native save executes."""
+        service = AICapabilityService(tmp_path / "capabilities")
+        monkeypatch.setattr(service, "_current_pb8_bundle", lambda name: (copy.deepcopy(current), {}, "digest" if existing else None))
+        monkeypatch.setattr(service, "_validate_pb8_config", lambda name, config: copy.deepcopy(config))
+        monkeypatch.setattr(service, "_queue_preview", lambda config, overrides: {})
+        config = {"backtest": {}, "optimize": {}}
+        result = await service._propose_pb8_optimizer_config("a" * 32, "b" * 32, {
+            "name": "fresh_hype", "config": config, "action": "save", "scenario_template": parameters,
+        })
+        proposal = service.proposals[result["proposal_id"]]
+        assert proposal.status == "awaiting_approval"
+        assert proposal.config["pbgui"]["scenario_template"] == expected["provenance"]
+        assert proposal.config["backtest"]["scenarios"] == expected["training_scenarios"]
+        assert len(expected["training_scenarios"]) == 4 and len(expected["holdout_scenarios"]) == 1
+        assert not any(row in proposal.config["backtest"]["scenarios"] for row in expected["holdout_scenarios"])
+        assert any(row["path"].startswith("scenario_template") for row in result["preview"]["changes"])
+        assert config == {"backtest": {}, "optimize": {}}
+        if existing:
+            assert proposal.config["pbgui"]["note"] == "preserve"
+        second = AICapabilityService(tmp_path / "capabilities")
+        monkeypatch.setattr(second, "_current_pb8_bundle", lambda name: (copy.deepcopy(current), {}, "digest" if existing else None))
+        monkeypatch.setattr(second, "_queue_preview", lambda config, overrides: {})
+        restored = await second.list_proposals("a" * 32, "b" * 32)
+        assert restored[0]["payload_digest"] == proposal.payload_digest
+        assert second.proposals[result["proposal_id"]].config["pbgui"]["scenario_template"] == expected["provenance"]
+        assert any(row["path"].startswith("scenario_template") for row in restored[0]["preview"]["changes"])
+        await second.shutdown()
+        with pytest.raises(AICapabilityError, match="runtime metadata"):
+            await service._propose_pb8_optimizer_config("a" * 32, "c" * 32, {
+                "name": "unsafe", "config": {"pbgui": {"scenario_template": expected["provenance"]}},
+            })
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_candle_inventory_reads_native_dates_and_excludes_paths(tmp_path, monkeypatch):
+    """Read real inventory projections, normalize symbols and distinguish missing data."""
+    from api import market_data
+    calls = []
+
+    def inventory(exchange, view):
+        """Supply synthetic native rows without touching market files or caches."""
+        calls.append((exchange, view))
+        if exchange == "bybit":
+            return []
+        return [{"coin": "HYPE_USDC:USDC", "oldest_day": "2024-12-14", "newest_day": "2026-09-27",
+                 "n_days": 650, "coverage_pct": 97.5, "missing_days_count": 5,
+                 "path": "/private/runtime", "unrelated_secret": "do not expose"},
+                {"coin": "BTC_USDC:USDC", "oldest_day": "2020-01-01", "newest_day": "2026-10-01"}]
+
+    monkeypatch.setattr(market_data, "_collect_inventory_rows", inventory)
+
+    async def scenario():
+        """Use the provider dispatch path, including the analysis-only read boundary."""
+        service = AICapabilityService(tmp_path / "capabilities")
+        monkeypatch.setattr(service, "analysis_only", lambda owner, chat: True)
+        result = await service.dispatch("owner", "chat", "get_candle_inventory", {
+            "exchanges": ["hyperliquid", "bybit"], "coins": ["hype"],
+        })
+        hl, bybit = result["results"]
+        assert hl["start_date"] == "2024-12-14"
+        assert hl["end_date"] == "2026-09-27"
+        assert hl["available"]
+        assert len(hl["datasets"]) == 3
+        assert hl["datasets"][0]["coverage_pct"] == 97.5
+        assert hl["datasets"][0]["missing_days_count"] == 5
+        assert not bybit["available"]
+        assert bybit["start_date"] is None and bybit["end_date"] is None
+        assert calls == [("hyperliquid", "1m"), ("hyperliquid", "1m_api"), ("hyperliquid", "pb8_cache"), ("bybit", "1m"), ("bybit", "pb8_cache")]
+        assert "private" not in json.dumps(result) and "unrelated_secret" not in json.dumps(result)
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("arguments", [
+    {"exchanges": ["../bybit"], "coins": ["HYPE"]},
+    {"exchanges": ["bybit"], "coins": ["../HYPE"]},
+    {"exchanges": ["bybit"], "coins": ["HYPE\x00"]},
+    {"exchanges": [], "coins": ["HYPE"]},
+    {"exchanges": ["bybit"], "coins": ["HYPE"] * 21},
+])
+def test_candle_inventory_rejects_invalid_identifiers_before_read(tmp_path, monkeypatch, arguments):
+    """Invalid external identifiers never reach inventory or filesystem helpers."""
+    from api import market_data
+
+    def unexpected_read(*args):
+        """Fail if an invalid request gets as far as storage."""
+        pytest.fail("Invalid request reached inventory")
+
+    monkeypatch.setattr(market_data, "_collect_inventory_rows", unexpected_read)
+    service = AICapabilityService(tmp_path / "capabilities")
+    with pytest.raises(AICapabilityError):
+        service._get_candle_inventory(arguments)
+
+
+def test_pb8_patch_migrates_legacy_source_without_writing_it(tmp_path, monkeypatch):
+    """Proposal snapshots migrate legacy HSL and keep stable conflict digests."""
+    from api import optimize_v8
+    import pb8_config
+
+    source = tmp_path / "config.json"
+    original = '{"legacy_hsl": true}'
+    source.write_text(original)
+    migrated = {"config_version": "v8.6.0", "optimize": {"iters": 20}}
+    calls = []
+
+    def strict_loader(path):
+        """Simulate the native rejection of the still-unsaved legacy file."""
+        assert path == source
+        raise pb8_config.PB8ConfigurationError("use passivbot tool migrate-hsl")
+
+    def migrate(operation, **kwargs):
+        """Return the editor's native migration without touching the source."""
+        calls.append(operation)
+        assert kwargs["config_path"] == str(source)
+        return {"config": copy.deepcopy(migrated), "hsl_migration_required": True}
+
+    monkeypatch.setattr(optimize_v8, "_config_lock", nullcontext)
+    monkeypatch.setattr(optimize_v8, "_config_file", lambda name: source)
+    monkeypatch.setattr(optimize_v8, "_config_dir", lambda name: tmp_path)
+    monkeypatch.setattr(optimize_v8, "load_pb8_config", strict_loader)
+    monkeypatch.setattr(pb8_config, "_call_migration_helper", migrate)
+    monkeypatch.setattr(optimize_v8, "_load_override_payloads", lambda config, directory: {})
+
+    async def scenario():
+        """Exercise patch preparation and repeated approval conflict snapshots."""
+        service = AICapabilityService(tmp_path / "capabilities")
+        first = service._current_pb8_bundle("legacy")
+        assert first[0] == migrated
+        assert service._current_pb8_bundle("legacy")[2] == first[2]
+        captured = {}
+
+        async def create(owner, conversation, action, name, config):
+            """Capture a proposal without approval or runtime mutation."""
+            captured.update(config)
+            return {"proposal_id": "a" * 32}
+
+        monkeypatch.setattr(service, "_validate_pb8_config", lambda name, config: config)
+        monkeypatch.setattr(service, "_create_proposal", create)
+        await service._propose_pb8_config_patch("owner", "chat", {
+            "name": "legacy",
+            "operations": [{"op": "replace", "path": "/optimize/iters", "value": 30}],
+        })
+        assert captured == {**migrated, "optimize": {"iters": 30}}
+        migrated["optimize"]["iters"] = 40
+        assert service._current_pb8_bundle("legacy")[2] != first[2]
+        assert source.read_text() == original
+        assert calls == ["load_hsl_editor"] * 4
+        await service.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_registry_hides_jev_for_owner_without_openrouter(
@@ -60,6 +227,16 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
     message_names = {item["name"] for item in service.messages_tools()}
 
     assert {
+        "get_ai_loop_configs",
+        "get_ai_loop_runs",
+        "read_ai_loop_log",
+        "get_vast_preferences",
+        "get_candle_inventory",
+        "list_bot_logs",
+        "read_bot_log",
+        "propose_ai_loop_config",
+        "propose_ai_loop_run",
+        "propose_vast_preferences",
         "get_capability_registry",
         "list_optimizer_configs",
         "get_optimizer_config",
@@ -2296,3 +2473,27 @@ def test_jev_optimizer_tool_proposes_without_spending_until_approval(tmp_path: P
         await service.shutdown()
 
     asyncio.run(exercise())
+
+
+def test_native_pb8_error_retains_safe_reason(tmp_path, monkeypatch):
+    """Native PB8 errors are actionable without leaking host paths or arguments."""
+    from pb8_config import PB8ConfigurationError
+    logged = []
+    monkeypatch.setattr(ai_capabilities, "_log", lambda *args, **kwargs: logged.append(args[1]))
+
+    async def scenario():
+        """Dispatch a synthetic native error through the actual capability boundary."""
+        service = AICapabilityService(tmp_path / "caps")
+
+        def invalid(args):
+            """Reject a synthetic selector without reading a config."""
+            raise PB8ConfigurationError("optimize.fixed_params selector matches no active bounds")
+
+        monkeypatch.setattr(service, "_get_optimizer_config", invalid)
+        with pytest.raises(AICapabilityError, match="PB8 validation failed: optimize.fixed_params"):
+            await service.dispatch("owner", "chat", "get_optimizer_config", {})
+        assert "get_optimizer_config" in logged[0] and "active bounds" in logged[0]
+        assert "withheld" in service._path_free_error("invalid file '/private/config.json'")
+        await service.shutdown()
+
+    asyncio.run(scenario())

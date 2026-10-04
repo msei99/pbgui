@@ -211,6 +211,7 @@ def _metric_type_help_text(groups: list[str]) -> str:
 
 
 def get_optimize_limits_meta_payload() -> dict[str, Any]:
+    """Describe limit fields exposed by legacy and current PB7 revisions."""
     limits_mod = _import_pb7_module("config.limits")
     scoring_mod = _import_pb7_module("config.scoring")
 
@@ -238,6 +239,22 @@ def get_optimize_limits_meta_payload() -> dict[str, Any]:
         if goal is not None:
             default_goal_map[metric] = goal
 
+    stat_options = getattr(limits_mod, "SUPPORTED_LIMIT_STATS", None)
+    limit_basis_field = "stat"
+    if stat_options is None:
+        limit_basis_field = "reducer"
+        stat_options = getattr(limits_mod, "SUPPORTED_REDUCERS", None)
+    if stat_options is None:
+        try:
+            reducers_mod = _import_pb7_module("config.reducers")
+            stat_options = getattr(reducers_mod, "SUPPORTED_REDUCERS", None)
+        except (ImportError, PB7ConfigurationError) as exc:
+            _log(SERVICE, f"PB7 reducer metadata unavailable: {type(exc).__name__}", level="WARNING")
+    if stat_options is None:
+        _log(SERVICE, "PB7 exposes no reducer metadata; using legacy limit statistics", level="WARNING")
+        stat_options = {"min", "max", "mean", "std", "median"}
+        limit_basis_field = "stat"
+
     return {
         "type_options": ["all", *groups],
         "type_help": _metric_type_help_text(groups),
@@ -258,7 +275,8 @@ def get_optimize_limits_meta_payload() -> dict[str, Any]:
             "inside_range",
             "auto",
         ],
-        "stat_options": [""] + sorted(limits_mod.SUPPORTED_LIMIT_STATS),
+        "stat_options": [""] + sorted(stat_options),
+        "limit_basis_field": limit_basis_field,
         "goal_options": list(scoring_mod.OBJECTIVE_GOALS),
         "default_goal_map": default_goal_map,
         "currency_help": pbgui_help.limit_currency,

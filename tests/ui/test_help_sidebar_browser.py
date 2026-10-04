@@ -100,7 +100,7 @@ def test_information_menu_opens_new_help_page_with_real_navigation():
                   <script>window.PBGUI_NAV_CONFIG={current:'welcome',authenticated:true,apiBase:'/prefix/api'};</script>
                   <script src="/prefix/app/pbgui_nav.js?v=test"></script>''')
             elif path == '/prefix/app/help.html':
-                assert parse_qs(url.query).get('v') == ['1769']
+                assert parse_qs(url.query).get('v') == ['1770']
                 route.fulfill(body=html, content_type='text/html')
             elif path.startswith('/prefix/app/'):
                 asset = ROOT / 'frontend' / path.removeprefix('/prefix/app/')

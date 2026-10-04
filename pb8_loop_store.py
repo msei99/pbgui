@@ -214,6 +214,17 @@ def apply_run_limit(settings, config):
     mode = settings.get('run_limit_mode', 'config')
     if mode != 'config':
         result.setdefault('optimize', {})['iters'] = settings['run_iters'] if mode == 'iters' else 10_000_000
+    # GPU completion timestamps have finite precision. A strict 1.0 boundary
+    # can classify a fully completed proxy differently from Rust (0.999994662
+    # versus 1.0). Only the private optimizer copy uses the previously used 0.99 floor;
+    # saved configs and independent exact-comparison completeness stay intact.
+    if settings.get('execution') in {'vast', 'gpu'}:
+        for limit in result.get('optimize', {}).get('limits', []):
+            if (isinstance(limit, dict) and limit.get('enabled', True)
+                    and limit.get('metric') == 'backtest_completion_ratio'
+                    and limit.get('penalize_if') == 'less_than'
+                    and limit.get('value') == 1.0):
+                limit['value'] = 0.99
     return result
 
 
@@ -246,6 +257,34 @@ def validate_gpu_drift(config):
     required = max(required, values['drift_min_samples'])
     if values['drift_window'] < required:
         raise ValueError(f'optimize.gpu.drift_window must be at least {required} for the configured validation/probe allocation')
+
+
+def cloud_loop_metric_contract():
+    """Expose the pinned worker's metric eligibility, separate from exact goals."""
+    from vast_config_validation import METRICS, PROFILE_REVISION, _METRIC_CONTRACT
+    return {'execution': 'vast', 'worker_revision': PROFILE_REVISION,
+            'allowed_metrics': sorted(METRICS),
+            'exact_only_metrics': sorted(_METRIC_CONTRACT['exact_only_metrics']),
+            'applies_to': ['optimize.scoring', 'optimize.limits'],
+            'exact_goal_metrics_restricted': False,
+            'rule': 'Use only allowed_metrics for Vast.ai optimizer scoring and limits. '
+                    'Exact-only metrics remain usable in the exact comparison rubric and results. '
+                    'There is no automatic CPU fallback for an unsupported GPU objective.'}
+
+
+def validate_cloud_loop_metrics(config, execution):
+    """Reject unsupported cloud objectives before approval or job preparation."""
+    if execution != 'vast':
+        return
+    from vast_config_validation import METRICS, cloud_alternatives
+    for group in ('scoring', 'limits'):
+        for index, entry in enumerate(config.get('optimize', {}).get(group) or []):
+            metric = entry.get('metric') if isinstance(entry, dict) else entry
+            if not isinstance(metric, str) or metric not in METRICS:
+                path = f'optimize.{group}.{index}.metric'
+                message = f'Unsupported cloud metrics: {metric}.'
+                alternatives = ' '.join(cloud_alternatives(path, message))
+                raise ValueError(f'Vast.ai {path}: {message} {alternatives}')
 
 
 def validate_change(record, config, overrides):
@@ -293,6 +332,7 @@ def validate_change(record, config, overrides):
     expected = 'gpu' if record['settings']['execution'] in {'gpu', 'vast'} else 'pymoo'
     if config['optimize'].get('backend') != expected:
         raise ValueError('Configuration must honor the selected execution target')
+    validate_cloud_loop_metrics(config, record['settings']['execution'])
     if expected == 'gpu':
         validate_gpu_drift(config)
     for row in windows(config):
@@ -309,7 +349,10 @@ def validate_change(record, config, overrides):
     if coins:
         approved = config['live'].get('approved_coins') or {}
         for side in ('long', 'short'):
-            expected_coins = sorted(coins) if direction in {'both', side} else []
+            # Suite uses one shared coin universe even for a disabled side.
+            # Trading direction remains pinned by the risk/bounds checks below.
+            shared_universe = config['backtest'].get('suite_enabled', False)
+            expected_coins = sorted(coins) if shared_universe or direction in {'both', side} else []
             if not isinstance(approved, dict) or sorted(approved.get(side) or []) != expected_coins:
                 raise ValueError('Configuration must preserve requested coins and trading direction')
     if coins:

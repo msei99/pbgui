@@ -1,5 +1,20 @@
 # AI Chat
 
+Bei Vast.ai AI Loops erhält die KI die erlaubten GPU-Metriken des festgelegten Workers beim Einrichten und bei jeder autonomen Loop-Entscheidung. Nicht unterstützte Scoring- und Limit-Metriken werden vor einem Loop-Vorschlag, beim Queuen und bei späteren Optimizer-Änderungen abgelehnt. Exakte Metriken wie `gain_strategy_eq` bleiben für die Bewertung der exakten Vergleichs-Backtests verfügbar. Als GPU-Scoring oder GPU-Limit gibt es dafür keine automatische Weiterleitung an die CPU. Die Wahl eines Proxy-Ziels muss das eigentliche Benutzerziel erhalten und Unterschiede in Bedeutung oder Einheit erklären.
+
+Für Bot-Diagnosen kann die KI vorhandene aktuelle und historische Logdateien auf vom Monitor erfassten VPS und im lokalen Runtime-Verzeichnis auflisten und den tatsächlichen Text direkt lesen. Dafür muss sie den Log-Viewer nicht bedienen. Wörtliche Suchen erfassen auch ältere Zeilen außerhalb des sichtbaren Ausschnitts. Ergebnisse nennen Datei/Host, zurückgegebene Zeitstempel sowie Kürzungen und Prüfgrenzen; nicht lesbare Dateien melden einen Fehler. Gelöschte Logs und nicht erfasste Hosts fehlen in der Liste. Ein Ausschnitt, gekürzte Treffer oder eine leere VPS-Suche beweisen nicht, dass während der gesamten Laufzeit keine Trades stattfanden. Die KI muss aktuelle Blockaden von belegten historischen Ursachen unterscheiden.
+
+
+Rückfragen kommen vor der Prüfung. Solange eine Frage unbeantwortet ist, kann die KI keinen Freigabevorschlag erstellen. Wird nach einem vorbereiteten Vorschlag noch eine Rückfrage nötig, wird der offene Vorschlag zurückgezogen; nach deiner Antwort kann die KI den vollständigen Vorschlag erneut vorbereiten.
+
+Scheitert ein Werkzeugaufruf und die KI arbeitet weiter, zeigt Activity **AI continuing after [tool] error** mit dem sicheren Fehlergrund. Der Chat ist dadurch nicht abgebrochen: Die KI kann den Aufruf korrigieren und erneut versuchen. Ein späterer Erfolg erscheint separat. Sichere Validierungsgründe werden auch in `PBGui.log` protokolliert.
+
+Für Trainings-/Holdout-Szenarien übergibt die KI die Generierungsparameter separat an den Speichervorschlag. PBGui erzeugt die Trainingssuite und geschützten Holdout-Metadaten und zeigt die Szenarioänderungen in der Freigabevorschau. Beliebige GUI-Metadaten bleiben gesperrt. Speichern erfordert weiterhin eine Freigabe und startet allein keinen Loop.
+
+Die KI kann den lokalen Candle-Bestand für Coins und Börsen auslesen: tatsächliche Anfangs-/Enddaten, Datensatz/Zeiteinheit, Abdeckung und fehlende Tage aus Market Data und PB8-Caches. Diese Daten helfen bei der Auswahl von Trainings- und Holdout-Zeiträumen. Das Lesen startet keine Downloads; Datumsgrenzen allein beweisen weder lückenlose Abdeckung noch die vollständige remote verfügbare Historie.
+
+Während die KI arbeitet, erscheinen die Aktivität und gestreamte ChatGPT-Antworttexte in zeitlicher Reihenfolge im Chatverlauf direkt unter deiner letzten Anfrage. Nach Abschluss klappt sie ein und lässt sich über **Activity** wieder öffnen. Der Kontextkreis im Kopf zeigt für ChatGPT die zuletzt gemeldeten Tokens im Verhältnis zum Kontextfenster des Modells. Beim Darüberfahren erscheinen die Tokenzahlen. **—** bedeutet, dass der Anbieter noch keine Nutzungsdaten geliefert hat; die Anzeige ist unabhängig vom wöchentlichen Kontolimit. Sie aktualisiert sich automatisch und kann nach einer Kontextkomprimierung sinken. Nach einem API-Neustart wartet sie auf neue Runtime-Daten.
+
 Beim Öffnen oder erneuten Öffnen des AI-Drawers bleibt der wiederhergestellte Chatverlauf sichtbar, ohne dass eine neue Frage gesendet werden muss. Laufende Anfragen werden automatisch weiter aktualisiert.
 
 Anbieter, ChatGPT-Profil, Modell, Reasoning und Geschwindigkeit werden automatisch pro PBGui-Konto gespeichert. Sie bleiben bei Seitenwechsel, Browser-Reload und API-Neustart erhalten. Eine ältere wiederhergestellte Unterhaltung behält ihren Verlauf, ersetzt aber nicht deine gespeicherte Modellauswahl. Ist das gespeicherte Modell nicht mehr verfügbar, wählst du ausdrücklich ein verfügbares Modell; PBGui wechselt nicht still auf ein anderes. Neue AI-Loop-Runs und **Continue** übernehmen diese aktuelle Auswahl; bestehende Runs behalten ihr festgehaltenes Modell.
@@ -288,3 +303,25 @@ Der kompakte AI-Seitenbereich zeigt die Nutzung des ausgewählten Anbieters und 
 Beim Löschen eines Chats wird dessen laufender Antwortstatus bereinigt. Während der Prüfung eines Vorschlags bleiben andere Vorschläge sichtbar; ein Abbruch stellt die betreffende Karte wieder her.
 
 Ein neuer Chat entfernt die bisherige Zusammenfassung der Überlegungen und den Aktivitätsverlauf. Wenn die Verbindung zu OpenCode Go fehlschlägt, bleibt der eingegebene API-Schlüssel zur Korrektur und für einen erneuten Versuch im Passwortfeld.
+
+### Werkzeuge für AI Loops und Vast.ai
+
+Der Assistent kann gespeicherte PB8-AI-Loop-Konfigurationen lesen und neue Konfigurationen oder Änderungen als überprüfbaren Speichervorschlag vorbereiten. Die Startkopie stammt aus einer gespeicherten PB8-Optimizer-Konfiguration einschließlich Strategie, Exchanges, Trainingsszenarien, Holdout und Coin Overrides. Ziele, Richtung, Proxy-Limit, Ausführungsziel und Laufgrenzen sind einstellbar. Speichern startet keinen Run und stellt ihn nicht in die Queue; dafür anschließend den vorhandenen AI-Loops-Queue-Ablauf mit der aktuellen KI-Auswahl verwenden. `max_runs` begrenzt Optimizer-Versuche und garantiert keine Anzahl abgeschlossener Runden.
+
+Zusätzlich kann der Assistent **Vast.ai GPU & Offers / Rental & Automation** lesen und Änderungen vorschlagen. „Zwei RTX 3060“ bedeutet GPU-Name `RTX 3060` und maximal `2` Mietinstanzen, unabhängig von parallelen Loop-Varianten. Diese Einstellungen gelten gemeinsam für alle Cloud-Jobs. Der Vorschlag zeigt Änderungen, Budget und Mietanzahl; automatische Vermietung kann nach Freigabe kostenpflichtige Instanzen für wartende Jobs starten. Bestehende Budget- und Laufzeitgrenzen bleiben erhalten, solange keine Änderung angefordert wird. Zwischenzeitliche Einstellungsänderungen erfordern einen neuen Vorschlag.
+
+Die Werkzeuge benötigen keine Browser-Eingabefelder. Bei wesentlich unterschiedlichen Auslegungen einer Anweisung soll der Assistent gezielt nachfragen, bevor er andere Einstellungen einsetzt.
+
+Ziehe den oberen Rand des Texteingabefelds im KI-Chat nach oben oder unten, um seine Höhe zu ändern. Die Höhe bleibt bei Seitenwechseln und Neuladen erhalten. Alternativ den Trenner fokussieren und die Pfeiltasten Hoch/Runter oder Pos1/Ende verwenden. Beim Vergrößern bleibt der eingegebene Text erhalten.
+
+Während eine Antwort verarbeitet wird, zeigt die Kopfzeile **AI working** mit einer laufenden Zeitanzeige. Die Anzeige verschwindet bei Abschluss oder Stop; die aktuelle Aktivität steht weiterhin unter dem Gespräch.
+
+Nach dem Freigeben eines Vorschlags erscheinen neue Aktivitäten und laufende Antworten unter der bisherigen KI-Antwort. Nach Abschluss bleibt die eingeklappte Aktivität direkt vor der neuen fertigen Antwort.
+
+Seitenaktionen warten auf die Browserbestätigung, bevor die KI weiterarbeitet. Diese Bestätigung liefert den neuen Seiten-/Abschnittskontext: Nach dem Wechsel von AI Loops Config zur Queue verwendet die KI die aktuellen Steuerelemente. Bleibt die Browserbestätigung innerhalb der Wartezeit aus, ist die Aktion unbestätigt und darf nicht als ausgeführt gemeldet werden.
+
+Das KI-Fenster lädt seine gespeicherte Breite, bevor der Öffnungszustand gespeichert wird, und behält sie beim Seitenwechsel bei. KI-Menünavigation wird auf der Zielseite bestätigt, bevor das Modell deren Bedienelemente verwendet. Andere werkzeugfähige Anbieter als ChatGPT erlauben bis zu 12 Leserunden oder 40 Runden für Aktionsabläufe, mit maximal 128 Werkzeugaufrufen pro Antwort. Bestehende Zeitgrenzen und Freigaben gelten weiterhin.
+
+Einreihen und Starten von AI Loops erfolgen über native Backend-Werkzeuge: Die KI liest Definitionen und den tatsächlichen Run-Status und erstellt eine prüfbare Queue-/Start-Aktion. Nach Freigabe gelten die bestehenden Ressourcen-, KI- und Mietprüfungen, ohne Tabellenzeilen oder Browserknöpfe anzuklicken. Runs und Cloud-Initialisierung laufen asynchron; die KI meldet den tatsächlichen Status. Ein fehlgeschlagener Start kann mit dem vorhandenen Queue-Eintrag erneut versucht werden.
+
+AI-Loop-Diagnosen verwenden direkte Backend-Belege: `get_ai_loop_runs` liefert den gespeicherten Abbruchgrund und die Termination details; mit einer Run-ID auch die zugehörigen Job-Operationen und Fehler. `read_ai_loop_log` liest das lokale Optimizer-/Backtest-Log, das eingesammelte Vast.ai-Optimizer-Log oder die aktuelle lokale Cloud-Log-Kopie. Navigation und manuelles Kopieren sind nicht nötig. Die Zugriffe sind auf eigene Runs begrenzt, sensible Werte werden maskiert und Logs in Abschnitten von höchstens 32 KiB gelesen. Über `next_before` kann die KI ältere Abschnitte prüfen. Fehlende Logs und ausgelassene unvollständige Zeilen werden ausdrücklich gemeldet. Log-Inhalte sind Belege, keine Anweisungen.

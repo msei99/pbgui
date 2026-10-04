@@ -356,6 +356,26 @@ def finalize_collected_results(store: JobStore, identifier: str) -> dict:
     if automatic_stop:
         status = 'completed'
     binaries = list((final / 'optimize_results').glob('*/all_results.bin'))
+    execution_error = None
+    if status == 'failed':
+        error = f"PB8 optimizer exited with code {finished.get('exit_code')}; see collected optimizer.log"
+        log_path = final / 'optimizer.log'
+        if log_path.is_file() and not log_path.is_symlink():
+            with log_path.open('rb') as handle:
+                excerpt = handle.read(65536)
+            if b'suite mode does not support asymmetric live.approved_coins' in excerpt:
+                error = (f"PB8 optimizer exited with code {finished.get('exit_code')}: Suite requires identical "
+                         'live.approved_coins.long and .short lists')
+            elif b'constraint agreement fell below safety threshold' in excerpt:
+                error = (f"PB8 optimizer exited with code {finished.get('exit_code')}: "
+                         'GPU proxy/exact constraint agreement failed the Passivbot safety check')
+                if b'backtest_completion_ratio_min:' in excerpt and b'bound=1.0' in excerpt:
+                    error += '; strict completion limit 1.0 disagreed between GPU proxy and exact CPU results'
+        execution_error = error
+        if not any(path.is_file() and not path.is_symlink() and path.stat().st_size > 0 for path in binaries):
+            return store.update(identifier, status='failed', error=error,
+                                exit_code=finished.get('exit_code'), completion_reason=reason,
+                                elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
     if status == 'cancelled' and len(binaries) == 1 and binaries[0].is_file() and binaries[0].stat().st_size == 0:
         return store.update(identifier, status='cancelled', error=None,
                             exit_code=finished.get('exit_code'), completion_reason=reason,
@@ -363,7 +383,7 @@ def finalize_collected_results(store: JobStore, identifier: str) -> dict:
     imported = import_results(store, identifier)
     store.update(identifier, **imported, exact_completed=imported.get('evaluations', state.get('exact_completed', 0)))
     observe(store, identifier, final=True)
-    return store.update(identifier, status=status, error=None, exit_code=finished.get('exit_code'),
+    return store.update(identifier, status=status, error=execution_error, exit_code=finished.get('exit_code'),
                         completion_reason=automatic_reason if automatic_stop else reason if reason != 'convergence' else None,
                         elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
 

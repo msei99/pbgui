@@ -1,11 +1,21 @@
 """Conservative config-only estimates of full-candidate candle workload."""
 from datetime import date
+from functools import lru_cache
 import math
 from pathlib import Path
+from threading import RLock
 
 from logging_helpers import human_log as _log
 
 SERVICE = "OptimizerWorkload"
+_snapshot_cache_lock = RLock()
+
+
+@lru_cache(maxsize=256)
+def _estimate_snapshot_cached(path, signature):
+    """Cache immutable estimates by file identity and modification metadata."""
+    from pb8_config import load_pb8_config
+    return estimate_coin_candles(load_pb8_config(Path(path)))
 
 
 def _coins(value):
@@ -83,10 +93,12 @@ def estimate_snapshot(path, root):
         if not path.exists():
             return None
         path.resolve().relative_to(root.resolve())
-        if any(part.is_symlink() for part in (path, *path.parents)) or path.stat().st_size > 16 * 1024**2:
+        stat = path.stat()
+        if any(part.is_symlink() for part in (path, *path.parents)) or stat.st_size > 16 * 1024**2:
             return None
-        from pb8_config import load_pb8_config
-        return estimate_coin_candles(load_pb8_config(path))
+        signature = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_dev, stat.st_ino)
+        with _snapshot_cache_lock:
+            return _estimate_snapshot_cached(str(path.resolve()), signature)
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
         _log(SERVICE, 'Cannot estimate optimizer snapshot: ' + type(exc).__name__, level='WARNING')
         return None

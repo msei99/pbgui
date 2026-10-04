@@ -30,6 +30,7 @@ def dashboard_data(monkeypatch):
     db.fetch_positions.side_effect = lambda user: positions[user.name]
     db.fetch_prices.return_value = [[1, "ETHUSDT", 0, 110.0]]
     db.fetch_orders_by_symbol.return_value = []
+    db.fetch_orders.return_value = []
     all_users = SimpleNamespace(
         list=lambda: list(users),
         find_user=lambda name: users.get(name),
@@ -60,7 +61,7 @@ def test_live_balance_exposure_uses_absolute_notional(dashboard_data, monkeypatc
     """Signed live position sizes must still produce gross exposure."""
     _, users, _ = dashboard_data
     monkeypatch.setattr(dashboard, "_get_exchange", lambda _: SimpleNamespace(fetch_balance=lambda _: 1000.0))
-    monkeypatch.setattr(dashboard, "_live_positions_for_user", lambda *_: [
+    monkeypatch.setattr(dashboard, "_live_positions_for_user", lambda *_args, **_kwargs: [
         {"size": 1.0, "entry": 100.0, "upnl": 0.0},
         {"size": -1.0, "entry": 100.0, "upnl": 0.0},
     ])

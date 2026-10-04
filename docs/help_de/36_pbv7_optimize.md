@@ -1,5 +1,9 @@
 # PBv7 Optimierung
 
+Die Queue aktualisiert sich bei Änderungen automatisch. Hintergrundtabs pausieren die Queue-Darstellung und Ergebnisabfragen; beim Zurückkehren wird die aktuelle Ansicht aktualisiert, während Auswahlen und ungespeicherte Eingaben erhalten bleiben. Results und Pareto werden während eines laufenden Jobs weiterhin aktualisiert, auch wenn sein Queue-Status unverändert bleibt.
+
+Der Limit-Editor unterstützt sowohl ältere PB7-Statistiken als auch die aktuellen Suite-Reducer der installierten Passivbot-Version.
+
 Können PB7-Metadaten wegen einer fehlenden Laufzeitabhängigkeit nicht importiert werden, liefert das Öffnen der Seite einen HTTP-503-Konfigurationsfehler mit Details zur Abhängigkeit statt eines allgemeinen Serverfehlers. Repariere die konfigurierte PB7-Installation vor einem erneuten Versuch.
 
 Die **PBv7 Optimize** Seite wird jetzt als eigenständige **FastAPI + Vanilla JS** Seite geöffnet.

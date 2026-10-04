@@ -25,6 +25,8 @@ Top navigation (#topnav)
 - **Dialog:** a temporary interaction layered over the current page. A menu destination must not become a floating dialog over an otherwise empty background.
 - **Help distinction:** **Information → Help** opens a full page with a topic sidebar. **Guide** opens a floating help window while retaining the current page, including when clicked on Help itself. Test these as two separate paths.
 - Do not add outside-click dismissal to dialogs. Retain explicit close actions.
+- The shared AI drawer message input resizes vertically using the separator along its top edge. Drag upward to enlarge; Arrow Up/Down and Home/End provide keyboard control. Persist only its browser-local height, clamp it to the viewport, and preserve the draft while resizing. The drawer's side handle remains responsible for width.
+- The AI drawer shows activity and streamed ChatGPT assistant text inline in chronological order after the current turn’s last visible message while working (after the previous assistant answer for approval continuations), then collapses it into an expandable history after completion. Its header shows elapsed work time and a compact context usage ring based on provider telemetry; unavailable usage is shown explicitly rather than estimated.
 - Embedded components, such as an internal LogViewerPanel sidebar, keep their component layout. Do not give them duplicate page-shell IDs or the global page-sidebar width.
 
 ### Concise UI text and on-demand help

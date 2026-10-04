@@ -521,3 +521,17 @@ def test_approved_jev_result_is_forwarded_to_original_chat(monkeypatch) -> None:
         SimpleNamespace(user_id="owner"),
     ))
     assert json_body(response)["continuation"]["status"] == "queued"
+
+
+def test_page_action_ack_passes_current_context(monkeypatch):
+    """The authenticated acknowledgement route forwards newly collected page controls."""
+    class FakeService:
+        """No real conversation, provider or runtime data is touched."""
+        async def acknowledge_ui_action(self, owner, conversation_id, action_id, context=None):
+            """Verify the latest Queue section crosses the API boundary."""
+            assert len(owner) == 32 and conversation_id == 'a' * 32 and action_id == 'c' * 32
+            assert context == {'page_key': 'v8_optimize', 'section': 'loops-queue'}
+    monkeypatch.setattr(ai_api, 'get_ai_chat_service', lambda: FakeService())
+    body = ai_api.UIActionAcknowledgement(context={'page_key': 'v8_optimize', 'section': 'loops-queue'})
+    response = asyncio_run(ai_api.acknowledge_ui_action('a' * 32, 'c' * 32, SimpleNamespace(user_id='owner'), body))
+    assert json_body(response) == {'status': 'acknowledged'}

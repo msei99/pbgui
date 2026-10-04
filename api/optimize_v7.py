@@ -578,7 +578,13 @@ def _parse_log_number(value) -> Optional[float]:
         return None
 
 
-def _read_optimize_log_excerpt(log_path: Path, *, head_kb: int = 32, tail_kb: int = 512) -> str:
+def _read_optimize_log_excerpt(
+    log_path: Path,
+    *,
+    head_kb: int = 32,
+    tail_kb: int = 512,
+    raise_errors: bool = False,
+) -> str:
     if not log_path.exists():
         return ""
     try:
@@ -596,6 +602,8 @@ def _read_optimize_log_excerpt(log_path: Path, *, head_kb: int = 32, tail_kb: in
             tail = handle.read().decode("utf-8", errors="ignore")
             return head + "\n...\n" + tail
     except Exception:
+        if raise_errors:
+            raise
         return ""
 
 
@@ -918,7 +926,9 @@ def _collect_optimize_system_stats() -> dict:
     swap = psutil.swap_memory()
     cpu_per_core = []
     try:
-        cpu_per_core = [round(float(value), 1) for value in psutil.cpu_percent(interval=0.05, percpu=True)]
+        # Non-blocking: utilisation since the previous call; the status poll
+        # repeats every few seconds, so no sampling sleep is needed (#399).
+        cpu_per_core = [round(float(value), 1) for value in psutil.cpu_percent(interval=None, percpu=True)]
     except Exception:
         cpu_per_core = []
     load_avg = None
@@ -927,7 +937,7 @@ def _collect_optimize_system_stats() -> dict:
             load_avg = tuple(round(value, 2) for value in os.getloadavg())
     except Exception:
         load_avg = None
-    overall_cpu = round(sum(cpu_per_core) / len(cpu_per_core), 1) if cpu_per_core else round(psutil.cpu_percent(interval=0.05), 1)
+    overall_cpu = round(sum(cpu_per_core) / len(cpu_per_core), 1) if cpu_per_core else round(psutil.cpu_percent(interval=None), 1)
     return {
         "cpu_percent": overall_cpu,
         "cpu_per_core": cpu_per_core,
@@ -941,11 +951,67 @@ def _collect_optimize_system_stats() -> dict:
     }
 
 
-def _build_optimize_runtime_status(item: dict) -> dict:
+# Status polls repeat every few seconds; reparse the log excerpt and config
+# only when the file changed (#399). Keyed by path -> (mtime_ns, size, value).
+_STATUS_FILE_CACHE_MAX = 64
+_status_log_summary_cache: dict[str, tuple[int, int, dict]] = {}
+_status_config_meta_cache: dict[str, tuple[int, int, dict]] = {}
+_status_file_cache_lock = threading.Lock()
+
+
+def _cached_by_file_stat(cache: dict[str, tuple[int, int, dict]], path: Path, build) -> dict | None:
+    """Return build(path), reusing the previous result while mtime and size are unchanged.
+
+    A failing build is not cached, so a transient read error is retried on the next poll.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        with _status_file_cache_lock:
+            cache.pop(str(path), None)
+        return None
+    key = str(path)
+    with _status_file_cache_lock:
+        cached = cache.get(key)
+    if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
+    try:
+        value = build(path)
+    except Exception:
+        return None
+    with _status_file_cache_lock:
+        cache.pop(key, None)
+        while len(cache) >= _STATUS_FILE_CACHE_MAX:
+            cache.pop(next(iter(cache)))
+        cache[key] = (stat.st_mtime_ns, stat.st_size, value)
+    return value
+
+
+def _read_optimize_config_meta(config_path: Path) -> dict:
+    """Extract backend, iters and n_cpus from an optimize config file; load errors propagate."""
+    meta = {"backend": None, "iters": None, "n_cpus": None}
+    cfg = load_pb7_config(config_path)
+    optimize = cfg.get("optimize") if isinstance(cfg.get("optimize"), dict) else {}
+    meta["backend"] = str(optimize.get("backend") or "").strip().lower() or None
+    try:
+        meta["iters"] = int(optimize.get("iters")) if optimize.get("iters") not in (None, "") else None
+    except Exception:
+        meta["iters"] = None
+    try:
+        meta["n_cpus"] = int(optimize.get("n_cpus")) if optimize.get("n_cpus") not in (None, "") else None
+    except Exception:
+        meta["n_cpus"] = None
+    return meta
+
+
+def _build_optimize_runtime_status(item: dict, queue_items: list[dict] | None = None) -> dict:
     log_path = Path(str(item.get("log_path") or ""))
     _store._migrate_old_log(str(item.get("filename") or ""), log_path)
-    log_excerpt = _read_optimize_log_excerpt(log_path)
-    log_summary = _parse_optimize_log_summary(log_excerpt)
+    log_summary = _cached_by_file_stat(
+        _status_log_summary_cache,
+        log_path,
+        lambda path: _parse_optimize_log_summary(_read_optimize_log_excerpt(path, raise_errors=True)),
+    ) or _parse_optimize_log_summary("")
 
     config_meta = {
         "backend": None,
@@ -955,21 +1021,10 @@ def _build_optimize_runtime_status(item: dict) -> dict:
         "exchange": item.get("exchange"),
     }
     config_path = Path(str(item.get("json") or ""))
-    if config_path.exists():
-        try:
-            cfg = load_pb7_config(config_path)
-            optimize = cfg.get("optimize") if isinstance(cfg.get("optimize"), dict) else {}
-            config_meta["backend"] = str(optimize.get("backend") or "").strip().lower() or None
-            try:
-                config_meta["iters"] = int(optimize.get("iters")) if optimize.get("iters") not in (None, "") else None
-            except Exception:
-                config_meta["iters"] = None
-            try:
-                config_meta["n_cpus"] = int(optimize.get("n_cpus")) if optimize.get("n_cpus") not in (None, "") else None
-            except Exception:
-                config_meta["n_cpus"] = None
-        except Exception:
-            pass
+    if str(item.get("json") or "") and config_path.is_file():
+        config_meta.update(
+            _cached_by_file_stat(_status_config_meta_cache, config_path, _read_optimize_config_meta) or {}
+        )
 
     eval_count = log_summary.get("eval") or log_summary.get("iter")
     target_iters = config_meta.get("iters")
@@ -991,7 +1046,8 @@ def _build_optimize_runtime_status(item: dict) -> dict:
         except Exception:
             log_stat = None
 
-    queue_items = _load_queue_sync()
+    if queue_items is None:
+        queue_items = _load_queue_sync()
     overview = {
         "queued": sum(1 for queued_item in queue_items if queued_item.get("status") == "queued"),
         "running": sum(1 for queued_item in queue_items if queued_item.get("status") in {"running", "optimizing"}),
@@ -2013,6 +2069,13 @@ class OptimizeStore:
         self.changed = asyncio.Event()
         self._lock = asyncio.Lock()
         self._seed_cache: dict[str, tuple[int, int, str, str]] = {}
+        self._next_refresh = 0.0
+        self._refresh_root: Path | None = None
+        self._refresh_generation = 0
+        self._process_index: list[dict] = []
+        self._process_index_until = 0.0
+        self._log_tail_cache: dict[tuple[str, int], tuple[tuple, Optional[str]]] = {}
+        self._log_tail_lock = threading.RLock()
 
     def _resolve_seed_info_cached(self, cfg_path: Path) -> tuple[str, str]:
         """Return optimize seed info, reloading the config only after file changes."""
@@ -2037,50 +2100,102 @@ class OptimizeStore:
         self._seed_cache[cache_key] = (stat.st_mtime_ns, stat.st_size, seed_mode, seed_path)
         return seed_mode, seed_path
 
-    async def refresh_from_disk(self) -> None:
+    async def refresh_from_disk(self, *, force: bool = False) -> None:
+        """Coalesce client scans and keep blocking disk/process work off the loop."""
         async with self._lock:
             queue_dir = _opt_queue_dir()
-            queue_dir.mkdir(parents=True, exist_ok=True)
-            process_index = _build_optimize_process_index()
-            config_counts = _build_queue_config_counts(queue_dir)
-            found = {}
-            for fp, data, created_ts in _load_sorted_queue_entries(queue_dir):
-                try:
-                    filename = data.get("filename", fp.stem)
-                    cfg_path = Path(str(data.get("json") or ""))
-                    log_path = _opt_log_dir() / f"{filename}.log"
-                    pid = self._resolve_runtime_pid(
-                        filename,
-                        self._read_pid(filename),
-                        cfg_path,
-                        log_path,
-                        process_index=process_index,
-                        config_counts=config_counts,
-                    )
-                    self._migrate_old_log(filename, log_path)
-                    status = self._determine_status(pid, log_path)
-                    seed_mode = "none"
-                    seed_path = ""
-                    if cfg_path.exists():
-                        seed_mode, seed_path = self._resolve_seed_info_cached(cfg_path)
-                    found[filename] = {
-                        "filename": filename,
-                        "name": data.get("name", filename),
-                        "json": str(data.get("json") or ""),
-                        "exchange": _serialize_exchange(data.get("exchange")),
-                        "status": status,
-                        "pid": pid,
-                        "log_path": str(log_path),
-                        "starting_config": seed_mode != "none",
-                        "seed_mode": seed_mode,
-                        "seed_path": seed_path,
-                        "created": datetime.datetime.fromtimestamp(created_ts).isoformat(),
-                        "order": _coerce_queue_order(data.get("order")),
-                    }
-                except Exception as exc:
-                    _log(SERVICE, f"Error loading queue item {fp}: {exc}", level="WARNING")
+            if queue_dir != self._refresh_root:
+                self._next_refresh = self._process_index_until = 0.0
+                self._refresh_root = queue_dir
+            if not force and time.monotonic() < self._next_refresh:
+                return
+            if force:
+                self._process_index_until = 0.0
+            generation = self._refresh_generation
+            scan = asyncio.create_task(asyncio.to_thread(self._scan_from_disk, queue_dir))
+            try:
+                found = await asyncio.shield(scan)
+            except asyncio.CancelledError:
+                await asyncio.gather(scan, return_exceptions=True)
+                raise
+            changed = found != self.items
             self.items = found
-            self.changed.set()
+            if generation == self._refresh_generation:
+                active = any(item["status"] in ("running", "optimizing") for item in found.values())
+                self._next_refresh = time.monotonic() + (3.0 if active else 8.0)
+            if changed:
+                self.changed.set()
+
+    def _scan_from_disk(self, queue_dir: Path) -> dict[str, dict]:
+        """Refresh one shared view; recover process ownership at bounded intervals."""
+        queue_dir.mkdir(parents=True, exist_ok=True)
+        entries = _load_sorted_queue_entries(queue_dir)
+        tracked_pids = {}
+        valid_entries = []
+        for fp, data, created_ts in entries:
+            try:
+                filename = str(data.get("filename", fp.stem))
+                _validate_name(filename)
+                if any(ord(ch) < 32 or ord(ch) == 127 for ch in filename):
+                    raise ValueError("Invalid queue filename")
+                tracked_pids[filename] = self._read_pid(filename)
+                valid_entries.append((fp, data, created_ts))
+            except (HTTPException, ValueError) as exc:
+                _log(SERVICE, f"Invalid optimize queue item {fp.name}: {type(exc).__name__}", level="WARNING")
+        entries = valid_entries
+        now = time.monotonic()
+        indexed_pids = {row["pid"] for row in self._process_index}
+        if set(tracked_pids) != set(self.items) or any(
+            pid is not None and pid not in indexed_pids and self._is_process_running(pid)
+            for pid in tracked_pids.values()
+        ):
+            self._process_index_until = 0.0
+        stale_process = False
+        for row in self._process_index:
+            try:
+                if not self._is_process_running(row["pid"]) or psutil.Process(row["pid"]).create_time() != row["create_time"]:
+                    stale_process = True
+                    break
+            except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
+                stale_process = True
+                break
+        if now >= self._process_index_until or stale_process:
+            generation = self._refresh_generation
+            self._process_index = _build_optimize_process_index() if entries else []
+            self._process_index_until = time.monotonic() + 30.0 if generation == self._refresh_generation else 0.0
+        process_index = self._process_index
+        config_counts: dict[str, int] = {}
+        for _, data, _ in entries:
+            key = _normalize_process_arg_path(data.get("json"))
+            if key:
+                config_counts[key] = config_counts.get(key, 0) + 1
+        found = {}
+        for fp, data, created_ts in entries:
+            try:
+                filename = str(data.get("filename", fp.stem))
+                _validate_name(filename)
+                cfg_path = Path(str(data.get("json") or ""))
+                log_path = _opt_log_dir() / f"{filename}.log"
+                pid = self._resolve_runtime_pid(
+                    filename, tracked_pids[filename], cfg_path, log_path,
+                    process_index=process_index, config_counts=config_counts,
+                )
+                self._migrate_old_log(filename, log_path)
+                status = self._determine_status(pid, log_path)
+                seed_mode, seed_path = self._resolve_seed_info_cached(cfg_path) if cfg_path.exists() else ("none", "")
+                found[filename] = {
+                    "filename": filename, "name": data.get("name", filename),
+                    "json": str(data.get("json") or ""), "exchange": _serialize_exchange(data.get("exchange")),
+                    "status": status, "pid": pid, "log_path": str(log_path),
+                    "starting_config": seed_mode != "none", "seed_mode": seed_mode, "seed_path": seed_path,
+                    "created": datetime.datetime.fromtimestamp(created_ts).isoformat(),
+                    "order": _coerce_queue_order(data.get("order")),
+                }
+            except Exception as exc:
+                _log(SERVICE, f"Error loading queue item {fp}: {exc}", level="WARNING")
+        active_configs = {item["json"] for item in found.values()}
+        self._seed_cache = {key: value for key, value in self._seed_cache.items() if key in active_configs}
+        return found
 
     def _migrate_old_log(self, filename: str, log_path: Path) -> None:
         old_log = _opt_queue_dir() / f"{filename}.log"
@@ -2164,16 +2279,28 @@ class OptimizeStore:
         return live_pid
 
     def _read_log_tail(self, log_path: Path, size_kb: int = 50) -> Optional[str]:
-        if not log_path.exists():
-            return None
+        """Reuse unchanged tails with a bounded cache, including rotated log identity."""
+        key = (str(log_path), size_kb)
         try:
-            with open(log_path, "rb") as f:
-                f.seek(0, 2)
-                file_size = f.tell()
-                start = max(file_size - size_kb * 1024, 0)
-                f.seek(start)
-                return f.read().decode("utf-8", errors="ignore")
-        except Exception:
+            if not log_path.exists():
+                with self._log_tail_lock:
+                    self._log_tail_cache.pop(key, None)
+                return None
+            stat = log_path.stat()
+            signature = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_dev, stat.st_ino)
+            with self._log_tail_lock:
+                cached = self._log_tail_cache.get(key)
+                if cached and cached[0] == signature:
+                    return cached[1]
+                with open(log_path, "rb") as f:
+                    f.seek(max(stat.st_size - size_kb * 1024, 0))
+                    tail = f.read(size_kb * 1024).decode("utf-8", errors="ignore")
+                if len(self._log_tail_cache) >= 256:
+                    self._log_tail_cache.pop(next(iter(self._log_tail_cache)))
+                self._log_tail_cache[key] = (signature, tail)
+                return tail
+        except OSError as exc:
+            _log(SERVICE, f"Cannot read optimize log tail: {type(exc).__name__}", level="WARNING")
             return None
 
     def _determine_status(self, pid: Optional[int], log_path: Path) -> str:
@@ -2190,6 +2317,9 @@ class OptimizeStore:
         return "queued"
 
     def notify(self) -> None:
+        """Invalidate cached runtime scans after an explicit queue/settings action."""
+        self._refresh_generation += 1
+        self._next_refresh = self._process_index_until = 0.0
         self.changed.set()
 
 
@@ -2265,7 +2395,7 @@ class OptimizeWorker:
                         release_autostart("v7", launch_filename)
                         _log(SERVICE, f"Automatic PB7 optimize launch failed: {exc}", level="ERROR")
                     await asyncio.sleep(1)
-                    await self.store.refresh_from_disk()
+                    await self.store.refresh_from_disk(force=True)
 
                 await asyncio.sleep(10)
         except asyncio.CancelledError:
@@ -2404,24 +2534,27 @@ _ws_clients: set[WebSocket] = set()
 
 
 async def _ws_push_loop(ws: WebSocket) -> None:
+    """Send changed snapshots only; shared store scans are coalesced across clients."""
+    last_payload = None
     try:
         while True:
             try:
-                await _store.refresh_from_disk()
                 _store.changed.clear()
-                await ws.send_json(
-                    {
-                        "type": "queue_update",
-                        "items": list(_store.items.values()),
-                        "settings": _read_ini_section(),
-                    }
-                )
+                await _store.refresh_from_disk()
+                payload = {
+                    "type": "queue_update", "items": list(_store.items.values()),
+                    "settings": _read_ini_section(),
+                }
+                if payload != last_payload:
+                    await ws.send_json(payload)
+                    last_payload = payload
             except (WebSocketDisconnect, RuntimeError):
                 break
             except Exception as exc:
                 _log(SERVICE, f"Optimize WS push error: {exc}", level="WARNING")
             try:
-                await asyncio.wait_for(_store.changed.wait(), timeout=3.0)
+                active = any(item["status"] in ("running", "optimizing") for item in _store.items.values())
+                await asyncio.wait_for(_store.changed.wait(), timeout=3.0 if active else 8.0)
             except asyncio.TimeoutError:
                 pass
     except asyncio.CancelledError:
@@ -3077,12 +3210,18 @@ def get_queue_log(filename: str, lines: int = 100,
 
 
 @router.get("/queue/{filename}/status")
-def get_queue_status(filename: str, session: SessionToken = Depends(require_auth)):
+async def get_queue_status(filename: str, session: SessionToken = Depends(require_auth)):
     _validate_name(filename)
-    item = next((queued_item for queued_item in _load_queue_sync() if queued_item.get("filename") == filename), None)
+    # Reuse the coalesced store scan instead of two full disk/process scans per poll (#399).
+    await _store.refresh_from_disk()
+    item = _store.items.get(filename)
+    if not item:
+        await _store.refresh_from_disk(force=True)
+        item = _store.items.get(filename)
     if not item:
         raise HTTPException(404, "Queue item not found")
-    return _build_optimize_runtime_status(item)
+    queue_items = list(_store.items.values())
+    return await asyncio.to_thread(_build_optimize_runtime_status, dict(item), queue_items)
 
 
 @router.get("/results")

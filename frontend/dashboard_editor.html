@@ -1105,6 +1105,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     function refreshLivePositions() {
       if (!container.isConnected) { _disconnectLive(lKey); return; }
       if (document.querySelector('.msel-drop.open')) return;
+      if (document.hidden) return;  /* background tabs must not poll exchanges */
       if (st.loading) return;
       if (st.lastFetch && Date.now() - st.lastFetch < 5000) return;
       st.lastFetch = Date.now();
@@ -1142,6 +1143,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     function refreshLiveBalance() {
       if (!container.isConnected) { _disconnectLive(lKey); return; }
       if (document.querySelector('.msel-drop.open')) return;
+      if (document.hidden) return;  /* background tabs must not poll exchanges */
       if (st.loading) return;
       if (st.lastFetch && Date.now() - st.lastFetch < 5000) return;
       st.lastFetch = Date.now();

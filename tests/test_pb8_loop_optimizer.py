@@ -20,6 +20,28 @@ OWNER = 'a' * 32
 RULE = [{'goal': 'gain', 'metrics': ['gain'], 'direction': 'max', 'target': 2, 'scale': 1, 'weight': 1}]
 
 
+@pytest.mark.parametrize('execution', ['cpu', 'gpu', 'vast'])
+def test_completion_boundary_tolerance_is_private_to_gpu_optimizer(execution):
+    """Avoid full-completion drift mismatches without changing saved or other limits."""
+    from pb8_loop_store import apply_run_limit
+    original = config()
+    limits = [
+        {'metric': 'backtest_completion_ratio', 'penalize_if': 'less_than', 'value': 1.0},
+        {'metric': 'backtest_completion_ratio', 'penalize_if': 'less_than', 'value': 0.98},
+        {'metric': 'drawdown_worst_strategy_eq', 'penalize_if': 'greater_than', 'value': 0.5},
+        {'metric': 'backtest_completion_ratio', 'penalize_if': 'less_than', 'value': 1, 'enabled': False},
+    ]
+    original['optimize']['limits'] = copy.deepcopy(limits)
+    effective = apply_run_limit({'execution': execution}, original)
+    assert original['optimize']['limits'] == limits
+    assert effective['optimize']['limits'][1:] == limits[1:]
+    threshold = effective['optimize']['limits'][0]['value']
+    assert threshold == (1.0 if execution == 'cpu' else 0.99)
+    if execution != 'cpu':
+        assert 0.9999946621713555 >= threshold
+        assert 0.98 < threshold
+
+
 def config():
     """Return a complete minimal input without files, credentials or real runtime."""
     return {'backtest': {'start_date': '2020-01-01', 'end_date': '2020-02-01', 'exchanges': ['binance']},
@@ -1596,6 +1618,83 @@ def test_quota_result_errors_remain_specific_for_ai_repair(record, tmp_path):
     assert row['jobs'][0]['result_error']==row['repair_error']
 
 
+@pytest.mark.parametrize('group', ['scoring', 'limits'])
+def test_cloud_loop_rejects_exact_only_metrics_before_queue(record, group):
+    """Cloud metric checks retain user objectives and report an explicit alternative."""
+    _, row = record
+    row['settings']['execution'] = 'vast'
+    proposed = config()
+    proposed['optimize'].update(backend='gpu', **{group: [{'metric': 'gain_strategy_eq', 'goal': 'max'}]})
+    original = copy.deepcopy(proposed)
+    with pytest.raises(ValueError, match=r'Vast.ai optimize.*gain_strategy_eq') as error:
+        validate_change(row, proposed, {})
+    assert 'adg_strategy_eq' in str(error.value)
+    assert proposed == original
+    proposed['optimize'][group][0]['metric'] = 'adg_strategy_eq'
+    assert validate_change(row, proposed, {}) == proposed
+
+
+@pytest.mark.parametrize('group', ['scoring', 'limits'])
+@pytest.mark.parametrize('metric', __import__('vast_config_validation')._METRIC_CONTRACT['exact_only_metrics'])
+def test_every_exact_only_cloud_metric_is_blocked_without_changing_cpu_goals(metric, group):
+    """The complete pinned exclusion list is enforced, without rewriting CPU metrics."""
+    from pb8_loop_store import validate_cloud_loop_metrics
+    proposed = {'optimize': {group: [{'metric': metric, 'goal': 'max', 'value': 1}]}}
+    original = copy.deepcopy(proposed)
+    with pytest.raises(ValueError, match='Unsupported cloud metrics'):
+        validate_cloud_loop_metrics(proposed, 'vast')
+    validate_cloud_loop_metrics(proposed, 'cpu')
+    assert proposed == original
+
+
+def test_cloud_metric_policy_reaches_ai_with_custom_instruction_snapshot(record):
+    """Every provider sees immutable eligibility even when a run uses custom instructions."""
+    from vast_config_validation import METRICS, _METRIC_CONTRACT
+    store, row = record
+    row['settings']['execution'] = 'vast'
+    row['ai_instructions'] = {'id': 'custom', 'name': 'Custom', 'text': 'Return JSON.'}
+    class AI(LoopAI):
+        """Inspect the actual provider payload without making a model request."""
+        async def preflight(self, owner, settings):
+            """Use isolated metadata without a provider call."""
+            return {'output_limit': 16000}
+        async def _request(self, current, metadata, content, output_tokens):
+            """Keep exact goal metrics separate from GPU objective eligibility."""
+            policy = content['optimizer_metric_policy']
+            assert set(policy['allowed_metrics']) == METRICS
+            assert set(policy['exact_only_metrics']) == set(_METRIC_CONTRACT['exact_only_metrics'])
+            assert 'gain_strategy_eq' not in policy['allowed_metrics']
+            assert 'adg_strategy_eq' in policy['allowed_metrics']
+            assert policy['exact_goal_metrics_restricted'] is False
+            assert content['goals'] == current['settings']['goals']
+            return '{"rubric":[]}', {'status': 'subscription'}
+    asyncio.run(AI(store).decide(row, 'interpret', {}))
+
+
+def test_failed_optimizer_keeps_native_error_in_termination_details(record, tmp_path):
+    """A completed polling cycle must not replace the actual failure with a generic label."""
+    store, row = record
+    message = 'Cloud configuration is invalid: optimize.scoring.0.metric: Unsupported cloud metrics: gain_strategy_eq.'
+    class Backend(FakeBackend):
+        """Simulate a terminal cloud preparation error without accessing cloud state."""
+        def candidates(self, current, job):
+            """Preparation failed before producing any exact result."""
+            return []
+        def poll(self, current, job):
+            """Return the recorded native error."""
+            return {'status': 'failed', 'started': False, 'source': {'error': message}}
+    controller = LoopController(tmp_path, store=store, backend=Backend(), ai=FakeAI())
+    job = controller.job(row, 'optimizer', config(), {}, 'Initial run')
+    job.update(backend={'id': job['operation'], 'execution': 'vast'})
+    row = store.update(OWNER, row['id'], lambda current: current.update(phase='optimize', jobs=[job], rubric=RULE))
+    asyncio.run(controller.tick(OWNER, row['id']))
+    row = store.read(OWNER, row['id'])
+    assert row['phase'] == 'evaluate' and row['repair_error'] == message
+    asyncio.run(controller.tick(OWNER, row['id']))
+    row = store.read(OWNER, row['id'])
+    assert row['status'] == 'failed' and row['failure']['detail'] == message
+
+
 def test_job_projection_reports_actual_pinned_changes_and_candidate_links(record, tmp_path):
     """Reports show effective settings and detailed list leaves without full config copies."""
     from api.loop_optimizer_v8 import projection
@@ -1842,3 +1941,130 @@ def test_loop_overview_options_do_not_load_or_validate_legacy_sources(tmp_path, 
     assert result['configs'] == ['legacy']
     assert result['config_defaults'] is None
     assert result['bundle_digest'] is None
+
+
+@pytest.mark.parametrize('direction', ['long', 'short'])
+def test_suite_disabled_side_uses_same_coin_universe(direction):
+    """Suite list normalization leaves risk, bounds and the original input intact."""
+    from pb8_loop_backend import normalize_suite_coins
+    initial = config()
+    initial['backtest']['suite_enabled'] = True
+    disabled = 'short' if direction == 'long' else 'long'
+    initial['bot'][disabled]['risk']['total_wallet_exposure_limit'] = 0
+    initial['live']['approved_coins'] = {direction: ['HYPE'], disabled: []}
+    prepared = copy.deepcopy(initial)
+    normalize_suite_coins(prepared)
+    assert prepared['live']['approved_coins'] == {'long': ['HYPE'], 'short': ['HYPE']}
+    assert prepared['bot'] == initial['bot']
+    assert prepared['optimize'] == initial['optimize']
+    assert initial['live']['approved_coins'][disabled] == []
+
+
+def test_suite_active_asymmetric_sides_are_rejected():
+    """Never broaden the trading universe when both sides are active."""
+    from pb8_loop_backend import normalize_suite_coins
+    value = config()
+    value['backtest']['suite_enabled'] = True
+    value['live']['approved_coins']['short'] = ['ETH']
+    with pytest.raises(ValueError, match='Both directions are active'):
+        normalize_suite_coins(value)
+    value['backtest']['suite_enabled'] = False
+    normalize_suite_coins(value)
+    assert value['live']['approved_coins']['short'] == ['ETH']
+
+
+@pytest.mark.parametrize('direction', ['long', 'short'])
+def test_suite_initial_single_side_can_be_queued(tmp_path, monkeypatch, direction):
+    """Real normalization and controller policy agree on a disabled Suite side."""
+    from api import optimize_v8 as opt
+    initial = config()
+    initial['backtest']['suite_enabled'] = True
+    monkeypatch.setattr('pb8_loop_backend.migrate_loop_bundle', lambda bundle: copy.deepcopy(bundle))
+    monkeypatch.setattr(opt, 'pb8_runtime_status', lambda: {'ready': True})
+    backend = LoopBackend(tmp_path, LoopStore(tmp_path / 'loops'))
+    monkeypatch.setattr(backend, 'fingerprint', lambda value: {})
+    goals = settings()['goals']
+    goals.update(direction=direction, coins=['HYPE'])
+    async def preflight(owner, selected):
+        """Keep model access offline while exercising real controller creation."""
+        return {}
+    controller = LoopController(tmp_path, store=backend.store, backend=backend,
+                                ai=SimpleNamespace(preflight=preflight))
+    row = asyncio.run(controller.create(OWNER, settings(goals=goals),
+                                       {'config': initial, 'override_configs': {}}, queued=True))
+    result = row['initial_config']
+    disabled = 'short' if direction == 'long' else 'long'
+    assert row['status'] == 'queued'
+    assert backend.store.read(OWNER, row['id'])['initial_config'] == result
+    assert result['live']['approved_coins'] == {'long': ['HYPE'], 'short': ['HYPE']}
+    assert result['bot'][disabled]['risk']['total_wallet_exposure_limit'] == 0
+    assert result['bot'][disabled]['risk']['n_positions'] == 0
+    assert validate_change(row, copy.deepcopy(result), {}) == result
+    for change in ('coins', 'bot', 'bounds', 'fixed', 'symbol'):
+        changed = copy.deepcopy(result)
+        overrides = {}
+        if change == 'coins':
+            changed['live']['approved_coins'][disabled] = ['ETH']
+        elif change == 'bot':
+            changed['bot'][disabled]['risk']['n_positions'] = 1
+        elif change == 'bounds':
+            changed['optimize']['bounds'][disabled]['risk']['n_positions'] = [0, 1]
+        elif change == 'fixed':
+            changed['optimize']['fixed_runtime_overrides'] = {f'bot.{disabled}.risk.n_positions': 1}
+        else:
+            overrides = {'HYPE': {'bot': {disabled: {'risk': {'n_positions': 1}}}}}
+        with pytest.raises(ValueError, match='requested coins|Disabled trading direction|position capacity'):
+            validate_change(row, changed, overrides)
+
+
+def test_failed_optimizer_partial_exact_results_still_require_comparison(record, tmp_path):
+    """Safety-stopped optimizer results advance to selection, never directly to a winner."""
+    store, row = record
+    class Backend(FakeBackend):
+        """Keep imported exact candidates while retaining the native failure."""
+        def poll(self, current, job):
+            """Return a stopped optimizer with collected exact results."""
+            return {'status': 'failed', 'started': True, 'source': {'error': 'GPU safety check failed'}}
+    controller = LoopController(tmp_path, store=store, backend=Backend(), ai=FakeAI())
+    job = controller.job(row, 'optimizer', config(), {}, 'Safety stopped')
+    job.update(backend={'id': job['operation'], 'execution': 'vast'})
+    store.update(OWNER, row['id'], lambda current: current.update(phase='optimize', jobs=[job], rubric=RULE))
+    asyncio.run(controller.tick(OWNER, row['id']))
+    current = store.read(OWNER, row['id'])
+    assert current['phase'] == 'select' and current['candidates']
+    assert current['jobs'][0]['status'] == 'failed'
+    assert current['jobs'][0]['result_count'] == 1
+    assert 'GPU safety check failed' in current['jobs'][0]['error']
+    assert not current.get('best')
+
+
+def test_generated_holdout_survives_real_loop_queue_and_observer(tmp_path, monkeypatch):
+    """A contract-1 AI source gives the queued Loop a separate Holdout backtest."""
+    from api import optimize_v8 as opt
+    from scenario_templates import generate_scenario_template
+    preview = generate_scenario_template({'template': 'walk_forward', 'start_date': '2024-12-12',
+        'end_date': '2026-10-03', 'window_days': 132, 'stride_days': 132,
+        'training_windows': 4, 'holdout_windows': 1,
+        'exchange_mode': 'inherit', 'exchanges': ['bybit', 'hyperliquid']})
+    initial = config()
+    initial['backtest'].update(suite_enabled=True, start_date='2024-12-12', end_date='2026-10-03',
+                              scenarios=preview['training_scenarios'], starting_balance=10000)
+    initial['pbgui'] = {'scenario_template': preview['provenance']}
+    monkeypatch.setattr('pb8_loop_backend.migrate_loop_bundle', lambda bundle: copy.deepcopy(bundle))
+    monkeypatch.setattr(opt, 'pb8_runtime_status', lambda: {'ready': True})
+    backend = LoopBackend(tmp_path, LoopStore(tmp_path / 'loops'))
+    monkeypatch.setattr(backend, 'fingerprint', lambda value: {})
+    async def preflight(owner, selected):
+        """No provider access while using real Loop creation and holdout extraction."""
+        return {}
+    controller = LoopController(tmp_path, store=backend.store, backend=backend,
+                                ai=SimpleNamespace(preflight=preflight))
+    row = asyncio.run(controller.create(OWNER, settings(),
+                                       {'config': initial, 'override_configs': {}}, queued=True))
+    assert row['holdouts'] and row['training_exclusions'] == row['holdouts']
+    assert row['observer_holdouts'] == row['holdouts']
+    holdout = backend.observer_config(row, {'config': row['initial_config'], 'overrides': {}}, 'observer_holdout')
+    assert holdout['backtest']['start_date'] == '2026-05-25'
+    assert holdout['backtest']['end_date'] == '2026-10-03'
+    assert all(s['end_date'] < '2026-05-25' for s in row['comparison']['scenarios'])
+    assert not holdout.get('pbgui', {}).get('scenario_template')

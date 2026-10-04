@@ -1864,7 +1864,7 @@ def test_thousand_pareto_candidates_keep_structural_payload_bounded(optimize_v8_
     assert len(json.dumps(response)) < 500_000
 
 
-def test_queue_status_returns_complete_shared_dashboard_shape(optimize_v8_roots) -> None:
+def test_queue_status_returns_complete_shared_dashboard_shape(optimize_v8_roots, monkeypatch) -> None:
     """PB8 queue status includes progress, runtime, process, host, log, totals, and runner sections."""
     _write_queue_job("status-job", 0)
     launch = optimize_v8._launch_dir("status-job")
@@ -1892,7 +1892,17 @@ def test_queue_status_returns_complete_shared_dashboard_shape(optimize_v8_roots)
         encoding="utf-8",
     )
 
+    loads = []
+    original_load = optimize_v8._load_queue
+
+    def counted_load():
+        """Count complete queue reads during one status request."""
+        loads.append(True)
+        return original_load()
+
+    monkeypatch.setattr(optimize_v8, "_load_queue", counted_load)
     status = optimize_v8.get_queue_status("status-job", None)
+    assert len(loads) == 1
 
     assert {"progress", "runtime", "metrics", "process", "system", "queue", "log", "runner"} <= status.keys()
     assert status["progress"]["evaluations"] == 50

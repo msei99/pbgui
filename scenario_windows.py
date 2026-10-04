@@ -101,14 +101,22 @@ VALIDATION_PLAN_FILENAME = '.pbgui_validation_windows.json'
 
 
 def build_validation_plan(config: dict) -> dict | None:
-    """Extract and validate graphical windows before native config preparation."""
+    """Validate generated and explicit windows before native config preparation."""
     template = (config.get('pbgui') or {}).get('scenario_template') or {}
-    if template.get('contract_version') != 2:
+    version = template.get('contract_version')
+    if version not in (1, 2):
         return None
     parameters = template.get('parameters') or {}
     payload = dict(parameters, template=template.get('template'))
     payload.update(parameters.get('sweep_policy') or {})
-    preview = preview_windows(payload)
+    if version == 1:
+        # AI-generated date templates use contract 1, while the graphical editor
+        # uses explicit contract-2 windows. Regenerate rather than trusting the
+        # saved holdout array; both formats must match the actual training suite.
+        from scenario_templates import generate_scenario_template
+        preview = generate_scenario_template(payload)
+    else:
+        preview = preview_windows(payload)
     backtest = config.get('backtest')
     if isinstance(backtest, dict):
         if not backtest.get('suite_enabled'):

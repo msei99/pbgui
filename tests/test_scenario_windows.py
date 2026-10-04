@@ -97,3 +97,26 @@ def test_sweep_dragged_roles_keep_two_distributed_holdouts(tmp_path):
     plan = build_validation_plan({'pbgui': {'scenario_template': result['provenance']}})
     (tmp_path / VALIDATION_PLAN_FILENAME).write_text(json.dumps(plan))
     assert validation_holdouts(tmp_path) == result['holdout_scenarios']
+
+
+@pytest.mark.parametrize('template,exchange_mode', [('walk_forward', 'inherit'),
+                                                   ('walk_forward', 'per_exchange'), ('sweep_cycles', 'inherit')])
+def test_generated_contract_one_retains_holdouts(tmp_path, template, exchange_mode):
+    """AI-generated date plans retain independently regenerated holdouts in results."""
+    preview = generate_scenario_template({'template': template, 'start_date': '2024-12-12',
+        'end_date': '2026-10-03', 'window_days': 132, 'stride_days': 132,
+        'training_windows': 4, 'holdout_windows': 1,
+        'exchange_mode': exchange_mode, 'exchanges': ['bybit', 'hyperliquid']})
+    assert preview['provenance']['contract_version'] == 1
+    config = {'pbgui': {'scenario_template': preview['provenance']},
+              'backtest': {'suite_enabled': True, 'scenarios': preview['training_scenarios']}}
+    plan = build_validation_plan(config)
+    assert plan['holdout_scenarios'] == preview['holdout_scenarios']
+    assert {row['start_date'] for row in plan['holdout_scenarios']} == {'2026-05-25'}
+    (tmp_path / VALIDATION_PLAN_FILENAME).write_text(json.dumps(plan))
+    assert validation_holdouts(tmp_path) == preview['holdout_scenarios']
+    config['pbgui']['scenario_template']['holdout_scenarios'] = []
+    assert build_validation_plan(config)['holdout_scenarios'] == preview['holdout_scenarios']
+    config['backtest']['scenarios'][0] = copy.deepcopy(preview['holdout_scenarios'][0])
+    with pytest.raises(ScenarioTemplateError, match='no longer match training'):
+        build_validation_plan(config)

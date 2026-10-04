@@ -384,13 +384,16 @@ async def list_loops(session: SessionToken = Depends(require_auth)):
         raise _error(exc) from exc
 
 
-async def _start_loop(body: LoopStart, session: SessionToken = Depends(require_auth), definition=None):
+async def _start_loop(body: LoopStart, session: SessionToken = Depends(require_auth), definition=None, *, owner=None, queue_proposal=None):
     """Authorize one full bounded loop at start, without subsequent approval prompts."""
+    owner = owner if owner is not None else _owner(session)
     try:
         if not body.authorization:
             raise HTTPException(422, 'Authorize automatic configuration changes, job starts and AI usage when starting the loop')
         settings = body.model_dump(exclude={'authorization'})
-        ai_preferences = get_ai_chat_service().get_preferences(_owner(session))
+        if queue_proposal is not None:
+            settings['ai_queue_proposal'] = queue_proposal
+        ai_preferences = get_ai_chat_service().get_preferences(owner)
         settings['jev_max_cost_usd'] = ai_preferences['jev_max_cost_usd']
         settings['jev_budget_usd'] = settings['jev_max_cost_usd'] * body.max_runs
         if body.execution == 'vast':
@@ -410,9 +413,9 @@ async def _start_loop(body: LoopStart, session: SessionToken = Depends(require_a
             raise ValueError('Per-run hours cannot exceed total loop hours')
         if definition is not None:
             settings.update(loop_name=definition['name'], definition_name=definition['name'], source=definition['source'])
-            row = await _controller.create(_owner(session), settings, definition['bundle'], queued=True)
+            row = await _controller.create(owner, settings, definition['bundle'], queued=True)
         else:
-            row = await _controller.create(_owner(session), settings)
+            row = await _controller.create(owner, settings)
         return JSONResponse(projection(row), status_code=201, headers={'Cache-Control': 'no-store'})
     except Exception as exc:
         raise _error(exc) from exc
@@ -757,8 +760,12 @@ async def best_config(loop_id: str, session: SessionToken = Depends(require_auth
 
 @router.post('/{loop_id}/action')
 async def loop_action(loop_id: str, body: LoopAction, session: SessionToken = Depends(require_auth)):
+    return await _loop_action_owned(_owner(session), loop_id, body)
+
+
+async def _loop_action_owned(owner, loop_id, body):
+    """Run native owner-scoped actions for authenticated routes and reviewed AI tools."""
     try:
-        owner = _owner(session)
         if body.action == 'start':
             waiting = await asyncio.to_thread(_controller.store.read, owner, loop_id)
             if waiting['status'] != 'queued':

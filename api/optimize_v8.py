@@ -3358,6 +3358,33 @@ class OptimizeV8Worker:
 
 _worker = OptimizeV8Worker()
 _ws_clients: set[WebSocket] = set()
+_ws_snapshot_lock = asyncio.Lock()
+_ws_snapshot: dict | None = None
+_ws_snapshot_until = 0.0
+
+
+async def _queue_ws_snapshot() -> dict:
+    """Share one bounded queue scan across all Optimize WebSocket clients."""
+    global _ws_snapshot, _ws_snapshot_until
+    async with _ws_snapshot_lock:
+        if _ws_snapshot is not None and time.monotonic() < _ws_snapshot_until:
+            return _ws_snapshot
+        scan = asyncio.create_task(asyncio.to_thread(
+            lambda: {
+                "type": "queue_update",
+                "items": [row for row in _load_queue() if not row.get("loop_id")],
+                "settings": load_ini_section(_QUEUE_SETTINGS_SECTION),
+            }
+        ))
+        try:
+            payload = await asyncio.shield(scan)
+        except asyncio.CancelledError:
+            await asyncio.gather(scan, return_exceptions=True)
+            raise
+        _ws_snapshot = payload
+        active = any(item.get("status") in ("running", "optimizing") for item in payload["items"])
+        _ws_snapshot_until = time.monotonic() + (3.0 if active else 8.0)
+        return payload
 
 
 def startup() -> None:
@@ -3403,27 +3430,30 @@ async def shutdown() -> None:
 
 @router.websocket("/ws/opt8")
 async def ws_optimize(websocket: WebSocket) -> None:
+    """Push changed state only, with an idle backoff and a shared scan cache."""
+    global _ws_snapshot, _ws_snapshot_until
     if await authenticate_websocket(websocket) is None:
         return
     _ws_clients.add(websocket)
+    last_payload = None
     try:
         while True:
-            payload = await asyncio.to_thread(
-                lambda: {
-                    "type": "queue_update",
-                    "items": [row for row in _load_queue() if not row.get("loop_id")],
-                    "settings": load_ini_section(_QUEUE_SETTINGS_SECTION),
-                }
-            )
-            await websocket.send_json(payload)
+            payload = await _queue_ws_snapshot()
+            if payload != last_payload:
+                await websocket.send_json(payload)
+                last_payload = payload
+            active = any(item.get("status") in ("running", "optimizing") for item in payload["items"])
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=3)
+                await asyncio.wait_for(websocket.receive_text(), timeout=3.0 if active else 8.0)
             except asyncio.TimeoutError:
                 pass
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         _ws_clients.discard(websocket)
+        if not _ws_clients:
+            _ws_snapshot = None
+            _ws_snapshot_until = 0.0
 
 
 @router.get("/main_page", response_class=HTMLResponse)
@@ -4704,7 +4734,8 @@ def _active_all_results_progress(filename: str) -> dict | None:
 
 @router.get("/queue/{filename}/status")
 def get_queue_status(filename: str, session: SessionToken = Depends(require_auth)) -> dict:
-    item = next((item for item in _load_queue() if item["filename"] == filename), None)
+    queue_items = _load_queue()
+    item = next((item for item in queue_items if item["filename"] == filename), None)
     if item is None:
         raise HTTPException(status_code=404, detail="Queue item not found")
     state = _read_runner_state(filename) or {}
@@ -4747,7 +4778,6 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
     percent = None
     if evaluations is not None and target and target > 0:
         percent = max(0.0, min(100.0, evaluations / target * 100.0))
-    queue_items = _load_queue()
     queue_totals = {
         status: sum(1 for queued in queue_items if queued["status"] == status)
         for status in ("queued", "running", "complete", "error")

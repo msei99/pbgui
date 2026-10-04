@@ -26,6 +26,7 @@ def account(monkeypatch):
         fetch_positions=Mock(return_value=[[0, "BTCUSDT", 0, 2, 10, 100, user.name, "long"]]),
         fetch_prices=Mock(return_value=[[0, "BTCUSDT", 0, 110]]),
         fetch_orders_by_symbol=Mock(return_value=[]),
+        fetch_orders=Mock(return_value=[]),
     )
     monkeypatch.setattr(dashboard, "_get_users", lambda: SimpleNamespace(
         find_user=lambda name: user if name == user.name else None, list=lambda: [user.name],
@@ -120,15 +121,15 @@ def test_live_bitget_rows_and_orders(account, key, side):
         "entryPrice": 100, "markPrice": 110, "unrealizedPnl": 2, "info": {key: side},
     }]
     exchange.fetch_all_open_orders.return_value = [
-        {"status": "open", "side": entry_side, "amount": 1, "price": 90, "info": {key: side}},
-        {"status": "open", "side": close_side, "amount": 1, "price": 120, "info": {key: side}},
-        {"status": "open", "side": entry_side, "amount": 1, "price": 95,
+        {"symbol": "BTC/USDT:USDT", "status": "open", "side": entry_side, "amount": 1, "price": 90, "info": {key: side}},
+        {"symbol": "BTC/USDT:USDT", "status": "open", "side": close_side, "amount": 1, "price": 120, "info": {key: side}},
+        {"symbol": "BTC/USDT:USDT", "status": "open", "side": entry_side, "amount": 1, "price": 95,
          "info": {key: "short" if side == "long" else "long"}},
     ]
     row = dashboard._live_positions_for_user(user, db)[0]
     assert (row["symbol"], row["side"], row["size"], row["upnl"]) == ("BTCUSDT", side, 0.2, 2)
     assert (row["dca"], row["next_dca"], row["next_tp"]) == (1, 90, 120)
-    exchange.fetch_all_open_orders.assert_called_once_with("BTC/USDT:USDT")
+    exchange.fetch_all_open_orders.assert_called_once_with(None)
     exchange.instance.fetch_open_orders.assert_not_called()
 
 

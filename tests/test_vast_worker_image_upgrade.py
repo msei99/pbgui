@@ -35,7 +35,7 @@ def test_current_image_has_offline_layer_sizes():
     """The active immutable image keeps byte-weighted pull progress available."""
     from vast_image_layers import IMAGE_LAYERS
     assert IMAGE in IMAGE_LAYERS
-    assert len(IMAGE_LAYERS[IMAGE]) == 26
+    assert len(IMAGE_LAYERS[IMAGE]) == 28
 
 
 def test_new_calibration_pin_keeps_previous_worker_image_known():
@@ -121,3 +121,26 @@ def test_known_image_with_wrong_revision_is_rejected(job):
     assert intent['pb8_revision'] == REVISION
     with pytest.raises(VastError):
         validate_intent(intent, identifier)
+
+
+def test_suite_metric_hotfix_is_a_narrow_checked_backport():
+    """The temporary worker patches only GPU suite metric orchestration."""
+    root = Path(__file__).resolve().parents[1] / 'setup' / 'vast_gpu_benchmark'
+    dockerfile = (root / 'Dockerfile.suite-metrics').read_text()
+    patch = (root / 'patches' / 'gpu-suite-invalid-metrics.patch').read_text()
+    assert 'FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:32d7ee7a00330e01e4a2b8856275289eb8ee4b067542b09cfdce5e81c3b3691c' in dockerfile
+    assert 'git apply --check' in dockerfile
+    assert 'git apply /opt/pbgui/patches/gpu-suite-invalid-metrics.patch' in dockerfile
+    assert '061e472e3d400cb3a740583d52f9d46e02eaf781' in dockerfile
+    assert patch.count('diff --git ') == 1
+    assert 'diff --git a/src/optimization/backends/gpu_backend.py b/src/optimization/backends/gpu_backend.py' in patch
+    assert '+        except MetricAggregationError as exc:' in patch
+    assert '+            from optimize import _build_invalid_candidate_metrics' in patch
+
+
+def test_unpatched_v86_worker_retains_ownership_and_calibration_evidence():
+    """Introducing a backport does not orphan existing official worker rentals."""
+    from vast_calibration import COMPATIBLE_CALIBRATION_IMAGES
+    image = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:32d7ee7a00330e01e4a2b8856275289eb8ee4b067542b09cfdce5e81c3b3691c'
+    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[image] == REVISION
+    assert image in COMPATIBLE_CALIBRATION_IMAGES

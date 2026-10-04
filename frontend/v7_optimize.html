@@ -23,7 +23,7 @@
 <script src="/app/js/optimize_editor_adapter.js?v=14"></script>
 <script src="/app/js/floating_window.js?v=1"></script>
 <script src="/app/js/pb8_loop_instructions.js?v=2"></script>
-<script src="/app/js/pb8_loop_optimizer.js?v=42"></script>
+<script src="/app/js/pb8_loop_optimizer.js?v=43"></script>
 <link rel="stylesheet" href="/app/css/pb8_loop_optimizer.css?v=14">
 <style>
 :root {
@@ -2900,6 +2900,9 @@ var state = {
   logStatusInFlight: false,
   hadActiveOptimizeRuns: false,
   livePanelRefreshInFlight: false,
+  livePanelRefreshTimer: null,
+  queueUpdateSignature: null,
+  pendingQueueUpdate: null,
   initialLoadPending: true,
   settingsLoadSeq: 0,
   settingsPushSeq: 0,
@@ -13726,11 +13729,13 @@ async function loadSettings() {
   if (requestSeq !== state.settingsLoadSeq || navigationSeq !== state.navigationSeq) return;
   var mutableQueueSettings = ['autostart', 'cpu', 'cpu_override', 'use_pbgui_market_data'];
   var queueSettingsWerePushed = pushSeq !== state.settingsPushSeq;
+  var settingsOpen = el('settings-modal').classList.contains('open');
+  var settingsDirty = settingsOpen && (state.settingsModalDirty || state.settingsModalCpuDirty || state.settingsModalCpuOverrideDirty);
   Object.keys(settings || {}).forEach(function(key) {
-    if (queueSettingsWerePushed && mutableQueueSettings.indexOf(key) >= 0) return;
+    if ((queueSettingsWerePushed || settingsDirty) && mutableQueueSettings.indexOf(key) >= 0) return;
     state.settings[key] = settings[key];
   });
-  if (el('settings-modal').classList.contains('open')) syncQueueSettingsModalFields();
+  if (settingsOpen && !settingsDirty) syncQueueSettingsModalFields();
   updateMetaCounts();
 }
 
@@ -14312,6 +14317,7 @@ function hasActiveOptimizeRuns() {
 }
 
 async function refreshLiveResultsDuringRun(force) {
+  if (document.visibilityState !== 'visible') return;
   if (state.panel !== 'results' && state.panel !== 'paretos') return;
   if (!force && !hasActiveOptimizeRuns()) return;
   if (state.livePanelRefreshInFlight) return;
@@ -14323,8 +14329,24 @@ async function refreshLiveResultsDuringRun(force) {
   }
 }
 
+function scheduleOptimizeLiveResults() {
+  if (state.livePanelRefreshTimer) window.clearInterval(state.livePanelRefreshTimer);
+  state.livePanelRefreshTimer = null;
+  if (document.visibilityState === 'visible') {
+    state.livePanelRefreshTimer = window.setInterval(function() {
+      refreshLiveResultsDuringRun().catch(handleError);
+    }, 8000);
+  }
+}
+
 function attachEventHandlers() {
+  scheduleOptimizeLiveResults();
+  window.addEventListener('pagehide', function() {
+    if (state.livePanelRefreshTimer) window.clearInterval(state.livePanelRefreshTimer);
+    state.livePanelRefreshTimer = null;
+  });
   window.addEventListener('pageshow', function(event) {
+    scheduleOptimizeLiveResults();
     if (state.initialLoadPending) return;
     if (event && event.persisted) {
       refreshOptimizePageOnReturn();
@@ -14335,6 +14357,7 @@ function attachEventHandlers() {
     }
   });
   document.addEventListener('visibilitychange', function() {
+    scheduleOptimizeLiveResults();
     if (document.visibilityState !== 'visible') {
       if (state.logStatusTimer) {
         window.clearInterval(state.logStatusTimer);
@@ -14342,12 +14365,15 @@ function attachEventHandlers() {
       }
       return;
     }
+    if (state.pendingQueueUpdate) {
+      var pending = state.pendingQueueUpdate;
+      state.pendingQueueUpdate = null;
+      applyOptimizeQueueUpdate(pending);
+    }
     if (state.logFilename && el('log-panel').classList.contains('visible') && !state.logStatusTimer) {
       startOptimizeLogStatusPolling(state.logFilename);
     }
-    if (!state.results.length && (state.configs.length || state.queue.length)) {
-      refreshOptimizePageOnReturn();
-    }
+    if (!state.initialLoadPending) refreshOptimizePageOnReturn();
   });
   el('btn-new-config').addEventListener('click', function() {
     openNewConfig().catch(handleError);
@@ -14735,7 +14761,42 @@ function initSelections() {
   });
 }
 
+function applyOptimizeQueueUpdate(msg) {
+  if (document.visibilityState !== 'visible') {
+    state.pendingQueueUpdate = msg;
+    return;
+  }
+  var signature = JSON.stringify([msg.items || [], msg.settings || {}]);
+  if (signature === state.queueUpdateSignature) return;
+  state.queueUpdateSignature = signature;
+  var hadActiveOptimizeRuns = state.hadActiveOptimizeRuns;
+  state.queuePushSeq += 1;
+  state.queue = msg.items || [];
+  if (msg.settings) {
+    state.settingsPushSeq += 1;
+    state.settings.autostart = normalizeAutostart(msg.settings.autostart);
+    var settingsOpen = el('settings-modal').classList.contains('open');
+    if (Object.prototype.hasOwnProperty.call(msg.settings, 'cpu') && (!settingsOpen || !state.settingsModalCpuDirty)) {
+      state.settings.cpu = normalizeOptimizePositiveInteger(msg.settings.cpu) || state.settings.cpu;
+    }
+    if (Object.prototype.hasOwnProperty.call(msg.settings, 'cpu_override') && (!settingsOpen || !state.settingsModalCpuOverrideDirty)) {
+      var raw = msg.settings.cpu_override;
+      state.settings.cpu_override = raw === true || String(raw).toLowerCase() === 'true';
+    }
+    if (Object.prototype.hasOwnProperty.call(msg.settings, 'use_pbgui_market_data') && (!settingsOpen || !state.settingsModalDirty)) {
+      var rawPbguiData = msg.settings.use_pbgui_market_data;
+      state.settings.use_pbgui_market_data = rawPbguiData === true || String(rawPbguiData).toLowerCase() === 'true';
+    }
+  }
+  if (el('settings-modal').classList.contains('open') && !state.settingsModalDirty) syncQueueSettingsModalFields();
+  renderQueueMaybeDeferred();
+  state.hadActiveOptimizeRuns = hasActiveOptimizeRuns();
+  refreshLiveResultsDuringRun(state.hadActiveOptimizeRuns || hadActiveOptimizeRuns).catch(handleError);
+}
+
 function connectWS() {
+  state.queueUpdateSignature = null;
+  state.pendingQueueUpdate = null;
   if (state.wsReconnectTimer) {
     window.clearTimeout(state.wsReconnectTimer);
     state.wsReconnectTimer = null;
@@ -14756,42 +14817,7 @@ function connectWS() {
     if (state.ws !== socket) return;
     var msg = JSON.parse(event.data);
     if (msg.type === 'queue_update') {
-      var hadActiveOptimizeRuns = state.hadActiveOptimizeRuns;
-      state.queuePushSeq += 1;
-      state.queue = msg.items || [];
-      if (msg.settings) {
-        state.settingsPushSeq += 1;
-        state.settings.autostart = normalizeAutostart(msg.settings.autostart);
-        if (Object.prototype.hasOwnProperty.call(msg.settings, 'cpu')) {
-          // Don't overwrite unsaved modal edits with backend-pushed settings.
-          var settingsOpen = el('settings-modal').classList.contains('open');
-          if (!settingsOpen || !state.settingsModalCpuDirty) {
-            state.settings.cpu = normalizeOptimizePositiveInteger(msg.settings.cpu) || state.settings.cpu;
-          }
-        }
-        if (Object.prototype.hasOwnProperty.call(msg.settings, 'cpu_override')) {
-          var settingsOpenForOverride = el('settings-modal').classList.contains('open');
-          if (!settingsOpenForOverride || !state.settingsModalCpuOverrideDirty) {
-            var raw = msg.settings.cpu_override;
-            var enabled = raw === true || String(raw).toLowerCase() === 'true';
-            state.settings.cpu_override = enabled;
-          }
-        }
-        if (Object.prototype.hasOwnProperty.call(msg.settings, 'use_pbgui_market_data')) {
-          var settingsOpenForPbguiData = el('settings-modal').classList.contains('open');
-          if (!settingsOpenForPbguiData || !state.settingsModalDirty) {
-            var rawPbguiData = msg.settings.use_pbgui_market_data;
-            state.settings.use_pbgui_market_data = rawPbguiData === true || String(rawPbguiData).toLowerCase() === 'true';
-          }
-        }
-      }
-      // Keep modal stable while user is editing (unsaved).
-      if (el('settings-modal').classList.contains('open') && !state.settingsModalDirty) {
-        syncQueueSettingsModalFields();
-      }
-      renderQueueMaybeDeferred();
-      state.hadActiveOptimizeRuns = hasActiveOptimizeRuns();
-      refreshLiveResultsDuringRun(state.hadActiveOptimizeRuns || hadActiveOptimizeRuns).catch(handleError);
+      applyOptimizeQueueUpdate(msg);
     }
   };
   socket.onclose = function() {

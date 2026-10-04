@@ -120,7 +120,10 @@ def test_optimize_metric_sets_come_from_pb7_metrics(monkeypatch) -> None:
     assert "backtest_completion_ratio" in payload["shared_metrics"]
 
 
-def test_optimize_limits_meta_uses_metric_sets(monkeypatch) -> None:
+@pytest.mark.parametrize("location, expected_field", [
+    ("legacy", "stat"), ("limits", "reducer"), ("reducers", "reducer"), ("missing", "stat"),
+])
+def test_optimize_limits_meta_uses_metric_sets(monkeypatch, location, expected_field) -> None:
     """Limits metadata should be buildable from PB7 metrics/limits/scoring modules."""
     modules = {
         "config.metrics": SimpleNamespace(
@@ -128,7 +131,11 @@ def test_optimize_limits_meta_uses_metric_sets(monkeypatch) -> None:
             SHARED_METRICS={"loss_profit_ratio"},
             ANALYSIS_SHARED_KEYS={"total_wallet_exposure_mean"},
         ),
-        "config.limits": SimpleNamespace(SUPPORTED_LIMIT_STATS={"min", "max"}),
+        "config.limits": SimpleNamespace(**(
+            {"SUPPORTED_LIMIT_STATS": {"min", "max"}} if location == "legacy" else
+            {"SUPPORTED_REDUCERS": {"min", "max"}} if location == "limits" else {}
+        )),
+        "config.reducers": SimpleNamespace(SUPPORTED_REDUCERS={"min", "max"}),
         "config.scoring": SimpleNamespace(
             OBJECTIVE_GOALS=("min", "max"),
             default_objective_goal=lambda metric: "max" if metric != "loss_profit_ratio" else "min",
@@ -137,6 +144,8 @@ def test_optimize_limits_meta_uses_metric_sets(monkeypatch) -> None:
 
     def fake_import(module_name: str):
         """Return a fake PB7 module by import name."""
+        if module_name == "config.reducers" and location == "missing":
+            raise ModuleNotFoundError(module_name)
         return modules[module_name]
 
     monkeypatch.setattr(pb7_bridge, "_import_pb7_module", fake_import)
@@ -147,6 +156,15 @@ def test_optimize_limits_meta_uses_metric_sets(monkeypatch) -> None:
     assert "total_wallet_exposure_mean" in payload["all_valid_metrics"]
     assert payload["default_goal_map"]["gain_usd"] == "max"
     assert "max" in payload["stat_options"]
+    assert payload["limit_basis_field"] == expected_field
+    from fastapi import Request
+    from api import optimize_v7
+    request = Request({"type": "http", "scheme": "http", "server": ("test", 80),
+                       "path": "/api/optimize-v7/main_page", "headers": [], "root_path": ""})
+    page = optimize_v7.main_page(request, None)
+    assert page.status_code == 200
+    assert b"%%LIMITS_META%%" not in page.body
+    assert json.dumps(payload).encode() in page.body
 
 
 def test_optimize_scoring_default_goals_use_pb7_scoring(monkeypatch) -> None:

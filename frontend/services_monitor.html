@@ -1194,23 +1194,52 @@ window.PBGUI_NAV_CONFIG = {
   }
 
   /* ── Status polling ────────────────────────────────────── */
+  var _statusInFlight = false;
+  var _statusRefreshQueued = false;
+
   function fetchStatus() {
+    if (_statusInFlight) {
+      // A user action asked for fresh status while a poll is running.
+      _statusRefreshQueued = true;
+      return;
+    }
+    clearTimeout(_statusTimer);
+    _statusTimer = null;
+    _statusInFlight = true;
+    _statusRefreshQueued = false;
     fetch(API_BASE + '/status', authOptions())
       .then(function (r) { return r.json(); })
-      .then(function (data) { _status = data; _statusRequestState = 'ready'; updateStatusUI(); scheduleStatus(); })
+      .then(function (data) { _status = data; _statusRequestState = 'ready'; updateStatusUI(); })
       .catch(function () {
         if (_statusRequestState !== 'ready') {
           _statusRequestState = 'unavailable';
           renderOverviewCards();
         }
-        scheduleStatus();
+      })
+      .then(function () {
+        _statusInFlight = false;
+        if (_statusRefreshQueued) fetchStatus();
+        else scheduleStatus();
       });
   }
 
   function scheduleStatus() {
     clearTimeout(_statusTimer);
+    _statusTimer = null;
+    // Hidden tabs stop polling; visibilitychange resumes immediately.
+    if (document.hidden) return;
     _statusTimer = setTimeout(fetchStatus, 5000);
   }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      // Drop the pending poll so a hidden tab never fetches.
+      clearTimeout(_statusTimer);
+      _statusTimer = null;
+    } else if (!_statusInFlight) {
+      fetchStatus();
+    }
+  });
 
   function serviceSkipped(item) {
     return item.expected === false && !item.running;

@@ -23,6 +23,7 @@ from ai_openrouter import DEFAULT_JEV_BUDGET_USD, JEV_MODEL, OPENROUTER_API, Ope
 
 from ai_capabilities import (
     AICapabilityError,
+    AICapabilityService,
     get_ai_capability_service,
     shutdown as capability_shutdown,
 )
@@ -101,9 +102,9 @@ _MAX_HISTORY_MESSAGES = 24
 _MAX_HISTORY_CHARS = 512_000
 _MAX_PROVIDER_HANDOFF_CHARS = 256_000
 _MAX_REPLY_CHARS = 40_000
-_MAX_CAPABILITY_ROUNDS = 3
-_MAX_ACTION_CAPABILITY_ROUNDS = 10
-_MAX_CAPABILITY_CALLS = 16
+_MAX_CAPABILITY_ROUNDS = 12
+_MAX_ACTION_CAPABILITY_ROUNDS = 40
+_MAX_CAPABILITY_CALLS = 128
 _MAX_REASONING_VARIANTS = 16
 _CONVERSATION_TTL_SECONDS = 2 * 60 * 60
 _CONVERSATION_RETENTION_SECONDS = 30 * 24 * 60 * 60
@@ -115,6 +116,7 @@ _CODEX_IDLE_SECONDS = 30 * 60
 _MODEL_HEALTH_INTERVAL_SECONDS = 6 * 60 * 60
 _MODEL_HEALTH_INITIAL_DELAY_SECONDS = 10
 _CODEX_STREAM_LIMIT = 4 * 1024 * 1024
+_BROWSER_ACTION_WAIT_SECONDS = 45
 _CHAT_TIMEOUT_SECONDS = 180
 _CODEX_HIGH_EFFORT_TIMEOUT_SECONDS = 300
 _CODEX_TOOL_SOFT_LIMIT = 32
@@ -129,6 +131,8 @@ _GO_INSTRUCTIONS = (
     "access."
 )
 _CAPABILITY_ACTIVITY = {
+    "list_bot_logs": "Listing current and historical bot log files",
+    "read_bot_log": "Reading server-side bot log evidence",
     "list_optimizer_configs": "Listing optimizer configurations",
     "get_optimizer_config": "Reading an optimizer configuration",
     "get_optimizer_metadata": "Reading optimizer metadata",
@@ -495,6 +499,8 @@ class CodexRuntime:
         self.stderr_task: asyncio.Task | None = None
         self.pending: dict[str, asyncio.Future] = {}
         self.notifications: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1000)
+        self.context_usage: dict[str, dict[str, int]] = {}
+        self.live_messages: dict[str, list[dict[str, Any]]] = {}
         self.write_lock = asyncio.Lock()
         self.start_lock = asyncio.Lock()
         self.turn_lock = asyncio.Lock()
@@ -592,6 +598,8 @@ class CodexRuntime:
                 future.set_exception(AIChatError("ChatGPT runtime stopped"))
         self.pending.clear()
         self.tool_results.clear()
+        self.context_usage.clear()
+        self.live_messages.clear()
         if process is not None and process.returncode is None:
             if process.stdin is not None:
                 process.stdin.close()
@@ -916,6 +924,10 @@ class CodexRuntime:
             last_turn_error = None
             chunks: list[str] = []
             completed_messages: list[str] = []
+            if not self.research_mode:
+                if thread_id not in self.live_messages and len(self.live_messages) >= 64:
+                    self.live_messages.pop(next(iter(self.live_messages)))
+                self.live_messages[thread_id] = []
             timeout_seconds = (
                 _CODEX_HIGH_EFFORT_TIMEOUT_SECONDS
                 if effort.lower() in {"high", "xhigh", "ultra"}
@@ -992,6 +1004,14 @@ class CodexRuntime:
                                     raise AIChatError("Loop response exceeded the reserved output allowance")
                             if sum(len(chunk) for chunk in chunks) > _MAX_REPLY_CHARS:
                                 raise AIChatError("ChatGPT response is too large")
+                            if not self.research_mode and delta:
+                                item_id = str(payload.get("itemId") or "message")[:200]
+                                entries = self.live_messages[thread_id]
+                                if not entries or entries[-1]["item_id"] != item_id:
+                                    if len(entries) >= 100:
+                                        entries.pop(0)
+                                    entries.append({"item_id": item_id, "timestamp": time.time(), "content": ""})
+                                entries[-1]["content"] += delta
                     elif method == "item/completed":
                         item = payload.get("item")
                         if isinstance(item, dict) and item.get("type") == "agentMessage":
@@ -1134,6 +1154,21 @@ class CodexRuntime:
                             }
                         )
                     continue
+                if message.get("method") == "thread/tokenUsage/updated":
+                    params = message.get("params") or {}
+                    usage = params.get("tokenUsage") if isinstance(params, dict) else None
+                    last = usage.get("last") if isinstance(usage, dict) else None
+                    used = last.get("totalTokens") if isinstance(last, dict) else None
+                    limit = usage.get("modelContextWindow") if isinstance(usage, dict) else None
+                    thread_id = params.get("threadId") if isinstance(params, dict) else None
+                    if (isinstance(thread_id, str) and 0 < len(thread_id) <= 200
+                            and type(used) is int and 0 <= used <= 10**12
+                            and type(limit) is int and 0 < limit <= 10**12):
+                        if thread_id not in self.context_usage and len(self.context_usage) >= 64:
+                            self.context_usage.pop(next(iter(self.context_usage)))
+                        self.context_usage[thread_id] = {"used_tokens": used, "limit_tokens": limit}
+                    elif isinstance(thread_id, str):
+                        self.context_usage.pop(thread_id, None)
                 if message.get("method") == "account/login/completed":
                     params = message.get("params")
                     if isinstance(params, dict) and params.get("loginId") == self.login_id:
@@ -1970,7 +2005,7 @@ class AIChatService:
             conversation = self._owned_conversation(owner, conversation_id)
             if conversation.closed:
                 return
-            conversation.activity = str(activity)[:160]
+            conversation.activity = str(activity)[:500]
             conversation.activity_step += 1
             if (
                 not conversation.activity_history
@@ -2298,7 +2333,7 @@ class AIChatService:
             )
 
     async def acknowledge_ui_action(
-        self, owner: str, conversation_id: str, action_id: str
+        self, owner: str, conversation_id: str, action_id: str, context: dict[str, Any] | None = None
     ) -> None:
         """Remove one browser action only after an allowlisted page handled it."""
         if len(action_id) != 32 or any(char not in "0123456789abcdef" for char in action_id):
@@ -2308,12 +2343,19 @@ class AIChatService:
             retained = [item for item in conversation.ui_actions if item.get("action_id") != action_id]
             if len(retained) == len(conversation.ui_actions):
                 raise AIChatError("UI action not found")
+            action = next(item for item in conversation.ui_actions if item.get("action_id") == action_id)
+            if context is not None:
+                conversation.context = self._validate_page_context(context)
+            # The waiting tool owns this same in-memory record; it is removed
+            # from persisted actions before the acknowledgement is committed.
+            action["acknowledged"] = True
+            action["page_context"] = copy.deepcopy(conversation.context)
             conversation.ui_actions = retained
             conversation.revision += 1
             self._persist_conversation(conversation)
 
     async def _capture_ui_action(
-        self, owner: str, conversation_id: str, result: object
+        self, owner: str, conversation_id: str, result: object, *, wait_for_browser: bool = False
     ) -> None:
         """Persist one typed browser action emitted by a trusted capability handler."""
         if self.analysis_policy.analysis_only(owner, conversation_id):
@@ -2333,6 +2375,10 @@ class AIChatService:
         encoded = json.dumps(action, allow_nan=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > 32 * 1024:
             raise AIChatError("PBGui UI action is too large")
+        if action["type"] == "chat.quick_replies":
+            reject = getattr(self.capabilities, "reject_conversation", None)
+            if reject is not None:
+                await reject(owner, conversation_id)
         record = {
             "action_id": uuid4().hex,
             "type": action["type"],
@@ -2342,9 +2388,25 @@ class AIChatService:
         }
         async with self.state_lock:
             conversation = self._owned_conversation(owner, conversation_id)
+            if action["type"] == "chat.quick_replies":
+                conversation.ui_actions = [item for item in conversation.ui_actions
+                                           if item.get("type") != "chat.quick_replies"]
             conversation.ui_actions = [*conversation.ui_actions[-19:], record]
             conversation.revision += 1
             self._persist_conversation(conversation)
+
+        if wait_for_browser and action["type"] == "page.perform_action":
+            await self._set_activity(owner, conversation_id, "Waiting for the browser to finish the page action")
+            deadline = time.monotonic() + _BROWSER_ACTION_WAIT_SECONDS
+            while not record.get("acknowledged") and time.monotonic() < deadline:
+                await asyncio.sleep(0.05)
+            if record.get("acknowledged"):
+                result["status"] = "browser_acknowledged"
+                result["page_context"] = copy.deepcopy(record["page_context"])
+                result["instruction"] = "The browser completed this action. Use this updated untrusted page context for the next control; the original turn context may be stale."
+            else:
+                result["status"] = "browser_unconfirmed"
+                result["instruction"] = "The browser has not confirmed this action. Do not claim it executed or issue dependent actions based on the old page context."
 
     async def preview_jev_transfer(
         self, owner: str, conversation_id: str, message: str, model: str,
@@ -2465,7 +2527,7 @@ class AIChatService:
                     raise AIChatError("Conversation is busy")
                 if sum(1 for item in self.conversations.values() if item.busy) >= _MAX_ACTIVE_TURNS:
                     raise AIChatError("AI turn capacity reached")
-            await self.capabilities.reject_conversation(owner, conversation_id)
+            await self.capabilities.reject_conversation(owner, conversation_id, preserve_configurations=True)
         turn_id = uuid4().hex
         async with self.state_lock:
             conversation = self._owned_conversation(owner, conversation_id)
@@ -2950,6 +3012,13 @@ class AIChatService:
         self, conversation: Conversation, *, include_messages: bool
     ) -> dict[str, Any]:
         """Return a browser-safe conversation projection."""
+        runtime = conversation.codex_runtime
+        context_usage = (getattr(runtime, "context_usage", {}).get(conversation.codex_thread_id)
+                         if conversation.provider == "chatgpt" and runtime is not None else None)
+        turn_started = (conversation.activity_history[0].get("timestamp", 0)
+                        if conversation.activity_history else time.time())
+        live_messages = (getattr(runtime, "live_messages", {}).get(conversation.codex_thread_id, [])
+                         if conversation.busy and conversation.provider == "chatgpt" else [])
         payload = {
             "conversation_id": conversation.id,
             "title": conversation.title,
@@ -2969,6 +3038,11 @@ class AIChatService:
             "context": copy.deepcopy(conversation.context),
             "reasoning_summary": conversation.reasoning_summary,
             "activity_history": copy.deepcopy(conversation.activity_history),
+            "context_usage": copy.deepcopy(context_usage),
+            "streaming_messages": [
+                {"timestamp": item["timestamp"], "content": item["content"]}
+                for item in live_messages if item["timestamp"] >= turn_started
+            ],
             "analysis_only": self.analysis_policy.analysis_only(conversation.owner, conversation.id),
             "ui_actions": [] if self.analysis_policy.analysis_only(conversation.owner, conversation.id) else copy.deepcopy(conversation.ui_actions),
         }
@@ -3423,6 +3497,16 @@ class AIChatService:
             raise AIChatError("OpenCode Go response is too large")
         return text
 
+    async def _waiting_for_clarification(self, owner: str, conversation_id: str, tool: str) -> bool:
+        """Prevent review proposals while the current user decision is unanswered."""
+        if not tool.startswith("propose_"):
+            return False
+        async with self.state_lock:
+            conversation = self.conversations.get(conversation_id)
+            return bool(conversation and conversation.owner == owner and any(
+                action.get("type") == "chat.quick_replies" for action in conversation.ui_actions
+            ))
+
     async def _agent_capability_result(
         self,
         owner: str,
@@ -3432,6 +3516,9 @@ class AIChatService:
         seen_requests: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         """Replay exact results without repeating effects; let corrected requests execute."""
+        if await self._waiting_for_clarification(owner, conversation_id, name):
+            await self._set_activity(owner, conversation_id, "Waiting for your answer before preparing a review")
+            return {"success": False, "error": "A clarification is unanswered. Stop and wait for the user's answer before preparing any review proposal."}
         if not isinstance(arguments, dict):
             return {
                 "success": False,
@@ -3456,16 +3543,17 @@ class AIChatService:
         )
         try:
             result = await self.capabilities.dispatch(owner, conversation_id, name, args)
-            await self._capture_ui_action(owner, conversation_id, result)
+            await self._capture_ui_action(owner, conversation_id, result, wait_for_browser=True)
             output = {"success": True, "result": result}
         except AICapabilityError as exc:
-            output = {"success": False, "error": str(exc)}
+            detail = AICapabilityService._path_free_error(str(exc))
+            output = {"success": False, "error": detail}
         await self._set_activity(
             owner,
             conversation_id,
-            _CAPABILITY_RESULT_ACTIVITY.get(
+            (f"AI continuing after {name} error: {detail}" if not output["success"] else _CAPABILITY_RESULT_ACTIVITY.get(
                 name, "PBGui capability complete; model is processing results"
-            ),
+            )),
         )
         seen_requests[request_key] = output
         return output
@@ -4504,6 +4592,11 @@ class AIChatService:
                 ],
                 "success": False,
             }
+        if await self._waiting_for_clarification(owner, conversation.id, tool):
+            await self._set_activity(owner, conversation.id, "Waiting for your answer before preparing a review")
+            return {"contentItems": [{"type": "inputText", "text": json.dumps({
+                "error": "A clarification is unanswered. Stop and wait for the user's answer before preparing any review proposal."
+            })}], "success": False}
         try:
             arguments_key = json.dumps(
                 params.get("arguments"), allow_nan=False, sort_keys=True, separators=(",", ":")
@@ -4580,7 +4673,7 @@ class AIChatService:
                 tool,
                 params.get("arguments"),
             )
-            await self._capture_ui_action(owner, conversation.id, result)
+            await self._capture_ui_action(owner, conversation.id, result, wait_for_browser=True)
             await self._set_activity(
                 owner,
                 conversation.id,
@@ -4618,10 +4711,11 @@ class AIChatService:
                 }
             return response
         except AICapabilityError as exc:
+            detail = AICapabilityService._path_free_error(str(exc))
             await self._set_activity(
-                owner, conversation.id, "PBGui capability failed; model is processing the error"
+                owner, conversation.id, f"AI continuing after {tool} error: {detail}"
             )
-            text = json.dumps({"error": str(exc)}, separators=(",", ":"))
+            text = json.dumps({"error": detail, "tool": tool, "turn_stopped": False}, separators=(",", ":"))
             return {"contentItems": [{"type": "inputText", "text": text}], "success": False}
 
     async def _close_idle_codex_runtimes(self) -> None:
@@ -4897,6 +4991,8 @@ class AIChatService:
             return
         selected_runtime = runtime or conversation.codex_runtime or self.codex.get(self._profile_key(conversation.owner, conversation.chatgpt_profile))
         if selected_runtime is not None:
+            getattr(selected_runtime, "context_usage", {}).pop(thread_id, None)
+            getattr(selected_runtime, "live_messages", {}).pop(thread_id, None)
             if not await selected_runtime.unsubscribe(thread_id):
                 selected_runtime.closing = True
                 if self.codex.get(self._profile_key(conversation.owner, conversation.chatgpt_profile)) is selected_runtime:
@@ -5197,6 +5293,10 @@ class AIChatService:
             "entfernen",
             "hinzufügen",
             "hinzufuegen",
+            "create ",
+            "erstell",
+            "continue",
+            "weiter",
             "change ",
             "adjust ",
             "update ",

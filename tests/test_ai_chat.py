@@ -26,6 +26,53 @@ from ai_chat import (
 )
 
 
+def test_codex_context_telemetry_is_bounded_and_thread_scoped(tmp_path):
+    """Only valid last-request usage reaches the matching browser conversation."""
+    from types import SimpleNamespace
+    from ai_chat import CodexRuntime, Conversation
+
+    async def scenario():
+        """Read synthetic provider notifications without spawning a runtime."""
+        runtime = CodexRuntime("a" * 32, tmp_path / "codex")
+        stream = asyncio.StreamReader()
+        for thread, used, limit in [("thread-a", 25000, 100000), ("thread-b", True, 100000)]:
+            event = {"method": "thread/tokenUsage/updated", "params": {
+                "threadId": thread, "turnId": "turn-a", "tokenUsage": {
+                    "last": {"totalTokens": used}, "total": {"totalTokens": 99999999},
+                    "modelContextWindow": limit, "untrusted_extra": "never project",
+                }}}
+            stream.feed_data((json.dumps(event) + "\n").encode())
+        stream.feed_eof()
+        runtime.process = SimpleNamespace(stdout=stream, returncode=None)
+        await runtime._read_stdout()
+        assert runtime.context_usage == {"thread-a": {"used_tokens": 25000, "limit_tokens": 100000}}
+        service = AIChatService(tmp_path / "ai")
+        conversation = Conversation(id="b" * 32, owner="a" * 32, provider="chatgpt", model="test",
+                                    codex_runtime=runtime, codex_thread_id="thread-a")
+        assert service._conversation_projection(conversation, include_messages=False)["context_usage"] == runtime.context_usage["thread-a"]
+        runtime.live_messages["thread-a"] = [
+            {"item_id": "old", "timestamp": 5, "content": "old turn"},
+            {"item_id": "new", "timestamp": 20, "content": "live answer"},
+        ]
+        conversation.activity_history = [{"timestamp": 10, "message": "Starting model"}]
+        conversation.busy = True
+        assert service._conversation_projection(conversation, include_messages=False)["streaming_messages"] == [{"timestamp": 20, "content": "live answer"}]
+        conversation.busy = False
+        assert service._conversation_projection(conversation, include_messages=False)["streaming_messages"] == []
+        conversation.codex_thread_id = "thread-b"
+        assert service._conversation_projection(conversation, include_messages=False)["context_usage"] is None
+        conversation.codex_thread_id = "thread-a"
+        conversation.provider = "openrouter"
+        assert service._conversation_projection(conversation, include_messages=False)["context_usage"] is None
+        runtime.process = None
+        await runtime.close()
+        assert not runtime.context_usage
+        assert not runtime.live_messages
+        await service.capabilities.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_jev_tool_only_visible_with_connected_openrouter() -> None:
     """Filter Jev from every provider tool format while retaining other tools."""
     jev = "propose_jev_optimizer_analysis"
@@ -682,7 +729,7 @@ def test_responses_agent_turns_excess_parallel_calls_into_final_answer(
                 "name": "search_passivbot_docs",
                 "arguments": json.dumps({"version": "v8", "query": f"query-{index}"}),
             }
-            for index in range(18)
+            for index in range(130)
         ]
         payloads = [
             {"output": calls},
@@ -710,11 +757,11 @@ def test_responses_agent_turns_excess_parallel_calls_into_final_answer(
         )
 
         assert reply == "Final answer"
-        assert len(capabilities.calls) == 16
+        assert len(capabilities.calls) == 128
         assert "tools" in session.requests[0]
         assert "tools" not in session.requests[1]
         outputs = [item for item in session.requests[1]["input"] if item.get("type") == "function_call_output"]
-        assert len(outputs) == 18
+        assert len(outputs) == 130
         assert all(json.loads(item["output"])["success"] is False for item in outputs[-2:])
         assert all("budget exhausted" in json.loads(item["output"])["error"] for item in outputs[-2:])
         await service.shutdown()
@@ -1732,7 +1779,8 @@ def test_new_user_turn_supersedes_pending_proposals(tmp_path: Path, monkeypatch)
         conversation = await service._conversation(owner, "opencode-go", "model", None)
         rejected = []
 
-        async def reject_conversation(owner_arg, conversation_id_arg):
+        async def reject_conversation(owner_arg, conversation_id_arg, *, preserve_configurations=False):
+            assert preserve_configurations is True
             rejected.append((owner_arg, conversation_id_arg))
 
         async def fake_go_chat(*_args, **_kwargs):
@@ -2026,16 +2074,16 @@ def test_action_requests_receive_extended_bounded_capability_rounds() -> None:
     """Config mutations need enough rounds to read, validate, correct, and propose."""
     assert AIChatService._capability_round_limit(
         [{"role": "user", "content": "Passe die aktuelle Config an und speichere sie nach Freigabe"}]
-    ) == 10
+    ) == 40
     assert AIChatService._capability_round_limit(
         [{"role": "user", "content": "Markiere mir die drei stabilsten Pareto-Kandidaten"}]
-    ) == 10
+    ) == 40
     assert AIChatService._capability_round_limit(
         [{"role": "user", "content": "Queue die beiden PB8 Jobs und starte sie direkt"}]
-    ) == 10
+    ) == 40
     assert AIChatService._capability_round_limit(
         [{"role": "user", "content": "Erkläre mir diese Metrik"}]
-    ) == 3
+    ) == 12
     assert "do not repeat searches with minor query variations" in _go_instructions(
         "kimi-k3", tools_enabled=True
     )
@@ -2304,6 +2352,8 @@ def test_codex_turn_sends_exact_selected_effort(tmp_path: Path, monkeypatch) -> 
         reply = await runtime.chat("thread-1", "Hello", "gpt-test", "ultra", "priority")
 
         assert reply == "answer"
+        assert runtime.live_messages["thread-1"][0]["content"] == "answer"
+        assert set(runtime.live_messages["thread-1"][0]) == {"item_id", "timestamp", "content"}
         assert captured["effort"] == "ultra"
         assert captured["serviceTierForTurn"] == "priority"
         await runtime.chat("thread-1", "Standard speed", "gpt-test", "", "default")
@@ -2332,6 +2382,48 @@ def test_codex_turn_timeout_returns_safe_ai_error(tmp_path: Path, monkeypatch) -
 
         with pytest.raises(AIChatError, match="ChatGPT response timed out"):
             await runtime.chat("thread-1", "Hello", "gpt-test", "high")
+
+    asyncio.run(scenario())
+
+
+def test_codex_tool_error_reason_is_visible_without_stopping_turn(tmp_path):
+    """A rejected request remains observable and a corrected retry can succeed."""
+    from ai_chat import CodexRuntime
+    from ai_capabilities import AICapabilityError
+
+    class FakeCapabilities:
+        """Return a validation failure followed by a successful preview."""
+        calls = 0
+
+        async def dispatch(self, *args):
+            """Simulate deterministic tool responses without runtime access."""
+            self.calls += 1
+            if self.calls == 1:
+                raise AICapabilityError("window_days must be between 1 and 3650")
+            return {"training_scenarios": []}
+
+    async def scenario():
+        """Exercise failure projection, retained history and successful continuation."""
+        service = AIChatService(tmp_path / "ai")
+        service.capabilities = FakeCapabilities()
+        runtime = CodexRuntime("a" * 32, tmp_path / "codex")
+        runtime.active_turn_id = "turn-1"
+        conversation = await service._conversation("a" * 32, "chatgpt", "test", None)
+        conversation.codex_thread_id = "thread-1"
+        conversation.codex_runtime = runtime
+        conversation.busy = True
+        params = {"namespace": "pbgui", "tool": "preview_pb8_scenario_template",
+                  "threadId": "thread-1", "turnId": "turn-1", "arguments": {}}
+        failed = await service._handle_codex_tool("a" * 32, runtime, params)
+        error = json.loads(failed["contentItems"][0]["text"])
+        assert not failed["success"] and not error["turn_stopped"]
+        assert error["tool"] == params["tool"]
+        assert "window_days" in conversation.activity and "AI continuing" in conversation.activity
+        assert conversation.busy
+        recovered = await service._handle_codex_tool("a" * 32, runtime, params)
+        assert recovered["success"]
+        assert any("window_days" in row["message"] for row in conversation.activity_history)
+        await service.shutdown()
 
     asyncio.run(scenario())
 
@@ -2719,4 +2811,116 @@ def test_health_refresh_and_disconnect_share_one_credential_boundary(
         assert not service._health_path(owner).exists()
         await service.shutdown()
 
+    asyncio.run(scenario())
+
+
+def test_clarification_blocks_review_tools_for_all_provider_paths(tmp_path, monkeypatch):
+    """Neither provider path can create or replay a review before an answer arrives."""
+    from ai_chat import CodexRuntime
+
+    async def scenario():
+        """Keep reads available and allow proposals again after the question clears."""
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation("a" * 32, "chatgpt", "test", None)
+        runtime = CodexRuntime("a" * 32, tmp_path / "codex")
+        runtime.active_turn_id = "turn-1"
+        conversation.codex_thread_id = "thread-1"
+        conversation.codex_runtime = runtime
+        conversation.busy = True
+        conversation.ui_actions = [{"type": "chat.quick_replies"}]
+        calls = []
+
+        async def dispatch(*args):
+            """Record synthetic requests without creating a proposal."""
+            calls.append(args[2])
+            return {"returned": 0}
+
+        monkeypatch.setattr(service.capabilities, "dispatch", dispatch)
+        result = await service._agent_capability_result("a" * 32, conversation.id, "propose_ai_loop_config", {}, {})
+        assert not result["success"] and "unanswered" in result["error"]
+        result = await service._handle_codex_tool("a" * 32, runtime, {
+            "namespace": "pbgui", "tool": "propose_pb8_optimizer_config", "threadId": "thread-1",
+            "turnId": "turn-1", "arguments": {},
+        })
+        assert not result["success"] and not calls
+        read = await service._agent_capability_result("a" * 32, conversation.id, "get_optimizer_config", {}, {})
+        assert read["success"]
+        conversation.ui_actions = []
+        result = await service._agent_capability_result("a" * 32, conversation.id, "propose_ai_loop_config", {}, {})
+        assert result["success"]
+        assert calls == ["get_optimizer_config", "propose_ai_loop_config"]
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_new_clarification_revokes_existing_review(tmp_path, monkeypatch):
+    """A late clarification removes the conflicting pending approval instead of coexisting."""
+    import ai_capabilities
+
+    async def scenario():
+        """Use an actual isolated proposal store with no native writes."""
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation("a" * 32, "chatgpt", "test", None)
+        caps = service.capabilities
+        monkeypatch.setattr(caps, "_current_pb8_bundle", lambda name: (None, {}, None))
+        monkeypatch.setattr(caps, "_queue_preview", lambda config, overrides: {})
+        monkeypatch.setattr(ai_capabilities, "load_ini_section", lambda section: {})
+        proposal = await caps._create_proposal("a" * 32, conversation.id, "save", "demo", {"optimize": {}})
+        result = {"ui_action": {"type": "chat.quick_replies", "target": {"page_key": "ai_chat"},
+                                "payload": {"question": "Choose a setting", "choices": []}}}
+        await service._capture_ui_action("a" * 32, conversation.id, result)
+        assert caps.proposals[proposal["proposal_id"]].status == "rejected"
+        assert len(conversation.ui_actions) == 1
+        await service._capture_ui_action("a" * 32, conversation.id, result)
+        assert len(conversation.ui_actions) == 1
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_page_action_waits_for_browser_and_returns_new_section(tmp_path):
+    """Navigation must return the completed Queue context rather than old Config controls."""
+    async def scenario():
+        """Simulate a real browser acknowledgement while the model tool is waiting."""
+        owner = 'a' * 32
+        service = AIChatService(tmp_path / 'ai')
+        conversation = await service._conversation(owner, 'opencode-go', 'model', None)
+        conversation.context = {'page_key': 'v8_optimize', 'section': 'loops-config'}
+        result = {'status': 'queued_for_browser', 'ui_action': {
+            'type': 'page.perform_action', 'target': {'page_key': 'v8_optimize'},
+            'payload': {'action': 'activate', 'entity': {'kind': 'ui_control', 'name': 'queue'}}}}
+        task = asyncio.create_task(service._capture_ui_action(owner, conversation.id, result, wait_for_browser=True))
+        while not conversation.ui_actions:
+            await asyncio.sleep(0)
+        assert not task.done()
+        action_id = conversation.ui_actions[0]['action_id']
+        with pytest.raises(AIChatError):
+            await service.acknowledge_ui_action('b' * 32, conversation.id, action_id, context={'section': 'loops-queue'})
+        assert not task.done()
+        await service.acknowledge_ui_action(owner, conversation.id, action_id, context={'page_key': 'v8_optimize', 'section': 'loops-queue'})
+        await task
+        assert result['status'] == 'browser_acknowledged'
+        assert result['page_context']['section'] == 'loops-queue'
+        assert conversation.context['section'] == 'loops-queue'
+        assert not conversation.ui_actions
+        await service.shutdown()
+    asyncio.run(scenario())
+
+
+def test_page_action_timeout_retains_unconfirmed_action(tmp_path, monkeypatch):
+    """No browser acknowledgement must never be reported as successful execution."""
+    monkeypatch.setattr('ai_chat._BROWSER_ACTION_WAIT_SECONDS', 0)
+    async def scenario():
+        """Leave the queued action available for a later browser reconnection."""
+        owner = 'a' * 32
+        service = AIChatService(tmp_path / 'ai')
+        conversation = await service._conversation(owner, 'opencode-go', 'model', None)
+        result = {'ui_action': {'type': 'page.perform_action', 'target': {'page_key': 'v8_optimize'},
+                               'payload': {'action': 'activate', 'entity': {'kind': 'ui_control', 'name': 'queue'}}}}
+        await service._capture_ui_action(owner, conversation.id, result, wait_for_browser=True)
+        assert result['status'] == 'browser_unconfirmed'
+        assert 'page_context' not in result
+        assert len(conversation.ui_actions) == 1
+        await service.shutdown()
     asyncio.run(scenario())

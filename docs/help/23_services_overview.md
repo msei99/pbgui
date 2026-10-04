@@ -100,3 +100,5 @@ Settings saves are locked while pending. Validation errors identify the affected
 The navigation Restart action shows progress immediately after confirmation and ignores duplicate clicks. PBGui reconnects automatically and verifies that a new API instance is running before reloading the current page. A lost restart response is checked without automatically submitting another restart.
 
 Press Escape to close the active Services Monitor Help, Prices, result, CMC key, or CMC authority dialog. A CMC dialog remains open while its mutation is in progress.
+
+If the code version changes during a restart, PBGui performs one follow-up restart after the replacement API is available. The progress display identifies services still running older code. Persistent failures remain visible instead of repeatedly restarting services.

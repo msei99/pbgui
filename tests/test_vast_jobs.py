@@ -1013,3 +1013,59 @@ def test_ambiguous_creation_absence_recovers_without_manual_cleanup(job):
     assert not guard_step(store, identifier, client, intent, '', now=1220)
     assert guard_step(store, identifier, client, intent, '', now=1230)
     assert client.calls == [('PUT', '/asks/42/')]
+
+
+@pytest.mark.parametrize('specific', [False, True])
+def test_failed_optimizer_exit_is_not_result_import_failure(tmp_path, monkeypatch, specific):
+    """An upstream execution failure needs no nonexistent-result import retry."""
+    import vast_job_runner as runner
+    store = JobStore(tmp_path / 'vast')
+    state = store.create_preparation('failure', 20_000, 4, False)
+    identifier = state['id']
+    final = ensure_private_directory(store.directory(identifier) / 'final-results')
+    write_json(final / 'finished.json', {'cancelled': False, 'exit_code': 1, 'wall_seconds': 3})
+    (final / 'optimizer.log').write_text('suite mode does not support asymmetric live.approved_coins; token=secret' if specific else 'unexpected error')
+    def forbidden(*args, **kwargs):
+        """No valid results exist for the importer to process."""
+        pytest.fail('Failed execution was incorrectly sent to result import')
+    monkeypatch.setattr(runner, 'import_results', forbidden)
+    row = runner.finalize_collected_results(store, identifier)
+    assert row['status'] == 'failed' and row['exit_code'] == 1
+    assert 'optimizer exited with code 1' in row['error']
+    assert ('Suite requires identical' in row['error']) is specific
+    assert 'secret' not in row['error'] and 'import needs retry' not in row['error']
+
+
+def test_failed_optimizer_preserves_importable_partial_results(tmp_path, monkeypatch):
+    """A nonzero exit does not discard collected evaluations that can still import."""
+    import vast_job_runner as runner
+    import vast_convergence
+    store = JobStore(tmp_path / 'vast')
+    identifier = store.create_preparation('partial_failure', 20_000, 4, False)['id']
+    final = ensure_private_directory(store.directory(identifier) / 'final-results')
+    write_json(final / 'finished.json', {'cancelled': False, 'exit_code': 1})
+    results = ensure_private_directory(final / 'optimize_results' / 'run')
+    (results / 'all_results.bin').write_bytes(b'collected')
+    monkeypatch.setattr(runner, 'import_results', lambda *args: {'evaluations': 12})
+    monkeypatch.setattr(vast_convergence, 'observe', lambda *args, **kwargs: None)
+    row = runner.finalize_collected_results(store, identifier)
+    assert row['exact_completed'] == 12
+    assert row['status'] == 'failed' and 'exited with code 1' in row['error']
+
+
+def test_gpu_constraint_safety_failure_explains_completion_boundary(tmp_path):
+    """Surface the native safety cause without exposing arbitrary optimizer-log content."""
+    import vast_job_runner as runner
+    store = JobStore(tmp_path / 'vast')
+    identifier = store.create_preparation('completion_failure', 20_000, 4, False)['id']
+    final = ensure_private_directory(store.directory(identifier) / 'final-results')
+    write_json(final / 'finished.json', {'cancelled': False, 'exit_code': 1})
+    (final / 'optimizer.log').write_text(
+        'backtest_completion_ratio_min: proxy=0.999994662 exact=1.0 mode=less_than bound=1.0\n'
+        'GPU proxy/exact proxy-front constraint agreement fell below safety threshold\n'
+        'token=secret')
+    row = runner.finalize_collected_results(store, identifier)
+    assert row['status'] == 'failed'
+    assert 'Passivbot safety check' in row['error']
+    assert 'strict completion limit 1.0' in row['error']
+    assert 'secret' not in row['error']
