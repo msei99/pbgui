@@ -8,14 +8,16 @@ from tests.test_vast_jobs import job, Provider
 
 
 def test_published_worker_build_uses_pinned_official_pb8():
-    """The published worker build must not inherit an obsolete PB8 image."""
+    """The candidate build pins official PB8 while preserving the PR overlay."""
     root = Path(__file__).resolve().parents[1] / 'setup' / 'vast_gpu_benchmark'
-    revision = '061e472e3d400cb3a740583d52f9d46e02eaf781'
-    base_tag = 'pbgui-pb8-worker:upstream-061e472-base'
+    revision = '00ce7d0ddf123071ae67db149753d6b3619f52ac'
+    base_tag = 'pbgui-pb8-worker:upstream-00ce7d0-pr1871-base'
     base = (root / 'Dockerfile').read_text()
     assert 'git clone https://github.com/enarjord/passivbot.git' in base
     assert f'ARG PB8_REVISION={revision}' in base
     assert 'git rev-parse HEAD > /opt/pb8-revision' in base
+    assert 'git apply --check /opt/pbgui/patches/gpu-suite-invalid-metrics.patch' in base
+    assert 'git apply /opt/pbgui/patches/gpu-suite-invalid-metrics.patch' in base
     assert 'rsync' in base
     wrapper = (root / 'Dockerfile.calibration').read_text()
     assert f'FROM {base_tag}' in wrapper
@@ -142,5 +144,13 @@ def test_unpatched_v86_worker_retains_ownership_and_calibration_evidence():
     """Introducing a backport does not orphan existing official worker rentals."""
     from vast_calibration import COMPATIBLE_CALIBRATION_IMAGES
     image = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:32d7ee7a00330e01e4a2b8856275289eb8ee4b067542b09cfdce5e81c3b3691c'
-    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[image] == REVISION
+    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[image] == '061e472e3d400cb3a740583d52f9d46e02eaf781'
+    assert image in COMPATIBLE_CALIBRATION_IMAGES
+
+
+def test_previous_suite_metric_worker_keeps_original_revision():
+    """The latest upgrade preserves recovery for the preceding patched image."""
+    from vast_calibration import COMPATIBLE_CALIBRATION_IMAGES
+    image = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:792a11f40098a3fffe9365c46e38f60c7bddaa35179c9bc608d130b5e1449dbe'
+    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[image] == '061e472e3d400cb3a740583d52f9d46e02eaf781'
     assert image in COMPATIBLE_CALIBRATION_IMAGES

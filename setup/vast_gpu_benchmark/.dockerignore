@@ -1,5 +1,10 @@
 *
 !Dockerfile
+!Dockerfile.calibration
+!Dockerfile.suite-metrics
+!worker_candidate.json
+!patches/
+!patches/gpu-suite-invalid-metrics.patch
 !Dockerfile.worker
 !Dockerfile.exact-progress-test
 !cloud_worker.py

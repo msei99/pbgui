@@ -8,31 +8,46 @@ The current integration is in **PB8 Optimize**, with Cloud setup in Queue and GP
 selection in the editor. Multiple jobs share one rental and cached market data.
 See the [user guide](../../docs/help/48_vast_gpu.md).
 
-Active worker image: `ghcr.io/msei99/pbgui-pb8-worker:061e472-upstream-v1`
-(pinned by manifest digest in PBGui). It uses the unmodified official
-`enarjord/passivbot` commit `061e472e3d400cb3a740583d52f9d46e02eaf781`, with
-config schema v8.6.0 and the native HSL controller. Build the
-base with `Dockerfile` and add the PBGui worker with `Dockerfile.calibration`.
+The isolated RTX 3060 reproduction of the HSL terminal-balance valuation error,
+paired fix results, synthetic configuration generator, and exact patch/native
+provenance are documented in the
+[reproduction report](../../docs/plans/vast-hsl-terminal-balance-reproduction.md).
+The historical HSL backport is retained with its reproduction evidence. The new
+candidate below includes that fix directly from official upstream sources;
+production image pins are unchanged.
+
+Active worker image: `ghcr.io/msei99/pbgui-pb8-worker:00ce7d0-pr1871-v1`
+(pinned by manifest digest in PBGui). It uses official
+`enarjord/passivbot` commit `00ce7d0ddf123071ae67db149753d6b3619f52ac`, with
+config schema v8.6.0, the upstream HSL terminal-balance fix, and the unchanged
+Python-only PR #1871 candidate-metric overlay. The immutable manifest is
+`sha256:47032b1e42076555a29909a9b888cd24efb69dec6ccd80d06ac26b0bc653ac99`.
+Publication provenance and compressed layer sizes are recorded in
+`worker_release.json`; local build inputs are recorded in `worker_candidate.json`.
 Existing rentals retain their own image and process state; see the
-[image release review](../../docs/plans/vast-worker-image-release.md).
+[current image release review](../../docs/plans/vast-worker-upgrade-00ce7d0.md).
 
 PBGui pins its manifest digest; no registry token is needed to download it.
-The [image release review](../../docs/plans/vast-worker-image-release.md) records
-content/license checks and anonymous access validation. The same image runs
+The [image release review](../../docs/plans/vast-worker-upgrade-00ce7d0.md) records
+the completed checks and anonymous access validation. The same image runs
 ordinary rentals and GPU calibration; normal users do
 not build or publish images. Publishing a new version is a maintainer release
 operation, not part of creating a queue job.
 
-### Rebuilding the schema v8.6 worker
+### Building the current upstream candidate
 
-The recipes target the official source revision of the published worker.
-Its verified immutable manifest is
-`sha256:32d7ee7a00330e01e4a2b8856275289eb8ee4b067542b09cfdce5e81c3b3691c`.
-Build locally:
+The recipes target official PB8 revision
+`00ce7d0ddf123071ae67db149753d6b3619f52ac`, selected on 2026-10-06. This revision
+already includes the HSL fix from `1d142ec`. PR #1871 remains open; its original
+runtime patch applies without adaptation. The base build verifies the revision
+and patch SHA256 before installing PB8 and rebuilding Rust. Exact provenance is
+in `worker_candidate.json`. No other historical PB8 overlays are applied.
+
+Build locally (these tags are unpublished candidates):
 
 ```sh
-docker build -f setup/vast_gpu_benchmark/Dockerfile -t pbgui-pb8-worker:upstream-061e472-base setup/vast_gpu_benchmark
-docker build -f setup/vast_gpu_benchmark/Dockerfile.calibration -t pbgui-pb8-worker:upstream-061e472-calibration setup/vast_gpu_benchmark
+docker build -f setup/vast_gpu_benchmark/Dockerfile -t pbgui-pb8-worker:upstream-00ce7d0-pr1871-base setup/vast_gpu_benchmark
+docker build -f setup/vast_gpu_benchmark/Dockerfile.calibration -t pbgui-pb8-worker:upstream-00ce7d0-pr1871-candidate setup/vast_gpu_benchmark
 ```
 
 Verify the native config loader, Rust source stamp, worker import and GPU metric

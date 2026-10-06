@@ -1,0 +1,47 @@
+{
+    "tag": "00ce7d0-pr1871-v1",
+    "digest": "sha256:47032b1e42076555a29909a9b888cd24efb69dec6ccd80d06ac26b0bc653ac99",
+    "config_digest": "sha256:1afa2af31baedb4baa229958f443dcb173b9bc680cf0f15821dd130d04cab5f7",
+    "layers": {
+        "sha256:b4e4c0127190b05d4a0b5b8de6097a4faf15a2096170c1dc46ea30349b0ad8ac": 49584944,
+        "sha256:08457856946d74c8aede7d750e185d1e479a79b8123d1b805182a580d224a6e2": 24056247,
+        "sha256:8cab6ce149c24516f80b26a762b6b9aaebcaf4fbe51d4c6844af7d7dbc372f2d": 64413065,
+        "sha256:01a6a9ffe665b63ea18491fedb646423413ae3fdefcf7776ee25a2eaff8a673e": 211662335,
+        "sha256:9fc49131440437072df6c70097a5db4accbb50654ef7d3b82c636109f8ef361f": 6162299,
+        "sha256:cbbcd353f76c8ee15dafcb5c2d64bc2d581c6bf87c584725ec8050d8507b33e3": 25718575,
+        "sha256:02a27392fe493a4b31d440408340ea74d5f2608fb54e906215eb836573d4ca84": 250,
+        "sha256:895ca0f932c30a502d07d664099c15b0cf49b9c502d41c539adcfac157f1af20": 410578784,
+        "sha256:c648508afaa82b1530c6ed37c4675fcceefda17d7d272901b264932ea3d25c00": 541315093,
+        "sha256:df9bd4d5eb261e8803b94cc8eba704bca8fd5b0ae5da831f17dedc64443635c5": 201811265,
+        "sha256:2db87f023d873cdc9c339d44e6c1e560550ebbc880a489bc81dedc2e8697dd4b": 1001774,
+        "sha256:64839ea3c1b5963c3e11b962172daf6776c4db07c66883c1ca4a30a5ebdc638b": 248,
+        "sha256:ad4537fa9ad523021c430ebf250d6f8a4eef690f712507a6b2a551507820661b": 820822310,
+        "sha256:29763ca3ee4093a8f65820553581aff13faf4daeb6b68aa35c8012d435c7fc20": 375407726,
+        "sha256:fc8c6166606cf441b2e1fc6238c00d44bbf1af93dcc4e17afff078d9bf0835fd": 366946724,
+        "sha256:cca4a189411037191ff3bad3640344eca488c4a68d55564e0878caa849e98901": 206185857,
+        "sha256:caaf4bf2690bb23d32858e14067094c427897f4cff7dca1d5b5234f441120a45": 61014739,
+        "sha256:70fd8643ba87b3cfa996d6160d3809399ee7ed3aa1e0993c9296e9dd9246d855": 170720642,
+        "sha256:8861159c42308903acccacc805ba86fa31bd45f149d7b5b52a5db57709d0251a": 90246259,
+        "sha256:bb1eb046db898210d547a005de965640a2fa0540568f234e757502a92e8adffc": 825225,
+        "sha256:f1976d7efe664aea2e546e7cdab2e6dd267660756494d8e3506cacc7b95f72c1": 10459317,
+        "sha256:f1a454436d2bbfcb24693eaae62bbaacd7f53e810b1e26c41998472aeec826e6": 144098340,
+        "sha256:46b598d98fceb1d96167cb166e3723286d070f652e42924a5a306642564580ec": 1304,
+        "sha256:065f500f9aad44f4d8a0ed0d7f6686530ad896af40472d677709dbe97aff9e78": 576,
+        "sha256:15d3159a292fca525c5e65ea307604425a4297630dc1c9af4e18af42c1eea2f9": 1202,
+        "sha256:7086a3e2486a3ade7eb7a6bdc9caee28b0e4aa6bdec1e88844a18bf3b1e25e8a": 2599,
+        "sha256:d5f201ff91138c4e20213661cfe6191e3a96e81beafc4992fdd65ad3618776c7": 94,
+        "sha256:ca75ffa5c96f6f0a5c6c74efde1bff9f887f78f72a7168a3dd5803754980a2bf": 11834
+    },
+    "anonymous_pull_verified": true,
+    "base_revision": "00ce7d0ddf123071ae67db149753d6b3619f52ac",
+    "native": {
+        "runtime_compiled_path": "/usr/local/lib/python3.12/site-packages/passivbot_rust.cpython-312-x86_64-linux-gnu.so",
+        "runtime_compiled_sha256": "55e40545844f94755b1e85d7e05938cbdb909c00e8f3bede5cb9622159dc3315",
+        "runtime_compiled_source_stamp": "dc656b28436f2eb2b3c77f70a3be7164bee80cd8b59116f9d21b0ff5b8d3afca",
+        "expected_source_fingerprint": "dc656b28436f2eb2b3c77f70a3be7164bee80cd8b59116f9d21b0ff5b8d3afca"
+    },
+    "validation": {
+        "pb8_focused_tests": 8,
+        "cuda_on_final_image": "Not rerun at user request; earlier isolated RTX 3060 reproduction verified the targeted upstream HSL fix."
+    }
+}

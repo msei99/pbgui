@@ -7,10 +7,16 @@ ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends git build-essential && rm -rf /var/lib/apt/lists/*
 # Official enarjord/passivbot source, pinned independently of dependency wheels.
-ARG PB8_REVISION=061e472e3d400cb3a740583d52f9d46e02eaf781
+ARG PB8_REVISION=00ce7d0ddf123071ae67db149753d6b3619f52ac
+COPY patches/gpu-suite-invalid-metrics.patch /opt/pbgui/patches/gpu-suite-invalid-metrics.patch
+COPY worker_candidate.json /opt/pb8-worker-provenance.json
 RUN git clone https://github.com/enarjord/passivbot.git /opt/passivbot \
     && cd /opt/passivbot && git checkout --detach "$PB8_REVISION" \
+    && test "$PB8_REVISION" = "00ce7d0ddf123071ae67db149753d6b3619f52ac" \
     && git rev-parse HEAD > /opt/pb8-revision \
+    && echo '2d86e672d3163d76e1e68f165d647582e2b643e8ad6dc84b4efef83f3db5d6d8  /opt/pbgui/patches/gpu-suite-invalid-metrics.patch' | sha256sum --check \
+    && git apply --check /opt/pbgui/patches/gpu-suite-invalid-metrics.patch \
+    && git apply /opt/pbgui/patches/gpu-suite-invalid-metrics.patch \
     && python -m pip install --no-cache-dir '.[full,gpu-cuda]' \
     && python -m pip freeze > /opt/pb8-pip-freeze.txt
 # pip/maturin builds the extension but does not run PB8's rustbuild.sh stamping
@@ -40,6 +46,8 @@ COPY --from=build /usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/ /
 COPY --from=build /usr/local/bin/ /usr/local/bin/
 COPY --from=build /opt/passivbot/ /opt/passivbot/
 COPY --from=build /opt/pb8-revision /opt/pb8-pip-freeze.txt /opt/
+COPY --from=build /opt/pb8-worker-provenance.json /opt/
+COPY --from=build /opt/pbgui/patches/ /opt/pbgui/patches/
 COPY --from=build /opt/benchmark/ /opt/benchmark/
 WORKDIR /work
 CMD ["bash"]

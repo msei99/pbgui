@@ -1,5 +1,7 @@
 # Vast.ai GPU queue
 
+New rentals use official PB8 revision `00ce7d0` with the PR #1871 invalid-candidate protection. The upstream HSL fix prevents a closing loss that exhausts cash from causing a false held-position candle valuation error. Existing rentals retain their original image and revision; a new rental uses the updated worker.
+
 The jobs view reuses saved throughput measurements for completed, failed and cancelled jobs. It reads a finished job's optimizer log only when its throughput snapshot is still missing.
 
 If a rental control is unavailable, clicking it explains why; the cards do not show permanent startup notices.

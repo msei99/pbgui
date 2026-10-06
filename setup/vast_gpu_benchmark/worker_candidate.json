@@ -1,0 +1,14 @@
+{
+    "schema_version": 1,
+    "state": "unpublished_candidate",
+    "upstream_repository": "https://github.com/enarjord/passivbot",
+    "base_revision": "00ce7d0ddf123071ae67db149753d6b3619f52ac",
+    "included_hsl_fix": "1d142ec9720f62cdce5c7b1c911efd7e45178501",
+    "overlay_pr": 1871,
+    "overlay_head": "83d18f0afbd0c927367aed522067558184a34933",
+    "overlay_path": "patches/gpu-suite-invalid-metrics.patch",
+    "overlay_sha256": "2d86e672d3163d76e1e68f165d647582e2b643e8ad6dc84b4efef83f3db5d6d8",
+    "overlay_changes_from_pr": "None: runtime changed lines match the PR exactly; the patch applies without adaptation.",
+    "base_image_tag": "pbgui-pb8-worker:upstream-00ce7d0-pr1871-base",
+    "worker_image_tag": "pbgui-pb8-worker:upstream-00ce7d0-pr1871-candidate"
+}

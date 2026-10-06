@@ -1,5 +1,7 @@
 # Vast.ai GPU-Queue
 
+Neue Mieten verwenden die offizielle PB8-Revision `00ce7d0` mit der Absicherung ungültiger Kandidaten aus PR #1871. Der enthaltene HSL-Fix verhindert einen falschen Candle-Bewertungsfehler, wenn ein schließender Verlusttrade das Guthaben aufbraucht. Bestehende Mieten behalten ihr ursprüngliches Image und ihre Revision; eine neue Miete verwendet den aktualisierten Worker.
+
 Die Job-Ansicht verwendet gespeicherte Durchsatzmessungen für abgeschlossene, fehlgeschlagene und abgebrochene Jobs erneut. Das Optimizer-Log eines beendeten Jobs wird nur gelesen, wenn die Durchsatzmessung noch fehlt.
 
 Ist eine Mietsteuerung noch nicht verfügbar, erklärt ein Klick den Grund. Die Karten zeigen dafür keinen dauerhaften Starthinweis.

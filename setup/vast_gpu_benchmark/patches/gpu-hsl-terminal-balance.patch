@@ -1,0 +1,129 @@
+diff --git a/passivbot-rust/src/gpu/mps_ema_anchor_directional.metal b/passivbot-rust/src/gpu/mps_ema_anchor_directional.metal
+--- a/passivbot-rust/src/gpu/mps_ema_anchor_directional.metal
++++ b/passivbot-rust/src/gpu/mps_ema_anchor_directional.metal
+@@ -1313,7 +1313,7 @@ inline void passivbot_single_coin_impl(
+         pnl_lookback_bars, hsl_initialize, !hsl_unified || !hsl_long_owner);
+     for (int k = 1; k < T - 1; ++k) {
+         if (!long_hsl.hsl_valid || !short_hsl.hsl_valid) {
+-            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
++            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+             return;
+         }
+         const int bo = k * 5;
+@@ -2070,7 +2070,7 @@ inline void passivbot_single_coin_impl(
+                 kf, interval_ms
+             );
+             if (!hsl_update_valid) {
+-                scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
++                scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+                 return;
+             }
+ #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+diff --git a/passivbot-rust/src/gpu/mps_ema_anchor_multicoin_long.metal b/passivbot-rust/src/gpu/mps_ema_anchor_multicoin_long.metal
+--- a/passivbot-rust/src/gpu/mps_ema_anchor_multicoin_long.metal
++++ b/passivbot-rust/src/gpu/mps_ema_anchor_multicoin_long.metal
+@@ -3526,7 +3526,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
+             }
+         }
+         if (!(valid_hsl_multicoin_hsl(side.hsl, side.coin_hsl, C))) {
+-            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
++            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+             return;
+         }
+ }
+@@ -4515,7 +4515,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
+             }
+         }
+         if (!(valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, C) && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, C))) {
+-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;
++            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
+             return;
+         }
+ }
+diff --git a/passivbot-rust/src/gpu/mps_hsl_common.metal b/passivbot-rust/src/gpu/mps_hsl_common.metal
+--- a/passivbot-rust/src/gpu/mps_hsl_common.metal
++++ b/passivbot-rust/src/gpu/mps_hsl_common.metal
+@@ -567,6 +567,11 @@ inline bool finish_hsl_episode_at_flat(
+     float kf,
+     float interval_ms
+ ) {
++    // A closing fill can exhaust raw cash before the kernel's end-of-bar
++    // liquidation check. There is no remaining HSL budget to observe; retain
++    // the controller and let liquidation record its floor sample. Non-finite
++    // budgets still reach HSL validation and remain fatal.
++    if (isfinite(balance) && balance <= 0.0f) return true;
+     observe_hsl(h, balance, realized_pnl, 0.0f, false, int(kf), true);
+     return true;
+ }
+diff --git a/passivbot-rust/src/gpu/mps_trailing_martingale_directional.metal b/passivbot-rust/src/gpu/mps_trailing_martingale_directional.metal
+--- a/passivbot-rust/src/gpu/mps_trailing_martingale_directional.metal
++++ b/passivbot-rust/src/gpu/mps_trailing_martingale_directional.metal
+@@ -2274,7 +2274,7 @@ inline void passivbot_single_coin_impl(
+         pnl_lookback_bars, hsl_initialize, !hsl_unified || !hsl_long_owner);
+     for (int k = replay_start; k < replay_stop; ++k) {
+         if (!long_hsl.hsl_valid || !short_hsl.hsl_valid) {
+-            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
++            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+             return;
+         }
+         const int bo = k * 5;
+@@ -4469,7 +4469,7 @@ inline void passivbot_single_coin_impl(
+                 kf, interval_ms
+             );
+             if (!hsl_update_valid) {
+-                scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
++                scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+                 return;
+             }
+ #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+diff --git a/passivbot-rust/src/gpu/mps_trailing_martingale_multicoin.metal b/passivbot-rust/src/gpu/mps_trailing_martingale_multicoin.metal
+--- a/passivbot-rust/src/gpu/mps_trailing_martingale_multicoin.metal
++++ b/passivbot-rust/src/gpu/mps_trailing_martingale_multicoin.metal
+@@ -5549,7 +5549,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
+             }
+         }
+         if (!(valid_hsl_multicoin_hsl(long_side.hsl, long_side.coin_hsl, C) && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, C))) {
+-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;
++            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -4.0f;
+             return;
+         }
+ }
+@@ -6509,7 +6509,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
+             }
+         }
+         if (!(valid_hsl_multicoin_hsl(side.hsl, side.coin_hsl, C))) {
+-            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
++            scalars[int(b) * SCALAR_COLS + 9] = -4.0f;
+             return;
+         }
+ }
+diff --git a/src/optimization/gpu/mps_kernel.py b/src/optimization/gpu/mps_kernel.py
+--- a/src/optimization/gpu/mps_kernel.py
++++ b/src/optimization/gpu/mps_kernel.py
+@@ -1224,13 +1224,23 @@ def _require_available_held_valuation(scalars):
+     # Metal writes -2 and returns immediately if a held coin has no price.
+     if bool((scalars[:, 9] == -3.0).any()):
+         raise RuntimeError("GPU auto-unstuck PnL history overflow")
++    invalid_hsl = scalars[:, 9] == -4.0
++    if bool(invalid_hsl.any()):
++        indices = invalid_hsl.nonzero().flatten()
++        rows = indices[:8].cpu().tolist()
++        suffix = f" (+{indices.numel() - 8} more)" if indices.numel() > 8 else ""
++        raise ValueError(
++            f"GPU proxy unavailable HSL controller inputs; candidate rows {rows}{suffix}"
++        )
+     invalid = scalars[:, 9] == -2.0
+     if bool(invalid.any()):
+-        rows = invalid.nonzero().flatten().cpu().tolist()
++        indices = invalid.nonzero().flatten()
++        rows = indices[:8].cpu().tolist()
++        suffix = f" (+{indices.numel() - 8} more)" if indices.numel() > 8 else ""
+         raise ValueError(
+-            "MPS proxy unavailable held-position valuation: candle outside its declared "
++            "GPU proxy unavailable held-position valuation: candle outside its declared "
+             "valid range or missing finite positive H/L/C; "
+-            f"candidate rows {rows}"
++            f"candidate rows {rows}{suffix}"
+         )
+ 
+ 
