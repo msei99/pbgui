@@ -280,7 +280,7 @@ class VastClient:
             if not matching_names:
                 return []
             query["gpu_name"] = {"in": matching_names}
-        payload = self.request("POST", "/bundles", query)
+        payload = self.request("POST", "/bundles/", query)
         rows = payload.get("offers")
         if not isinstance(rows, list):
             raise VastError("Vast returned an invalid offer list")

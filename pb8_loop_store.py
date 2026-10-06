@@ -261,13 +261,16 @@ def validate_gpu_drift(config):
 
 def cloud_loop_metric_contract():
     """Expose the pinned worker's metric eligibility, separate from exact goals."""
-    from vast_config_validation import METRICS, PROFILE_REVISION, _METRIC_CONTRACT
+    from vast_config_validation import METRICS, REDUCERS, PROFILE_REVISION, _METRIC_CONTRACT
     return {'execution': 'vast', 'worker_revision': PROFILE_REVISION,
             'allowed_metrics': sorted(METRICS),
+            'allowed_reducers': sorted(REDUCERS),
             'exact_only_metrics': sorted(_METRIC_CONTRACT['exact_only_metrics']),
             'applies_to': ['optimize.scoring', 'optimize.limits'],
             'exact_goal_metrics_restricted': False,
-            'rule': 'Use only allowed_metrics for Vast.ai optimizer scoring and limits. '
+            'rule': 'Use only allowed_metrics and allowed_reducers for Vast.ai optimizer scoring and limits. '
+                    'worst is an exact-goal evidence label, not an optimizer reducer. '
+                    'For a worst-window upper limit use max; for a worst-window lower limit use min. '
                     'Exact-only metrics remain usable in the exact comparison rubric and results. '
                     'There is no automatic CPU fallback for an unsupported GPU objective.'}
 
@@ -276,7 +279,7 @@ def validate_cloud_loop_metrics(config, execution):
     """Reject unsupported cloud objectives before approval or job preparation."""
     if execution != 'vast':
         return
-    from vast_config_validation import METRICS, cloud_alternatives
+    from vast_config_validation import METRICS, REDUCERS, cloud_alternatives
     for group in ('scoring', 'limits'):
         for index, entry in enumerate(config.get('optimize', {}).get(group) or []):
             metric = entry.get('metric') if isinstance(entry, dict) else entry
@@ -285,6 +288,16 @@ def validate_cloud_loop_metrics(config, execution):
                 message = f'Unsupported cloud metrics: {metric}.'
                 alternatives = ' '.join(cloud_alternatives(path, message))
                 raise ValueError(f'Vast.ai {path}: {message} {alternatives}')
+            if isinstance(entry, dict):
+                alias = 'aggregate' if group == 'scoring' else 'stat'
+                if 'reducer' in entry and alias in entry and entry['reducer'] != entry[alias]:
+                    raise ValueError(f'Vast.ai optimize.{group}.{index}: Conflicting reducer aliases')
+                basis_key = 'reducer' if 'reducer' in entry else alias
+                basis = entry.get(basis_key)
+                if basis and (not isinstance(basis, str) or basis not in REDUCERS):
+                    raise ValueError(f'Vast.ai optimize.{group}.{index}.{basis_key}: '
+                                     f'Unsupported optimizer reducer {basis!r}; choose from {sorted(REDUCERS)}. '
+                                     'Use max for a worst-window upper limit or min for a worst-window lower limit.')
 
 
 def validate_change(record, config, overrides):
