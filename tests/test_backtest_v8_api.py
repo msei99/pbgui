@@ -180,7 +180,7 @@ def test_pb8_legacy_results_are_read_only_safe_and_exclude_managed_root(
     assert legacy_result.is_dir()
 
 
-def test_build_optimize_preset_from_pb8_backtest_result(tmp_path: Path, monkeypatch) -> None:
+def test_build_optimize_preset_from_pb8_backtest_result(tmp_path: Path, monkeypatch, pb7_config_runtime) -> None:
     """PB8 backtest results generate nested PB8 optimize bounds and scoring."""
     result_dir = tmp_path / "demo" / "result-1"
     result_dir.mkdir(parents=True)

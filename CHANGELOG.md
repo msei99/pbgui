@@ -1,8 +1,11 @@
 # Changelog
 
+- [v2.08.6](releases/v2.08.6.md)
+
 Release notes live in dedicated files under `releases/`.
 
 - [Unreleased](releases/unreleased.md)
+- [v2.08.5 — Vast.ai redirect and AI Loop reducer fixes](releases/v2.08.5.md)
 - [v2.08.4 — Polling and queue I/O performance fixes](releases/v2.08.4.md)
 - [v2.08.3 — AI, optimizer, dashboard and restart fixes](releases/v2.08.3.md)
 - [v2.08.2 — PB8 save and restart fixes](releases/v2.08.2.md)

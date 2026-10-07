@@ -234,6 +234,10 @@ rental duration is available for additional job transfers.
 
 ## Progress and controls
 
+The log is a nonmodal companion window; the page behind it remains interactive. Browser-history return revalidates the cloud queue and resumes polling. Opening or closing a log takes precedence over any pending restoration.
+
+In **Open log**, queue/run controls stay above all cards. Rental/Hardware and Run Details form the upper row; Utilization/Throughput and Convergence/Stagnation form the lower row (one column below 640 px window width). Groups start collapsed and retain their state during polling. Expanded content automatically moves the log down; collapsing groups returns the space to the log. The separator is not draggable. When space is limited, the detail area scrolls together instead of each group separately. Hardware, budget/deadline inputs, throughput counters and convergence samples remain available. GPU utilization retains its freshness rules; throughput shows the age of its measured interval. Errors and supervision notices remain visible outside closed groups. Browser reload restores the available selected queue log and layout in this tab. **Reset to default** restores the centered default window size and collapses all detail groups while preserving the selected log and unsaved rental inputs.
+
 The worker panel shows rental state, hourly price, deadline and idle-deletion
 time. Job details distinguish exact evaluations from GPU-screened candidates.
 Paretos and logs are backed up roughly once per minute. **Open last downloaded

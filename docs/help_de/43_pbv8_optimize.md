@@ -170,6 +170,10 @@ Nach Aenderungen an Market Cap, Volumenverhaeltnis, Tags, CPT oder Notices muss 
 
 ## Queue
 
+Das Logfenster ist nicht modal: Seitensteuerung und andere Queue-Logs bleiben zugänglich. Results und Pareto Explorer navigieren, ohne das Ziel zu blockieren. Bei der Rückkehr über den Browserverlauf wird das ausgewählte Queue-Log vor der Wiederaufnahme der Updates erneut geprüft; eine neuere Auswahl hat Vorrang.
+
+**Open log** öffnet ein verschiebbares, größenverstellbares Fenster mit Lauf-/Queueaktionen oberhalb der Statuskarten. Vier zunächst eingeklappte Gruppen zeigen **Rental & Hardware**, **Run Details & Objectives**, **Utilization & Throughput** und **Convergence & Stagnation** ab 640 px Fensterbreite im 2×2-Raster; schmalere Fenster verwenden eine Spalte. Nicht verfügbare Gruppen werden ausgeblendet. Beim Aufklappen wächst der Detailbereich automatisch und verschiebt das Log nach unten; beim Einklappen erhält das Log den Platz zurück. Die Trennleiste ist nicht verschiebbar. Gruppen zeigen ihren gesamten Inhalt; bei wenig Platz scrollt der Detailbereich gemeinsam und das Log bleibt nutzbar. Mieteingaben behalten ungespeicherte Änderungen bei Updates. Fehler bleiben außerhalb der Gruppen sichtbar; Durchsatzübersichten unterscheiden Sample-Alter und historische Intervalle. Dieser Tab stellt das noch verfügbare Queue-Log, Fenstergeometrie, Gruppenstatus und automatische Aufteilung nach Browser-Reload wieder her. Logs aktualisieren sich automatisch. **Reset to default** stellt die zentrierte Standardgröße wieder her und klappt alle Detailgruppen ein; das ausgewählte Log und ungespeicherte Mieteingaben bleiben erhalten.
+
 Queue-Eintraege enthalten unveraenderliche PB8-Config-Snapshots. Eine spaetere Aenderung der gespeicherten Config veraendert keinen bestehenden Queue-Eintrag.
 
 Wird der Editor dagegen ausdruecklich aus einer Queue-Zeile geoeffnet, aktualisiert **Save** sowohl die verwaltete Config als auch den Snapshot genau dieses Queue-Eintrags. Aenderungen wie `optimize.n_cpus` sind damit beim erneuten Oeffnen oder Starten der Zeile enthalten.

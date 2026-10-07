@@ -16,6 +16,7 @@
     host.appendChild(document.importNode(parsed.querySelector('.vast-component'), true));
     const jobsHost = document.getElementById('vast-jobs-host');
     if (jobsHost) jobsHost.appendChild(document.getElementById('vast-jobs'));
+    window.PBGuiOptimizeLog?.attachCloud();
   } catch (error) {
     if (!leaving) host.textContent = 'Cloud controls could not load. Check the API restart indicator and reload this page.';
     return;
@@ -141,7 +142,7 @@
   let generation = 0;
   let offerGeneration = 0;
   let accountGeneration = 0;
-  let disposed = false;
+  let disposed = false, bfcacheSuspended = false;
   let selectedJobId = null;
   let savedPreferences = null, jobRows = [], supervision = false, jobGeneration = 0, jobTimer = null;
   const controllers = new Set();
@@ -187,7 +188,7 @@
         headers: {'Content-Type': 'application/json'}, signal: controller.signal
       });
       if ([401, 403].includes(response.status) && response.headers.get('X-PBGui-Error-Source') !== 'vast') {
-        clearSecrets(); disposed = true; clearTimeout(jobTimer); jobGeneration++; closeLog();
+        clearSecrets(); disposed = true; bfcacheSuspended = false; clearTimeout(jobTimer); jobGeneration++; closeLog();
         controllers.forEach(item => { if (item !== controller) item.abort(); });
         generation++; accountGeneration++; offerGeneration++;
         el('balance').textContent = 'Authentication required';
@@ -1695,6 +1696,7 @@
       if (typeof selectedOffer !== 'undefined' && selectedOffer) void refreshCalibration();
       if (newOptRun || newRental) void refreshHostHistory();
       if (resultsChanged && typeof refreshLiveResultsDuringRun === 'function') await refreshLiveResultsDuringRun(true);
+      window.PBGuiOptimizeLog?.cloudReady();
     } catch (error) {
       if (!disposed && current === jobGeneration) {
         message(error.message, true);
@@ -2035,6 +2037,9 @@
   function renderRentalDetails(rental, billing) {
     const panel = el('optlog-rental');
     if (!panel) return;
+    const scrollHost = panel.closest('.optlog-accordion-body');
+    const scrollTop = scrollHost?.scrollTop || 0;
+    window.PBGuiOptimizeLog?.rental(rental);
     const sameRental = rental && panel.dataset.rentalId === rental.id;
     const focused = sameRental && panel.contains(document.activeElement) ? document.activeElement : null;
     const inputs = new Map(sameRental ? [...panel.querySelectorAll('input[aria-label]')].map(input => [input.getAttribute('aria-label'), input]) : []);
@@ -2175,6 +2180,7 @@
       card.append(heading, content); panel.appendChild(card);
     });
     if (focused && panel.contains(focused)) focused.focus({preventScroll:true});
+    if (scrollHost) scrollHost.scrollTop = scrollTop;
   }
 
   function renderUtilization(job) {
@@ -2279,13 +2285,14 @@
     if (job.lease_id && !billingPending && (billingLease !== job.lease_id || Date.now() >= billingNextCheck)) {
       billingPending = true;
       const lease = job.lease_id;
+      const logGeneration = window.state?.logContextGeneration;
       request('/jobs/' + encodeURIComponent(job.id) + '/charges').then(data => {
-        if (disposed) return;
+        if (disposed || logGeneration !== window.state?.logContextGeneration || window.state?.cloudLogId !== job.id) return;
         billingLease = lease; billingSnapshot = data.billing; billingNextCheck = Date.now() + 300000;
         const active = jobRows.find(row => window.state && row.id === window.state.cloudLogId && row.lease_id === lease);
         if (active) renderRentalDetails(active.rental, billingSnapshot);
       }).catch(error => {
-        if (!disposed) {
+        if (!disposed && logGeneration === window.state?.logContextGeneration && window.state?.cloudLogId === job.id) {
           billingSnapshot = {...(billingLease === lease ? billingSnapshot : null), error:error.message};
           billingLease = lease; billingNextCheck = Date.now() + 60000;
           const active = jobRows.find(row => window.state && row.id === window.state.cloudLogId && row.lease_id === lease);
@@ -2390,6 +2397,7 @@
         viewer.setFile(optimizerLog);
       }
     }
+    window.PBGuiOptimizeLog?.cloud(job);
   }
 
   function observedOptimizerJob(item) {
@@ -2422,6 +2430,7 @@
   function renderObservedOptimizer(item) {
     const observed = currentObservedOptimizer(item);
     if (!window.state || window.state.cloudLogId !== item?.id || !observed) return;
+    el('cloud-job-details').hidden = false;
     renderCloudDashboard(observedOptimizerJob(item));
     el('optlog-activity').textContent = observed.activity || 'Optimizer process detected';
     el('stop-job').disabled = true;
@@ -2669,6 +2678,7 @@
     el('optlog-progress-fill')?.classList.remove('is-indeterminate');
     el('cloud-job-details').hidden = true;
     if (window.state) window.state.cloudLogId = null;
+    window.PBGuiOptimizeLog?.sync();
   }
   function showRequeuePending(identifier, pending) {
     document.querySelectorAll('tr[data-cloud-id]').forEach(row => {
@@ -3060,7 +3070,20 @@
       void pollJobs();
     }
   });
-  window.addEventListener('pagehide', () => { disposed = true; performanceView?.dispose(); validationGeneration++; clearTimeout(validationTimer); closeLog(); clearTimeout(jobTimer); jobGeneration++; generation++; accountGeneration++; offerGeneration++; clearSecrets(); controllers.forEach(controller => controller.abort()); });
+  window.addEventListener('pagehide', event => {
+    bfcacheSuspended = event.persisted && !disposed;
+    disposed = true;
+    if (event.persisted) performanceView?.hide(); else performanceView?.dispose();
+    validationGeneration++; clearTimeout(validationTimer); closeLog(); clearTimeout(jobTimer);
+    jobGeneration++; generation++; accountGeneration++; offerGeneration++;
+    clearSecrets(); controllers.forEach(controller => controller.abort());
+  });
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted || !bfcacheSuspended) return;
+    bfcacheSuspended = false; disposed = false;
+    if (settingsVisible && settingsView === 'performance') performanceView?.show();
+    void pollJobs();
+  });
   const initial = generation;
   refreshHostHistory();
   request('/settings').then(data => { if (!disposed && initial === generation) renderSettings(data); }).catch(error => { if (!disposed) message(error.message, true); });

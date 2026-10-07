@@ -185,6 +185,7 @@ Mit **Copy Schedules** hältst du ein oder mehrere Optimizer-Systeme automatisch
 - Den Zeitplan aktivieren und **Save schedule** klicken. Der erste automatische Copy-Lauf startet nach einem vollständigen Intervall.
 - **Run now** startet sofort einen Copy-Job mit den gespeicherten Einstellungen.
 - **Edit** lädt einen Zeitplan zurück in das Copy-Data-Formular. Dort können Ziel, Exchanges, Intervall oder Aktivstatus geändert und erneut gespeichert werden.
+- **Delete** zeigt vor dem endgültigen Entfernen eine Bestätigung mit Name, Ziel und Intervall. **Cancel**, die Schließen-Schaltfläche oder Escape lassen den Zeitplan unverändert. Ist er nicht mehr in der angezeigten Liste vorhanden, zeigt PBGui eine Meldung und gleicht die Liste automatisch ab, ohne eine Löschanfrage zu senden.
 - Zeitpläne bleiben über API-Neustarts erhalten. Ein Zeitplan startet keinen zweiten Copy-Lauf, solange sein vorheriger Job noch pending oder running ist.
 
 Jeder automatische oder manuelle Zeitplan-Lauf erscheint wie ein normaler Copy-Job im eingebetteten Copy Job Monitor. Solange sein eigener Copy-Job aktiv ist, kann der Zeitplan nicht gelöscht werden; der detached Copy-Worker selbst läuft auch über einen API-Neustart sicher weiter.

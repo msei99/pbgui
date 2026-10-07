@@ -241,6 +241,10 @@ maximalen Mietkosten steht für weitere Job-Transfers zur Verfügung.
 
 ## Anzeige und Steuerung
 
+Das Log ist ein nicht modales Begleitfenster; die Seite dahinter bleibt bedienbar. Bei der Rückkehr über den Browserverlauf wird die Cloud-Queue erneut geprüft und Polling fortgesetzt. Öffnen oder Schließen eines Logs hat Vorrang vor einer ausstehenden Wiederherstellung.
+
+Unter **Open log** bleiben Queue-/Laufaktionen oberhalb aller Karten. Rental/Hardware und Run Details bilden die obere Reihe, Utilization/Throughput und Convergence/Stagnation die untere (eine Spalte unter 640 px Fensterbreite). Gruppen starten eingeklappt und behalten ihren Zustand bei Polling. Aufgeklappte Inhalte verschieben das Log automatisch nach unten; beim Einklappen erhält das Log den Platz zurück. Die Trennleiste ist nicht verschiebbar. Bei wenig Platz scrollt der Detailbereich gemeinsam statt jeder Gruppe separat. Hardware, Budget-/Deadline-Eingaben, Durchsatzzähler und Konvergenzsamples bleiben verfügbar. GPU-Auslastung behält ihre Aktualitätsregeln; der Durchsatz zeigt das Alter seines gemessenen Intervalls. Fehler und Überwachungshinweise bleiben außerhalb geschlossener Gruppen sichtbar. Browser-Reload stellt das noch verfügbare ausgewählte Queue-Log und Layout in diesem Tab wieder her. **Reset to default** stellt die zentrierte Standardgröße wieder her und klappt alle Detailgruppen ein; das ausgewählte Log und ungespeicherte Mieteingaben bleiben erhalten.
+
 Der Worker zeigt Mietstatus, Stundenpreis, Frist und Leerlauf-Löschzeit. Die
 Jobanzeige unterscheidet exakte Auswertungen und GPU-Vorselektionen. Paretos und
 Logs werden ungefähr jede Minute gesichert. **Open last downloaded log** öffnet

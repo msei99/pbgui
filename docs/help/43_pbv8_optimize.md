@@ -170,6 +170,10 @@ Use **Apply Filters** after changing Market Cap, volume ratio, tags, CPT, or not
 
 ## Queue
 
+The log window is nonmodal: page controls and other queue logs remain accessible. Results and Pareto Explorer navigate without blocking the destination. Returning through the browser history revalidates the selected queue log before resuming updates; a newer selection takes precedence.
+
+**Open log** opens a movable, resizable window with run/queue actions above the status cards. Four initially collapsed groups show **Rental & Hardware**, **Run Details & Objectives**, **Utilization & Throughput**, and **Convergence & Stagnation** in a 2×2 grid when the window is at least 640 px wide; narrower windows use one column. Unavailable groups are hidden. Opening groups automatically grows the detail area and moves the log down; collapsing them gives the space back to the log. There is no draggable separator. Groups show their full content; when space is limited, the detail area scrolls together while keeping the log usable. Rental inputs retain unsaved edits during updates. Errors remain visible outside the groups; throughput summaries distinguish sample age and historical intervals. This tab restores the available queue log, window geometry, group states and automatic layout after browser reload. Logs update automatically. **Reset to default** restores the centered default window size and collapses all detail groups while preserving the selected log and unsaved rental inputs.
+
 Queue entries contain immutable PB8 configuration snapshots. Editing a saved configuration after queueing does not alter an existing queue item.
 
 When the editor is opened explicitly from a queue row, **Save** is different: it saves the managed config and refreshes that same queue item's snapshot. Changes such as `optimize.n_cpus` are therefore present when the row is reopened or started.

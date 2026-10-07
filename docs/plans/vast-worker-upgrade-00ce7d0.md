@@ -68,22 +68,3 @@ configuration are retained under `.local-work/pb8-worker-upgrade-00ce7d0/`.
 The earlier RTX 3060 reproduction and targeted-fix comparison are documented in
 `docs/plans/vast-hsl-terminal-balance-reproduction.md`. That GPU test used the
 older worker plus the isolated upstream fix, not this newly built image.
-
-## Original activation checklist (superseded by the authorization above)
-
-1. Obtain explicit authorization to publish the candidate image; publication
-   was excluded from the original plan. Push an immutable candidate tag and
-   verify the public manifest digest, configuration and compressed layer sizes.
-2. Run the existing reproduction configuration, replay controls and boundary
-   probes on that exact image digest on an isolated RTX 3060. Keep the total
-   reproduction budget within USD 5 and two hours, including the earlier test
-   (approximately USD 0.02 and 19.3 minutes). Guarantee instance cleanup.
-3. Only after successful CUDA checks, update job, validation and calibration
-   pins and layer metadata together. Preserve historical digest provenance;
-   update the metric contract source hashes for the selected image.
-4. Update EN/DE worker guidance and changelog; bump `api/serial.txt` when
-   runtime pins change. Run focused tests and required impact analysis before
-   touching a new subsystem. Ask before committing or pushing.
-
-At the end of the initial preparation, no active image pins, production instances
-or remote hosts had changed and no image had been published or committed.

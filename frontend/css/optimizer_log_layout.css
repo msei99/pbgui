@@ -1,0 +1,41 @@
+/* Optimize-only layout: the shared viewer and page shell keep their own styles. */
+#log-panel { min-width: min(360px, calc(100vw - 32px)); min-height: min(260px, calc(100vh - 32px)); border-radius: 8px; container-type: inline-size; }
+#log-panel [hidden] { display: none !important; }
+#log-panel-title { min-width: 0; }
+.optlog-window-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+#optlog-head { flex: none; min-height: 0; overflow: auto; }
+#optlog-actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 8px; }
+#optlog-actions .fields { display: contents; }
+#optlog-cloud-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+#log-panel .vast-component { margin: 0; }
+#optlog-cloud-actions button { font-size: var(--fs-xs); padding: 4px 6px; }
+#opt-log-dashboard { padding: 4px 8px; gap: 4px; border: 0; }
+#opt-log-dashboard .optlog-progress-track { height: 6px; }
+#opt-log-dashboard > .optlog-summary-grid { grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 4px; }
+#opt-log-dashboard .optlog-card { padding: 3px 6px; }
+#opt-log-dashboard .optlog-value { font-size: var(--fs-sm); }
+#optlog-notices { flex: none; min-height: 0; overflow: auto; overflow-wrap: anywhere; padding: 0 8px; color: var(--text); }
+#optlog-run-error { color: var(--red, #ff6b6b); white-space: pre-wrap; }
+#optlog-notices p, #optlog-notices div { margin: 2px 0; }
+#optlog-details { flex: none; min-height: 0; overflow: auto; display: grid; grid-template-columns: 1fr; align-content: start; align-items: start; gap: 4px; padding: 0 8px; box-sizing: border-box; }
+#vast-jobs-host, #optlog-details #vast-jobs, #optlog-details #cloud-job-details { display: contents; }
+.optlog-accordion { min-width: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); }
+.optlog-accordion > summary { cursor: pointer; padding: 3px 6px; font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.optlog-accordion > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.optlog-hint { color: var(--text-dim); margin-left: 6px; }
+.optlog-hint.is-warning { color: var(--red, #ff6b6b); }
+.optlog-accordion-body { padding: 4px; }
+#optlog-details .optlog-summary-grid, #optlog-details .optlog-detail-grid { grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 4px; }
+#optlog-details #optlog-rental { margin-top: 0; }
+#optlog-details .optlog-card, #optlog-details .optlog-detail { padding: 4px 6px; }
+#optlog-details .optlog-detail-text, #optlog-details .optlog-value { white-space: normal; overflow-wrap: anywhere; }
+#optlog-details .optlog-rental-controls { flex-wrap: wrap; }
+#optlog-divider { flex: none; height: 4px; border-bottom: 1px solid var(--border); box-sizing: border-box; }
+#log-viewer-target, #log-waiting { flex: 1; min-height: 0; }
+#log-waiting { overflow: auto; padding: 8px; box-sizing: border-box; }
+#log-panel .optlog-viewer-controls { flex: none; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+#log-panel .lvp-sidebar { overflow-y: auto; }
+#log-panel [id$="fetch-btn"] { display: none; }
+#log-panel.optlog-short { overflow-y: auto; }
+/* Container queries measure the content box; the window has two 2px borders. */
+@container (min-width: 636px) { #optlog-details { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

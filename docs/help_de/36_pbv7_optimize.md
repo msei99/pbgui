@@ -172,6 +172,10 @@ Bei PB8 setzt ein permanenter Startfehler nur die betroffene Zeile auf einen han
 
 ### Log-Viewer
 
+Das Logfenster ist nicht modal: Die Seite dahinter bleibt bedienbar, einschließlich Navigation und Öffnen eines anderen Queue-Logs. Results und Pareto Explorer können navigieren, während das Log geöffnet bleibt.
+
+Im Logfenster stehen Results und Pareto Explorer oberhalb einer kompakten Statusübersicht. **Run Details & Objectives** ist zunächst eingeklappt. Aufgeklappte Details verschieben das Log automatisch nach unten; beim Einklappen erhält das Log den Platz zurück. Es gibt keine verschiebbare Trennleiste oder reservierte Leerfläche. Statusupdates erhalten die geöffneten Gruppen. Ein Browser-Reload stellt das noch verfügbare Queue-Log, Fensterposition/-größe und geöffnete Detailgruppen in diesem Tab wieder her. Fehler bleiben außerhalb der eingeklappten Details sichtbar. Die Logdaten aktualisieren sich automatisch. **Reset to default** stellt die zentrierte Standardgröße wieder her und klappt alle Detailgruppen ein; das ausgewählte Log und ungespeicherte Mieteingaben bleiben erhalten.
+
 Jede Queue-Zeile hat eine **Log**-Aktion.
 Sie öffnet den gemeinsamen schwebenden Log-Viewer und streamt die lokale Datei aus `data/logs/optimizes/`.
 Fuer eine exakt ausgewaehlte Queue-Zeile oder einen aktuell laufenden Optimizer, der aus einem anderen Optimize-Panel sichtbar ist, kann PBGui AI die von der Seite angebotene Aktion `show_log` ausfuehren; sie ruft dieselbe vorhandene `openLogPanel`-Funktion auf. Eine seitenuebergreifende Anfrage navigiert automatisch zu Optimize und bleibt offen, bis die Queue-Daten geladen sind.

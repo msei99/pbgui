@@ -261,3 +261,32 @@ def isolate_vast_provider_coordination(tmp_path, monkeypatch):
     """Never let provider tests touch the real shared cooldown/cache."""
     import vast_provider
     monkeypatch.setattr(vast_provider, 'COORDINATION_ROOT', tmp_path / 'vast-provider')
+    monkeypatch.setattr(vast_provider, '_GPU_NAMES_CACHE', {})
+
+
+@pytest.fixture
+def pb7_config_runtime(tmp_path, monkeypatch):
+    """Provide actual, pinned PB7 config code independently of local bot installs."""
+    from types import SimpleNamespace
+    from tests.pb7_config_fixture import PB7ConfigRuntime
+    import api.pb7_bridge as bridge
+    import pb7_config
+
+    runtime = PB7ConfigRuntime(tmp_path / "pb7_config_runtime")
+    monkeypatch.setattr(pb7_config, "_get_pb7_config_api", lambda: (runtime.load, runtime.strip))
+
+    def import_module(name):
+        """Expose only configuration operations used by these offline tests."""
+        if name == "config.schema":
+            return SimpleNamespace(get_template_config=lambda: runtime.call("template"))
+        metadata = runtime.call("metadata")
+        if name == "config.metrics":
+            return SimpleNamespace(CURRENCY_METRICS=metadata["currency"],
+                                   SHARED_METRICS=metadata["shared"],
+                                   ANALYSIS_SHARED_KEYS=metadata["analysis"])
+        if name == "config.scoring":
+            return SimpleNamespace(default_objective_goal=metadata["goals"].get)
+        raise AssertionError(f"Unexpected PB7 import: {name}")
+
+    monkeypatch.setattr(bridge, "_import_pb7_module", import_module)
+    return runtime

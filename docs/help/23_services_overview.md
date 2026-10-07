@@ -101,4 +101,6 @@ The navigation Restart action shows progress immediately after confirmation and 
 
 Press Escape to close the active Services Monitor Help, Prices, result, CMC key, or CMC authority dialog. A CMC dialog remains open while its mutation is in progress.
 
+The Prices dialog updates prices automatically every five seconds and ages every second, preserving text selection and scroll position. Updates pause while the browser tab is hidden and resume immediately on return. Concurrent viewers share a server snapshot for up to three seconds.
+
 If the code version changes during a restart, PBGui performs one follow-up restart after the replacement API is available. The progress display identifies services still running older code. Persistent failures remain visible instead of repeatedly restarting services.

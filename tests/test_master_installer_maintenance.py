@@ -223,6 +223,8 @@ def test_gui_recovery_removes_only_old_empty_pb8_writer_without_active_process(
 def test_vps_manager_logs_automatic_pb8_writer_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The local Update PB8 task reports automatic orphan recovery in its task log."""
     callbacks: dict[str, object] = {}
+    monkeypatch.setattr(vps_core, "PB7DIR", str(tmp_path / "pb7"))
+    monkeypatch.setattr(vps_core, "PB7VENV", str(tmp_path / "venv_pb7/bin/python"))
 
     class FakeLease:
         """Provide the update lease contract without touching a real lock."""
@@ -256,6 +258,8 @@ def test_vps_manager_holds_shared_lock_until_runner_finishes(
 ) -> None:
     """The existing VPS Manager update path shares the installer lease lifetime."""
     callbacks: dict[str, object] = {}
+    monkeypatch.setattr(vps_core, "PB7DIR", str(tmp_path / "pb7"))
+    monkeypatch.setattr(vps_core, "PB7VENV", str(tmp_path / "venv_pb7/bin/python"))
 
     class FakeLease:
         """Record release without opening a production lock file."""

@@ -3564,6 +3564,8 @@ window.PBGUI_NAV_CONFIG = {
     var _pricesRefreshTimer = null;
     var _pricesAgeTimer = null;
     var _pricesLoading = false;
+    var _pricesGeneration = 0;
+    var _pricesController = null;
 
     function fmtPrice(p) {
       if (p == null) return '\u2014';
@@ -3604,15 +3606,30 @@ window.PBGUI_NAV_CONFIG = {
       });
     }
     function renderCurrentPriceTable() {
-      if (_pricesLoading && !_allRows.length) return;
       renderTable(filteredPriceRows());
+    }
+    function updatePriceAges() {
+      if (document.hidden) return;
+      document.querySelectorAll('#prices-overlay-body .po-age-cell').forEach(function (cell) {
+        var ts = cell.dataset.ts;
+        var age = fmtAge(ts);
+        if (cell.textContent !== age) cell.textContent = age;
+        cell.style.color = ageCol(ts);
+      });
     }
     function startPricesAutoRefresh() {
       stopPricesAutoRefresh();
-      _pricesRefreshTimer = setInterval(function () { window.loadPricesOverlay({ silent: true }); }, 5000);
-      _pricesAgeTimer = setInterval(renderCurrentPriceTable, 1000);
+      if (document.hidden) return;
+      _pricesRefreshTimer = setInterval(function () {
+        if (!document.hidden) window.loadPricesOverlay({ silent: true });
+      }, 5000);
+      _pricesAgeTimer = setInterval(updatePriceAges, 1000);
     }
     function stopPricesAutoRefresh() {
+      _pricesGeneration++;
+      if (_pricesController) _pricesController.abort();
+      _pricesController = null;
+      _pricesLoading = false;
       if (_pricesRefreshTimer) clearInterval(_pricesRefreshTimer);
       if (_pricesAgeTimer) clearInterval(_pricesAgeTimer);
       _pricesRefreshTimer = null;
@@ -3623,27 +3640,43 @@ window.PBGUI_NAV_CONFIG = {
       var body = document.getElementById('prices-overlay-body');
       if (!body) return;
       if (!rows.length) {
-        body.innerHTML = '<div style="color:#4a5568;padding:1rem;">No price data available yet.</div>';
+        if (body.querySelector('table') || !body.querySelector('.po-empty')) {
+          body.innerHTML = '<div class="po-empty" style="color:#4a5568;padding:1rem;">No price data available yet.</div>';
+        }
         return;
       }
-      var html = '<table class="po-table"><thead><tr>'
-        + '<th>#</th>'
-        + '<th>Symbol</th>'
-        + '<th>Exchange</th>'
-        + '<th style="text-align:right;">Price</th>'
-        + '<th style="text-align:right;">Age</th>'
-        + '</tr></thead><tbody>';
+      var table = body.querySelector('table');
+      if (!table) {
+        body.innerHTML = '<table class="po-table"><thead><tr><th>#</th><th>Symbol</th><th>Exchange</th>'
+          + '<th style="text-align:right;">Price</th><th style="text-align:right;">Age</th></tr></thead><tbody></tbody></table>';
+        table = body.querySelector('table');
+      }
+      var tbody = table.tBodies[0];
+      var existing = new Map();
+      Array.from(tbody.rows).forEach(function (row) { existing.set(row.dataset.key, row); });
       rows.forEach(function (r, i) {
-        html += '<tr>'
-          + '<td style="color:#4a5568;">' + (i + 1) + '</td>'
-          + '<td>' + _esc(r.symbol) + '</td>'
-          + '<td style="color:#64748b;">' + _esc(r.exchange || '') + '</td>'
-          + '<td style="text-align:right;color:#93c5fd;font-variant-numeric:tabular-nums;">' + fmtPrice(r.price) + '</td>'
-          + '<td style="text-align:right;color:' + ageCol(r.ts) + ';font-variant-numeric:tabular-nums;">' + fmtAge(r.ts) + '</td>'
-          + '</tr>';
+        var key = JSON.stringify([r.symbol, r.exchange || '']);
+        var row = existing.get(key);
+        if (!row) {
+          row = document.createElement('tr');
+          row.dataset.key = key;
+          for (var j = 0; j < 5; j++) row.appendChild(document.createElement('td'));
+          row.cells[0].style.color = '#4a5568';
+          row.cells[2].style.color = '#64748b';
+          row.cells[3].style.cssText = 'text-align:right;color:#93c5fd;font-variant-numeric:tabular-nums;';
+          row.cells[4].style.cssText = 'text-align:right;font-variant-numeric:tabular-nums;';
+          row.cells[4].className = 'po-age-cell';
+        }
+        existing.delete(key);
+        var values = [String(i + 1), String(r.symbol || ''), String(r.exchange || ''), fmtPrice(r.price), fmtAge(r.ts)];
+        values.forEach(function (value, j) {
+          if (row.cells[j].textContent !== value) row.cells[j].textContent = value;
+        });
+        row.cells[4].dataset.ts = r.ts == null ? '' : String(r.ts);
+        row.cells[4].style.color = ageCol(r.ts);
+        if (tbody.rows[i] !== row) tbody.insertBefore(row, tbody.rows[i] || null);
       });
-      html += '</tbody></table>';
-      body.innerHTML = html;
+      existing.forEach(function (row) { row.remove(); });
     }
 
     window.openPricesOverlay = function () {
@@ -3660,27 +3693,55 @@ window.PBGUI_NAV_CONFIG = {
     };
     window.loadPricesOverlay = function (opts) {
       opts = opts || {};
-      if (_pricesLoading) return;
+      var overlay = document.getElementById('prices-overlay');
+      if (document.hidden || !overlay.classList.contains('active') || _pricesLoading) return;
       _pricesLoading = true;
+      var generation = ++_pricesGeneration;
+      _pricesController = new AbortController();
       var body = document.getElementById('prices-overlay-body');
       if (!opts.silent && body) body.innerHTML = '<div style="color:#64748b;padding:1rem;">Loading\u2026</div>';
-      fetch(API_BASE + '/prices-snapshot', authOptions())
-        .then(function (r) { return r.json(); })
+      fetch(API_BASE + '/prices-snapshot', authOptions({ signal: _pricesController.signal }))
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
         .then(function (d) {
+          if (generation !== _pricesGeneration || document.hidden) return;
           _allRows = d.rows || [];
           renderCurrentPriceTable();
         })
-        .catch(function () {
+        .catch(function (error) {
+          if (generation !== _pricesGeneration || error.name === 'AbortError' || document.hidden) return;
+          console.error('Prices snapshot failed', error);
           var body = document.getElementById('prices-overlay-body');
           if (!opts.silent && body) body.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load prices.</div>';
         })
         .finally(function () {
+          if (generation !== _pricesGeneration) return;
           _pricesLoading = false;
+          _pricesController = null;
         });
     };
     window.filterPricesOverlay = function (q) {
       renderCurrentPriceTable();
     };
+
+    document.addEventListener('visibilitychange', function () {
+      var overlay = document.getElementById('prices-overlay');
+      if (document.hidden) stopPricesAutoRefresh();
+      else if (overlay.classList.contains('active')) {
+        startPricesAutoRefresh();
+        updatePriceAges();
+        window.loadPricesOverlay({ silent: true });
+      }
+    });
+    window.addEventListener('pagehide', stopPricesAutoRefresh);
+    window.addEventListener('pageshow', function () {
+      if (!document.hidden && document.getElementById('prices-overlay').classList.contains('active')) {
+        startPricesAutoRefresh();
+        window.loadPricesOverlay({ silent: true });
+      }
+    });
 
     /* drag logic */
     document.addEventListener('DOMContentLoaded', function () {

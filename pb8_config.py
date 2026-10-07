@@ -13,6 +13,7 @@ import threading
 import time
 from pathlib import Path
 
+from logging_helpers import human_log as _log
 from file_lock import advisory_file_lock
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from pbgui_purefunc import pb8_runtime_status
@@ -44,7 +45,16 @@ class PB8MarketRequestError(PB8ConfigurationError):
     status_code = 422
 
 
+SERVICE = "PB8Config"
 _CACHE_TTL_SECONDS = 30.0
+_GPU_CACHE_TTL_SECONDS = 60.0
+_FINGERPRINT_SCAN_SECONDS = 1.5
+_fingerprint_lock = threading.RLock()
+_fingerprint_scans: OrderedDict[tuple, tuple[float, tuple]] = OrderedDict()
+_metadata_flights: dict[tuple, threading.Event] = {}
+_metadata_condition = threading.Condition(threading.RLock())
+_METADATA_MAX_FLIGHTS = 64
+_gpu_metadata_cache = None
 _CACHE_MAX_CONFIGS = 64
 _cache_lock = threading.RLock()
 _template_cache: tuple[float, tuple, dict] | None = None
@@ -84,17 +94,15 @@ def _runtime_fingerprint(status: dict | None = None) -> tuple:
         except OSError:
             return 0, 0
 
-    git_head = ""
-    head_path = pb8_dir / ".git" / "HEAD"
-    try:
-        head_value = head_path.read_text(encoding="utf-8").strip()
-        if head_value.startswith("ref: "):
-            ref_path = pb8_dir / ".git" / head_value[5:].strip()
-            git_head = ref_path.read_text(encoding="utf-8").strip()
-        else:
-            git_head = head_value
-    except OSError:
-        pass
+    git_head = _git_revision(pb8_dir)
+    # An update writer rewrites this lock on acquisition. Invalidate scans even
+    # when the 1.5-second debounce window has not elapsed yet.
+    update_signature = (
+        signature(Path(PBGDIR) / "data" / "locks" / "master-update.lock"),
+        signature(pb8_dir / ".pbgui-pb8-update-active"),
+        signature(Path(PBGDIR) / "data" / "locks" / "pb8-runtime-invalid"),
+    )
+    scan = _runtime_source_signature(pb8_dir, str(current.get("pb8venv") or ""), update_signature)
     return (
         str(pb8_dir),
         str(current.get("pb8venv") or ""),
@@ -104,7 +112,172 @@ def _runtime_fingerprint(status: dict | None = None) -> tuple:
         signature(current.get("version_file")),
         signature(current.get("config_schema_file")),
         signature(helper),
+        scan,
+        update_signature,
     )
+
+
+
+def _git_revision(pb8_dir: Path) -> str:
+    """Resolve loose/packed refs for normal repositories and linked worktrees."""
+    git_dir = pb8_dir / ".git"
+    if not git_dir.exists():
+        return ""
+    try:
+        if git_dir.is_file():
+            value = git_dir.read_text(encoding="utf-8").strip()
+            if not value.startswith("gitdir: "):
+                return ""
+            git_dir = (pb8_dir / value[8:]).resolve()
+        common_dir = git_dir
+        common_file = git_dir / "commondir"
+        if common_file.exists():
+            common_dir = (git_dir / common_file.read_text(encoding="utf-8").strip()).resolve()
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref: "):
+            return head
+        ref = head[5:]
+        for directory in (git_dir, common_dir):
+            ref_file = directory / ref
+            if ref_file.is_file():
+                return ref_file.read_text(encoding="utf-8").strip()
+        packed = common_dir / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                if line and not line.startswith(("#", "^")):
+                    revision, name = line.split(" ", 1)
+                    if name == ref:
+                        return revision
+        return head
+    except (OSError, ValueError) as exc:
+        _log(SERVICE, "PB8 Git revision could not be resolved", level="DEBUG",
+             meta={"error_type": type(exc).__name__})
+        return ""
+
+
+def _runtime_source_signature(pb8_dir: Path, interpreter: str, update_signature: tuple) -> tuple:
+    """Debounce bounded source/environment scans without caching metadata by time."""
+    key = (str(pb8_dir), interpreter, update_signature)
+    with _fingerprint_lock:
+        now = time.monotonic()
+        cached = _fingerprint_scans.get(key)
+        if cached and now < cached[0]:
+            _fingerprint_scans.move_to_end(key)
+            return cached[1]
+        entries = []
+        source = pb8_dir / "src"
+        def scan_error(exc):
+            raise PB8ConfigurationError("Cannot inspect PB8 runtime sources") from exc
+        try:
+            # Fingerprinting must also support prepared file-cache writes when
+            # PB8 is unavailable. Actual helper launches validate readiness.
+            entries.append(("src_exists", source.is_dir()))
+            roots = os.walk(source, onerror=scan_error, followlinks=False) if source.is_dir() else ()
+            for root, dirs, files in roots:
+                dirs[:] = sorted(name for name in dirs if name not in {"__pycache__", ".git"})
+                for name in sorted(files):
+                    if name.endswith(".py"):
+                        path = Path(root) / name
+                        entries.append((str(path.relative_to(source)), *_file_signature(path)))
+            if interpreter:
+                environment = Path(interpreter).parent.parent
+                cfg = environment / "pyvenv.cfg"
+                if cfg.is_file():
+                    entries.append(("pyvenv.cfg", *_file_signature(cfg)))
+                packages = [environment / "Lib" / "site-packages"]
+                packages.extend(sorted((environment / "lib").glob("python*/site-packages")))
+                for directory in packages:
+                    if not directory.is_dir():
+                        continue
+                    for name in sorted(os.listdir(directory)):
+                        if name.endswith(".dist-info"):
+                            # Include all distribution identities: optimizer dependencies
+                            # include Torch, CuPy, pymoo and their runtime dependencies.
+                            entries.append((str(directory / name),))
+                            for filename in ("METADATA", "RECORD"):
+                                path = directory / name / filename
+                                if path.is_file():
+                                    entries.append((str(path), *_file_signature(path)))
+                    for relative in ("ccxt/async_support/__init__.py", "ccxt/__init__.py",
+                                     "pymoo/__init__.py", "torch/__init__.py", "cupy/__init__.py"):
+                        path = directory / relative
+                        if path.is_file():
+                            entries.append((str(path), *_file_signature(path)))
+        except OSError as exc:
+            _log(SERVICE, "PB8 source fingerprint failed", level="ERROR",
+                 meta={"error_type": type(exc).__name__})
+            raise PB8ConfigurationError("Cannot inspect PB8 runtime files") from exc
+        result = tuple(entries)
+        _fingerprint_scans[key] = (time.monotonic() + _FINGERPRINT_SCAN_SECONDS, result)
+        _fingerprint_scans.move_to_end(key)
+        while len(_fingerprint_scans) > 8:
+            _fingerprint_scans.popitem(last=False)
+        return result
+
+
+def _cached_call(cache_name: str, loader, *, key: tuple | None = None,
+                 ttl: float | None = None) -> dict | list:
+    """Load once per key without holding the cache lock during helper I/O."""
+    flight_key = (cache_name, key)
+    def read(fingerprint):
+        with _cache_lock:
+            cache = globals()[cache_name]
+            cached = cache.get(key) if key is not None else cache
+            if cached and cached[0] > time.monotonic() and cached[1] == fingerprint:
+                if key is not None:
+                    cache.move_to_end(key)
+                return copy.deepcopy(cached[2])
+        return None
+    while True:
+        if _migration_helper_shutdown.is_set():
+            raise PB8ConfigurationError("PB8 migration helper is shutting down")
+        fingerprint = _runtime_fingerprint()
+        cached = read(fingerprint)
+        if cached is not None:
+            return cached
+        with _metadata_condition:
+            flight = _metadata_flights.get(flight_key)
+            if flight is None:
+                if len(_metadata_flights) >= _METADATA_MAX_FLIGHTS:
+                    raise PB8RuntimeBusyError("PB8 metadata requests are busy. Retry shortly.")
+                flight = threading.Event()
+                _metadata_flights[flight_key] = flight
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            # Bounded polling also wakes waiters promptly when lifespan interrupts.
+            flight.wait(0.1)
+            continue
+        try:
+            for attempt in range(2):
+                fingerprint = _runtime_fingerprint()
+                cached = read(fingerprint)
+                if cached is not None:
+                    return cached
+                value = loader()
+                if _migration_helper_shutdown.is_set():
+                    raise PB8ConfigurationError("PB8 migration helper is shutting down")
+                if _runtime_fingerprint() != fingerprint:
+                    if attempt == 0:
+                        continue
+                    raise PB8RuntimeBusyError("PB8 runtime changed repeatedly. Retry the metadata request.")
+                with _cache_lock:
+                    cached = (float("inf") if ttl is None else time.monotonic() + ttl,
+                              fingerprint, copy.deepcopy(value))
+                    if key is None:
+                        globals()[cache_name] = cached
+                    else:
+                        cache = globals()[cache_name]
+                        cache[key] = cached
+                        cache.move_to_end(key)
+                        while len(cache) > 16:
+                            cache.popitem(last=False)
+                return copy.deepcopy(value)
+        finally:
+            with _metadata_condition:
+                _metadata_flights.pop(flight_key, None)
+                flight.set()
 
 
 def _cache_config(path: Path, config: dict, fingerprint: tuple | None = None) -> None:
@@ -138,8 +311,9 @@ def _write_prepared_config(config: dict, destination: Path) -> dict:
         except FileNotFoundError:
             pass
         raise
+    fingerprint = _runtime_fingerprint()
     with _cache_lock:
-        _cache_config(destination, config)
+        _cache_config(destination, config, fingerprint)
     return copy.deepcopy(config)
 
 
@@ -216,6 +390,8 @@ def _ensure_migration_helper_locked(status: dict) -> None:
     """Start or replace the persistent helper for the current PB8 runtime fingerprint."""
     global _migration_helper_process, _migration_helper_fingerprint
     global _migration_helper_responses, _migration_helper_reader_thread
+    if _migration_helper_shutdown.is_set():
+        raise PB8ConfigurationError("PB8 migration helper is shutting down")
     fingerprint = _runtime_fingerprint(status)
     if (
         _migration_helper_process is not None
@@ -255,6 +431,7 @@ def _ensure_migration_helper_locked(status: dict) -> None:
 def _call_migration_helper(operation: str, **payload) -> dict:
     """Call the persistent PB8 helper with one serialized bounded request."""
     runtime_lease = None
+    started = time.monotonic()
     try:
         runtime_lease = acquire_master_runtime_lock(Path(PBGDIR))
         status = _runtime()
@@ -287,10 +464,21 @@ def _call_migration_helper(operation: str, **payload) -> dict:
             if not isinstance(result, dict):
                 raise PB8ConfigurationError("PB8 migration helper returned no result")
     except MasterUpdateBusyError as exc:
+        _log(SERVICE, "PB8 helper blocked by update lock", level="WARNING",
+             meta={"operation": operation, "error_type": "PB8RuntimeBusyError",
+                   "duration_seconds": round(time.monotonic() - started, 3)})
         raise PB8RuntimeBusyError(
             "PB8 is being installed or updated. Retry this configuration operation when the update finishes."
         ) from exc
+    except PB8ConfigurationError as exc:
+        _log(SERVICE, "PB8 persistent helper request failed", level="ERROR",
+             meta={"operation": operation, "error_type": type(exc).__name__,
+                   "duration_seconds": round(time.monotonic() - started, 3)})
+        raise
     except (OSError, BrokenPipeError) as exc:
+        _log(SERVICE, "PB8 persistent helper I/O failed", level="ERROR",
+             meta={"operation": operation, "error_type": type(exc).__name__,
+                   "duration_seconds": round(time.monotonic() - started, 3)})
         with _migration_helper_lock:
             _stop_migration_helper_locked()
         raise PB8ConfigurationError(f"PB8 migration helper failed: {exc}") from exc
@@ -307,11 +495,14 @@ def start_pb8_migration_helper() -> None:
 
 def _call_helper(operation: str, **payload) -> dict:
     """Execute one helper request in PB8's Python environment."""
-    if operation in {"prepare", "load", "validate_overrides", "validate_optimizer_overrides"}:
+    if operation in {"prepare", "load", "validate_overrides", "validate_optimizer_overrides",
+                     "default", "result_metrics", "optimize_metadata", "optimize_metadata_static",
+                     "coin_override_metadata", "exchange_metadata", "optimizer_backend_contract"}:
         # Reuse the lifespan-owned helper for local config work. Propagate validation
         # and shutdown errors unchanged; a cold retry would hide failures and double work.
         return _call_migration_helper(operation, **payload)
     runtime_lease = None
+    started = time.monotonic()
     try:
         runtime_lease = acquire_master_runtime_lock(Path(PBGDIR))
         status = _runtime()
@@ -331,10 +522,16 @@ def _call_helper(operation: str, **payload) -> dict:
             timeout=120,
         )
     except MasterUpdateBusyError as exc:
+        _log(SERVICE, "PB8 helper blocked by update lock", level="WARNING",
+             meta={"operation": operation, "error_type": "PB8RuntimeBusyError",
+                   "duration_seconds": round(time.monotonic() - started, 3)})
         raise PB8RuntimeBusyError(
             "PB8 is being installed or updated. Retry this configuration operation when the update finishes."
         ) from exc
     except (OSError, subprocess.TimeoutExpired) as exc:
+        _log(SERVICE, "PB8 cold helper request failed", level="ERROR",
+             meta={"operation": operation, "error_type": type(exc).__name__,
+                   "duration_seconds": round(time.monotonic() - started, 3)})
         raise PB8ConfigurationError(f"PB8 config helper failed: {exc}") from exc
     finally:
         if runtime_lease is not None:
@@ -359,74 +556,52 @@ def pb8_config_status() -> dict:
 
 
 def get_pb8_template_config() -> dict:
-    """Return the current installed PB8 template as a canonical config."""
-    global _template_cache
-    with _cache_lock:
-        now = time.monotonic()
-        fingerprint = _runtime_fingerprint()
-        if _template_cache and _template_cache[0] > now and _template_cache[1] == fingerprint:
-            return copy.deepcopy(_template_cache[2])
-        config = _call_helper("default")["config"]
-        _template_cache = (now + _CACHE_TTL_SECONDS, fingerprint, copy.deepcopy(config))
-        return copy.deepcopy(config)
+    """Return a fingerprint-bound canonical PB8 template without timed expiry."""
+    return _cached_call("_template_cache", lambda: _call_helper("default")["config"])
 
 
 def get_pb8_result_metrics() -> list[str]:
-    """Return metric names accepted by the installed PB8 visibility config."""
-    global _result_metrics_cache
-    with _cache_lock:
-        now = time.monotonic()
-        fingerprint = _runtime_fingerprint()
-        if _result_metrics_cache and _result_metrics_cache[0] > now and _result_metrics_cache[1] == fingerprint:
-            return list(_result_metrics_cache[2])
+    """Return static installed metric names without restarting the interpreter."""
+    def load():
         metrics = _call_helper("result_metrics").get("metrics")
         if not isinstance(metrics, list) or not all(isinstance(item, str) for item in metrics):
             raise PB8ConfigurationError("PB8 config helper returned invalid result metrics")
-        normalized = sorted(set(metrics))
-        _result_metrics_cache = (now + _CACHE_TTL_SECONDS, fingerprint, normalized)
-        return list(normalized)
+        return sorted(set(metrics))
+    return _cached_call("_result_metrics_cache", load)
 
 
 def get_pb8_optimize_metadata() -> dict:
-    """Return a cached optimizer model reported by the installed PB8 runtime."""
-    global _optimize_metadata_cache
-    with _cache_lock:
-        now = time.monotonic()
+    """Combine immutable optimizer metadata with a bounded host capability probe."""
+    for attempt in range(2):
         fingerprint = _runtime_fingerprint()
-        if _optimize_metadata_cache and _optimize_metadata_cache[0] > now and _optimize_metadata_cache[1] == fingerprint:
-            return copy.deepcopy(_optimize_metadata_cache[2])
-        metadata = _call_helper("optimize_metadata")
-        if not isinstance(metadata.get("template"), dict) or not isinstance(metadata.get("strategies"), list):
-            raise PB8ConfigurationError("PB8 config helper returned invalid optimize metadata")
-        _optimize_metadata_cache = (now + _CACHE_TTL_SECONDS, fingerprint, copy.deepcopy(metadata))
-        return copy.deepcopy(metadata)
+        def load_static():
+            metadata = _call_helper("optimize_metadata_static")
+            if not isinstance(metadata.get("template"), dict) or not isinstance(metadata.get("strategies"), list):
+                raise PB8ConfigurationError("PB8 config helper returned invalid optimize metadata")
+            return metadata
+        metadata = _cached_call("_optimize_metadata_cache", load_static)
+        def load_contract():
+            contract = _call_helper("optimizer_backend_contract")
+            if contract.get("contract_version") != 1 or not isinstance(contract.get("items"), dict):
+                raise PB8ConfigurationError("PB8 config helper returned invalid backend contract")
+            return contract
+        metadata["backend_contract"] = _cached_call(
+            "_gpu_metadata_cache", load_contract, ttl=_GPU_CACHE_TTL_SECONDS)
+        if _runtime_fingerprint() == fingerprint:
+            return metadata
+    raise PB8RuntimeBusyError("PB8 runtime changed repeatedly. Retry the metadata request.")
 
 
 def get_pb8_coin_override_metadata(hsl_signal_mode: str, strategy_kind: str) -> dict:
-    """Return typed PB8 coin-override metadata for one effective config context."""
-    fingerprint = _runtime_fingerprint()
-    cache_key = (str(hsl_signal_mode), str(strategy_kind))
-    with _cache_lock:
-        cached = _coin_override_metadata_cache.get(cache_key)
-        if cached and cached[0] > time.monotonic() and cached[1] == fingerprint:
-            _coin_override_metadata_cache.move_to_end(cache_key)
-            return copy.deepcopy(cached[2])
-        metadata = _call_helper(
-            "coin_override_metadata",
-            hsl_signal_mode=hsl_signal_mode,
-            strategy_kind=strategy_kind,
-        )
+    """Return static typed metadata for one effective override context."""
+    def load():
+        metadata = _call_helper("coin_override_metadata", hsl_signal_mode=hsl_signal_mode,
+                                strategy_kind=strategy_kind)
         if metadata.get("contract_version") != 1 or not isinstance(metadata.get("params"), dict):
             raise PB8ConfigurationError("PB8 config helper returned invalid coin override metadata")
-        _coin_override_metadata_cache[cache_key] = (
-            time.monotonic() + _CACHE_TTL_SECONDS,
-            fingerprint,
-            copy.deepcopy(metadata),
-        )
-        _coin_override_metadata_cache.move_to_end(cache_key)
-        while len(_coin_override_metadata_cache) > 16:
-            _coin_override_metadata_cache.popitem(last=False)
-        return copy.deepcopy(metadata)
+        return metadata
+    return _cached_call("_coin_override_metadata_cache", load,
+                        key=(str(hsl_signal_mode), str(strategy_kind)))
 
 
 def validate_pb8_override_bundle(config_path: Path | str) -> None:
@@ -460,13 +635,8 @@ def validate_pb8_optimize_preflight(config: dict, *, base_config_path: str = "")
 
 
 def get_pb8_exchange_metadata() -> dict:
-    """Return PB8's vetted live and historical exchange capabilities."""
-    global _exchange_metadata_cache
-    with _cache_lock:
-        now = time.monotonic()
-        fingerprint = _runtime_fingerprint()
-        if _exchange_metadata_cache and _exchange_metadata_cache[0] > now and _exchange_metadata_cache[1] == fingerprint:
-            return copy.deepcopy(_exchange_metadata_cache[2])
+    """Return capabilities derived from the installed PB8/CCXT code."""
+    def load():
         metadata = _call_helper("exchange_metadata")
         required = ("live", "backtest", "optimize", "suite")
         if metadata.get("contract_version") != 1 or any(
@@ -475,12 +645,8 @@ def get_pb8_exchange_metadata() -> dict:
             for key in required
         ):
             raise PB8ConfigurationError("PB8 config helper returned invalid exchange metadata")
-        normalized = {
-            "contract_version": 1,
-            **{key: sorted(set(metadata[key])) for key in required},
-        }
-        _exchange_metadata_cache = (now + _CACHE_TTL_SECONDS, fingerprint, copy.deepcopy(normalized))
-        return copy.deepcopy(normalized)
+        return {"contract_version": 1, **{key: sorted(set(metadata[key])) for key in required}}
+    return _cached_call("_exchange_metadata_cache", load)
 
 
 def get_pb8_market_identifiers(
@@ -542,6 +708,8 @@ def get_pb8_market_identifiers(
     except PB8RuntimeBusyError:
         raise
     except PB8ConfigurationError as exc:
+        _log(SERVICE, "PB8 market catalog unavailable", level="WARNING",
+             meta={"endpoint": "/api/v8/symbols", "error_type": type(exc).__name__})
         raise PB8MarketDataUnavailableError(str(exc)) from exc
     if (
         result.get("contract_version") != 1
@@ -593,9 +761,9 @@ def load_pb8_config(path: Path | str) -> dict:
     """Load and canonicalize a PB8 config through the installed PB8 loader."""
     source = Path(path).resolve()
     key = str(source)
+    signature = _file_signature(source)
+    fingerprint = _runtime_fingerprint()
     with _cache_lock:
-        signature = _file_signature(source)
-        fingerprint = _runtime_fingerprint()
         cached = _config_cache.get(key)
         if (
             cached
@@ -605,9 +773,12 @@ def load_pb8_config(path: Path | str) -> dict:
         ):
             _config_cache.move_to_end(key)
             return copy.deepcopy(cached[3])
-        config = _call_helper("load", config_path=key)["config"]
-        _cache_config(source, config, fingerprint)
-        return copy.deepcopy(config)
+    config = _call_helper("load", config_path=key)["config"]
+    current_fingerprint = _runtime_fingerprint()
+    with _cache_lock:
+        if _file_signature(source) == signature and current_fingerprint == fingerprint:
+            _cache_config(source, config, fingerprint)
+    return copy.deepcopy(config)
 
 
 def load_pb8_editor_config(path: Path | str, *, loader=None) -> dict:
@@ -647,8 +818,9 @@ def cache_prepared_pb8_config(config: dict, path: Path | str) -> None:
     source = Path(path)
     if not source.is_file():
         return
+    fingerprint = _runtime_fingerprint()
     with _cache_lock:
-        _cache_config(source, config)
+        _cache_config(source, config, fingerprint)
 
 
 def migrate_pb7_config(
