@@ -30,6 +30,7 @@ from master.cluster_state import (
     read_local_identity,
 )
 import pbgui_purefunc
+import pbcoindata_lifecycle
 
 
 SERVICE = "PBMonitorAgent"
@@ -279,9 +280,15 @@ def _pbcluster_required_for_host(pbname: str) -> bool:
 def _service_expected(service_name: str) -> bool | None:
     """Return whether this host should run one PBGui service."""
 
-    if service_name == "PBCoinData":
-        return _local_credential_capability()["credential_active"]
     cfg = _read_ini()
+    if service_name == "PBCoinData":
+        capability = _local_credential_capability()
+        role = str(cfg.get("main", "role", fallback="") or "").strip().lower()
+        return pbcoindata_lifecycle.service_expected(
+            PBGDIR,
+            role=role,
+            credential_active=capability.get("credential_active"),
+        )
     pbname = _local_pbname(cfg)
     if service_name == "PBCluster":
         return _pbcluster_required_for_host(pbname)
@@ -292,6 +299,14 @@ def _service_expected(service_name: str) -> bool | None:
     if service_name == "PBMonitorAgent":
         return True
     return True
+
+
+def _pbcoindata_should_unload() -> bool:
+    """Return whether this host is an idle slave that can release PBCoinData."""
+
+    cfg = _read_ini()
+    role = str(cfg.get("main", "role", fallback="") or "").strip().lower()
+    return pbcoindata_lifecycle.should_unload(PBGDIR, role=role)
 
 
 def _auto_heal_enabled() -> bool:
@@ -578,6 +593,27 @@ def _restart_allowed(service_name: str, now: float | None = None) -> tuple[bool,
     return True, ""
 
 
+def _stop_systemd_service(service_name: str, unit: str) -> tuple[bool, str]:
+    """Stop one local systemd user service that is no longer expected."""
+
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "stop", unit],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20,
+            env=_systemd_user_env(),
+        )
+    except Exception as exc:
+        return False, str(exc)
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout or "").strip()
+        return False, stderr or f"systemctl stop exited {result.returncode}"
+    _log(SERVICE, f"[service] Stopped unused local {service_name} via {unit}", level="INFO")
+    return True, ""
+
+
 def _restart_systemd_service(service_name: str, unit: str) -> tuple[bool, str]:
     """Restart a local systemd user service."""
 
@@ -684,6 +720,13 @@ def _service_status(unit: str, pid_file: str, process_match: str) -> dict[str, A
 
     systemd_status = _systemd_service_status(unit)
     legacy_status = _pid_file_service_status(pid_file, process_match)
+    if (
+        systemd_status is not None
+        and systemd_status.get("status") == "running"
+        and legacy_status.get("status") == "running"
+        and systemd_status.get("pid") == legacy_status.get("pid")
+    ):
+        return systemd_status
     if legacy_status.get("status") == "running":
         if systemd_status is not None:
             legacy_status = dict(legacy_status)
@@ -708,7 +751,40 @@ def _run_service_status() -> None:
     for service_name, (unit, pid_file, process_match) in PBGUI_SERVICES.items():
         expected = _service_expected(service_name)
         if expected is False:
-            payload["services"][service_name] = _disabled_service_status(service_name)
+            if service_name == "PBCoinData" and _pbcoindata_should_unload():
+                current = _service_status(unit, pid_file, process_match)
+                reason = "No running dynamic_ignore bot needs PBCoinData on this slave"
+                if not heal_enabled:
+                    current = dict(current)
+                    current["expected"] = False
+                    current["reason"] = reason
+                    payload["services"][service_name] = current
+                    continue
+                if current.get("status") == "running":
+                    if current.get("manager") != "systemd":
+                        current = dict(current)
+                        current["expected"] = False
+                        current["reason"] = reason
+                        current["stop_error"] = "Legacy PBCoinData process is not managed by systemd"
+                        payload["services"][service_name] = current
+                        continue
+                    stopped, stop_error = _stop_systemd_service(service_name, unit)
+                    if not stopped:
+                        current = dict(current)
+                        current["expected"] = False
+                        current["stop_error"] = stop_error or "stop failed"
+                        current["reason"] = reason
+                        payload["services"][service_name] = current
+                        continue
+                    was_stopped = True
+                else:
+                    was_stopped = False
+                disabled = _disabled_service_status(service_name)
+                disabled["reason"] = reason
+                disabled["was_stopped"] = was_stopped
+                payload["services"][service_name] = disabled
+            else:
+                payload["services"][service_name] = _disabled_service_status(service_name)
             continue
         status = _service_status(unit, pid_file, process_match)
         if status.get("status") != "running" and service_name in {"PBCluster", "PBMonitorAgent"} and status.get("manager") != "systemd":

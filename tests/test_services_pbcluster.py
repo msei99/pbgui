@@ -48,6 +48,25 @@ def test_vps_local_restart_runs_blocking_lifecycle_in_thread(monkeypatch) -> Non
     assert calls == [("thread", "service_action"), ("pbdata", "restart")]
 
 
+def test_pbcoindata_migration_requirement_follows_runtime_lifecycle(monkeypatch, tmp_path) -> None:
+    """Systemd migration agrees with the runtime lifecycle decision for PBCoinData."""
+
+    monkeypatch.setattr(services, "PBGDIR", tmp_path)
+    monkeypatch.setattr(services, "_cmc_pool_payload", lambda: {"ready": True})
+    monkeypatch.setattr(
+        services,
+        "load_ini",
+        lambda section, key: "slave" if (section, key) == ("main", "role") else "",
+    )
+    monkeypatch.setattr(
+        services.pbcoindata_lifecycle,
+        "service_expected",
+        lambda pbgui_dir, **kwargs: False,
+    )
+
+    assert services._pbcoindata_required() is False
+
+
 def test_local_services_registry_includes_monitor_agent() -> None:
     """Local Services API exposes PBMonitorAgent as a systemd-only service."""
 

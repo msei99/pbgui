@@ -2210,6 +2210,44 @@ def test_monitor_agent_service_requires_systemd_unit() -> None:
     assert not any("data/pid/pbmonitoragent.pid" in command for command in commands)
 
 
+def test_monitor_agent_recognizes_systemd_process_when_pid_file_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale-compatible PID file must not hide ownership by the active systemd unit."""
+
+    monkeypatch.setattr(
+        monitor_agent,
+        "_systemd_service_status",
+        lambda unit: {
+            "status": "running",
+            "pid": 123,
+            "error": None,
+            "was_restarted": False,
+            "manager": "systemd",
+            "unit": unit,
+        },
+    )
+    monkeypatch.setattr(
+        monitor_agent,
+        "_pid_file_service_status",
+        lambda pid_file, process_match: {
+            "status": "running",
+            "pid": 123,
+            "error": None,
+            "was_restarted": False,
+        },
+    )
+
+    status = monitor_agent._service_status(
+        "pbgui-pbcoindata.service", "data/pid/pbcoindata.pid", "pbcoindata.py"
+    )
+
+    assert status["status"] == "running"
+    assert status["pid"] == 123
+    assert status["manager"] == "systemd"
+    assert status["unit"] == "pbgui-pbcoindata.service"
+
+
 def test_monitor_agent_prefers_live_legacy_process_over_inactive_systemd(monkeypatch: pytest.MonkeyPatch) -> None:
     """A live legacy PBData process must not be reported down because its unit is inactive."""
 
@@ -2281,6 +2319,114 @@ def test_monitor_agent_locally_restarts_expected_service(monkeypatch: pytest.Mon
     assert services["PBCoinData"]["status"] == "disabled"
     assert services["PBCoinData"]["expected"] is False
     assert services["PBMonitorAgent"]["status"] == "running"
+
+
+def test_monitor_agent_stops_unused_systemd_pbcoindata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An unused slave PBCoinData daemon is intentionally stopped instead of kept resident."""
+
+    monkeypatch.setattr(monitor_agent, "DATA_DIR", tmp_path / "data" / "monitor_agent")
+    monkeypatch.setattr(
+        monitor_agent,
+        "PBGUI_SERVICES",
+        {"PBCoinData": ("pbgui-pbcoindata.service", "data/pid/pbcoindata.pid", "pbcoindata.py")},
+    )
+    monkeypatch.setattr(monitor_agent, "_service_expected", lambda _name: False)
+    monkeypatch.setattr(monitor_agent, "_auto_heal_enabled", lambda: True)
+    monkeypatch.setattr(monitor_agent, "_pbcoindata_should_unload", lambda: True)
+    monkeypatch.setattr(monitor_agent, "_service_status", lambda *_args: {
+        "status": "running",
+        "pid": 123,
+        "error": None,
+        "was_restarted": False,
+        "manager": "systemd",
+        "unit": "pbgui-pbcoindata.service",
+    })
+    stops: list[str] = []
+    monkeypatch.setattr(
+        monitor_agent,
+        "_stop_systemd_service",
+        lambda service_name, unit: (stops.append(f"{service_name}:{unit}") or True, ""),
+    )
+
+    monitor_agent._run_service_status()
+
+    payload = json.loads((tmp_path / "data" / "monitor_agent" / "service_status.json").read_text(encoding="utf-8"))
+    assert stops == ["PBCoinData:pbgui-pbcoindata.service"]
+    assert payload["services"]["PBCoinData"]["status"] == "disabled"
+    assert payload["services"]["PBCoinData"]["expected"] is False
+    assert payload["services"]["PBCoinData"]["was_stopped"] is True
+
+
+def test_monitor_agent_does_not_stop_pbcoindata_for_other_disabled_reasons(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Master or credential-only disabled state does not trigger physical PBCoinData stop."""
+
+    monkeypatch.setattr(monitor_agent, "DATA_DIR", tmp_path / "data" / "monitor_agent")
+    monkeypatch.setattr(
+        monitor_agent,
+        "PBGUI_SERVICES",
+        {"PBCoinData": ("pbgui-pbcoindata.service", "data/pid/pbcoindata.pid", "pbcoindata.py")},
+    )
+    monkeypatch.setattr(monitor_agent, "_service_expected", lambda _name: False)
+    monkeypatch.setattr(monitor_agent, "_pbcoindata_should_unload", lambda: False)
+    monkeypatch.setattr(
+        monitor_agent,
+        "_stop_systemd_service",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not stop")),
+    )
+
+    monitor_agent._run_service_status()
+
+    payload = json.loads(
+        (tmp_path / "data" / "monitor_agent" / "service_status.json").read_text(encoding="utf-8")
+    )
+    assert payload["services"]["PBCoinData"]["status"] == "disabled"
+    assert payload["services"]["PBCoinData"]["expected"] is False
+
+
+def test_monitor_agent_restarts_pbcoindata_when_it_becomes_expected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stopped PBCoinData service is started again when a consumer makes it expected."""
+
+    monkeypatch.setattr(monitor_agent, "DATA_DIR", tmp_path / "data" / "monitor_agent")
+    monkeypatch.setattr(
+        monitor_agent,
+        "PBGUI_SERVICES",
+        {"PBCoinData": ("pbgui-pbcoindata.service", "data/pid/pbcoindata.pid", "pbcoindata.py")},
+    )
+    monkeypatch.setattr(monitor_agent, "_service_expected", lambda _name: True)
+    monkeypatch.setattr(monitor_agent, "_auto_heal_enabled", lambda: True)
+    monkeypatch.setattr(
+        monitor_agent,
+        "_service_status",
+        lambda *_args: {
+            "status": "stopped",
+            "pid": None,
+            "error": "down",
+            "was_restarted": False,
+            "manager": "systemd",
+            "unit": "pbgui-pbcoindata.service",
+        },
+    )
+    restarts: list[str] = []
+    monkeypatch.setattr(
+        monitor_agent,
+        "_restart_systemd_service",
+        lambda service_name, unit: (restarts.append(f"{service_name}:{unit}") or True, ""),
+    )
+
+    monitor_agent._run_service_status()
+
+    payload = json.loads(
+        (tmp_path / "data" / "monitor_agent" / "service_status.json").read_text(encoding="utf-8")
+    )
+    assert restarts == ["PBCoinData:pbgui-pbcoindata.service"]
+    assert payload["services"]["PBCoinData"]["status"] == "restarting"
+    assert payload["services"]["PBCoinData"]["expected"] is True
 
 
 def test_monitor_agent_first_local_restart_is_immediate(monkeypatch: pytest.MonkeyPatch) -> None:
