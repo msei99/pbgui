@@ -1276,20 +1276,23 @@ def test_pinned_pb7_checkout_is_current_for_master_and_vps_status() -> None:
 
 
 def test_master_pb7_branch_state_reads_live_checkout_after_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Branch details do not retain the pre-switch checkout from the hourly cache."""
+    """Current shared host facts override stale release metadata after a branch switch."""
     service = object.__new__(VPSManagerService)
     service._get_pb7_release = lambda: {
         "current_branch": "unknown",
         "current_commit": service_mod.PB7_PINNED_COMMIT,
         "branches": {},
     }
+    host_meta = {"pb7b": "unknown", "pb7c": service_mod.PB7_PINNED_COMMIT}
+    service._get_local_host_meta = lambda: dict(host_meta)
     monkeypatch.setattr(service_mod, "_configured_pb7dir", lambda: "/tmp/pb7")
-    monkeypatch.setattr(service_mod, "get_current_pb7_status", lambda repo: ("master", service_mod.PB7_PINNED_COMMIT))
     monkeypatch.setattr(service_mod, "list_git_remotes", lambda repo: ["origin"])
     monkeypatch.setattr(service_mod, "get_git_remote_url", lambda repo, name: service_mod.PB7_UPSTREAM_REMOTE_URL)
     monkeypatch.setattr(service_mod, "get_git_branch_remote", lambda repo, branch: "origin")
     monkeypatch.setattr(service_mod, "get_git_branch_remotes", lambda repo, branches: {})
 
+    assert service._build_master_pb7_branch_state()["current_branch"] == "pinned"
+    host_meta["pb7b"] = "master"
     state = service._build_master_pb7_branch_state()
 
     assert state["current_branch"] == "master"

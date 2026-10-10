@@ -1733,6 +1733,7 @@ textarea.json-invalid:focus {
 #opted-vast-validation .cloud-fix-actions { display:flex; flex-wrap:wrap; gap:var(--sp-sm); margin-top:var(--sp-sm); }
 #opted-vast-validation summary { cursor:pointer; color:var(--text-dim); }
 input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; outline:1px solid #ef4444; }
+.optimize-bound-row.cloud-invalid { box-shadow:inset 0 0 0 2px #ef4444; border-radius:8px; background:rgba(239,68,68,.06); }
 .limits-table tr.cloud-invalid td { background:rgba(239,68,68,.12); color:#fca5a5; }
 #panel-settings.active, #panel-vast.active { overflow-y:auto; }
 .queue-settings-page { width:100%; min-width:0; }
@@ -2257,6 +2258,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script defer src="/app/js/pb8_parameter_help.js?v=5"></script>
 <link rel="stylesheet" href="/app/css/vast.css?v=21">
+<link rel="stylesheet" href="/app/css/optimizer_log_layout.css?v=4">
   <script src="/app/js/sidebar_resize.js?v=3"></script>
   <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
 </head>
@@ -2689,7 +2691,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
   </div>
 </section>
 
-<div id="log-panel">
+<div id="log-panel" role="dialog" aria-modal="false" aria-labelledby="log-panel-title">
   <div class="lp-resize lp-resize-n" data-dir="n"></div>
   <div class="lp-resize lp-resize-s" data-dir="s"></div>
   <div class="lp-resize lp-resize-w" data-dir="w"></div>
@@ -2700,9 +2702,18 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
   <div class="lp-resize lp-resize-se" data-dir="se"></div>
   <div id="log-panel-header">
     <span id="log-panel-title">Optimize log</span>
-    <button id="log-panel-close" title="Close">✕</button>
+    <div class="optlog-window-actions">
+      <button type="button" class="optlog-mini-btn" id="optlog-reset-layout" title="Restore default window size, position and collapsed details">Reset to default</button>
+      <button id="log-panel-close" title="Close">✕</button>
+    </div>
   </div>
-  <div id="opt-log-dashboard">
+  <div id="optlog-head">
+    <div id="optlog-actions">
+      <button type="button" class="optlog-mini-btn" id="optlog-open-results" title="Show matching optimize results">Results</button>
+      <button type="button" class="optlog-mini-btn" id="optlog-open-pareto-explorer" title="Open matching result in Pareto Explorer">Pareto Explorer</button>
+      <div id="optlog-cloud-actions" class="vast-component" hidden></div>
+    </div>
+    <div id="opt-log-dashboard">
     <div class="optlog-progress-track"><div id="optlog-progress-fill" class="optlog-progress-fill"></div></div>
     <div class="optlog-progress-meta">
       <span id="optlog-progress-label">Waiting for optimize status...</span>
@@ -2713,10 +2724,6 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
       <div class="optlog-card">
         <div class="optlog-card-row">
           <div class="optlog-label">Pareto Front</div>
-          <div class="optlog-mini-actions">
-            <button type="button" class="optlog-mini-btn" id="optlog-open-results" title="Show matching optimize results">Results</button>
-            <button type="button" class="optlog-mini-btn" id="optlog-open-pareto-explorer" title="Open matching result in Pareto Explorer">Pareto Explorer</button>
-          </div>
         </div>
         <div id="optlog-pareto" class="optlog-value">-</div>
       </div>
@@ -2726,15 +2733,37 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
       <div class="optlog-card"><div class="optlog-label">System Memory</div><div id="optlog-memory" class="optlog-value">-</div></div>
       <div class="optlog-card"><div class="optlog-label">Queue</div><div id="optlog-queue" class="optlog-value">-</div></div>
     </div>
-    <div id="optlog-rental" class="optlog-summary-grid" hidden></div>
-    <div class="optlog-detail-grid">
+    </div>
+  </div>
+  <div id="optlog-notices" hidden>
+    <div id="optlog-run-error" role="status" hidden></div>
+    <div id="optlog-cloud-notices" class="vast-component" hidden></div>
+  </div>
+  <div id="optlog-details" hidden>
+    <details id="optlog-rental-group" class="optlog-accordion" hidden>
+      <summary>Rental &amp; Hardware<span id="optlog-rental-hint" class="optlog-hint"></span></summary>
+      <div id="optlog-rental-body" class="optlog-accordion-body"><div id="optlog-rental" class="optlog-summary-grid" hidden></div></div>
+    </details>
+    <details id="optlog-run-group" class="optlog-accordion" hidden>
+      <summary>Run Details &amp; Objectives</summary>
+      <div class="optlog-accordion-body"><div class="optlog-detail-grid">
       <div class="optlog-detail"><div class="optlog-label">Objectives</div><div id="optlog-objectives" class="optlog-detail-text">-</div></div>
       <div class="optlog-detail"><div class="optlog-label">Ranges</div><div id="optlog-ranges" class="optlog-detail-text">-</div></div>
       <div class="optlog-detail"><div class="optlog-label">Last Activity</div><div id="optlog-activity" class="optlog-detail-text">-</div></div>
       <div class="optlog-detail"><div class="optlog-label">Last Error</div><div id="optlog-error" class="optlog-detail-text">-</div></div>
-    </div>
+      </div></div>
+    </details>
+    <details id="optlog-utilization-group" class="optlog-accordion" hidden>
+      <summary>Utilization &amp; Throughput<span id="optlog-utilization-hint" class="optlog-hint"></span></summary>
+      <div id="optlog-utilization-body" class="optlog-accordion-body vast-component"></div>
+    </details>
+    <details id="optlog-convergence-group" class="optlog-accordion" hidden>
+      <summary>Convergence &amp; Stagnation<span id="optlog-convergence-hint" class="optlog-hint"></span></summary>
+      <div id="optlog-convergence-body" class="optlog-accordion-body vast-component"></div>
+    </details>
+    <div id="vast-jobs-host" class="vast-component"></div>
   </div>
-  <div id="vast-jobs-host" class="vast-component"></div>
+  <div id="optlog-divider" aria-hidden="true" hidden></div>
   <div id="log-waiting" role="status" hidden>Waiting for this run’s first log output…</div>
   <div id="log-viewer-target"></div>
 </div>
@@ -2898,6 +2927,7 @@ var state = {
   plotSessionKind: '',
   logStatusTimer: null,
   logStatusInFlight: false,
+  logContextGeneration: 0,
   hadActiveOptimizeRuns: false,
   livePanelRefreshInFlight: false,
   livePanelRefreshTimer: null,
@@ -5700,18 +5730,19 @@ function renderOptimizeLogDashboard(status) {
 
 async function refreshOptimizeLogStatus(filename) {
   if (state.logStatusInFlight || document.visibilityState !== 'visible') return;
+  var generation = state.logContextGeneration;
   state.logStatusInFlight = true;
   try {
     var status = await apiFetch('/queue/' + encodeURIComponent(filename) + '/status');
-    if (state.logFilename !== filename) return;
+    if (state.logFilename !== filename || generation !== state.logContextGeneration) return;
     renderOptimizeLogDashboard(status);
   } catch (error) {
-    if (state.logFilename !== filename) return;
+    if (state.logFilename !== filename || generation !== state.logContextGeneration) return;
     renderOptimizeLogDashboard(null);
     el('optlog-activity').textContent = 'Status unavailable';
     el('optlog-error').textContent = error && error.message ? error.message : 'Failed to load optimize status';
   } finally {
-    state.logStatusInFlight = false;
+    if (generation === state.logContextGeneration) state.logStatusInFlight = false;
   }
 }
 
@@ -5729,6 +5760,8 @@ function startOptimizeLogStatusPolling(filename) {
 }
 
 function stopOptimizeLogStatusPolling() {
+  state.logContextGeneration = (state.logContextGeneration || 0) + 1;
+  state.logStatusInFlight = false;
   if (state.logStatusTimer) {
     window.clearInterval(state.logStatusTimer);
     state.logStatusTimer = null;
@@ -13429,6 +13462,16 @@ async function saveEditor(andQueue) {
   } catch (error) {
     setPageEditorStatus(error && error.message ? error.message : 'Could not save config.', 'err');
     handleError(error);
+    if (andQueue) {
+      var validationBox = el('opted-vast-validation');
+      await window.PBGuiDialogs.alert({
+        title: 'Cannot queue configuration',
+        message: error && error.message ? error.message : 'Could not queue config.',
+        detail: error && error.message === 'Resolve the GPU compatibility errors before queueing.' && validationBox
+          ? validationBox.textContent : '',
+        confirmText: 'OK'
+      });
+    }
   } finally {
     setOptimizeEditorSaving(false, andQueue);
   }
@@ -13616,6 +13659,7 @@ function openLogPanel(filename, name, options) {
   }
   panel.classList.add('visible');
   if (!options.cloud && !options.backtest) startOptimizeLogStatusPolling(filename);
+  if (window.PBGuiOptimizeLog) window.PBGuiOptimizeLog.begin(filename, name, options);
   if (!panel._dragBound) {
     panel._dragBound = true;
     el('log-panel-header').addEventListener('mousedown', function(event) {
@@ -13636,7 +13680,10 @@ function openLogPanel(filename, name, options) {
       function onUp() {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
+        panel._stopInteraction = null;
       }
+      if (panel._stopInteraction) panel._stopInteraction();
+      panel._stopInteraction = onUp;
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
       event.preventDefault();
@@ -13695,7 +13742,10 @@ function openLogPanel(filename, name, options) {
         function onUp() {
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
+          panel._stopInteraction = null;
         }
+        if (panel._stopInteraction) panel._stopInteraction();
+        panel._stopInteraction = onUp;
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
       });
@@ -13704,6 +13754,8 @@ function openLogPanel(filename, name, options) {
 }
 
 function closeLogPanel() {
+  if (el('log-panel')._stopInteraction) el('log-panel')._stopInteraction();
+  if (window.PBGuiOptimizeLog) window.PBGuiOptimizeLog.stop(false);
   if (window.PBGuiVast) window.PBGuiVast.closeLog();
   state.cloudLogId = null;
   el('log-panel').classList.remove('visible');
@@ -13765,6 +13817,7 @@ async function loadQueue() {
   if (requestSeq !== state.queueLoadSeq || pushSeq !== state.queuePushSeq || navigationSeq !== state.navigationSeq) return;
   state.queue = data.items || [];
   renderQueue();
+  if (window.PBGuiOptimizeLog) window.PBGuiOptimizeLog.queueReady();
 }
 
 function removeQueueItemsFromState(filenames) {
@@ -14647,6 +14700,7 @@ function attachEventHandlers() {
 
   window.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
+      if (event.defaultPrevented || event.pbguiKeepLogOpen) return;
       if (editorVisible()) {
         closeEditor();
         return;
@@ -15026,6 +15080,7 @@ async function init() {
       finally { document.documentElement.classList.remove('restoring-optimize-editor'); }
     }
     await backgroundData;
+    if (window.PBGuiOptimizeLog) window.PBGuiOptimizeLog.queueReady();
     if (!migrationDraftPromise && !restoreEditor) await handleIncomingDraft();
     if (!restoreEditor) await handleOpenConfigParam();
   } finally {
@@ -15484,6 +15539,7 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=3"></script>
-<script src="/app/js/vast.js?v=157"></script>
+<script src="/app/js/optimizer_log_layout.js?v=5"></script>
+<script src="/app/js/vast.js?v=162"></script>
 </body>
 </html>

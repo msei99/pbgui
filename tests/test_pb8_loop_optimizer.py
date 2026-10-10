@@ -504,9 +504,10 @@ def test_three_vast_slots_use_frozen_budget_and_reject_fourth(tmp_path, monkeypa
     """One GPU per owned rental, with all starting leases consuming shared slots."""
     import vast_queue
     from api.vast import RentalPreferences
-    from vast_jobs import JobStore, write_json
+    from vast_jobs import JobStore, digest, write_json
     from secure_files import ensure_private_directory
     from vast_provider import VastError
+    from vast_direction_fixtures import direction_config
     store = LoopStore(tmp_path / 'data/loop_optimizer')
     preferences = RentalPreferences(gpu_name='RTX 3060', budget=5, max_rentals=3).model_dump()
     row = store.create(OWNER, settings(execution='vast', vast=preferences), config(), {}, {'pb8': 'commit'}, [], config()['backtest'])
@@ -514,6 +515,9 @@ def test_three_vast_slots_use_frozen_budget_and_reject_fourth(tmp_path, monkeypa
     queue.update(gpu_preferences=preferences)
     directory = ensure_private_directory(jobs.root / 'jobs' / ('b' * 32))
     write_json(directory / 'state.json', {'id': 'b' * 32, 'kind': 'job', 'status': 'ready', 'rental_state': 'none', 'workers': 1, 'created_at': 1, 'loop_id': row['id'], 'loop_owner': OWNER})
+    folder = ensure_private_directory(directory / 'input')
+    write_json(folder / 'optimize.json', direction_config())
+    write_json(folder / 'manifest.json', {'config_sha256': digest(folder / 'optimize.json')})
     monkeypatch.setattr(vast_queue, 'PROJECT', tmp_path)
     monkeypatch.setattr(vast_queue, 'preflight_local_metadata', lambda *args: None)
     def start(identifier, offer, hours, budget):
@@ -1647,9 +1651,37 @@ def test_every_exact_only_cloud_metric_is_blocked_without_changing_cpu_goals(met
     assert proposed == original
 
 
+@pytest.mark.parametrize(('group', 'field'), [('limits', 'reducer'), ('limits', 'stat'),
+                                            ('scoring', 'reducer'), ('scoring', 'aggregate')])
+def test_cloud_loop_rejects_worst_reducer_before_job_preparation(group, field):
+    """Invalid AI reducers fail early without silently changing a user's limit."""
+    from pb8_loop_store import validate_cloud_loop_metrics
+    from vast_config_validation import REDUCERS
+    proposed = {'optimize': {group: [{'metric': 'drawdown_worst_strategy_eq', field: 'worst'}]}}
+    original = copy.deepcopy(proposed)
+    with pytest.raises(ValueError, match='Unsupported optimizer reducer'):
+        validate_cloud_loop_metrics(proposed, 'vast')
+    assert proposed == original
+    validate_cloud_loop_metrics(proposed, 'cpu')
+    for reducer in REDUCERS:
+        proposed['optimize'][group][0][field] = reducer
+        validate_cloud_loop_metrics(proposed, 'vast')
+
+
+@pytest.mark.parametrize(('group', 'alias'), [('limits', 'stat'), ('scoring', 'aggregate')])
+def test_cloud_loop_rejects_conflicting_reducer_aliases(group, alias):
+    """Cloud aliases must agree so worker interpretation remains unambiguous."""
+    from pb8_loop_store import validate_cloud_loop_metrics
+    proposed = {'optimize': {group: [{'metric': 'drawdown_worst_strategy_eq', 'reducer': 'max', alias: 'mean'}]}}
+    with pytest.raises(ValueError, match='Conflicting reducer aliases'):
+        validate_cloud_loop_metrics(proposed, 'vast')
+    proposed['optimize'][group][0][alias] = 'max'
+    validate_cloud_loop_metrics(proposed, 'vast')
+
+
 def test_cloud_metric_policy_reaches_ai_with_custom_instruction_snapshot(record):
     """Every provider sees immutable eligibility even when a run uses custom instructions."""
-    from vast_config_validation import METRICS, _METRIC_CONTRACT
+    from vast_config_validation import METRICS, REDUCERS, _METRIC_CONTRACT
     store, row = record
     row['settings']['execution'] = 'vast'
     row['ai_instructions'] = {'id': 'custom', 'name': 'Custom', 'text': 'Return JSON.'}
@@ -1662,6 +1694,7 @@ def test_cloud_metric_policy_reaches_ai_with_custom_instruction_snapshot(record)
             """Keep exact goal metrics separate from GPU objective eligibility."""
             policy = content['optimizer_metric_policy']
             assert set(policy['allowed_metrics']) == METRICS
+            assert set(policy['allowed_reducers']) == REDUCERS
             assert set(policy['exact_only_metrics']) == set(_METRIC_CONTRACT['exact_only_metrics'])
             assert 'gain_strategy_eq' not in policy['allowed_metrics']
             assert 'adg_strategy_eq' in policy['allowed_metrics']

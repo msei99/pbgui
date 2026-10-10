@@ -57,12 +57,14 @@ def config():
     """Use explicit common-side coin lists and canonical PB8 override paths."""
     return {'live': {'strategy_kind': 'ema_anchor', 'approved_coins': {'long': ['BTC'], 'short': ['BTC']},
                      'ignored_coins': {'long': [], 'short': []}, 'hedge_mode': True},
-            'bot': {side: {'risk': {'n_positions': 3, 'total_wallet_exposure_limit': 1.0},
+            'bot': {side: {'risk': {'n_positions': 1, 'total_wallet_exposure_limit': 1.0},
                            'hsl': {'enabled': False}} for side in ('long', 'short')},
             'backtest': {'suite_enabled': True, 'exchanges': ['binance'], 'start_date': '2024-01-01',
                          'end_date': '2024-12-31', 'starting_balance': 1000,
                          'scenarios': [{'label': 'base'}]},
-            'optimize': {'iters': 512, 'n_cpus': 4, 'scoring': [{'metric': 'adg_strategy_eq', 'goal': 'max'}], 'limits': []}}
+            'optimize': {'iters': 512, 'n_cpus': 4, 'scoring': [{'metric': 'adg_strategy_eq', 'goal': 'max'}], 'limits': [],
+                         'bounds': {f'{side}_{field}': [1, 1] for side in ('long', 'short')
+                                    for field in ('n_positions', 'total_wallet_exposure_limit')}}}
 
 
 def make_market(tmp_path, exchange, coins, *, missing=()):
@@ -88,7 +90,7 @@ def test_suite_exports_added_coins_and_exchanges_once(config, tmp_path):
         {'label': 'base', 'exchanges': [], 'overrides': {}, 'coin_sources': {}, 'ignored_coins': []},
         {'label': 'bybit-sol', 'exchanges': ['bybit'], 'coins': ['SOL'], 'start_date': '2025-01-01', 'end_date': '2025-01-01'},
         {'label': 'repeat', 'exchanges': ['bybit'], 'coins': ['SOL'],
-         'overrides': {'bot.long.risk.n_positions': 5}}]
+         'overrides': {'bot.long.risk.n_positions': 1}}]
     before = copy.deepcopy(config)
     make_market(tmp_path, 'binance', ['BTC'])
     make_market(tmp_path, 'bybit', ['BTC', 'SOL'])
@@ -144,7 +146,7 @@ def test_conflicting_sources_are_rejected_with_scenario_identity(config):
 def test_overrides_are_applied_to_validation_without_mutating_config(config):
     """Validate nested and dotted parameter overrides on independent scenario copies."""
     config['backtest']['scenarios'] = [
-        {'label': 'nested', 'overrides': {'bot': {'long': {'risk': {'n_positions': 5}}}}},
+        {'label': 'nested', 'coins': ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'], 'overrides': {'bot': {'long': {'risk': {'n_positions': 5}}}}},
         {'label': 'balance', 'overrides': {'backtest.starting_balance': 2000}},
         {'label': 'hsl', 'overrides': {'bot.short.hsl.enabled': True}}]
     before = copy.deepcopy(config)
@@ -217,7 +219,7 @@ def test_frozen_job_stages_every_exported_exchange(config, tmp_path, monkeypatch
 
 def test_nested_overrides_are_flattened_only_in_frozen_copy(config):
     """The worker GPU preflight receives dotted paths; the user's draft is untouched."""
-    config['backtest']['scenarios'] = [{'label': 'nested', 'overrides': {'bot': {'long': {'risk': {'n_positions': 5}}}}}]
+    config['backtest']['scenarios'] = [{'label': 'nested', 'coins': ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'], 'overrides': {'bot': {'long': {'risk': {'n_positions': 5}}}}}]
     before = copy.deepcopy(config)
     prepared = native_job_config(config, 512, 4, False)
     assert prepared['backtest']['scenarios'][0]['overrides'] == {'bot.long.risk.n_positions': 5}

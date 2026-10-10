@@ -16,7 +16,7 @@ Die Cloud-CPU-Mindestleistung stellst du unter **Min CPU cores** in den Vast Set
 
 Wenn **Run on** auf **Vast.ai** steht, sind **n_cpus** und **exact_workers** im Optimizer ausgegraut. Die gepunkteten Hilfetexte erklären: **Min CPU cores** in den Vast GPU Settings bestimmt die Mindestanforderung für die Miete; der tatsächliche Lauf nutzt die effektive CPU-Zuteilung des Containers, begrenzt auf die gemietete CPU-Quote. Beim Wechsel zurück auf **Local** lassen sich die bisherigen Werte wieder bearbeiten.
 
-**Save & Queue** zeigt die Schritte Cloud-Kompatibilitätsprüfung, Speichern der Config und Anlegen des Jobs im Editor an. Die Speicherbuttons bleiben dabei durchgehend deaktiviert; **Saving & queueing…** bleibt bis zum Abschluss oder einem Fehler sichtbar. Sobald der Server den neuen Job bestätigt, öffnet PBGui die Queue mit **Preparing**; die vollständige Queue-Aktualisierung läuft im Hintergrund weiter.
+**Save & Queue** zeigt die Schritte Cloud-Kompatibilitätsprüfung, Speichern der Config und Anlegen des Jobs im Editor an. Die Speicherbuttons bleiben dabei durchgehend deaktiviert; **Saving & queueing…** bleibt bis zum Abschluss oder einem Fehler sichtbar. Bei Fehlern erscheint mittig der Dialog **Cannot queue configuration** mit **OK**; Cloud-Kompatibilitätsfehler enthalten die Validierungsdetails. Der Dialog bleibt bis zum ausdrücklichen Schließen geöffnet; der Editor-Entwurf bleibt erhalten. Sobald der Server den neuen Job bestätigt, öffnet PBGui die Queue mit **Preparing**; die vollständige Queue-Aktualisierung läuft im Hintergrund weiter.
 
 Vast-Uploads dürfen sich bei vorübergehenden Verbindungsfehlern bis zu 15 Minuten ohne neuen Transferfortschritt erholen. Zwischen Versuchen liegen 15/30/60 Sekunden; Teildaten bleiben erhalten. Das Log zeigt den Retry-Status. Nach erfolgreicher Worker-Health-Prüfung verkürzt der vorherige Setup-Timer die Upload-Zeit nicht mehr; Mietfrist und Reserve für Ergebnissicherung gelten weiterhin.
 
@@ -170,6 +170,10 @@ Nach Aenderungen an Market Cap, Volumenverhaeltnis, Tags, CPT oder Notices muss 
 
 ## Queue
 
+Das Logfenster ist nicht modal: Seitensteuerung und andere Queue-Logs bleiben zugänglich. Results und Pareto Explorer navigieren, ohne das Ziel zu blockieren. Bei der Rückkehr über den Browserverlauf wird das ausgewählte Queue-Log vor der Wiederaufnahme der Updates erneut geprüft; eine neuere Auswahl hat Vorrang.
+
+**Open log** öffnet ein verschiebbares, größenverstellbares Fenster mit Lauf-/Queueaktionen oberhalb der Statuskarten. Vier zunächst eingeklappte Gruppen zeigen **Rental & Hardware**, **Run Details & Objectives**, **Utilization & Throughput** und **Convergence & Stagnation** ab 640 px Fensterbreite im 2×2-Raster; schmalere Fenster verwenden eine Spalte. Nicht verfügbare Gruppen werden ausgeblendet. Beim Aufklappen wächst der Detailbereich automatisch und verschiebt das Log nach unten; beim Einklappen erhält das Log den Platz zurück. Die Trennleiste ist nicht verschiebbar. Gruppen zeigen ihren gesamten Inhalt; bei wenig Platz scrollt der Detailbereich gemeinsam und das Log bleibt nutzbar. Mieteingaben behalten ungespeicherte Änderungen bei Updates. Fehler bleiben außerhalb der Gruppen sichtbar; Durchsatzübersichten unterscheiden Sample-Alter und historische Intervalle. Dieser Tab stellt das noch verfügbare Queue-Log, Fenstergeometrie, Gruppenstatus und automatische Aufteilung nach Browser-Reload wieder her. Logs aktualisieren sich automatisch. **Reset to default** stellt die zentrierte Standardgröße wieder her und klappt alle Detailgruppen ein; das ausgewählte Log und ungespeicherte Mieteingaben bleiben erhalten.
+
 Queue-Eintraege enthalten unveraenderliche PB8-Config-Snapshots. Eine spaetere Aenderung der gespeicherten Config veraendert keinen bestehenden Queue-Eintrag.
 
 Wird der Editor dagegen ausdruecklich aus einer Queue-Zeile geoeffnet, aktualisiert **Save** sowohl die verwaltete Config als auch den Snapshot genau dieses Queue-Eintrags. Aenderungen wie `optimize.n_cpus` sind damit beim erneuten Oeffnen oder Starten der Zeile enthalten.
@@ -240,6 +244,8 @@ PB8-Optimize-Configs und PB8-Backtest-Ergebnisse verwenden den bestehenden Archi
 Wenn eine OHLCV-Startdatumssuche Stop nicht innerhalb von 10 Sekunden bestaetigt, gibt Optimize die Bedienelemente frei und meldet einen Timeout. Das Backend kann noch stoppen; ein verspaetetes Ergebnis wird nicht angewendet.
 
 ## Vast.ai Cloud-Ausführung
+
+Die Vast.ai-Richtungsprüfung läuft automatisch im Editor, vor dem Export und für eingefrorene Queue-/Kalibrierungseingaben vor Miete oder Zuweisung an den aktuellen Worker. Sperrende Fehler nennen Szenario/Feld; Prüfungen mit noch unbekannter vorbereiteter Coin-Anzahl zeigen keine vorläufige Warnung und sperren nicht. Die frühe Prüfung behält die Approved-Coins der Basis; die Szenario-Coin-Auswahl gehört zum späteren Dataset-Kontext. Unterstützte ältere Mieten behalten ihr bisheriges Verhalten. Umfang und Korrekturwege stehen unter [Vast.ai GPU queue](48_vast_gpu.md#richtungsprüfung-vor-der-anmietung).
 
 Unter **Execution & optimizer backend** im Editor **Run on → Vast.ai GPU** wählen, die drei GPU-Größen für Auto leer lassen oder direkt darunter manuell einstellen und dann **Save & Queue** verwenden. Die Cloud-Validierung erscheint bei diesen Feldern.
 GPU-Typ und Grenzen unter **Queue → Settings → GPU requirements** speichern. PBGui wählt erst beim Queue-Start ein aktuelles passendes Angebot.

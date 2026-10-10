@@ -59,8 +59,11 @@ def bootstrap_local_legacy_credentials(pbgdir: Path | str | None = None) -> dict
             with credential_mutation_lock(store.root):
                 retired = _retire_remaining_shadows(store)
             state = _read_state_or_rebuild(state_path)
-            state["cutoff_seen"] = True
-            _write_state(state_path, state)
+            # Retirement changes the credential catalog, not this marker state.
+            # Do not replace an already persisted cutoff generation on reads.
+            if state.get("cutoff_seen") is not True:
+                state["cutoff_seen"] = True
+                _write_state(state_path, state)
             return {"status": "cutoff", "retired": retired, "credentials": _credential_count(state)}
         state = _read_state_or_rebuild(state_path)
         if frozen:

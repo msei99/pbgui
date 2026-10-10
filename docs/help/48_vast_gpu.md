@@ -208,6 +208,43 @@ bound to the image digest and PB8 revision; an unknown image cannot use old rule
 Market data availability/export and native runtime/device checks are additional
 stages; passing the configuration check does not guarantee a successful GPU run.
 
+### Direction checks before renting
+
+For the current worker (`00ce7d0`, matched by its complete image digest and revision),
+PBGui checks Long/Short activation in the editor and before export. Frozen queue inputs,
+including requeued jobs and calibration jobs, are checked again before market
+metadata preparation, a new rental, or assignment to that worker. An incompatible
+waiting optimizer is marked failed with the job/scenario, field path and correction
+options; prepare it again after correcting the config. Unreadable inputs remain
+waiting with an explanation. A failing performance-test watch stops visibly instead
+of repeatedly searching offers. Supported older rentals keep their previous
+assignment behavior; jobs already running are unaffected.
+
+The check applies fixed-parameter selectors, side-bound collapse, start-value
+quantization/rounding, runtime pins and scenario pins in the worker's order. Positive
+scenario exposure alone does not necessarily enable Short: positions and approved
+coins must also permit it. In particular, an exposure bound fixed at zero can collapse
+that side's positions to zero. PBGui does not automatically change your configuration.
+For Long-only, keep Short disabled throughout the effective search and scenarios.
+For Long + Short, approve the side's coins and keep its effective exposure strictly
+positive and positions valid for the dataset.
+
+The early check requires at least one active side in the materialized base and every
+scenario, using the base approved coins plus explicit config overrides. Scenario coin
+selection is used only in the later dataset context. Each scenario still receives its
+own directional check. Single-coin scenarios may activate different nonempty sets of
+sides; multicoin suites require a common topology. Checks that depend on an unknown
+prepared coin count are deferred without displaying a provisional warning or blocking queueing.
+The worker performs the final data-dependent checks.
+
+Direction errors explain the effective WE/position ranges and how to keep the side on or off. The affected base-config rows under **Bounds long/short** receive a red outline; valid neighboring bounds remain unmarked. The outline clears automatically after correction.
+
+This preflight covers direction rules, not every GPU requirement (for example HSL,
+metrics or the exposure enforcer). Nonempty fine-tune anchor plans are unsupported
+in this cloud profile. A historical traceback path such as `/opt/passivbot`, or its
+line number, does not identify the image or execution host. Without the original
+config and rental intent, the historical FET failure cannot be reconstructed.
+
 ## GPU pool and shared rentals
 
 Set **Max concurrent GPUs** in **Rental & Automation** (default **1**, maximum **16**). To avoid starting every queued job manually, set **Auto rent & start** to **On** and save. The confirmation explicitly authorizes the per-rental and simultaneous budget targets. From then on, **Save & Queue** is enough: as soon as input preparation finishes, PBGui rents up to the saved limit and starts one optimizer on each GPU. Compatible idle GPUs are reused first. Provisioning and cleanup rentals count toward the limit until deletion is confirmed. **Auto rent & start** also works with a limit of 1. With Auto rent off, **Start** rents only one GPU for the existing queue, even if Max concurrent GPUs is higher; adding another job cannot authorize another rental. For an additional explicit rental while other jobs run, select a different offer under **GPU & Offers** and click **Rent**. Start that reserved GPU from its own Queue card; only one manual reservation can await Start queue at a time.
@@ -233,6 +270,10 @@ In single-rental mode, an existing rental is never silently replaced. Spare budg
 rental duration is available for additional job transfers.
 
 ## Progress and controls
+
+The log is a nonmodal companion window; the page behind it remains interactive. Browser-history return revalidates the cloud queue and resumes polling. Opening or closing a log takes precedence over any pending restoration.
+
+In **Open log**, queue/run controls stay above all cards. Rental/Hardware and Run Details form the upper row; Utilization/Throughput and Convergence/Stagnation form the lower row (one column below 640 px window width). Groups start collapsed and retain their state during polling. Expanded content automatically moves the log down; collapsing groups returns the space to the log. The separator is not draggable. When space is limited, the detail area scrolls together instead of each group separately. Hardware, budget/deadline inputs, throughput counters and convergence samples remain available. GPU utilization retains its freshness rules; throughput shows the age of its measured interval. Errors and supervision notices remain visible outside closed groups. Browser reload restores the available selected queue log and layout in this tab. **Reset to default** restores the centered default window size and collapses all detail groups while preserving the selected log and unsaved rental inputs.
 
 The worker panel shows rental state, hourly price, deadline and idle-deletion
 time. Job details distinguish exact evaluations from GPU-screened candidates.

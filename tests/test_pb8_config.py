@@ -19,6 +19,7 @@ def _reset_cache(monkeypatch) -> None:
     monkeypatch.setattr(pb8_config, "_template_cache", None)
     monkeypatch.setattr(pb8_config, "_result_metrics_cache", None)
     monkeypatch.setattr(pb8_config, "_optimize_metadata_cache", None)
+    monkeypatch.setattr(pb8_config, "_gpu_metadata_cache", None)
     pb8_config._coin_override_metadata_cache.clear()
     monkeypatch.setattr(pb8_config, "_exchange_metadata_cache", None)
     pb8_config._market_catalog_cache.clear()
@@ -331,6 +332,8 @@ def test_runtime_fingerprint_change_invalidates_optimize_metadata_cache(monkeypa
 
     def fake_call(operation: str, **_payload) -> dict:
         calls.append(operation)
+        if operation == "optimizer_backend_contract":
+            return {"contract_version": 1, "items": {}}
         return {"template": {"runtime": fingerprint[0]}, "strategies": []}
 
     monkeypatch.setattr(pb8_config, "_runtime_fingerprint", lambda *_args: tuple(fingerprint))
@@ -340,7 +343,7 @@ def test_runtime_fingerprint_change_invalidates_optimize_metadata_cache(monkeypa
     assert pb8_config.get_pb8_optimize_metadata()["template"]["runtime"] == "commit-a"
     fingerprint[0] = "commit-b"
     assert pb8_config.get_pb8_optimize_metadata()["template"]["runtime"] == "commit-b"
-    assert calls == ["optimize_metadata", "optimize_metadata"]
+    assert calls == ["optimize_metadata_static", "optimizer_backend_contract"] * 2
 
 
 def test_runtime_fingerprint_change_invalidates_loaded_config_cache(tmp_path, monkeypatch) -> None:
@@ -503,7 +506,7 @@ def test_persistent_helper_reuses_optimizer_metadata(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(
         pb8_config_helper,
         "_optimize_metadata",
-        lambda _modules: calls.append(True) or {"strategies": ["trailing_grid_v7"]},
+        lambda _modules, **_kwargs: calls.append(True) or {"strategies": ["trailing_grid_v7"]},
     )
 
     first = pb8_config_helper._cached_optimize_metadata({}, tmp_path)

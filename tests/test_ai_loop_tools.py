@@ -337,6 +337,48 @@ def test_native_loop_queue_requires_approval_and_is_idempotent(native_runs, oper
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize('operation', ['queue', 'queue_and_start', 'start'])
+def test_native_gpu_loop_uses_owned_chat_without_saved_selection(native_runs, tmp_path, monkeypatch, operation):
+    """Local GPU proposals freeze the active chat selection when preferences are absent."""
+    from ai_chat import AIChatService, Conversation
+    from api import loop_optimizer_v8 as runtime
+    service, store, _, calls, _ = native_runs
+    chat = AIChatService(tmp_path / 'chat')
+    conversation = Conversation(id=CHAT, owner=OWNER, provider='chatgpt', model='chat-model',
+                                chatgpt_profile='gpu-profile', effort='high', service_tier='priority')
+    chat.conversations[CHAT] = conversation
+    chat.loaded_owners.add(OWNER)
+    monkeypatch.setattr(runtime, 'get_ai_chat_service', lambda: chat)
+    definition = store.definition(OWNER, 'native_loop')
+    definition['settings']['execution'] = 'gpu'
+    store.save_definition(OWNER, 'native_loop', definition['settings'], definition['bundle'], definition['source'], 1)
+
+    async def scenario():
+        """Use isolated native calls and change the chat after review to check freezing."""
+        assert 'selection' not in chat.get_preferences(OWNER)
+        args = {'operation': operation, 'name': 'native_loop', 'revision': 2}
+        if operation == 'start':
+            queued = store.create(OWNER, definition['settings'], {}, {}, {}, [], {}, queued=True)
+            args = {'operation': 'start', 'loop_id': queued['id']}
+        created = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_run', args)
+        settings = created['preview']['settings']
+        assert settings['execution'] == 'gpu'
+        assert settings['provider'] == 'chatgpt' and settings['model'] == 'chat-model'
+        assert (settings['profile'], settings['effort'], settings['service_tier']) == ('gpu-profile', 'high', 'priority')
+        assert calls == []
+        conversation.model = 'changed-model'
+        result = await approve(service, created)
+        assert result['run_status'] == ('queued' if operation == 'queue' else 'running')
+        if operation != 'start':
+            assert calls[0][2:] == (True, 'chat-model')
+        if operation != 'queue':
+            assert calls[-1][3]['model'] == 'chat-model'
+        conversation.owner = 'c' * 32
+        with pytest.raises(AICapabilityError, match='owned chat'):
+            await service.dispatch(OWNER, CHAT, 'propose_ai_loop_run', args)
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('changed', ['definition', 'rental'])
 def test_native_loop_run_rejects_changed_review(native_runs, changed):
     """A changed revision or rental exposure cannot start the reviewed job."""

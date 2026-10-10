@@ -8,6 +8,9 @@ import os
 from pathlib import Path
 import threading
 import time
+import stat
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,6 +21,94 @@ from secure_files import read_regular_file_nofollow
 
 
 ROLLING_NODES = ("main-api", "local-pbcluster", "vps", "second-master")
+
+
+def _enable_cutoff(root: Path) -> Path:
+    """Enable cutoff using only synthetic persisted cluster state."""
+    desired = root / "data" / "cluster" / "desired_state.json"
+    desired.parent.mkdir(parents=True, exist_ok=True)
+    desired.write_text(json.dumps({"credential_migration": {"cutoff": {"min_protocol": 2}}}), encoding="utf-8")
+    return root / "data" / "credentials" / "legacy_shadow" / "state.json"
+
+
+def _state_generation(path: Path) -> tuple:
+    """Capture the bytes and metadata that an atomic replacement would change."""
+    content = path.read_bytes()
+    metadata = path.stat()
+    return content, metadata.st_mtime_ns, metadata.st_size, metadata.st_ino
+
+
+def test_cutoff_keeps_completed_state_generation(tmp_path, monkeypatch) -> None:
+    """Serial and concurrent cutoff checks preserve the persisted marker generation."""
+    state_path = _enable_cutoff(tmp_path)
+    bootstrap_local_legacy_credentials(tmp_path)
+    before = _state_generation(state_path)
+    state_path.chmod(0o644)
+    writer = MagicMock(wraps=rolling.atomic_write_private_text)
+    monkeypatch.setattr(rolling, "atomic_write_private_text", writer)
+    for _ in range(8):
+        result = bootstrap_local_legacy_credentials(tmp_path)
+        assert result == {"status": "cutoff", "retired": 0, "credentials": 0}
+        assert _state_generation(state_path) == before
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(bootstrap_local_legacy_credentials, [tmp_path] * 8))
+    assert all(result == {"status": "cutoff", "retired": 0, "credentials": 0} for result in results)
+    assert _state_generation(state_path) == before
+    writer.assert_not_called()
+    if os.name == "posix":
+        assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("payload", [
+    None,
+    "{broken",
+    json.dumps({"version": 999, "sources": {}, "cutoff_seen": True}),
+    *[json.dumps({"version": 1, "sources": {}, "cutoff_seen": marker})
+      for marker in [False, None, 1, "true"]],
+    json.dumps({"version": 1, "sources": {}}),
+])
+def test_cutoff_persists_missing_invalid_or_unmarked_state(tmp_path, monkeypatch, payload) -> None:
+    """Only exact True suppresses persistence; unsafe state is quarantined first."""
+    state_path = _enable_cutoff(tmp_path)
+    if payload is not None:
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text(payload, encoding="utf-8")
+    writer = MagicMock(wraps=rolling.atomic_write_private_text)
+    monkeypatch.setattr(rolling, "atomic_write_private_text", writer)
+    assert bootstrap_local_legacy_credentials(tmp_path)["status"] == "cutoff"
+    writer.assert_called_once()
+    assert Path(writer.call_args.args[0]) == state_path
+    assert json.loads(state_path.read_text())["cutoff_seen"] is True
+    quarantines = list(state_path.parent.glob("state.quarantine-*.json"))
+    unsafe = payload == "{broken" or (payload is not None and '999' in payload)
+    assert len(quarantines) == int(unsafe)
+    if quarantines:
+        assert quarantines[0].read_text() == payload
+    if os.name == "posix":
+        assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in [state_path, *quarantines])
+    before = _state_generation(state_path)
+    bootstrap_local_legacy_credentials(tmp_path)
+    assert _state_generation(state_path) == before
+    writer.assert_called_once()
+
+
+def test_cutoff_retires_shadows_without_rewriting_completed_marker(tmp_path, monkeypatch) -> None:
+    """Even a persisted cutoff marker must not bypass retirement of late shadows."""
+    state_path = _enable_cutoff(tmp_path)
+    bootstrap_local_legacy_credentials(tmp_path)
+    store = CredentialStore(tmp_path / "data" / "credentials")
+    cmc = store.create_cmc("synthetic-cmc", origin="legacy_shadow")
+    tradfi = store.create_tradfi("tiingo", {"api_key": "synthetic-tiingo"}, origin="legacy_shadow")
+    before = _state_generation(state_path)
+    writer = MagicMock(wraps=rolling.atomic_write_private_text)
+    monkeypatch.setattr(rolling, "atomic_write_private_text", writer)
+
+    result = bootstrap_local_legacy_credentials(tmp_path)
+    assert result == {"status": "cutoff", "retired": 2, "credentials": 0}
+    assert store.get_cmc(cmc["id"])["active"] is False
+    assert store.get_tradfi(tradfi["id"])["active"] is False
+    assert _state_generation(state_path) == before
+    writer.assert_not_called()
 
 
 def _write_ini(root: Path, *, cmc_key: str = "", pb7dir: Path | None = None, tradfi: str = "") -> Path:

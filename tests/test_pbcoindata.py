@@ -40,8 +40,16 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from concurrent.futures import ThreadPoolExecutor
+import os
+import stat
+import threading
+
 import pytest
+
 from credential_store import CredentialStore
+import pbgui_purefunc
+from ini_watcher import IniWatcher
 
 # Ensure project root is on path
 ROOT_DIR = Path(__file__).parent.parent.resolve()
@@ -62,6 +70,142 @@ get_normalized_coins = PBCoinData_mod.get_normalized_coins
 get_symbol_for_coin = PBCoinData_mod.get_symbol_for_coin
 build_symbol_mappings = PBCoinData_mod.build_symbol_mappings
 disambiguate_multiplier_market_coins = PBCoinData_mod.disambiguate_multiplier_market_coins
+
+
+def _cleanup_subject(path: Path):
+    """Exercise the real migration method against an isolated watcher path."""
+    subject = object.__new__(CoinData)
+    subject._ini_watcher = IniWatcher(ini_path=path)
+    subject._config_generation = subject._ini_watcher._read_signature()
+    return subject
+
+
+def test_legacy_cleanup_keeps_completed_ini_generation(tmp_path, monkeypatch):
+    """Repeated no-op cleanup repairs permissions without publishing a generation."""
+    path = tmp_path / "pbgui.ini"
+    path.write_text("# preserve formatting\n[main]\nname=test\n", encoding="utf-8")
+    path.chmod(0o644)
+    monkeypatch.setattr(pbgui_purefunc, "pbgui_ini_path", lambda: path)
+    subject = _cleanup_subject(path)
+    before = path.read_bytes(), subject._ini_watcher._read_signature()
+    writer = MagicMock(wraps=pbgui_purefunc.atomic_write_private_text)
+    monkeypatch.setattr(pbgui_purefunc, "atomic_write_private_text", writer)
+
+    for _ in range(8):
+        subject._cleanup_legacy_exchange_ini_entries()
+        assert (path.read_bytes(), subject._ini_watcher._read_signature()) == before
+        assert not subject.has_new_config()
+
+    writer.assert_not_called()
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("legacy", ["[exchanges]\n", "[exchanges]\nbinance.swap = ['BTCUSDT']\n"])
+def test_legacy_cleanup_uses_watcher_path_once(tmp_path, monkeypatch, legacy):
+    """Both empty and populated sections migrate only the explicit watcher file."""
+    standard = tmp_path / "pbgui.ini"
+    standard.write_text("[exchanges]\ndefault = untouched\n", encoding="utf-8")
+    standard_watcher = IniWatcher(ini_path=standard)
+    standard_before = standard.read_bytes(), standard_watcher._read_signature()
+    path = tmp_path / "watched.ini"
+    path.write_text("[main]\nname = preserved\n\n" + legacy, encoding="utf-8")
+    monkeypatch.setattr(pbgui_purefunc, "pbgui_ini_path", lambda: standard)
+    subject = _cleanup_subject(path)
+    writer = MagicMock(wraps=pbgui_purefunc.atomic_write_private_text)
+    monkeypatch.setattr(pbgui_purefunc, "atomic_write_private_text", writer)
+
+    subject._cleanup_legacy_exchange_ini_entries()
+    snapshot = pbgui_purefunc.load_ini_snapshot(path)
+    assert not snapshot.parser.has_section("exchanges")
+    assert snapshot.parser.get("main", "name") == "preserved"
+    before = path.read_bytes(), subject._ini_watcher._read_signature()
+    for _ in range(8):
+        subject._cleanup_legacy_exchange_ini_entries()
+        assert (path.read_bytes(), subject._ini_watcher._read_signature()) == before
+    writer.assert_called_once()
+    assert Path(writer.call_args.args[0]) == path
+    assert (standard.read_bytes(), standard_watcher._read_signature()) == standard_before
+
+
+@pytest.mark.parametrize("legacy", ["", "[exchanges]\n", "[exchanges]\nold = value\n"])
+def test_legacy_cleanup_parallel_calls_publish_at_most_once(tmp_path, monkeypatch, legacy):
+    """Concurrent callers serialize the check and migration, including later no-ops."""
+    path = tmp_path / "pbgui.ini"
+    path.write_text("[main]\nname = preserved\n\n" + legacy, encoding="utf-8")
+    monkeypatch.setattr(pbgui_purefunc, "pbgui_ini_path", lambda: path)
+    writer = MagicMock(wraps=pbgui_purefunc.atomic_write_private_text)
+    monkeypatch.setattr(pbgui_purefunc, "atomic_write_private_text", writer)
+    barrier = threading.Barrier(8)
+
+    def cleanup(_index):
+        """Start independent cleanup callers together."""
+        subject = _cleanup_subject(path)
+        barrier.wait(timeout=5)
+        subject._cleanup_legacy_exchange_ini_entries()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(cleanup, range(8)))
+    assert writer.call_count == int(bool(legacy))
+    subject = _cleanup_subject(path)
+    before = path.read_bytes(), subject._ini_watcher._read_signature()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(cleanup, range(8)))
+    assert writer.call_count == int(bool(legacy))
+    assert (path.read_bytes(), subject._ini_watcher._read_signature()) == before
+
+
+@pytest.mark.parametrize("failure", ["parse", "read", "chmod"])
+def test_legacy_cleanup_logs_errors_without_replacing_ini(tmp_path, monkeypatch, failure):
+    """Parse, read and permission failures are logged without an empty replacement."""
+    path = tmp_path / "pbgui.ini"
+    path.write_text("invalid ini" if failure == "parse" else "[main]\nname = test\n", encoding="utf-8")
+    monkeypatch.setattr(pbgui_purefunc, "pbgui_ini_path", lambda: path)
+    subject = _cleanup_subject(path)
+    before = path.read_bytes(), subject._ini_watcher._read_signature()
+    logger = MagicMock()
+    monkeypatch.setattr(PBCoinData_mod, "_log", logger)
+    writer = MagicMock(wraps=pbgui_purefunc.atomic_write_private_text)
+    monkeypatch.setattr(pbgui_purefunc, "atomic_write_private_text", writer)
+    with monkeypatch.context() as failing:
+        if failure == "read":
+            real_read = Path.read_text
+
+            def unreadable(candidate, *args, **kwargs):
+                """Deny only the isolated INI read, even when tests run as root."""
+                if candidate == path:
+                    raise PermissionError("simulated INI read failure")
+                return real_read(candidate, *args, **kwargs)
+
+            failing.setattr(Path, "read_text", unreadable)
+        elif failure == "chmod":
+            real_chmod = os.chmod
+
+            def denied_chmod(candidate, *args, **kwargs):
+                """Deny INI hardening without interfering with the lock file."""
+                if Path(candidate) == path:
+                    raise PermissionError("simulated INI chmod failure")
+                return real_chmod(candidate, *args, **kwargs)
+
+            failing.setattr(os, "chmod", denied_chmod)
+        subject._cleanup_legacy_exchange_ini_entries()
+
+    writer.assert_not_called()
+    assert (path.read_bytes(), subject._ini_watcher._read_signature()) == before
+    logger.assert_called_once()
+    assert logger.call_args.kwargs["level"] == "ERROR"
+    assert "Failed to remove legacy" in logger.call_args.args[1]
+
+
+def test_legacy_cleanup_does_not_create_missing_ini(tmp_path, monkeypatch):
+    """A missing INI remains absent after migration cleanup."""
+    path = tmp_path / "missing.ini"
+    monkeypatch.setattr(pbgui_purefunc, "pbgui_ini_path", lambda: path)
+    writer = MagicMock(wraps=pbgui_purefunc.atomic_write_private_text)
+    monkeypatch.setattr(pbgui_purefunc, "atomic_write_private_text", writer)
+    _cleanup_subject(path)._cleanup_legacy_exchange_ini_entries()
+    writer.assert_not_called()
+    assert not path.exists()
 
 
 # ============================================================================

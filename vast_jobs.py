@@ -152,7 +152,9 @@ def native_job_config(source: dict, iterations: int, workers: int, use_adg: bool
         raise VastError("Choose 256–10,000,000 iterations and 1–64 CPU workers", 422)
     errors = validate_cloud_config(source, iterations, workers, use_adg=use_adg, image=IMAGE, revision=REVISION)
     if errors:
-        raise VastError("Cloud configuration is invalid: " + "; ".join(item['path'] + ": " + item['message'] for item in errors), 422)
+        raise VastError("Cloud configuration is invalid: " + "; ".join(
+            item['path'] + ": " + item['message'] + " " + " ".join(item.get('suggestions', []))
+            for item in errors), 422)
     config = copy.deepcopy(source)
     live, bt, opt = config["live"], config["backtest"], config["optimize"]
     if bt.get("suite_enabled"):
@@ -214,11 +216,11 @@ class JobStore:
 
     def read(self, identifier: str, filename: str = "state.json") -> dict:
         """Read a bounded structured job record."""
-        if filename not in {"state.json", "intent.json", "control.json", "attempt.json", "input/manifest.json"}:
+        if filename not in {"state.json", "intent.json", "control.json", "attempt.json", "input/manifest.json", "input/optimize.json"}:
             raise VastError("Invalid job record", 422)
         path = self.directory(identifier) / filename
         try:
-            maximum = MAX_INPUT_MANIFEST_BYTES if filename == "input/manifest.json" else MAX_JOB_RECORD_BYTES
+            maximum = MAX_INPUT_MANIFEST_BYTES if filename.startswith('input/') else MAX_JOB_RECORD_BYTES
             if path.stat().st_size > maximum:
                 raise ValueError("oversized")
             value = json.loads(read_regular_file_nofollow(path, self.root))
@@ -556,6 +558,8 @@ class JobStore:
             raise VastError('Invalid GPU calibration plan', 422)
         source_directory = self.directory(source_id)
         source_input = source_directory / 'input'
+        from vast_queue import preflight_gpu_snapshots
+        preflight_gpu_snapshots(self, [source], reject=True)
         source_archive = source_directory / 'input.tar.gz'
         source_intent = self.read(source_id, 'intent.json')
         manifest = self.read(source_id, 'input/manifest.json')

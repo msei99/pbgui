@@ -246,8 +246,9 @@ def validate_config(body: ValidateConfigRequest, response: Response, session: Se
     from vast_jobs import IMAGE, REVISION
     from vast_config_validation import METRICS, validate_cloud_config
     response.headers['Cache-Control'] = 'no-store'
-    errors = validate_cloud_config(body.config, image=IMAGE, revision=REVISION)
-    return {'valid': not errors, 'errors': errors, 'metrics': sorted(METRICS),
+    warnings = []
+    errors = validate_cloud_config(body.config, image=IMAGE, revision=REVISION, warnings=warnings)
+    return {'valid': not errors, 'errors': errors, 'warnings': warnings, 'metrics': sorted(METRICS),
             'image': IMAGE, 'revision': REVISION}
 
 

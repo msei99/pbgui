@@ -213,6 +213,47 @@ werden die alten Regeln nicht übernommen. Datenverfügbarkeit/Export und native
 Runtime-/Geräteprüfungen folgen zusätzlich. Eine erfolgreiche Konfigurationsprüfung
 garantiert deshalb noch keinen erfolgreichen GPU-Lauf.
 
+### Richtungsprüfung vor der Anmietung
+
+Beim aktuellen Worker (`00ce7d0`, verglichen über den vollständigen Image-Digest
+und die Revision) prüft PBGui die Long-/Short-Aktivierung im Editor und vor dem
+Export. Eingefrorene Queue-Eingaben einschließlich Requeue und Kalibrierungen werden
+vor der Metadatenvorbereitung, einer neuen Miete und einer Zuweisung an diesen Worker
+erneut geprüft. Eindeutig inkompatible wartende Optimierungen werden mit Job/Szenario,
+Feldpfad und Korrekturwegen als fehlgeschlagen markiert; nach der Korrektur erneut
+vorbereiten. Nicht lesbare Eingaben bleiben mit Begründung wartend. Ein fehlerhafter
+Performance-Test-Watch endet sichtbar, statt wiederholt Angebote abzufragen.
+Unterstützte ältere Mieten behalten ihr bisheriges Zuweisungsverhalten; laufende
+Jobs bleiben unberührt.
+
+Die Prüfung berücksichtigt Fixed-Parameter-Selektoren, die Fixierung deaktivierter
+Seiten-Bounds, Quantisierung/Rundung der Startwerte sowie Runtime- und Szenario-Pins
+in Worker-Reihenfolge. Positive Szenario-Exposure allein aktiviert Short nicht
+zwangsläufig: Auch Positionen und Approved-Coins müssen es erlauben. Eine auf null
+fixierte Exposure-Bound kann insbesondere die Positions-Bounds dieser Seite auf
+null fixieren. PBGui ändert die Konfiguration nicht automatisch. Für nur Long bleibt
+Short im effektiven Suchraum und den Szenarien deaktiviert. Für Long + Short müssen
+Coins freigegeben sowie effektive Exposure strikt positiv und Positionen für das
+Dataset gültig sein.
+
+Die frühe Prüfung verlangt mindestens eine aktive Seite in der materialisierten
+Basis und jedem Szenario. Dafür gelten die Approved-Coins der Basis plus ausdrückliche
+Konfigurations-Overrides. Die Szenario-Coin-Auswahl gilt erst im späteren Dataset-Kontext.
+Jedes Szenario erhält weiterhin eine eigene Richtungsprüfung. Einzelcoin-Szenarien
+dürfen unterschiedliche, jeweils nicht leere Seitenmengen aktivieren; Mehrcoin-Suites
+brauchen eine gemeinsame Topologie. Prüfungen, die von der noch unbekannten vorbereiteten
+Coin-Anzahl abhängen, werden ohne vorläufige Warnung oder Queue-Sperre zurückgestellt.
+Die abschließenden datenabhängigen Prüfungen bleiben beim Worker.
+
+Richtungsfehler erklären die effektiven WE-/Positionsgrenzen und wie die Seite dauerhaft an oder aus bleibt. Die betroffenen Zeilen unter **Bounds long/short** der Basiskonfiguration werden rot umrandet; gültige benachbarte Grenzen bleiben unmarkiert. Nach der Korrektur verschwindet die Umrandung automatisch.
+
+Diese Vorprüfung deckt Richtungsregeln ab, nicht alle GPU-Voraussetzungen (etwa HSL,
+Metriken oder den Exposure-Enforcer). Nicht leere Fine-Tune-Anchor-Pläne werden in
+diesem Cloud-Profil nicht unterstützt. Ein historischer Traceback-Pfad wie
+`/opt/passivbot` oder seine Zeilennummer bestimmt weder Image noch Ausführungsort.
+Ohne Originalkonfiguration und Miet-Intent lässt sich der historische FET-Fehler
+nicht rekonstruieren.
+
 ## GPU-Pool und gemeinsame Mieten
 
 Unter **Rental & Automation** lässt sich **Max concurrent GPUs** einstellen (Standard **1**, maximal **16**). Damit nicht jeder Queue-Job von Hand gestartet werden muss, **Auto rent & start** auf **On** stellen und speichern. Die Bestätigung genehmigt ausdrücklich die Budgetziele pro Miete und für alle gleichzeitigen Mieten. Danach reicht **Save & Queue**: Sobald die Eingabevorbereitung fertig ist, mietet PBGui bis zum gespeicherten Limit und startet pro GPU einen Optimizer. Passende freie GPUs werden zuerst wiederverwendet. Aufbauende und noch nicht nachweislich gelöschte Mieten zählen zum Limit. **Auto rent & start** funktioniert auch mit Limit 1. Bei ausgeschaltetem Auto rent mietet **Start** nur eine GPU für die bestehende Queue, selbst wenn Max concurrent GPUs höher eingestellt ist; ein weiterer Queue-Job genehmigt keine zusätzliche Miete. Fuer eine weitere ausdrueckliche Miete waehrend laufender Jobs unter **GPU & Offers** ein anderes Angebot auswaehlen und **Rent** klicken. Die reservierte GPU auf ihrer eigenen Queue-Karte mit **Start queue** starten; jeweils nur eine manuelle Reservierung kann auf diesen Start warten.
@@ -240,6 +281,10 @@ nicht zurückgesetzt. Ersatzmieten erfolgen nur mit ausdrücklich gestartetem au
 maximalen Mietkosten steht für weitere Job-Transfers zur Verfügung.
 
 ## Anzeige und Steuerung
+
+Das Log ist ein nicht modales Begleitfenster; die Seite dahinter bleibt bedienbar. Bei der Rückkehr über den Browserverlauf wird die Cloud-Queue erneut geprüft und Polling fortgesetzt. Öffnen oder Schließen eines Logs hat Vorrang vor einer ausstehenden Wiederherstellung.
+
+Unter **Open log** bleiben Queue-/Laufaktionen oberhalb aller Karten. Rental/Hardware und Run Details bilden die obere Reihe, Utilization/Throughput und Convergence/Stagnation die untere (eine Spalte unter 640 px Fensterbreite). Gruppen starten eingeklappt und behalten ihren Zustand bei Polling. Aufgeklappte Inhalte verschieben das Log automatisch nach unten; beim Einklappen erhält das Log den Platz zurück. Die Trennleiste ist nicht verschiebbar. Bei wenig Platz scrollt der Detailbereich gemeinsam statt jeder Gruppe separat. Hardware, Budget-/Deadline-Eingaben, Durchsatzzähler und Konvergenzsamples bleiben verfügbar. GPU-Auslastung behält ihre Aktualitätsregeln; der Durchsatz zeigt das Alter seines gemessenen Intervalls. Fehler und Überwachungshinweise bleiben außerhalb geschlossener Gruppen sichtbar. Browser-Reload stellt das noch verfügbare ausgewählte Queue-Log und Layout in diesem Tab wieder her. **Reset to default** stellt die zentrierte Standardgröße wieder her und klappt alle Detailgruppen ein; das ausgewählte Log und ungespeicherte Mieteingaben bleiben erhalten.
 
 Der Worker zeigt Mietstatus, Stundenpreis, Frist und Leerlauf-Löschzeit. Die
 Jobanzeige unterscheidet exakte Auswertungen und GPU-Vorselektionen. Paretos und

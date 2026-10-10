@@ -428,7 +428,7 @@ class TestPb7ConfigRunV7Roundtrip:
         )
 
 
-def test_legacy_unsupported_optimize_bounds_are_stripped_on_load_and_save(tmp_path):
+def test_legacy_unsupported_optimize_bounds_are_stripped_on_load_and_save(tmp_path, pb7_config_runtime):
     """Unsupported legacy optimize.bounds keys should be removed transparently."""
     cfg = get_template_config()
     cfg.setdefault("backtest", {})["base_dir"] = "backtests/pbgui/legacy_opt_bounds"
@@ -464,7 +464,7 @@ def test_legacy_unsupported_optimize_bounds_are_stripped_on_load_and_save(tmp_pa
         assert key not in saved_bounds, f"legacy bound {key} should not be written back"
 
 
-def test_prepare_pb7_config_dict_preserves_supported_fixed_runtime_override_keys():
+def test_prepare_pb7_config_dict_preserves_supported_fixed_runtime_override_keys(pb7_config_runtime):
     """Schema-supported optimize.fixed_runtime_overrides keys survive the PB7 load pipeline."""
     cfg = get_template_config()
     cfg.setdefault("optimize", {})["fixed_runtime_overrides"] = {
@@ -490,7 +490,7 @@ def test_prepare_pb7_config_dict_preserves_supported_fixed_runtime_override_keys
     ],
 )
 def test_prepare_pb7_config_dict_fills_missing_supported_fixed_runtime_override_key_from_defaults(
-    override_key, override_value
+    override_key, override_value, pb7_config_runtime
 ):
     """A single supported fixed_runtime_overrides key survives and the other side is filled from schema defaults."""
     cfg = get_template_config()
@@ -505,7 +505,7 @@ def test_prepare_pb7_config_dict_fills_missing_supported_fixed_runtime_override_
     assert prepared["optimize"]["fixed_runtime_overrides"] == expected_overrides
 
 
-def test_prepare_pb7_config_dict_prunes_unknown_fixed_runtime_override_keys_without_rewriting():
+def test_prepare_pb7_config_dict_prunes_unknown_fixed_runtime_override_keys_without_rewriting(pb7_config_runtime):
     """Unknown fixed_runtime_overrides keys are dropped, not rewritten to supported paths."""
     cfg = get_template_config()
     expected_defaults = deepcopy(cfg["optimize"]["fixed_runtime_overrides"])

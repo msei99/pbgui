@@ -256,7 +256,9 @@ def _cluster_credential_publisher(store: CredentialStore) -> ClusterCredentialPu
 
     cluster_root = default_cluster_root(_Path(_PBGDIR))
     snapshot = pbgui_purefunc.load_ini_snapshot()
-    pbname = snapshot.get("main", "pbname", fallback="").strip() or os.uname().nodename
+    pbname = (
+        snapshot.get("main", "pbname") if snapshot.has_option("main", "pbname") else ""
+    ).strip() or os.uname().nodename
     ensure_local_identity(cluster_root, role="master", pbname=pbname)
     identity = read_local_identity(cluster_root)
     if str(identity.get("role") or "").strip().lower() != "master":

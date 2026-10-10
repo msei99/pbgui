@@ -51,14 +51,19 @@ def _make_result(root: Path, config: dict, name: str = "run") -> Path:
 
 
 def _patch_pb8_config_io(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace PB8 helper subprocess calls with isolated JSON round trips."""
+    """Isolate the helper boundary; archive tests check snapshots and routing.
+
+    Schema/override validation has separate coverage in test_pb8_config.py.
+    """
     monkeypatch.setattr(pb8_config, "load_pb8_config", lambda path: json.loads(Path(path).read_text(encoding="utf-8")))
     monkeypatch.setattr(optimize_v8, "load_pb8_config", pb8_config.load_pb8_config)
     monkeypatch.setattr(optimize_v8, "prepare_pb8_config", lambda config, **_kwargs: copy.deepcopy(config))
     monkeypatch.setattr(optimize_v8, "cache_prepared_pb8_config", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(optimize_v8, "validate_pb8_override_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(optimize_v8, "validate_pb8_optimizer_overrides", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(backtest_v8, "load_pb8_config", pb8_config.load_pb8_config)
     monkeypatch.setattr(backtest_v8, "prepare_pb8_config", lambda config, **_kwargs: copy.deepcopy(config))
+    monkeypatch.setattr(backtest_v8, "validate_pb8_override_bundle", lambda *_args, **_kwargs: None)
 
     def save_prepared(config: dict, path: Path) -> dict:
         """Persist a prepared PB8 snapshot under a temporary managed root."""

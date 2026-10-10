@@ -11,6 +11,7 @@ import pytest
 
 from vast_exchanges import CCXT_EXCHANGES, SUPPORTED_EXCHANGES, quote_currency
 from vast_config_validation import validate_cloud_config
+from vast_direction_fixtures import complete_direction
 from vast_inception import required_markets, CACHE_FILES
 from vast_market_cache import fetch_markets, stage_public_markets
 from vast_provider import VastError
@@ -83,10 +84,10 @@ def test_local_public_metadata_staging(tmp_path, monkeypatch, exchange):
 
 def test_validation_identifies_exchange_and_each_scenario():
     """Errors identify exact exchange values and genuinely unknown scenario fields."""
-    config = {'live': {'strategy_kind': 'ema_anchor', 'approved_coins': {'long': ['BTC'], 'short': []}},
+    config = complete_direction({'live': {'strategy_kind': 'ema_anchor', 'approved_coins': {'long': ['BTC'], 'short': []}},
         'bot': {'long': {}, 'short': {}},
         'backtest': {'exchanges': list(SUPPORTED_EXCHANGES)},
-        'optimize': {'iters': 512, 'n_cpus': 4, 'scoring': [{'metric': 'adg_strategy_eq', 'goal': 'max'}]}}
+        'optimize': {'iters': 512, 'n_cpus': 4, 'scoring': [{'metric': 'adg_strategy_eq', 'goal': 'max'}]}})
     assert validate_cloud_config(config) == []
     config['backtest'].update(exchanges=['bybit', '../bad'], suite_enabled=True, scenarios=[
         {'label': 'Bull', 'start_date': '2024-01-01', 'exchanges': ['bybit'], 'unexpected': {}},

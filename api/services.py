@@ -85,6 +85,9 @@ _MIGRATION_DEFAULT_SERVICES = ["vps-monitor", "api", "pbcluster", "pbrun", "pbda
 _MIGRATION_LEGACY_STOP_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata"]
 _fetch_summary_snapshot: Dict[str, Any] = {}
 _poller_metrics_snapshot: Dict[str, Any] = {}
+_prices_snapshot_cache: Dict[str, Any] = {}
+_prices_snapshot_lock = threading.Lock()
+_PRICES_SNAPSHOT_CACHE_TTL_S = 3.0
 _TASK_WORKER_STOP_TIMEOUT_S = 35.0
 _SERVICE_LIFECYCLE_LOCK_TIMEOUT_S = 5.0
 _SERVICE_TRANSITION_TIMEOUT_S = 30.0
@@ -3038,6 +3041,19 @@ def get_fetch_summary(session: SessionToken = Depends(require_auth)) -> Dict[str
 
 @router.get("/prices-snapshot")
 def get_prices_snapshot(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Share one short-lived snapshot across authenticated concurrent callers."""
+    with _prices_snapshot_lock:
+        summary = _fetch_summary_snapshot
+        cache = _prices_snapshot_cache
+        if (cache and cache["summary"] == summary
+                and time.monotonic() - cache["timestamp"] < _PRICES_SNAPSHOT_CACHE_TTL_S):
+            return cache["payload"]
+        payload = _build_prices_snapshot(summary)
+        cache.update(payload=payload, timestamp=time.monotonic(), summary=summary)
+        return payload
+
+
+def _build_prices_snapshot(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Return latest price per (symbol, exchange) from the prices DB table, filtered to active symbols."""
     import sqlite3 as _sqlite3
     from contextlib import closing
@@ -3062,7 +3078,7 @@ def get_prices_snapshot(session: SessionToken = Depends(require_auth)) -> Dict[s
         active_symbols: Optional[List[str]] = None
         allowed_pairs: Optional[set] = None          # set of (symbol, exchange)
         top_n: Optional[int] = None
-        fs = dict(_fetch_summary_snapshot)
+        fs = dict(summary)
         if fs:
             try:
                 prices = fs.get("prices", {})

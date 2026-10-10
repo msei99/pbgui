@@ -42,7 +42,7 @@ def cloud_alternatives(path, message):
     return []
 
 
-def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=False, image=PROFILE_IMAGE, revision=PROFILE_REVISION, _check_scenarios=True):
+def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=False, image=PROFILE_IMAGE, revision=PROFILE_REVISION, _check_scenarios=True, warnings=None):
     """Collect profile and structural errors without changing or exporting config."""
     errors = []
     def error(path, message):
@@ -60,6 +60,8 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
     if image != PROFILE_IMAGE or revision != PROFILE_REVISION:
         error('worker.image', 'No validated GPU profile exists for this worker image/revision. Update the compatibility rules before queueing.')
     source = obj(config, 'config')
+    if source.get('_fine_tune_anchor_plan'):
+        error('_fine_tune_anchor_plan', 'Fine-tune anchor plans are not supported by the cloud direction preflight.')
     live = obj(source.get('live'), 'live')
     bt = obj(source.get('backtest'), 'backtest')
     if bt.get('offline', False) is not False:
@@ -211,4 +213,10 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
                                                   image=image, revision=revision, _check_scenarios=False):
                     if (item['path'], item['message']) not in base_errors:
                         error(context['path'] + '.' + item['path'], context['label'] + ': ' + item['message'])
+    if _check_scenarios and not errors:
+        from vast_direction_validation import validate_gpu_directions
+        direction_errors, direction_warnings = validate_gpu_directions(source)
+        errors.extend(direction_errors)
+        if warnings is not None:
+            warnings.extend(direction_warnings)
     return errors

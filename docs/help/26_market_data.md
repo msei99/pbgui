@@ -185,6 +185,7 @@ Use **Copy Schedules** to keep one or more optimizer systems current automatical
 - Enable the schedule and click **Save schedule**. Its first automatic copy starts after one complete interval.
 - Use **Run now** for an immediate copy from the saved settings.
 - Use **Edit** to load a schedule back into the Copy Data form, change its target, exchanges, interval, or enabled state, and save it again.
+- **Delete** asks you to confirm the schedule name, target, and interval before permanently removing it. **Cancel**, the close button, or Escape leaves it unchanged. If the schedule is no longer in the displayed list, PBGui shows a message and automatically updates the list without sending a deletion request.
 - Scheduled copies are persistent across API restarts. A schedule never starts a second copy while its previous job is still pending or running.
 
 Each automatic or manual schedule run appears in the same embedded Copy Job Monitor as a regular copy job. Deleting a schedule is blocked while its own copy job is active; the detached copy worker itself continues safely across an API restart.

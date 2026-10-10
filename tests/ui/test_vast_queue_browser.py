@@ -75,8 +75,9 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
             calls.append(self.path)
             if self.path == '/api/vast/validate-config':
                 from vast_config_validation import METRICS, validate_cloud_config
-                errors = validate_cloud_config(payload['config'])
-                data = {'valid':not errors,'errors':errors,'metrics':sorted(METRICS),'revision':'ee2b7d4','image':'pinned-test-image'}
+                warnings = []
+                errors = validate_cloud_config(payload['config'], warnings=warnings)
+                data = {'valid':not errors,'errors':errors,'warnings':warnings,'metrics':sorted(METRICS),'revision':'ee2b7d4','image':'pinned-test-image'}
             elif self.path == '/api/vast/gpu-preferences':
                 preferences.update(payload)
                 data = dict(preferences)
@@ -126,7 +127,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 page.wait_for_function("document.getElementById('api-key').value === ''")
                 page.evaluate("""() => {
                     state.editorLastConfig = {live:{strategy_kind:'ema_anchor',approved_coins:{long:['BTC'],short:[]}},
-                        bot:{long:{},short:{}},backtest:{exchanges:['binance']},optimize:{iters:512,n_cpus:4,scoring:[{metric:'gain_strategy_eq',goal:'max'}],limits:[]}};
+                        bot:{long:{risk:{total_wallet_exposure_limit:1,n_positions:1}},short:{risk:{total_wallet_exposure_limit:0,n_positions:0}}},backtest:{exchanges:['binance']},optimize:{iters:512,n_cpus:4,bounds:{long_total_wallet_exposure_limit:[1,1],long_n_positions:[1,1],short_total_wallet_exposure_limit:[0,0],short_n_positions:[0,0]},scoring:[{metric:'gain_strategy_eq',goal:'max'}],limits:[]}};
                     PBGuiVast.openEditor({pbgui:{execution:'vast'}});
                 }""")
                 page.wait_for_function("document.getElementById('opted-vast-validation').textContent.includes('Unsupported cloud metrics')")

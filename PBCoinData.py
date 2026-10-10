@@ -25,6 +25,7 @@ from logging_helpers import human_log as _log
 from market_symbol_mapping import disambiguate_multiplier_market_coins
 from pbgui_purefunc import IniSnapshot, load_ini_snapshot, save_ini, update_ini
 from ini_watcher import IniWatcher
+from secure_files import secure_private_file
 
 SERVICE = "PBCoinData"
 
@@ -1510,7 +1511,14 @@ class CoinData:
                 pb_config.remove_section("exchanges")
                 return removed_count
 
-            removed_count = update_ini(mutate)
+            # Keep the check and update in one transaction: another constructor
+            # may have completed the migration while this caller was waiting.
+            with advisory_file_lock(ini_path):
+                snapshot = load_ini_snapshot(ini_path)
+                if not snapshot.parser.has_section("exchanges"):
+                    secure_private_file(ini_path)
+                    return
+                removed_count = update_ini(mutate, path=ini_path)
             if removed_count:
                 _log(SERVICE, f'Removed legacy [exchanges] section from pbgui.ini ({removed_count} entries)', level='INFO')
         except Exception as e:

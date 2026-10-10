@@ -5,6 +5,8 @@ from contextlib import closing
 from pathlib import Path
 import sqlite3
 import sys
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -22,11 +24,14 @@ def snapshot(tmp_path, monkeypatch):
     node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'get_prices_snapshot')
     node.decorator_list = []
     node.args.defaults = [ast.Constant(None)]
+    builder = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_build_prices_snapshot')
     future = ast.parse('from __future__ import annotations').body
     namespace = {'Path': Path, 'PBGDIR': tmp_path, 'HTTPException': HTTPException,
-                 '_log': Mock(), 'SERVICE': 'Services',
+                 '_log': Mock(), 'SERVICE': 'Services', 'time': time,
+                 '_prices_snapshot_cache': {}, '_prices_snapshot_lock': threading.Lock(),
+                 '_PRICES_SNAPSHOT_CACHE_TTL_S': 3.0,
                  '_fetch_summary_snapshot': {'prices': {'bybit': {'symbols': 1, 'symbol_list': ['BTCUSDT']}}}}
-    exec(compile(ast.fix_missing_locations(ast.Module(body=future + [node], type_ignores=[])), str(source), 'exec'), namespace)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=future + [node, builder], type_ignores=[])), str(source), 'exec'), namespace)
 
     class Users:
         """Supply harmless account-to-exchange metadata in memory."""
@@ -118,3 +123,63 @@ def test_legacy_top_n_snapshot(snapshot):
     """Legacy summaries without symbol lists retain their top-N query behavior."""
     snapshot.namespace['_fetch_summary_snapshot'] = {'prices': {'bybit': {'symbols': 1}}}
     assert snapshot.read() == {'rows': [{'symbol': 'ETHUSDT', 'exchange': 'bybit', 'price': 5.0, 'ts': 300}]}
+
+
+def test_cache_reuses_reads_until_expiry(snapshot, monkeypatch):
+    """Warm requests avoid both credential loading and SQLite until the TTL expires."""
+    clock = SimpleNamespace(value=10.0)
+    snapshot.namespace['time'] = SimpleNamespace(monotonic=lambda: clock.value)
+    users = sys.modules['User'].Users
+    load = Mock()
+    monkeypatch.setattr(users, 'load', load)
+    original = sqlite3.connect
+    connect = Mock(wraps=original)
+    monkeypatch.setattr(sqlite3, 'connect', connect)
+    first = snapshot.read()
+    clock.value = 12.99
+    assert snapshot.read() == first
+    assert load.call_count == connect.call_count == 1
+    with closing(original(snapshot.path)) as conn:
+        conn.execute("UPDATE prices SET price=20, timestamp=400 WHERE symbol='BTCUSDT' AND user='b'")
+        conn.commit()
+    clock.value = 13.0
+    assert snapshot.read()['rows'][0]['price'] == 20
+    assert load.call_count == connect.call_count == 2
+
+
+def test_changed_active_symbols_invalidate_cache(snapshot):
+    """A new summary cannot serve the previously active symbol list from cache."""
+    assert snapshot.read()['rows'][0]['symbol'] == 'BTCUSDT'
+    snapshot.namespace['_fetch_summary_snapshot'] = {'prices': {'bybit': {'symbols': 1, 'symbol_list': ['ETHUSDT']}}}
+    assert snapshot.read()['rows'][0]['symbol'] == 'ETHUSDT'
+    snapshot.namespace['_fetch_summary_snapshot'] = {}
+    assert snapshot.read() == {'rows': []}
+
+
+def test_cache_coalesces_concurrent_readers(snapshot):
+    """Simultaneous callers build only one snapshot and release all waiting threads."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    barrier = threading.Barrier(6)
+    build = Mock(wraps=snapshot.namespace['_build_prices_snapshot'])
+    snapshot.namespace['_build_prices_snapshot'] = build
+
+    def read():
+        """Start the callers together to exercise the cache's ownership lock."""
+        barrier.wait(timeout=5)
+        return snapshot.read()
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda _: read(), range(6)))
+    assert all(result == results[0] for result in results)
+    assert build.call_count == 1
+
+
+def test_failed_read_is_not_cached(snapshot, monkeypatch):
+    """A maintenance conflict is retried and does not poison the cache."""
+    with acquire_database_lock(snapshot.root, exclusive=True):
+        with pytest.raises(HTTPException) as error:
+            snapshot.read()
+    assert error.value.status_code == 409
+    assert snapshot.namespace['_prices_snapshot_cache'] == {}
+    assert snapshot.read()['rows']

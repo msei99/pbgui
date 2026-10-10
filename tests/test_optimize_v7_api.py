@@ -117,6 +117,7 @@ def optimize_queue_dirs(tmp_path, monkeypatch):
     log_dir.mkdir(parents=True)
     monkeypatch.setattr(optimize_v7, "_opt_queue_dir", lambda: queue_dir)
     monkeypatch.setattr(optimize_v7, "_opt_log_dir", lambda: log_dir)
+    monkeypatch.setattr(optimize_v7, "_opt_configs_dir", lambda: tmp_path / "opt_v7")
     return queue_dir, log_dir
 
 

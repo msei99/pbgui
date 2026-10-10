@@ -12,7 +12,8 @@ from fastapi import HTTPException
 from api import vast
 import vast_job_runner as runner
 import vast_market_cache
-from vast_jobs import JobStore, write_json
+from vast_jobs import IMAGE, REVISION, JobStore, write_json
+from vast_direction_fixtures import complete_direction, direction_config
 from vast_provider import VastError
 from vast_queue import CloudQueue, worker_step
 from vast_transfer import WorkerConnection
@@ -30,14 +31,23 @@ def queue(tmp_path):
         folder.mkdir(parents=True)
         write_json(folder / 'state.json', dict(id=identifier, **state))
         write_json(folder / 'control.json', dict(stop=False, cleanup=False))
-    write_json(store.directory('a'*32) / 'intent.json', dict(id='a'*32, accepted_at=0, deadline=5000,
+    write_json(store.directory('a'*32) / 'intent.json', dict(id='a'*32, image=IMAGE, pb8_revision=REVISION,
+        accepted_at=0, deadline=5000,
         budget_usd=1, transfer_reserve_usd=.05, offer=dict(price_hour_usd=.5, download_gb_usd=0, upload_gb_usd=.02)))
     queue.update(worker_id='a'*32)
     return queue
 
 
-def test_reserve_rebalance_waits_for_guard_acknowledgement(queue, monkeypatch):
+@pytest.fixture
+def reserve_queue(queue):
+    """Add a valid frozen GPU input only for transfer-reserve scheduling tests."""
+    write_json(queue.store.directory('b'*32) / 'input/optimize.json', complete_direction(direction_config()))
+    return queue
+
+
+def test_reserve_rebalance_waits_for_guard_acknowledgement(reserve_queue, monkeypatch):
     """A later job can use unused time budget only after a shorter deadline is confirmed."""
+    queue = reserve_queue
     monkeypatch.setattr('vast_deadline.time.time', lambda: 1000)
     assert worker_step(queue, 'a'*32, now=1000) is None
     worker = queue.store.read('a'*32)
@@ -55,8 +65,9 @@ def test_reserve_rebalance_waits_for_guard_acknowledgement(queue, monkeypatch):
 
 
 @pytest.mark.parametrize('protocol', [0, 1])
-def test_old_guard_does_not_spend_unacknowledged_reserve(queue, protocol):
+def test_old_guard_does_not_spend_unacknowledged_reserve(reserve_queue, protocol):
     """Unsupported guards retain a visible manual-recovery reason."""
+    queue = reserve_queue
     queue.store.update('a'*32, deadline_protocol=protocol, idle_since=None)
     assert worker_step(queue, 'a'*32, now=1000) is None
     assert 'Adjust Transfer reserve/Budget' in queue.store.read('b'*32)['error']
@@ -64,8 +75,9 @@ def test_old_guard_does_not_spend_unacknowledged_reserve(queue, protocol):
     assert queue.store.read('b'*32)['status'] == 'ready'
 
 
-def test_rejected_auto_reserve_is_not_resubmitted_forever(queue, monkeypatch):
+def test_rejected_auto_reserve_is_not_resubmitted_forever(reserve_queue, monkeypatch):
     """An explicit worker rejection remains actionable instead of resetting idle forever."""
+    queue = reserve_queue
     monkeypatch.setattr('vast_deadline.time.time', lambda: 1000)
     worker_step(queue, 'a'*32, now=1000)
     queue.store.update('a'*32, deadline_request=None, deadline_error='Worker rejected the deadline change')
@@ -74,8 +86,9 @@ def test_rejected_auto_reserve_is_not_resubmitted_forever(queue, monkeypatch):
     assert 'cannot confirm' in queue.store.read('b'*32)['error']
 
 
-def test_insufficient_budget_does_not_dispatch_later_job(queue, monkeypatch):
+def test_insufficient_budget_does_not_dispatch_later_job(reserve_queue, monkeypatch):
     """Reserve rebalancing cannot consume cleanup time or exceed authorized funds."""
+    queue = reserve_queue
     monkeypatch.setattr('vast_deadline.time.time', lambda: 4700)
     queue.store.update('a'*32, idle_since=None)
     assert worker_step(queue, 'a'*32, now=4700) is None

@@ -11,6 +11,7 @@ from secure_files import ensure_private_directory, read_regular_file_nofollow, a
 
 import json
 import math
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -23,6 +24,9 @@ INSTANCE_LIST_PATH = "/api/v1/instances/"
 MAX_INSTANCE_ROWS = 10_000
 COORDINATION_ROOT = Path(__file__).resolve().parent / "data/vast/provider"
 INSTANCE_TTL = 15
+GPU_NAMES_TTL = 3600
+_GPU_NAMES_CACHE: dict[str, object] = {}
+_GPU_NAMES_LOCK = threading.Lock()
 REFERRAL_URL = "https://cloud.vast.ai/?ref_id=522435"
 
 
@@ -228,6 +232,19 @@ class VastClient:
             "checked_at": time.time(),
         }
 
+    def gpu_names(self, *, fresh: bool = False) -> list[str]:
+        """Share one bounded, validated public catalog per process for an hour."""
+        with _GPU_NAMES_LOCK:
+            cache = _GPU_NAMES_CACHE
+            if (not fresh and "names" in cache
+                    and 0 <= time.monotonic() - cache["timestamp"] < GPU_NAMES_TTL):
+                return list(cache["names"])
+            names = self.request("GET", "/gpu_names/unique/").get("gpu_names")
+            if not isinstance(names, list) or len(names) > 2000 or any(not isinstance(name, str) for name in names):
+                raise VastError("Vast returned an invalid GPU model list")
+            cache.update(names=tuple(names), timestamp=time.monotonic())
+            return list(names)
+
     def offers(self, *, max_price: float = 1, min_vram: float = 12,
                min_ram: float = 16, min_cpu: float = 4, min_tflops: float = 0, disk_gb: int = 40,
                min_power_watts: int = 0, min_reliability_pct: float = 0,
@@ -271,16 +288,14 @@ class VastClient:
             query["ask_contract_id"] = {"eq": positive_id(offer_id)}
         matching_names = None
         if gpu_name.strip():
-            names = self.request("GET", "/gpu_names/unique/").get("gpu_names")
-            if not isinstance(names, list) or len(names) > 2000 or any(not isinstance(name, str) for name in names):
-                raise VastError("Vast returned an invalid GPU model list")
+            names = self.gpu_names()
             matching_names = [name for name in names if gpu_name_matches(name, gpu_name)]
             exact = [name for name in matching_names if gpu_name_matches(name, gpu_name) and gpu_name_matches(gpu_name, name)]
             matching_names = exact or matching_names
             if not matching_names:
                 return []
             query["gpu_name"] = {"in": matching_names}
-        payload = self.request("POST", "/bundles", query)
+        payload = self.request("POST", "/bundles/", query)
         rows = payload.get("offers")
         if not isinstance(rows, list):
             raise VastError("Vast returned an invalid offer list")

@@ -8,7 +8,9 @@ import time
 import pytest
 
 import vast_calibration_watch as watching
-from vast_jobs import JobStore
+from vast_jobs import JobStore, write_json
+from secure_files import ensure_private_directory
+from vast_direction_fixtures import direction_config
 from vast_provider import VastError
 from vast_queue import CloudQueue
 
@@ -20,6 +22,8 @@ def armed(tmp_path, monkeypatch):
     preparation = queue.store.create_preparation('PBGui GPU calibration v1', 10_000_000, 4, False)
     queue.store.update(preparation['id'], kind='calibration', status='ready',
                        calibration_plan={'protocol': 3}, calibration_workload_version='v2')
+    folder = ensure_private_directory(queue.store.directory(preparation['id']) / 'input')
+    write_json(folder / 'optimize.json', direction_config())
     preferences = {
         'gpu_name': 'RTX 3090', 'max_price': .2, 'min_vram': 24, 'min_ram': 16,
         'min_cpu': 16, 'min_tflops': 0, 'min_power_watts': 350,
@@ -220,3 +224,19 @@ def test_corrupt_persisted_consent_fails_closed(armed):
     queue.update(calibration_watch=dict(watch, budget=.01))
     with pytest.raises(VastError, match='authorization is invalid'):
         watching.watch_step(queue)
+
+
+def test_invalid_direction_stops_watch_before_search_or_metadata(armed, monkeypatch):
+    """A deterministic calibration error ends the watch instead of polling offers."""
+    queue, watch = armed
+    config = direction_config()
+    config['live']['approved_coins']['short'] = ['BTC']
+    config['optimize']['bounds'].update(short_total_wallet_exposure_limit=[0, 1], short_n_positions=[0, 1])
+    write_json(queue.store.directory(watch['job_id']) / 'input/optimize.json', config)
+    monkeypatch.setattr(watching, 'search_host_offers', lambda *args, **kwargs: pytest.fail('Invalid input searched offers'))
+    monkeypatch.setattr('vast_queue.preflight_local_metadata', lambda *args: pytest.fail('Invalid input prepared metadata'))
+    assert watching.watch_step(queue) is None
+    assert queue.read()['calibration_watch'] is None
+    assert queue.store.read(watch['job_id'])['status'] == 'cancelled'
+    assert 'Short must stay on or off' in queue.store.read(watch['job_id'])['error']
+    assert watching.watch_step(queue) is None

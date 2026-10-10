@@ -282,9 +282,11 @@ class ClusterSyncWorker:
 
         _log(SERVICE, "PBCluster worker starting")
         boot_v7_revision = self._v7_state_revision()
+        boot_credential_revision = self._credential_state_revision()
         self.run_once(reason="boot")
         self._consume_trigger_change()
-        if self._v7_state_revision() != boot_v7_revision:
+        if (self._v7_state_revision() != boot_v7_revision
+                or self._credential_state_revision() != boot_credential_revision):
             self._sync_requested.set()
         next_periodic = time.time() + self._periodic_delay()
         while not self._stop.is_set():
@@ -299,12 +301,27 @@ class ClusterSyncWorker:
                 continue
             reason = "event" if triggered or trigger_changed else "periodic"
             v7_revision = self._v7_state_revision()
+            credential_revision = self._credential_state_revision()
             self.run_once(reason=reason)
             self._consume_trigger_change()
-            if self._v7_state_revision() != v7_revision:
+            if (self._v7_state_revision() != v7_revision
+                    or self._credential_state_revision() != credential_revision):
                 self._sync_requested.set()
             next_periodic = time.time() + self._periodic_delay()
         _log(SERVICE, "PBCluster worker stopped")
+
+    def _credential_state_revision(self) -> str:
+        """Detect credential intent changes without retrying on projection acknowledgements."""
+        try:
+            desired = read_materialized_state(self.cluster_root).get("desired_state") or {}
+        except (ClusterStateError, OSError, TypeError, ValueError):
+            return ""
+        # A pass may publish acknowledgements itself. Only changes to credential
+        # intent need another fanout after the pass's trigger has been coalesced.
+        intent = {key: desired.get(key) for key in (
+            "api_keys", "secrets", "secret_tombstones", "cmc_pool", "tradfi_active_profiles",
+        )}
+        return hashlib.sha256(json.dumps(intent, sort_keys=True).encode("utf-8")).hexdigest()
 
     def _v7_state_revision(self) -> tuple[tuple[str, str, str], ...]:
         """Return a compact revision that detects V7 changes during a sync pass."""

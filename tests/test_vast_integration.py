@@ -252,7 +252,7 @@ def test_offer_projection_and_query(monkeypatch):
     assert rows[0]['verified'] and rows[0]['price_hour_usd']==0.17
     assert 'hidden' not in json.dumps(rows)
     assert rows[0]['tflops'] == 35.58
-    assert calls[0][:2]==('POST','/bundles')
+    assert calls[0][:2]==('POST','/bundles/')
     assert calls[0][2]['allocated_storage']==40
     assert calls[0][2]['type']=='on-demand'
     assert calls[0][2]['num_gpus']=={'eq':1}
@@ -280,6 +280,36 @@ def test_provider_errors_are_safe(client, monkeypatch):
     response=http.post('/api/vast/account')
     assert response.status_code==502
     assert 'permission' in response.text and 'sensitive' not in response.text
+
+
+def test_offer_search_uses_canonical_endpoint_without_redirect(monkeypatch):
+    """Offer searches must reach the slash-terminated endpoint with no redirect."""
+    class Response:
+        """Return an isolated empty marketplace response."""
+        def __enter__(self):
+            """Open the mocked response context."""
+            return self
+
+        def __exit__(self, *args):
+            """Close the mocked response context."""
+            return False
+
+        def read(self, size):
+            """Return the bounded provider payload."""
+            return b'{"offers": []}'
+
+    class Opener:
+        """Inspect the real HTTP request assembled by the provider client."""
+        def open(self, request, timeout):
+            """Reject the URL that causes Vast's HTTP 308 response."""
+            assert request.full_url == 'https://console.vast.ai/api/v0/bundles/'
+            assert request.get_method() == 'POST'
+            assert json.loads(request.data)['limit'] > 0
+            return Response()
+
+    monkeypatch.setattr('urllib.request.build_opener', lambda *_: Opener())
+    monkeypatch.setattr(VastClient, 'request', VastClient._request)
+    assert VastClient('test-key').offers() == []
 
 
 def test_upstream_http_error_does_not_echo_body(monkeypatch):

@@ -549,7 +549,21 @@ def test_write_candles_for_day_persists_npz_and_source_index(monkeypatch, tmp_pa
     }]
 
 
-def test_bitget_btc_symbol_inputs_resolve_to_native_and_storage_dir() -> None:
+@pytest.fixture
+def bitget_symbol_mapping(monkeypatch, tmp_path):
+    """Provide version-independent BTC/BONK markets without reading user mappings."""
+    mapping = tmp_path / "data/coindata/bitget/mapping.json"
+    mapping.parent.mkdir(parents=True)
+    mapping.write_text(json.dumps([
+        {"symbol": "BTCUSDT", "ccxt_symbol": "BTC/USDT:USDT", "base": "BTC", "coin": "BTC", "quote": "USDT", "swap": True, "linear": True, "active": True},
+        {"symbol": "1000BONKUSDT", "ccxt_symbol": "1000BONK/USDT:USDT", "base": "1000BONK", "coin": "BONK", "quote": "USDT", "swap": True, "linear": True, "active": True},
+    ]), encoding="utf-8")
+    monkeypatch.setattr(bitget, "__file__", str(tmp_path / "bitget_best_1m.py"))
+    monkeypatch.setattr(bitget, "_BITGET_USDT_MAP", {})
+    monkeypatch.setattr(bitget, "_BITGET_USDT_MAP_SIG", None)
+
+
+def test_bitget_btc_symbol_inputs_resolve_to_native_and_storage_dir(bitget_symbol_mapping) -> None:
     """BTC variants resolve to BTCUSDT and BTC_USDT:USDT."""
 
     assert bitget._coin_to_bitget_symbol("BTC") == "BTCUSDT"
@@ -558,7 +572,7 @@ def test_bitget_btc_symbol_inputs_resolve_to_native_and_storage_dir() -> None:
     assert bitget.get_storage_coin_dir("BTC_USDT:USDT") == "BTC_USDT:USDT"
 
 
-def test_bitget_mapping_preserves_power_of_ten_base_prefix() -> None:
+def test_bitget_mapping_preserves_power_of_ten_base_prefix(bitget_symbol_mapping) -> None:
     """Mapped power-of-ten markets keep their native Bitget base prefix."""
 
     assert bitget._coin_to_bitget_symbol("BONK") == "1000BONKUSDT"

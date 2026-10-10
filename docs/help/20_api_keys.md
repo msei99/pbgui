@@ -283,6 +283,8 @@ Transfer balances update automatically even while exchange confirmation is pendi
 
 ## Credential adoption after key changes
 
+Key changes saved during an active sync automatically schedule a follow-up pass as soon as that pass finishes, without waiting for the periodic sync interval. Delivery still depends on host reachability and the time needed for synchronization.
+
 PBCluster delivers keys automatically. A verified file arrival and a running bot using the new revision are separate states. In **System → Cluster Sync**, open the node's **Preview** to see **Credential adoption** update automatically: keys arrived, restart pending/restarting, waiting for a bot start, adopted, error, or stale PBRun observation. Older nodes report status unavailable until their PBGui code and PBRun have been updated.
 
 PBRun tracks each instance and exact process separately, including multiple instances sharing one account. Repeated syncs and metadata-only edits do not restart unchanged bots. A manual restart after verified key arrival is recognized. Pending changes survive PBRun restarts and interrupted key writes. Failed stops never launch a duplicate process; failed starts remain pending with a retry delay. Stops first send SIGINT, then escalate to TERM and KILL only after bounded waits. Adoption confirms that the replacement process is running; it is not an exchange-side credential validation. No secret values or credential fingerprints appear in this status.

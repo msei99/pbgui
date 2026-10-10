@@ -8,7 +8,8 @@ import pytest
 from api.vast import RentalPreferences
 from pydantic import ValidationError
 from secure_files import ensure_private_directory
-from vast_jobs import JobStore, write_json
+from vast_jobs import JobStore, IMAGE, REVISION, write_json
+from vast_direction_fixtures import direction_config
 from vast_provider import VastError
 from vast_queue import CloudQueue, worker_step
 import vast_pool as pool
@@ -22,8 +23,11 @@ def add_row(queue, number, *, worker=False, **changes):
         status='provisioning' if worker else 'ready', rental_state='creation_pending' if worker else 'none',
         workers=4, deadline=time.time()+3600, created_at=number, idle_seconds=300, input_bytes=100, **changes))
     write_json(directory / 'control.json', {'stop':False, 'cleanup':False})
-    write_json(directory / 'intent.json', {'transfer_reserve_usd':1,
+    write_json(directory / 'intent.json', {'image': IMAGE, 'pb8_revision': REVISION, 'transfer_reserve_usd':1,
         'offer':{'download_gb_usd':.01, 'upload_gb_usd':.01}})
+    if not worker:
+        ensure_private_directory(directory / 'input')
+        write_json(directory / 'input/optimize.json', direction_config())
     return identifier
 
 

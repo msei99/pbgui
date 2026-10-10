@@ -10,6 +10,7 @@ from vast_jobs import JobStore, write_json, IMAGE, REVISION
 from vast_queue import CloudQueue, worker_step
 from vast_job_runner import rental_payload
 from setup.vast_gpu_benchmark import cloud_worker
+from vast_direction_fixtures import direction_config
 
 
 @pytest.fixture
@@ -26,6 +27,9 @@ def queue(tmp_path):
         write_json(directory/'control.json', {'stop':False,'cleanup':False})
         write_json(directory/'intent.json', {'id':identifier,'image':IMAGE,'pb8_revision':REVISION,
                    'transfer_reserve_usd':1,'offer':{'download_gb_usd':.01,'upload_gb_usd':.01}})
+        if i:
+            ensure_private_directory(directory / 'input')
+            write_json(directory / 'input/optimize.json', direction_config())
     queue.update(worker_id=worker)
     return queue, worker
 
@@ -643,6 +647,7 @@ def test_missing_local_metadata_blocks_rental_before_worker_creation(tmp_path, m
     store.update(row['id'], status='ready', exchanges=['bybit'])
     input_dir = store.directory(row['id']) / 'input'
     input_dir.mkdir()
+    write_json(input_dir / 'optimize.json', direction_config())
     manifest = {'files': [{'path': 'ohlcv/bybit/1m/BTC_USDT:USDT/2024-01-01.npy'}]}
     if expired_bundle:
         manifest['public_market_cache_mtimes'] = {'bybit': time.time() - 86401}

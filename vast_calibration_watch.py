@@ -173,6 +173,14 @@ def watch_step(queue: CloudQueue) -> dict | None:
         return None
     if now < (number(watch.get('next_check_at')) or 0):
         return None
+    if job.get('status') == 'ready':
+        from vast_queue import preflight_gpu_snapshots
+        try:
+            with advisory_file_lock(queue.root / '.queue-lock'):
+                preflight_gpu_snapshots(queue.store, [job], reject=True)
+        except VastError as exc:
+            cancel_watch(queue, watch['id'], str(exc))
+            return None
     credentials = VastCredentialStore(queue.root)
     if credentials.metadata()['generation'] != watch['credential_generation']:
         cancel_watch(queue, watch['id'], 'Vast credentials changed; waiting test authorization revoked')

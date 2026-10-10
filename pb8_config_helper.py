@@ -288,8 +288,16 @@ def _cached_optimize_metadata(modules: dict, pb8_dir: Path) -> dict:
     """Reuse immutable optimizer metadata inside the persistent helper process."""
     key = str(pb8_dir)
     if key not in _OPTIMIZE_METADATA_CACHE:
-        _OPTIMIZE_METADATA_CACHE[key] = _optimize_metadata(modules)
+        _OPTIMIZE_METADATA_CACHE[key] = _optimize_metadata(modules, include_backend=False)
     return copy.deepcopy(_OPTIMIZE_METADATA_CACHE[key])
+
+
+def _complete_optimize_metadata(modules: dict, pb8_dir: Path) -> dict:
+    """Keep migration and legacy helper replies complete, refreshing host state."""
+    metadata = _cached_optimize_metadata(modules, pb8_dir)
+    metadata["backend_contract"] = _optimizer_backend_contract(
+        modules["backends"], metadata["scoring"]["metrics"])
+    return metadata
 
 
 def _load_pb8_modules(pb8_dir: Path):
@@ -737,7 +745,7 @@ def _nested_value(value, path):
     return current
 
 
-def _optimize_metadata(modules: dict) -> dict:
+def _optimize_metadata(modules: dict, *, include_backend: bool = True) -> dict:
     """Build one coherent metadata model from the installed PB8 runtime."""
     template = _prepare(modules, modules["get_template_config"]())
     optimize = copy.deepcopy(template.get("optimize") or {})
@@ -769,7 +777,8 @@ def _optimize_metadata(modules: dict) -> dict:
         "optimize_parameters": _leaf_metadata(optimize, "optimize"),
         "bot_parameter_paths": [entry["path"] for entry in _leaf_metadata(template.get("bot") or {}, "bot")],
         "backends": modules["backends"],
-        "backend_contract": _optimizer_backend_contract(modules["backends"], metrics),
+        **({"backend_contract": _optimizer_backend_contract(modules["backends"], metrics)}
+           if include_backend else {}),
         "pymoo": {
             "algorithms": modules["pymoo_algorithms"],
             "ref_dir_methods": modules["pymoo_ref_dir_methods"],
@@ -1039,7 +1048,12 @@ def handle(payload: dict) -> dict:
     if operation == "result_metrics":
         return {"metrics": modules["result_metrics"]}
     if operation == "optimize_metadata":
+        return _complete_optimize_metadata(modules, pb8_dir)
+    if operation == "optimize_metadata_static":
         return _cached_optimize_metadata(modules, pb8_dir)
+    if operation == "optimizer_backend_contract":
+        metadata = _cached_optimize_metadata(modules, pb8_dir)
+        return _optimizer_backend_contract(modules["backends"], metadata["scoring"]["metrics"])
     if operation == "optimize_preflight":
         config = payload.get("config")
         if not isinstance(config, dict):
@@ -1121,7 +1135,7 @@ def handle(payload: dict) -> dict:
         result = {"report": report}
         if report.get("output_written") and isinstance(migrated, dict):
             result["config"] = migrated
-            result["optimize_metadata"] = _cached_optimize_metadata(modules, pb8_dir)
+            result["optimize_metadata"] = _complete_optimize_metadata(modules, pb8_dir)
         return result
     raise ValueError(f"Unsupported operation: {operation}")
 

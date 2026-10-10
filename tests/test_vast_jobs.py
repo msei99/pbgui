@@ -1,5 +1,6 @@
 """Offline rental lifecycle and untrusted result transfer regression tests."""
 import copy
+from vast_direction_fixtures import direction_config, complete_direction
 import io
 import json
 import shutil
@@ -104,7 +105,7 @@ def test_create_calibration_reuses_frozen_input_without_mutating_source(tmp_path
     directory = store.directory(source['id'])
     input_directory = ensure_private_directory(directory / 'input')
     config = input_directory / 'optimize.json'
-    config.write_text('{}')
+    write_json(config, direction_config())
     shard = input_directory / 'ohlcv/binance/1m/BTC/data.npy'
     shard.parent.mkdir(parents=True)
     shard.write_bytes(b'candles')
@@ -553,6 +554,7 @@ def test_job_objective_change_is_explicit_and_source_is_immutable():
     source = {'live': {'strategy_kind':'ema_anchor', 'approved_coins':{'long':['BTC'], 'short':[]}},
               'bot': {'long':{}, 'short':{}}, 'backtest': {'exchanges':['binance']}, 'pbgui': {'sweep': 'keep'},
               'optimize': {'scoring':[{'metric':'gain_strategy_eq'}], 'limits':[]}}
+    source = complete_direction(source)
     original = copy.deepcopy(source)
     with pytest.raises(VastError, match='Unsupported cloud metrics'):
         native_job_config(source, 512, 4, False)
@@ -612,6 +614,7 @@ def test_multicoin_native_job_preserves_both_sides():
     source = {'live': {'strategy_kind':'ema_anchor', 'approved_coins':{'long':['BTC','ETH'], 'short':['ETH','SOL']}},
               'bot': {'long':{}, 'short':{}}, 'backtest': {'exchanges':['binance']},
               'optimize': {'scoring':[{'metric':'adg_strategy_eq'}], 'limits':[]}}
+    source = complete_direction(source)
     original = copy.deepcopy(source)
     result = native_job_config(source, 512, 4, False)
     assert result['live']['approved_coins'] == original['live']['approved_coins']

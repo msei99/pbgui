@@ -21,6 +21,19 @@ GPU_NON_BOT_OVERRIDES = {
 }
 
 
+def compatible_override(old, value):
+    """Accept finite scalar values or existing bot subtrees for parent overrides."""
+    if isinstance(value, dict):
+        return isinstance(old, dict) and all(
+            key in old and compatible_override(old[key], child) for key, child in value.items())
+    if isinstance(old, dict):
+        return False
+    return (type(value) in (str, bool, int, float, type(None))
+            and not (isinstance(value, float) and not math.isfinite(value))
+            and (type(old) not in (str, bool) or type(value) is type(old))
+            and (type(old) not in (int, float) or type(value) in (int, float)))
+
+
 def flatten_overrides(value, prefix=''):
     """Flatten nested documents with PB8's dotted-key and atomic-map semantics."""
     if not isinstance(value, dict):
@@ -139,7 +152,7 @@ def scenario_plan(config):
             overrides = {}
         for key, value in overrides.items():
             parts = key.split('.')
-            is_bot = len(parts) >= 3 and parts[0] == 'bot' and parts[1] in ('long', 'short')
+            is_bot = len(parts) >= 2 and parts[0] == 'bot' and parts[1] in ('long', 'short')
             if not is_bot and key not in GPU_NON_BOT_OVERRIDES:
                 error(path + '.overrides.' + key, label + f': override {key!r} is outside the cloud GPU scenario scope. Use the scenario coins/exchanges/date fields for data selection; per-coin override bundles are not exported.')
                 continue
@@ -150,11 +163,7 @@ def scenario_plan(config):
                 error(path + '.overrides.' + key, label + f': override path {key!r} does not exist in the base configuration. Use its canonical PB8 parameter path.')
                 continue
             old = target[parts[-1]]
-            if (isinstance(value, (dict, list)) or type(value) not in (str, bool, int, float, type(None))
-                    or (isinstance(value, float) and not math.isfinite(value))
-                    or (type(old) is str and type(value) is not str)
-                    or (type(old) is bool and type(value) is not bool)
-                    or (type(old) in (int, float) and type(value) not in (int, float))):
+            if not compatible_override(old, value):
                 error(path + '.overrides.' + key, label + f': override {key!r} must have a compatible finite scalar value.')
                 continue
             target[parts[-1]] = copy.deepcopy(value)

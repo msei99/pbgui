@@ -3,16 +3,115 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+from datetime import datetime
 from pathlib import Path
 import subprocess
 import textwrap
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 import api.coin_data as coin_data_api
 import api.services as services_api
+
+
+def test_state_get_preserves_migrated_files_with_real_coindata(monkeypatch, tmp_path: Path) -> None:
+    """Eight HTTP reads use real construction/bootstrap without republishing either file."""
+    import cmc_runtime
+    import credential_rolling_bootstrap as rolling
+    import pbgui_purefunc
+
+    # conftest deliberately imports a fallback PBCoinData; load production code
+    # explicitly so this test cannot accidentally bypass the offending constructor.
+    spec = importlib.util.spec_from_file_location(
+        "PBCoinData_state_regression", Path(__file__).resolve().parents[1] / "PBCoinData.py"
+    )
+    real_coindata = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(real_coindata)
+    monkeypatch.setattr(coin_data_api, "CoinData", real_coindata.CoinData)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PBGUI_DIR", str(tmp_path))
+    monkeypatch.setattr(pbgui_purefunc, "pbgui_ini_path", lambda: tmp_path / "pbgui.ini")
+    monkeypatch.setattr(coin_data_api, "PBGDIR", tmp_path)
+    monkeypatch.setattr(coin_data_api, "COINDATA_DIR", tmp_path / "data" / "coindata")
+    monkeypatch.setattr(coin_data_api, "_CMC_METADATA_CACHE_SIG", None)
+    monkeypatch.setattr(coin_data_api, "_CMC_LINK_BY_ID_CACHE", {})
+    ini = tmp_path / "pbgui.ini"
+    ini.write_text("# completed migration\n[main]\nname = isolated\n", encoding="utf-8")
+    desired = tmp_path / "data" / "cluster" / "desired_state.json"
+    desired.parent.mkdir(parents=True)
+    desired.write_text(json.dumps({"credential_migration": {"cutoff": {"min_protocol": 2}}}), encoding="utf-8")
+    rolling.bootstrap_local_legacy_credentials(tmp_path)
+    state_path = tmp_path / "data" / "credentials" / "legacy_shadow" / "state.json"
+    mapping = tmp_path / "data" / "coindata" / "binance" / "mapping.json"
+    mapping.parent.mkdir(parents=True)
+    mapping.write_text(json.dumps([{
+        "coin": "BTC", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT",
+        "ccxt_symbol": "BTC/USDT:USDT", "cmc_id": 1, "active": True,
+        "linear": True, "swap": True, "tags": ["mineable"], "price_last": 100,
+        "market_cap": 1_000_000, "volume_24h": 100_000,
+    }]), encoding="utf-8")
+
+    class FixedDatetime(datetime):
+        """Keep age formatting deterministic across all response builds."""
+
+        @classmethod
+        def now(cls, tz=None):
+            """Return one fixed wall-clock time."""
+            return cls(2026, 10, 10, 12, tzinfo=tz)
+
+    monkeypatch.setattr(coin_data_api, "datetime", FixedDatetime)
+    real_factory = real_coindata.build_cmc_pool_client
+
+    def fixed_clock_factory(root):
+        """Run the production factory/bootstrap and only fix its diagnostic clock."""
+        pool = real_factory(root)
+        pool._clock = lambda: FixedDatetime.now().timestamp()
+        return pool
+
+    monkeypatch.setattr(real_coindata, "build_cmc_pool_client", fixed_clock_factory)
+    bootstrap = MagicMock(wraps=cmc_runtime.bootstrap_local_legacy_credentials)
+    monkeypatch.setattr(cmc_runtime, "bootstrap_local_legacy_credentials", bootstrap)
+    ini_writer = MagicMock(wraps=pbgui_purefunc.atomic_write_private_text)
+    state_writer = MagicMock(wraps=rolling.atomic_write_private_text)
+    monkeypatch.setattr(pbgui_purefunc, "atomic_write_private_text", ini_writer)
+    monkeypatch.setattr(rolling, "atomic_write_private_text", state_writer)
+    refresh = MagicMock(side_effect=AssertionError("Cached mapping must not trigger exchange access"))
+    monkeypatch.setattr(coin_data_api, "_refresh_single_exchange", refresh)
+
+    def generation(path):
+        """Read only the isolated fixture files and capture their generation."""
+        content = path.read_bytes()
+        metadata = path.stat()
+        return content, metadata.st_mtime_ns, metadata.st_size, metadata.st_ino
+
+    app = FastAPI()
+    app.include_router(coin_data_api.router, prefix="/api/coin-data")
+    app.dependency_overrides[coin_data_api.require_auth] = lambda: SimpleNamespace()
+    with TestClient(app) as client:
+        first = client.get("/api/coin-data/state", params={"exchange": "binance"})
+        assert first.status_code == 200
+        assert first.json()["counts"]["main"] == 1
+        before = {path: generation(path) for path in [ini, state_path]}
+        ini_writer.reset_mock()
+        state_writer.reset_mock()
+        bootstrap.reset_mock()
+        for _ in range(8):
+            response = client.get("/api/coin-data/state", params={"exchange": "binance"})
+            assert response.status_code == 200
+            assert response.content == first.content
+            assert {path: generation(path) for path in before} == before
+
+    assert bootstrap.call_count == 8
+    assert all(call.args == (tmp_path,) for call in bootstrap.call_args_list)
+    ini_writer.assert_not_called()
+    state_writer.assert_not_called()
+    refresh.assert_not_called()
 
 
 class _FakeCoinData:

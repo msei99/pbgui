@@ -172,6 +172,10 @@ For PB8, permanent launch errors move only the affected row to an actionable err
 
 ### Log viewer
 
+The log window is nonmodal: the page behind it stays usable, including navigation and opening another queue log. Results and Pareto Explorer can navigate while the log remains open.
+
+The log window keeps Results and Pareto Explorer above a compact status summary. **Run Details & Objectives** is initially collapsed. Opening details automatically moves the log down; collapsing them returns the space to the log. There is no draggable separator or reserved empty detail space. Status updates preserve open groups. Browser reload restores the available queue log, window position/size and open detail groups in this tab. Errors remain visible outside the collapsed details. Log data updates automatically. **Reset to default** restores the centered default window size and collapses all detail groups while preserving the selected log and unsaved rental inputs.
+
 Each queue row has a **Log** action.
 It opens the shared floating log viewer and streams the local file from `data/logs/optimizes/`.
 For an exact selected queue row or a currently running optimizer visible from another Optimize panel, PBGui AI can invoke the page-advertised `show_log` action, which calls that same existing `openLogPanel` function. A cross-page request navigates to Optimize automatically and remains pending until the queue data is loaded.

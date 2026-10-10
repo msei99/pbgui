@@ -1,0 +1,1903 @@
+{
+    "reference_commit": "00ce7d0ddf123071ae67db149753d6b3619f52ac",
+    "derivation": "Hand-derived from the pinned CPU preparation and GPU direction branches; not a reconstruction of the missing FET snapshot. Other parameters are omitted because they do not change these four gates.",
+    "sources": [
+        {
+            "file": "src/optimize.py",
+            "function": "apply_fine_tune_bounds",
+            "line": 2947,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimize.py#L2947"
+        },
+        {
+            "file": "src/optimize.py",
+            "function": "configs_to_individuals",
+            "line": 3394,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimize.py#L3394"
+        },
+        {
+            "file": "src/optimization/config_adapter.py",
+            "function": "extract_bounds_tuple_list_from_config",
+            "line": 265,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/config_adapter.py#L265"
+        },
+        {
+            "file": "src/optimization/bounds.py",
+            "function": "Bound and enforce_bounds",
+            "line": 1,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/bounds.py#L1"
+        },
+        {
+            "file": "src/optimization/backends/gpu_backend.py",
+            "function": "_gpu_fixed_bound_context",
+            "line": 781,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L781"
+        },
+        {
+            "file": "src/optimization/backends/gpu_backend.py",
+            "function": "validate_gpu_preparation_scope",
+            "line": 632,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L632"
+        },
+        {
+            "file": "src/optimization/backends/gpu_backend.py",
+            "function": "_gpu_suite_search_context",
+            "line": 2248,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L2248"
+        },
+        {
+            "file": "src/optimization/backends/gpu_backend.py",
+            "function": "_gpu_suite_scenario_override_context",
+            "line": 2282,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L2282"
+        },
+        {
+            "file": "src/optimization/backends/gpu_backend.py",
+            "function": "_validate_directional_search_space",
+            "line": 4160,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L4160"
+        },
+        {
+            "file": "src/optimization/backends/gpu_backend.py",
+            "function": "vector_side_enabled and scenario validation in run_backend",
+            "line": 4736,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L4736"
+        },
+        {
+            "file": "src/optimization/gpu/model.py",
+            "function": "gpu_side_enabled",
+            "line": 490,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/gpu/model.py#L490"
+        },
+        {
+            "file": "src/suite_runner.py",
+            "function": "apply_scenario",
+            "line": 1175,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/suite_runner.py#L1175"
+        },
+        {
+            "file": "src/optimize.py",
+            "function": "SuiteEvaluator.build_scenario_candidate_config",
+            "line": 2146,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimize.py#L2146"
+        },
+        {
+            "file": "src/optimization/backends/gpu_backend.py",
+            "function": "_gpu_suite_scenario_inputs",
+            "line": 2047,
+            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L2047"
+        }
+    ],
+    "cases": [
+        {
+            "name": "long_only",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": []
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": null,
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        1
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ]
+                ],
+                "errors": 0,
+                "warnings": 0,
+                "error_contains": null,
+                "scenarios": []
+            }
+        },
+        {
+            "name": "collapsed_exposure_only_is_accepted",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": [
+                            "BTC"
+                        ]
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ],
+                    "suite_enabled": true,
+                    "scenarios": [
+                        {
+                            "label": "exposure-0.5",
+                            "overrides": {
+                                "bot.short.risk.total_wallet_exposure_limit": 0.5
+                            }
+                        },
+                        {
+                            "label": "exposure-1",
+                            "overrides": {
+                                "bot.short.risk.total_wallet_exposure_limit": 1
+                            }
+                        },
+                        {
+                            "label": "exposure-1.5",
+                            "overrides": {
+                                "bot.short.risk.total_wallet_exposure_limit": 1.5
+                            }
+                        },
+                        {
+                            "label": "exposure-2",
+                            "overrides": {
+                                "bot.short.risk.total_wallet_exposure_limit": 2
+                            }
+                        }
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            1
+                        ]
+                    }
+                }
+            },
+            "coin_counts": null,
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        1
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ],
+                    [
+                        "long"
+                    ],
+                    [
+                        "long"
+                    ],
+                    [
+                        "long"
+                    ],
+                    [
+                        "long"
+                    ]
+                ],
+                "errors": 0,
+                "warnings": 0,
+                "error_contains": null,
+                "scenarios": [
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 0.5,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                0.5,
+                                0.5
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    },
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 1,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    },
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 1.5,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                1.5,
+                                1.5
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    },
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 2,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                2,
+                                2
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "unstable_short_is_rejected",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": [
+                            "BTC"
+                        ]
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            1
+                        ],
+                        "short_n_positions": [
+                            0,
+                            1
+                        ]
+                    }
+                }
+            },
+            "coin_counts": null,
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        1
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        1
+                    ],
+                    "short_n_positions": [
+                        0,
+                        1
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ]
+                ],
+                "errors": 1,
+                "warnings": 0,
+                "error_contains": "Short must stay on or off",
+                "scenarios": []
+            }
+        },
+        {
+            "name": "runtime_restores_collapsed_bounds",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": [
+                            "BTC"
+                        ]
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ],
+                    "suite_enabled": true,
+                    "scenarios": [
+                        {
+                            "label": "long-only",
+                            "overrides": {
+                                "bot.short.risk.total_wallet_exposure_limit": 0,
+                                "bot.short.risk.n_positions": 0
+                            }
+                        }
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {
+                        "bot.short.risk.total_wallet_exposure_limit": 1,
+                        "bot.short.risk.n_positions": 1
+                    },
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": null,
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        1
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "short_n_positions": [
+                        1,
+                        1
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 1,
+                    "short_n_positions": 1
+                },
+                "early_sides": [
+                    [
+                        "long",
+                        "short"
+                    ],
+                    [
+                        "long"
+                    ]
+                ],
+                "errors": 0,
+                "warnings": 0,
+                "error_contains": null,
+                "scenarios": [
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 0,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "early_coins_are_not_dataset_coins",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": []
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ],
+                    "suite_enabled": true,
+                    "scenarios": [
+                        {
+                            "label": "base-coins-matter",
+                            "coins": [
+                                "BTC",
+                                "ETH"
+                            ],
+                            "overrides": {
+                                "bot.long.risk.total_wallet_exposure_limit": 0,
+                                "bot.short.risk.total_wallet_exposure_limit": 1,
+                                "bot.short.risk.n_positions": 1
+                            }
+                        }
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": {
+                "backtest.scenarios.0": 2
+            },
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        1
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ],
+                    []
+                ],
+                "errors": 1,
+                "warnings": 0,
+                "error_contains": "base approved-coin context",
+                "scenarios": [
+                    {
+                        "sides": [
+                            "short"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 0,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 1,
+                            "short_n_positions": 1
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "short_n_positions": [
+                                1,
+                                1
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "all_off_singlecoin_scenario",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": []
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ],
+                    "suite_enabled": true,
+                    "scenarios": [
+                        {
+                            "label": "all-off",
+                            "overrides": {
+                                "bot.long.risk.total_wallet_exposure_limit": 0
+                            }
+                        }
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": null,
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        1
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ],
+                    []
+                ],
+                "errors": 1,
+                "warnings": 0,
+                "error_contains": "at least one enabled side",
+                "scenarios": [
+                    {
+                        "sides": [],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 0,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 0,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "inactive_base_cannot_be_rescued_by_multicoin",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": []
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0,
+                            "n_positions": 0
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ],
+                    "suite_enabled": true,
+                    "scenarios": [
+                        {
+                            "label": "activate-long",
+                            "coins": [
+                                "BTC",
+                                "ETH"
+                            ],
+                            "overrides": {
+                                "bot.long.risk.total_wallet_exposure_limit": 1,
+                                "bot.long.risk.n_positions": 1
+                            }
+                        }
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "long_n_positions": [
+                            0,
+                            0
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": {
+                "backtest.scenarios.0": 2
+            },
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "long_n_positions": [
+                        0,
+                        0
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 0,
+                    "long_n_positions": 0,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [],
+                    [
+                        "long"
+                    ]
+                ],
+                "errors": 1,
+                "warnings": 0,
+                "error_contains": "at least one enabled side",
+                "scenarios": [
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 0,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "singlecoin_topologies_may_differ",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": [
+                            "BTC"
+                        ]
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ],
+                    "suite_enabled": true,
+                    "scenarios": [
+                        {
+                            "label": "long"
+                        },
+                        {
+                            "label": "both",
+                            "overrides": {
+                                "bot.short.risk.total_wallet_exposure_limit": 1,
+                                "bot.short.risk.n_positions": 1
+                            }
+                        }
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": null,
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        1
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ],
+                    [
+                        "long"
+                    ],
+                    [
+                        "long",
+                        "short"
+                    ]
+                ],
+                "errors": 0,
+                "warnings": 0,
+                "error_contains": null,
+                "scenarios": [
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 0,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    },
+                    {
+                        "sides": [
+                            "long",
+                            "short"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 1,
+                            "short_n_positions": 1
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "short_n_positions": [
+                                1,
+                                1
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "mixed_suite_checks_every_scenario",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": []
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ],
+                    "suite_enabled": true,
+                    "scenarios": [
+                        {
+                            "label": "single",
+                            "coins": [
+                                "BTC"
+                            ],
+                            "overrides": {
+                                "bot.long.risk.n_positions": 1
+                            }
+                        },
+                        {
+                            "label": "multi",
+                            "coins": [
+                                "BTC",
+                                "ETH"
+                            ],
+                            "overrides": {
+                                "bot.long.risk.n_positions": 2
+                            }
+                        }
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            2,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": {
+                "backtest.scenarios.0": 1,
+                "backtest.scenarios.1": 2
+            },
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        2
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ],
+                    [
+                        "long"
+                    ],
+                    [
+                        "long"
+                    ]
+                ],
+                "errors": 0,
+                "warnings": 0,
+                "error_contains": null,
+                "scenarios": [
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 1,
+                            "short_total_wallet_exposure_limit": 0,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                1,
+                                1
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    },
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 2,
+                            "short_total_wallet_exposure_limit": 0,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                2,
+                                2
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "multicoin_topology_does_not_skip_single_scenario",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": []
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ],
+                    "suite_enabled": true,
+                    "scenarios": [
+                        {
+                            "label": "single",
+                            "coins": [
+                                "BTC"
+                            ],
+                            "overrides": {
+                                "bot.long.risk.n_positions": 2
+                            }
+                        },
+                        {
+                            "label": "multi",
+                            "coins": [
+                                "BTC",
+                                "ETH"
+                            ],
+                            "overrides": {
+                                "bot.long.risk.n_positions": 2
+                            }
+                        }
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            2,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": {
+                "backtest.scenarios.0": 1,
+                "backtest.scenarios.1": 2
+            },
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        2
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ],
+                    [
+                        "long"
+                    ],
+                    [
+                        "long"
+                    ]
+                ],
+                "errors": 1,
+                "warnings": 0,
+                "error_contains": "pinned at 1",
+                "scenarios": [
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 2,
+                            "short_total_wallet_exposure_limit": 0,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                2,
+                                2
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    },
+                    {
+                        "sides": [
+                            "long"
+                        ],
+                        "base": {
+                            "long_total_wallet_exposure_limit": 1,
+                            "long_n_positions": 2,
+                            "short_total_wallet_exposure_limit": 0,
+                            "short_n_positions": 0
+                        },
+                        "bounds": {
+                            "long_total_wallet_exposure_limit": [
+                                1,
+                                1
+                            ],
+                            "long_n_positions": [
+                                2,
+                                2
+                            ],
+                            "short_total_wallet_exposure_limit": [
+                                0,
+                                0
+                            ],
+                            "short_n_positions": [
+                                0,
+                                0
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "fine_tune_wildcard_precedes_seed",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC"
+                        ],
+                        "short": []
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [
+                        "risk.*"
+                    ],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            0,
+                            2
+                        ],
+                        "long_n_positions": [
+                            0,
+                            3
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": null,
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        1
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ]
+                ],
+                "errors": 0,
+                "warnings": 0,
+                "error_contains": null,
+                "scenarios": []
+            }
+        },
+        {
+            "name": "unknown_coin_count_is_hint",
+            "config": {
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {
+                        "long": [
+                            "BTC",
+                            "ETH",
+                            "SOL"
+                        ],
+                        "short": []
+                    }
+                },
+                "bot": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 1.0,
+                            "n_positions": 1
+                        }
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": 0.0,
+                            "n_positions": 0
+                        }
+                    }
+                },
+                "backtest": {
+                    "exchanges": [
+                        "binance"
+                    ]
+                },
+                "optimize": {
+                    "iters": 512,
+                    "n_cpus": 4,
+                    "scoring": [
+                        {
+                            "metric": "adg_strategy_eq",
+                            "goal": "max"
+                        }
+                    ],
+                    "limits": [],
+                    "fixed_params": [],
+                    "fixed_runtime_overrides": {},
+                    "bounds": {
+                        "long_total_wallet_exposure_limit": [
+                            1,
+                            1
+                        ],
+                        "long_n_positions": [
+                            1,
+                            3,
+                            1
+                        ],
+                        "short_total_wallet_exposure_limit": [
+                            0,
+                            0
+                        ],
+                        "short_n_positions": [
+                            0,
+                            0
+                        ]
+                    }
+                }
+            },
+            "coin_counts": null,
+            "expected": {
+                "bounds": {
+                    "long_total_wallet_exposure_limit": [
+                        1,
+                        1
+                    ],
+                    "long_n_positions": [
+                        1,
+                        3
+                    ],
+                    "short_total_wallet_exposure_limit": [
+                        0,
+                        0
+                    ],
+                    "short_n_positions": [
+                        0,
+                        0
+                    ]
+                },
+                "base": {
+                    "long_total_wallet_exposure_limit": 1,
+                    "long_n_positions": 1,
+                    "short_total_wallet_exposure_limit": 0,
+                    "short_n_positions": 0
+                },
+                "early_sides": [
+                    [
+                        "long"
+                    ]
+                ],
+                "errors": 0,
+                "warnings": 1,
+                "error_contains": null,
+                "scenarios": []
+            }
+        }
+    ]
+}

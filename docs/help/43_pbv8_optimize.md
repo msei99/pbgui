@@ -16,7 +16,7 @@ For cloud CPU capacity, set **Min CPU cores** in Vast Settings; Cloud Auto uses 
 
 When **Run on** is set to **Vast.ai**, the optimizer's **n_cpus** and **exact_workers** fields are greyed out. Their dotted help labels explain that **Min CPU cores** in Vast GPU settings controls the rental minimum; the actual run uses the effective container CPU allocation, capped by the rented CPU quota. Switching back to **Local** restores editing and the previous values.
 
-**Save & Queue** reports cloud compatibility checking, config saving and job creation in the editor. The save buttons stay disabled throughout this operation, with a steady **Saving & queueing…** label until completion or an error. Once the server confirms the new job, PBGui opens Queue with **Preparing** while the full queue refresh continues in the background.
+**Save & Queue** reports cloud compatibility checking, config saving and job creation in the editor. The save buttons stay disabled throughout this operation, with a steady **Saving & queueing…** label until completion or an error. Failures open a centered **Cannot queue configuration** dialog with **OK**; cloud compatibility failures include the validation details. The dialog stays open until explicitly dismissed and preserves the editor draft. Once the server confirms the new job, PBGui opens Queue with **Preparing** while the full queue refresh continues in the background.
 
 Vast input uploads recover from transient connection errors for up to 15 minutes without new transfer progress, with 15/30/60-second retry pauses and retained partial data. The log displays retry status. A healthy worker's upload is no longer cut short by its earlier setup timer; the rental deadline and collection reserve still apply.
 
@@ -170,6 +170,10 @@ Use **Apply Filters** after changing Market Cap, volume ratio, tags, CPT, or not
 
 ## Queue
 
+The log window is nonmodal: page controls and other queue logs remain accessible. Results and Pareto Explorer navigate without blocking the destination. Returning through the browser history revalidates the selected queue log before resuming updates; a newer selection takes precedence.
+
+**Open log** opens a movable, resizable window with run/queue actions above the status cards. Four initially collapsed groups show **Rental & Hardware**, **Run Details & Objectives**, **Utilization & Throughput**, and **Convergence & Stagnation** in a 2×2 grid when the window is at least 640 px wide; narrower windows use one column. Unavailable groups are hidden. Opening groups automatically grows the detail area and moves the log down; collapsing them gives the space back to the log. There is no draggable separator. Groups show their full content; when space is limited, the detail area scrolls together while keeping the log usable. Rental inputs retain unsaved edits during updates. Errors remain visible outside the groups; throughput summaries distinguish sample age and historical intervals. This tab restores the available queue log, window geometry, group states and automatic layout after browser reload. Logs update automatically. **Reset to default** restores the centered default window size and collapses all detail groups while preserving the selected log and unsaved rental inputs.
+
 Queue entries contain immutable PB8 configuration snapshots. Editing a saved configuration after queueing does not alter an existing queue item.
 
 When the editor is opened explicitly from a queue row, **Save** is different: it saves the managed config and refreshes that same queue item's snapshot. Changes such as `optimize.n_cpus` are therefore present when the row is reopened or started.
@@ -240,6 +244,8 @@ PB8 Optimize configurations and PB8 Backtest results use the existing Archive wo
 If an OHLCV start-date lookup does not confirm Stop within 10 seconds, Optimize releases the controls and reports a timeout. The backend may still be stopping; a late result is not applied.
 
 ## Vast.ai cloud execution
+
+Vast.ai direction checks run automatically in the editor, before export, and on frozen queue/calibration inputs before rental or a current-worker assignment. Blocking errors name the scenario/field; checks awaiting the prepared coin count show no provisional warning and do not block queueing. The early check keeps the base approved coins; scenario coin selection belongs to the later dataset context. Supported older leases retain their previous behavior. See [Vast.ai GPU queue](48_vast_gpu.md#direction-checks-before-renting) for the scope and correction options.
 
 Under **Execution & optimizer backend**, choose **Run on → Vast.ai GPU**, leave the three GPU sizing fields blank for Auto or set manual overrides directly below, then use **Save & Queue**. Cloud validation appears beside those fields.
 Save the GPU type and limits under **Queue → Settings → GPU requirements**. PBGui selects a current matching offer when starting the queue.

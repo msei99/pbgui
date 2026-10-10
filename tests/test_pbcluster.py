@@ -673,6 +673,80 @@ def test_cluster_sync_worker_retries_v7_change_written_during_boot(
     assert reasons == ["boot", "event"]
 
 
+@pytest.mark.parametrize("phase", ["boot", "event"])
+@pytest.mark.parametrize("field", [
+    "api_keys", "secrets", "secret_tombstones", "cmc_pool", "tradfi_active_profiles",
+])
+def test_cluster_sync_worker_retries_credentials_changed_during_pass(
+    monkeypatch, tmp_path: Path, phase: str, field: str,
+) -> None:
+    """Credential changes during boot or fanout get an immediate catch-up pass."""
+    worker = ClusterSyncWorker(tmp_path)
+    desired = {field: {"synthetic": {"generation": 1}}}
+    monkeypatch.setattr(cluster_sync_worker, "read_materialized_state", lambda _root: {
+        "desired_state": desired,
+    })
+    reasons = []
+
+    def run_once(*, reason: str) -> dict:
+        """Publish an update after the pass has already selected its outgoing state."""
+        reasons.append(reason)
+        if reason == phase and desired[field]["synthetic"]["generation"] == 1:
+            desired[field]["synthetic"]["generation"] = 2
+            worker.trigger_path.parent.mkdir(parents=True, exist_ok=True)
+            worker.trigger_path.touch()
+        elif phase == "event" and reason == "boot":
+            worker.request_sync()
+        else:
+            worker.stop()
+        return {"reason": reason}
+
+    def wait(_timeout):
+        """Fail promptly if the worker would wait for the periodic fallback."""
+        if not worker._sync_requested.is_set():
+            worker._stop.set()
+        return worker._sync_requested.is_set()
+
+    monkeypatch.setattr(worker, "run_once", run_once)
+    monkeypatch.setattr(worker._sync_requested, "wait", wait)
+    worker.run_forever()
+    assert reasons == (["boot", "event"] if phase == "boot" else ["boot", "event", "event"])
+
+
+def test_cluster_sync_worker_coalesces_credential_acknowledgements(monkeypatch, tmp_path: Path) -> None:
+    """Projection acknowledgements do not produce an endless credential catch-up loop."""
+    worker = ClusterSyncWorker(tmp_path)
+    desired = {"secrets": {"synthetic": {"generation": 2}}}
+    monkeypatch.setattr(cluster_sync_worker, "read_materialized_state", lambda _root: {
+        "desired_state": desired,
+    })
+    reasons = []
+
+    def run_once(*, reason: str) -> dict:
+        """Write only maintenance fields, as normal materialization does."""
+        reasons.append(reason)
+        desired.update({
+            "generated_at": 123,
+            "credential_materialization_acks": {NODE_ID: {"generation": 2}},
+            "tradfi_projection_acks": {NODE_ID: {"generation": 2}},
+        })
+        worker.trigger_path.parent.mkdir(parents=True, exist_ok=True)
+        worker.trigger_path.touch()
+        return {"reason": reason}
+
+    def wait(_timeout):
+        """Stop at the next wait and inspect whether an immediate retry was requested."""
+        worker._stop.set()
+        return worker._sync_requested.is_set()
+
+    monkeypatch.setattr(worker, "run_once", run_once)
+    monkeypatch.setattr(worker._sync_requested, "wait", wait)
+    worker.run_forever()
+    assert reasons == ["boot"]
+    assert not worker._sync_requested.is_set()
+    assert worker._consume_trigger_change() is False
+
+
 def test_cluster_sync_worker_event_clears_peer_backoff(tmp_path: Path) -> None:
     """Explicit sync events retry peers immediately after repair actions."""
 

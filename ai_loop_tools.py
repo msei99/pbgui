@@ -215,11 +215,23 @@ class AILoopTools:
 
     async def propose_run(self, owner, conversation_id, args):
         """Prepare immutable native queue/start operations for explicit approval."""
-        payload, preview = await self.caps._to_thread_uncancellable(self.checked, self._prepare_run, owner, args)
+        chat = self._runtime().get_ai_chat_service()
+        preferences = await self.caps._to_thread_uncancellable(chat.get_preferences, owner)
+        selection = preferences.get('selection')
+        if not selection:
+            from ai_chat import AIChatError
+            from ai_capabilities import AICapabilityError
+            try:
+                conversation = await chat.get_conversation(owner, conversation_id)
+            except AIChatError as exc:
+                raise AICapabilityError('Select an AI provider and model in an owned chat before queueing or starting a Loop') from exc
+            selection = {key: conversation[key] for key in ('provider', 'model', 'effort', 'service_tier')}
+            selection['profile'] = conversation['chatgpt_profile']
+        payload, preview = await self.caps._to_thread_uncancellable(self.checked, self._prepare_run, owner, args, selection)
         return await self.caps._create_custom_proposal(owner, conversation_id, RUN_ACTION,
                                                       payload['name'], payload, preview)
 
-    def _prepare_run(self, owner, args):
+    def _prepare_run(self, owner, args, selection):
         """Validate the owned revision and freeze shared AI selection and cost settings."""
         if set(args) - {'operation', 'name', 'revision', 'loop_id'}:
             raise ValueError('Unknown Loop run field')
@@ -227,7 +239,6 @@ class AILoopTools:
         if operation not in {'queue', 'queue_and_start', 'start'}:
             raise ValueError('Choose queue, queue_and_start or start')
         runtime = self._runtime()
-        selection = runtime.get_ai_chat_service().get_preferences(owner).get('selection') or {}
         if operation == 'start':
             if args.get('name') or args.get('revision') is not None:
                 raise ValueError('Start uses loop_id, not definition fields')

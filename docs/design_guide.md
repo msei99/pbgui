@@ -184,6 +184,8 @@ Use the established editor/table hierarchy, as in Optimize (`v7_optimize.html`, 
 
 ### Windows and detail dialogs
 
+The Optimize log is an explicitly approved **nonmodal companion window**: keep the surrounding page interactive, omit a backdrop and focus trap, and use `aria-modal="false"`. Retain initial centering, title-bar dragging, edge resizing, the explicit close action and persisted geometry. Its Results/Pareto actions must leave their destination usable. Its detail groups size automatically to their expanded content and move the log down; collapsing returns the space to the log. Do not use a draggable detail/log separator, persist manual split heights, or cap each group with its own scrollbar. If content exceeds the available space, scroll the detail area together while retaining usable log space. The modal rules below apply to modal detail and decision windows.
+
 An inventory on 2026-10-01 found 18 existing window-bearing frontend implementations using centered overlays; the AI Loop native `<dialog>` was the outlier. Reference implementations include Optimize `.modal-backdrop`/`.modal`/`.modal-head`/`.modal-body`, Backtest `.modal-overlay`/`.modal-box`, Run Config import windows, Jobs Monitor and the shared `pbgui_dialogs.js`/Guide overlay. Their common geometry defines the rule below; historical class names may differ.
 
 - Open a full-viewport fixed overlay with a dim backdrop and a **centered** window. The main view remains at its current position behind it. Do not rely on native `<dialog>` user-agent margins/positioning: the global CSS reset can place it in the top-left corner.

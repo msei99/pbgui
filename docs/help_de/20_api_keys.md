@@ -284,6 +284,8 @@ Transfer-Guthaben aktualisieren sich automatisch, auch solange die Börsenbestä
 
 ## Übernahme nach einem Key-Wechsel
 
+Wird ein Key während einer laufenden Synchronisation geändert und gespeichert, folgt direkt nach deren Abschluss automatisch ein weiterer Durchlauf, ohne auf das regelmäßige Sync-Intervall zu warten. Die Zustellung hängt weiterhin von der Erreichbarkeit des Hosts und der Dauer der Synchronisation ab.
+
 PBCluster verteilt Keys automatisch. Die verifizierte Ankunft der Datei und ein laufender Bot mit der neuen Version sind getrennte Zustände. Unter **System → Cluster Sync** zeigt **Preview** beim jeweiligen Node den automatisch aktualisierten Bereich **Credential adoption**: Key angekommen, Neustart ausstehend/läuft, Warten auf Bot-Start, übernommen, Fehler oder veraltete PBRun-Beobachtung. Ältere Nodes zeigen den Status erst nach Aktualisierung ihres PBGui-Codes und PBRun an.
 
 PBRun verfolgt jede Instanz und jeden konkreten Prozess einzeln, auch wenn mehrere Instanzen denselben Account verwenden. Wiederholte Synchronisation und reine Metadatenänderungen starten unveränderte Bots nicht neu. Ein manueller Neustart nach der verifizierten Key-Ankunft wird erkannt. Ausstehende Änderungen überleben PBRun-Neustarts und unterbrochene Dateischreibvorgänge. Fehlgeschlagene Stops starten keinen zweiten Prozess; fehlgeschlagene Starts bleiben mit Wartezeit erneut ausführbar. Zuerst wird SIGINT gesendet, erst nach begrenzten Wartezeiten folgen TERM und KILL. Die Übernahme bestätigt einen laufenden Ersatzprozess; sie ist keine börsenseitige Prüfung der Zugangsdaten. Geheimnisse und Credential-Fingerprints erscheinen nicht im Status.

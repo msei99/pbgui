@@ -7,9 +7,153 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import Response
+from fastapi import FastAPI, Response
+from fastapi.testclient import TestClient
 
 from credential_store import CredentialStore
+
+
+@pytest.fixture
+def isolated_tradfi_publisher(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Keep real snapshot, identity, vault, and PB7 writes inside the test root."""
+
+    import cluster_sync_command
+    import credential_reconciler
+    from api import api_keys
+
+    ini_path = tmp_path / "pbgui.ini"
+    ini_path.write_text("[main]\npbname = pbgui-master\n", encoding="utf-8")
+    pb7 = tmp_path / "pb7"
+    pb7.mkdir()
+    (pb7 / "api-keys.json").write_text("{}", encoding="utf-8")
+    store = CredentialStore(tmp_path / "data" / "credentials")
+    monkeypatch.setattr(api_keys, "_PBGDIR", str(tmp_path))
+    monkeypatch.setattr(api_keys.pbgui_purefunc, "PBGDIR", tmp_path)
+    monkeypatch.setattr(api_keys.pbgui_purefunc, "pbgui_ini_path", lambda: ini_path)
+    monkeypatch.setattr(api_keys, "_credential_store", lambda: store)
+    monkeypatch.setattr(api_keys, "_get_pb7_paths", lambda: ("", str(pb7)))
+    monkeypatch.setattr(cluster_sync_command, "PBGDIR", tmp_path)
+    monkeypatch.setattr(cluster_sync_command, "pb7dir", lambda: str(pb7))
+    monkeypatch.setattr(cluster_sync_command, "pb8dir", lambda: "")
+    monkeypatch.setattr(credential_reconciler, "pb7dir", lambda: str(pb7))
+    system = api_keys.os.uname()
+    hostname = type(system)((system.sysname, "test-host", system.release, system.version, system.machine))
+    monkeypatch.setattr(api_keys.os, "uname", lambda: hostname)
+    return SimpleNamespace(api=api_keys, ini=ini_path, store=store, root=tmp_path, pb7=pb7)
+
+
+@pytest.mark.parametrize(
+    ("ini_text", "expected_name"),
+    [
+        ("[main]\npbname = pbgui-master\n", "pbgui-master"),
+        ("[main]\npbname =   custom-node   \n", "custom-node"),
+        ("[main]\n", "test-host"),
+        ("[other]\n", "test-host"),
+        ("[main]\npbname =\n", "test-host"),
+        ("[main]\npbname =   \n", "test-host"),
+        (None, "test-host"),
+    ],
+    ids=["configured", "trimmed", "missing-option", "missing-section", "empty", "whitespace", "missing-file"],
+)
+def test_cluster_publisher_resolves_snapshot_name(
+    isolated_tradfi_publisher, ini_text: str | None, expected_name: str,
+) -> None:
+    """The real publisher helper resolves optional names from an INI snapshot."""
+
+    env = isolated_tradfi_publisher
+    if ini_text is None:
+        env.ini.unlink()
+    else:
+        env.ini.write_text(ini_text, encoding="utf-8")
+    snapshot = env.api.pbgui_purefunc.load_ini_snapshot()
+    assert isinstance(snapshot, env.api.pbgui_purefunc.IniSnapshot)
+    assert snapshot.path == env.ini
+
+    publisher = env.api._cluster_credential_publisher(env.store)
+
+    assert publisher.cluster_root == env.root / "data" / "cluster"
+    assert publisher.credential_store is env.store
+    identity = env.api.read_local_identity(publisher.cluster_root)
+    assert identity["created_from_pbname"] == expected_name
+    assert identity["role"] == "master"
+
+
+def test_tradfi_routes_with_real_publisher(isolated_tradfi_publisher) -> None:
+    """All four HTTP routes work with a real snapshot, publisher, and local state."""
+
+    env = isolated_tradfi_publisher
+    app = FastAPI()
+    app.include_router(env.api.router, prefix="/api/api-keys")
+    app.dependency_overrides[env.api.require_auth] = lambda: None
+    with TestClient(app) as client:
+        empty = client.get("/api/api-keys/tradfi/config")
+        assert empty.status_code == 200
+        assert empty.json()["configured"] is False
+
+        saved = client.put(
+            "/api/api-keys/tradfi/config",
+            json={"provider": "tiingo", "api_key": "test-tradfi-secret", "operation_id": "save-1"},
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["status"] == "saved"
+        profile_id = saved.json()["profile"]["id"]
+        assert saved.json()["profile"]["active"] is True
+
+        loaded = client.get("/api/api-keys/tradfi/config")
+        assert loaded.status_code == 200
+        assert loaded.json()["id"] == profile_id
+        assert loaded.json()["has_api_key"] is True
+
+        retried = client.post(
+            "/api/api-keys/tradfi/projection/retry", json={"operation_id": "retry-1"},
+        )
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["ok"] is True
+        assert retried.json()["operation_id"] == "retry-1"
+
+        deleted = client.delete("/api/api-keys/tradfi/config", params={"profile_id": profile_id})
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["status"] == "cleared"
+        assert deleted.json()["deleted"] == profile_id
+        assert env.store.list_tradfi() == []
+        for response in (empty, saved, loaded, retried, deleted):
+            assert "test-tradfi-secret" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/tradfi/config", None),
+        ("PUT", "/tradfi/config", {"provider": "tiingo", "api_key": "test-tradfi-secret"}),
+        ("DELETE", "/tradfi/config", None),
+        ("POST", "/tradfi/projection/retry", {"operation_id": "retry-1"}),
+    ],
+    ids=["get", "put", "delete", "retry"],
+)
+def test_tradfi_routes_preserve_non_master_conflict(
+    isolated_tradfi_publisher, monkeypatch: pytest.MonkeyPatch,
+    method: str, path: str, body: dict | None,
+) -> None:
+    """The real helper retains its HTTP 409 check for a non-master identity."""
+
+    env = isolated_tradfi_publisher
+    read_identity = env.api.read_local_identity
+
+    def non_master_identity(cluster_root: Path) -> dict:
+        """Override the observed role after real identity initialization."""
+        assert cluster_root == env.root / "data" / "cluster"
+        return {**read_identity(cluster_root), "role": "vps"}
+
+    monkeypatch.setattr(env.api, "read_local_identity", non_master_identity)
+    app = FastAPI()
+    app.include_router(env.api.router, prefix="/api/api-keys")
+    app.dependency_overrides[env.api.require_auth] = lambda: None
+    with TestClient(app) as client:
+        response = client.request(method, "/api/api-keys" + path, json=body)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "TradFi credentials can only be managed on a master"
+    assert env.store.list_tradfi() == []
 
 
 def test_tradfi_bulk_routes_return_metadata_only(monkeypatch, tmp_path: Path) -> None:

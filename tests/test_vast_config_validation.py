@@ -6,15 +6,16 @@ import pytest
 from vast_config_validation import validate_cloud_config
 from vast_jobs import JobStore
 from vast_provider import VastError
+from vast_direction_fixtures import complete_direction
 
 
 @pytest.fixture
 def config():
     """Provide an ordinary supported config without accessing user files."""
-    return {'live':{'strategy_kind':'ema_anchor','approved_coins':{'long':['BTC'],'short':[]}},
+    return complete_direction({'live':{'strategy_kind':'ema_anchor','approved_coins':{'long':['BTC'],'short':[]}},
             'bot':{'long':{},'short':{}}, 'backtest':{'exchanges':['binance']},
             'optimize':{'iters':512,'n_cpus':4,'scoring':[{'metric':'adg_strategy_eq','goal':'max'}],
-                        'limits':[{'metric':'backtest_completion_ratio','penalize_if':'less_than','value':.99}]}}
+                        'limits':[{'metric':'backtest_completion_ratio','penalize_if':'less_than','value':.99}]}})
 
 
 def test_supported_config_is_not_modified(config):
@@ -100,7 +101,7 @@ def test_unknown_image_cannot_reuse_old_rules(config):
 @pytest.mark.parametrize('bound', [0.5, [0.5], [0, 1], [0, 1, .1], [0, 1, 0], [0, 1, None], [2, 2, .1]])
 def test_native_bound_formats_are_accepted(config, bound):
     """Accept native fixed, continuous and stepped PB8 bounds without rewriting."""
-    config['optimize']['bounds'] = {'long':{'risk':{'n_positions':bound}}}
+    config['optimize']['bounds']['long'] = {'strategy': {'ema_anchor': {'entry': {'ema_span_0': bound}}}}
     original = copy.deepcopy(config)
     assert validate_cloud_config(config) == []
     assert config == original

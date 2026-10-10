@@ -3412,6 +3412,8 @@ def test_save_actions_report_failures_and_allow_retry():
       const ensureRawJsonValidForSave = () => true;
       const ensureStructuredJsonFieldsValidForSave = () => true;
       let failure='', notices=[], requests=[], closed=0, statuses=[];
+      const dialogs=[];
+      const window={PBGuiDialogs:{alert:async options=>{dialogs.push(options);}}};
       function collectEditorConfig() {
         if(failure==='validation') throw Error('Select at least one exchange.');
         return {name:'sample',config:{optimize:{scoring:[{metric:'adg_strategy_eq'}]}}};
@@ -3430,6 +3432,7 @@ def test_save_actions_report_failures_and_allow_retry():
       const setPanel = ()=>{};
     """ + source + """
       for (const queue of [false,true]) {
+        const dialogsBefore=dialogs.length;
         for (failure of ['validation','api']) {
           const before=closed;
           await saveEditor(queue);
@@ -3437,10 +3440,16 @@ def test_save_actions_report_failures_and_allow_retry():
           assert.equal(state.editorSaving,false);
           assert.equal(notices.at(-1),failure==='api'?'Save rejected by API':'Select at least one exchange.');
         }
+        assert.deepEqual(dialogs.slice(dialogsBefore).map(({title,message})=>({title,message})),queue?[
+          {title:'Cannot queue configuration',message:'Select at least one exchange.'},
+          {title:'Cannot queue configuration',message:'Save rejected by API'}
+        ]:[]);
+        const dialogsAfterFailures=dialogs.length;
         failure=''; requests=[];
         await saveEditor(queue);
         assert.deepEqual(requests,queue?['/configs/sample','/queue']:['/configs/sample']);
         assert.equal(state.editorSaving,false);
+        assert.equal(dialogs.length,dialogsAfterFailures);
       }
       assert(statuses.includes('Saving…'));
       assert(statuses.includes('Saving and queueing…'));
