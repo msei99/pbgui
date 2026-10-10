@@ -46,6 +46,7 @@ from operation_store import DurableOperationStore
 from api_pid_handoff import ApiPidOwnershipError
 from process_identity import ExactProcessSignalError, process_identity
 from service_lifecycle_lock import ServiceLifecycleBusyError, acquire_service_lifecycle_lock
+import pbcoindata_lifecycle
 
 SERVICE = "Services"
 
@@ -769,10 +770,18 @@ def _pbdata_required() -> bool:
 
 
 def _pbcoindata_required() -> bool:
-    """Return strict local CMC readiness for PBCoinData expected state."""
+    """Return whether this node currently needs a resident PBCoinData daemon."""
 
     try:
-        return bool(_cmc_pool_payload().get("ready"))
+        credential_active = bool(_cmc_pool_payload().get("ready"))
+        role = str(load_ini("main", "role") or "").strip().lower()
+        return bool(
+            pbcoindata_lifecycle.service_expected(
+                Path(PBGDIR),
+                role=role,
+                credential_active=credential_active,
+            )
+        )
     except Exception:
         return False
 

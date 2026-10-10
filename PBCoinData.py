@@ -6,6 +6,7 @@ from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import json
 import math
 import pbgui_purefunc
+import pbcoindata_lifecycle
 from pathlib import Path, PurePath
 from datetime import datetime
 import platform
@@ -107,14 +108,6 @@ class CoinDataConfigError(ValueError):
     def __init__(self, key: str):
         self.key = key
         super().__init__(f"Invalid INI value [coinmarketcap] {key}")
-
-
-def _arg_matches_path(arg: str, expected_path: Path) -> bool:
-    if not arg:
-        return False
-    expected = str(expected_path)
-    expected_alt = expected.replace("/", "\\")
-    return str(arg).endswith(expected) or str(arg).endswith(expected_alt)
 
 
 def remove_powers_of_ten(text):
@@ -3079,42 +3072,9 @@ class CoinData:
 
     @staticmethod
     def _has_dynamic_ignore_bots() -> bool:
-        """Check if any actually-running V7 instance on this node uses dynamic_ignore.
+        """Check if any actually-running V7 instance on this node uses dynamic_ignore."""
 
-        Scans data/run_v7/*/config.json for dynamic_ignore=True, then verifies
-        the bot is really running by checking for main.py + config_run.json in
-        the process cmdline (same detection logic as RunV7.pid() in PBRun.py).
-        """
-        run_v7_dir = Path('data/run_v7')
-        if not run_v7_dir.exists():
-            return False
-        for instance_dir in run_v7_dir.iterdir():
-            if not instance_dir.is_dir():
-                continue
-            config_file = instance_dir / 'config.json'
-            if not config_file.exists():
-                continue
-            try:
-                with open(config_file, encoding='utf-8') as f:
-                    cfg = json.load(f)
-                if not cfg.get('pbgui', {}).get('dynamic_ignore', False):
-                    continue
-            except Exception:
-                continue
-            config_run = instance_dir / 'config_run.json'
-            if not config_run.exists():
-                continue
-            for proc in psutil.process_iter():
-                try:
-                    cmdline = proc.cmdline()
-                except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
-                    continue
-                if (
-                    any('main.py' in s for s in cmdline)
-                    and any(_arg_matches_path(s, config_run) for s in cmdline)
-                ):
-                    return True
-        return False
+        return pbcoindata_lifecycle.has_running_dynamic_ignore_bots(Path.cwd())
 
     def _run_tradfi_sync(self):
         """Sync TradFi symbol map + XYZ spec after a mapping update cycle.
