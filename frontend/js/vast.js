@@ -2672,7 +2672,7 @@
     closeEditor: function () { validationGeneration++; gpuRecommendationGeneration++; gpuRecommendation = null; clearTimeout(validationTimer); setQueueBlocked(false); },
     queue: async function (name, config) {
       const job = await request('/jobs/prepare', {method:'POST', body:JSON.stringify({config_name:name,
-        iterations:Number(config.optimize.iters), workers:Number(config.optimize.gpu && config.optimize.gpu.exact_workers || config.optimize.n_cpus), use_adg:false})});
+        iterations:Number(config.optimize.iters), workers:Number(config.optimize.gpu && config.optimize.gpu.exact_workers || config.optimize.n_cpus || 4), use_adg:false})});
       if (!disposed) {
         // Publish the confirmed job immediately; a full refresh must not delay navigation.
         ++jobGeneration;

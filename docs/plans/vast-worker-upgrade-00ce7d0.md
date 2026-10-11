@@ -1,5 +1,7 @@
 # PB8 worker upgrade candidate — 2026-10-06
 
+> Historical release evidence. The October 2026 candidate builds official PB8 `b9d6692ea` without the now-merged PR #1871 backport. The published image documented here remains active until a validated replacement digest is released.
+
 ## Publication and activation — completed
 
 The user subsequently authorized publication, pin integration and a commit,

@@ -2559,7 +2559,6 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
                     migration_payload,
                     config,
                     report,
-                    require_v7_excess_review=source_type in {"backtest_config", "backtest_result"},
                     require_minimum_coin_age_review=source_type in {"backtest_config", "backtest_result"},
                 )
                 enable_overrides = (config.get("optimize") or {}).get("enable_overrides")

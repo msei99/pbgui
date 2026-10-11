@@ -24,16 +24,18 @@ from vast_credentials import VastCredentialStore
 from vast_provider import VastClient, VastError, number, positive_id
 
 from vast_exchanges import SUPPORTED_EXCHANGES
+from vast_worker_compatibility import config_for_worker
 
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
-IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:47032b1e42076555a29909a9b888cd24efb69dec6ccd80d06ac26b0bc653ac99"
-REVISION = "00ce7d0ddf123071ae67db149753d6b3619f52ac"
+IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae"
+REVISION = "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a"
 PREVIOUS_REVISION = "69227b75e808f8ce1f4b8949350b3311916bd377"
 ORIGINAL_REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 # Persisted rental intents keep their own immutable image/revision pair.
 SUPPORTED_RENTAL_IMAGE_REVISIONS = {
     IMAGE: REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:47032b1e42076555a29909a9b888cd24efb69dec6ccd80d06ac26b0bc653ac99": "00ce7d0ddf123071ae67db149753d6b3619f52ac",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:792a11f40098a3fffe9365c46e38f60c7bddaa35179c9bc608d130b5e1449dbe": "061e472e3d400cb3a740583d52f9d46e02eaf781",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:32d7ee7a00330e01e4a2b8856275289eb8ee4b067542b09cfdce5e81c3b3691c": "061e472e3d400cb3a740583d52f9d46e02eaf781",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:3fadf2220b4b19ee58aff6df95fa62a5e27e30d5a8058015e326ad4c229f55e0": "7b639e1180fa6bfe02e110429d4f931933c73089",
@@ -155,7 +157,7 @@ def native_job_config(source: dict, iterations: int, workers: int, use_adg: bool
         raise VastError("Cloud configuration is invalid: " + "; ".join(
             item['path'] + ": " + item['message'] + " " + " ".join(item.get('suggestions', []))
             for item in errors), 422)
-    config = copy.deepcopy(source)
+    config = config_for_worker(source, REVISION)
     live, bt, opt = config["live"], config["backtest"], config["optimize"]
     if bt.get("suite_enabled"):
         from vast_scenarios import flatten_overrides

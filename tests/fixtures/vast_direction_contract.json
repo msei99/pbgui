@@ -1,90 +1,119 @@
 {
-    "reference_commit": "00ce7d0ddf123071ae67db149753d6b3619f52ac",
-    "derivation": "Hand-derived from the pinned CPU preparation and GPU direction branches; not a reconstruction of the missing FET snapshot. Other parameters are omitted because they do not change these four gates.",
+    "reference_commit": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
+    "derivation": "Direction expectations retained from the active contract after confirming identical Python ASTs for all 14 referenced native functions/classes, plus enforce_bounds, between the active pin and official b9d6692ea. Source locations and whole-file SHA256 refer to the candidate. Native GPU checkpoint/migration regressions are recorded separately.",
     "sources": [
         {
             "file": "src/optimize.py",
             "function": "apply_fine_tune_bounds",
-            "line": 2947,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimize.py#L2947"
+            "line": 3109,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimize.py#L3109",
+            "source_sha256": "f59ea1813188b9b69acbc8958b6ec4721ec38a68d85db51b8e3e2338db0f30c5",
+            "native_ast_sha256": "2e97213515c49e785f0e750d8f0c2aef59b33b905a10efacf357353bb8abc525"
         },
         {
             "file": "src/optimize.py",
             "function": "configs_to_individuals",
-            "line": 3394,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimize.py#L3394"
+            "line": 3577,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimize.py#L3577",
+            "source_sha256": "f59ea1813188b9b69acbc8958b6ec4721ec38a68d85db51b8e3e2338db0f30c5",
+            "native_ast_sha256": "a21b3b9bdfbc90e0de11bc6bada3b7f21dc56b9ae02194d2d9fa517ceb24675b"
         },
         {
             "file": "src/optimization/config_adapter.py",
             "function": "extract_bounds_tuple_list_from_config",
             "line": 265,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/config_adapter.py#L265"
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/config_adapter.py#L265",
+            "source_sha256": "e8a87e7a34bc8f9c121d42e9200c0a6d59e0d1e69edcee78c324d5bba8f58fa6",
+            "native_ast_sha256": "339a6375270171104e3f039b0fb405cd92bb0ef42846d05e8f421ce58c8246ee"
         },
         {
             "file": "src/optimization/bounds.py",
             "function": "Bound and enforce_bounds",
-            "line": 1,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/bounds.py#L1"
+            "line": 46,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/bounds.py#L46",
+            "source_sha256": "a1762b57cd50d92348308dac21c82c578ff3db91ee34e46845ff793d1bc1d9ab",
+            "native_ast_sha256": "2d60a6d24f4af9a9c06276f50a2949ec52480c59379e87fe90500e92f649a0ed",
+            "enforce_bounds_ast_sha256": "7db2784c483371ccb673acd5ceebfb158c86ff205bedc2f7c0f4544f416e1be5"
         },
         {
             "file": "src/optimization/backends/gpu_backend.py",
             "function": "_gpu_fixed_bound_context",
             "line": 781,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L781"
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/backends/gpu_backend.py#L781",
+            "source_sha256": "99bb7ceaec9bca2c442d7e78ea36969b3ddea7cf22ff67137e097f38657ac55f",
+            "native_ast_sha256": "6bb7a9227a3f6aae7e68dfa407fa2720ac951a807f6f8da7e1ec61f4ec1f8588"
         },
         {
             "file": "src/optimization/backends/gpu_backend.py",
             "function": "validate_gpu_preparation_scope",
             "line": 632,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L632"
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/backends/gpu_backend.py#L632",
+            "source_sha256": "99bb7ceaec9bca2c442d7e78ea36969b3ddea7cf22ff67137e097f38657ac55f",
+            "native_ast_sha256": "d4581f316031390b9ec6602abddb30500bfd6127a1d5386805f1b22b6388b80c"
         },
         {
             "file": "src/optimization/backends/gpu_backend.py",
             "function": "_gpu_suite_search_context",
-            "line": 2248,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L2248"
+            "line": 2262,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/backends/gpu_backend.py#L2262",
+            "source_sha256": "99bb7ceaec9bca2c442d7e78ea36969b3ddea7cf22ff67137e097f38657ac55f",
+            "native_ast_sha256": "bcabe8f237393dd2ede433225a695bb333ec14018d0a8dc21ebd4025fc3b20e0"
         },
         {
             "file": "src/optimization/backends/gpu_backend.py",
             "function": "_gpu_suite_scenario_override_context",
-            "line": 2282,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L2282"
+            "line": 2312,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/backends/gpu_backend.py#L2312",
+            "source_sha256": "99bb7ceaec9bca2c442d7e78ea36969b3ddea7cf22ff67137e097f38657ac55f",
+            "native_ast_sha256": "9ca171d04f7cb2892113dc8aaf1053d6707fe1673ca9dcd63ad80a529b0466f8"
         },
         {
             "file": "src/optimization/backends/gpu_backend.py",
             "function": "_validate_directional_search_space",
-            "line": 4160,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L4160"
+            "line": 4183,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/backends/gpu_backend.py#L4183",
+            "source_sha256": "99bb7ceaec9bca2c442d7e78ea36969b3ddea7cf22ff67137e097f38657ac55f",
+            "native_ast_sha256": "8b71935392fef93d0bde8522d5a428e5878e222fe4794f7d49643ea391aff373"
         },
         {
             "file": "src/optimization/backends/gpu_backend.py",
             "function": "vector_side_enabled and scenario validation in run_backend",
-            "line": 4736,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L4736"
+            "line": 4783,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/backends/gpu_backend.py#L4783",
+            "source_sha256": "99bb7ceaec9bca2c442d7e78ea36969b3ddea7cf22ff67137e097f38657ac55f",
+            "native_ast_sha256": "c46661508049e14195ed7cb05657bf96417efcf7a8003d9a91f3fc395fcc1510"
         },
         {
             "file": "src/optimization/gpu/model.py",
             "function": "gpu_side_enabled",
             "line": 490,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/gpu/model.py#L490"
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/gpu/model.py#L490",
+            "source_sha256": "c0e1cf357ab6c0af75897856883dadfa4f1051729dffd7913a60acd9686020de",
+            "native_ast_sha256": "eecfbf0f52752f67965cc368846d6c62d4c004b976d5e832abe4f2927d83dded"
         },
         {
             "file": "src/suite_runner.py",
             "function": "apply_scenario",
-            "line": 1175,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/suite_runner.py#L1175"
+            "line": 1232,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/suite_runner.py#L1232",
+            "source_sha256": "f3fcf324e07c4103654af74387a757c75562b790ae2d59aa9517a03cc7fc1af0",
+            "native_ast_sha256": "2f306130ca31a5e89fd730bf1f312411fda953975b761882476e0b0ae5c2d83d"
         },
         {
             "file": "src/optimize.py",
             "function": "SuiteEvaluator.build_scenario_candidate_config",
-            "line": 2146,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimize.py#L2146"
+            "line": 2270,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimize.py#L2270",
+            "source_sha256": "f59ea1813188b9b69acbc8958b6ec4721ec38a68d85db51b8e3e2338db0f30c5",
+            "native_ast_sha256": "0bbec2f32c0768502f86b649e8c112a7aab5c5ebf2ae31791c2e62095d3cbea3"
         },
         {
             "file": "src/optimization/backends/gpu_backend.py",
             "function": "_gpu_suite_scenario_inputs",
-            "line": 2047,
-            "url": "https://github.com/enarjord/passivbot/blob/00ce7d0ddf123071ae67db149753d6b3619f52ac/src/optimization/backends/gpu_backend.py#L2047"
+            "line": 2173,
+            "url": "https://github.com/enarjord/passivbot/blob/b9d6692ea41266ecb4ab81d40bb5e5baef29b50a/src/optimization/backends/gpu_backend.py#L2173",
+            "source_sha256": "99bb7ceaec9bca2c442d7e78ea36969b3ddea7cf22ff67137e097f38657ac55f",
+            "native_ast_sha256": "6e4ba1fb07015deebd97b442d958de2fdb3f14f07d1a57e8ff6100478742fb01"
         }
     ],
     "cases": [
@@ -1899,5 +1928,12 @@
                 "scenarios": []
             }
         }
-    ]
+    ],
+    "parity_reference_commit": "00ce7d0ddf123071ae67db149753d6b3619f52ac",
+    "case_reference": {
+        "path": "tests/fixtures/vast_direction_contract.json",
+        "reference_commit": "00ce7d0ddf123071ae67db149753d6b3619f52ac",
+        "count": 12,
+        "cases_sha256": "715888ea8adf9c264937e12c891d74ce6140ff71aae25faff8f6c559a08da7e8"
+    }
 }

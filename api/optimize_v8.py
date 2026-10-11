@@ -3899,7 +3899,7 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)) -> dict
         with _config_lock():
             if not path.is_file() or path.is_symlink():
                 raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
-            editor_payload = load_pb8_editor_config(path, loader=load_pb8_config)
+            editor_payload = load_pb8_editor_config(path, loader=load_pb8_config, report_changes=True)
             config = editor_payload["config"]
             return {
                 **editor_payload,
@@ -4169,7 +4169,7 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> d
             from vast_provider import VastError
             try:
                 opt = prepared.get("optimize") or {}
-                workers = (opt.get("gpu") or {}).get("exact_workers") or opt.get("n_cpus", 4)
+                workers = (opt.get("gpu") or {}).get("exact_workers") or opt.get("n_cpus") or 4
                 job = JobStore().prepare(name, prepared, source_hash, Path(PBGDIR) / "data/ohlcv",
                                         Path(PBGDIR) / "data/coindata", _results_root(), opt.get("iters", 512), workers, False)
                 return {"ok": True, "filename": job["id"], "execution": "vast"}

@@ -1,5 +1,7 @@
 # Public PB8 GPU worker image
 
+> Historical release evidence. The October 2026 candidate builds official PB8 `b9d6692ea` without the now-merged PR #1871 backport. The published image documented here remains active until a validated replacement digest is released.
+
 ## Temporary GPU suite metric fix (2026-10-04)
 
 - Upstream fix: [Passivbot PR #1871](https://github.com/enarjord/passivbot/pull/1871), commit `83d18f0af`. The worker backport matches this patch.
@@ -309,3 +311,17 @@ and rechecked by exact digest without network access. PBGui pins this manifest
 only for new rentals and retains the heartbeat image for recovery and cleanup of
 existing immutable rental intents. No paid Vast instance was started as part of
 the image publication itself.
+
+## v2.08.8: official PB8 b9d6692ea (2026-10-11)
+
+Published `ghcr.io/msei99/pbgui-pb8-worker:b9d6692-upstream-v1` as
+`sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae`; anonymous manifest retrieval verifies the reviewed
+config ID `sha256:13203ea6bccfaace7a532f476a0d9102edd39de6c4ed497ab0b2f0c0ff0598f5`.
+The image contains official PB8 `b9d6692ea41266ecb4ab81d40bb5e5baef29b50a` without source overlays.
+The publication receipt is `setup/vast_gpu_benchmark/worker_release_b9d6692.json`;
+historical receipts remain unchanged. Job, validation and calibration pins,
+metric/direction contracts and compressed layer sizes are updated together.
+Existing rentals keep their immutable identity, with compatible pool and dispatch
+checks. The user explicitly approved activation with conservative uncalibrated
+fallbacks; GPU hardware tests, real checkpoint/resume acceptance and paid
+recalibration remain pending. No running rental or bot host was updated.

@@ -1473,10 +1473,11 @@ def test_config_list_reports_active_pb8_strategy(tmp_path, monkeypatch) -> None:
     assert rows[0]["strategy"] == "ema_anchor"
 
 
-def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize('layout', ['demo/bybit/run-1', 'demo/2026-10-10_12-00-00_ETH_bybit_2020-2025_abcd1234', 'demo/2026-10-10_12-00-00_ETH_suite_2020-2025_abcd1234/train_01'])
+def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch, layout) -> None:
     """The V8 result parser must not discover analysis files under PB7 roots."""
     pb8_root = tmp_path / "pb8" / "backtests" / "pbgui"
-    pb8_analysis = pb8_root / "demo" / "bybit" / "run-1" / "analysis.json"
+    pb8_analysis = pb8_root / layout / "analysis.json"
     pb8_analysis.parent.mkdir(parents=True)
     pb8_analysis.write_text(
         json.dumps(
@@ -1806,11 +1807,12 @@ def test_result_delete_rejects_root_and_intermediate_directories(tmp_path, monke
     assert (leaf / "analysis.json").is_file()
 
 
-def test_result_delete_removes_selected_result_directory(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize('layout', ['demo/bybit', 'demo/2026-10-10_ETH_suite_abcd1234'])
+def test_result_delete_removes_selected_result_directory(tmp_path, monkeypatch, layout) -> None:
     """Deleting a validated PB8 result must remove only that result directory."""
     root = tmp_path / "pb8" / "backtests" / "pbgui"
-    leaf = root / "demo" / "bybit" / "run-1"
-    sibling = root / "demo" / "bybit" / "run-2"
+    leaf = root / layout / "run-1"
+    sibling = root / layout / "run-2"
     leaf.mkdir(parents=True)
     sibling.mkdir(parents=True)
     (leaf / "analysis.json").write_text("{}", encoding="utf-8")

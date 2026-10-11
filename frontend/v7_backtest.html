@@ -2397,25 +2397,7 @@ function applyMigrationReviewDecision(index, select) {
   var decisionCode = String(decision.code || '');
   var selectedValue = value;
   var changedControl = null;
-  if (decisionCode === 'we_excess_allowance_mode') {
-    if (['legacy_raw', 'bounded'].indexOf(value) < 0) return;
-    var side = String(decision.side || '').trim();
-    var textarea = document.getElementById('cfg-bot-' + side);
-    if (!textarea) return;
-    try {
-      var sideConfig = JSON.parse(textarea.value);
-      if (!sideConfig.risk || typeof sideConfig.risk !== 'object' || Array.isArray(sideConfig.risk)) {
-        sideConfig.risk = {};
-      }
-      sideConfig.risk.we_excess_allowance_mode = value;
-      textarea.value = JSON.stringify(sideConfig, null, 2);
-      botSyncFromJson(side);
-    } catch (error) {
-      toast('Could not apply migration decision: ' + error.message, 'err');
-      return;
-    }
-    changedControl = textarea;
-  } else if (decisionCode === 'minimum_coin_age_days') {
+  if (decisionCode === 'minimum_coin_age_days') {
     if (['pb7_coverage', 'pb8_age_gate'].indexOf(value) < 0) return;
     var ageInput = document.getElementById('cfg-min-coin-age');
     if (!ageInput) return;
@@ -2444,10 +2426,7 @@ function applyMigrationReviewDecision(index, select) {
   });
   if (select.classList) select.classList.remove('unresolved');
   var group = changedControl && changedControl.closest ? changedControl.closest('.form-group') : null;
-  var sameControlPending = decisionCode === 'we_excess_allowance_mode'
-    ? decisions.some(function(item) { return item.side === decision.side && !item.resolved; })
-    : false;
-  if (group && !sameControlPending) {
+  if (group) {
     group.classList.remove('migration-review-mark');
   }
   var decisionPaths = decisions.map(function(item) { return String(item.path || ''); });
@@ -2501,12 +2480,25 @@ function showMigrationReviewNotice(draft) {
   var notice = document.createElement('div');
   notice.className = 'migration-review-notice';
   var title = document.createElement('strong');
-  title.textContent = 'Manual V7 → V8 review required';
+  title.textContent = report.manual_review_required || fields.length
+    ? 'Manual V7 → V8 review required' : 'V7 → V8 conversion completed';
   notice.appendChild(title);
   var message = document.createElement('div');
   message.textContent = (draft && draft.migration_message)
-    || 'The official migrator produced a canonical review draft but did not publish a runnable config. Review the fields below before saving.';
+    || (fields.length
+      ? 'Review the fields below before saving the converted draft.'
+      : 'Review the converted draft before saving.');
   notice.appendChild(message);
+  var warnings = Array.isArray(report.behavior_change_warnings) ? report.behavior_change_warnings : [];
+  if (warnings.length) {
+    var warningList = document.createElement('ul');
+    warnings.forEach(function(warning) {
+      var item = document.createElement('li');
+      item.textContent = String(warning);
+      warningList.appendChild(item);
+    });
+    notice.appendChild(warningList);
+  }
   if (fields.length) {
     var values = draft.migration_review_values && typeof draft.migration_review_values === 'object'
       ? draft.migration_review_values
@@ -2533,27 +2525,16 @@ function showMigrationReviewNotice(draft) {
       var decisionIndex = decisions.findIndex(function(decision) {
         return String(decision && decision.path || '') === field;
       });
-      if (decisionIndex >= 0) {
+      if (decisionIndex >= 0 && decisions[decisionIndex].code === 'minimum_coin_age_days') {
         var decision = decisions[decisionIndex];
         var decisionHint = document.createElement('span');
         decisionHint.className = 'migration-review-hint';
-        var optionData;
-        if (decision.code === 'minimum_coin_age_days') {
-          decisionHint.textContent = ' — PB7 uses global coin age; PB8 uses exchange-specific market age.';
-          optionData = [
-            ['', 'Choose behavior before saving...'],
-            ['pb7_coverage', '0 days — match PB7 backtest data coverage'],
-            ['pb8_age_gate', String(decision.pb8_age_gate_value) + ' days — keep PB8 exchange age gate']
-          ];
-        } else {
-          decisionHint.textContent = ' — V7 allowed WEL ' + Number(decision.raw_allowed_wel).toFixed(6)
-            + ' above side TWEL ' + Number(decision.side_twel).toFixed(6) + '.';
-          optionData = [
-            ['', 'Choose behavior before saving...'],
-            ['legacy_raw', 'legacy_raw — match V7 position sizing'],
-            ['bounded', 'bounded — keep PB8 safety cap']
-          ];
-        }
+        decisionHint.textContent = ' — PB7 uses global coin age; PB8 uses exchange-specific market age.';
+        var optionData = [
+          ['', 'Choose behavior before saving...'],
+          ['pb7_coverage', '0 days — match PB7 backtest data coverage'],
+          ['pb8_age_gate', String(decision.pb8_age_gate_value) + ' days — keep PB8 exchange age gate']
+        ];
         item.appendChild(decisionHint);
         var select = document.createElement('select');
         select.className = 'migration-review-decision unresolved';

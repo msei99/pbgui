@@ -18,6 +18,34 @@ from vast_provider import VastError, positive_id, gpu_name_matches
 SERVICE = "VastRunner"
 
 
+def worker_compatible_jobs(store: JobStore, jobs: list[dict], *, image: str = IMAGE,
+                           revision: str = REVISION, report_errors: bool = True) -> list[dict]:
+    """Use the same frozen-input capability gate for planning, rental and dispatch."""
+    from vast_jobs import SUPPORTED_RENTAL_IMAGE_REVISIONS
+    from vast_worker_compatibility import worker_compatibility_errors
+
+    if SUPPORTED_RENTAL_IMAGE_REVISIONS.get(image) != revision:
+        raise VastError('Unsupported worker image/revision', 422)
+    accepted = []
+    for row in jobs:
+        try:
+            snapshot = store.read(row['id'], 'input/optimize.json')
+            errors = worker_compatibility_errors(snapshot, revision)
+        except (VastError, OSError, ValueError, TypeError) as exc:
+            errors = [{'message': 'Cannot verify the prepared job for this worker. Prepare the job again.'}]
+            if report_errors:
+                from logging_helpers import human_log
+                human_log(SERVICE, 'Worker compatibility inspection failed', level='WARNING',
+                          meta={'error_type': type(exc).__name__})
+        if errors:
+            message = 'Waiting for a compatible worker: ' + errors[0]['message']
+            if report_errors and row.get('error') != message:
+                store.update(row['id'], error=message)
+        else:
+            accepted.append(row)
+    return accepted
+
+
 def preflight_gpu_snapshots(store: JobStore, jobs: list[dict], *, reject: bool = False,
                             checked_inputs: dict | None = None) -> list[dict]:
     """Filter current-profile frozen inputs before metadata, rental or claim.
@@ -263,9 +291,12 @@ class CloudQueue:
             if legacy_reuse:
                 # This path returns an existing paid worker below, rather than
                 # creating a current-image rental. Keep its previous preflight.
-                preflight_jobs = self.waiting(loop_id) if calibration_id is None else []
+                preflight_jobs = worker_compatible_jobs(
+                    self.store, self.waiting(loop_id), image=intent['image'],
+                    revision=intent['pb8_revision']) if calibration_id is None else []
             elif calibration_id is None:
-                preflight_jobs = preflight_gpu_snapshots(self.store, self.waiting(loop_id), checked_inputs=checked_inputs)
+                preflight_jobs = preflight_gpu_snapshots(
+                    self.store, worker_compatible_jobs(self.store, self.waiting(loop_id)), checked_inputs=checked_inputs)
             else:
                 preflight_jobs = preflight_gpu_snapshots(
                     self.store, [self.store.read(job_id(calibration_id))], reject=True, checked_inputs=checked_inputs)
@@ -291,6 +322,8 @@ class CloudQueue:
                 if not rental_needed(self, pool_authorization_id):
                     raise VastError('GPU pool capacity or queue authorization changed', 409)
             elif loop_id is None and current and current['rental_state'] not in ('none', 'deletion_verified') and not manual:
+                if legacy_reuse and self.waiting(loop_id) and not preflight_jobs:
+                    raise VastError('Existing worker cannot run the waiting jobs; use a compatible pool rental or end it first', 409)
                 return current
             active_workers = self.workers()
             if loop_id is not None:
@@ -320,7 +353,8 @@ class CloudQueue:
                     raise VastError('GPU calibration is no longer ready to start', 409)
                 jobs = preflight_gpu_snapshots(self.store, [calibration], reject=True, checked_inputs=current_inputs)
             else:
-                jobs = preflight_gpu_snapshots(self.store, self.waiting(loop_id), checked_inputs=current_inputs)
+                jobs = preflight_gpu_snapshots(
+                    self.store, worker_compatible_jobs(self.store, self.waiting(loop_id)), checked_inputs=current_inputs)
                 if [row['id'] for row in jobs] != [row['id'] for row in preflight_jobs]:
                     raise VastError('Cloud queue changed during local metadata preparation; retry rental', 409)
             if current_inputs != checked_inputs:
@@ -385,8 +419,10 @@ class CloudQueue:
             if not intent.get('offer'):
                 raise VastError('Wait for Vast to confirm this rental', 409)
             if job_profiles is not None:
+                compatible = worker_compatible_jobs(
+                    self.store, self.waiting(), image=intent['image'], revision=intent['pb8_revision'])
                 selected = validated_rental_job_profiles(
-                    job_profiles, {row['id'] for row in self.waiting()},
+                    job_profiles, {row['id'] for row in compatible},
                 )
                 intent['rental_job_gpu_profiles'] = selected
             intent['rental_gpu_profile'] = profile
@@ -731,7 +767,8 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
                 raise VastError('Unsupported worker image/revision', 422)
             if (intent.get('image'), intent.get('pb8_revision')) == (IMAGE, REVISION):
                 candidates = preflight_gpu_snapshots(store, candidates)
-            for candidate in candidates:
+            for candidate in worker_compatible_jobs(
+                    store, candidates, image=intent['image'], revision=intent['pb8_revision']):
                 if not candidate.get('auto_cpu_workers') and candidate['workers'] > worker.get('allocated_cpus', worker['workers']):
                     store.update(candidate['id'], error='Waiting for a worker with enough allocated CPU cores')
                     continue

@@ -1,0 +1,48 @@
+{
+    "origin": {
+        "revision": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
+        "callable": "config.migrations.trailing_grid_v7.migrate_v7_trailing_grid_config",
+        "selection": "Complete input, migrated long risk block and unmodified native report warning/validation fields"
+    },
+    "source": {
+        "bot": {
+            "long": {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 2.0,
+                "risk_we_excess_allowance_pct": 0.4811,
+                "entry_grid_double_down_factor": 1.0
+            },
+            "short": {
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0
+            }
+        }
+    },
+    "migrated_long_risk": {
+        "n_positions": 1,
+        "position_exposure_enforcer_enabled": false,
+        "position_exposure_enforcer_threshold": 1.0,
+        "total_exposure_enforcer_enabled": false,
+        "total_exposure_enforcer_policy": "reduce_overweight",
+        "total_exposure_enforcer_threshold": 1.0,
+        "total_exposure_entry_gate_enabled": true,
+        "total_wallet_exposure_limit": 2.0,
+        "we_excess_allowance_pct": 0.4811
+    },
+    "report": {
+        "warnings": [
+            "bot.long.entry_cooldown.base_duration_minutes was not a v7 parameter; using 0.0 for v7 behavior instead of the v8 template value 24.1.",
+            "v7 migration inserted v8 default values for fields absent from the source config; review report.inserted_v8_defaults before running live/large optimizations: backtest.candle_interval_minutes, backtest.dynamic_wel_by_tradability, backtest.exchanges, backtest.liquidation_threshold, backtest.maker_fee_override, backtest.market_order_slippage_pct, backtest.scenarios, backtest.starting_balance, ... (191 total).",
+            "bot.long.risk.we_excess_allowance_pct=0.4811 would give v7 raw per-position WEL 2.9622, above side TWEL 2 (base WEL = 2). The migrated v8 config keeps bounded excess allowance, so the effective allowance is capped at 0. Raw/unclamped exposure is no longer supported; review this change and re-backtest before trading."
+        ],
+        "behavior_change_warnings": [
+            "bot.long.entry_cooldown.base_duration_minutes was not a v7 parameter; using 0.0 for v7 behavior instead of the v8 template value 24.1.",
+            "bot.long.risk.we_excess_allowance_pct=0.4811 would give v7 raw per-position WEL 2.9622, above side TWEL 2 (base WEL = 2). The migrated v8 config keeps bounded excess allowance, so the effective allowance is capped at 0. Raw/unclamped exposure is no longer supported; review this change and re-backtest before trading."
+        ],
+        "canonical_validation": {
+            "status": "ok"
+        },
+        "manual_review_fields": [],
+        "dropped_unsupported_fields": []
+    }
+}

@@ -1,6 +1,8 @@
 # Vast.ai GPU queue
 
-New rentals use official PB8 revision `00ce7d0` with the PR #1871 invalid-candidate protection. The upstream HSL fix prevents a closing loss that exhausts cash from causing a false held-position candle valuation error. Existing rentals retain their original image and revision; a new rental uses the updated worker.
+Pool planning matches waiting jobs to idle rentals using each rental's recorded worker image, PB8 revision and CPU allocation. A free older rental cannot prevent renting a worker required by a newer job. Offer selection and rental job-profile choices use the same compatibility check as dispatch; unsupported jobs remain waiting with a useful message while compatible jobs continue.
+
+New rentals use official PB8 revision `b9d6692ea` with the merged PR #1871 invalid-candidate protection and native HSL budget scaling, without a separate source patch. The upstream HSL fix prevents a closing loss that exhausts cash from causing a false held-position candle valuation error. Existing rentals retain their original image and revision; a new rental uses the updated worker. Fresh calibration is pending, so new-revision jobs use conservative hardware fallbacks. GPU hardware and real checkpoint/resume acceptance are still pending.
 
 The jobs view reuses saved throughput measurements for completed, failed and cancelled jobs. It reads a finished job's optimizer log only when its throughput snapshot is still missing.
 
@@ -454,3 +456,7 @@ During upload, **Transferring job metadata** reports compressed configuration/ma
 Valid Pareto fronts with more than 1,000 results remain eligible for stagnation checks; all feasible points contribute to the exact hypervolume calculation.
 
 Performance comparison actions are disabled while a comparison request is running, preventing duplicate submissions.
+
+The October upstream worker candidate targets PB8 `b9d6692ea` and includes merged PR #1871 without the temporary patch. It is not the active published image yet. New HSL budget scaling is blocked during preparation and checked again against each actual rental at dispatch. Blocked jobs remain waiting; compatible following jobs can run. Activation also requires compatibility-aware pool scheduling so an idle older rental cannot suppress a required compatible rental. Old calibration profiles remain tied to their measured revision and must not be reused for the candidate.
+
+Older workers reject the new HSL field even when it is `false`. Preparation removes only that disabled field from the Cloud copy and preserves the original config. Previously frozen jobs containing it must be prepared again; their immutable snapshots are not rewritten during dispatch.

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from api.v8_migration_context import postprocess_v7_migration
@@ -177,105 +180,22 @@ def test_explicit_v7_enforcer_switch_is_respected() -> None:
     assert migrated["bot"]["long"]["risk"]["position_exposure_enforcer_enabled"] is False
 
 
-def test_backtest_conversion_requires_explicit_excess_allowance_choice() -> None:
-    """A real bounded-versus-V7 sizing difference must become a marked pre-save decision."""
-    source = {
-        "bot": {
-            "long": {
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 2.0,
-                "risk_we_excess_allowance_pct": 0.4811,
-            },
-            "short": {
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-                "risk_we_excess_allowance_pct": 0.0,
-            },
-        }
-    }
+def test_native_excess_allowance_warning_is_preserved_without_obsolete_choice() -> None:
+    """The real PB8 migration warns about bounded sizing without offering unsupported raw mode."""
+    fixture = json.loads((Path(__file__).parent / "fixtures/pb8_excess_allowance_migration.json").read_text())
     config = _config()
-    config["bot"]["long"]["risk"].update(
-        {
-            "n_positions": 1,
-            "total_wallet_exposure_limit": 2.0,
-            "we_excess_allowance_mode": "bounded",
-            "we_excess_allowance_pct": 0.4811,
-        }
-    )
+    config["bot"]["long"]["risk"] = fixture["migrated_long_risk"]
+    report = {"status": "ok", **fixture["report"]}
 
-    migrated, report = postprocess_v7_migration(
-        source,
-        config,
-        {"status": "ok"},
-        require_v7_excess_review=True,
-    )
+    migrated, updated = postprocess_v7_migration(fixture["source"], config, report)
 
-    path = "bot.long.risk.we_excess_allowance_mode"
-    assert migrated["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "bounded"
-    assert report["manual_review_required"] is True
-    assert report["status"] == "manual_review_required"
-    assert report["manual_review_fields"] == [path]
-    assert report["pbgui_post_migration_review_fields"] == [path]
-    assert report["pbgui_review_decisions"] == [
-        {
-            "code": "we_excess_allowance_mode",
-            "path": path,
-            "side": "long",
-            "current_value": "bounded",
-            "v7_parity_value": "legacy_raw",
-            "excess_allowance_pct": 0.4811,
-            "base_wel": 2.0,
-            "raw_allowed_wel": 2.9622,
-            "side_twel": 2.0,
-            "affected_contexts": ["bot.long.risk"],
-        }
-    ]
-
-
-def test_backtest_excess_choice_includes_inherited_coin_override_clamp() -> None:
-    """A sparse coin override must trigger the side-level mode choice when it inherits bounded."""
-    source = {
-        "bot": {
-            "long": {
-                "n_positions": 2,
-                "total_wallet_exposure_limit": 2.0,
-                "risk_we_excess_allowance_pct": 0.0,
-            },
-            "short": {},
-        }
-    }
-    config = _config()
-    config["bot"]["long"]["risk"].update(
-        {
-            "n_positions": 2,
-            "total_wallet_exposure_limit": 2.0,
-            "we_excess_allowance_mode": "bounded",
-            "we_excess_allowance_pct": 0.0,
-        }
-    )
-    config["coin_overrides"] = {
-        "HYPE": {
-            "bot": {
-                "long": {
-                    "wallet_exposure_limit": 1.8,
-                    "risk": {"we_excess_allowance_pct": 0.5},
-                }
-            }
-        }
-    }
-
-    _migrated, report = postprocess_v7_migration(
-        source,
-        config,
-        {"status": "ok"},
-        require_v7_excess_review=True,
-    )
-
-    assert report["manual_review_required"] is True
-    decision = report["pbgui_review_decisions"][0]
-    assert decision["path"] == "bot.long.risk.we_excess_allowance_mode"
-    assert decision["raw_allowed_wel"] == pytest.approx(2.7)
-    assert decision["affected_contexts"] == ["coin_overrides.HYPE.bot.long.risk"]
+    assert "we_excess_allowance_mode" not in migrated["bot"]["long"]["risk"]
+    assert updated["behavior_change_warnings"] == report["behavior_change_warnings"]
+    assert any("Raw/unclamped exposure is no longer supported" in item for item in updated["behavior_change_warnings"])
+    assert not updated.get("pbgui_review_decisions")
+    assert updated["manual_review_required"] is False
+    assert updated["manual_review_fields"] == []
+    assert updated["canonical_validation"] == {"status": "ok"}
 
 
 def test_backtest_conversion_requires_minimum_coin_age_semantics_choice() -> None:

@@ -1,8 +1,7 @@
 # Build the upstream PB8 base from Dockerfile first and tag it as below.
-FROM pbgui-pb8-worker:upstream-00ce7d0-pr1871-base
-RUN test "$(cat /opt/pb8-revision)" = "00ce7d0ddf123071ae67db149753d6b3619f52ac"
+FROM pbgui-pb8-worker:upstream-b9d6692-base
+RUN test "$(cat /opt/pb8-revision)" = "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a"
 LABEL org.opencontainers.image.title="PBGui PB8 GPU Calibration Worker"
 LABEL org.opencontainers.image.source="https://github.com/msei99/pbgui"
-LABEL pbgui.passivbot.base-revision="00ce7d0ddf123071ae67db149753d6b3619f52ac"
-LABEL pbgui.passivbot.patch="pr1871-83d18f0af"
+LABEL pbgui.passivbot.base-revision="b9d6692ea41266ecb4ab81d40bb5e5baef29b50a"
 COPY cloud_worker.py /opt/pbgui/worker.py

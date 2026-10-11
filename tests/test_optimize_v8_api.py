@@ -299,6 +299,39 @@ def test_config_bundle_round_trips_all_strategies_and_optimizer_options(optimize
     assert loaded["pbgui"]["additional_parameters"]["future_runtime_option"]["enabled"] is True
 
 
+def test_open_reports_native_changes_until_explicit_save(optimize_v8_roots, monkeypatch) -> None:
+    """Optimize reports default additions/removals without changing files before Save."""
+    config = _full_pb8_config()
+    config["optimize"]["backend"] = "gpu"
+    config["optimize"]["n_cpus"] = None
+    optimize_v8.save_config("old-config", config, session=None)
+    path = optimize_v8._config_file("old-config")
+    original = json.loads(path.read_text())
+    original["live"]["retired_option"] = 7
+    original["bot"]["long"].setdefault("hsl", {}).pop("scale_budget_with_excess_allowance", None)
+    path.write_text(json.dumps(original))
+    disk_before = path.read_bytes()
+
+    def native_load(source):
+        prepared = json.loads(Path(source).read_text())
+        prepared["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = False
+        prepared["live"].pop("retired_option", None)
+        return prepared
+
+    monkeypatch.setattr(optimize_v8, "load_pb8_config", native_load)
+    for _ in range(2):
+        opened = optimize_v8.get_config("old-config", session=None)
+        changes = opened["param_status"]["config_changes"]
+        assert changes["bot.long.hsl.scale_budget_with_excess_allowance"]["added"] is True
+        assert changes["live.retired_option"]["removed"] is True
+        assert "optimize.n_cpus" not in changes
+        assert path.read_bytes() == disk_before
+    optimize_v8.save_config("old-config", {"config": opened["config"]}, session=None)
+    reopened = optimize_v8.get_config("old-config", session=None)
+    assert reopened["param_status"]["config_changes"] == {}
+    assert reopened["config"]["optimize"]["n_cpus"] is None
+
+
 def test_save_and_queue_reject_strategy_incompatible_optimizer_overrides(
     optimize_v8_roots, monkeypatch
 ) -> None:
@@ -2320,7 +2353,7 @@ def test_queue_settings_match_pb7_and_apply_only_to_launch_copy(monkeypatch) -> 
     assert settings["hsl_signal_modes"] == ["coin", "pside", "unified"]
     assert settings["exchange_options"] == ["binance", "weex"]
 
-    source = {"backtest": {"ohlcv_source_dir": "original"}, "optimize": {"n_cpus": 2}}
+    source = {"backtest": {"ohlcv_source_dir": "original"}, "optimize": {"n_cpus": 2, "gpu": {"exact_workers": None}}}
     automatic = optimize_v8._apply_queue_launch_settings(
         source,
         {"cpu": "6", "cpu_override": "True", "use_pbgui_market_data": "True"},
@@ -2336,7 +2369,9 @@ def test_queue_settings_match_pb7_and_apply_only_to_launch_copy(monkeypatch) -> 
     assert automatic["optimize"]["n_cpus"] == 6
     assert manual["optimize"]["n_cpus"] == 2
     assert automatic["backtest"]["ohlcv_source_dir"] == "/managed/market-data"
-    assert source == {"backtest": {"ohlcv_source_dir": "original"}, "optimize": {"n_cpus": 2}}
+    assert automatic["optimize"]["gpu"]["exact_workers"] is None
+    assert manual["optimize"]["gpu"]["exact_workers"] is None
+    assert source == {"backtest": {"ohlcv_source_dir": "original"}, "optimize": {"n_cpus": 2, "gpu": {"exact_workers": None}}}
 
     optimize_v8.update_settings(
         {"autostart": False, "cpu": 99, "cpu_override": False, "use_pbgui_market_data": False},

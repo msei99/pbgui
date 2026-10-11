@@ -13,6 +13,35 @@ import pb8_optimize_runner
 from sweep_cycles import SWEEP_PLAN_FILENAME, build_sweep_plan
 
 
+@pytest.mark.parametrize('succeeds', [False, True])
+def test_runner_records_mocked_resume_completion_or_native_error(tmp_path, monkeypatch, succeeds):
+    """Test resume argv and state/error propagation, without native signature validation."""
+    options = tmp_path / 'options.json'
+    options.write_text(json.dumps({'mode': 'checkpoint_resume', 'source': '/results/session'}))
+    ownership = tmp_path / 'ownership.json'
+    ownership.write_text(json.dumps({'pid': os.getpid()}))
+    state = tmp_path / 'state.json'
+    reason = 'GPU checkpoint does not match current search, scoring, suite, or prepared execution contract'
+
+    async def native_main():
+        """Return or raise a representative error from the mocked native entry point."""
+        assert sys.argv[-2:] == ['--resume', '/results/session']
+        if not succeeds:
+            raise ValueError(reason)
+        return 0
+
+    monkeypatch.setattr(pb8_optimize_runner.importlib, 'import_module', lambda _: SimpleNamespace(main=native_main))
+    monkeypatch.setattr(pb8_optimize_runner, 'acquire_master_runtime_lock', lambda _: SimpleNamespace(release=lambda: None))
+    code = pb8_optimize_runner.main(['optimize', str(state), str(ownership), str(tmp_path / 'ready'),
+                                   'passivbot', '/pb8', '/queue/config.json', str(options)])
+    payload = json.loads(state.read_text())
+    assert code == (0 if succeeds else 1)
+    if succeeds:
+        assert 'error' not in payload
+    else:
+        assert payload['error'] == 'ValueError: ' + reason
+
+
 @pytest.mark.parametrize(
     ("options", "expected_tail"),
     [

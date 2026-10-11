@@ -1,4 +1,4 @@
-"""CPU-only direction contract for PB8 00ce7d0; no installed PB8 imports.
+"""CPU-only direction contract for PB8 b9d6692ea; no installed PB8 imports.
 
 Only the four side-gating values are projected. Other GPU capability checks
 remain upstream. Source locations and independent expectations live in

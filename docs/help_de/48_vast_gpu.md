@@ -1,6 +1,8 @@
 # Vast.ai GPU-Queue
 
-Neue Mieten verwenden die offizielle PB8-Revision `00ce7d0` mit der Absicherung ungültiger Kandidaten aus PR #1871. Der enthaltene HSL-Fix verhindert einen falschen Candle-Bewertungsfehler, wenn ein schließender Verlusttrade das Guthaben aufbraucht. Bestehende Mieten behalten ihr ursprüngliches Image und ihre Revision; eine neue Miete verwendet den aktualisierten Worker.
+Die Pool-Planung ordnet wartende Jobs freien Mieten anhand des gespeicherten Worker-Images, der PB8-Revision und der CPU-Zuteilung zu. Eine freie ältere Miete verhindert nicht die Anmietung eines Workers, den ein neuerer Job benötigt. Angebotssuche und Job-Profilauswahl einer Miete verwenden dieselbe Kompatibilitätsprüfung wie der Dispatch; unpassende Jobs bleiben mit einem Hinweis wartend, passende Jobs laufen weiter.
+
+Neue Mieten verwenden die offizielle PB8-Revision `b9d6692ea` mit der gemergten Absicherung ungültiger Kandidaten aus PR #1871 und nativer HSL-Budget-Skalierung, ohne separaten Quellcode-Patch. Der enthaltene HSL-Fix verhindert einen falschen Candle-Bewertungsfehler, wenn ein schließender Verlusttrade das Guthaben aufbraucht. Bestehende Mieten behalten ihr ursprüngliches Image und ihre Revision; eine neue Miete verwendet den aktualisierten Worker. Bis zur Neukalibrierung verwenden Jobs der neuen Revision konservative Hardware-Fallbacks. GPU-Hardwaretests und echte Checkpoint-/Resume-Abnahmen stehen noch aus.
 
 Die Job-Ansicht verwendet gespeicherte Durchsatzmessungen für abgeschlossene, fehlgeschlagene und abgebrochene Jobs erneut. Das Optimizer-Log eines beendeten Jobs wird nur gelesen, wenn die Durchsatzmessung noch fehlt.
 
@@ -466,3 +468,7 @@ Beim Upload zeigt **Transferring job metadata** die komprimierten Konfigurations
 Gueltige Pareto-Fronten mit mehr als 1.000 Ergebnissen werden weiterhin auf Stagnation geprueft; alle zulaessigen Punkte gehen in die exakte Hypervolumenberechnung ein.
 
 Aktionen zum Leistungsvergleich sind während einer laufenden Vergleichsanfrage deaktiviert. So werden doppelte Anfragen verhindert.
+
+Der Upstream-Worker-Kandidat vom Oktober verwendet PB8 `b9d6692ea` und enthält den gemergten PR #1871 ohne temporären Patch. Er ist noch nicht das aktive veröffentlichte Image. Die neue HSL-Budget-Skalierung wird bei der Vorbereitung gesperrt und beim Dispatch erneut gegen das tatsächliche Rental geprüft. Gesperrte Jobs bleiben wartend; nachfolgende passende Jobs können starten. Vor der Aktivierung muss auch die Pool-Planung kompatibilitätsbewusst werden, damit ein freies älteres Rental keine notwendige kompatible Anmietung verhindert. Alte Kalibrierungsprofile bleiben an ihre gemessene Revision gebunden und dürfen nicht für den Kandidaten verwendet werden.
+
+Ältere Worker lehnen das neue HSL-Feld auch bei `false` ab. Die Vorbereitung entfernt nur dieses deaktivierte Feld aus der Cloud-Kopie und erhält die Originalconfig. Bereits eingefrorene Jobs mit dem Feld müssen erneut vorbereitet werden; ihre unveränderlichen Snapshots werden beim Dispatch nicht umgeschrieben.

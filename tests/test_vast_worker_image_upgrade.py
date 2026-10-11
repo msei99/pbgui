@@ -8,16 +8,16 @@ from tests.test_vast_jobs import job, Provider
 
 
 def test_published_worker_build_uses_pinned_official_pb8():
-    """The candidate build pins official PB8 while preserving the PR overlay."""
+    """The candidate pins official PB8 including the merged fix without overlays."""
     root = Path(__file__).resolve().parents[1] / 'setup' / 'vast_gpu_benchmark'
-    revision = '00ce7d0ddf123071ae67db149753d6b3619f52ac'
-    base_tag = 'pbgui-pb8-worker:upstream-00ce7d0-pr1871-base'
+    revision = 'b9d6692ea41266ecb4ab81d40bb5e5baef29b50a'
+    base_tag = 'pbgui-pb8-worker:upstream-b9d6692-base'
     base = (root / 'Dockerfile').read_text()
     assert 'git clone https://github.com/enarjord/passivbot.git' in base
     assert f'ARG PB8_REVISION={revision}' in base
     assert 'git rev-parse HEAD > /opt/pb8-revision' in base
-    assert 'git apply --check /opt/pbgui/patches/gpu-suite-invalid-metrics.patch' in base
-    assert 'git apply /opt/pbgui/patches/gpu-suite-invalid-metrics.patch' in base
+    assert 'git apply' not in base
+    assert 'gpu-suite-invalid-metrics.patch' not in base
     assert 'rsync' in base
     wrapper = (root / 'Dockerfile.calibration').read_text()
     assert f'FROM {base_tag}' in wrapper
@@ -37,7 +37,10 @@ def test_current_image_has_offline_layer_sizes():
     """The active immutable image keeps byte-weighted pull progress available."""
     from vast_image_layers import IMAGE_LAYERS
     assert IMAGE in IMAGE_LAYERS
-    assert len(IMAGE_LAYERS[IMAGE]) == 28
+    import json
+    receipt = json.loads((Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark/worker_release_b9d6692.json').read_text())
+    assert IMAGE == 'ghcr.io/msei99/pbgui-pb8-worker@' + receipt['digest']
+    assert IMAGE_LAYERS[IMAGE] == {key.split(':')[1][:12]: size for key, size in receipt['layers'].items()}
 
 
 def test_new_calibration_pin_keeps_previous_worker_image_known():
@@ -125,19 +128,22 @@ def test_known_image_with_wrong_revision_is_rejected(job):
         validate_intent(intent, identifier)
 
 
-def test_suite_metric_hotfix_is_a_narrow_checked_backport():
-    """The temporary worker patches only GPU suite metric orchestration."""
+def test_suite_metric_hotfix_is_retired_after_upstream_merge():
+    """New candidate provenance retires overlays while published evidence remains."""
+    import json
     root = Path(__file__).resolve().parents[1] / 'setup' / 'vast_gpu_benchmark'
-    dockerfile = (root / 'Dockerfile.suite-metrics').read_text()
-    patch = (root / 'patches' / 'gpu-suite-invalid-metrics.patch').read_text()
-    assert 'FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:32d7ee7a00330e01e4a2b8856275289eb8ee4b067542b09cfdce5e81c3b3691c' in dockerfile
-    assert 'git apply --check' in dockerfile
-    assert 'git apply /opt/pbgui/patches/gpu-suite-invalid-metrics.patch' in dockerfile
-    assert '061e472e3d400cb3a740583d52f9d46e02eaf781' in dockerfile
-    assert patch.count('diff --git ') == 1
-    assert 'diff --git a/src/optimization/backends/gpu_backend.py b/src/optimization/backends/gpu_backend.py' in patch
-    assert '+        except MetricAggregationError as exc:' in patch
-    assert '+            from optimize import _build_invalid_candidate_metrics' in patch
+    candidate = json.loads((root / 'worker_candidate.json').read_text())
+    published = json.loads((root / 'worker_release.json').read_text())
+    assert candidate['overlays'] == []
+    assert candidate['state'] == 'unpublished_candidate'
+    assert published['base_revision'] == '00ce7d0ddf123071ae67db149753d6b3619f52ac'
+    current = json.loads((root / 'worker_release_b9d6692.json').read_text())
+    assert current['base_revision'] == REVISION
+    assert current['overlays'] == []
+    assert current['anonymous_pull_verified'] is True
+    assert not (root / 'Dockerfile.suite-metrics').exists()
+    assert not (root / 'patches/gpu-suite-invalid-metrics.patch').exists()
+    assert 'gpu-suite-invalid-metrics.patch' not in (root / '.dockerignore').read_text()
 
 
 def test_unpatched_v86_worker_retains_ownership_and_calibration_evidence():

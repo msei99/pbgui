@@ -1,0 +1,82 @@
+{
+    "revision": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
+    "packaging": "26.3",
+    "rust_stamp": "b8bfbfd911185f7e931897f98733997404b1991e40c6a562d5f9f49f44ce6a8e",
+    "worker_import": "ok",
+    "schema_version": 1,
+    "state": "validated_offline_unpublished_candidate",
+    "validated_at": "2026-10-10",
+    "local_image_tag": "pbgui-pb8-worker:upstream-b9d6692-candidate",
+    "local_image_id": "sha256:13203ea6bccfaace7a532f476a0d9102edd39de6c4ed497ab0b2f0c0ff0598f5",
+    "local_uncompressed_size_bytes": 7539163421,
+    "registry_manifest_digest": null,
+    "proposed_publication_tag": "ghcr.io/msei99/pbgui-pb8-worker:b9d6692-upstream-v1",
+    "pip_check": "No broken requirements found.",
+    "native_regressions": {
+        "gpu_metrics_checkpoint_migration": "20 passed, 1007 deselected",
+        "excess_allowance_and_session_artifacts": "60 passed",
+        "config_bridge": {
+            "native_bridge": "prepare/load/save passed",
+            "gpu_nulls": "preserved",
+            "hsl_mode_validation": "passed",
+            "bounds_round_trip": "unchanged"
+        },
+        "nullable_cpu_and_direction_modes": "7 passed, 650 deselected"
+    },
+    "publication_pending": true,
+    "gpu_hardware_validation_pending": true,
+    "paid_recalibration_pending": true,
+    "direction_contract_status": "Native AST parity confirmed for all 14 referenced symbols plus enforce_bounds against the active published source revision",
+    "active_published_image_changed": false,
+    "artifact_sha256": {
+        "setup/vast_gpu_benchmark/Dockerfile": "b4c75a019522122b581abaa72a45518988f0ccfaa56372b27c34a0343018f662",
+        "setup/vast_gpu_benchmark/Dockerfile.calibration": "fcab76d9b0f3edfbfbb0f2749a9ffcf423ca0ff41dcd7d70a7518fda0a1bfdc5",
+        "setup/vast_gpu_benchmark/worker_candidate.json": "9a225e89bdd787dd911496f46899b92a44d5af4bc906f9eb84490ecb4f518aba",
+        "setup/vast_gpu_benchmark/cloud_worker.py": "3803a47bd0d2eb36546d807a3296dbb0205f4f35aae7179b37ba37f5223cff19",
+        "setup/vast_gpu_benchmark/gpu_metric_contract_candidate.json": "24680267222610374d44a53b9413eab6372e0876ab7bbfde569d97ab9902a130",
+        "setup/vast_gpu_benchmark/direction_contract_candidate.json": "ccdd3e2c1c75de8faec8626695d29180e9464b376ec9aa2b481ca64d65976f18",
+        "pb8_config_helper.py": "078fb1c97ef8d3c77df9b00613b51793171db92842bde059588ae3d302405e8d",
+        "vast_worker_compatibility.py": "afa5d5cb7f4dbea51c6f7f5dd25ec826a45fa64bffb3b48217ae49c7f516749e",
+        "vast_config_validation.py": "90f49c672d03b4844c50b35765d7ee5e7deefebd939b8f7d7c7cce5ab455b4a9",
+        "vast_jobs.py": "664009fb5ba7f1ab51a344e1785935bac52e8ee86d5c16660aa1e01f1e0ee209"
+    },
+    "pbgui_full_suite": {
+        "passed": 12488,
+        "skipped": 57,
+        "failed": 2,
+        "duration_seconds": 917.18,
+        "failures": "Two logging-policy audit checks against unchanged .local/sk_doge_research scripts; no PB8 compatibility test failed",
+        "temporary_timeout_seconds": 45,
+        "timeout_failures": 0
+    },
+    "gpu_fix_validation": {
+        "date": "2026-10-10",
+        "runtime": "Local PB8 virtualenv at candidate source revision b9d6692ea; original HSL normalizer loaded from pinned source revision 00ce7d0",
+        "native_probes": {
+            "main": {
+                "native_protocol": "passed",
+                "response_count": 1,
+                "rust_chatter": "stderr",
+                "gpu": "device availability mocked"
+            },
+            "serve": {
+                "native_protocol": "passed",
+                "response_count": 2,
+                "rust_chatter": "stderr",
+                "gpu": "device availability mocked"
+            },
+            "cloud_export": {
+                "original_pinned_hsl_normalizer": "passed for both sides"
+            },
+            "source_config": "unchanged"
+        },
+        "bridge_prepare_load_save_rechecked": true,
+        "pbgui_focused_tests": {
+            "passed": 1414,
+            "skipped": 2
+        },
+        "gpu_hardware_exercised": false,
+        "optimization_started": false,
+        "full_suite_repeated": false
+    }
+}

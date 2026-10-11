@@ -78,6 +78,62 @@ def test_idle_capacity_and_cpu_compatibility(queue):
     assert pool.rental_needed(queue, 'a'*32)
 
 
+@pytest.mark.parametrize('reverse_workers,ordinary_first', [(False, False), (True, True)])
+def test_old_idle_rental_cannot_hide_new_job_capacity_and_mixed_queue_reuses_both(
+        queue, monkeypatch, reverse_workers, ordinary_first):
+    """Each idle slot claims only jobs supported by its frozen image/revision."""
+    import vast_jobs
+    from vast_queue import worker_compatible_jobs
+
+    revision = 'b9d6692ea41266ecb4ab81d40bb5e5baef29b50a'
+    image = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:' + 'e' * 64
+    monkeypatch.setitem(vast_jobs.SUPPORTED_RENTAL_IMAGE_REVISIONS, image, revision)
+
+    def current_profile(store, jobs, **kwargs):
+        if not kwargs:
+            kwargs = {'image': image, 'revision': revision}
+        return worker_compatible_jobs(store, jobs, **kwargs)
+
+    monkeypatch.setattr(pool, 'worker_compatible_jobs', current_profile)
+    if reverse_workers:
+        original_list = queue.store.list
+        monkeypatch.setattr(queue.store, 'list', lambda: list(reversed(original_list())))
+    new_job = add_row(queue, 10)
+    config = queue.store.read(new_job, 'input/optimize.json')
+    config['bot']['long'].setdefault('hsl', {})['scale_budget_with_excess_allowance'] = True
+    write_json(queue.store.directory(new_job) / 'input/optimize.json', config)
+    old_worker = add_row(queue, 1, worker=True)
+    write_json(queue.store.directory(old_worker) / "intent.json", {
+        "image": "ghcr.io/msei99/pbgui-pb8-worker@sha256:47032b1e42076555a29909a9b888cd24efb69dec6ccd80d06ac26b0bc653ac99",
+        "pb8_revision": "00ce7d0ddf123071ae67db149753d6b3619f52ac"})
+    assert pool.rental_needed(queue, 'a' * 32)
+    ordinary = add_row(queue, 11)
+    if ordinary_first:
+        queue.store.update(ordinary, created_at=0)
+    assert pool.rental_needed(queue, 'a' * 32)
+    new_worker = add_row(queue, 2, worker=True)
+    write_json(queue.store.directory(new_worker) / 'intent.json', {'image': image, 'pb8_revision': revision})
+    assert not pool.rental_needed(queue, 'a' * 32)
+    assert queue.store.read(new_job)['status'] == queue.store.read(ordinary)['status'] == 'ready'
+
+
+def test_offer_selection_does_not_query_provider_for_incompatible_jobs(queue, monkeypatch):
+    """Unsupported frozen jobs cannot cause a paid offer search or raise CPU needs."""
+    job = add_row(queue, 10)
+    config = queue.store.read(job, 'input/optimize.json')
+    config['bot']['long'].setdefault('hsl', {})['scale_budget_with_excess_allowance'] = True
+    write_json(queue.store.directory(job) / 'input/optimize.json', config)
+    from vast_queue import worker_compatible_jobs
+    monkeypatch.setattr(pool, 'worker_compatible_jobs', lambda store, jobs: worker_compatible_jobs(
+        store, jobs, image='ghcr.io/msei99/pbgui-pb8-worker@sha256:47032b1e42076555a29909a9b888cd24efb69dec6ccd80d06ac26b0bc653ac99',
+        revision='00ce7d0ddf123071ae67db149753d6b3619f52ac'))
+    monkeypatch.setattr(pool, 'VastClient', lambda *_: pytest.fail('provider must not be queried'))
+    with pytest.raises(VastError, match='No prepared jobs match'):
+        pool.select_offer(queue, queue.read()['pool_authorization']['settings'])
+    assert queue.store.read(job)['status'] == 'ready'
+    assert 'compatible worker' in queue.store.read(job)['error']
+
+
 def test_busy_worker_and_parallel_claims(queue):
     """Three supervisors claim distinct jobs and further jobs keep FIFO order."""
     leases = [add_row(queue, i, worker=True) for i in range(1, 4)]

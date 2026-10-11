@@ -533,93 +533,74 @@ def test_v8_run_editor_distinguishes_adjustments_from_manual_review() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
-def test_backtest_migration_excess_choice_updates_config_and_blocks_unresolved_save() -> None:
-    """The WEL parity decision must be explicit, applied to JSON, and required before Save."""
-    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
-    functions = "\n\n".join(
-        _extract_function(source, name)
-        for name in ("applyMigrationReviewDecision", "ensureMigrationReviewDecisionsResolvedForSave")
-    )
-    script = textwrap.dedent(
-        f"""
+def test_backtest_migration_keeps_age_choice_and_rejects_retired_raw_mode() -> None:
+    """Only the supported coin-age decision can mutate a migration draft."""
+    source = (ROOT / "frontend/v7_backtest.html").read_text()
+    functions = "\n".join(_extract_function(source, name) for name in (
+        "applyMigrationReviewDecision", "ensureMigrationReviewDecisionsResolvedForSave",
+    ))
+    script = textwrap.dedent(f"""
         const assert = require('node:assert/strict');
-        const path = 'bot.long.risk.we_excess_allowance_mode';
-        const group = {{classList: {{remove() {{}}}}}};
-        const textarea = {{
-          value: JSON.stringify({{risk: {{we_excess_allowance_mode: 'bounded'}}}}),
-          closest() {{ return group; }}
-        }};
-        const ageInput = {{value: '30', closest() {{ return group; }}}};
-        const select = {{
-          value: '',
-          focused: false,
-          classList: {{add() {{}}, remove() {{}}}},
-          focus() {{ this.focused = true; }}
-        }};
-        const document = {{
-          getElementById(id) {{
-            if (id === 'cfg-bot-long') return textarea;
-            if (id === 'cfg-min-coin-age') return ageInput;
-            return null;
-          }},
-          querySelectorAll() {{ return [select]; }}
-        }};
+        const path = 'live.minimum_coin_age_days';
+        const ageInput = {{value:'30', closest:() => ({{classList:{{remove() {{}}}}}})}};
+        const select = {{value:'', classList:{{add() {{}},remove() {{}}}}, focus() {{this.focused=true;}}}};
+        const document = {{getElementById:() => ageInput, querySelectorAll:() => [select]}};
         let toastMessage = '';
-        function toast(message) {{ toastMessage = message; }}
-        function botSyncFromJson() {{}}
-        function scheduleStructuredEditorSync() {{}}
-        let _pendingMigrationReport = {{
-          manual_review_required: true,
-          manual_review_fields: [path],
-          dropped_unsupported_fields: [],
-          pbgui_post_migration_review_fields: [path],
-          pbgui_post_migration_adjustments: [],
-          pbgui_review_decisions: [{{code: 'we_excess_allowance_mode', side: 'long', path, resolved: false}}]
-        }};
+        const toast = message => {{toastMessage=message;}};
+        const scheduleStructuredEditorSync = () => {{}};
+        let _pendingMigrationReport = {{manual_review_required:true,manual_review_fields:[path],
+          dropped_unsupported_fields:[],pbgui_post_migration_review_fields:[path],
+          pbgui_review_decisions:[{{code:'minimum_coin_age_days',path,pb8_age_gate_value:30,resolved:false}}]}};
         {functions}
-        assert.equal(ensureMigrationReviewDecisionsResolvedForSave(), false);
-        assert.equal(select.focused, true);
-        assert.match(toastMessage, /before saving/);
-
-        select.value = 'legacy_raw';
-        applyMigrationReviewDecision(0, select);
-        assert.equal(JSON.parse(textarea.value).risk.we_excess_allowance_mode, 'legacy_raw');
-        assert.equal(_pendingMigrationReport.pbgui_review_decisions[0].resolved, true);
-        assert.equal(_pendingMigrationReport.manual_review_required, false);
-        assert.deepEqual(_pendingMigrationReport.manual_review_fields, []);
-        assert.equal(_pendingMigrationReport.status, 'ok_with_adjustments');
-        assert.equal(ensureMigrationReviewDecisionsResolvedForSave(), true);
-
-        const agePath = 'live.minimum_coin_age_days';
-        _pendingMigrationReport = {{
-          manual_review_required: true,
-          manual_review_fields: [agePath],
-          dropped_unsupported_fields: [],
-          pbgui_post_migration_review_fields: [agePath],
-          pbgui_post_migration_adjustments: [],
-          pbgui_review_decisions: [{{
-            code: 'minimum_coin_age_days',
-            path: agePath,
-            pb8_age_gate_value: 30,
-            resolved: false
-          }}]
-        }};
-        select.value = 'pb7_coverage';
-        applyMigrationReviewDecision(0, select);
-        assert.equal(ageInput.value, '0');
-        assert.equal(_pendingMigrationReport.pbgui_review_decisions[0].selected_value, 0);
-        assert.equal(_pendingMigrationReport.manual_review_required, false);
-        """
-    )
-
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+        assert.equal(ensureMigrationReviewDecisionsResolvedForSave(),false);
+        assert.equal(select.focused,true);
+        assert.match(toastMessage,/before saving/);
+        select.value='pb7_coverage';
+        applyMigrationReviewDecision(0,select);
+        assert.equal(ageInput.value,'0');
+        assert.equal(_pendingMigrationReport.pbgui_review_decisions[0].selected_value,0);
+        assert.equal(_pendingMigrationReport.manual_review_required,false);
+        assert.equal(_pendingMigrationReport.status,'ok_with_adjustments');
+        assert.equal(ensureMigrationReviewDecisionsResolvedForSave(),true);
+        select.value='pb8_age_gate';
+        applyMigrationReviewDecision(0,select);
+        assert.equal(ageInput.value,'30');
+        _pendingMigrationReport.pbgui_review_decisions=[{{code:'we_excess_allowance_mode',resolved:false}}];
+        select.value='legacy_raw';
+        applyMigrationReviewDecision(0,select);
+        assert.equal(_pendingMigrationReport.pbgui_review_decisions[0].resolved,false);
+        assert.equal(ageInput.value,'30');
+    """)
+    completed = subprocess.run(["node","-e",script],cwd=ROOT,text=True,capture_output=True,check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
-    assert "legacy_raw — match V7 position sizing" in source
-    assert "bounded — keep PB8 safety cap" in source
+    assert "legacy_raw" not in source
+    assert "we_excess_allowance_mode" not in source
     assert "0 days — match PB7 backtest data coverage" in source
     assert "days — keep PB8 exchange age gate" in source
-    assert "control = document.getElementById('cfg-bot-long');" in source
-    assert "control = document.getElementById('cfg-min-coin-age');" in source
+
+
+def test_backtest_migration_displays_native_behavior_warning_without_choices() -> None:
+    """Native bounded-exposure warnings remain visible without an obsolete selector."""
+    source = (ROOT / "frontend/v7_backtest.html").read_text()
+    function = _extract_function(source, "showMigrationReviewNotice")
+    script = textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const nodes=[];
+        const editor={{prepend(node) {{this.notice=node;}}}};
+        const document={{getElementById:() => editor,createElement(tag) {{
+          const node={{tag,children:[],appendChild(child) {{this.children.push(child);}}}};
+          nodes.push(node);return node;
+        }}}};
+        {function}
+        const warning='Raw/unclamped exposure is no longer supported; review and re-backtest.';
+        showMigrationReviewNotice({{migration_report:{{manual_review_required:false,
+          behavior_change_warnings:[warning],manual_review_fields:[],dropped_unsupported_fields:[]}}}});
+        assert.equal(editor.notice.children[0].textContent,'V7 → V8 conversion completed');
+        assert.ok(nodes.some(node => node.textContent === warning));
+        assert.ok(!nodes.some(node => node.tag === 'select'));
+    """)
+    completed = subprocess.run(["node","-e",script],cwd=ROOT,text=True,capture_output=True,check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_shared_editor_payload_preserves_migration_review_metadata() -> None:

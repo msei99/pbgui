@@ -26,6 +26,56 @@ def _reset_cache(monkeypatch) -> None:
     pb8_config._config_cache.clear()
 
 
+@pytest.mark.parametrize(
+    ("authored", "canonical", "expected"),
+    [
+        ({"optimize": {"n_cpus": None}}, {"optimize": {"n_cpus": None}}, {}),
+        ({"optimize": {"n_cpus": None}}, {"optimize": {"n_cpus": 0}},
+         {"optimize.n_cpus": (None, 0, False, False)}),
+        ({"bot": {"long": {"hsl": {"enabled": True}}}},
+         {"bot": {"long": {"hsl": {"enabled": True, "scale_budget_with_excess_allowance": False}}}},
+         {"bot.long.hsl.scale_budget_with_excess_allowance": (None, False, True, False)}),
+        ({"live": {"retired": None, "mode": "old"}}, {"live": {"mode": "new"}},
+         {"live.retired": (None, None, False, True), "live.mode": ("old", "new", False, False)}),
+        ({"optimize": {"bounds": {"x": [0, 1, 0.1]}}},
+         {"optimize": {"bounds": {"x": [0.0, 1.0, 0.1]}}}, {}),
+        ({"live": {"flag": False, "values": [False]}}, {"live": {"flag": 0, "values": [0]}},
+         {"live.flag": (False, 0, False, False), "live.values": ([False], [0], False, False)}),
+        ({"live": {"flag": False}, "_raw": {"old": True}, "_transform_log": ["old"]},
+         {"live": {"flag": False}}, {}),
+    ],
+)
+def test_editor_reports_native_adjustments_without_writing(tmp_path, authored, canonical, expected):
+    """Opening compares values, distinguishes missing/null/false and preserves disk bytes."""
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(authored))
+    before = path.read_bytes()
+    loaded = pb8_config.load_pb8_editor_config(path, loader=lambda _: canonical, report_changes=True)
+    changes = loaded["param_status"]["config_changes"]
+    assert {key: (value["before"], value["after"], value["added"], value["removed"])
+            for key, value in changes.items()} == expected
+    assert loaded["config"] == canonical
+    assert path.read_bytes() == before
+
+
+def test_editor_reports_defaults_from_real_pb8_template(tmp_path):
+    """A genuine template supplies new defaults without manufacturing an old schema."""
+    canonical = json.loads((Path(__file__).parent / "fixtures" / "pb8_october_template.json").read_text())["config"]
+    authored = json.loads(json.dumps(canonical))
+    del authored["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"]
+    authored["optimize"]["n_cpus"] = canonical["optimize"]["n_cpus"] = None
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(authored))
+    loaded = pb8_config.load_pb8_editor_config(path, loader=lambda _: canonical, report_changes=True)
+    assert set(loaded["param_status"]["config_changes"]) == {"bot.long.hsl.scale_budget_with_excess_allowance"}
+    assert loaded["config"]["optimize"]["n_cpus"] is None
+
+
+def test_regular_editor_loader_does_not_enable_change_reporting(tmp_path):
+    """Existing Live and Backtest callers retain their original loader contract."""
+    assert pb8_config.load_pb8_editor_config(tmp_path / "unused.json", loader=lambda _: {"bot": {}}) == {"config": {"bot": {}}}
+
+
 def test_prepare_pb8_config_delegates_to_isolated_helper(monkeypatch) -> None:
     """In-memory configs must be prepared by the PB8 helper, not imported locally."""
     calls = []
@@ -532,6 +582,37 @@ def test_helper_serve_handles_multiple_requests_without_exit(monkeypatch) -> Non
         {"ok": True, "result": {"value": 1}},
         {"ok": True, "result": {"value": 2}},
     ]
+
+
+@pytest.mark.parametrize('mode', ['main', 'serve'])
+@pytest.mark.parametrize('fails', [False, True])
+def test_helper_protocol_routes_native_stdout_to_stderr(monkeypatch, mode, fails) -> None:
+    """Rust import chatter cannot corrupt JSON responses, including error replies."""
+    def native_operation(payload):
+        """Model the real Rust status print before preflight completion or failure."""
+        pb8_config_helper.sys.stdout.write('passivbot_rust already imported; using existing binary.\n')
+        pb8_config_helper.sys.stderr.write('INFO GPU capability preflight passed\n')
+        if fails:
+            raise ValueError('invalid GPU config')
+        return {'value': payload['value']}
+
+    monkeypatch.setattr(pb8_config_helper, 'handle', native_operation)
+    requests = [{'value': 1}] if mode == 'main' else [{'value': 1}, {'value': 2}]
+    stdin = io.StringIO('\n'.join(json.dumps(item) for item in requests) + '\n')
+    stdout, stderr = io.StringIO(), io.StringIO()
+    monkeypatch.setattr(pb8_config_helper.sys, 'stdin', stdin)
+    monkeypatch.setattr(pb8_config_helper.sys, 'stdout', stdout)
+    monkeypatch.setattr(pb8_config_helper.sys, 'stderr', stderr)
+
+    code = getattr(pb8_config_helper, mode)()
+    responses = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    expected = ([{'ok': False, 'error': 'ValueError', 'detail': 'invalid GPU config'}] * len(requests)
+                if fails else [{'ok': True, 'result': item} for item in requests])
+    assert responses == expected
+    assert code == (1 if mode == 'main' and fails else 0)
+    assert stderr.getvalue().count('passivbot_rust already imported') == len(requests)
+    assert 'GPU capability preflight passed' in stderr.getvalue()
+    assert pb8_config_helper.sys.stdout is stdout
 
 
 def test_migration_helper_interrupt_wakes_shutdown_without_io_lock(monkeypatch) -> None:

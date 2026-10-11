@@ -5,10 +5,11 @@ from pathlib import Path
 
 from vast_exchanges import SUPPORTED_EXCHANGES
 from vast_scenarios import scenario_plan
+from vast_worker_compatibility import worker_compatibility_errors
 
 SERVICE = 'Vast'
-PROFILE_IMAGE = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:47032b1e42076555a29909a9b888cd24efb69dec6ccd80d06ac26b0bc653ac99'
-PROFILE_REVISION = '00ce7d0ddf123071ae67db149753d6b3619f52ac'
+PROFILE_IMAGE = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae'
+PROFILE_REVISION = 'b9d6692ea41266ecb4ab81d40bb5e5baef29b50a'
 _METRIC_CONTRACT = json.loads((Path(__file__).resolve().parent / 'setup/vast_gpu_benchmark/gpu_metric_contract.json').read_text())
 METRICS = frozenset(_METRIC_CONTRACT['allowed_metrics'])
 if METRICS.intersection(_METRIC_CONTRACT['exact_only_metrics']):
@@ -60,6 +61,8 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
     if image != PROFILE_IMAGE or revision != PROFILE_REVISION:
         error('worker.image', 'No validated GPU profile exists for this worker image/revision. Update the compatibility rules before queueing.')
     source = obj(config, 'config')
+    for item in worker_compatibility_errors(source, revision, for_preparation=True):
+        error(item['path'], item['message'])
     if source.get('_fine_tune_anchor_plan'):
         error('_fine_tune_anchor_plan', 'Fine-tune anchor plans are not supported by the cloud direction preflight.')
     live = obj(source.get('live'), 'live')
@@ -123,7 +126,7 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
     if bt.get('btc_collateral_cap'):
         error('backtest.btc_collateral_cap', 'BTC collateral is not supported by this cloud profile.')
     iterations = opt.get('iters', 512) if iterations is None else iterations
-    workers = (gpu.get('exact_workers') or opt.get('n_cpus', 4)) if workers is None else workers
+    workers = (gpu.get('exact_workers') or opt.get('n_cpus') or 4) if workers is None else workers
     if type(iterations) is not int or not 256 <= iterations <= 10_000_000:
         error('optimize.iters', 'Choose 256–10,000,000 iterations.')
     if type(workers) is not int or not 1 <= workers <= 64:

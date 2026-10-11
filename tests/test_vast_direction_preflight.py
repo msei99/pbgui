@@ -125,7 +125,12 @@ def test_uncheckable_input_is_deferred_not_failed(queue, snapshot):
     with pytest.raises(VastError):
         queue.start({'id': 42, 'machine_id': 7}, 1, 1, 300)
     state = queue.store.read(row['id'])
-    assert state['status'] == 'ready' and 'cannot be checked' in state['error']
+    assert state['status'] == 'ready'
+    if snapshot is None:
+        assert 'Cannot verify the prepared job' in state['error']
+        assert 'Prepare the job again' in state['error']
+    else:
+        assert 'cannot be checked' in state['error']
     assert not queue.calls
 
 

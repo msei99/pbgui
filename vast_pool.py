@@ -17,7 +17,7 @@ from vast_credentials import VastCredentialStore
 from vast_hosts import offer_priority, search_host_offers
 from vast_jobs import PROJECT, TERMINAL, job_id, services_available
 from vast_provider import VastClient, VastError, gpu_name_matches
-from vast_queue import CloudQueue, blocked_machine_ids, offer_host_allowed
+from vast_queue import CloudQueue, blocked_machine_ids, offer_host_allowed, worker_compatible_jobs
 
 SERVICE = 'VastPool'
 MAX_RENTALS = 16
@@ -46,10 +46,10 @@ def rental_needed(queue: CloudQueue, authorization_id: str) -> bool:
     active = [r for r in rows if r.get('rental_state') not in ('none', 'deletion_verified')]
     if len(active) >= pool_limit(state):
         return False
-    waiting = queue.waiting()
+    waiting = worker_compatible_jobs(queue.store, queue.waiting())
     if not waiting:
         return False
-    unclaimed = list(waiting)
+    idle_slots = []
     for worker in active:
         if worker.get('kind') != 'worker':
             continue
@@ -62,11 +62,34 @@ def rental_needed(queue: CloudQueue, authorization_id: str) -> bool:
                    and row.get('status') != 'ready' for row in rows)
         if not busy:
             cores = worker.get('allocated_cpus', worker.get('workers', 1))
-            candidate = next((row for row in unclaimed
-                              if row.get('auto_cpu_workers') or row.get('workers', 1) <= cores), None)
-            if candidate is not None:
-                unclaimed.remove(candidate)
-    return bool(unclaimed)
+            try:
+                intent = queue.store.read(worker['id'], 'intent.json')
+                compatible = worker_compatible_jobs(
+                    queue.store, waiting, image=intent.get('image'),
+                    revision=intent.get('pb8_revision'), report_errors=False)
+            except (VastError, OSError, ValueError, TypeError) as exc:
+                _log(SERVICE, 'Cannot count worker capacity with an invalid image/revision intent',
+                     level='WARNING', meta={'error_type': type(exc).__name__})
+                continue
+            idle_slots.append([row['id'] for row in compatible
+                               if row.get('auto_cpu_workers') or row.get('workers', 1) <= cores])
+    claims = {}
+
+    def claim(slot, seen):
+        """Reassign flexible workers so queue order cannot waste compatible slots."""
+        for identifier in idle_slots[slot]:
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+            previous = claims.get(identifier)
+            if previous is None or claim(previous, seen):
+                claims[identifier] = slot
+                return True
+        return False
+
+    for slot in range(len(idle_slots)):
+        claim(slot, set())
+    return len(claims) < len(waiting)
 
 
 def select_offer(queue: CloudQueue, settings: dict) -> dict:
@@ -74,7 +97,9 @@ def select_offer(queue: CloudQueue, settings: dict) -> dict:
     keys = ('gpu_name', 'max_price', 'min_vram', 'min_ram', 'min_cpu', 'min_tflops',
             'min_power_watts', 'min_reliability_pct', 'disk_gb', 'verified_only')
     preferences = {k: settings.get(k, 0) if k in ('min_power_watts', 'min_reliability_pct') else settings[k] for k in keys}
-    waiting = queue.waiting()
+    waiting = worker_compatible_jobs(queue.store, queue.waiting())
+    if not waiting:
+        raise VastError('No prepared jobs match the current worker image; prepare compatible input first', 409)
     preferences['min_cpu'] = max(preferences['min_cpu'], max(
         (1 if row.get('auto_cpu_workers') else row['workers'] for row in waiting), default=1))
     state = queue.read()

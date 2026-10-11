@@ -1,4 +1,4 @@
-"""Compressed layer sizes from pinned public worker manifests (2026-09-22).
+"""Compressed layer sizes from pinned public worker manifests (through 2026-10-11).
 
 Keys are Docker's unique 12-character layer digest prefixes. Update this catalog
 alongside IMAGE when publishing a new worker; unknown images use layer counts.
@@ -8,6 +8,35 @@ No registry credentials or runtime network requests are needed.
 SERVICE = 'VastRunner'
 
 IMAGE_LAYERS = {
+    'ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae': {
+        'b4e4c0127190': 49584944,
+        '08457856946d': 24056247,
+        '8cab6ce149c2': 64413065,
+        '01a6a9ffe665': 211662335,
+        '9fc491314404': 6162299,
+        'cbbcd353f76c': 25718575,
+        '02a27392fe49': 250,
+        '089e58efa067': 410690697,
+        '78e505c5e013': 541315960,
+        '48fa823e6832': 201811306,
+        '3cd3c8026367': 1001863,
+        '62d0b2b7063d': 248,
+        '13c7c45de30d': 820822119,
+        'd63410711823': 375407644,
+        '6df818d6e8f5': 366946722,
+        '890c9b827d68': 206185826,
+        '9aa1e9fb22a5': 61014740,
+        '4a6514d81cd4': 170720641,
+        '59eeb9255a06': 90246311,
+        'af2fd34fae69': 825223,
+        '9e513bd64509': 10459318,
+        'ed1cc996bc3f': 144080058,
+        'd277b6d2b156': 1301,
+        '804cb05b204d': 402,
+        'e74abf5b0a70': 2599,
+        'cb565a09c14d': 94,
+        '722749f1f2e1': 11825,
+    },
     'ghcr.io/msei99/pbgui-pb8-worker@sha256:bc330893bef1864065dc21835faac725e551383c3455ad4c5908a6713417268e': {
         'b4e4c0127190': 49584944, '08457856946d': 24056247,
         '8cab6ce149c2': 64413065, '01a6a9ffe665': 211662335,

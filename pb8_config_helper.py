@@ -9,6 +9,7 @@ import importlib.util
 import json
 import platform
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 
 _OPTIMIZE_METADATA_CACHE: dict[str, dict] = {}
@@ -823,6 +824,21 @@ def _optimize_metadata(modules: dict, *, include_backend: bool = True) -> dict:
     }
 
 
+def _sanitize_for_editor(modules: dict, prepared: dict, source: dict) -> dict:
+    """Keep validated explicit GPU CPU auto values through PB8's dump cleaner."""
+    source = source.get("config", source)
+    source_optimize = source.get("optimize") or {}
+    prepared_optimize = prepared.get("optimize") or {}
+    preserve_auto = (isinstance(source_optimize, dict)
+            and "n_cpus" in source_optimize and source_optimize["n_cpus"] is None
+            and prepared_optimize.get("backend") == "gpu"
+            and prepared_optimize.get("n_cpus") is None)
+    sanitized = modules["sanitize"](prepared)
+    if preserve_auto:
+        sanitized["optimize"]["n_cpus"] = None
+    return sanitized
+
+
 def _prepare(modules: dict, config: dict, base_config_path: str = "") -> dict:
     """Return a clean canonical PB8 config suitable for persistence."""
     candidate = copy.deepcopy(config)
@@ -838,7 +854,7 @@ def _prepare(modules: dict, config: dict, base_config_path: str = "") -> dict:
         raw_snapshot=candidate,
         effective_snapshot=candidate,
     )
-    sanitized = modules["sanitize"](prepared)
+    sanitized = _sanitize_for_editor(modules, prepared, candidate)
     if pbgui_metadata is not None:
         sanitized["pbgui"] = copy.deepcopy(pbgui_metadata)
     return sanitized
@@ -1119,7 +1135,7 @@ def handle(payload: dict) -> dict:
             runtime=None,
             log_info=False,
         )
-        sanitized = modules["sanitize"](prepared)
+        sanitized = _sanitize_for_editor(modules, prepared, raw_config)
         if pbgui_metadata is not None:
             sanitized["pbgui"] = copy.deepcopy(pbgui_metadata)
         return {"config": sanitized}
@@ -1158,7 +1174,11 @@ def _response(payload) -> dict:
     try:
         if not isinstance(payload, dict):
             raise TypeError("request must be an object")
-        return {"ok": True, "result": handle(payload)}
+        # Native imports (notably optimize/backtest's Rust checks) may print.
+        # stdout is exclusively the JSON protocol in both main and serve.
+        with redirect_stdout(sys.stderr):
+            result = handle(payload)
+        return {"ok": True, "result": result}
     except Exception as exc:
         return {
             "ok": False,

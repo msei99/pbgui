@@ -408,6 +408,7 @@ class TestV7OptimizeBackendLogic:
         }
 
         var __fields = buildFields();
+        var optimizeEditorAdapter = { isV8: false };
         var __visibility = { showPymoo: true, showDeap: false, showNsga3: false, effectiveAlgorithm: 'nsga2', objectiveCount: 1, algorithm: 'auto' };
         var __scheduled = 0;
 
@@ -477,6 +478,7 @@ class TestV7OptimizeBackendLogic:
                 "resolveOptimizePymooEffectiveRefDirPartitions",
                 "getCurrentOptimizePymooMinimumPopulationSize",
                 "updateOptimizeBackendSections",
+                "updateOptimizeCpuCountInput",
             ],
             bootstrap=bootstrap,
             assertions=assertions,

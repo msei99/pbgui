@@ -161,9 +161,37 @@
       activeHslPath: function (key, mode) {
         if (!isV8) return true;
         var clean = String(key || '').replace(/^bot\./, '');
+        if (/\.hsl\.scale_budget_with_excess_allowance$/.test(clean)) return mode === 'coin';
         if (/^(long|short)\.hsl(?:\.|$)/.test(clean)) return mode !== 'unified';
         if (/^hsl(?:\.|$)/.test(clean)) return mode === 'unified';
         return true;
+      },
+      applyHslBudgetScaling: function (config) {
+        // One-time import of persisted overrides when populating the editor.
+        if (!isV8) return;
+        var overrides = object(object(config.optimize).fixed_runtime_overrides);
+        ['long', 'short'].forEach(function (side) {
+          var key = 'bot.' + side + '.hsl.scale_budget_with_excess_allowance';
+          if (!Object.prototype.hasOwnProperty.call(overrides, key)) return;
+          var value = overrides[key];
+          if (typeof value !== 'boolean') return; // Native validation reports invalid raw values.
+          config.bot = object(config.bot);
+          config.bot[side] = object(config.bot[side]);
+          config.bot[side].hsl = object(config.bot[side].hsl);
+          config.bot[side].hsl.scale_budget_with_excess_allowance = value;
+          delete overrides[key];
+        });
+      },
+      validateHslBudgetScaling: function (config) {
+        if (!isV8 || object(config.live).hsl_signal_mode === 'coin') return;
+        var overrides = object(object(config.optimize).fixed_runtime_overrides);
+        ['long', 'short'].forEach(function (side) {
+          var key = 'bot.' + side + '.hsl.scale_budget_with_excess_allowance';
+          if (object(object(object(config.bot)[side]).hsl).scale_budget_with_excess_allowance === true
+              || overrides[key] === true) {
+            throw new Error(side + ' HSL budget scaling requires coin HSL mode. Select coin mode or explicitly disable scaling.');
+          }
+        });
       },
       metadataApiBase: function () {
         return apiBase.replace(/\/optimize-v[78]$/, isV8 ? '/v8' : '/v7');
@@ -341,6 +369,16 @@
               type: 'boolean',
               defaultValue: hsl.enabled === true,
               tip: 'Enable ' + side + '-side equity hard stop behavior during optimizer evaluations.'
+            });
+            if (Object.prototype.hasOwnProperty.call(hsl, 'scale_budget_with_excess_allowance')) mergeRuntimeOverride({
+              key: 'bot.' + side + '.hsl.scale_budget_with_excess_allowance',
+              label: sideLabel + ' HSL budget scaling',
+              side: side,
+              storage: 'bot_hsl',
+              botKey: 'scale_budget_with_excess_allowance',
+              type: 'boolean',
+              defaultValue: hsl.scale_budget_with_excess_allowance === true,
+              tip: 'Coin HSL only: scale the HSL budget with bounded excess allowance. Global policy per side; not a coin override.'
             });
             if (Object.prototype.hasOwnProperty.call(hsl, 'no_restart_drawdown_threshold')) mergeRuntimeOverride({
               key: 'bot.' + side + '.hsl.no_restart_drawdown_threshold',

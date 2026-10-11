@@ -781,10 +781,54 @@ def load_pb8_config(path: Path | str) -> dict:
     return copy.deepcopy(config)
 
 
-def load_pb8_editor_config(path: Path | str, *, loader=None) -> dict:
-    """Open legacy HSL as an unsaved native migration draft with change markers."""
+def _editor_config_changes(original: dict, prepared: dict) -> dict:
+    """Compare authored and canonical JSON values without confusing null or false."""
+    def flatten(value, prefix=""):
+        result = {}
+        if isinstance(value, dict) and value:
+            for key, child in value.items():
+                if not prefix and key in {"_raw", "_transform_log", "_pbgui_param_status"}:
+                    continue
+                result.update(flatten(child, f"{prefix}.{key}" if prefix else key))
+        else:
+            result[prefix] = value
+        return result
+
+    def equal(left, right):
+        if isinstance(left, bool) != isinstance(right, bool):
+            return False
+        if isinstance(left, dict) and isinstance(right, dict):
+            return left.keys() == right.keys() and all(equal(left[key], right[key]) for key in left)
+        if isinstance(left, list) and isinstance(right, list):
+            return len(left) == len(right) and all(equal(a, b) for a, b in zip(left, right))
+        return left == right
+
+    before, after = flatten(original), flatten(prepared)
+    return {
+        path: {
+            "path": path, "added": path not in before, "removed": path not in after,
+            "before": copy.deepcopy(before.get(path)), "after": copy.deepcopy(after.get(path)),
+        }
+        for path in sorted(before.keys() | after.keys())
+        if path not in before or path not in after or not equal(before[path], after[path])
+    }
+
+
+def load_pb8_editor_config(path: Path | str, *, loader=None, report_changes: bool = False) -> dict:
+    """Open an unsaved editor draft, optionally reporting every native adjustment."""
     try:
-        return {"config": (loader or load_pb8_config)(path)}
+        config = (loader or load_pb8_config)(path)
+        result = {"config": config}
+        if report_changes:
+            source = Path(path).resolve()
+            try:
+                original = json.loads(read_regular_file_nofollow(source, source.parent))
+                if not isinstance(original, dict):
+                    raise ValueError("PB8 config must be a JSON object")
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise PB8ConfigurationError(f"Cannot read original PB8 editor config: {exc}") from exc
+            result["param_status"] = {"config_changes": _editor_config_changes(original, config)}
+        return result
     except PB8ConfigurationError as exc:
         if "migrate-hsl" not in str(exc):
             raise

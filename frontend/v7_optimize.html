@@ -20,7 +20,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - V7 Optimize</title>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
-<script src="/app/js/optimize_editor_adapter.js?v=14"></script>
+<script src="/app/js/optimize_editor_adapter.js?v=16"></script>
 <script src="/app/js/floating_window.js?v=1"></script>
 <script src="/app/js/pb8_loop_instructions.js?v=2"></script>
 <script src="/app/js/pb8_loop_optimizer.js?v=43"></script>
@@ -469,6 +469,9 @@ body.pb8-runtime-warning-visible #page-body { height: calc(100vh - 94px); }
   .editor-status-inline:empty { display: none; }
 .editor-status-inline.ok { color: var(--green); }
 .editor-status-inline.err { color: var(--red); }
+.opt-config-changes { margin-bottom: 8px; min-width: 0; }
+.opt-config-changes summary { color: var(--orange); cursor: pointer; }
+.opt-config-changes pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-size: var(--fs-sm); }
 .editor-grid-note {
   font-size: var(--fs-sm);
   color: var(--text-dim);
@@ -5072,6 +5075,15 @@ function fieldNumber2(id, label, value, step, tip, span, placeholder, nullableAu
 }
 
 function fieldOptimizeCpuCount2(id, label, value, step, tip, span) {
+  if (optimizeEditorAdapter.isV8) {
+    var limit = optimizeCpuCountLimit();
+    return fmtGroupSpan(id, label,
+      '<div class="num-stepper">' +
+      '<button type="button" class="stepper-btn" onclick="stepOptimizeCpuCount(\'' + id + '\', -1)">−</button>' +
+      '<input type="number" id="' + id + '" value="' + esc(String(value == null ? '' : value)) + '" step="1" min="1" max="' + limit + '">' +
+      '<button type="button" class="stepper-btn" onclick="stepOptimizeCpuCount(\'' + id + '\', 1)">+</button>' +
+      '</div>', tip + ' Host limit: ' + limit + ' workers. Blank means Auto only for the GPU backend.', span || 1);
+  }
   var cpuLimit = optimizeCpuCountLimit();
   var rendered = esc(String(normalizeOptimizeCpuCount(value, 1)));
   return fmtGroupSpan(id, label,
@@ -5080,6 +5092,43 @@ function fieldOptimizeCpuCount2(id, label, value, step, tip, span) {
     '<input type="number" id="' + id + '" value="' + rendered + '" step="' + step + '" min="1" max="' + cpuLimit + '" oninput="this.value=String(normalizeOptimizeCpuCount(this.value, 1))" onchange="this.value=String(normalizeOptimizeCpuCount(this.value, 1))">' +
     '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'' + id + '\');i.value=String(normalizeOptimizeCpuCount(Number(i.value || 0)+' + step + ', 1))">+</button>' +
     '</div>', tip + ' Limited to ' + cpuLimit + ' on this host.', span || 1);
+}
+
+function updateOptimizeCpuCountInput() {
+  if (!optimizeEditorAdapter.isV8) return;
+  var input = el('opted-n-cpus');
+  var backend = el('opted-opt-backend');
+  if (!input || !backend) return;
+  var auto = normalizeOptimizeBackendValue(backend.value) === 'gpu';
+  input.placeholder = auto ? 'Auto' : '1';
+  input.required = !auto;
+  input.min = '1';
+  input.max = String(optimizeCpuCountLimit());
+}
+
+function stepOptimizeCpuCount(id, direction) {
+  var input = el(id);
+  if (!input) return;
+  var backend = el('opted-opt-backend');
+  var auto = optimizeEditorAdapter.isV8 && backend && normalizeOptimizeBackendValue(backend.value) === 'gpu';
+  var value = Number(input.value);
+  if (direction < 0 && auto && (input.value === '' || value <= 1)) input.value = '';
+  else input.value = String(Math.max(1, Math.min(optimizeCpuCountLimit(),
+    input.value === '' || !Number.isFinite(value) ? 1 : Math.trunc(value) + direction)));
+}
+
+function collectOptimizeCpuCount(value, backend, strict) {
+  var auto = optimizeEditorAdapter.isV8 && normalizeOptimizeBackendValue(backend) === 'gpu';
+  var empty = value == null || String(value).trim() === '';
+  var number = empty ? null : Number(value);
+  if (strict && ((!auto && empty) || (!empty && (!Number.isInteger(number) || number < 1)))) {
+    throw new Error('n_cpus requires a positive integer; Auto is available only for the PB8 GPU backend.');
+  }
+  if (strict && optimizeEditorAdapter.isV8 && number > optimizeCpuCountLimit()) {
+    throw new Error('n_cpus exceeds the host limit of ' + optimizeCpuCountLimit() + ' workers.');
+  }
+  if (!optimizeEditorAdapter.isV8) return normalizeOptimizeCpuCount(value, 1);
+  return empty ? (auto ? null : 1) : number;
 }
 
 function fieldOptimizeProbability2(id, label, value, tip, span, fieldName) {
@@ -6848,9 +6897,12 @@ function renderOptimizeRuntimeOverridesEditor() {
       var value = hasRuntimeValue
         ? state.runtimeOverrideValues[field.key]
         : (field.defaultValue === undefined ? field.defaultValueText : field.defaultValue);
-      if (!hasRuntimeValue && field.storage === 'bot_hsl') {
+      if (field.storage === 'bot_hsl' && (!hasRuntimeValue || field.botKey === 'scale_budget_with_excess_allowance')) {
         var bot = ((state.editorLastConfig || {}).bot || {});
-        value = optimizeEditorAdapter.getBotHslValue(bot[field.side] || {}, field.botKey, value);
+        var sideBot = bot[field.side] || {};
+        var textarea = el('opted-bot-' + field.side);
+        try { if (textarea) sideBot = JSON.parse(textarea.value); } catch (error) {}
+        value = optimizeEditorAdapter.getBotHslValue(sideBot, field.botKey, value);
       }
       var label = field.label || field.key;
       var tip = field.tip || ('Optimize-only runtime override for ' + field.key + '.');
@@ -6985,8 +7037,10 @@ function toggleOptimizeRuntimeOverrideCheckbox(key, checked) {
   var cleanKey = String(key || '').trim();
   if (!cleanKey) return;
   state.runtimeOverrideValues = state.runtimeOverrideValues || {};
-  state.runtimeOverrideValues[cleanKey] = !!checked;
   var field = getOptimizeRuntimeOverrideFieldMeta(cleanKey);
+  if (field && field.storage === 'bot_hsl' && field.botKey === 'scale_budget_with_excess_allowance') {
+    delete state.runtimeOverrideValues[cleanKey];
+  } else state.runtimeOverrideValues[cleanKey] = !!checked;
   if (field && field.storage === 'bot_hsl') {
     setOptimizeBotHslField(field.side, field.botKey, !!checked);
   }
@@ -7178,11 +7232,11 @@ function collectOptimizeRuntimeOverrides(opts) {
       if (!optimizeEditorAdapter.activeHslPath(key, mode)) delete result[key];
     });
     OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.forEach(function(field) {
-      if (!optimizeEditorAdapter.activeHslPath(field.key, mode)) return;
       if (field.storage === 'bot_hsl') {
         delete result[field.key];
         return;
       }
+      if (!optimizeEditorAdapter.activeHslPath(field.key, mode)) return;
       var hasValue = Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues || {}, field.key);
       var value = hasValue ? state.runtimeOverrideValues[field.key] : fallback[field.key];
       if (value === undefined || value === null || String(value).trim() === '') return;
@@ -7826,9 +7880,9 @@ function collectOptimizeGpuSettings(optimize, strict) {
     if ((!Number.isInteger(value) || value <= 0) && strict) throw new Error(label + ' must be a positive integer or blank for auto.');
     return Math.max(1, Math.round(value));
   }
-  function nonnegativeInteger(id, label) {
+  function nonnegativeInteger(id, label, allowAuto) {
     var value = toNullableNumber(el(id).value);
-    if (value == null) value = 0;
+    if (value == null) return allowAuto ? null : 0;
     if ((!Number.isInteger(value) || value < 0) && strict) throw new Error(label + ' must be a non-negative integer.');
     return Math.max(0, Math.round(value));
   }
@@ -7836,8 +7890,8 @@ function collectOptimizeGpuSettings(optimize, strict) {
   if (supports('population_size')) gpu.population_size = nullablePositiveInteger('opted-gpu-population-size', 'GPU population_size');
   if (supports('batch_size')) gpu.batch_size = nullablePositiveInteger('opted-gpu-batch-size', 'GPU batch_size');
   if (supports('max_dispatch_candidate_bars')) gpu.max_dispatch_candidate_bars = nullablePositiveInteger('opted-gpu-max-dispatch-bars', 'GPU max_dispatch_candidate_bars');
-  if (supports('exact_workers')) gpu.exact_workers = nonnegativeInteger('opted-gpu-exact-workers', 'GPU exact_workers');
-  if (supports('max_pending_exact')) gpu.max_pending_exact = nonnegativeInteger('opted-gpu-max-pending-exact', 'GPU max_pending_exact');
+  if (supports('exact_workers')) gpu.exact_workers = nonnegativeInteger('opted-gpu-exact-workers', 'GPU exact_workers', true);
+  if (supports('max_pending_exact')) gpu.max_pending_exact = nonnegativeInteger('opted-gpu-max-pending-exact', 'GPU max_pending_exact', true);
   if (supports('validate_per_generation')) gpu.validate_per_generation = nullablePositiveInteger('opted-gpu-validate-generation', 'GPU validate_per_generation') || 8;
   if (supports('checkpoint_interval_seconds')) gpu.checkpoint_interval_seconds = toNumberOr(el('opted-gpu-checkpoint-seconds').value, 5);
   if (supports('drift_probes')) gpu.drift_probes = nonnegativeInteger('opted-gpu-drift-probes', 'GPU drift_probes');
@@ -8122,7 +8176,8 @@ function optimizeCpuCountLimit() {
   return limit == null ? 1 : limit;
 }
 
-function normalizeOptimizeCpuCount(value, fallbackValue) {
+function normalizeOptimizeCpuCount(value, fallbackValue, allowAuto) {
+  if (allowAuto && (value == null || String(value).trim() === '')) return null;
   var normalized = normalizeOptimizePositiveInteger(value);
   var fallback = normalizeOptimizePositiveInteger(fallbackValue);
   if (normalized == null) normalized = fallback == null ? 1 : fallback;
@@ -8337,6 +8392,7 @@ function updateOptimizeGpuHalvingFields() {
 }
 
 function updateOptimizeBackendSections() {
+  updateOptimizeCpuCountInput();
   var visibility = optimizeSectionVisibility();
   var pymooSection = el('optimize-pymoo-section');
   var deapSection = el('optimize-deap-section');
@@ -9142,8 +9198,26 @@ function optBotSyncFromJson(side) {
     var nposEl = document.getElementById('opted-' + side + '-npos');
     if (tweEl) tweEl.value = optimizeEditorAdapter.getBotValue(obj, 'total_wallet_exposure_limit', tweEl.value);
     if (nposEl) nposEl.value = optimizeEditorAdapter.getBotValue(obj, 'n_positions', nposEl.value);
+    if (optimizeEditorAdapter.isV8) {
+      renderOptimizeRuntimeOverridesEditor();
+      scheduleStructuredEditorSync();
+      updateOptimizeHslBudgetScalingValidation();
+    }
   } catch (error) {}
   autoResizeTa(textarea);
+}
+
+function updateOptimizeHslBudgetScalingValidation() {
+  if (!optimizeEditorAdapter.isV8) return;
+  try {
+    optimizeEditorAdapter.validateHslBudgetScaling(collectEditorConfig(null, { strict: false }).config);
+    var status = editorStatusNode();
+    if (status && /HSL budget scaling requires coin HSL mode/.test(status.textContent)) {
+      setPageEditorStatus('', '');
+    }
+  } catch (error) {
+    setPageEditorStatus(error.message, 'err');
+  }
 }
 
 function setOptimizeBotBoolField(side, key, value) {
@@ -9445,6 +9519,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
   var endDate = resolveOptimizeEditorEndDateValue(backtest.end_date);
   return '<div class="editor-shell">'
     + '<div id="cfg-editor-status" class="editor-status-inline"></div>'
+    + '<details id="opted-config-changes" class="opt-config-changes" hidden><summary></summary><pre></pre></details>'
 
     + '<div class="form-row cols-8">'
       + fieldText2('opted-name', 'config_name', name || '', true, 'my_optimize_config', 'Name of this optimize configuration.', 2)
@@ -9610,8 +9685,8 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
         + fieldNumber2('opted-gpu-batch-size', 'batch_size', gpu.batch_size == null ? '' : gpu.batch_size, 1, 'Optional override. Leave blank for PBGui to choose after GPU rental.', 1, optimizeGpuAutoPlaceholder('batch_size'), true)
         + fieldNumber2('opted-gpu-max-dispatch-bars', 'max_dispatch_candidate_bars', gpu.max_dispatch_candidate_bars == null ? '' : gpu.max_dispatch_candidate_bars, 1, 'Optional override. Leave blank for PBGui to choose after GPU rental.', 1, optimizeGpuAutoPlaceholder('max_dispatch_candidate_bars'), true)
         + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Exact validation &amp; checkpointing</div>'
-        + fieldNumber2('opted-gpu-exact-workers', 'exact_workers', gpu.exact_workers == null ? 0 : gpu.exact_workers, 1, 'Zero inherits optimize.n_cpus for exact Rust validation.', 1)
-        + fieldNumber2('opted-gpu-max-pending-exact', 'max_pending_exact', gpu.max_pending_exact == null ? 0 : gpu.max_pending_exact, 1, 'Zero lets PB8 derive the pending exact-validation limit.', 1)
+        + fieldNumber2('opted-gpu-exact-workers', 'exact_workers', gpu.exact_workers, 1, 'Blank enables automatic sizing when tuning is enabled. Zero inherits optimize.n_cpus; a positive number fixes the worker count.', 1, 'Auto')
+        + fieldNumber2('opted-gpu-max-pending-exact', 'max_pending_exact', gpu.max_pending_exact, 1, 'Blank enables automatic queue tuning. Zero uses the native derived limit; a positive number fixes it.', 1, 'Auto')
         + fieldNumber2('opted-gpu-validate-generation', 'validate_per_generation', gpu.validate_per_generation == null ? 8 : gpu.validate_per_generation, 1, 'Exact Rust validations submitted per GPU generation.', 1)
         + fieldNumber2('opted-gpu-checkpoint-seconds', 'checkpoint_interval_seconds', gpu.checkpoint_interval_seconds == null ? 5 : gpu.checkpoint_interval_seconds, 0.5, 'Seconds between durable GPU checkpoints.', 1)
       + '</div>'
@@ -9695,7 +9770,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 
     + '<div class="form-row cols-8">'
       + fieldNumber2('opted-iters', 'iters', optimize.iters == null ? 100000 : optimize.iters, 1000, 'Number of optimize iterations/evaluations.', 1)
-      + fieldOptimizeCpuCount2('opted-n-cpus', 'n_cpus', optimize.n_cpus == null ? 1 : optimize.n_cpus, 1, 'Number of worker processes.', 1)
+      + fieldOptimizeCpuCount2('opted-n-cpus', 'n_cpus', optimize.n_cpus, 1, 'Number of worker processes. GPU automatic sizing uses this as its fallback/start value.', 1)
       + fieldNumber2('opted-pareto-max-size', 'pareto_max_size', optimize.pareto_max_size == null ? 100 : optimize.pareto_max_size, 10, 'Maximum number of pareto configs retained.', 1)
       + (optimizeEditorAdapter.isV8 ? '' : fieldNumber2('opted-max-pending-starting-evals', 'max_pending_starting_evals_per_cpu', optimize.max_pending_starting_evals_per_cpu == null ? 1 : optimize.max_pending_starting_evals_per_cpu, 1, 'Throttle for starting-seed evaluations per CPU during optimizer bootstrap.', 1))
       + fieldSelect('opted-log-level', 'logging_level', LOG_LEVEL_OPTIONS, normalizeLogLevelValue(logging.level, 1), false, 'Controls global verbosity for Passivbot and tooling.')
@@ -9735,6 +9810,8 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 function populateOptimizeEditor(config, opts) {
   opts = opts || {};
   var cfg = deepClone(config || {});
+  // Import legacy fixed values once. Subsequent edits use the side's Bot JSON.
+  if (optimizeEditorAdapter.isV8) optimizeEditorAdapter.applyHslBudgetScaling(cfg);
   var backtest = cfg.backtest || {};
   var bot = cfg.bot || {};
   var live = cfg.live || {};
@@ -9760,7 +9837,8 @@ function populateOptimizeEditor(config, opts) {
   el('opted-end-date').value = resolveOptimizeEditorEndDateValue(backtest.end_date);
   el('opted-starting-balance').value = backtest.starting_balance == null ? '' : String(backtest.starting_balance);
   el('opted-iters').value = optimize.iters == null ? '' : String(optimize.iters);
-  el('opted-n-cpus').value = String(normalizeOptimizeCpuCount(optimize.n_cpus, 1));
+  var cpuValue = collectOptimizeCpuCount(optimize.n_cpus, resolveOptimizeEditorBackendValue(optimize), false);
+  el('opted-n-cpus').value = cpuValue == null ? '' : String(cpuValue);
   el('opted-log-level').value = normalizeLogLevelValue(logging.level, 1);
   var seedState = getOptimizeSeedState(cfg);
   el('opted-seed-mode').value = seedState.mode;
@@ -9834,6 +9912,7 @@ function populateOptimizeEditor(config, opts) {
   el('opted-hsl-signal-mode').onchange = function() {
     renderOptimizeRuntimeOverridesEditor();
     scheduleStructuredEditorSync();
+    updateOptimizeHslBudgetScalingValidation();
   };
   var enableOverrides = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, live.strategy_kind);
   optimize.enable_overrides = enableOverrides;
@@ -10127,7 +10206,7 @@ function collectEditorConfig(baseConfig, opts) {
   var btcLtvCap = toNullableNumber(el('opted-btc-collateral-ltv-cap').value);
   backtest.btc_collateral_ltv_cap = btcLtvCap == null || btcLtvCap === 0 ? null : btcLtvCap;
   optimize.iters = toNumberOr(el('opted-iters').value, 100000);
-  optimize.n_cpus = normalizeOptimizeCpuCount(el('opted-n-cpus').value, 1);
+  optimize.n_cpus = collectOptimizeCpuCount(el('opted-n-cpus').value, el('opted-opt-backend').value, strict);
   optimize.pareto_max_size = toNumberOr(el('opted-pareto-max-size').value, 100);
   optimize.backend = normalizeOptimizeBackendValue(el('opted-opt-backend').value);
   collectOptimizeGpuSettings(optimize, strict);
@@ -10298,6 +10377,7 @@ function collectEditorConfig(baseConfig, opts) {
   };
   live.minimum_coin_age_days = toNumberOr(el('opted-min-coin-age').value, 0);
   live.hsl_signal_mode = normalizeOptimizeHslSignalModeValue(el('opted-hsl-signal-mode').value);
+  if (strict && optimizeEditorAdapter.isV8) optimizeEditorAdapter.validateHslBudgetScaling(cfg);
   if (optimizeEditorAdapter.isV8 && el('opted-strategy-kind')) {
     live.strategy_kind = el('opted-strategy-kind').value;
   }
@@ -10380,6 +10460,45 @@ function syncRawJsonHighlightOverlay(error, detail) {
   });
   var raw = document.getElementById('opted-raw-json');
   if (raw) window.PBGuiEditorShared.applyConfigMigrationMarkers('configs-editor', _optBotParamStatus.config_changes || {}, raw.value, 'optimize');
+  renderOptimizeConfigChanges();
+}
+
+function optimizeConfigChangeText(change) {
+  var before = change.added ? '(missing)' : JSON.stringify(change.before);
+  var after = change.removed ? '(removed)' : JSON.stringify(change.after);
+  return before + ' → ' + after;
+}
+
+function renderOptimizeConfigChanges() {
+  var changes = optimizeEditorAdapter.isV8 ? (_optBotParamStatus.config_changes || {}) : {};
+  var paths = Object.keys(changes);
+  var panel = el('opted-config-changes');
+  if (panel) {
+    panel.hidden = !paths.length;
+    var text = paths.map(function(path) { return path + ': ' + optimizeConfigChangeText(changes[path]); }).join('\n');
+    var lines = panel.querySelector('pre');
+    // Preserve expansion, selection and scrolling during automatic form sync.
+    if (lines.textContent !== text) lines.textContent = text;
+    panel.querySelector('summary').textContent = 'PB8 adjusted this config (' + paths.length + ' fields). Review and save.';
+  }
+  var root = el('configs-editor');
+  if (!root) return;
+  root.querySelectorAll('[data-config-migration], [data-optimize-migration-title]').forEach(function(node) {
+    var path = node.dataset.configMigration;
+    var matching = path ? paths.filter(function(key) { return key === path || key.startsWith(path + '.'); }) : [];
+    if (!matching.length) {
+      if (node.dataset.optimizeMigrationTitle !== undefined) {
+        if (node._optimizeMigrationOriginalTitle === null) node.removeAttribute('title');
+        else node.setAttribute('title', node._optimizeMigrationOriginalTitle);
+        delete node.dataset.optimizeMigrationTitle;
+      }
+      return;
+    }
+    if (node.dataset.optimizeMigrationTitle === undefined) node._optimizeMigrationOriginalTitle = node.getAttribute('title');
+    node.dataset.optimizeMigrationTitle = 'true';
+    node.title = (node._optimizeMigrationOriginalTitle ? node._optimizeMigrationOriginalTitle + '\n' : '')
+      + matching.map(function(key) { return key + ': ' + optimizeConfigChangeText(changes[key]); }).join('\n');
+  });
 }
 
 function revealRawJsonError() {
@@ -15540,6 +15659,6 @@ window.PBGUI_NAV_CONFIG = {
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=3"></script>
 <script src="/app/js/optimizer_log_layout.js?v=5"></script>
-<script src="/app/js/vast.js?v=162"></script>
+<script src="/app/js/vast.js?v=163"></script>
 </body>
 </html>

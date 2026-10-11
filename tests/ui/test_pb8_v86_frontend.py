@@ -127,6 +127,11 @@ def test_raw_and_structured_migration_marks_use_exact_paths_and_preserve_edits(p
     source = (ROOT / f'frontend/v7_{page_name}.html').read_text()
     start = source.index('function syncRawJsonHighlightOverlay(')
     sync_function = source[start:source.index('\n}', start) + 2]
+    if page_name == 'optimize':
+        for name in ('optimizeConfigChangeText', 'renderOptimizeConfigChanges'):
+            start = source.index('function ' + name + '(')
+            sync_function += '\n' + source[start:source.index('\n}', start) + 2]
+        sync_function = 'var optimizeEditorAdapter = {isV8:true};\n' + sync_function
     raw_id = 'opted-raw-json' if page_name == 'optimize' else 'cfg-raw-json'
     overlay_id = 'opted-raw-json-highlight' if page_name == 'optimize' else 'cfg-raw-json-highlight'
     root_id = 'main-content' if page_name == 'edit' else 'configs-editor'
@@ -135,6 +140,7 @@ def test_raw_and_structured_migration_marks_use_exact_paths_and_preserve_edits(p
         browser = pw.chromium.launch()
         page = browser.new_page()
         page.set_content(f'''<main id="{root_id}">
+          <details id="opted-config-changes" hidden><summary></summary><pre></pre></details>
           <div class="form-group"><label>pnls_max_lookback_days</label><input id="f-pnls-lookback" value="35"></div>
           <div class="form-group"><label>hsl_engine</label><input id="f-hsl-engine" value="legacy"></div>
           <div class="form-group"><label>Long TWE</label><input id="cfg-twe-long" value="2"></div>
@@ -180,6 +186,18 @@ def test_raw_and_structured_migration_marks_use_exact_paths_and_preserve_edits(p
           syncRawJsonHighlightOverlay(null,null);
         }''', {'rawId':raw_id,'statusName':status_name})
         assert page.locator('#f-pnls-lookback').get_attribute('data-config-migration') == 'live.pnls_max_lookback_days'
+        if page_name == 'optimize':
+            assert page.locator('#opted-config-changes').is_visible()
+            assert 'Review and save' in page.locator('#opted-config-changes summary').inner_text()
+            page.locator('#opted-config-changes summary').click()
+            changes_text = page.locator('#opted-config-changes pre').inner_text()
+            assert 'live.hsl_engine: "legacy" → (removed)' in changes_text
+            assert 'bot.long.entry_cooldown.base_duration_minutes: (missing) →' in changes_text
+            assert 'live.pnls_max_lookback_days:' in page.locator('#f-pnls-lookback').get_attribute('title')
+            page.locator('#opted-config-changes pre').evaluate('el=>el.scrollTop=20')
+            page.locator(f'#{raw_id}').evaluate('el=>el.focus({preventScroll:true})')
+            page.evaluate('syncRawJsonHighlightOverlay(null,null)')
+            assert page.locator('#opted-config-changes').get_attribute('open') is not None
         assert page.locator('#f-hsl-engine').get_attribute('data-config-migration') == 'live.hsl_engine'
         assert page.locator('#cfg-twe-long').get_attribute('data-config-migration') == 'bot.long.risk.total_wallet_exposure_limit'
         assert page.locator('#cfg-twe-short').get_attribute('data-config-migration') is None
@@ -198,6 +216,9 @@ def test_raw_and_structured_migration_marks_use_exact_paths_and_preserve_edits(p
         assert page.locator(f'#{overlay_id} span').nth(1).evaluate('el=>el.style.background') == 'rgba(255, 75, 75, 0.16)'
         page.evaluate('setMigrationTestStatus({});syncRawJsonHighlightOverlay(null,null)')
         assert page.locator('[data-config-migration]').count() == 0
+        if page_name == 'optimize':
+            assert page.locator('#opted-config-changes').is_hidden()
+            assert page.locator('#f-pnls-lookback').get_attribute('title') is None
         assert page.locator(f'#{overlay_id}').is_hidden()
         assert page.locator(f'#{raw_id}').evaluate('el=>el.value===window.originalRaw')
         browser.close()
@@ -292,5 +313,89 @@ def test_real_pb8_run_editor_loads_current_fields_without_retired_controls(width
         assert page.locator('[data-pb8-bot-fields], [data-pb8-portfolio], [data-pb8-migration-changes]').count() == 0
         assert page.locator('.hsl-migration-removals').count() == (1 if migrated else 0)
         assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+        assert not errors, errors
+        browser.close()
+
+
+def test_optimizer_adjustment_notice_in_real_page_preserves_edits_and_navigation():
+    """Real menu, editor, Guide and reload work with isolated adjustment responses."""
+    import pb8_config
+
+    config = json.loads((ROOT / 'tests/fixtures/pb8_october_template.json').read_text())['config']
+    config['optimize']['backend'] = 'gpu'
+    config['optimize']['n_cpus'] = None
+    config['backtest']['exchanges'] = ['bybit']
+    original = json.loads(json.dumps(config))
+    del original['bot']['long']['hsl']['scale_budget_with_excess_allowance']
+    original['live']['retired_option'] = '<img src=x onerror=alert(1)>'
+    changes = pb8_config._editor_config_changes(original, config)
+    source = (ROOT / 'frontend/v7_optimize.html').read_text()
+    replacements = {'API_BASE':'/api/optimize-v8', 'BASE_PREFIX':'', 'LIMITS_META':'{}',
+                    'VERSION':'test', 'SERIAL':'1', 'OPTIMIZE_VERSION':'v8', 'BACKTEST_VERSION':'v8',
+                    'OPTIMIZE_NAV_TITLE':'PBv8 Optimize', 'OPTIMIZE_NAV_CURRENT':'v8_optimize', 'NAV_HASH':'test'}
+    for key, value in replacements.items():
+        source = source.replace('%%' + key + '%%', value)
+    mutations = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        page = browser.new_page(viewport={'width':1600, 'height':900})
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+
+        def route(request):
+            path = urlparse(request.request.url).path
+            if request.request.method not in ('GET', 'HEAD'):
+                mutations.append((request.request.method, path))
+            if path == '/entry':
+                request.fulfill(body='''<nav id="topnav"></nav><script>
+                  window.PBGUI_NAV_CONFIG={current:'dashboard'};
+                </script><script src="/app/pbgui_nav.js"></script>''', content_type='text/html')
+            elif path == '/api/optimize-v8/main_page':
+                request.fulfill(body=source, content_type='text/html')
+            elif path.startswith('/app/'):
+                asset = ROOT / 'frontend' / path.removeprefix('/app/')
+                request.fulfill(body=asset.read_bytes() if asset.is_file() else b'',
+                                content_type='text/css' if asset.suffix == '.css' else 'text/javascript')
+            elif path == '/api/optimize-v8/configs/old-config':
+                request.fulfill(json={'config':config, 'param_status':{'config_changes':changes}})
+            elif path == '/api/optimize-v8/configs':
+                request.fulfill(json={'configs':[{'name':'old-config', 'exchange':['bybit']}]})
+            elif path == '/api/optimize-v8/metadata':
+                request.fulfill(json={'template':config})
+            elif path == '/api/optimize-v8/settings':
+                request.fulfill(json={'cpu':8, 'cpu_count':8})
+            else:
+                request.fulfill(json={})
+
+        page.route('**/*', route)
+        page.goto('http://pbgui.test/entry')
+        page.locator('[data-group="pbv8"]').click()
+        page.locator('[data-page="v8_optimize"]').click()
+        page.wait_for_url('**/api/optimize-v8/main_page*')
+        page.locator('.cfg-edit[data-name="old-config"]').click()
+        page.locator('#opted-config-changes summary').wait_for(state='visible')
+        assert '2 fields' in page.locator('#opted-config-changes summary').inner_text()
+        page.locator('#opted-config-changes summary').click()
+        assert '(missing) → false' in page.locator('#opted-config-changes pre').inner_text()
+        assert 'retired_option' in page.locator('#opted-config-changes pre').inner_text()
+        assert page.locator('#opted-config-changes img').count() == 0
+        assert page.evaluate("JSON.parse(document.getElementById('opted-raw-json').value).optimize.n_cpus") is None
+        page.locator('#opted-iters').fill('1234')
+        page.wait_for_function("JSON.parse(document.getElementById('opted-raw-json').value).optimize.iters === 1234")
+        assert page.locator('#opted-config-changes').get_attribute('open') is not None
+        assert page.locator('#opted-config-changes pre').inner_text().count('retired_option') == 1
+        url = page.url
+        page.locator('#pbgui-guide-btn').click()
+        page.wait_for_function("!!document.querySelector('[role=dialog], #help-ovl.open')")
+        assert page.url == url
+        page.reload()
+        page.locator('#opted-config-changes summary').wait_for(state='visible')
+        assert 'open_config=old-config' in page.url
+        for width in (700, 1600):
+            page.set_viewport_size({'width':width, 'height':900})
+            for sidebar_width in (160, 240, 420):
+                page.evaluate("width=>document.getElementById('sidebar').style.width=width+'px'", sidebar_width)
+                assert page.locator('#opted-config-changes').evaluate('el=>el.scrollWidth<=el.clientWidth')
+        assert not [item for item in mutations if item[1].startswith('/api/optimize-v8/configs')]
         assert not errors, errors
         browser.close()

@@ -8,6 +8,188 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_hsl_checkbox_and_json_share_one_value_across_modes() -> None:
+    """Later Bot JSON edits win over checkbox state, including when the control is hidden."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    adapter = (ROOT / 'frontend/js/optimize_editor_adapter.js').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'toggleOptimizeRuntimeOverrideCheckbox', 'setOptimizeBotHslField', 'optBotSyncFromJson',
+        'collectOptimizeRuntimeOverrides', 'renderOptimizeRuntimeOverridesEditor',
+        'normalizeOptimizeRuntimeOverrideBooleanValue',
+        'updateOptimizeHslBudgetScalingValidation',
+    ))
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const window = {{}};
+        {adapter}
+        const optimizeEditorAdapter = window.PBGuiOptimizeEditorAdapter.create('v8');
+        const key = 'bot.long.hsl.scale_budget_with_excess_allowance';
+        const OPT_FIXED_RUNTIME_OVERRIDE_FIELDS = [{{key,storage:'bot_hsl',side:'long',
+          botKey:'scale_budget_with_excess_allowance',type:'boolean',label:'Long HSL budget scaling'}}];
+        const state = {{runtimeOverrideValues:{{}},editorLastConfig:{{}}}};
+        const nodes = {{'opted-runtime-overrides-panel':{{innerHTML:''}},'opted-hsl-signal-mode':{{value:'coin'}},
+          'opted-bot-long':{{value:'{{"hsl":{{"scale_budget_with_excess_allowance":false}}}}',dispatchEvent() {{}}}}}};
+        const el = id => nodes[id] || null;
+        const document = {{getElementById:el}};
+        const Event = function() {{}};
+        const normalizeOptimizeRuntimeOverrideMap = x => ({{...(x || {{}})}});
+        const getOptimizeRuntimeOverrideFieldMeta = () => OPT_FIXED_RUNTIME_OVERRIDE_FIELDS[0];
+        const renderOptimizeBoundsEditor = () => {{}};
+        const scheduleStructuredEditorSync = () => {{}};
+        const status = {{textContent:''}};
+        const editorStatusNode = () => status;
+        const setPageEditorStatus = message => {{status.textContent=message;}};
+        const collectEditorConfig = () => ({{config:{{live:{{hsl_signal_mode:nodes['opted-hsl-signal-mode'].value}},
+          bot:{{long:JSON.parse(nodes['opted-bot-long'].value)}},optimize:{{fixed_runtime_overrides:{{}}}}}}}});
+        const autoResizeTa = () => {{}};
+        const escAttr = x => String(x);
+        const escapeHtml = escAttr;
+        const fieldCheckboxInline = (id,label,value) => '<input id="" type="checkbox"'+(value?' checked':'')+'>';
+        {functions}
+        for (const mode of ['coin','pside','unified']) {{
+          nodes['opted-hsl-signal-mode'].value='coin';
+          toggleOptimizeRuntimeOverrideCheckbox(key,true);
+          assert.equal(JSON.parse(nodes['opted-bot-long'].value).hsl.scale_budget_with_excess_allowance,true);
+          assert.equal(Object.hasOwn(state.runtimeOverrideValues,key),false);
+          nodes['opted-hsl-signal-mode'].value=mode;
+          updateOptimizeHslBudgetScalingValidation();
+          if (mode !== 'coin') assert.match(status.textContent,/requires coin/);
+          nodes['opted-bot-long'].value=JSON.stringify({{hsl:{{scale_budget_with_excess_allowance:false}}}});
+          optBotSyncFromJson('long');
+          assert.equal(status.textContent,'');
+          assert.doesNotMatch(nodes['opted-runtime-overrides-panel'].innerHTML,/ checked/);
+          state.runtimeOverrideValues[key]=true; // A stale cache must never override edited Bot JSON.
+          const overrides=collectOptimizeRuntimeOverrides({{hslSignalMode:mode,fallbackValue:{{[key]:true,future:3}}}});
+          assert.deepEqual(overrides,{{future:3}});
+          const config={{live:{{hsl_signal_mode:mode}},bot:{{long:JSON.parse(nodes['opted-bot-long'].value)}},
+            optimize:{{fixed_runtime_overrides:overrides}}}};
+          optimizeEditorAdapter.validateHslBudgetScaling(config);
+          assert.equal(config.bot.long.hsl.scale_budget_with_excess_allowance,false);
+        }}
+    """))
+    assert 'applyHslBudgetScaling' not in _page_function(page, 'collectEditorConfig')
+    assert 'applyHslBudgetScaling(cfg)' in _page_function(page, 'populateOptimizeEditor')
+
+
+def test_cpu_input_enforces_host_limit_and_backend_specific_auto() -> None:
+    """CPU decrement stays at one; GPU can select Auto; oversized edits fail visibly."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'fieldOptimizeCpuCount2', 'stepOptimizeCpuCount', 'updateOptimizeCpuCountInput',
+        'collectOptimizeCpuCount', 'normalizeOptimizeCpuCount', 'normalizeOptimizePositiveInteger',
+    ))
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const optimizeEditorAdapter={{isV8:true}};
+        const nodes={{'opted-n-cpus':{{value:'1'}},'opted-opt-backend':{{value:'pymoo'}}}};
+        const el=id=>nodes[id];
+        const optimizeCpuCountLimit=()=>32;
+        const normalizeOptimizeBackendValue=x=>x;
+        const esc=x=>String(x);
+        const fmtGroupSpan=(id,label,html,tip)=>html+tip;
+        {functions}
+        const input=nodes['opted-n-cpus'];
+        updateOptimizeCpuCountInput();
+        assert.equal(input.required,true);
+        assert.equal(input.max,'32');
+        stepOptimizeCpuCount('opted-n-cpus',-1);
+        assert.equal(input.value,'1');
+        assert.throws(()=>collectOptimizeCpuCount('','pymoo',true),/positive integer/);
+        assert.equal(collectOptimizeCpuCount('33','pymoo',false),33);
+        assert.throws(()=>collectOptimizeCpuCount('33','pymoo',true),/host limit of 32/);
+        for(const value of ['0','-1','1.5','Infinity','NaN']) {{
+          assert.throws(()=>collectOptimizeCpuCount(value,'gpu',true),/positive integer/);
+        }}
+        nodes['opted-opt-backend'].value='gpu';
+        updateOptimizeCpuCountInput();
+        assert.equal(input.required,false);
+        assert.equal(input.placeholder,'Auto');
+        stepOptimizeCpuCount('opted-n-cpus',-1);
+        assert.equal(input.value,'');
+        assert.equal(collectOptimizeCpuCount(input.value,'gpu',true),null);
+        stepOptimizeCpuCount('opted-n-cpus',1);
+        assert.equal(input.value,'1');
+        input.value='32';
+        stepOptimizeCpuCount('opted-n-cpus',1);
+        assert.equal(input.value,'32');
+        const html=fieldOptimizeCpuCount2('opted-n-cpus','n_cpus',null,1,'Workers.',1);
+        assert.match(html,/min="1" max="32"/);
+        assert.match(html,/Host limit: 32 workers/);
+        assert.match(html,/stepOptimizeCpuCount/);
+    """))
+
+
+def test_pb8_worker_auto_values_round_trip_without_zero_coercion() -> None:
+    """GPU auto, inherited and fixed worker counts retain distinct native meanings."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'collectOptimizeGpuSettings', 'normalizeOptimizeCpuCount', 'normalizeOptimizePositiveInteger',
+    ))
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const optimizeEditorAdapter = {{isV8:true}};
+        const nodes = {{'opted-gpu-auto-lean':{{checked:false}},'opted-gpu-halving-enabled':{{checked:false}}}};
+        const el = id => nodes[id] || null;
+        const deepClone = x => JSON.parse(JSON.stringify(x));
+        const defaults = {{exact_workers:null,max_pending_exact:null,drift_probes:0}};
+        const optimizeGpuDefaults = () => defaults;
+        const optimizeCpuCountLimit = () => 32;
+        const toNullableNumber = x => x == null || String(x).trim() === '' ? null : Number(x);
+        {functions}
+        for (const [raw, expected] of [['',null],['0',0],['7',7]]) {{
+          for (const id of ['exact-workers','max-pending-exact']) nodes['opted-gpu-'+id] = {{value:raw}};
+          nodes['opted-gpu-drift-probes'] = {{value:''}};
+          const config = {{gpu:{{future_option:'keep'}}}};
+          collectOptimizeGpuSettings(config,true);
+          assert.equal(config.gpu.exact_workers,expected);
+          assert.equal(config.gpu.max_pending_exact,expected);
+          assert.equal(config.gpu.drift_probes,0);
+          assert.equal(config.gpu.future_option,'keep');
+        }}
+        for (const bad of ['-1','1.5','Infinity','NaN']) {{
+          nodes['opted-gpu-exact-workers'].value = bad;
+          assert.throws(() => collectOptimizeGpuSettings({{}},true), /non-negative integer/);
+        }}
+        assert.equal(normalizeOptimizeCpuCount(null,1,true),null);
+        assert.equal(normalizeOptimizeCpuCount('',1,true),null);
+        assert.equal(normalizeOptimizeCpuCount('6',1,true),6);
+        assert.equal(normalizeOptimizeCpuCount(null,1,false),1);
+    """))
+
+
+def test_pb8_coin_budget_controls_preserve_effective_fixed_values_and_validate_mode() -> None:
+    """No silent mode reset, numeric bounds, unknown runtime injection or double values."""
+    adapter = (ROOT / 'frontend/js/optimize_editor_adapter.js').read_text()
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const window = {{}};
+        {adapter}
+        const v8 = window.PBGuiOptimizeEditorAdapter.create('v8');
+        const key = 'bot.long.hsl.scale_budget_with_excess_allowance';
+        for (const value of [true,false]) {{
+          const config = {{live:{{hsl_signal_mode:'coin'}},bot:{{long:{{hsl:{{enabled:false,scale_budget_with_excess_allowance:!value}}}}}},
+            optimize:{{fixed_runtime_overrides:{{[key]:value,future:3}}}}}};
+          v8.applyHslBudgetScaling(config);
+          assert.equal(config.bot.long.hsl.scale_budget_with_excess_allowance,value);
+          assert.deepEqual(config.optimize.fixed_runtime_overrides,{{future:3}});
+          v8.validateHslBudgetScaling(config);
+          for (const mode of ['pside','unified']) {{
+            config.live.hsl_signal_mode = mode;
+            if (value) assert.throws(() => v8.validateHslBudgetScaling(config),/requires coin/);
+            else v8.validateHslBudgetScaling(config);
+            assert.equal(config.bot.long.hsl.scale_budget_with_excess_allowance,value);
+            assert.equal(v8.activeHslPath(key,mode),false);
+          }}
+        }}
+        const fields = v8.normalizeMetadata({{template:{{bot:{{long:{{hsl:{{scale_budget_with_excess_allowance:false}}}}}}}}}}).runtimeOverrides;
+        assert.equal(fields.filter(x=>x.key===key).length,1);
+        assert.equal(fields.find(x=>x.key===key).type,'boolean');
+        assert.equal(v8.normalizeMetadata({{template:{{bot:{{long:{{hsl:{{enabled:false}}}}}}}}}}).runtimeOverrides.some(x=>x.key===key),false);
+        const v7 = window.PBGuiOptimizeEditorAdapter.create('v7');
+        assert.equal(v7.normalizeMetadata({{template:{{bot:{{long:{{hsl:{{scale_budget_with_excess_allowance:false}}}}}}}}}}).runtimeOverrides.some(x=>x.key===key),false);
+    """))
+
+
 def test_gpu_runtime_labels_and_native_alias_choices() -> None:
     """CUDA identity and accepted aliases work without changing CPU metric choices."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
@@ -1287,7 +1469,7 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
     assert '"%%OPTIMIZE_VERSION%%": "v8"' in api_v8
     assert '"%%OPTIMIZE_NAV_CURRENT%%": "v8_optimize"' in api_v8
     assert not (ROOT / "frontend" / "v8_optimize.html").exists()
-    assert '/app/js/optimize_editor_adapter.js?v=14' in page
+    assert '/app/js/optimize_editor_adapter.js?v=16' in page
     assert "PBGuiOptimizeEditorAdapter.create(OPTIMIZE_VERSION" in page
     assert 'backtestVersion: BACKTEST_VERSION' in page
     for panel in ("panel-configs", "panel-queue", "panel-results", "panel-paretos"):
@@ -1379,7 +1561,7 @@ def test_pb8_gpu_editor_uses_the_standard_eight_column_responsive_grid() -> None
         "opted-gpu-halving-min-survivors",
     ):
         call = section.split("'" + field + "'", 1)[1].split("\n", 1)[0]
-        assert call.rstrip().endswith(", 1)") or ", 1, optimizeGpuAutoPlaceholder(" in call
+        assert call.rstrip().endswith((", 1)", ", 1, 'Auto')")) or ", 1, optimizeGpuAutoPlaceholder(" in call
 
 
 

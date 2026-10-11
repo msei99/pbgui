@@ -372,92 +372,6 @@ def _enable_implicit_v7_enforcers(
             )
 
 
-def _append_v7_excess_allowance_decisions(
-    source: dict[str, Any],
-    config: dict[str, Any],
-    report: dict[str, Any],
-) -> None:
-    source_bot = source.get("bot")
-    target_bot = config.get("bot")
-    if not isinstance(source_bot, dict) or not isinstance(target_bot, dict):
-        return
-
-    def clamp_details(risk: dict[str, Any]) -> dict[str, float] | None:
-        excess = _finite_number(risk.get("we_excess_allowance_pct"))
-        twel = _finite_number(risk.get("total_wallet_exposure_limit"))
-        n_positions = _finite_number(risk.get("n_positions"))
-        explicit_wel = _finite_number(risk.get("wallet_exposure_limit"))
-        if excess is None or twel is None or n_positions is None or excess <= 0.0 or twel <= 0.0 or n_positions <= 0.0:
-            return None
-        base_wel = explicit_wel if explicit_wel is not None and explicit_wel > 0.0 else twel / n_positions
-        raw_allowed_wel = base_wel * (1.0 + excess)
-        if raw_allowed_wel <= twel:
-            return None
-        return {
-            "excess_allowance_pct": excess,
-            "base_wel": base_wel,
-            "raw_allowed_wel": raw_allowed_wel,
-            "side_twel": twel,
-        }
-
-    coin_overrides = config.get("coin_overrides")
-    for side in ("long", "short"):
-        source_side = source_bot.get(side)
-        target_side = target_bot.get(side)
-        target_risk = target_side.get("risk") if isinstance(target_side, dict) else None
-        if not isinstance(source_side, dict) or not isinstance(target_risk, dict):
-            continue
-        mode_present, _source_mode = _source_side_value(
-            source_side,
-            "risk_we_excess_allowance_mode",
-            "we_excess_allowance_mode",
-        )
-        if mode_present or target_risk.get("we_excess_allowance_mode") != "bounded":
-            continue
-        affected = []
-        base_details = clamp_details(target_risk)
-        if base_details is not None:
-            affected.append({"context": f"bot.{side}.risk", **base_details})
-        if isinstance(coin_overrides, dict):
-            for coin, override in coin_overrides.items():
-                override_bot = override.get("bot") if isinstance(override, dict) else None
-                override_side = override_bot.get(side) if isinstance(override_bot, dict) else None
-                override_risk = override_side.get("risk") if isinstance(override_side, dict) else None
-                if not isinstance(override_risk, dict):
-                    continue
-                merged_risk = copy.deepcopy(target_risk)
-                merged_risk.update(override_risk)
-                if "wallet_exposure_limit" in override_side:
-                    merged_risk["wallet_exposure_limit"] = override_side["wallet_exposure_limit"]
-                details = clamp_details(merged_risk)
-                if details is not None:
-                    affected.append(
-                        {"context": f"coin_overrides.{coin}.bot.{side}.risk", **details}
-                    )
-        if not affected:
-            continue
-        worst = max(affected, key=lambda item: item["raw_allowed_wel"] - item["side_twel"])
-        path = f"bot.{side}.risk.we_excess_allowance_mode"
-        _append_unique(report, "manual_review_fields", path)
-        _append_unique(report, "pbgui_post_migration_review_fields", path)
-        _append_unique(
-            report,
-            "pbgui_review_decisions",
-            {
-                "code": "we_excess_allowance_mode",
-                "path": path,
-                "side": side,
-                "current_value": "bounded",
-                "v7_parity_value": "legacy_raw",
-                "excess_allowance_pct": worst["excess_allowance_pct"],
-                "base_wel": worst["base_wel"],
-                "raw_allowed_wel": worst["raw_allowed_wel"],
-                "side_twel": worst["side_twel"],
-                "affected_contexts": [item["context"] for item in affected],
-            },
-        )
-
-
 def _append_minimum_coin_age_decision(
     source: dict[str, Any],
     config: dict[str, Any],
@@ -562,7 +476,6 @@ def postprocess_v7_migration(
     migrated_v8: dict[str, Any],
     report: dict[str, Any],
     *,
-    require_v7_excess_review: bool = False,
     require_minimum_coin_age_review: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Apply deterministic PBGui safety fixes after PB8's official V7 migration."""
@@ -572,8 +485,6 @@ def postprocess_v7_migration(
     _canonicalize_fixed_runtime_overrides(config, updated_report)
     _fix_disabled_side_search(config, updated_report)
     _enable_implicit_v7_enforcers(source_v7, config, updated_report)
-    if require_v7_excess_review:
-        _append_v7_excess_allowance_decisions(source_v7, config, updated_report)
     if require_minimum_coin_age_review:
         _append_minimum_coin_age_decision(source_v7, config, updated_report)
     _append_optimize_review_warnings(config, updated_report)
