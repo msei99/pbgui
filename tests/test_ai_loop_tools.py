@@ -117,7 +117,7 @@ def test_loop_create_edit_and_owner_isolation(environment):
     async def scenario():
         result = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_config', {
             'name': 'HYPE_loop', 'config_name': 'HYPE', 'settings': {
-                'execution': 'vast', 'hours': 12, 'max_runs': 25, 'run_limit_mode': 'proxy',
+                'execution': 'vast', 'hours': 12, 'max_runs': 25, 'hsl_mode': 'off', 'run_limit_mode': 'proxy',
                 'run_proxy': 100000, 'goals': {'coins': ['HYPE'], 'direction': 'long',
                     'presets': ['gain','drawdown','uptrend'], 'targets': {'drawdown': 0.5}}}})
         assert store.definitions(OWNER) == []
@@ -125,6 +125,7 @@ def test_loop_create_edit_and_owner_isolation(environment):
         assert any(change['path'] == 'run_proxy' and change['after'] == 100000 for change in result['preview']['changes'])
         await approve(service, result)
         saved = store.definition(OWNER, 'HYPE_loop')
+        assert saved['settings']['hsl_mode'] == 'off'
         assert saved['settings']['max_runs'] == 25
         assert saved['settings']['run_proxy'] == 100000
         assert saved['settings']['parallel'] == 1

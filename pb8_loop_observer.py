@@ -73,6 +73,23 @@ def holdout_selection(record, number):
         winner = next((job for job in selected if job
                        and job.get('candidate_id') == candidate_id
                        and job['status'] in SUCCESS and job.get('simulation_complete')), None)
+        if winner is None and number >= 0:
+            # An unchanged incumbent retains its original validation operation.
+            # Follow that immutable origin, never another candidate's Holdout.
+            origin = next((job for job in record.get('jobs', [])
+                           if job['kind'] == 'validation'
+                           and job['operation'] == history.get('winner_operation')
+                           and job['round'] < number
+                           and (job.get('candidate') or {}).get('id') == candidate_id), None)
+            if origin:
+                winner = next((job for job in record.get('observer_jobs', [])
+                               if job['kind'] == 'observer_holdout'
+                               and job['round'] == origin['round']
+                               and job.get('candidate_id') == candidate_id
+                               and job['status'] in SUCCESS and job.get('simulation_complete')
+                               and not needs_observer_report(job)), None)
+                if winner:
+                    summary['source_round'] = origin['round']
         if winner:
             summary.update(status='selected', candidate_id=winner['candidate_id'],
                            operation=winner['operation'], score=None)
@@ -128,6 +145,9 @@ class ObserverJobs:
         for number in sorted({number for number, _ in sources}):
             selection = holdout_selection(record, number)
             if selection['status'] == 'selected':
+                if selection.get('source_round', number) != number:
+                    # Its original round owns collection and any pending Full Range.
+                    continue
                 candidate = next(candidate for round_number, candidate in sources
                                  if round_number == number and candidate['id'] == selection['candidate_id'])
                 targets.append((number, candidate, 'observer_full_range'))

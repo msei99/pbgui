@@ -112,7 +112,7 @@ def _warm_start_observation(row, score, exposure=2):
 ])
 def test_optimizer_start_uses_qualified_selection_without_score_ranking(
         record, score, exact, comparable, complete, hard, expected):
-    """Only qualified exact winners seed searches; their legacy score has no authority."""
+    """Only qualified exact winners provide comparison references; legacy score has no authority."""
     from pb8_loop_store import optimizer_start_candidate
     _, row = record
     row['baseline'] = _warm_start_observation(row, 1, 1)
@@ -141,7 +141,7 @@ def test_optimizer_job_carries_bot_but_preserves_ai_recipe_and_budget(record, tm
     assert job['overrides'] == {}
     assert job['optimizer_start']['bot_modified'] is True
     assert job['optimizer_start']['overrides_modified'] is True
-    assert job['config']['optimize'] == {**proposed['optimize'], 'iters': 10000000}
+    assert job['config']['optimize'] == {**proposed['optimize'], 'iters': 10000000, 'seed': job['config']['optimize']['seed']}
     assert job['optimizer_start']['candidate_id'] == 'candidate_2'
     assert (row, proposed) == before
     for kind in ('baseline', 'validation', 'holdout', 'observer_holdout', 'observer_full_range'):
@@ -169,7 +169,8 @@ def test_optimizer_preserves_explicit_bot_and_override_experiments(record, tmp_p
     before = copy.deepcopy((row, proposed, overrides))
     job = LoopController(tmp_path, store=store, backend=FakeBackend(), ai=FakeAI()).job(
         row, 'optimizer', proposed, overrides, 'Explicit bot experiment')
-    assert job['config'] == proposed
+    from pb8_loop_store import fresh_optimizer_config
+    assert job['config'] == fresh_optimizer_config(proposed, job['config']['optimize']['seed'])
     assert job['overrides'] == overrides
     assert job['optimizer_start']['candidate_id'] == row['best']['candidate']['id']
     assert job['optimizer_start']['bot_modified'] is True
@@ -243,7 +244,7 @@ def test_warm_start_retains_winner_through_worse_rounds_and_restart(record, tmp_
 
 
 def test_ai_receives_new_exact_start_before_best_is_committed(record, monkeypatch):
-    """The evaluation prompt sees the just-selected best, not stale initial bot parameters."""
+    """The evaluation prompt specifies fresh populations without a winning starting bot."""
     store, row = record
     winner = _warm_start_observation(row, 2)
     class AI(LoopAI):
@@ -253,8 +254,10 @@ def test_ai_receives_new_exact_start_before_best_is_committed(record, monkeypatc
             return {'output_limit': 16000}
         async def _request(self, current, metadata, content, output_tokens):
             """Verify the fresh seed while retaining the original input separately."""
-            assert content['optimizer_start']['candidate_id'] == winner['candidate']['id']
-            assert content['optimizer_start']['bot'] == winner['candidate']['config']['bot']
+            assert 'optimizer_start' not in content
+            assert content['search_policy']['population'] == 'fresh_random'
+            assert content['search_policy']['winner_use'] == 'comparison_only'
+            assert content['hsl_mode'] == 'auto'
             assert content['initial_config'] == row['initial_config']
             return '{"finish":false}', {'tokens': None, 'usd': None}
     asyncio.run(AI(store).decide(row, 'evaluate', {'best': winner}))
@@ -1242,7 +1245,7 @@ def test_run_limit_stops_only_owned_optimizer_and_preserves_partial_results(reco
         """Model a running optimizer and its native completed stop signal."""
         def poll(self, current, job):
             return {'status':'stopped' if job['operation'] in self.stops else 'running', 'started':True,
-                    'source':{'started_at':1000}, 'proxy_evaluations':100 if expired else 99}
+                    'source':{'started_at':1000}, 'proxy_evaluations':None if job['operation'] in self.stops else 100 if expired else 99}
         def stop(self, current, job):
             assert self.store.read(OWNER, row['id'])['jobs'][0]['limit_reached'] == mode
             super().stop(current, job)
@@ -1258,6 +1261,7 @@ def test_run_limit_stops_only_owned_optimizer_and_preserves_partial_results(reco
     assert len(backend.stops) == int(expired)
     assert not backend.cleanups and not backend.starts
     assert current['jobs'][0]['run_started_at'] == 1000
+    assert current['jobs'][0]['proxy_evaluations'] == (100 if expired else 99)
     if expired and not paused:
         assert current['phase'] == 'select' and current['candidates']
     replacement = LoopController(tmp_path,store=store,backend=backend,ai=FakeAI())
@@ -1516,7 +1520,7 @@ def test_saved_results_adjust_first_optimizer_and_survive_restart(record, tmp_pa
     assert len(backend.starts)==1 and ai.stages==['interpret','bootstrap']
 
 
-@pytest.mark.parametrize('invalid', ['unchanged','protected_scenario','too_many'])
+@pytest.mark.parametrize('invalid', ['unchanged','seed_only','protected_scenario','too_many'])
 def test_initial_adjustment_cannot_bypass_policy(record,tmp_path,invalid):
     """Saved evidence cannot bypass Scenario protection or per-loop parallel limits."""
     store,row=record;backend=SavedResultBackend()
@@ -1526,6 +1530,7 @@ def test_initial_adjustment_cannot_bypass_policy(record,tmp_path,invalid):
             if stage!='bootstrap':return await super().decide(row,stage,evidence)
             changed=copy.deepcopy(row['initial_config'])
             if invalid=='protected_scenario':changed['backtest']['start_date']='2020-01-15'
+            if invalid=='seed_only':changed['optimize']['seed']=12345
             variants=[{'config':changed,'overrides':{}}]
             if invalid=='too_many':variants=variants*2
             return {'variants':variants}
@@ -2310,3 +2315,30 @@ def test_generated_holdout_survives_real_loop_queue_and_observer(tmp_path, monke
     assert holdout['backtest']['end_date'] == '2026-10-03'
     assert all(s['end_date'] < '2026-05-25' for s in row['comparison']['scenarios'])
     assert not holdout.get('pbgui', {}).get('scenario_template')
+
+
+def test_proxy_progress_persists_missing_and_older_samples(record, tmp_path):
+    """Expose completed native counters without inventing zero or losing known progress."""
+    from api.loop_optimizer_v8 import projection
+    store, row = record
+    class Backend(FakeBackend):
+        """Return isolated native progress samples without launching any process."""
+        sample = None
+        def poll(self, current, job):
+            """Keep this fixture job running while changing only the sampled counter."""
+            return {'status':'running', 'started':True, 'proxy_evaluations':self.sample}
+    backend = Backend()
+    controller = LoopController(tmp_path, store=store, backend=backend, ai=FakeAI())
+    job = controller.job(row, 'optimizer', config(), {}, 'Progress test')
+    job.update(backend={'id':'native', 'execution':'gpu'}, status='running', started=True)
+    row = store.update(OWNER, row['id'], lambda current: current.update(
+        jobs=[job], settings=dict(current['settings'], run_limit_mode='proxy', run_proxy=100000)))
+    for sample, expected in [(None,None),(0,0),(12345,12345),(None,12345),(12000,12345),
+                             (-1,12345),(True,12345),(50000,50000)]:
+        backend.sample = sample
+        row = asyncio.run(controller.sync_jobs(store.read(OWNER,row['id']), launch=False))
+        exposed = projection(row)['jobs'][0]
+        assert exposed['proxy_evaluations'] == expected
+        assert exposed['proxy_limit'] == 100000
+        assert store.read(OWNER,row['id'])['jobs'][0].get('proxy_evaluations') == expected
+    assert not backend.starts and not backend.stops

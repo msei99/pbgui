@@ -84,6 +84,7 @@ class LoopStart(BaseModel):
     execution: Literal['cpu', 'gpu', 'vast'] = 'cpu'
     scenario_enabled: bool = False
     strategy_enabled: bool = False
+    hsl_mode: Literal['on', 'off', 'auto'] = 'auto'
     goals: LoopGoals = Field(default_factory=LoopGoals)
     run_limit_mode: Literal['config', 'iters', 'proxy', 'hours'] = 'config'
     run_iters: int | None = Field(default=None, ge=1, le=10_000_000)
@@ -251,8 +252,21 @@ def _cycle_reports(row):
 def _observer_reports(row):
     """Expose user-only metrics/deltas without mixing them into decision history."""
     from pb8_loop_observer import comparison_deltas, observer_selections
-    jobs = row.get('observer_jobs', [])
+    jobs = list(row.get('observer_jobs', []))
     selections = {item['round']: item for item in observer_selections(row)}
+    for number, selection in selections.items():
+        source_round = selection.get('source_round', number)
+        if selection.get('status') != 'selected' or source_round == number:
+            continue
+        # Display aliases retain the native operation/log/results, without
+        # persisting duplicate jobs or exposing user-only evidence to the AI.
+        for job in row.get('observer_jobs', []):
+            if (job['round'] == source_round
+                    and job.get('candidate_id') == selection['candidate_id']
+                    and job['kind'] in {'observer_holdout', 'observer_full_range'}
+                    and not any(item['round'] == number and item['kind'] == job['kind']
+                                and item.get('candidate_id') == job.get('candidate_id') for item in jobs)):
+                jobs.append(dict(job, round=number, source_round=source_round))
     def reference(number, kind):
         """Compare against the displayed round winner, never the first candidate."""
         selection = selections.get(number) or {}
@@ -274,7 +288,7 @@ def _observer_reports(row):
                       if (item.get('candidate') or {}).get('id') == job.get('candidate_id')), None)
         score = (job.get('assessment') or {}).get('score')
         reports.append({key:job.get(key) for key in ('operation','name','kind','round','status','started','candidate_id',
-                       'created_at','ended_at','run_started_at','error','metrics','reports','simulation_complete','report_done')} | {
+                       'created_at','ended_at','run_started_at','error','metrics','reports','simulation_complete','report_done','source_round')} | {
                        'observer_only':True, 'execution':'cpu', 'log_available':bool((job.get('backend') or {}).get('id')),
                        'comparison_label': 'Comparison backtest ' + str(index) if index else job.get('candidate_id'),
                        'evaluation_score':score if type(score) in (int,float) and math.isfinite(score) else None,
@@ -319,6 +333,7 @@ def projection(row):
                     'execution': (job.get('backend') or {}).get('execution') or (row['settings']['execution'] if job['kind'] == 'optimizer' else 'cpu'),
                     'display_status': 'Proxy limit reached' if job.get('limit_reached') == 'proxy' else 'Time limit reached' if job.get('limit_reached') else job['status'],
                     'proxy_limit': row['settings'].get('run_proxy') if job['kind'] == 'optimizer' else None,
+                    'proxy_evaluations': job.get('proxy_evaluations') if job['kind'] == 'optimizer' else None,
                  } for job in row['jobs']],
         'jev_answers': (row.get('bootstrap_jev_answers') or []) + (row.get('jev_answers') or []),
         'jev_status': 'disabled' if not row['settings'].get('jev_enabled') else 'consulted' if row.get('jev_usd_reserved', 0) else 'failed' if any('failed' in str(answer).lower() for answer in (row.get('bootstrap_jev_answers') or []) + (row.get('jev_answers') or [])) else 'not requested',
@@ -688,6 +703,94 @@ async def loop_instruction_version(version_id: str, session: SessionToken = Depe
     try:
         version = await asyncio.to_thread(_controller.store.instruction_version, _owner(session), version_id)
         return JSONResponse(version, headers={'Cache-Control': 'no-store'})
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+class LoopRentalExtension(BaseModel):
+    """Bind explicit extension intent to the reviewed rental and Loop deadlines."""
+    model_config = ConfigDict(extra='forbid')
+    worker_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    expected_deadline: float = Field(allow_inf_nan=False)
+    expected_loop_deadline: float = Field(allow_inf_nan=False)
+    minutes: int = Field(strict=True, ge=1, le=1440)
+
+
+@router.get('/{loop_id}/rental')
+async def loop_rental(loop_id: str, session: SessionToken = Depends(require_auth)):
+    """Read public rental controls only for the authenticated owner's run."""
+    from pb8_loop_rental_controls import rental_snapshot
+    from vast_queue import CloudQueue
+    try:
+        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
+        rental = await asyncio.to_thread(rental_snapshot, CloudQueue(), row)
+        return JSONResponse({'rental': rental}, headers={'Cache-Control': 'no-store'})
+    except VastError as exc:
+        _log(SERVICE, 'Loop rental read rejected', level='WARNING')
+        raise HTTPException(exc.status, str(exc)) from exc
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+@router.post('/{loop_id}/rental/extend', status_code=202)
+async def extend_loop_rental(loop_id: str, body: LoopRentalExtension, session: SessionToken = Depends(require_auth)):
+    """Extend this run on its current rental without increasing its budget."""
+    from pb8_loop_rental_controls import extend_rental
+    from vast_queue import CloudQueue
+    try:
+        await asyncio.to_thread(extend_rental, _controller.store, CloudQueue(), _owner(session), loop_id,
+                               body.worker_id, body.expected_deadline, body.expected_loop_deadline, body.minutes)
+        return JSONResponse({'pending': True}, status_code=202, headers={'Cache-Control': 'no-store'})
+    except VastError as exc:
+        _log(SERVICE, 'Loop rental extension rejected', level='WARNING')
+        raise HTTPException(exc.status, str(exc)) from exc
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+class LoopRentalBudget(BaseModel):
+    """Require the reviewed rental identity, deadline and budget for a budget edit."""
+    model_config = ConfigDict(extra='forbid')
+    worker_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    expected_deadline: float = Field(allow_inf_nan=False)
+    expected_budget_usd: float = Field(allow_inf_nan=False, ge=.1, le=100)
+    budget_usd: float = Field(allow_inf_nan=False, ge=.1, le=100)
+
+
+@router.post('/{loop_id}/rental/budget', status_code=202)
+async def loop_rental_budget(loop_id: str, body: LoopRentalBudget, session: SessionToken = Depends(require_auth)):
+    """Submit an explicit budget change to this owner's current rental guard."""
+    from pb8_loop_rental_controls import change_budget
+    from vast_queue import CloudQueue
+    try:
+        result = await asyncio.to_thread(change_budget, _controller.store, CloudQueue(), _owner(session), loop_id,
+                                        body.worker_id, body.expected_deadline, body.expected_budget_usd, body.budget_usd)
+        return JSONResponse(result, status_code=202, headers={'Cache-Control': 'no-store'})
+    except VastError as exc:
+        _log(SERVICE, 'Loop rental budget change rejected', level='WARNING')
+        raise HTTPException(exc.status, str(exc)) from exc
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+@router.get('/{loop_id}/rental/charges')
+async def loop_rental_charges(loop_id: str, session: SessionToken = Depends(require_auth)):
+    """Read cached provider costs independently of the Loop progress poll."""
+    from pb8_loop_rental_controls import public_billing, rental_snapshot
+    from vast_billing import instance_charges
+    from vast_queue import CloudQueue
+    try:
+        queue = CloudQueue()
+        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
+        rental = await asyncio.to_thread(rental_snapshot, queue, row)
+        if not rental:
+            return JSONResponse({'worker_id': None, 'billing': None}, headers={'Cache-Control': 'no-store'})
+        billing = await asyncio.to_thread(instance_charges, queue.store, rental['worker_id'])
+        return JSONResponse({'worker_id': rental['worker_id'], 'billing': public_billing(billing)},
+                            headers={'Cache-Control': 'no-store'})
+    except VastError as exc:
+        _log(SERVICE, 'Loop rental billing read rejected', level='WARNING')
+        raise HTTPException(exc.status, str(exc)) from exc
     except Exception as exc:
         raise _error(exc) from exc
 

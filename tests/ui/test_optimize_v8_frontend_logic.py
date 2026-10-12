@@ -1915,6 +1915,7 @@ def test_initial_configs_load_does_not_wait_for_settings_metadata() -> None:
         const assert = require('node:assert/strict');
         let resolveSettings;
         let calls = [];
+        const el = () => ({{hidden: true}});
         const optimizeEditorAdapter = {{configureUi() {{}}}};
         const state = {{initialLoadPending: true}};
         const location = {{hash: ''}};
@@ -3513,6 +3514,7 @@ const assert=require('node:assert/strict');
 const window={location:{href:'http://localhost/main?open_config=ETH#configs'}};
 const location={hash:'#configs'},PANEL_META={},state={};
 const document={documentElement:{classList:{remove(){}}}};
+const el=()=>({hidden:true});
 const optimizeEditorAdapter={configureUi(){}};
 function attachEventHandlers(){} function initSelections(){} function initSidebarResize(){}
 function initPlotModalWindow(){} function initOptimizeOhlcvPreflightController(){} function connectWS(){}

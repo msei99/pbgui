@@ -129,7 +129,9 @@ def test_saved_instructions_reach_each_http_protocol(tmp_path, protocol, payload
     assert (body['messages'][0]['content'] if protocol == 'chat' else body['instructions'] if protocol == 'responses' else body['system']) == version['text'] + EVALUATION_PROTOCOL
     assert row['ai_instructions']['text'] == version['text']
     assert 'without overwriting it' in EVALUATION_PROTOCOL
-    assert 'HSL, Unstuck and risk settings' in EVALUATION_PROTOCOL
+    assert 'fresh random population' in EVALUATION_PROTOCOL
+    assert 'comparison evidence only' in EVALUATION_PROTOCOL
+    assert 'only auto permits AI changes to HSL activation' in EVALUATION_PROTOCOL
 
 
 def test_saved_instructions_reach_native_gpt(tmp_path, monkeypatch):

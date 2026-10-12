@@ -165,7 +165,7 @@ def config_defaults(config):
 
 
 def optimizer_start_candidate(record):
-    """Use the AI-selected, qualified exact winner without re-ranking its metrics."""
+    """Identify the qualified comparison reference; never create a seed population."""
     candidate = {'id': 'baseline', 'config': record['initial_config'],
                  'overrides': record['initial_overrides'], 'optimizer_job': None}
     best = record.get('best') or {}
@@ -177,14 +177,96 @@ def optimizer_start_candidate(record):
             'overrides': copy.deepcopy(candidate.get('overrides', {}))}
 
 
+def fresh_optimizer_config(config, seed=None):
+    """Drop inherited populations/resumes without changing the experiment's search space."""
+    result = copy.deepcopy(config)
+    optimize = result.setdefault('optimize', {})
+    for key in ('starting_configs', 'starting_config', 'checkpoint'):
+        optimize.pop(key, None)
+    if seed is not None:
+        optimize['seed'] = seed
+    pbgui = result.setdefault('pbgui', {})
+    pbgui['optimize_runtime'] = {'mode': 'fresh'}
+    for key in ('optimize_seed_mode', 'optimize_seed_path', 'starting_config'):
+        pbgui.pop(key, None)
+    return result
+
+
+def hsl_policy_sides(settings, config):
+    """Resolve the user-pinned HSL switch, enabling only active trading sides."""
+    mode = settings.get('hsl_mode', 'auto')
+    if mode not in {'on', 'off', 'auto'}:
+        raise ValueError('HSL must be On, Off or Auto')
+    if mode == 'auto':
+        return {}
+    direction = settings['goals']['direction']
+    if direction == 'config':
+        direction = configured_direction(config)
+    return {side: mode == 'on' and direction in {'both', side} for side in ('long', 'short')}
+
+
+def apply_hsl_policy(settings, config, overrides):
+    """Apply an explicit HSL choice to a private initial bundle, including coin patches."""
+    config, overrides = copy.deepcopy(config), copy.deepcopy(overrides)
+    for side, enabled in hsl_policy_sides(settings, config).items():
+        config['bot'][side].setdefault('hsl', {})['enabled'] = enabled
+        optimize = config.setdefault('optimize', {})
+        runtime = optimize.setdefault('fixed_runtime_overrides', {})
+        _hsl_override_values(runtime, side, replacement=enabled)
+        runtime[f'bot.{side}.hsl.enabled'] = enabled
+        optimize.get('bounds', {}).get(side, {}).get('hsl', {}).pop('enabled', None)
+        patches = list(overrides.values()) + [row.get('overrides') or {} for row in
+                                             config.get('backtest', {}).get('scenarios', [])]
+        for override in patches:
+            _hsl_override_values(override, side, replacement=enabled)
+    return config, overrides
+
+
+def _hsl_override_values(override, side, replacement=None):
+    """Read or replace HSL leaves, including dotted parent-subtree overrides."""
+    found = []
+    def walk(value, prefix=''):
+        for key, child in list(value.items()):
+            key_path = key.strip()
+            path = prefix + '.' + key_path if prefix else key_path
+            if path == f'bot.{side}.hsl.enabled':
+                found.append(child)
+                if replacement is not None:
+                    value[key] = replacement
+            elif isinstance(child, dict):
+                walk(child, path)
+    walk(override)
+    return found
+
+
+def validate_hsl_policy(record, config, overrides):
+    """Reject AI/candidate attempts to bypass a fixed HSL switch at any effective layer."""
+    for side, enabled in hsl_policy_sides(record['settings'], record['initial_config']).items():
+        path = f'bot.{side}.hsl.enabled'
+        if config['bot'][side].get('hsl', {}).get('enabled') is not enabled:
+            raise ValueError(f'HSL {record["settings"]["hsl_mode"]} must remain fixed for {side}')
+        runtime = config.get('optimize', {}).get('fixed_runtime_overrides', {})
+        if any(value is not enabled for value in _hsl_override_values(runtime, side)):
+            raise ValueError('A runtime override changes the fixed HSL mode')
+        bounds = config.get('optimize', {}).get('bounds', {}).get(side, {}).get('hsl', {})
+        if 'enabled' in bounds:
+            values = bounds['enabled']
+            if not isinstance(values, list) or any(value != enabled for value in values):
+                raise ValueError('Search bounds change the fixed HSL mode')
+        patches = list(overrides.values()) + [row.get('overrides') or {} for row in
+                                             config.get('backtest', {}).get('scenarios', [])]
+        for override in patches:
+            if any(value is not enabled for value in _hsl_override_values(override, side)):
+                raise ValueError('A coin or scenario override changes the fixed HSL mode')
+
+
 def apply_optimizer_start(record, config, overrides):
     """Validate the AI's complete experiment without overwriting proposed bot edits."""
     start = optimizer_start_candidate(record)
     config, overrides = copy.deepcopy(config), copy.deepcopy(overrides)
-    # The confirmed bot is supplied to the AI as a reference, not applied here:
-    # a complete proposal may deliberately change even a value back to its
-    # initial default. Inferring intent by comparing with the initial config
-    # would silently discard such experiments.
+    # The incumbent is comparison evidence only. A complete proposal may change
+    # even a value back to its initial default; do not infer intent or copy a bot
+    # from an earlier round into the new experiment.
     compatible = config['live'].get('strategy_kind', 'trailing_martingale') == start['strategy_kind']
     config = apply_run_limit(record['settings'], config)
     validate_change(record, config, overrides)
@@ -192,7 +274,7 @@ def apply_optimizer_start(record, config, overrides):
                               'optimizer_job': start['optimizer_job'] if compatible else None,
                               'bot_modified': config['bot'] != start['bot'],
                               'overrides_modified': overrides != start['overrides'],
-                              'reason': 'Confirmed bot supplied as reference; AI experiment preserved' if compatible
+                              'reason': 'Fresh random population; incumbent retained for comparison only' if compatible
                               else 'Explicit strategy change uses the proposed compatible bot'}
 
 
@@ -294,6 +376,7 @@ def validate_change(record, config, overrides):
     bounded_json(overrides)
     if not all(isinstance(config.get(key), dict) for key in ('backtest', 'bot', 'live', 'optimize')):
         raise ValueError('A complete PB8 optimizer configuration is required')
+    validate_hsl_policy(record, config, overrides)
     if not record['settings']['scenario_enabled'] and scenario_state(config) != scenario_state(record['initial_config']):
         raise ValueError('Scenario Editor is disabled; its effective settings must remain unchanged')
     initial = record['initial_config']

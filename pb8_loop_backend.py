@@ -8,7 +8,7 @@ import time
 
 from fastapi import HTTPException
 
-from pb8_loop_store import digest, evaluate, validate_change, apply_run_limit, windows, configured_direction
+from pb8_loop_store import digest, evaluate, validate_change, apply_run_limit, windows, configured_direction, fresh_optimizer_config, apply_hsl_policy, validate_hsl_policy
 from file_lock import advisory_file_lock
 
 SERVICE = 'PB8Loop'
@@ -90,7 +90,7 @@ class LoopBackend:
         config = apply_run_limit(settings, config)
         config.setdefault('optimize', {})['backend'] = 'pymoo' if settings['execution'] == 'cpu' else 'gpu'
         config.setdefault('pbgui', {})['execution'] = 'vast' if settings['execution'] == 'vast' else 'local'
-        config['pbgui'].setdefault('optimize_runtime', {'mode': 'fresh'})
+        config = fresh_optimizer_config(config)
         goals = settings['goals']
         use_config = goals['direction'] == 'config'
         direction = configured_direction(config) if use_config else goals['direction']
@@ -116,6 +116,7 @@ class LoopBackend:
                 if not isinstance(config['live'].get('approved_coins'), dict):
                     config['live']['approved_coins'] = {}
                 config['live'].setdefault('approved_coins', {})[side] = goals['coins'] if active else []
+        config, overrides = apply_hsl_policy(settings, config, overrides)
         normalize_suite_coins(config)
         runtime = opt.pb8_runtime_status()
         if not runtime.get('ready'):
@@ -205,7 +206,10 @@ class LoopBackend:
         from api import optimize_v8 as opt, backtest_v8 as bt
         config, overrides, name = copy.deepcopy(job['config']), job['overrides'], job['name']
         self.authorized(record, observer=bool(job.get('observer_only')))
+        validate_hsl_policy(record, config, overrides)
         if job['kind'] == 'optimizer':
+            if fresh_optimizer_config(config) != config:
+                raise ValueError('AI Loop optimizers require a fresh random population')
             validate_change(record, config, overrides)
             prepared = opt._save_config_bundle(name, config, override_payloads=overrides, preserve_hsl_runtime_overrides=True)
             validate_change(record, prepared, overrides)

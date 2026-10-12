@@ -72,6 +72,7 @@ def test_queue_settings_and_five_vast_views_are_separate(cloud_page):
       window.refreshLiveResultsDuringRun = window.restoreSelectedOptimizeResultWhenReady = async () => {};
       window.handleError = e => {throw e;};
       window.setPanel = (0,eval)('(' + SWITCHER + ')');
+      window.selectPanel = panel => setPanel(panel);
       el('btn-queue-settings').onclick = () => setPanel('settings');
       setPanel('queue');
     });'''.replace('SIDEBAR', json.dumps(sidebar)).replace('PANELS', json.dumps(panels)).replace('SWITCHER', json.dumps(switcher))
@@ -82,6 +83,11 @@ def test_queue_settings_and_five_vast_views_are_separate(cloud_page):
     page.locator('#btn-queue-settings').click()
     assert page.locator('#settings-cpu-value').is_visible()
     assert page.locator('#vast-offers').is_hidden()
+    assert page.locator('#vast-settings-nav').is_hidden()
+    page.locator('#nav-vast').click()
+    assert page.locator('#ctx-queue').is_hidden()
+    assert page.locator('#vast-settings-nav').is_visible()
+    assert page.locator('#nav-vast').evaluate('(button)=>button.classList.contains("active")')
     assert page.locator('#vast-settings-nav [data-vast-view]').evaluate_all(
         '(buttons) => buttons.map(button => button.dataset.vastView)'
     ) == ['account', 'offers', 'hosts', 'rental', 'performance']
@@ -99,6 +105,7 @@ def test_queue_settings_and_five_vast_views_are_separate(cloud_page):
         if view == 'performance':
             assert page.locator('#vast-performance #vast-performance-actions').is_visible()
             assert page.locator('#vast-performance #performance-refresh').is_visible()
+    page.evaluate("setPanel('queue')")
     page.locator('#btn-queue-settings').click()
     assert page.locator('#settings-cpu-value').is_visible()
     assert page.locator('#vast-settings-nav .active').count() == 0
@@ -106,7 +113,10 @@ def test_queue_settings_and_five_vast_views_are_separate(cloud_page):
     assert page.locator('.sb-section[data-panel="queue"]').evaluate(
         '(button) => button.classList.contains("active")'
     )
-    assert page.locator('#vast-settings-nav').is_visible()
+    assert page.locator('#vast-settings-nav').is_hidden()
+    assert page.locator('#nav-vast').is_visible()
+    page.evaluate("optimizeEditorAdapter.isV8=false;setPanel('queue')")
+    assert page.locator('#nav-vast').is_hidden()
 
 
 def test_custom_idle_timeout_saves_and_restores(cloud_page):

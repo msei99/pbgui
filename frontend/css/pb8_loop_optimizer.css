@@ -6,7 +6,7 @@
 .loop-panel .loop-form {width:100%;max-width:none;gap:var(--sp-md);}
 .loop-panel .loop-section {container-type:inline-size;min-width:0;}
 .loop-panel .loop-section > .section-title {margin-top:0;}
-.loop-panel .loop-grid {width:100%;align-items:end;}
+.loop-panel .loop-grid {width:100%;align-items:start;}
 .loop-panel .loop-grid:last-child {margin-bottom:0;}
 .loop-panel .span-8 {grid-column:span 8;}
 .loop-panel .loop-field {min-width:0;}

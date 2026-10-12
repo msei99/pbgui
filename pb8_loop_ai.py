@@ -13,7 +13,7 @@ from email.utils import parsedate_to_datetime
 
 import aiohttp
 
-from pb8_loop_store import bounded_json, digest, apply_run_limit, optimizer_start_candidate
+from pb8_loop_store import bounded_json, digest, apply_run_limit
 from logging_helpers import human_log as _log
 
 SERVICE = 'PB8Loop'
@@ -43,17 +43,15 @@ its allowed_metrics. Never put exact_only_metrics into GPU optimizer objectives 
 not assume they will be deferred to exact CPU validation. These restrictions do not apply to the
 exact comparison rubric: preserve user goals and evaluate them using exact backtest metrics.
 Explain any proxy-objective choice; do not silently change a goal, threshold or its units.
-optimizer_start contains the retained best bot from exact fixed-comparison backtests, or the original
-bot until a candidate strictly improves on its baseline. The controller seeds every new optimizer
-with your complete proposed bot and coin override bundle, without replacing your edits.
-Keep optimizer experiments separate: propose bounds, scoring, limits and search settings in optimize;
-the controller does not copy the winner's optimizer settings or automatically tighten bounds.
-Use the supplied starting bot and overrides as the base for each experiment. You may deliberately
-change bot settings, including HSL, Unstuck and risk settings, unless user requirements forbid them.
-Explain those changes; an experimental bot is not a confirmed winner. Search bounds and fixed runtime
-overrides still constrain the seed. An enabled strategy change may need a compatible bot template.
-Never choose a starting bot from Holdout or Full Time Range results. A winning bot alone does not prove
-that its optimizer settings are superior; distinguish these findings in your recorded knowledge.
+Every optimizer experiment starts with a fresh random population and a new controller-assigned RNG seed.
+Never seed from earlier candidates, Pareto populations or checkpoints. The incumbent and baseline are
+comparison evidence only, not starting bots. Adapt bounds, scoring, limits and search settings from
+measured training results; do not automatically narrow the search around the incumbent.
+Return a complete bot/override bundle for fixed settings and compatibility, not as a seed population.
+hsl_mode is a hard user setting: on keeps HSL enabled on active sides and disabled on inactive sides;
+off disables HSL on both sides. Only auto allows changing HSL activation. Do not bypass this through
+bounds, runtime overrides or coin overrides. Other valid HSL parameters remain tunable.
+Never use Holdout or Full Time Range results to guide the search.
 Keep GPU drift settings coherent when changing validate_per_generation or drift_probes:
 drift_probes must be smaller than validate_per_generation, and drift_window must be at least
 8 * validate_per_generation and large enough for the configured broad-probe evidence.
@@ -109,14 +107,16 @@ Choose using the user's goals and priorities and explain using exact metrics in 
 Compare with the incumbent and baseline; retain them when no improvement is supported.
 PBGui validates completeness and hard targets but does not rank by a weighted score.
 Do not use legacy scores or Holdout/Full Time Range evidence for this decision.
-For all stages proposing variants, optimizer_start is the confirmed starting reference, not a forced
-replacement for variant.config.bot or variant.overrides. This supersedes older instructions requiring
-the starting bot to remain unchanged: base experiments on that reference and deliberately vary bot
-settings when useful and allowed by the user's requirements, including HSL, Unstuck and risk settings.
-Return the complete intended bot and override bundle, preserving unchanged settings from the reference.
-Explain bot changes. The controller validates your proposal without overwriting it; existing user
-constraints, fixed comparison conditions, search bounds and runtime overrides still apply. Experimental
-changes do not promote a winner without independent exact comparison and explicit winner selection.
+For all stages proposing variants, every new optimizer uses a fresh random population and a new
+controller-assigned RNG seed. This supersedes older instructions to use the retained winner as the
+starting bot. Baseline/incumbent configs are comparison evidence only; do not reuse old populations,
+Pareto seeds or checkpoints. Adapt search settings from exact training evidence without automatically
+anchoring the search to the winner. Return a complete intended config and sparse override bundle.
+The controller validates the proposed bot without overwriting it with the incumbent.
+Honor hsl_mode at every layer: on enables HSL on active trading sides, off disables it on both sides,
+and only auto permits AI changes to HSL activation. Other HSL parameters may be optimized when enabled.
+Existing user constraints, fixed comparison conditions and runtime overrides remain mandatory.
+Experimental changes need independent exact comparison and explicit winner selection.
 '''
 
 
@@ -436,7 +436,8 @@ class LoopAI:
                    'required_goal_ids': sorted(set(settings['goals'].get('presets') or []) | ({'custom'} if settings['goals'].get('text') else set())), 'scenario_enabled': settings['scenario_enabled'], 'strategy_enabled': settings.get('strategy_enabled', False),
                    'execution': settings['execution'], 'run_limit': {key: settings.get(key) for key in ('run_limit_mode', 'run_iters', 'run_proxy', 'run_hours')} | {'controller_pins_native_iters': settings.get('run_limit_mode', 'config') != 'config', 'effective_native_iters': apply_run_limit(settings, record['initial_config'])['optimize'].get('iters')}, 'initial_config': record['initial_config'],
                    'training_exclusions': record.get('training_exclusions', record.get('holdouts', [])), 'initial_overrides': record['initial_overrides'], 'rubric': record['rubric'],
-                   'optimizer_start': optimizer_start_candidate({**record, 'best': evidence.get('best', record.get('best'))}),
+                   'search_policy': {'population': 'fresh_random', 'seed': 'controller_assigned', 'winner_use': 'comparison_only'},
+                   'hsl_mode': settings.get('hsl_mode', 'auto'),
                    'knowledge': self.store.context(record), 'evidence': evidence}
         if stage == 'evaluate':
             content['evaluation_contract'] = {

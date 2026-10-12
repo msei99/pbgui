@@ -26,6 +26,12 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
     instruction_catalog = {'active':'default','revision':0}
     cloud_jobs, log_targets, log_subscriptions, native_status_requests = [], [], [], []
     definitions = {}
+    rental_extensions, rental_budgets = [], []
+    rental_fixture = dict(worker_id='f'*32, state='active', deadline=2000007200,
+                          loop_deadline=2000000000, budget_usd=2, price_hour_usd=.08,
+                          maximum_deadline=2000010000, pending=False, error=None, can_extend=True,
+                          can_edit_budget=True, estimated_compute_usd=.15,
+                          billing={'amount_usd':.1234,'reported_at':2000000000,'error':None})
     from api.vast import RentalPreferences
     rental_preferences = RentalPreferences(hours=12, budget=5, max_rentals=3, idle_seconds=300).model_dump()
     options = {'configs':['fixture','alternative'], 'providers': {'chatgpt': {'connected':True}}, 'profiles':[{'id':'default','name':'Default'}], 'gpu_available':True,'gpu_reason':'', 'vast_connected':True, 'vast':{'hours':12,'gpu_name':'RTX 3060','budget':5,'max_rentals':3}, 'presets':['gain','drawdown','uptrend']}
@@ -145,6 +151,20 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
                     continuation_delay['pending'].append((route, child))
                 else:
                     loops.append(child);route.fulfill(json=child,status=201)
+            elif path.endswith('/rental/budget') and path.startswith('/api/optimize-v8/loops/'):
+                payload=json.loads(route.request.post_data)
+                rental_budgets.append(payload)
+                rental_fixture['pending']=True
+                route.fulfill(json={'pending':True},status=202)
+            elif path.endswith('/rental/charges') and path.startswith('/api/optimize-v8/loops/'):
+                route.fulfill(json={'worker_id':rental_fixture['worker_id'],'billing':rental_fixture['billing']})
+            elif path.endswith('/rental/extend') and path.startswith('/api/optimize-v8/loops/'):
+                payload=json.loads(route.request.post_data)
+                rental_extensions.append(payload)
+                rental_fixture['pending']=True
+                route.fulfill(json={'pending':True},status=202)
+            elif path.endswith('/rental') and path.startswith('/api/optimize-v8/loops/'):
+                route.fulfill(json={'rental':rental_fixture})
             elif path.endswith('/diff') and path.startswith('/api/optimize-v8/loops/'):
                 query=parse_qs(urlparse(route.request.url).query);diff_queries.append(query)
                 route.fulfill(json={'fields':[{'path':'optimize.limits.2.value','before':None,'after':.25}],'truncated':False})
@@ -199,6 +219,19 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         page.wait_for_timeout(300)
         assert not errors, errors
         assert page.evaluate('()=>({version:window.OPTIMIZE_VERSION,adapter:window.optimizeEditorAdapter&&optimizeEditorAdapter.isV8,loop:!!window.PBGuiLoopOptimizer})')['loop']
+        page.wait_for_function('!!window.PBGuiVast')
+        page.locator('#nav-vast').click()
+        assert page.locator('#vast-settings-nav').is_visible()
+        page.locator('[data-vast-view=rental]').click()
+        assert page.locator('#vast-rental').is_visible()
+        page.reload()
+        page.wait_for_function('!!window.PBGuiVast')
+        assert page.url.endswith('#vast-rental')
+        assert page.locator('#vast-rental').is_visible()
+        assert page.locator('#nav-vast').evaluate('(button)=>button.classList.contains("active")')
+        page.locator('.sb-section[data-panel="queue"]').click()
+        assert page.locator('#vast-settings-nav').is_hidden()
+        assert page.locator('#nav-vast').is_visible()
         # Real sidebar instruction editor preserves text/focus during polling and saved version on reload.
         instruction_nav=page.locator('.sb-section[data-panel="loops-instructions"]')
         instruction_nav.click()
@@ -326,6 +359,12 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         page.locator('#loop-trades').check()
         assert page.locator('#loop-trades-target').is_enabled()
         page.locator('#loop-trades').uncheck()
+        assert page.locator('#loop-hsl-mode').input_value() == 'auto'
+        assert page.locator('#loop-hsl-mode option').all_text_contents() == ['Off', 'On', 'Auto · AI decides']
+        page.locator('#loop-hsl-mode').select_option('off')
+        if viewport_width == 1920:
+            tops = page.locator('#loop-coins, #loop-direction, #loop-positions').evaluate_all('nodes=>nodes.map(node=>node.getBoundingClientRect().top)')
+            assert max(tops) - min(tops) <= 1
         assert page.locator('#loop-direction').input_value() == 'config'
         assert page.locator('#loop-direction option').all_text_contents() == ['Use config · Long and short', 'Long and short', 'Long', 'Short']
         assert page.locator('#loop-position-split').is_hidden()
@@ -393,6 +432,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         page.locator('#loop-start').click()
         page.wait_for_function("document.querySelector('#loops-queue-table tr[data-key]')")
         assert len(starts)==1 and starts[0]['execution']=='vast'
+        assert starts[0]['hsl_mode']=='off'
         assert starts[0]['model']=='pinned' and starts[0]['effort']=='high' and starts[0]['service_tier']=='priority'
         assert page.url.endswith('#loops-queue')
         assert loops[0]['status']=='queued' and loops[0]['ai_calls']==0
@@ -428,6 +468,38 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         page.locator('#loop-queue-start').click()
         page.wait_for_function("document.querySelector('#loops-queue-table').textContent.includes('running')")
         assert page.locator('#loop-queue-delete').is_disabled()
+        page.wait_for_function("document.querySelector('#loop-rental-status').textContent.includes('Budget $2.00')")
+        assert 'Spent on this rental: $0.1234' in page.locator('#loop-rental-cost').inner_text()
+        budget=page.locator('#loop-rental-budget')
+        budget.fill('3')
+        budget.focus()
+        page.wait_for_timeout(3300)
+        assert budget.input_value()=='3' and budget.evaluate('(node)=>node===document.activeElement')
+        page.locator('#loop-rental-budget-save').click()
+        page.wait_for_function("document.querySelector('#loop-rental-status').textContent.includes('Awaiting worker confirmation')")
+        assert page.locator('#loop-rental-budget-save').is_disabled()
+        assert rental_budgets[-1]==dict(worker_id='f'*32,expected_deadline=2000007200,expected_budget_usd=2,budget_usd=3)
+        assert 'Budget $2.00' in page.locator('#loop-rental-status').inner_text()
+        rental_fixture.update(pending=False,budget_usd=3)
+        page.wait_for_function("document.querySelector('#loop-rental-status').textContent.includes('Budget $3.00')")
+        assert budget.input_value()=='3'
+        minutes=page.locator('#loop-rental-minutes')
+        minutes.fill('90')
+        minutes.focus()
+        page.wait_for_timeout(3300)
+        assert minutes.input_value()=='90'
+        assert minutes.evaluate('(node)=>node===document.activeElement')
+        assert page.locator('#loop-rental-extend').inner_text()=='Extend loop'
+        page.locator('#loop-rental-extend').click()
+        page.wait_for_function("document.querySelector('#loop-rental-status').textContent.includes('Awaiting worker confirmation')")
+        assert page.locator('#loop-rental-extend').is_disabled()
+        assert rental_extensions[-1]==dict(worker_id='f'*32,expected_deadline=2000007200,
+                                           expected_loop_deadline=2000000000,minutes=90)
+        rental_fixture.update(pending=False,loop_deadline=2000005400)
+        page.wait_for_function("!document.querySelector('#loop-rental-extend').disabled")
+        assert minutes.input_value()=='90'
+        assert page.locator('#loop-rental-extend').inner_text()=='Extend rental & loop'
+        assert page.locator('#loop-rental').evaluate('(node)=>node.getBoundingClientRect().right<=innerWidth')
         loops[0]['bootstrap']={'status':'applied','candidate_count':1,'sources':['saved_vast_run'],
                               'reason':'Historical assessment <script>unsafe()</script>','knowledge':'Requires exact validation'}
         first,second,check1,check2=[digit*32 for digit in ('1','2','3','4')]
@@ -473,11 +545,27 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
                 assessment={'comparable':True,'simulation_complete':True,'goals':[
                     {'goal':goal['goal'],'metric':goal['metrics'][0],'direction':goal['direction'],'value':goal['value']}
                     for goal in cycle['goals']]})
+        loops[0].update(phase='optimize', round=1)
+        loops[0]['jobs'][1].update(proxy_evaluations=50000, proxy_limit=100000)
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
         page.wait_for_function("document.querySelector('#loops-queue-table').textContent.includes('Loop 2')")
         assert 'Reduce recovery duration' not in page.locator('#loops-queue-table').inner_text()
         progress=page.locator('#loops-queue-table tr[data-key="'+'a'*32+':1"]')
         assert 'Gain 1.2 ×' in progress.inner_text() and 'Drawdown 50 %' in progress.inner_text()
+        assert progress.locator('.loop-proxy-progress').inner_text() == 'Proxy 50,000 / 100,000 · 50%'
+        main_proxy=page.locator('#loops-queue-table tr[data-key="'+'a'*32+'"] .loop-proxy-progress')
+        assert main_proxy.inner_text() == 'Proxy 50,000 / 100,000 · 50%'
+        loops[0]['jobs'][1]['proxy_evaluations']=104448
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        page.wait_for_function("document.querySelector('.loop-proxy-progress')?.textContent==='Proxy 104,448 / 100,000 · 104.4%'")
+        assert progress.locator('.loop-proxy-progress').inner_text() == 'Proxy 104,448 / 100,000 · 104.4%'
+        assert progress.locator('.loop-activity').inner_text() == 'GPU optimizing'
+        loops[0]['phase']='evaluate'
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        page.wait_for_function("document.querySelector('.loop-activity')?.textContent==='AI evaluating results'")
+        assert progress.locator('.loop-activity').inner_text() == 'AI evaluating results'
+        assert page.locator('#loops-queue-table tr[data-key=\"'+'a'*32+'\"]').locator('.loop-activity').inner_text() == 'AI evaluating results'
+
         assert '↑ +0.7 ×' in progress.locator('.loop-metric-change.is-better').all_text_contents()
         assert '↓ +20 pp' in progress.locator('.loop-metric-change.is-worse').all_text_contents()
         assert '↑ -10 pp' in progress.locator('.loop-metric-change.is-better').all_text_contents()
@@ -493,6 +581,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         assert page.locator('#loops-queue-table tr[data-key="'+'a'*32+'"]').get_by_role('button',name='Log',exact=True).is_disabled()
         assert page.locator('#loops-queue-table tr[data-key="'+'a'*32+':1"]').get_by_role('button',name='Log',exact=True).is_disabled()
         assert page.locator('#loops-queue-table tr[data-key="'+'a'*32+':1:'+second+'"]').get_by_role('button',name='Log',exact=True).is_enabled()
+        assert page.locator('#loops-queue-table tr[data-key="'+'a'*32+':1:'+second+'"] .loop-proxy-progress').inner_text() == 'Proxy 104,448 / 100,000 · 104.4%'
         assert page.locator('#loops-queue-table tr[data-key="'+'a'*32+':1:'+'5'*32+'"]').get_by_role('button',name='Log',exact=True).is_enabled()
         loops[0]['jobs'].remove(variant)
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
@@ -728,6 +817,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         page.locator('#loop-config-list tbody tr').click()
         page.locator('#loop-edit-config').click()
         page.wait_for_function("!document.querySelector('#loop-form').hidden")
+        assert page.locator('#loop-hsl-mode').input_value() == 'off'
         # Same-name Save has no waiting queue ID and must send null, not an empty string.
         revision=definitions['My named loop']['revision']
         page.locator('#loop-save').click()
@@ -748,6 +838,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         page.reload()
         page.wait_for_function("document.querySelector('#loop-goals')?.value==='Preserve this unsaved edit' && document.querySelector('#panel-loops-queue').classList.contains('active')")
         assert page.url.endswith('#loops-queue'), 'Restoring a draft must preserve the active destination'
+        assert page.locator('#loop-hsl-mode').input_value() == 'off'
         page.locator('.sb-section[data-panel="loops-config"]').click()
         assert page.locator('#loop-goals').input_value()=='Preserve this unsaved edit'
         page.locator('#loop-save').click()

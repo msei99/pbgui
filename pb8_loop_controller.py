@@ -11,7 +11,7 @@ import traceback
 import uuid
 
 from logging_helpers import human_log as _log
-from pb8_loop_store import ACTIVE, TERMINAL, LoopStore, LoopDeletionConflict, digest, validate_change, config_changes, apply_optimizer_start, qualified_winner
+from pb8_loop_store import ACTIVE, TERMINAL, LoopStore, LoopDeletionConflict, digest, validate_change, config_changes, apply_optimizer_start, qualified_winner, fresh_optimizer_config, validate_hsl_policy
 from pb8_loop_ai import LoopAI, LoopAIRetryScheduled, LoopAIRequestFailed, validate_rubric
 from pb8_loop_backend import LoopBackend
 from pb8_loop_observer import ObserverJobs
@@ -244,11 +244,19 @@ class LoopController:
         return ''
 
     def job(self, record, kind, config, overrides, reason, candidate=None):
-        """Snapshot a job, seeding only new optimizers from retained exact evidence."""
+        """Snapshot an experiment with a fresh population and a unique persisted RNG seed."""
         token = uuid.uuid4().hex
         start = None
         if kind == 'optimizer':
+            seed = int(token[:8], 16) & 0x7fffffff
+            used = {item.get('config', {}).get('optimize', {}).get('seed') for item in record.get('jobs', [])}
+            used.add(record['initial_config'].get('optimize', {}).get('seed'))
+            while seed in used:
+                seed = (seed + 1) & 0x7fffffff
+            config = fresh_optimizer_config(config, seed)
             config, overrides, start = apply_optimizer_start(record, config, overrides)
+            start.update(population='fresh_random', seed=seed, reference_only=True)
+        validate_hsl_policy(record, config, overrides)
         return {'operation': token, 'name': 'loop_' + record['id'][:8] + '_' + token[:8],
                 'kind': kind, 'round': record['round'], 'config': copy.deepcopy(config),
                 'overrides': copy.deepcopy(overrides), 'reason': str(reason)[:4000],
@@ -256,6 +264,10 @@ class LoopController:
                 'candidate': candidate, 'status': 'planned', 'backend': None, 'started': False, 'created_at': time.time()}
 
     async def _tick(self, record):
+        if record.get('rental_extension'):
+            from pb8_loop_rental_controls import reconcile_extension
+            from vast_queue import CloudQueue
+            record = await owned_thread(reconcile_extension, self.store, CloudQueue(), record)
         handover = record.get('rental_handover') or {}
         if handover.get('status') == 'collecting':
             if not await owned_thread(self.backend.handover_step, record):
@@ -388,7 +400,8 @@ class LoopController:
                 overrides = variant.get('overrides', record['initial_overrides'])
                 validate_change(record, config, overrides)
                 job = self.job(record, 'optimizer', config, overrides, variant.get('reason', decision.get('reason', '')))
-                if digest([job['config'], overrides]) == digest([record['initial_config'], record['initial_overrides']]):
+                if digest([fresh_optimizer_config(config, 0), overrides]) == digest([
+                        fresh_optimizer_config(record['initial_config'], 0), record['initial_overrides']]):
                     raise ValueError('Use the saved results to adjust the config before the first optimizer run')
                 jobs.append(job)
             summary = {**record['bootstrap'], 'status': 'applied', 'reason': str(decision.get('reason') or '')[:4000],
@@ -665,6 +678,7 @@ class LoopController:
                 record = self.store.update(record['owner'], record['id'], prepared)
                 job = next(item for item in record['jobs'] if item['operation'] == job['operation'])
             state = await owned_thread(self.backend.poll, record, job)
+            polled_proxy = state.get('proxy_evaluations')
             source = state.get('source') or {}
             started_at = job.get('run_started_at') or source.get('started_at')
             if started_at is None and state['status'] == 'running' and state['started']:
@@ -716,6 +730,10 @@ class LoopController:
                 target = next(item for item in row['jobs'] if item['operation'] == job['operation'])
                 target['status'] = state['status']
                 target['started'] = target['started'] or state['started']
+                proxies = [value for value in (polled_proxy, state.get('proxy_evaluations'))
+                           if type(value) is int and value >= 0]
+                if job['kind'] == 'optimizer' and proxies:
+                    target['proxy_evaluations'] = max(target.get('proxy_evaluations') or 0, *proxies)
                 if state.get('executed_config'):
                     target['executed_config'] = state['executed_config']
                     target['executed_digest'] = digest(state['executed_config'])

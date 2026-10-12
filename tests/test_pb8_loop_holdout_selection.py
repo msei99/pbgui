@@ -52,6 +52,66 @@ class RankedBackend(Backend):
         return value
 
 
+def retained_incumbent(store, row):
+    """Build three rounds retaining one immutable winner with settled Holdouts."""
+    row = reference(store, row, rounds=3)
+    row['baseline'] = None
+    for entry in row['history']:
+        entry.update(winner_operation=row['jobs'][0]['operation'], winner_candidate_id='candidate_0')
+    row = store.update(OWNER, row['id'], lambda current: current.update(
+        baseline=None, history=row['history']))
+    observer = ObserverJobs(store, Backend(), owned_thread)
+    row = observer.plan(row)
+    def complete(current):
+        """Use distinct user-only results to detect accidental candidate substitution."""
+        for job in current['observer_jobs']:
+            job.update(status='complete', report_done=True, simulation_complete=True,
+                       assessment={'simulation_complete': True, 'comparable': True},
+                       metrics={'gain': 1.25 + job['round'], 'drawdown': .2})
+    row = store.update(OWNER, row['id'], complete)
+    row = observer.plan(row)
+    row = store.update(OWNER, row['id'], complete)
+    return observer, row
+
+
+def test_retained_incumbent_reuses_original_holdout_and_full_range(record):
+    """Later rounds display the same native evidence with correct zero deltas."""
+    store, row = record
+    observer, row = retained_incumbent(store, row)
+    original = copy.deepcopy(row)
+    reports = _observer_reports(row)
+    for number in (1, 2):
+        selection = holdout_selection(row, number)
+        assert selection['status'] == 'selected' and selection['source_round'] == 0
+        chosen = [job for job in reports if job['round'] == number and job['selected_for_full_range']]
+        assert {job['kind'] for job in chosen} == {'observer_holdout', 'observer_full_range'}
+        for job in chosen:
+            source = next(item for item in row['observer_jobs'] if item['operation'] == job['operation'])
+            assert job['source_round'] == source['round'] == 0
+            assert job['metrics']['gain'] == 1.25
+            assert job['delta_previous'] == {'gain': 0.0, 'drawdown': 0.0}
+    assert not observer.pending(row)
+    assert observer.plan(row) == original and row == original
+    assert len([job for job in row['observer_jobs'] if job['kind'] == 'observer_full_range']) == 1
+
+
+@pytest.mark.parametrize('problem', ['unknown_operation', 'wrong_candidate', 'future_origin', 'incomplete', 'unread_report'])
+def test_retained_incumbent_requires_matching_complete_origin(record, problem):
+    """Never borrow unrelated, future, incomplete or unread user-only evidence."""
+    store, row = record
+    _, row = retained_incumbent(store, row)
+    if problem == 'unknown_operation':
+        row['history'][1]['winner_operation'] = 'f' * 32
+    elif problem == 'wrong_candidate':
+        row['history'][1]['winner_candidate_id'] = 'unrelated'
+    elif problem == 'future_origin':
+        row['jobs'][0]['round'] = 2
+    else:
+        source = next(job for job in row['observer_jobs'] if job['kind'] == 'observer_holdout' and job['round'] == 0)
+        source['simulation_complete' if problem == 'incomplete' else 'report_done'] = False
+    assert holdout_selection(row, 1)['status'] == 'unavailable'
+
+
 def test_new_full_range_follows_ai_training_selection_without_holdout_ranking(record):
     """User-only evidence cannot replace the recorded AI winner, even with larger scores."""
     store, row = record

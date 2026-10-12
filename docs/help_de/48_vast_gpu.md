@@ -49,7 +49,7 @@ Eine automatische Batchgröße bleibt auch in der Ausführungskonfiguration leer
 
 **Queue Settings** enthält nur den lokalen Autostart, die CPU-Anzahl, CPU-Override und die Auswahl der PBGui-Marktdaten.
 
-Die Queue-Sidebar bietet fünf getrennte Vast.ai-Buttons:
+Öffne **PB8 Optimize → Vast.ai** über den eigenen Sidebar-Eintrag, unabhängig von Queue. Seine fünf Einstellungsbereiche erscheinen unter der Hauptnavigation:
 
 - **Account**: API-Key, Verbindungstest und Guthaben. Zugangsdaten mit **Save key** speichern.
 - **GPU & Offers**: Hardware-Anforderungen, maximaler Stundenpreis, Angebotsvorschau und manuelles Rent. Speichern mit **Save GPU requirements**.
@@ -64,7 +64,7 @@ Beim ersten Aufruf von GPU & Offers öffnet sich Account, falls noch kein Key ei
 1. Auf der [Keys-Seite der Vast-Konsole](https://console.vast.ai/manage-keys/) anmelden und unter **API Keys** auf **+New** klicken.
 2. Den Key `PBGui` nennen. Benutzerdefinierte/eingeschränkte Rechte wählen und die folgenden Kategorien aktivieren.
 3. **Create** klicken und den einmalig angezeigten Key kopieren.
-4. In PBGui **PB8 Optimize → Account** öffnen. Unter **Vast API key** einfügen, **Save key** und danach **Test connection & refresh balance** klicken.
+4. In PBGui **PB8 Optimize → Vast.ai → Account** öffnen. Unter **Vast API key** einfügen, **Save key** und danach **Test connection & refresh balance** klicken.
 
 | Berechtigung | Verwendung in PBGui |
 | --- | --- |

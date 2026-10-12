@@ -23,8 +23,8 @@
 <script src="/app/js/optimize_editor_adapter.js?v=16"></script>
 <script src="/app/js/floating_window.js?v=1"></script>
 <script src="/app/js/pb8_loop_instructions.js?v=2"></script>
-<script src="/app/js/pb8_loop_optimizer.js?v=47"></script>
-<link rel="stylesheet" href="/app/css/pb8_loop_optimizer.css?v=14">
+<script src="/app/js/pb8_loop_optimizer.js?v=53"></script>
+<link rel="stylesheet" href="/app/css/pb8_loop_optimizer.css?v=15">
 <style>
 :root {
   --bg: #0e1117;
@@ -121,6 +121,16 @@ body.pb8-runtime-warning-visible #page-body { height: calc(100vh - 94px); }
   margin-bottom: var(--sp-sm);
   flex-wrap: wrap;
 }
+
+#loop-rental {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+  padding: var(--sp-sm) 0;
+  border-bottom: 1px solid var(--border);
+}
+#loop-rental[hidden] { display: none; }
 
 .pareto-toolbar-control {
   display: inline-flex;
@@ -2322,6 +2332,9 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
       <button class="sb-section" data-panel="paretos" onclick="selectPanel('paretos')">
         <span class="sb-icon">🎯</span> Paretos
         <span id="nav-pareto-count" class="sb-count" style="margin-left:auto">0</span>
+      </button>
+      <button class="sb-section" id="nav-vast" data-panel="vast" onclick="selectPanel('vast')" hidden>
+        Vast.ai
       </button>
 
       <hr class="sb-sep">
@@ -11525,6 +11538,7 @@ function filterResults() {
 }
 
 function setPanel(panel, vastView) {
+  el('nav-vast').hidden = !optimizeEditorAdapter.isV8;
   if (panel === 'vast' && !optimizeEditorAdapter.isV8) panel = 'settings';
   if (state.panel === 'vast' && panel !== 'vast' && window.PBGuiVast) window.PBGuiVast.hideSettings();
   if (panel === 'vast' && ['offers','rental','hosts','performance','account'].includes(vastView)) state.vastView = vastView;
@@ -11539,10 +11553,10 @@ function setPanel(panel, vastView) {
     if (nav) nav.classList.toggle('active', active || (name === 'queue' && panel === 'settings'));
   });
   el('ctx-configs').style.display = panel === 'configs' ? '' : 'none';
-  el('ctx-queue').style.display = ['queue','settings','vast'].includes(panel) ? '' : 'none';
+  el('ctx-queue').style.display = ['queue','settings'].includes(panel) ? '' : 'none';
   el('btn-queue-settings').classList.toggle('active', panel === 'settings');
   el('btn-delete-selected-queue').style.display = panel === 'queue' ? '' : 'none';
-  el('ctx-settings').style.display = optimizeEditorAdapter.isV8 && ['queue','settings','vast'].includes(panel) ? '' : 'none';
+  el('ctx-settings').style.display = optimizeEditorAdapter.isV8 && panel === 'vast' ? '' : 'none';
   el('ctx-results').style.display = panel === 'results' ? '' : 'none';
   el('ctx-paretos').style.display = panel === 'paretos' ? '' : 'none';
   window.PBGuiLoopOptimizer?.onPanel();
@@ -15160,6 +15174,7 @@ async function handleOpenConfigParam() {
 async function init() {
   try {
     optimizeEditorAdapter.configureUi();
+    el('nav-vast').hidden = !optimizeEditorAdapter.isV8;
     window.PBGuiLoopOptimizer?.mount();
     attachEventHandlers();
     initSelections();
