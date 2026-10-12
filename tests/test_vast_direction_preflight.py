@@ -93,6 +93,33 @@ def test_collapsed_issue_countercase_remains_exportable():
     assert native_job_config(config, 512, 4, False)['optimize']['backend'] == 'gpu'
 
 
+@pytest.mark.parametrize('offline', [None, False, 'true', 1])
+def test_legacy_online_snapshots_never_reach_metadata_or_rental(queue, offline):
+    """Old ready inputs cannot bypass the offline requirement during dispatch."""
+    config = direction_config()
+    if offline is None:
+        config['backtest'].pop('offline')
+    else:
+        config['backtest']['offline'] = offline
+    row = prepared(queue.store, config)
+    assert preflight_gpu_snapshots(queue.store, [row]) == []
+    assert queue.calls == []
+    assert queue.store.read(row['id'])['status'] == 'failed'
+    assert 'backtest.offline' in queue.store.read(row['id'])['error']
+
+
+@pytest.mark.parametrize('offline', [None, False])
+def test_legacy_online_archives_are_rebuilt_on_requeue(queue, monkeypatch, offline):
+    """Reuse returns to fresh offline export without modifying the old archive."""
+    config = direction_config()
+    config['backtest']['offline'] = offline
+    source = prepared(queue.store, config)
+    queue.store.update(source['id'], status='failed')
+    monkeypatch.setattr('pb8_config.load_pb8_config', lambda path: copy.deepcopy(config))
+    assert queue.store.clone_prepared(source['id'], 'synthetic', 'synthetic-source', queue.root / 'results', 512, 4, False) is None
+    assert len(queue.store.list()) == 1
+
+
 def test_invalid_queue_job_never_reaches_metadata_or_rental(queue):
     """Saved Altjobs are filtered before either metadata preflight."""
     row = prepared(queue.store, unstable_config())
@@ -213,7 +240,7 @@ def test_requeue_clone_is_filtered_before_rental(queue, monkeypatch):
     """clone_prepared stays unchanged; its ready result is checked at start."""
     source = prepared(queue.store, unstable_config())
     queue.store.update(source['id'], status='failed')
-    monkeypatch.setattr('pb8_config.load_pb8_config', lambda path: {'optimize': {'iters': 512, 'n_cpus': 4}})
+    monkeypatch.setattr('pb8_config.load_pb8_config', lambda path: {'backtest': {'offline': True}, 'optimize': {'iters': 512, 'n_cpus': 4}})
     clone = queue.store.clone_prepared(source['id'], 'synthetic', 'synthetic-source', queue.root / 'results', 512, 4, False)
     assert clone and clone['status'] == 'ready'
     with pytest.raises(VastError):

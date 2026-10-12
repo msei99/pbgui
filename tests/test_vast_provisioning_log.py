@@ -9,13 +9,16 @@ def test_manifest_weighted_progress_preserves_rolling_tail():
     """Large completed layers outweigh tiny ones; rolling logs preserve completion."""
     from vast_image_layers import IMAGE_LAYERS
     image, sizes = next(iter(IMAGE_LAYERS.items()))
-    progress = logs.image_layer_progress('ea381c80ad7f: Download complete\n02a27392fe49: Already exists', image=image)
+    large = max(sizes, key=sizes.get)
+    small = min(sizes, key=sizes.get)
+    completed_bytes = sizes[large] + sizes[small]
+    progress = logs.image_layer_progress(f'{large}: Download complete\n{small}: Already exists', image=image)
     assert progress['total'] == len(sizes)
-    assert progress['completed_bytes'] == 820822233 + 250
+    assert progress['completed_bytes'] == completed_bytes
     assert progress['total_bytes'] == sum(sizes.values())
-    assert progress['download_percent'] == pytest.approx(100 * (820822233 + 250) / sum(sizes.values()))
+    assert progress['download_percent'] == pytest.approx(100 * completed_bytes / sum(sizes.values()))
     assert progress['ready'] == 1
-    later = logs.image_layer_progress('ea381c80ad7f: Pull complete\nffffffffffff: Pull complete', progress, image=image)
+    later = logs.image_layer_progress(f'{large}: Pull complete\nffffffffffff: Pull complete', progress, image=image)
     assert later['completed_bytes'] == progress['completed_bytes']
     assert later['ready'] == 2
     assert 'completed_bytes' not in logs.image_layer_progress('', later, image='unknown')

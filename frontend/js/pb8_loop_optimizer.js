@@ -8,6 +8,7 @@
   var starting = false, formEdited = false, setupGeneration = 0, initialSetupRestored = false, optionsReady;
   var jevEnabled=true;
   var uiError = '', uiErrorPanel = 'loops-config', definitions = [], editingName = '', editingRevision = null, editingQueue = '';
+  var pollError = '', pollErrorPanel = 'loops-config';
   var editorSource = null, sourceDefaults = null, sourceDigest = null, editorVisible = false, editorLoading = false, editorGeneration = 0, queueing = false;
   var selectedDefinitions = new Set(), selectedRuns = new Set(), expanded = new Set();
   var logGeneration=0, logOpening=false, logRun='', logOperation='';
@@ -169,7 +170,7 @@
     if (!response.ok) { if (response.status === 401) { clearTimeout(timer); generation++; } throw new Error(typeof data.detail === 'string' ? data.detail : Array.isArray(data.detail) ? data.detail.map(function(item){return item.msg;}).join('; ') : 'Loop request failed'); }
     return data;
   }
-  function showMessages(){[byId('message'),document.getElementById('loops-queue-message'),document.getElementById('loops-results-message'),document.getElementById('loops-knowledge-message')].forEach(function(node){if(node){var panel=node===byId('message')?'loops-config':node.id.replace('-message','');node.textContent=panel===uiErrorPanel?uiError:'';node.className='loop-error';}});}
+  function showMessages(){[byId('message'),document.getElementById('loops-queue-message'),document.getElementById('loops-results-message'),document.getElementById('loops-knowledge-message')].forEach(function(node){if(node){var panel=node===byId('message')?'loops-config':node.id.replace('-message','');node.textContent=(panel===uiErrorPanel?uiError:'')||(panel===pollErrorPanel?pollError:'');node.className='loop-error';}});}
   function error(exc) { uiErrorPanel=(window.state && state.panel)||'loops-config';uiError=exc.message || String(exc);showMessages(); }
   function clearNativeLog() {
     logGeneration++;logOpening=false;logRun='';logOperation='';
@@ -196,8 +197,10 @@
   }
   function nativeLogButton(cell,run,jobs) {
     var available=jobs.filter(function(job){return job.log_available;});
-    var log=button(cell,'Log',function(){if(available.length===1)openNativeLog(run,available[0],false);});log.className='act-btn loop-open';log.disabled=available.length!==1;
-    log.title=available.length>1?'Expand the round to choose a job.':available.length?'Open this job’s native log.':'Available after the native job is created.';
+    var active=available.filter(function(job){return ['queued','preparing','provisioning','uploading','running','collecting','stopping'].includes(job.status);});
+    var target=active.length===1?active[0]:available.length===1?available[0]:null;
+    var log=button(cell,'Log',function(){if(target)openNativeLog(run,target,false);});log.className='act-btn loop-open';log.disabled=!target;
+    log.title=target?'Open this job’s native log.':available.length>1?'Expand the round to choose a job.':'Available after the native job is created.';
   }
   async function restoreNativeLog() {
     var url=new URL(location.href),id=url.searchParams.get('loop_log_run'),operation=url.searchParams.get('loop_log');
@@ -381,7 +384,7 @@
   function observerName(job) {
     var name=job.kind==='observer_holdout'?'Holdout':'Full Time Range';
     if(job.round>=0&&job.comparison_label)name+=' · '+job.comparison_label;
-    if(job.selected_for_full_range)name+=' · Best Holdout';
+    if(job.selected_for_full_range)name+=' · Selected candidate';
     if(job.previous_selection)name+=' · Previous selection';
     return name;
   }
@@ -423,16 +426,18 @@
     return !['incomplete','failed','not validated'].includes(cycle.status)&&(!observations.length||observations.some(function(item){return item.assessment&&item.assessment.comparable!==false&&item.assessment.simulation_complete!==false;}));
   }
   function comparisonReference(run,cycles,cycle) {
-    var previous=cycles.filter(function(item){return item.round<cycle.round&&item.score!=null&&completeComparison(item);}).pop();
+    var previous=cycles.filter(function(item){return item.round<cycle.round&&(item.ai_evaluated||item.score!=null)&&completeComparison(item);}).pop();
     if(previous)return {goals:previous.goals||[],label:'vs Loop '+(previous.round+1)+' (best exact comparison)'};
     var baseline=run.baseline&&run.baseline.assessment;
     return {goals:baseline&&baseline.comparable!==false&&baseline.simulation_complete!==false?baseline.goals||[]:[],label:'vs unchanged start'};
   }
   function overviewGoals(cell,goals,reference,complete) {
     cell.replaceChildren();cell.classList.add('loop-metric-cell');
+    goals=goals.filter(function(goal){return goal.metric||(goal.metrics||[]).length||goal.target!=null;});
     if(!goals.length){cell.appendChild(element('span','—','loop-metric-change is-neutral'));return;}
     goals.forEach(function(goal){
       var metric=goal.metric||(goal.metrics||[])[0]||'',name={gain:'Gain',drawdown:'Drawdown',uptrend:'Uptrend',consistency:'Consistency',trades:'Trades',robustness:'Robustness',custom:'Custom'}[goal.goal]||goal.goal;
+      if(goal.goal==='custom'&&metric)name={backtest_completion_ratio:'Completion',liquidated_usd:'Liquidated',liquidated:'Liquidated',exponential_fit_error:'Fit error',equity_choppiness:'Choppiness',equity_jerkiness:'Jerkiness'}[metric]||metric.replace(/_/g,' ');
       var item=element('div',undefined,'loop-metric-line'),label=element('span',name+' '+overviewValue(goal.value,metric,false));
       label.title=metric+' · '+(goal.direction==='min'?'worst window':'mean');item.appendChild(label);
       var prior=(reference.goals||[]).find(function(other){return other.goal===goal.goal&&(other.metric||(other.metrics||[])[0])===metric;});
@@ -444,17 +449,17 @@
     var job=specificJob||selectedObserver(run,round,kind);
     cell.replaceChildren();cell.classList.add('loop-metric-cell');
     if(!job||!job.simulation_complete){cell.textContent=specificJob?(specificJob.display_status||specificJob.status):observerSummary(run,round,kind);return;}
-    if(job.comparison_label)cell.title=job.comparison_label+(job.selected_for_full_range?' · Best Holdout':'');
+    if(job.comparison_label)cell.title=job.comparison_label+(job.selected_for_full_range?' · Selected candidate':'');
     ['gain','drawdown'].forEach(function(metric){var item=element('div',undefined,'loop-metric-line');item.appendChild(element('span',(metric==='gain'?'Gain ':'DD ')+overviewValue((job.metrics||{})[metric],metric,false)));overviewChange(item,(job.delta_previous||{})[metric],metric==='gain'?'max':'min',metric,round===0?'vs unchanged start':'vs Loop '+round);cell.appendChild(item);});
   }
   function userEvaluation(parent,run,round) {
     var compareActions=element('div',undefined,'panel-toolbar');parent.appendChild(compareActions);
     ['observer_holdout','observer_full_range'].forEach(function(kind){var control=button(compareActions,kind==='observer_holdout'?'Compare all Holdouts':'Compare all Full Time Ranges',function(){openEvaluationComparison(run,kind);});control.disabled=!hasEvaluationResults(run,kind);});
     parent.appendChild(element('p','Automatic backtests for your evaluation. These results are excluded from AI, JEV, goal scores, stopping decisions and learned knowledge.','muted-line'));
-    parent.appendChild(element('p','Holdout tests every successful comparison candidate. Full Time Range tests only the best Holdout, selected by target compliance and Holdout score.','muted-line'));
+    parent.appendChild(element('p','Holdout tests every successful comparison candidate. Full Time Range follows the AI-selected exact comparison winner. Historical runs may retain an earlier Holdout selection.','muted-line'));
     var jobs=(run.observer_jobs||[]).filter(function(job){return round==null||job.round===round;}).sort(function(a,b){return a.round-b.round||a.kind.localeCompare(b.kind);});
     if(!jobs.length){parent.appendChild(element('p',run.observer_enabled?'User evaluations are queued after the start comparison and each round’s exact comparison.':'No automatic user evaluations were recorded for this older run.','muted-line'));return;}
-    var table=reportTable(parent,['Round / period','Status','Holdout score','Duration','Gain','Drawdown','Recovery','ADG','Sharpe','Sortino','Fills'],jobs.map(function(job){var metrics=job.metrics||{};return [job.round<0?'Unchanged start · '+observerName(job):'Loop '+(job.round+1)+' · '+observerName(job),job.display_status||job.status,numeric(job.holdout_score),duration(job.run_started_at&&job.ended_at?job.ended_at-job.run_started_at:null)].concat(['gain','drawdown','recovery_days','adg','sharpe','sortino','trades'].map(function(metric){return observerValue(metrics[metric],metric);}));}));
+    var table=reportTable(parent,['Round / period','Status','Legacy score','Duration','Gain','Drawdown','Recovery','ADG','Sharpe','Sortino','Fills'],jobs.map(function(job){var metrics=job.metrics||{};return [job.round<0?'Unchanged start · '+observerName(job):'Loop '+(job.round+1)+' · '+observerName(job),job.display_status||job.status,numeric(job.holdout_score),duration(job.run_started_at&&job.ended_at?job.ended_at-job.run_started_at:null)].concat(['gain','drawdown','recovery_days','adg','sharpe','sortino','trades'].map(function(metric){return observerValue(metrics[metric],metric);}));}));
     Array.from(table.tBodies[0].rows).forEach(function(line,index){var job=jobs[index];backtestButton(line.cells[0],run,job);nativeLogButton(line.cells[0],run,[job]);});
     jobs.forEach(function(job){
       parent.appendChild(element('h4',(job.round<0?'Unchanged start':'Loop '+(job.round+1))+' · '+observerName(job)));
@@ -511,7 +516,7 @@
     else if(reportView==='cycle'){
       var jobs=row.jobs.filter(function(job){return job.round===reportRound;});
       if(reportTab==='overview'){
-        var overview=element('div',undefined,'form-row cols-4 loop-summary');[['Status',cycle.status],['Duration',duration(cycle.duration_seconds)],['Backtests',cycle.completed_backtests+' / '+cycle.backtests],['Validated score',numeric(cycle.score)]].forEach(function(pair){var card=element('div');card.appendChild(element('span',pair[0]));var val=element('strong',pair[1]);if(pair[0]==='Duration')val.dataset.reportDuration='';card.appendChild(val);overview.appendChild(card);});reportBody.appendChild(overview);
+        var overview=element('div',undefined,'form-row cols-4 loop-summary');[['Status',cycle.status],['Duration',duration(cycle.duration_seconds)],['Backtests',cycle.completed_backtests+' / '+cycle.backtests],['AI selection',cycle.ai_evaluated?(cycle.winner_candidate_id||'No qualified winner'):'Not recorded']].forEach(function(pair){var card=element('div');card.appendChild(element('span',pair[0]));var val=element('strong',pair[1]);if(pair[0]==='Duration')val.dataset.reportDuration='';card.appendChild(val);overview.appendChild(card);});reportBody.appendChild(overview);
         reportTable(reportBody,['Started','Finished','Timing'],[[dateText(cycle.started_at),cycle.active?'Running':dateText(cycle.ended_at),cycle.duration_estimated?'Estimated from legacy timestamps':'Recorded']]);
         reportTable(reportBody,['Job','Kind','Status','Duration'],jobs.map(function(job){return [job.name,job.kind,job.status,duration(job.run_started_at&&job.ended_at?job.ended_at-job.run_started_at:null)];}));
         jobs.filter(function(job){return job.error||job.result_error;}).forEach(function(job){reportBody.appendChild(element('p',job.name+': '+(job.error||job.result_error),'loop-error'));});
@@ -540,7 +545,7 @@
     } else {
       if(reportTab==='analysis'){reportBody.appendChild(element('h4','Goal interpretation'));reportBody.appendChild(element('p',row.interpretation||'Not recorded.','loop-analysis'));if(row.status!=='failed'){if(row.reason)reportBody.appendChild(element('p',row.reason,'loop-analysis'));if(row.last_error&&row.last_error!==row.reason)reportBody.appendChild(element('p',row.last_error,'loop-error'));}}
       else if(reportTab==='goals') {
-        var measured=cycles.filter(function(cycle){return cycle.score!=null;}), latest=measured[measured.length-1];
+        var measured=cycles.filter(function(cycle){return cycle.ai_evaluated||cycle.score!=null;}), latest=measured[measured.length-1];
         if(!latest) reportBody.appendChild(element('p','No confirmed exact-backtest comparison yet.'));
         else reportTable(reportBody,['Goal / metric'].concat(measured.map(function(cycle){return 'Loop '+(cycle.round+1);})), latest.goals.map(function(goal){return [goal.goal+' · '+goal.metrics.join(', ')].concat(measured.map(function(cycle){var item=(cycle.goals||[]).find(function(value){return value.goal===goal.goal&&value.metrics.join(',')===goal.metrics.join(',');});return item?metricValue(item.value,item)+(item.delta==null?'':item.improved?' ↑':item.delta!==0?' ↓':' ='):'—';}));}));
       }
@@ -586,7 +591,7 @@
       }catch(exc){if(current())error(exc);}
     });control.className='act-btn loop-open';
   }
-  function canContinueRound(cycle){return (cycle.observations||[]).some(function(item){return item.assessment&&item.assessment.comparable!==false&&item.assessment.simulation_complete!==false;});}
+  function canContinueRound(cycle){return !!cycle.winner_operation&&(cycle.observations||[]).some(function(item){return item.assessment&&item.assessment.comparable!==false&&item.assessment.simulation_complete!==false;});}
   function continueButton(parent,run,round){
     var control=button(parent,'Continue',function(){select(run.id);openReport(round==null?'run':'cycle',round==null?0:round,'overview');var count=reportBody.querySelector('input[aria-label="Additional optimizer runs"]');if(count){count.focus();count.scrollIntoView({block:'nearest'});}});control.className='act-btn loop-open';control.title=round==null?'Continue from the best exact comparison with 5, 10 or a custom number of runs.':'Continue from this round with 5, 10 or a custom number of runs.';
   }
@@ -624,7 +629,7 @@
     var confirmation=row.status==='completed'?'Confirmed':row.final_validation&&row.final_validation.length?'Unconfirmed — inspect holdout goals':'Not confirmed';
     if(row.status==='completed'&&finalAssessment&&finalAssessment.confirmation_source==='observer_holdout')confirmation=(finalAssessment.goals||[]).some(function(goal){return goal.requirement;})?'Holdout checked · numeric targets met':'Holdout checked';
     if(row.holdout_retryable)button(parent,'Retry unchanged final holdout',async function(){try{await request('/'+row.id+'/retry-holdout',{});await poll();}catch(exc){error(exc);}});
-    reportTable(parent,['Outcome','Details'],[['Search stopped',row.status==='failed'?failureReason(row):row.stop_reason||row.reason||row.status],['Best comparison',best?'Round '+(best.round==null?'unknown':best.round+1)+' · '+numeric(assessment.score):'None'],['Hard numeric targets',assessment?(assessment.hard_targets_met===false?'Violated':assessment.hard_targets_met===true?'Met':'See goal evidence'):'Unknown'],['Final confirmation',confirmation],['Start comparison',baseline?numeric(baseline.assessment.score):'Not recorded for this older run']]);
+    reportTable(parent,['Outcome','Details'],[['Search stopped',row.status==='failed'?failureReason(row):row.stop_reason||row.reason||row.status],['Best comparison',best?'Round '+(best.round==null?'unknown':best.round+1)+' · '+(best.candidate_id||'Selected'):'None'],['Hard numeric targets',assessment?(assessment.hard_targets_met===false?'Violated':assessment.hard_targets_met===true?'Met':'See goal evidence'):'Unknown'],['Final confirmation',confirmation],['Start comparison',baseline?'Exact baseline recorded':'Not recorded for this older run']]);
     if(best){reportTable(parent,['Goal / metric','Unchanged start','Best comparison','Change vs start'],assessment.goals.map(function(goal){var initial=baseline&&(baseline.assessment.goals||[]).find(function(item){return item.goal===goal.goal&&item.metric===goal.metric;});return [goal.goal+' · '+goal.metric,metricValue(initial&&initial.value,goal),metricValue(goal.value,goal),initial&&initial.value!=null?metricValue(goal.value-initial.value,goal):'Unknown'];}));}
     if(row.final_validation&&row.final_validation.length){parent.appendChild(element('h4','Final holdout'));row.final_validation.forEach(function(item){goalTable(parent,item.assessment.goals||[]);});}
     (row.jev_answers||[]).forEach(function(answer){parent.appendChild(element('p',typeof answer==='string'?answer:JSON.stringify(answer),'loop-analysis'));});
@@ -700,11 +705,11 @@
     var sig=JSON.stringify([visible,Array.from(expanded)],function(key,value){return ['updated_at','duration_seconds'].includes(key)?undefined:value;});
     if(host.querySelector('table[data-selecting]'))return;
     if(host.dataset.signature===sig){host.querySelectorAll('tr[data-key]').forEach(function(line){line.classList.toggle('selected',selectedRuns.has(line.dataset.selection));line.classList.toggle('is-selected',line.dataset.key===workflow.focus && !line.dataset.selection);});host.querySelectorAll('[data-clock]').forEach(function(clock){var pair=clock.dataset.clock.split(':'),row=rows.find(function(row){return row.id===pair[0];}),cycle=row && cycleRows(row).find(function(cycle){return cycle.round===Number(pair[1]);});if(cycle)clock.textContent=duration(cycle.duration_seconds);});return;}host.dataset.signature=sig;var oldScroll=host.querySelector('.loop-table-scroll'),scrollLeft=oldScroll?oldScroll.scrollLeft:0;var focused=document.activeElement,focusedRow=focused&&focused.closest('tr[data-key]'),focusKey=focusedRow&&host.contains(focusedRow)?focusedRow.dataset.key:'';host.replaceChildren();
-    var body=tableShell(host,['Name / round / job','Status','Execution','Duration','Backtests','Comparison metrics · Δ prior round','Goal score','Score change','Created','Holdout gain / DD','Full range gain / DD']);
+    var body=tableShell(host,['Name / round / job','Status','Execution','Duration','Backtests','Comparison metrics · Δ prior round','AI selection','Decision','Created','Holdout gain / DD','Full range gain / DD']);
     function line(values, depth, key, report) {values=values.slice();values.splice(5,0,'');var row=element('tr');values.forEach(function(value,index){var cell=element('td',String(value==null?'—':value));if(index===0)cell.style.paddingLeft='calc(var(--sp-md) + '+depth+' * 20px)';row.appendChild(cell);});while(row.cells.length<11)row.appendChild(element('td',''));body.appendChild(row);row.dataset.key=key;row.classList.toggle('is-selected',key===workflow.focus);row.tabIndex=0;if(report){row.addEventListener('dblclick',report);row.addEventListener('keydown',function(event){if(event.key==='Enter'){event.preventDefault();report();}});var open=button(row.cells[0],'Open',report);open.className='act-btn loop-open';}return row;}
     visible.forEach(function(run){
-      var cycles=cycleRows(run), latest=cycles.filter(function(cycle){return cycle.score!=null;}).pop(),checks=run.jobs.filter(function(job){return job.kind!=='optimizer';});
-      var parent=line([(run.name||run.settings.config_name)+' · '+run.id.slice(0,8),run.status,{cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai'}[run.settings.execution],run.deadline==null?'—':duration((run.ended?Math.max.apply(null,run.jobs.map(function(job){return job.ended_at||run.created_at;})):Date.now()/1000)-(run.started_at||run.created_at)),checks.filter(function(job){return ['completed','complete'].includes(job.status);}).length+' / '+checks.length,run.best?numeric(run.best.assessment.score):latest?numeric(latest.score):'—','—',dateText(run.created_at)],0,run.id,function(){select(run.id);openReport('run',0,'overview');});
+      var cycles=cycleRows(run), latest=cycles.filter(function(cycle){return cycle.ai_evaluated||cycle.score!=null;}).pop(),checks=run.jobs.filter(function(job){return job.kind!=='optimizer';});
+      var parent=line([(run.name||run.settings.config_name)+' · '+run.id.slice(0,8),run.status,{cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai'}[run.settings.execution],run.deadline==null?'—':duration((run.ended?Math.max.apply(null,run.jobs.map(function(job){return job.ended_at||run.created_at;})):Date.now()/1000)-(run.started_at||run.created_at)),checks.filter(function(job){return ['completed','complete'].includes(job.status);}).length+' / '+checks.length,run.best?(run.best.candidate_id||'Selected'):'—','—',dateText(run.created_at)],0,run.id,function(){select(run.id);openReport('run',0,'overview');});
       var bestCycle=cycles.find(function(cycle){return run.best&&cycle.round===run.best.round;})||latest;
       overviewObserver(parent.cells[9],run,latest?latest.round:-1,'observer_holdout');overviewObserver(parent.cells[10],run,latest?latest.round:-1,'observer_full_range');
       if(bestCycle){parent.cells[5].title='Best comparison · Loop '+(bestCycle.round+1);overviewGoals(parent.cells[5],bestCycle.goals||[],comparisonReference(run,cycles,bestCycle),completeComparison(bestCycle));}
@@ -717,7 +722,7 @@
       observerLines(-1,1);
       run.jobs.filter(function(job){return job.kind==='baseline';}).forEach(function(job){var baseline=line(['Start comparison',job.display_status||job.status,'Local CPU',duration(job.ended_at&&job.created_at?job.ended_at-job.created_at:null),'','','',''],1,run.id+':baseline',function(){select(run.id);openReport('initial',0,'backtests');});if(run.baseline&&run.baseline.assessment)overviewGoals(baseline.cells[5],run.baseline.assessment.goals||[],{goals:[],label:'Unchanged start'},false);nativeLogButton(baseline.cells[0],run,[job]);backtestButton(baseline.cells[0],run,job);});
       cycles.forEach(function(cycle){var jobs=run.jobs.filter(function(job){return job.round===cycle.round;}),optimizers=jobs.filter(function(job){return job.kind==='optimizer';}),validations=jobs.filter(function(job){return job.kind!=='optimizer';}),key=run.id+':'+cycle.round;
-        var round=line(['Loop '+(cycle.round+1),cycle.status,'',duration(cycle.duration_seconds),cycle.completed_backtests+' / '+cycle.backtests,numeric(cycle.score),numeric(cycle.score_delta),''],1,key,function(){select(run.id);openReport('cycle',cycle.round,'overview');});overviewObserver(round.cells[9],run,cycle.round,'observer_holdout');overviewObserver(round.cells[10],run,cycle.round,'observer_full_range');var reference=comparisonReference(run,cycles,cycle);overviewGoals(round.cells[5],cycle.goals||[],reference,completeComparison(cycle));round.cells[7].replaceChildren();overviewChange(round.cells[7],completeComparison(cycle)?cycle.score_delta:null,'max','score',reference.label);round.cells[3].dataset.clock=key;disclosure(round.cells[0],key,renderWorkflow);
+        var round=line(['Loop '+(cycle.round+1),cycle.status,'',duration(cycle.duration_seconds),cycle.completed_backtests+' / '+cycle.backtests,cycle.ai_evaluated?(cycle.winner_candidate_id||'No qualified winner'):numeric(cycle.score),cycle.ai_evaluated?'View analysis':numeric(cycle.score_delta),''],1,key,function(){select(run.id);openReport('cycle',cycle.round,'overview');});overviewObserver(round.cells[9],run,cycle.round,'observer_holdout');overviewObserver(round.cells[10],run,cycle.round,'observer_full_range');var reference=comparisonReference(run,cycles,cycle);overviewGoals(round.cells[5],cycle.goals||[],reference,completeComparison(cycle));if(cycle.ai_evaluated){round.cells[7].title=cycle.reason||'';}else{round.cells[7].replaceChildren();overviewChange(round.cells[7],completeComparison(cycle)?cycle.score_delta:null,'max','score',reference.label);}round.cells[3].dataset.clock=key;disclosure(round.cells[0],key,renderWorkflow);
         nativeLogButton(round.cells[0],run,optimizers);
         if(run.ended&&canContinueRound(cycle))continueButton(round.cells[0],run,cycle.round);
         if(!expanded.has(key))return;
@@ -764,9 +769,10 @@
     if(state.panel==='loops-instructions'){await PBGuiLoopInstructions.refresh();return;}
     var loadKnowledge=state.panel==='loops-knowledge';
     try { var values=await Promise.all([request(''),request('/configs'),loadKnowledge?request('/knowledge?limit=200').then(function(data){return {data:data};},function(exc){return {error:exc.message};}):null]);if(token!==generation)return;rows=values[0].loops;definitions=values[1].configs;
+      pollError='';
       if(loadKnowledge){knowledgeError=values[2].error||'';if(values[2].data){knowledgeEntries=values[2].data.entries||[];knowledgeLoaded=true;}}
       if(selected&&!rows.some(function(row){return row.id===selected;})){forgetRun(selected);uiError='The selected loop is no longer available.';}selectedRuns.forEach(function(id){if(!rows.some(function(row){return row.id===id;}))forgetRun(id);});render();await restoreNativeLog(); }
-    catch(exc){if(token===generation)error(exc);}
+    catch(exc){if(token===generation){pollErrorPanel=(window.state&&state.panel)||'loops-config';pollError=exc instanceof TypeError&&/Failed to fetch|NetworkError|Load failed/i.test(exc.message)?'Connection interrupted. Retrying automatically…':exc.message||String(exc);showMessages();}}
   }
   async function watch() {
     clearTimeout(timer);

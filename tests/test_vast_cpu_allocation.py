@@ -31,7 +31,7 @@ def test_cpu_execution_copy_preserves_original_and_manifest(tmp_path, monkeypatc
     actual = json.loads((target / 'optimize.json').read_text())
     assert actual['optimize']['n_cpus'] == actual['optimize']['gpu']['exact_workers'] == 9
     assert actual['optimize']['gpu']['population_size'] == 8192
-    assert actual['optimize']['gpu']['batch_size'] == 8192
+    assert actual['optimize']['gpu']['batch_size'] is None
     assert actual['backtest']['ohlcv_source_dir'] == '/work/pbgui/jobs/' + identifier + '/input/ohlcv'
     assert actual['optimize']['iters'] == 200000
     assert actual['bot'] == config['bot']

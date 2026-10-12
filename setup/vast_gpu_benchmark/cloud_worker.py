@@ -538,6 +538,7 @@ def seed_calibration_case_caches(output: Path, case_root: Path, exchanges: list[
     """Give each fresh optimizer process PBGui's verified offline metadata."""
     source = output / 'caches'
     names = [Path(exchange) / 'markets.json' for exchange in exchanges]
+    names += [Path(exchange) / 'first_timestamps.json' for exchange in exchanges]
     names += [Path(name) for name in (
         'first_ohlcv_timestamps_unified.json',
         'first_ohlcv_timestamps_unified_exchange_specific.json',
@@ -712,6 +713,12 @@ def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict)
     return result
 
 
+def require_offline_config(config: dict) -> None:
+    """Refuse legacy online exports before starting any PB8 process."""
+    if config.get('backtest', {}).get('offline') is not True:
+        raise ValueError('Vast requires backtest.offline=true and complete PBGui-supplied inputs')
+
+
 def run() -> None:
     """Run at most one optimizer; duplicate starts cannot reset its state."""
     with (ROOT / "run.lock").open("a") as lock:
@@ -727,6 +734,7 @@ def run() -> None:
         install()
         hardware = health()
         config = json.loads((ROOT / "input/optimize.json").read_text())
+        require_offline_config(config)
         workers = config["optimize"]["n_cpus"]
         if workers > max(1, int(hardware["cpu_cores"])):
             raise ValueError("Requested exact workers exceed the container CPU quota")

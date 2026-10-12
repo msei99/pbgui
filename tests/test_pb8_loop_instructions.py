@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from pb8_loop_ai import INSTRUCTIONS, LoopAI, instructions_for_run
+from pb8_loop_ai import INSTRUCTIONS, EVALUATION_PROTOCOL, LoopAI, instructions_for_run
 from pb8_loop_store import LoopInstructionConflict, LoopStore
 from tests.test_pb8_loop_optimizer import OWNER, config, settings, _loop_chat_for_payloads
 from tests.test_pb8_loop_workflow import workflow, save
@@ -126,7 +126,10 @@ def test_saved_instructions_reach_each_http_protocol(tmp_path, protocol, payload
     chat._http_session = session
     asyncio.run(LoopAI(store, chat)._request(row, {'protocol':protocol}, {}, 1000))
     body = captured[0]
-    assert (body['messages'][0]['content'] if protocol == 'chat' else body['instructions'] if protocol == 'responses' else body['system']) == version['text']
+    assert (body['messages'][0]['content'] if protocol == 'chat' else body['instructions'] if protocol == 'responses' else body['system']) == version['text'] + EVALUATION_PROTOCOL
+    assert row['ai_instructions']['text'] == version['text']
+    assert 'without overwriting it' in EVALUATION_PROTOCOL
+    assert 'HSL, Unstuck and risk settings' in EVALUATION_PROTOCOL
 
 
 def test_saved_instructions_reach_native_gpt(tmp_path, monkeypatch):
@@ -147,7 +150,8 @@ def test_saved_instructions_reach_native_gpt(tmp_path, monkeypatch):
         finally:
             await stop_feeders(feeders)
     asyncio.run(scenario())
-    assert runtimes[0].loop_instructions == version['text']
+    assert runtimes[0].loop_instructions == version['text'] + EVALUATION_PROTOCOL
+    assert row['ai_instructions']['text'] == version['text']
     runtimes[0].close.assert_awaited_once()
 
 

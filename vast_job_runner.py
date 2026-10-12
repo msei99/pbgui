@@ -213,8 +213,9 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
                      provider_status=str(row.get("actual_status") or "unknown")[:50], absent_checks=0, cleanup_error=None, creation_error=None,
                      provider_seen_at=now, provider_checked_at=now,
                      **({'host_machine_id': row['machine_id']} if type(row.get('machine_id')) is int and row['machine_id'] > 0 else {}))
-        if ending:
-            client.request("DELETE", f"/instances/{positive_id(row['id'])}")
+        if ending and now - float(state.get('destroy_requested_at') or 0) >= 60:
+            client.request("DELETE", f"/instances/{positive_id(row['id'])}/")
+            store.update(identifier, destroy_requested_at=now)
         return False
     # A confirmed creation may disappear before its first visible listing. Give
     # provider propagation the same grace period as an ambiguous create response.

@@ -108,3 +108,27 @@ let Plotly={newPlot:()=>plots++};
 '''
     completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
+
+
+def test_loop_log_shortcut_opens_active_retry_after_cancelled_attempt():
+    """A retained cancelled attempt must not block its active replacement log."""
+    source = (Path(__file__).resolve().parents[1] / 'frontend/js/pb8_loop_optimizer.js').read_text()
+    start = source.index('  function nativeLogButton(')
+    end = source.index('  function ', start + 12)
+    script = """
+const assert=require('assert');let control,opened;
+function button(cell,label,click){control={click};return control;}
+function openNativeLog(run,job){opened=job.operation;}
+""" + source[start:end] + """
+const cancelled={operation:'old',status:'cancelled',log_available:true};
+const retry={operation:'retry',status:'uploading',log_available:true};
+nativeLogButton({}, {}, [cancelled,retry]);
+assert.strictEqual(control.disabled,false);control.click();assert.strictEqual(opened,'retry');
+nativeLogButton({}, {}, [retry,{operation:'parallel',status:'running',log_available:true}]);
+assert.strictEqual(control.disabled,true);
+nativeLogButton({}, {}, [cancelled]);
+assert.strictEqual(control.disabled,false);control.click();assert.strictEqual(opened,'old');
+nativeLogButton({}, {}, [{status:'planned',log_available:false}]);
+assert.strictEqual(control.disabled,true);
+"""
+    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)

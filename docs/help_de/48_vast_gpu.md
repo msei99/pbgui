@@ -2,7 +2,7 @@
 
 Die Pool-Planung ordnet wartende Jobs freien Mieten anhand des gespeicherten Worker-Images, der PB8-Revision und der CPU-Zuteilung zu. Eine freie ältere Miete verhindert nicht die Anmietung eines Workers, den ein neuerer Job benötigt. Angebotssuche und Job-Profilauswahl einer Miete verwenden dieselbe Kompatibilitätsprüfung wie der Dispatch; unpassende Jobs bleiben mit einem Hinweis wartend, passende Jobs laufen weiter.
 
-Neue Mieten verwenden die offizielle PB8-Revision `b9d6692ea` mit der gemergten Absicherung ungültiger Kandidaten aus PR #1871 und nativer HSL-Budget-Skalierung, ohne separaten Quellcode-Patch. Der enthaltene HSL-Fix verhindert einen falschen Candle-Bewertungsfehler, wenn ein schließender Verlusttrade das Guthaben aufbraucht. Bestehende Mieten behalten ihr ursprüngliches Image und ihre Revision; eine neue Miete verwendet den aktualisierten Worker. Bis zur Neukalibrierung verwenden Jobs der neuen Revision konservative Hardware-Fallbacks. GPU-Hardwaretests und echte Checkpoint-/Resume-Abnahmen stehen noch aus.
+Neue Mieten verwenden die offizielle PB8-Revision `b9d6692ea` mit der gemergten Absicherung ungültiger Kandidaten aus PR #1871 sowie den veröffentlichten HSL-History-Cache- und adaptiven CUDA-Speicheranpassungen. Der Upstream-HSL-Fix verhindert einen falschen Candle-Bewertungsfehler, wenn ein schließender Verlusttrade das Guthaben aufbraucht. Bestehende Mieten behalten ihr ursprüngliches Image und ihre Revision. Neukalibrierung und echte Checkpoint-/Resume-Abnahmen stehen noch aus; gezielte Offline-Tests und ein begrenzter Speicher-/Ergebnisvergleich auf einer RTX 3060 sind bestanden.
 
 Die Job-Ansicht verwendet gespeicherte Durchsatzmessungen für abgeschlossene, fehlgeschlagene und abgebrochene Jobs erneut. Das Optimizer-Log eines beendeten Jobs wird nur gelesen, wenn die Durchsatzmessung noch fehlt.
 
@@ -42,6 +42,8 @@ Die Anlaufzeit bezeichnet den **ersten beobachteten** Zähler seit Container-Set
 PB8-Queue und Performance History zeigen **Est. coin candles / candidate**. Die Schätzung summiert inklusive Kalendertage × 1.440 ÷ Kerzenintervall × eindeutig gewählte Coins über aktive Trainingsszenarien. Eigene Coin-Auswahl und Ausschlüsse je Szenario werden berücksichtigt; derselbe Coin auf Long und Short zählt einmal. Ohne Suite Mode gilt der Basiszeitraum. Jede ausgewählte Börse zählt separat, auch bei szenariospezifischen Exchange-Listen. Iterationen und Populationsgröße sind keine zusätzlichen Multiplikatoren. Holdout-Validierung, Warm-up, Datenlücken und tatsächlich verarbeitete Kerzen sind nicht enthalten. Unbekannte oder dynamische Eingaben zeigen **—**. Dies schätzt die Datenmenge einer vollständigen Kandidatenbewertung, weder Laufzeit noch Gesamtberechnungen des Runs. Die Queue verwendet den eingefrorenen Snapshot. Für ältere History-Einträge lässt sich die Schätzung nur bei noch vorhandenem Snapshot nachholen.
 
 Zwei bis vier Runs markieren und mit **Compare configs** unterschiedliche Aufgaben vergleichen. **Compare hardware** verlangt weiterhin identische verifizierte Workload-Fingerprints. Proxy/min und Exact/min bleiben getrennt. **Minutes / 1k exact** = 1.000 ÷ gemessene Exact/min; **USD / 1k exact** = 1.000 ÷ gemessene Exact/USD. Dies sind Hochrechnungen aus dem gemessenen Durchsatz ohne Startzeit, Leerlauf und Transfers, keine Prognose der gesamten Mietkosten. Bei null oder unbekanntem Durchsatz erscheint **—**. GPU, CPU-Zuteilung, Worker-Version, Strategie und Sucheinstellungen beeinflussen ebenfalls den Durchsatz; der Config-Vergleich isoliert keine Hardwareleistung.
+
+Eine automatische Batchgröße bleibt auch in der Ausführungskonfiguration leer. Dadurch kann PB8 die tatsächlichen Pakete abstimmen, HSL-Arbeitsspeicher aus dem freien GPU-Speicher zuweisen und internen Fortschritt melden. Für CUDA-HSL bemisst Auto den History-Speicher am tatsächlichen Paketbedarf und freien VRAM. Wenn verfügbar, bleibt der größere Wert aus 1 GiB oder 20 % des gesamten VRAM als Reserve. Die Berechnung erfolgt zwischen abgeschlossenen Replays; bei Speicherdruck bleibt die Zuteilung konservativ, und MPS behält die bisherige Obergrenze. Explizite Batchgrößen und manuell gewählte Mietprofile bleiben fest.
 
 ## Optimizer Settings
 
@@ -308,7 +310,11 @@ erhalten, damit hochgeladene Daten und der Worker-Cache für Folgeläufe verfüg
 bleiben. Sofortige Bereinigung sowie 5 Minuten, 30 Minuten oder 1 Stunde Leerlauf
 bleiben auswählbar. Mit **Custom** unter **When idle** lässt sich eine eigene Leerlaufzeit in Minuten eingeben (auf ganze Sekunden gerundet). Eine frühere Mietfrist beendet die Miete weiterhin. Die GPU-Karte zeigt die aktive Regel und verbleibende Zeit.
 Neue passende Jobs heben einen laufenden Countdown auf. Auch eine
-pausierte Queue unterliegt dieser Leerlaufregel. Erst **deletion_verified**
+pausierte Queue unterliegt dieser Leerlaufregel. GPU-Karten zeigen auch nach dem Neuladen **Ending rental** oder **Deletion pending** sowie Fehler bei der Provider-Bereinigung. **Retry cleanup** wiederholt den bestehenden Beendigungsauftrag ohne neue Mietfreigabe; ein bereits freigegebener automatischer Ersatz bleibt freigegeben. Die Karte bleibt bis zur bestätigten Provider-Löschung sichtbar.
+
+PBGui teilt die Anfragedrosselung zwischen seinen lokalen Prozessen: vorsorglich mindestens fünf Sekunden je Endpoint, nach HTTP 429 automatisch größere Abstände bis 60 Sekunden und eine gemeinsame exponentielle Wiederholungspause von 30–300 Sekunden (bei Provider-Vorgabe länger). Erfolgreiche Aufrufe anderer Endpoints setzen den Backoff eines fehlschlagenden Endpoints nicht zurück; erfolgreiche Aufrufe verringern dessen Abstand schrittweise. Angenommene Löschaufträge werden höchstens einmal pro Minute wiederholt, während frische Abwesenheitsprüfungen weiterlaufen. Vast dokumentiert Endpoint-/Identitäts- und Burst-Limits ohne feste Zahlen; diese Werte sind PBGui-Einstellungen, keine Provider-Quoten. Siehe [Vast API-Limits](https://docs.vast.ai/api-reference/rate-limits-and-errors).
+
+Erst **deletion_verified**
 bestätigt die Löschung; blosses Stoppen kann weitere Speicherkosten verursachen.
 
 ## Grenzen und Wiederaufnahme
@@ -394,7 +400,11 @@ Während der Image-Bereitstellung zählt der Fortschrittsbalken erkannte Image-S
 Uploads zeigen an SSH übergebene Bytes, Prozent und mittlere Geschwindigkeit, danach die Eingabeprüfung. Die Kostenkachel verwendet die von Vast gemeldeten Instanzkosten statt einer berechneten Job-Schätzung.
 
 Optimizer-Logs werden während des Starts alle 15 Sekunden aktualisiert, auch vor
-der ersten Auswertung. Vorbereitete Offline-Pakete können öffentliche Markt-Caches
+der ersten Auswertung. Vast läuft immer mit `backtest.offline=true`, auch wenn
+die lokale Ausgangskonfiguration Downloads erlaubt. PBGui liefert Kerzendaten,
+öffentliche Markt-Snapshots und Erstkerzen-Metadaten vor dem Optimizer-Start.
+Fehlende Eingaben führen zu einem klaren Fehler statt zu Börsen-Downloads auf Vast.
+Vorbereitete Offline-Pakete können öffentliche Markt-Caches
 enthalten; deren ursprüngliches Alter bleibt erhalten. Abgelaufene Caches blockieren den Start.
 
 **Vast instance charges** zeigt den Betrag der Billing-API für die gesamte

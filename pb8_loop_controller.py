@@ -11,7 +11,7 @@ import traceback
 import uuid
 
 from logging_helpers import human_log as _log
-from pb8_loop_store import ACTIVE, TERMINAL, LoopStore, LoopDeletionConflict, digest, validate_change, config_changes, apply_optimizer_start
+from pb8_loop_store import ACTIVE, TERMINAL, LoopStore, LoopDeletionConflict, digest, validate_change, config_changes, apply_optimizer_start, qualified_winner
 from pb8_loop_ai import LoopAI, LoopAIRetryScheduled, LoopAIRequestFailed, validate_rubric
 from pb8_loop_backend import LoopBackend
 from pb8_loop_observer import ObserverJobs
@@ -181,7 +181,9 @@ class LoopController:
                 pass
             except Exception as exc:
                 def failed(current):
-                    if current['status'] not in ACTIVE:
+                    waiting_handover = (current['status'] == 'queued'
+                                        and (current.get('rental_handover') or {}).get('status') == 'collecting')
+                    if current['status'] not in ACTIVE and not waiting_handover:
                         return
                     current['errors'] += 1
                     current['last_error'] = (str(exc).strip() or type(exc).__name__)[:1000]
@@ -254,11 +256,21 @@ class LoopController:
                 'candidate': candidate, 'status': 'planned', 'backend': None, 'started': False, 'created_at': time.time()}
 
     async def _tick(self, record):
+        handover = record.get('rental_handover') or {}
+        if handover.get('status') == 'collecting':
+            if not await owned_thread(self.backend.handover_step, record):
+                return
+            record = self.store.read(record['owner'], record['id'])
         if record['status'] == 'queued':
             return
         if record['status'] == 'stopping' or record['status'] in TERMINAL:
             collecting = False
             for job in record['jobs']:
+                if not job.get('backend') and job['status'] not in JOB_FINISHED:
+                    def cancelled(current):
+                        target = next(item for item in current['jobs'] if item['operation'] == job['operation'])
+                        target.update(status='cancelled', ended_at=time.time())
+                    self.store.update(record['owner'], record['id'], cancelled)
                 if job.get('backend') and job['status'] not in JOB_FINISHED:
                     await owned_thread(self.backend.stop, record, job)
                     state = await owned_thread(self.backend.poll, record, job)
@@ -289,7 +301,7 @@ class LoopController:
         required_rounds = record.get('required_rounds', 0)
         if type(required_rounds) is not int or not 0 <= required_rounds <= record['settings']['max_runs']:
             raise ValueError('Requested completed rounds must fit the authorized optimizer allowance')
-        completed_rounds = {item['round'] for item in record['history'] if item.get('best_score') is not None}
+        completed_rounds = {item['round'] for item in record['history'] if item.get('evaluated_at') is not None}
         if record.get('pending_ai'):
             raise ValueError('AI request was interrupted; its reservation is retained and no duplicate call was sent')
         if time.time() < (record.get('ai_retry') or {}).get('retry_at', 0):
@@ -333,6 +345,9 @@ class LoopController:
                 self.commit(record, lambda row: row.update(status='failed', reason='Starting baseline backtest failed', last_error=job.get('error')))
                 return
             result = await owned_thread(self.backend.observations, record, job)
+            result.update(operation=job['operation'], candidate={'id': 'baseline', 'optimizer_job': None,
+                          'config': copy.deepcopy(record['initial_config']),
+                          'overrides': copy.deepcopy(record['initial_overrides'])})
             self.commit(record, lambda row: row.update(baseline=result, phase=row['after_baseline']))
             return
         if phase == 'bootstrap':
@@ -439,7 +454,7 @@ class LoopController:
             for job in jobs:
                 if job['status'] in {'complete', 'completed'}:
                     result = await owned_thread(self.backend.observations, record, job)
-                    observations.append({**result, 'candidate': job['candidate'], 'operation': job['operation']})
+                    observations.append({**result, 'candidate': job['candidate'], 'operation': job['operation'], 'round': job['round']})
             if phase == 'holdout':
                 before_data = bool(not observations and all([await owned_thread(self.backend.failed_before_data, record, job) for job in jobs])) if hasattr(self.backend, 'failed_before_data') else False
                 await owned_thread(self.store.settle_holdouts, record, not before_data)
@@ -511,6 +526,7 @@ class LoopController:
             completed_checks = {job['operation'] for job in record['jobs'] if job['kind'] == 'validation'
                                 and job['round'] == record['round'] and job['status'] in {'complete', 'completed'}}
             eligible = [item for item in observations if item['exact'] and item['assessment'].get('comparable', True)
+                        and item['assessment'].get('simulation_complete') is True
                         and item.get('operation') in completed_checks]
             if not eligible:
                 if observations:
@@ -520,17 +536,23 @@ class LoopController:
                            'Next cycle blocked: no successful comparable validation backtests for this cycle',
                     last_error=record.get('repair_error') or 'Exact comparison backtests are required before continuing'))
                 return
-            rank = lambda item: (item['assessment'].get('hard_targets_met', True), item['assessment']['score'])
-            cycle_best = max(eligible, key=rank)
             goal_metrics = {metric for rule in record['rubric'] for metric in rule['metrics']}
             current_best = record.get('best')
-            for item in eligible:
-                if current_best is None or rank(item) > rank(current_best):
-                    current_best = item
+            options = {}
+            for item in [record.get('baseline'), current_best, *eligible]:
+                if qualified_winner(item):
+                    operation = item.get('operation', 'baseline')
+                    options[operation] = copy.deepcopy(item)
+                    if item is record.get('baseline') and not item.get('candidate'):
+                        options[operation]['candidate'] = {'id': 'baseline', 'optimizer_job': None,
+                            'config': copy.deepcopy(record['initial_config']),
+                            'overrides': copy.deepcopy(record['initial_overrides'])}
             settings = record['settings']
             optimizers = [job for job in record['jobs'] if job['kind'] == 'optimizer']
             remaining = settings['max_runs'] - sum(job['started'] or job['status'] not in JOB_FINISHED for job in optimizers)
             evidence = {'observations': observations, 'best': current_best, 'remaining_runs': remaining,
+                        'winner_options': {key: {field: item.get(field) for field in ('metrics', 'assessment', 'per_report')}
+                                           | {'candidate_id': item['candidate']['id']} for key, item in options.items()},
                         'free_slots': max(1, await owned_thread(self.backend.capacity, record)),
                         'baseline': record.get('baseline'), 'jev': record.get('jev_answers') or [], 'repair_error': record.get('repair_error'),
                         'jobs': [{key: job.get(key) for key in ('operation', 'status', 'reason', 'error', 'config', 'executed_config', 'runner')} for job in optimizers if job['round'] == record['round']]}
@@ -538,7 +560,23 @@ class LoopController:
                 evidence.update(required_rounds=required_rounds,
                     required_rounds_remaining=max(0, required_rounds - len(completed_rounds | {record['round']})))
             decision = await self.decision(record, 'evaluate', evidence)
-            improved = current_best is not None and (record['best'] is None or rank(current_best) > rank(record['best']))
+            if 'winner_operation' not in decision:
+                raise ValueError('AI must select winner_operation from qualified exact evidence')
+            selected_operation = decision['winner_operation']
+            if selected_operation is None:
+                if options:
+                    raise ValueError('AI must retain or select a qualified exact winner')
+                current_best = None
+            elif not isinstance(selected_operation, str) or selected_operation not in options:
+                raise ValueError('AI selected an unknown, incomplete or hard-target-violating winner')
+            else:
+                if not isinstance(decision.get('reason'), str) or not decision['reason'].strip():
+                    raise ValueError('AI must explain its exact winner selection')
+                current_best = copy.deepcopy(options[selected_operation])
+                current_best.update(operation=selected_operation, ai_selected=True, selection_reason=decision['reason'])
+            previous = record.get('best') or record.get('baseline') or {}
+            improved = current_best is not None and selected_operation != previous.get('operation', 'baseline')
+            cycle_best = current_best
             entry = {'coins': settings['goals'].get('coins', []), 'hypothesis': decision.get('reason', ''),
                      'knowledge': decision.get('knowledge', ''), 'contradicts': decision.get('contradicts', []),
                      'goals': settings['goals'], 'comparison': record['comparison'], 'uncertainty': 'Exact comparison evidence; several simultaneous edits do not establish individual causality', 'changes': [{'operation': job['operation'], 'reason': job['reason'], 'config_digest': digest(job['config'])} for job in optimizers if job['round'] == record['round']], 'observations': observations,
@@ -553,10 +591,11 @@ class LoopController:
                 row.update(errors=0, last_error=None, repair_error=None)
                 row['history'].append({'round': row['round'], 'reason': str(decision.get('reason', ''))[:4000],
                                        'knowledge': str(decision.get('knowledge', ''))[:4000],
-                                       'best_score': current_best['assessment']['score'] if current_best else None,
-                                       'cycle_score': cycle_best['assessment']['score'],
-                                       'assessment': copy.deepcopy(cycle_best['assessment']),
-                                       'metrics': {key: value for key, value in cycle_best['metrics'].items() if key in goal_metrics},
+                                       'winner_operation': selected_operation,
+                                       'winner_candidate_id': current_best['candidate']['id'] if current_best else None,
+                                       'best_score': None, 'cycle_score': None,
+                                       'assessment': copy.deepcopy(cycle_best['assessment']) if cycle_best else None,
+                                       'metrics': {key: value for key, value in cycle_best['metrics'].items() if key in goal_metrics} if cycle_best else {},
                                        'observations': [{'operation': item['operation'], 'candidate_id': item['candidate']['id'],
                                                          'optimizer_job': item['candidate']['optimizer_job'],
                                                          'assessment': copy.deepcopy(item['assessment']),
@@ -565,9 +604,9 @@ class LoopController:
                                        'evaluated_at': time.time(),
                                        'changes': [{'operation': job['operation'], 'config_digest': digest(job['config']), 'executed_digest': job.get('executed_digest'), 'fields': config_changes(record['initial_config'], job['config'])} for job in optimizers if job['round'] == row['round']]})
             record = self.commit(record, observed)
-            must_continue = len({item['round'] for item in record['history'] if item.get('best_score') is not None}) < required_rounds
-            if remaining <= 0 or (not must_continue and (decision.get('finish') or record['stagnation'] >= settings['patience'] or (current_best and current_best['assessment']['achieved']))):
-                stop = 'Optimizer allowance reached' if remaining <= 0 else 'Goals reached' if current_best and current_best['assessment']['achieved'] else 'No improvement patience reached' if record['stagnation'] >= settings['patience'] else 'AI concluded the search'
+            must_continue = len({item['round'] for item in record['history'] if item.get('evaluated_at') is not None}) < required_rounds
+            if remaining <= 0 or (not must_continue and (decision.get('finish') or record['stagnation'] >= settings['patience'])):
+                stop = 'Optimizer allowance reached' if remaining <= 0 else 'No improvement patience reached' if record['stagnation'] >= settings['patience'] else 'AI concluded the search'
                 record = self.commit(record, lambda row: row.update(stop_reason=stop))
                 await self.finish(record, str(decision.get('reason') or stop))
                 return

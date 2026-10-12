@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
-def review_page():
+def review_page(request):
     """Serve inert owner-bound proposals and intercept every HTTP request."""
     cid, pid = 'a' * 32, 'b' * 32
     conversation = {'conversation_id': cid, 'title': 'Research analysis', 'provider': 'opencode-go',
@@ -20,6 +20,13 @@ def review_page():
         'preview': {'action': 'reviewed_config_change', 'name': 'test', 'version': 'v8', 'kind': 'backtest',
             'mode': 'save', 'effect': 'Save config only', 'changed_count': 1,
             'changes': [{'path': 'live.approved_coins.long', 'kind': 'removed', 'before': 'ETH'}]}}
+    if getattr(request, 'param', '') == 'loop':
+        proposal['preview'] = {'action': 'save_ai_loop_config', 'name': 'HYPE_loop',
+            'effect': 'Save an owned AI Loop definition only. No jobs or rentals are started.',
+            'changed_count': 3, 'changes': [
+                {'path': 'max_runs', 'kind': 'added', 'after': 25},
+                {'path': 'run_proxy', 'kind': 'added', 'after': 100000},
+                {'path': 'goals', 'kind': 'added', 'after': {'text': 'Keep exact_gain and HSL unchanged. ' * 40}}]}
     pending = [proposal]
     calls, errors = [], []
     with sync_playwright() as driver:
@@ -109,3 +116,27 @@ def test_only_trusted_review_and_explicit_apply_can_cross_bridge(review_page, su
     expect(review).to_have_count(0)
     assert [kind for kind, _ in calls] == ['review', 'approve']
     assert 'e' * 64 not in page.evaluate('JSON.stringify(sessionStorage) + JSON.stringify(localStorage)')
+
+
+@pytest.mark.parametrize('review_page', ['loop'], indirect=True)
+@pytest.mark.parametrize('surface', ['drawer', 'page'])
+def test_loop_review_names_settings_and_save_effect(review_page, surface):
+    """Both real UI surfaces explain a save without authorizing jobs or rentals."""
+    page, calls = review_page
+    if surface == 'drawer':
+        page.locator('#pbgui-ai-btn').click()
+        page.get_by_role('button', name='Review changes', exact=True).click()
+        dialog = page.locator('.pai-review-dialog')
+        expect(dialog).to_contain_text('Save AI Loop definition')
+        expect(dialog).to_contain_text('No jobs or rentals are started.')
+        expect(dialog).to_contain_text('Max runs')
+        expect(dialog).to_contain_text('Run proxy')
+        expect(dialog.get_by_role('button', name='Save definition', exact=True)).to_be_visible()
+        expect(dialog.get_by_text('Keep exact_gain and HSL unchanged. ', exact=False).first).not_to_be_visible()
+        dialog.get_by_text('Show full text', exact=True).click()
+        expect(dialog.locator('.pai-change-value').filter(has_text='Keep exact_gain').last).to_be_visible()
+    else:
+        page.locator('.nav-group-btn', has_text='Information').click()
+        page.locator('.nav-item[data-page="info_ai_chat"]').click()
+        expect(page.locator('.proposal-detail').first).to_contain_text('No jobs or rentals are started.')
+    assert calls == []

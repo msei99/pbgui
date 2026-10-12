@@ -9,3 +9,14 @@
 !gpu_exact_progress.patch
 !Dockerfile.multi-venue-btc
 !pb8_multi_venue_btc.patch
+
+!Dockerfile.hsl-history-cache
+!hsl_history_cache.py
+!hsl_history_cache.patch
+
+!Dockerfile.hsl-auto-memory
+!hsl_auto_memory.patch
+
+!Dockerfile.hsl-cpu-rolling
+!hsl_cpu_rolling.patch
+!hsl_cpu_Cargo.lock

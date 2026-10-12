@@ -45,11 +45,13 @@ exact comparison rubric: preserve user goals and evaluate them using exact backt
 Explain any proxy-objective choice; do not silently change a goal, threshold or its units.
 optimizer_start contains the retained best bot from exact fixed-comparison backtests, or the original
 bot until a candidate strictly improves on its baseline. The controller seeds every new optimizer
-with that bot and its coin override bundle, even if your variant repeats older bot parameters.
+with your complete proposed bot and coin override bundle, without replacing your edits.
 Keep optimizer experiments separate: propose bounds, scoring, limits and search settings in optimize;
 the controller does not copy the winner's optimizer settings or automatically tighten bounds.
-Retain the supplied starting bot and overrides. Only an explicitly enabled strategy change may need
-a different compatible bot template. Search bounds and fixed runtime overrides still constrain the seed.
+Use the supplied starting bot and overrides as the base for each experiment. You may deliberately
+change bot settings, including HSL, Unstuck and risk settings, unless user requirements forbid them.
+Explain those changes; an experimental bot is not a confirmed winner. Search bounds and fixed runtime
+overrides still constrain the seed. An enabled strategy change may need a compatible bot template.
 Never choose a starting bot from Holdout or Full Time Range results. A winning bot alone does not prove
 that its optimizer settings are superior; distinguish these findings in your recorded knowledge.
 Keep GPU drift settings coherent when changing validate_per_generation or drift_probes:
@@ -58,7 +60,7 @@ drift_probes must be smaller than validate_per_generation, and drift_window must
 For example validate_per_generation=32 requires drift_window>=256, not the default 128.
 Do not invent observations or claim that changes caused individual effects when several changed together.
 For stage interpret return {"rubric":[{"goal":"...","metrics":["actual_metric"],"direction":"max|min",
-"target":number|null,"scale":positive_number,"weight":positive_number}],"reason":"..."}.
+"target":number|null}],"reason":"..."}. Rules measure evidence and hard constraints, not a weighted score.
 For each rubric rule, goal MUST be an exact ID from required_goal_ids (for example "gain", "drawdown",
 "uptrend", or "custom"). Do not use a sentence, label, prefix or translated name as the goal ID.
 Put explanations in an optional description field. Multiple rules may share an ID.
@@ -72,11 +74,16 @@ these results; do not simply rerun the unchanged starting config. Respect max_va
 settings. Historical metrics may describe different dates/coins/settings: explain uncertainty and do not
 claim a confirmed improvement. Subsequent exact backtests confirm changes; never use the final holdout.
 For stage select return {"candidate_ids":["exact supplied ID"],"jev_needed":boolean,"reason":"..."}.
-For stage evaluate return {"finish":boolean,"reason":"...","knowledge":"...",
+For stage evaluate return {"winner_operation":"exact supplied operation"|null,"finish":boolean,"reason":"...","knowledge":"...",
 "contradicts":["prior evidence ID if disproved"],
 "variants":[{"config":complete_PB8_config,"overrides":object,"reason":"..."}]}.
 Use supplied exact comparison observations to decide improvements. No independent validation is available
 from optimizer proxy metrics alone. To continue, provide at least one technically complete configuration.
+Select winner_operation only from evidence.winner_options. Compare their exact metrics using the user's
+stated goals and priority order. Explain the selection with measured values. Retain the incumbent or
+baseline unless the new candidate improves the user's goals. Return null only when no qualified option
+exists. Hard limits are mandatory; lower drawdown below a ceiling is not automatically an objective.
+Never use legacy PBGui scores to select a winner. No weighted PBGui score chooses the winner for you.
 Parallel variants are independent experiments; propose only as many as the supplied free slots/run allowance.
 Each variant must retain disabled direction/coin goals, position capacity, safe inherited input paths and
 selected backend. Do not change or use the final holdout as a training or comparison window.
@@ -93,6 +100,24 @@ def instructions_for_run(record):
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get('text'), str) or not snapshot['text'].strip():
         raise ValueError('The saved Loop instruction snapshot is invalid')
     return {**snapshot, 'legacy': False}
+
+
+EVALUATION_PROTOCOL = '''
+Current controller protocol (also applies to saved instruction snapshots): at stage evaluate,
+return winner_operation from evidence.winner_options, or null only when that map is empty.
+Choose using the user's goals and priorities and explain using exact metrics in reason.
+Compare with the incumbent and baseline; retain them when no improvement is supported.
+PBGui validates completeness and hard targets but does not rank by a weighted score.
+Do not use legacy scores or Holdout/Full Time Range evidence for this decision.
+For all stages proposing variants, optimizer_start is the confirmed starting reference, not a forced
+replacement for variant.config.bot or variant.overrides. This supersedes older instructions requiring
+the starting bot to remain unchanged: base experiments on that reference and deliberately vary bot
+settings when useful and allowed by the user's requirements, including HSL, Unstuck and risk settings.
+Return the complete intended bot and override bundle, preserving unchanged settings from the reference.
+Explain bot changes. The controller validates your proposal without overwriting it; existing user
+constraints, fixed comparison conditions, search bounds and runtime overrides still apply. Experimental
+changes do not promote a winner without independent exact comparison and explicit winner selection.
+'''
 
 
 class LoopAIResponseError(ValueError):
@@ -147,6 +172,9 @@ def _transient_ai_error(exc):
         'ChatGPT encountered a temporary server error. Try again later.',
         'ChatGPT rate limit reached. Wait before sending another request.',
         'ChatGPT runtime timed out',
+        'ChatGPT runtime request failed',
+        'ChatGPT runtime stream failed',
+        'ChatGPT runtime exited',
         'ChatGPT response timed out',
         'AI provider is temporarily unavailable',
         'Selected AI model is currently unavailable',
@@ -211,6 +239,8 @@ def validate_rubric(rubric, goals):
             raise ValueError('Invalid goal direction')
         for field in ('weight', 'scale'):
             value = rule.get(field)
+            if value is None:
+                continue  # Legacy fields are accepted but no longer used for ranking.
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError('Goal scale and weight must be positive finite numbers')
         target = rule.get('target')
@@ -223,6 +253,96 @@ def validate_rubric(rubric, goals):
         raise ValueError('The model omitted requested goal IDs: ' + ', '.join(sorted(requested - names)) +
                          '; use the exact IDs from required_goal_ids in every rule')
     return rubric
+
+
+def compact_evaluation_content(content):
+    """Compact every decision stage without dropping current candidate evidence."""
+    result = deepcopy(content)
+    initial = result['initial_config']
+    relevant = {metric for rule in result.get('rubric', []) for metric in rule['metrics']}
+    core_metrics = relevant | {'backtest_completion_ratio', 'drawdown_worst_strategy_eq',
+                               'liquidation_count', 'n_liquidations', 'n_fills'}
+
+    def delta(before, after, path=()):
+        """Represent exact config changes with unambiguous path segments."""
+        changes, removals = [], []
+        if isinstance(before, dict) and isinstance(after, dict):
+            for key in sorted(set(before) | set(after)):
+                if key not in after:
+                    removals.append(list(path + (key,)))
+                elif key not in before:
+                    changes.append({'path': list(path + (key,)), 'value': after[key]})
+                else:
+                    child, removed = delta(before[key], after[key], path + (key,))
+                    changes.extend(child)
+                    removals.extend(removed)
+        elif before != after:
+            changes.append({'path': list(path), 'value': after})
+        return changes, removals
+
+    def compact_observation(observation):
+        """Retain all measured values; avoid resending shared source configs."""
+        if not isinstance(observation, dict):
+            return observation
+        candidate = observation.get('candidate')
+        if isinstance(candidate, dict) and isinstance(candidate.get('config'), dict):
+            changes, removals = delta(initial, candidate.pop('config'))
+            candidate['config_from_initial'] = {'set': changes, 'remove': removals}
+        reports = observation.get('per_report')
+        if isinstance(reports, list) and reports and all(isinstance(report, dict) for report in reports):
+            columns = sorted(set().union(*(set(report) for report in reports)) - core_metrics)
+            if columns:
+                # Keep the pinned goals directly readable. Every other native
+                # metric remains present in a lossless column table, without
+                # repeating hundreds of long metric names in every report.
+                missing = {str(index): [i for i, key in enumerate(columns) if key not in report]
+                           for index, report in enumerate(reports)}
+                observation['per_report_extra'] = {
+                    'columns': columns, 'rows': [[report.get(key) for key in columns] for report in reports],
+                    'missing': {index: values for index, values in missing.items() if values}}
+                observation['per_report'] = [{key: value for key, value in report.items() if key in core_metrics}
+                                             for report in reports]
+        return observation
+
+    evidence = result['evidence']
+    locations = {}
+    for observation in evidence.get('observations') or []:
+        compact_observation(observation)
+        if observation.get('operation'):
+            locations[observation['operation']] = 'evidence.observations'
+    for name in ('baseline', 'best'):
+        observation = compact_observation(evidence.get(name))
+        if observation and observation.get('operation'):
+            locations[observation['operation']] = 'evidence.' + name
+    for operation, option in list((evidence.get('winner_options') or {}).items()):
+        if operation in locations:
+            evidence['winner_options'][operation] = {
+                'candidate_id': option.get('candidate_id'),
+                'observation_operation': operation, 'evidence_location': locations[operation]}
+    for finding in result.get('knowledge') or []:
+        for observation in finding.get('observations') or []:
+            metrics = observation.get('metrics') or {}
+            observation['metrics'] = {key: value for key, value in metrics.items() if key in relevant}
+    candidates = evidence.get('candidates') or []
+    if candidates and all(isinstance(row, dict) and isinstance(row.get('metrics'), dict) for row in candidates):
+        columns = sorted(set().union(*(set(row['metrics']) for row in candidates)) - core_metrics)
+        if columns:
+            reports = [row['metrics'] for row in candidates]
+            missing = {str(index): [i for i, key in enumerate(columns) if key not in report]
+                       for index, report in enumerate(reports)}
+            evidence['candidate_metrics_extra'] = {
+                'columns': columns, 'rows': [[report.get(key) for key in columns] for report in reports],
+                'missing': {index: values for index, values in missing.items() if values}}
+            for row in candidates:
+                row['metrics'] = {key: value for key, value in row['metrics'].items() if key in core_metrics}
+    result.setdefault('evaluation_contract', {})['evidence_format'] = (
+        'winner_options references full exact observations by operation. per_report keeps the pinned goals and safety metrics. '
+        'All other original per-report metrics are retained in per_report_extra: rows follow the same report order; '
+        'columns names each value; missing maps row indices to absent column indices (never treat these as zero). '
+        'candidate_metrics_extra uses the same lossless format for candidates, with rows in evidence.candidates order. '
+        'Candidate configs equal initial_config plus config_from_initial.set path-segment values and remove paths. '
+        'Prior knowledge metrics are limited to the pinned rubric; no current metric or candidate is discarded or ranked.')
+    return result
 
 
 class LoopAI:
@@ -318,11 +438,19 @@ class LoopAI:
                    'training_exclusions': record.get('training_exclusions', record.get('holdouts', [])), 'initial_overrides': record['initial_overrides'], 'rubric': record['rubric'],
                    'optimizer_start': optimizer_start_candidate({**record, 'best': evidence.get('best', record.get('best'))}),
                    'knowledge': self.store.context(record), 'evidence': evidence}
+        if stage == 'evaluate':
+            content['evaluation_contract'] = {
+                'required_field': 'winner_operation', 'allowed_values': list(evidence.get('winner_options', {})),
+                'selection': 'Choose the best qualified exact option for user goals; retain the incumbent when no improvement. '
+                             'Use null only if no option exists. Explain using exact metrics. Legacy scores have no authority.'}
+        # Selection also includes prior-round knowledge: without compaction it
+        # grows past Codex's 1,048,576-character input limit after round one.
+        content = compact_evaluation_content(content)
         if settings['execution'] == 'vast':
             from pb8_loop_store import cloud_loop_metric_contract
             content['optimizer_metric_policy'] = cloud_loop_metric_contract()
         encoded = json.dumps(content, allow_nan=False)
-        instructions = instructions_for_run(record)['text']
+        instructions = instructions_for_run(record)['text'] + EVALUATION_PROTOCOL
         from ai_token_budget import _proxy_encoding
         input_tokens = math.ceil(len(_proxy_encoding().encode_ordinary(instructions + encoded)) * 1.25) + 512
         advertised = metadata.get('output_limit')
@@ -398,7 +526,7 @@ class LoopAI:
         chat = self.service()
         settings = record['settings']
         provider, model = settings['provider'], settings['model']
-        instructions = instructions_for_run(record)['text']
+        instructions = instructions_for_run(record)['text'] + EVALUATION_PROTOCOL
         if provider == 'chatgpt':
             from ai_chat import CodexRuntime
             existing = chat._profile_runtime(record['owner'], settings['profile'])
@@ -531,7 +659,7 @@ class LoopAI:
                                    and not isinstance(value, bool) and math.isfinite(value)}}
                       for row in candidates[:20]]
         spec = {'state': {'goals': record['settings']['goals'], 'rubric': rubric, 'candidates': comparison},
-                'questions': {'best': {'type': 'choice', 'instructions': 'Which candidate best meets the stated risk-adjusted goals for exact validation?',
+                'questions': {'best': {'type': 'choice', 'instructions': "Which candidate best meets the user's stated goals and priorities for exact validation?",
                                       'criteria': {row['id']: 'Candidate ' + row['id'] + '; compare its goal metrics in state.candidates using state.rubric.'
                                                    for row in comparison}}}}
         request = prepare_user_jev_payload(JEV_MODEL, spec)

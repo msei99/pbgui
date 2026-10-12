@@ -52,6 +52,26 @@ class RankedBackend(Backend):
         return value
 
 
+def test_new_full_range_follows_ai_training_selection_without_holdout_ranking(record):
+    """User-only evidence cannot replace the recorded AI winner, even with larger scores."""
+    store, row = record
+    row = candidates(store, row)
+    def selected(current):
+        """Record the AI's immutable training choice in isolated history."""
+        current['history'][0].update(winner_operation=current['jobs'][0]['operation'],
+                                     winner_candidate_id='candidate_0')
+    row = store.update(OWNER, row['id'], selected)
+    backend = RankedBackend()
+    backend.finished.add('candidate_2')
+    observer = ObserverJobs(store, backend, owned_thread)
+    row = observer.plan(row)
+    asyncio.run(observer.tick(row))
+    row = store.read(OWNER, row['id'])
+    assert holdout_selection(row, 0)['candidate_id'] == 'candidate_0'
+    ranges = [job for job in observer.plan(row)['observer_jobs'] if job['kind'] == 'observer_full_range']
+    assert len(ranges) == 1 and ranges[0]['candidate_id'] == 'candidate_0'
+
+
 def test_all_holdouts_settle_before_best_holdout_full_range(record):
     """Full range uses Holdout target/score ranking, not the comparison winner."""
     store, row = record; row = candidates(store, row)

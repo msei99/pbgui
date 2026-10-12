@@ -53,6 +53,9 @@ def test_receiver_installs_all_cache_files_and_version(tmp_path):
         assert json.loads((cache / name).read_text()) == content
         assert (cache / name).stat().st_mode & 0o777 == 0o600
     assert (cache / 'first_ohlcv_timestamps_unified.version').read_text() == '2'
+    assert json.loads((cache / 'binance/first_timestamps.json').read_text()) == {'SOL': 1600041600000}
+    assert json.loads((cache / 'bybit/first_timestamps.json').read_text()) == {'SOL': 1634256000000}
+    assert (cache / 'bybit/first_timestamps.json').stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize('failure', ['version', 'checksum', 'symbols', 'timestamp'])

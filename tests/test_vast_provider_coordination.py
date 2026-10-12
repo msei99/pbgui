@@ -10,6 +10,67 @@ import pytest
 import vast_provider as provider
 
 
+def test_endpoint_pacing_spans_clients_and_instance_ids(monkeypatch):
+    """Independent clients and different IDs share an endpoint's minimum interval."""
+    now, sleeps, calls = [1000.0], [], []
+    def sleep(seconds):
+        """Advance an isolated clock instead of waiting."""
+        sleeps.append(seconds)
+        now[0] += seconds
+    monkeypatch.setattr(provider, 'time', SimpleNamespace(time=lambda: now[0], sleep=sleep))
+    monkeypatch.setattr(provider.VastClient, '_request',
+                        lambda self, *args: calls.append(now[0]) or {'success': True})
+    provider.VastClient('key').request('DELETE', '/instances/1')
+    provider.VastClient('key').request('DELETE', '/instances/2')
+    assert calls == [1000, 1000 + provider.ENDPOINT_INTERVAL]
+    assert sleeps == [provider.ENDPOINT_INTERVAL]
+
+
+def test_successful_listing_does_not_reset_delete_backoff(monkeypatch):
+    """Fresh GETs between refused DELETEs cannot keep cooldown at its minimum."""
+    now = [1000.0]
+    monkeypatch.setattr(provider, 'time', SimpleNamespace(time=lambda: now[0]))
+    def request(self, method, path, body=None):
+        """Refuse deletes without affecting the independent listing endpoint."""
+        if method == 'DELETE':
+            raise provider.VastRateLimit(0, request_sent=True)
+        return {'instances': []}
+    monkeypatch.setattr(provider.VastClient, '_request', request)
+    client = provider.VastClient('key')
+    for expected in (30, 60, 120):
+        with pytest.raises(provider.VastRateLimit) as error:
+            client.request('DELETE', '/instances/1')
+        assert error.value.retry_after == expected
+        now[0] += expected
+        client.instances(fresh=True)
+
+
+def test_rate_limit_adapts_spacing_and_recovers_gradually(monkeypatch):
+    """A 429 slows all clients for the endpoint beyond the shared cooldown."""
+    now, fail, calls = [1000.0], [True], []
+    monkeypatch.setattr(provider, 'time', SimpleNamespace(time=lambda: now[0]))
+    def request(self, method, path, body=None):
+        """Fail once, then record the paced recovery attempts."""
+        calls.append(now[0])
+        if fail[0]:
+            raise provider.VastRateLimit(0, request_sent=True)
+        return {'success': True}
+    monkeypatch.setattr(provider.VastClient, '_request', request)
+    client = provider.VastClient('key')
+    with pytest.raises(provider.VastRateLimit):
+        client.request('DELETE', '/instances/1')
+    fail[0] = False
+    now[0] += 30
+    client.request('DELETE', '/instances/1')
+    with pytest.raises(provider.VastRateLimit) as error:
+        provider.VastClient('key').request('DELETE', '/instances/2')
+    assert not error.value.request_sent
+    assert error.value.retry_after == 2 * provider.ENDPOINT_INTERVAL
+    assert len(calls) == 2
+    state = json.loads((provider.COORDINATION_ROOT/'state.json').read_text())
+    assert state['endpoint_intervals']['DELETE /instances/:id'] == pytest.approx(1.8 * provider.ENDPOINT_INTERVAL)
+
+
 def test_log_requests_keep_instance_cache(monkeypatch):
     """Reading either provider log must not force controllers to refetch instances."""
     calls = []

@@ -98,6 +98,9 @@ async function _compareResultPaths(paths,items,area,id,current){plotted=paths.le
  topUrl.searchParams.set('result_top','1');window.location.href=topUrl.href;
  await loadLoopEvaluationResults(loopEvaluationSelection(),'',{});
  assert.deepEqual(selected,['job_2/result']);
+ jobs[4].ai_selected=true;jobs[5].ai_selected=true;
+ await loadLoopEvaluationResults(loopEvaluationSelection(),'',{});
+ assert.deepEqual(selected,['job_5/result']);
  let url=new URL(window.location.href);url.searchParams.delete('result_compare');window.location.href=url.href;
  assert.equal(chartCurrent(),false);
 })().catch(error=>{console.error(error);process.exitCode=1;});

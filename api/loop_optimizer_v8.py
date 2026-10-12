@@ -19,6 +19,7 @@ from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR
 from pb8_loop_controller import LoopController
 from pb8_loop_backend import migrate_loop_bundle
+from vast_provider import VastError
 from pb8_loop_store import TERMINAL, LoopDeletionConflict, config_defaults, config_changes, digest, run_deletable, completed_round_observations
 
 SERVICE = 'PB8Loop'
@@ -119,6 +120,16 @@ class LoopAction(BaseModel):
     selection: dict | None = None
 
 
+class LoopHandover(BaseModel):
+    """Replace one owned Loop using its existing paid GPU only."""
+    model_config = ConfigDict(extra='forbid')
+    target_loop_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    worker_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
+    source_generation: int | None = Field(default=None, ge=0)
+    selection: dict | None = None
+    authorization: bool = False
+
+
 def startup():
     """Start only the replaceable API-owned loop controller."""
     _controller.start()
@@ -190,7 +201,7 @@ def _cycle_reports(row):
             if not observations:
                 observations = [item for item in row.get('observations', []) if item.get('operation') in completed and item.get('exact')]
             if observations:
-                assessment = max(observations, key=lambda item: (item['assessment'].get('hard_targets_met', True), item['assessment']['score']))['assessment']
+                assessment = observations[0]['assessment'] if len(observations) == 1 else None
                 goal_metrics = {metric for rule in row['rubric'] for metric in rule['metrics']}
                 evidence = [{'operation':item['operation'], 'candidate_id':item['candidate']['id'],
                              'optimizer_job':item['candidate']['optimizer_job'], 'assessment':item['assessment'],
@@ -228,6 +239,9 @@ def _cycle_reports(row):
                         'active':active, 'backtests':len(checks), 'completed_backtests':passed,
                         'score':score, 'score_delta':score-previous_score if score is not None and previous_score is not None else None,
                         'goals':goals, 'reason':history.get('reason',''), 'knowledge':history.get('knowledge',''),
+                        'ai_evaluated': 'winner_operation' in history,
+                        'winner_operation': history.get('winner_operation'),
+                        'winner_candidate_id': history.get('winner_candidate_id'),
                         'observations':evidence})
         if score is not None:
             previous_score = score
@@ -265,6 +279,8 @@ def _observer_reports(row):
                        'comparison_label': 'Comparison backtest ' + str(index) if index else job.get('candidate_id'),
                        'evaluation_score':score if type(score) in (int,float) and math.isfinite(score) else None,
                        'evaluation_targets_met':(job.get('assessment') or {}).get('hard_targets_met') is True,
+                       'ai_selected': any(entry.get('winner_candidate_id') and entry.get('winner_candidate_id') == job.get('candidate_id')
+                                          for entry in row.get('history', []) if entry['round'] == job['round']),
                        'holdout_score':score if job['kind']=='observer_holdout' and type(score) in (int,float) and math.isfinite(score) else None,
                        'selected_for_full_range': selection.get('status') == 'selected' and job.get('candidate_id') == selection.get('candidate_id'),
                        'previous_selection': job['kind']=='observer_full_range' and selection.get('status') == 'selected' and job.get('candidate_id') != selection.get('candidate_id'),
@@ -283,7 +299,7 @@ def projection(row):
     from pb8_loop_observer import observer_selections
     return {key: row.get(key) for key in ('id', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at', 'reason',
             'last_error', 'failure', 'holdout_retryable', 'stop_reason', 'continuation', 'interpretation', 'rubric', 'history', 'bootstrap', 'ai_calls', 'ai_tokens_reserved',
-            'ai_usd_reserved', 'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline')} | {
+            'ai_usd_reserved', 'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover')} | {
         'name': row['settings'].get('loop_name') or row['settings']['config_name'],
         'definition_name': row['settings'].get('definition_name'),
         'settings': row['settings'], 'fingerprint': row['fingerprint'], 'cycles': _cycle_reports(row),
@@ -763,6 +779,39 @@ async def loop_action(loop_id: str, body: LoopAction, session: SessionToken = De
     return await _loop_action_owned(_owner(session), loop_id, body)
 
 
+@router.post('/{loop_id}/handover')
+async def handover_loop(loop_id: str, body: LoopHandover, session: SessionToken = Depends(require_auth)):
+    """Stop/collect the source and bind a replacement to its unchanged rental."""
+    return await _handover_owned(_owner(session), loop_id, body)
+
+
+async def _handover_owned(owner, loop_id, body):
+    """Share native handover validation with the reviewed AI Loop operation."""
+    try:
+        if not body.authorization:
+            raise ValueError('Authorize replacing this Loop on its existing GPU')
+        from pb8_loop_handover import begin
+        from vast_queue import CloudQueue
+        # Verify provider/model readiness before any stop or GPU reservation.
+        target = await asyncio.to_thread(_controller.store.read, owner, body.target_loop_id)
+        if body.selection is not None and not set(body.selection) <= {'provider', 'model', 'profile', 'effort', 'service_tier'}:
+            raise ValueError('Invalid shared AI selection')
+        settings = dict(target['settings'], **(body.selection or {}))
+        await _controller.ai.preflight(owner, settings)
+        await asyncio.to_thread(begin, _controller.store, CloudQueue(), owner, loop_id, body.target_loop_id,
+                                expected_worker=body.worker_id, expected_generation=body.source_generation)
+        target = await asyncio.to_thread(_controller.store.read, owner, body.target_loop_id)
+        if target['status'] == 'queued':
+            await _loop_action_owned(owner, target['id'], LoopAction(action='start', selection=body.selection))
+        target = await asyncio.to_thread(_controller.store.read, owner, body.target_loop_id)
+        return JSONResponse(projection(target), status_code=202, headers={'Cache-Control': 'no-store'})
+    except VastError as exc:
+        _log(SERVICE, f'GPU handover rejected: {str(exc)[:1000]}', level='WARNING')
+        raise HTTPException(exc.status, str(exc)[:1000]) from exc
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
 async def _loop_action_owned(owner, loop_id, body):
     """Run native owner-scoped actions for authenticated routes and reviewed AI tools."""
     try:
@@ -784,7 +833,10 @@ async def _loop_action_owned(owner, loop_id, body):
                 queue = CloudQueue()
                 if not VastCredentialStore(queue.root).metadata()['configured']:
                     raise ValueError('Connect Vast.ai before starting a cloud loop')
-                settings['vast'] = RentalPreferences.model_validate(queue.read().get('gpu_preferences') or {}).model_dump()
+                preferences = RentalPreferences.model_validate(queue.read().get('gpu_preferences') or {}).model_dump()
+                if waiting.get('rental_handover') and waiting['settings'].get('vast') != preferences:
+                    raise ValueError('Vast preferences changed during handover; preserve the reviewed rental limits')
+                settings['vast'] = preferences
                 if settings['hours'] > settings['vast']['hours'] or settings['parallel'] > settings['vast']['max_rentals']:
                     raise ValueError('Edit this waiting loop to fit the current Rental & Automation settings')
             preferences = get_ai_chat_service().get_preferences(owner)
@@ -829,23 +881,20 @@ async def continue_loop(loop_id: str, body: LoopContinue, session: SessionToken 
         row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
         checkpoint = row.get('best')
         if body.round is not None:
-            candidates = completed_round_observations(row, body.round)
-            if not candidates:
-                raise ValueError('This round has no complete exact checkpoint')
-            verified = []
-            for item in candidates:
-                job = next((job for job in row['jobs'] if job['operation'] == item['operation']), None)
-                if not job or job['status'] not in {'completed', 'complete'}:
-                    continue
-                exact = await asyncio.to_thread(_controller.backend.observations, row, job)
-                if exact['assessment'].get('comparable') and exact['assessment'].get('simulation_complete', True):
-                    verified.append({**item, 'assessment': exact['assessment']})
-            if not verified:
-                raise ValueError('This round has no complete exact checkpoint')
-            candidates = verified
-            chosen = max(candidates, key=lambda item: (item['assessment'].get('hard_targets_met', True), item['assessment']['score']))
-            job = next((job for job in row['jobs'] if job['operation'] == chosen['operation']), None)
-            checkpoint = {'candidate': job['candidate'], 'metrics': chosen.get('metrics', {})} if job else None
+            history = next((entry for entry in row['history'] if entry['round'] == body.round), {})
+            operation = history.get('winner_operation')
+            if not operation:
+                raise ValueError('This round has no qualified AI-selected checkpoint')
+            job = next((job for job in row['jobs'] if job['operation'] == operation
+                        and job['kind'] in {'validation', 'baseline'}), None)
+            if not job or job['status'] not in {'completed', 'complete'}:
+                raise ValueError('The AI-selected checkpoint has no successful exact backtest')
+            exact = await asyncio.to_thread(_controller.backend.observations, row, job)
+            candidate = job.get('candidate')
+            if job['kind'] == 'baseline':
+                candidate = {'id': 'baseline', 'optimizer_job': None, 'config': row['initial_config'],
+                             'overrides': row['initial_overrides']}
+            checkpoint = {**exact, 'operation': operation, 'candidate': candidate}
         if not checkpoint or not checkpoint['candidate']:
             raise ValueError('No complete exact checkpoint is available')
         if body.round is None:
@@ -858,6 +907,8 @@ async def continue_loop(loop_id: str, body: LoopContinue, session: SessionToken 
             checkpoint = {**checkpoint, 'assessment': exact['assessment'], 'metrics': exact['metrics']}
         if checkpoint.get('assessment', {}).get('comparable') is False or checkpoint.get('assessment', {}).get('simulation_complete') is False:
             raise ValueError('The checkpoint simulation is incomplete')
+        if checkpoint.get('assessment', {}).get('hard_targets_met') is False:
+            raise ValueError('The checkpoint violates a hard goal target')
         candidate = copy.deepcopy(checkpoint['candidate'])
         candidate['metrics'] = checkpoint.get('metrics') or candidate.get('metrics', {})
         candidate['source'] = {'run': row['id'], 'round': body.round, 'kind': 'exact_comparison'}

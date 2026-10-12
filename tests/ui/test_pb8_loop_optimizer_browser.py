@@ -19,6 +19,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         source = source.replace('%%' + key + '%%', value)
     loops, starts, errors, diff_queries, continuations = [], [], [], [], []
     continuation_delay = {'enabled': False, 'pending': []}
+    connection_fixture = {'fail': False, 'action_fail': False}
     knowledge_fixture = {'entries': [], 'fail': False}
     knowledge_queries = []
     instruction_versions = {'default':{'id':'default','name':'PBGui default','text':'Default Loop instructions','digest':'default-hash','created_at':None}}
@@ -128,6 +129,9 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
                 elif route.request.method=='DELETE':
                     definitions.pop(name);route.fulfill(json={'deleted':True})
             elif path.endswith('/action') and path.startswith('/api/optimize-v8/loops/'):
+                if connection_fixture['action_fail']:
+                    route.fulfill(status=409,json={'detail':'Fixture action rejected'})
+                    return
                 payload=json.loads(route.request.post_data);row=next(row for row in loops if row['id']==path.split('/')[-2])
                 row.update(status={'start':'running','pause':'paused','resume':'running','stop':'stopped'}[payload['action']],phase='optimize',deadline=2000000000)
                 row['deletable']=False
@@ -152,6 +156,9 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
                 native_status_requests.append(path.split('/')[-2])
                 route.fulfill(json={'name':'Native optimizer','phase':'running','progress':{},'runtime':{},'queue':{},'log':{}})
             elif path == '/api/optimize-v8/loops':
+                if connection_fixture['fail']:
+                    route.abort('failed')
+                    return
                 route.fulfill(json={'loops':loops})
             elif path.startswith('/api/optimize-v8/loops/') and route.request.method=='DELETE':
                 loop_id=path.split('/')[-1]
@@ -389,6 +396,22 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         assert starts[0]['model']=='pinned' and starts[0]['effort']=='high' and starts[0]['service_tier']=='priority'
         assert page.url.endswith('#loops-queue')
         assert loops[0]['status']=='queued' and loops[0]['ai_calls']==0
+        # Simulate an API restart: keep rows/navigation and clear only the
+        # polling failure when the automatic next request succeeds.
+        visible_queue_rows = page.locator('#loops-queue-table tr[data-key]').count()
+        connection_fixture['fail'] = True
+        page.wait_for_function("document.querySelector('#loops-queue-message').textContent.includes('Retrying automatically')")
+        assert page.locator('#loops-queue-table tr[data-key]').count() == visible_queue_rows
+        assert page.url.endswith('#loops-queue')
+        connection_fixture['fail'] = False
+        page.wait_for_function("document.querySelector('#loops-queue-message').textContent === ''")
+        # Successful background polling must retain a separate action failure.
+        connection_fixture['action_fail'] = True
+        page.locator('#loop-queue-start').click()
+        page.wait_for_function("document.querySelector('#loops-queue-message').textContent === 'Fixture action rejected'")
+        page.wait_for_timeout(3300)
+        assert page.locator('#loops-queue-message').inner_text() == 'Fixture action rejected'
+        connection_fixture['action_fail'] = False
         knowledge_nav.click()
         source_card=page.locator('.loop-knowledge-entry').filter(has_text='Lower exposure reduced drawdown.')
         page.wait_for_function("document.querySelector('#panel-loops-knowledge').classList.contains('active') && document.querySelector('#loop-knowledge-list').textContent.includes('My named loop')")
@@ -441,6 +464,8 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
             'reason':'Exact comparison confirms the values','knowledge':'Improvement measured under fixed conditions',
             'observations':[{'candidate_id':'candidate_'+str(number),'assessment':{'comparable':True,'simulation_complete':True,'goals':[]}}]} for number in (0,1)]
         for number,cycle in enumerate(loops[0]['cycles']):
+            cycle.update(winner_operation=check1 if number == 0 else check2,
+                         winner_candidate_id='candidate_'+str(number))
             cycle['goals'].append({'goal':'drawdown','metrics':['drawdown_worst_strategy_eq'],'direction':'min',
                 'value':.3 if number==0 else .5,'previous':None if number==0 else .3,
                 'delta':None if number==0 else .2,'confirmed':False})
@@ -669,8 +694,8 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         for index,gain in [(1,3),(2,5),(3,4)]:
             holdout_row=page.locator('#loop-report-body tbody tr').filter(has_text='Loop 2 · Holdout · Comparison backtest '+str(index))
             assert str(gain)+' ×' in holdout_row.inner_text()
-        assert 'Best Holdout' in page.locator('#loop-report-body tbody tr').filter(has_text='Loop 2 · Holdout · Comparison backtest 2').inner_text()
-        assert 'Holdout score' in page.locator('#loop-report-body').inner_text()
+        assert 'Selected candidate' in page.locator('#loop-report-body tbody tr').filter(has_text='Loop 2 · Holdout · Comparison backtest 2').inner_text()
+        assert 'Legacy score' in page.locator('#loop-report-body').text_content()
         page.reload()
         page.wait_for_function("document.querySelector('#loop-report-body')?.textContent.includes('Comparison backtest 3')")
         assert page.locator('#loop-report-dialog').evaluate('(node)=>node.scrollWidth <= node.clientWidth+1')

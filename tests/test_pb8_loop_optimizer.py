@@ -103,16 +103,16 @@ def _warm_start_observation(row, score, exposure=2):
 
 @pytest.mark.parametrize('score,exact,comparable,complete,hard,expected', [
     (2, True, True, True, True, 'candidate_2'),
-    (1, True, True, True, True, 'baseline'),
-    (.5, True, True, True, True, 'baseline'),
+    (1, True, True, True, True, 'candidate_2'),
+    (.5, True, True, True, True, 'candidate_2'),
     (2, False, True, True, True, 'baseline'),
     (2, True, False, True, True, 'baseline'),
     (2, True, True, False, True, 'baseline'),
     (20, True, True, True, False, 'baseline'),
 ])
-def test_optimizer_start_requires_strict_exact_baseline_improvement(
+def test_optimizer_start_uses_qualified_selection_without_score_ranking(
         record, score, exact, comparable, complete, hard, expected):
-    """Observer results, invalid evidence, ties and worse candidates cannot replace the start."""
+    """Only qualified exact winners seed searches; their legacy score has no authority."""
     from pb8_loop_store import optimizer_start_candidate
     _, row = record
     row['baseline'] = _warm_start_observation(row, 1, 1)
@@ -126,7 +126,7 @@ def test_optimizer_start_requires_strict_exact_baseline_improvement(
 
 
 def test_optimizer_job_carries_bot_but_preserves_ai_recipe_and_budget(record, tmp_path):
-    """Warm starts preserve optimizer experiments, override bundles and the fixed proxy budget."""
+    """Complete AI experiments survive even when they differ from the confirmed reference."""
     store, row = record
     row['settings'].update(run_limit_mode='proxy', run_proxy=100000)
     row['best'] = _warm_start_observation(row, 2)
@@ -137,8 +137,10 @@ def test_optimizer_job_carries_bot_but_preserves_ai_recipe_and_budget(record, tm
     before = copy.deepcopy((row, proposed))
     controller = LoopController(tmp_path, store=store, backend=FakeBackend(), ai=FakeAI())
     job = controller.job(row, 'optimizer', proposed, {}, 'Experiment')
-    assert job['config']['bot'] == row['best']['candidate']['config']['bot']
-    assert job['overrides'] == row['best']['candidate']['overrides']
+    assert job['config']['bot'] == proposed['bot']
+    assert job['overrides'] == {}
+    assert job['optimizer_start']['bot_modified'] is True
+    assert job['optimizer_start']['overrides_modified'] is True
     assert job['config']['optimize'] == {**proposed['optimize'], 'iters': 10000000}
     assert job['optimizer_start']['candidate_id'] == 'candidate_2'
     assert (row, proposed) == before
@@ -146,6 +148,50 @@ def test_optimizer_job_carries_bot_but_preserves_ai_recipe_and_budget(record, tm
         unchanged = controller.job(row, kind, proposed, {}, 'Existing check')
         assert unchanged['config'] == proposed and unchanged['overrides'] == {}
         assert unchanged['optimizer_start'] is None
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_optimizer_preserves_explicit_bot_and_override_experiments(record, tmp_path, enabled):
+    """HSL/Unstuck toggles, sizing and sparse overrides survive in either direction."""
+    store, row = record
+    row['initial_config']['bot']['long'].update(hsl={'enabled': False}, unstuck={'enabled': False})
+    row['best'] = _warm_start_observation(row, 2)
+    best_bot = row['best']['candidate']['config']['bot']['long']
+    best_bot.update(hsl={'enabled': not enabled}, unstuck={'enabled': not enabled})
+    proposed = copy.deepcopy(row['best']['candidate']['config'])
+    proposed['bot']['long']['hsl']['enabled'] = enabled
+    proposed['bot']['long']['unstuck']['enabled'] = enabled
+    proposed['bot']['long']['risk']['we_excess_allowance_pct'] = .4
+    proposed['bot']['long']['strategy'] = {'ema_anchor': {'base_qty_pct': .096}}
+    proposed['optimize']['bounds'] = {'long': {'risk': {'we_excess_allowance_pct': [0, .5]},
+        'strategy': {'ema_anchor': {'base_qty_pct': [.001, .1, .0001]}}}}
+    overrides = {'BTC': {'bot': {'long': {'hsl': {'enabled': enabled}}}}}
+    before = copy.deepcopy((row, proposed, overrides))
+    job = LoopController(tmp_path, store=store, backend=FakeBackend(), ai=FakeAI()).job(
+        row, 'optimizer', proposed, overrides, 'Explicit bot experiment')
+    assert job['config'] == proposed
+    assert job['overrides'] == overrides
+    assert job['optimizer_start']['candidate_id'] == row['best']['candidate']['id']
+    assert job['optimizer_start']['bot_modified'] is True
+    assert (row, proposed, overrides) == before
+
+
+@pytest.mark.parametrize('change', ['direction', 'positions', 'strategy'])
+def test_explicit_bot_experiments_cannot_bypass_user_constraints(record, tmp_path, change):
+    """Keeping AI bot edits must not silently repair forbidden direction/capacity changes."""
+    store, row = record
+    proposed = copy.deepcopy(row['initial_config'])
+    if change == 'direction':
+        row['settings']['goals']['direction'] = 'long'
+        proposed['bot']['short']['risk']['n_positions'] = 1
+    elif change == 'positions':
+        row['settings']['goals']['positions'] = 1
+        proposed['bot']['long']['risk']['n_positions'] = 2
+    else:
+        proposed['live']['strategy_kind'] = 'ema_anchor'
+    with pytest.raises(ValueError):
+        LoopController(tmp_path, store=store, backend=FakeBackend(), ai=FakeAI()).job(
+            row, 'optimizer', proposed, {}, 'Forbidden change')
 
 
 def test_optimizer_start_preserves_authorized_strategy_experiment(record, tmp_path):
@@ -165,7 +211,7 @@ def test_optimizer_start_preserves_authorized_strategy_experiment(record, tmp_pa
 
 
 def test_warm_start_retains_winner_through_worse_rounds_and_restart(record, tmp_path, monkeypatch):
-    """Real cycle evaluation promotes only strict improvements and persists the seed across controllers."""
+    """Evaluation retains the confirmed reference without forcing it over complete AI experiments."""
     store, row = record
     async def isolated_operation(function, *args):
         """Keep the controller test synchronous with isolated data and no native jobs."""
@@ -191,7 +237,8 @@ def test_warm_start_retains_winner_through_worse_rounds_and_restart(record, tmp_
         assert current['phase'] == 'optimize'
         job = current['jobs'][-1]
         assert job['optimizer_start']['candidate_id'] == f'candidate_{expected}'
-        assert job['config']['bot']['long']['risk']['total_wallet_exposure_limit'] == expected
+        assert job['config']['bot'] == config()['bot']
+        assert job['optimizer_start']['bot_modified'] is True
         assert job['config']['optimize']['iters'] == 777
 
 
@@ -307,7 +354,7 @@ class FakeBackend:
         return candidate['config']
 
     def observations(self, row, job):
-        return {'metrics': {'gain': 1}, 'exact': True, 'assessment': evaluate({'gain': 1}, RULE)}
+        return {'metrics': {'gain': 1}, 'exact': True, 'assessment': {**evaluate({'gain': 1}, RULE), 'simulation_complete': True}}
 
     def stop(self, row, job):
         self.stops.append(job['operation'])
@@ -324,7 +371,84 @@ class FakeAI:
         if stage == 'select':
             return {'candidate_ids': [evidence['candidates'][0]['id']]}
         changed = copy.deepcopy(row['initial_config']); changed['optimize']['iters'] = 777
-        return {'finish': False, 'reason': 'Try more iterations', 'knowledge': 'Gain below target', 'variants': [{'config': changed, 'overrides': {}}]}
+        options = evidence.get('winner_options', {})
+        winner = max(options, key=lambda key: options[key]['metrics']['gain']) if options else None
+        return {'winner_operation': winner, 'finish': False, 'reason': 'Compare exact gain and try more iterations', 'knowledge': 'Gain below target', 'variants': [{'config': changed, 'overrides': {}}]}
+
+
+@pytest.mark.parametrize('selection', ['profitable', 'retain', 'unknown', 'violation', 'incomplete', 'missing', 'null'])
+def test_ai_exact_winner_is_authoritative_but_cannot_bypass_validation(record, tmp_path, monkeypatch, selection):
+    """Low legacy scores cannot overrule AI selection; invalid selections never advance."""
+    store, row = record
+    rules = [{'goal': 'gain', 'metrics': ['gain'], 'direction': 'max', 'target': None},
+             {'goal': 'drawdown', 'metrics': ['drawdown'], 'direction': 'min', 'target': .5}]
+    baseline = _warm_start_observation(row, 1, 1)
+    baseline['operation'] = 'baseline_check'
+    observations = []
+    for name, gain, dd, complete in [('profitable', 2.6449, .4796, True),
+                                      ('violation', 5, .6, True), ('incomplete', 10, .1, False)]:
+        item = _warm_start_observation(row, gain, gain)
+        item.update(operation=name, metrics={'gain': gain, 'drawdown': dd})
+        item['assessment'] = {**evaluate(item['metrics'], rules), 'simulation_complete': complete,
+                              'score': -1000 if name == 'profitable' else 1000}
+        observations.append(item)
+    def initialize(current):
+        """Use only synthetic completed jobs and exact observations in temporary storage."""
+        current.update(phase='evaluate', rubric=rules, baseline=baseline, observations=observations,
+                       jobs=[{'operation': item['operation'], 'kind': 'validation', 'round': 0,
+                              'status': 'completed'} for item in observations])
+    row = store.update(OWNER, row['id'], initialize)
+    class AI(FakeAI):
+        """Choose explicitly without consulting the backend score."""
+        async def decide(self, current, stage, evidence):
+            assert set(evidence['winner_options']) == {'baseline_check', 'profitable'}
+            decision = await super().decide(current, stage, evidence)
+            if selection == 'missing':
+                decision.pop('winner_operation')
+            else:
+                decision['winner_operation'] = {'retain': 'baseline_check', 'null': None}.get(selection, selection)
+            return decision
+    async def isolated(function, *args):
+        """Run the fake backend and isolated store without external resources."""
+        return function(*args)
+    monkeypatch.setattr('pb8_loop_controller.owned_thread', isolated)
+    controller = LoopController(tmp_path, store=store, backend=FakeBackend(), ai=AI())
+    if selection in {'profitable', 'retain'}:
+        asyncio.run(controller._tick(row))
+        current = store.read(OWNER, row['id'])
+        expected = 'profitable' if selection == 'profitable' else 'baseline_check'
+        assert current['best']['operation'] == expected
+        assert current['history'][0]['winner_operation'] == expected
+        assert current['jobs'][-1]['optimizer_start']['candidate_id'] == current['best']['candidate']['id']
+    else:
+        with pytest.raises(ValueError, match='AI must|AI selected'):
+            asyncio.run(controller._tick(row))
+        assert not store.read(OWNER, row['id'])['history']
+
+
+def test_goal_evidence_has_no_weighted_score():
+    """A ceiling is checked without rewarding unused risk or computing a total score."""
+    rules = [{'goal': 'drawdown', 'metrics': ['dd'], 'direction': 'min', 'target': .5}]
+    low, high = [evaluate({'dd': dd}, rules) for dd in (.01, .49)]
+    assert low['hard_targets_met'] and high['hard_targets_met']
+    assert low['score'] is None and high['score'] is None
+
+
+def test_candidate_evidence_is_not_shortlisted_by_goal_score(record, tmp_path, monkeypatch):
+    """Every bounded native Pareto artifact reaches AI selection, including entries after twelve."""
+    from api import optimize_v8 as opt
+    store, row = record
+    files = [tmp_path / f'{index}.json' for index in range(20)]
+    monkeypatch.setattr(opt, '_resolve_result_path', lambda value: tmp_path)
+    monkeypatch.setattr(opt, '_pareto_files_for_listing', lambda directory: (directory, files))
+    monkeypatch.setattr(opt, '_read_json', lambda path: {**config(), 'metrics': {'gain': int(path.stem)}})
+    monkeypatch.setattr(opt, '_pareto_summary', lambda data, reducer: data['metrics'])
+    candidates = LoopBackend(tmp_path, store)._result_candidates(row,
+        {'path': 'isolated', 'result': 'isolated', 'modified': 1},
+        {'operation': 'optimizer', 'config': config(), 'overrides': {}})
+    assert len(candidates) == 20
+    assert candidates[-1]['metrics']['gain'] == 19
+    assert all('guidance_score' not in candidate for candidate in candidates)
 
 
 def test_invalid_gpu_variant_is_repaired_before_job_allocation(record, tmp_path, monkeypatch):
@@ -419,7 +543,8 @@ def test_explicit_additional_rounds_survive_early_ai_finish_and_repair(record, t
             if stage == 'evaluate':
                 seen.append(evidence['required_rounds_remaining'])
                 if not evidence.get('repair_error'):
-                    return {'finish': True, 'reason': 'A good candidate is already retained'}
+                    decision = await super().decide(current, stage, evidence)
+                    return {**decision, 'finish': True, 'variants': [], 'reason': 'A good candidate is already retained'}
             return await super().decide(current, stage, evidence)
     backend = FakeBackend()
     async def run():
@@ -550,6 +675,89 @@ def test_seed_and_checkpoint_options_are_not_silently_replaced(tmp_path, monkeyp
     assert opt._runtime_options_from_config(value)['mode'] == 'pareto_seed'
     with pytest.raises(HTTPException):
         opt._runtime_options_from_config(dict(value, pbgui={'optimize_runtime': {'mode': 'checkpoint_resume', 'source': '../outside'}}))
+
+
+def test_evaluation_wire_format_retains_all_reports_and_lossless_configs():
+    """Remove repeated evidence without a score shortlist or missing measurements."""
+    from pb8_loop_ai import compact_evaluation_content
+    initial = {'shared': 'x' * 20_000, 'bot': {'long': {'ema': 10}}, 'literal.key': {'remove': 1}}
+    observations = []
+    options = {}
+    for index in range(6):
+        candidate_config = copy.deepcopy(initial)
+        candidate_config['bot']['long']['ema'] += index
+        candidate_config['literal.key'].pop('remove')
+        report = {'gain': 1.25 + index, 'unrelated_but_retained': 123.5}
+        observation = {'operation':str(index), 'candidate':{'id':str(index), 'config':candidate_config, 'metrics':{'optimizer_gain':index}},
+                       'metrics':report, 'per_report':[copy.deepcopy(report) for _ in range(8)]}
+        observation['per_report'][1].pop('unrelated_but_retained')
+        observation['per_report'][2]['unrelated_but_retained'] = None
+        observations.append(observation)
+        options[str(index)] = {'candidate_id':str(index), 'metrics':report, 'per_report':observation['per_report']}
+    original = {'initial_config':initial, 'rubric':[{'metrics':['gain']}], 'evaluation_contract':{},
+                'knowledge':[{'observations':[{'metrics':{'gain':1.5,'unused_old_metric':7}}]}],
+                'evidence':{'observations':observations,'winner_options':options,'baseline':None,'best':None}}
+    before = copy.deepcopy(original)
+    wire = compact_evaluation_content(original)
+    assert original == before
+    assert set(wire['evidence']['winner_options']) == set(options)
+    assert len(wire['evidence']['observations']) == 6
+    for old, new in zip(observations, wire['evidence']['observations']):
+        assert len(new['per_report']) == len(old['per_report']) and new['metrics'] == old['metrics']
+        table = new['per_report_extra']
+        reports = [{**report, **{key: table['rows'][index][column] for column, key in enumerate(table['columns'])
+                                if column not in table['missing'].get(str(index), [])}}
+                   for index, report in enumerate(new['per_report'])]
+        assert reports == old['per_report']
+        assert new['candidate']['metrics'] == old['candidate']['metrics']
+        rebuilt = copy.deepcopy(initial)
+        for change in new['candidate']['config_from_initial']['set']:
+            parent = rebuilt
+            for segment in change['path'][:-1]:
+                parent = parent[segment]
+            parent[change['path'][-1]] = change['value']
+        for path in new['candidate']['config_from_initial']['remove']:
+            parent = rebuilt
+            for segment in path[:-1]:
+                parent = parent[segment]
+            del parent[path[-1]]
+        assert rebuilt == old['candidate']['config']
+    assert wire['knowledge'][0]['observations'][0]['metrics'] == {'gain':1.5}
+    assert len(json.dumps(wire)) < len(json.dumps(original)) / 2
+
+
+def test_round_archive_accepts_multiple_bounded_exact_observations(record):
+    """Six real-sized reports may exceed the config limit without losing evidence."""
+    store, row = record
+    entry = {'status': 'observed_exact', 'observations': [{'detail': 'x' * 120_000, 'operation': str(i)} for i in range(6)]}
+    store.remember(row, 'large-round', entry)
+    saved = store.knowledge(row['owner'])['entries'][-1]
+    assert len(saved['observations']) == 6
+    assert saved['observations'][5]['detail'] == entry['observations'][5]['detail']
+    store.remember(row, 'large-round', entry)
+    assert len(store.knowledge(row['owner'])['entries']) == 1
+    with pytest.raises(ValueError, match='Credentials'):
+        store.remember(row, 'secret-round', {'observations': [{'api_key': 'forbidden'}]})
+    with pytest.raises(ValueError, match='512 KB'):
+        store.remember(row, 'oversize-observation', {'observations': [{'detail': 'x' * (513 * 1024)}]})
+
+
+@pytest.mark.parametrize('suffix,comparable', [('_usd', True), ('_btc', False)])
+def test_exact_smoothness_legacy_names_use_only_native_usd_metrics(record, tmp_path, monkeypatch, suffix, comparable):
+    """Unqualified legacy names retain quote-equity semantics, never BTC/proxies."""
+    from api import backtest_v8 as bt
+    store, row = record
+    names = ('exponential_fit_error', 'equity_choppiness', 'equity_jerkiness')
+    row['rubric'] = [{'goal':'uptrend', 'metrics':[name], 'direction':'min', 'target':None} for name in names]
+    report = {name + suffix: i + .25 for i, name in enumerate(names)} | {'backtest_completion_ratio':1}
+    path = tmp_path / 'analysis.json'
+    path.write_text(json.dumps(report))
+    monkeypatch.setattr(bt, '_result_analysis_paths', lambda name: [path])
+    monkeypatch.setattr(bt, '_read_json', lambda path: json.loads(path.read_text()))
+    result = LoopBackend(tmp_path, store).observations(row, {'name':'job'})
+    assert result['assessment']['comparable'] is comparable
+    if comparable:
+        assert all(result['per_report'][0][name] == report[name + suffix] for name in names)
 
 
 def test_fixed_metric_aggregation_requires_each_report_to_pass(record, tmp_path, monkeypatch):
@@ -1464,7 +1672,7 @@ def test_saved_candidate_lookup_is_bounded_exact_and_readonly(record,tmp_path,mo
     candidates=LoopBackend(tmp_path,store).existing_candidates(row)
     assert len(candidates)==3
     assert {item['source']['run'] for item in candidates}=={'run_0','run_1','run_2'}
-    assert candidates[0]['metrics']['gain']==3
+    assert [item['metrics']['gain'] for item in candidates] == [1, 2, 3]
     assert {str(p):p.read_bytes() for p in root.rglob('*.json')}==before
 
 
@@ -1737,7 +1945,8 @@ def test_job_projection_reports_actual_pinned_changes_and_candidate_links(record
     changed['optimize']['limits']=[{'metric':'strategy_eq_recovery_days_max','value':.25}]
     row['best'] = _warm_start_observation(row, 2)
     row['best']['candidate']['overrides'] = {'BTC':{'bot':{'long':{'risk':{'n_positions':3}}}}}
-    optimizer=controller.job({**row,'round':1},'optimizer',changed,{},'Recovery objective')
+    optimizer=controller.job({**row,'round':1},'optimizer',changed,
+        row['best']['candidate']['overrides'],'Recovery objective')
     candidate={'id':'candidate','optimizer_job':optimizer['operation']}
     validation=controller.job(row,'validation',config(),{},'Fixed comparison',candidate=candidate)
     row['jobs']=[optimizer,validation]
@@ -1766,7 +1975,7 @@ def test_next_cycle_requires_completed_owned_exact_backtest(record,tmp_path,evid
     candidate=backend.candidates(row,optimizer)[0]
     check=controller.job(row,'validation',config(),{},'Fixed comparison',candidate=candidate)
     check.update(status='running' if evidence_kind=='pending' else 'completed',started=True)
-    assessment=evaluate({'gain':1},RULE)
+    assessment={**evaluate({'gain':1},RULE), 'simulation_complete': True}
     if evidence_kind=='incomparable':assessment['comparable']=False
     observation={'operation':'not_owned' if evidence_kind=='unowned' else check['operation'],
                  'candidate':candidate,'metrics':{'gain':1},'exact':evidence_kind!='proxy','assessment':assessment}
@@ -1844,7 +2053,7 @@ def test_cycle_report_exposes_completed_checks_while_ai_evaluates(record):
     row['observations']=[{'operation':'b'*32,'exact':True,'candidate':{'id':'result','optimizer_job':'a'*32},
                           'assessment':evaluate({'gain':1},RULE),'metrics':{'gain':1,'unrelated':7}}]
     cycle=_cycle_reports(row)[0]
-    assert cycle['score']==.5 and cycle['completed_backtests']==1 and cycle['active']
+    assert cycle['score'] is None and cycle['completed_backtests']==1 and cycle['active']
     assert cycle['observations'][0]['candidate_id']=='result'
     assert cycle['observations'][0]['metrics']=={'gain':1}
 

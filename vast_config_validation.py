@@ -8,7 +8,7 @@ from vast_scenarios import scenario_plan
 from vast_worker_compatibility import worker_compatibility_errors
 
 SERVICE = 'Vast'
-PROFILE_IMAGE = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae'
+PROFILE_IMAGE = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d'
 PROFILE_REVISION = 'b9d6692ea41266ecb4ab81d40bb5e5baef29b50a'
 _METRIC_CONTRACT = json.loads((Path(__file__).resolve().parent / 'setup/vast_gpu_benchmark/gpu_metric_contract.json').read_text())
 METRICS = frozenset(_METRIC_CONTRACT['allowed_metrics'])
@@ -67,8 +67,10 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
         error('_fine_tune_anchor_plan', 'Fine-tune anchor plans are not supported by the cloud direction preflight.')
     live = obj(source.get('live'), 'live')
     bt = obj(source.get('backtest'), 'backtest')
-    if bt.get('offline', False) is not False:
-        error('backtest.offline', 'The pinned Vast worker does not support PB8 offline provenance. Use Local for offline runs, or explicitly set offline to false.')
+    if type(bt.get('offline', False)) is not bool:
+        error('backtest.offline', 'Offline must be a boolean. Vast always runs offline with PBGui-supplied inputs.')
+    if bt.get('force_refetch_gaps'):
+        error('backtest.force_refetch_gaps', 'Vast runs offline; prepare missing candles on PBGui before starting.')
     opt = obj(source.get('optimize'), 'optimize')
     bot = obj(source.get('bot'), 'bot')
     if live.get('strategy_kind') not in ('ema_anchor', 'trailing_martingale'):

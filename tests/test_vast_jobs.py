@@ -18,6 +18,26 @@ from vast_transfer import extract_results, import_results, fetch_host_key_result
 from setup.vast_gpu_benchmark.cloud_worker import safe_path
 
 
+@pytest.mark.parametrize('offline', [None, False, True])
+def test_cloud_export_always_enforces_offline_without_changing_source(offline):
+    """Even an online local config cannot permit remote exchange downloads."""
+    source = direction_config()
+    if offline is not None:
+        source['backtest']['offline'] = offline
+    before = copy.deepcopy(source)
+    exported = native_job_config(source, 512, 4, False)
+    assert exported['backtest']['offline'] is True
+    assert source == before
+
+
+def test_cloud_export_rejects_refetch_before_renting():
+    """Offline-incompatible gap refetch fails at the local export boundary."""
+    source = direction_config()
+    source['backtest']['force_refetch_gaps'] = True
+    with pytest.raises(VastError, match='force_refetch_gaps'):
+        native_job_config(source, 512, 4, False)
+
+
 def test_list_skips_job_directory_removed_during_scan(tmp_path, monkeypatch):
     """A concurrent permanent deletion does not fail the complete queue snapshot."""
     store = JobStore(tmp_path / "vast")
@@ -73,6 +93,7 @@ def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch)
                      "bytes_completed": 1234, "bytes_total": 1234,
                  })
     monkeypatch.setattr("pb8_config.load_pb8_config", lambda _path: {
+        "backtest": {"offline": True},
         "optimize": {"iters": 20_000, "n_cpus": 4},
     })
 
@@ -367,12 +388,27 @@ def test_guard_deletes_only_owned_instance_and_verifies_absence(job):
     store, identifier, intent = job
     client = Provider([{'id': 123, 'label': intent['label']}, {'id': 999, 'label': 'foreign'}])
     assert not guard_step(store, identifier, client, intent, 'fake_token', now=2001)
-    assert client.calls == [('DELETE', '/instances/123')]
+    assert client.calls == [('DELETE', '/instances/123/')]
     client.rows = [{'id': 999, 'label': 'foreign'}]
     assert not guard_step(store, identifier, client, intent, 'fake_token', now=2010)
     assert guard_step(store, identifier, client, intent, 'fake_token', now=2020)
     assert store.read(identifier)['rental_state'] == 'deletion_verified'
     assert store.read(identifier)['provider_status'] == 'deleted'
+
+
+def test_guard_spaces_accepted_deletes_without_delaying_absence_checks(job):
+    """Provider propagation never causes repeated DELETEs every guard tick."""
+    store, identifier, intent = job
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    for now in (2001, 2011, 2021, 2051):
+        assert not guard_step(store, identifier, client, intent, '', now=now)
+    assert client.calls == [('DELETE', '/instances/123/')]
+    assert not guard_step(store, identifier, client, intent, '', now=2061)
+    assert len(client.calls) == 2
+    client.rows = []
+    assert not guard_step(store, identifier, client, intent, '', now=2062)
+    assert guard_step(store, identifier, client, intent, '', now=2072)
+    assert store.read(identifier)['rental_state'] == 'deletion_verified'
 
 
 def test_stop_before_create_prevents_rental(job):

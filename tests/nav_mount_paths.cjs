@@ -140,7 +140,7 @@ async function main() {
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/jev_transfer_preview.js?v=1');
     c.PBGuiJevTransferPreview = {review() {}};
     b.assets.at(-1).onload();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=69');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=70');
     b.nodes['pbgui-notify-btn'].click();
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/log_viewer_panel.js?v=50');
     let viewerOptions;

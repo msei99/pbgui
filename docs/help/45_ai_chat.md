@@ -1,5 +1,7 @@
 # AI Chat
 
+AI Loop reviews name each changed setting and show whether approval saves a definition or starts/replaces a run. Long text is expandable; **Save definition** starts no jobs or rentals.
+
 For bot diagnostics, the AI can list retained current/historical log files across monitor-discovered VPS hosts and local runtime, then read actual server-side text without controlling the Log Viewer. Literal searches inspect the file beyond its visible tail. Results include file/host, returned timestamps and truncation/coverage limits; inaccessible files produce an explicit error. Deleted logs and unobserved hosts are outside the inventory. A tail, truncated results, or an empty remote search do not establish that no trades occurred throughout the bot's history. The AI must distinguish current blockers from proven historical causes.
 
 

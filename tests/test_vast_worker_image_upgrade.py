@@ -38,9 +38,28 @@ def test_current_image_has_offline_layer_sizes():
     from vast_image_layers import IMAGE_LAYERS
     assert IMAGE in IMAGE_LAYERS
     import json
-    receipt = json.loads((Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark/worker_release_b9d6692.json').read_text())
+    receipt = json.loads((Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark/worker_release_hsl_cpu_rolling_b9d6692.json').read_text())
     assert IMAGE == 'ghcr.io/msei99/pbgui-pb8-worker@' + receipt['digest']
     assert IMAGE_LAYERS[IMAGE] == {key.split(':')[1][:12]: size for key, size in receipt['layers'].items()}
+
+
+def test_cpu_hsl_overlay_preserves_verified_gpu_base_and_dependency_lock():
+    """The CPU overlay retains GPU fixes and reproduces the tested Rust sources."""
+    import hashlib
+    import json
+    root = Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark'
+    receipt = json.loads((root / 'worker_release_hsl_cpu_rolling_b9d6692.json').read_text())
+    recipe = (root / 'Dockerfile.hsl-cpu-rolling').read_text()
+    assert recipe.count('FROM ghcr.io/msei99/pbgui-pb8-worker@' + receipt['base_digest']) == 2
+    assert '--locked' in recipe
+    assert receipt['source_fingerprint'] in recipe
+    assert 'cargo test --release --locked --no-default-features --features abi3-py312 hsl --lib' in recipe
+    assert hashlib.sha256((root / 'hsl_cpu_Cargo.lock').read_bytes()).hexdigest() == receipt['cargo_lock_sha256']
+    assert hashlib.sha256((root / 'hsl_cpu_rolling.patch').read_bytes()).hexdigest() == receipt['patch_sha256']
+    old_image = 'ghcr.io/msei99/pbgui-pb8-worker@' + receipt['base_digest']
+    from vast_calibration import COMPATIBLE_CALIBRATION_IMAGES
+    assert old_image in SUPPORTED_RENTAL_IMAGE_REVISIONS
+    assert old_image in COMPATIBLE_CALIBRATION_IMAGES
 
 
 def test_new_calibration_pin_keeps_previous_worker_image_known():
@@ -113,7 +132,7 @@ def test_old_rental_can_still_be_cleaned_up(job):
     store.control(identifier, 'cleanup')
     provider = Provider([{'id': 123, 'label': intent['label']}])
     guard_step(store, identifier, provider, intent, '', now=1100)
-    assert ('DELETE', '/instances/123') in provider.calls
+    assert ('DELETE', '/instances/123/') in provider.calls
     assert not any(method == 'PUT' for method, _ in provider.calls)
 
 def test_known_image_with_wrong_revision_is_rejected(job):
@@ -160,3 +179,16 @@ def test_previous_suite_metric_worker_keeps_original_revision():
     image = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:792a11f40098a3fffe9365c46e38f60c7bddaa35179c9bc608d130b5e1449dbe'
     assert SUPPORTED_RENTAL_IMAGE_REVISIONS[image] == '061e472e3d400cb3a740583d52f9d46e02eaf781'
     assert image in COMPATIBLE_CALIBRATION_IMAGES
+
+
+def test_hsl_cache_worker_retains_previous_upstream_image():
+    """The performance wrapper must preserve previous rental and calibration identities."""
+    from vast_calibration import COMPATIBLE_CALIBRATION_IMAGES
+    previous = "ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae"
+    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[previous] == REVISION
+    assert previous in COMPATIBLE_CALIBRATION_IMAGES
+    root = Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark'
+    recipe = (root / 'Dockerfile.hsl-history-cache').read_text()
+    assert 'FROM ' + previous in recipe
+    assert 'hsl_history_cache.patch' in recipe
+    assert 'hsl_history_cache.py' in recipe

@@ -38,7 +38,7 @@ def workload(*, population=None, dispatch=None):
 def test_rented_vram_resolves_bounded_dispatch(
     vram_gb, target_candidates, dispatch_floor
 ):
-    """Unknown cards keep every automatic candidate in the CUDA dispatch."""
+    """Unknown cards size the population while preserving native Auto batching."""
     config = workload()
     result = resolve_gpu_settings(config, {'workers': 23, 'hardware': {
         'gpu': 'arbitrary card', 'vram_bytes': vram_gb * 1024**3}}, {'vram_gb': 99})
@@ -51,7 +51,7 @@ def test_rented_vram_resolves_bounded_dispatch(
     assert result['automatic']['max_dispatch_candidate_bars'] == dispatch
     scale = target_candidates // 1024
     assert result['automatic']['population_size'] == target_candidates
-    assert result['automatic']['batch_size'] == target_candidates
+    assert result['automatic']['batch_size'] is None
     assert result['automatic']['validate_per_generation'] == 8 * scale
     assert result['automatic']['drift_probes'] == 4 * scale
     assert result['automatic']['drift_window'] == 128 * scale
@@ -67,7 +67,7 @@ def test_large_workload_scales_population_and_exact_evidence_together():
     result = resolve_gpu_settings(config, {'workers': 23, 'hardware': {
         'gpu': 'unknown 12 GB card', 'vram_bytes': 12 * 1024**3}}, {'gpu_mem_bw_gbps': 315})
     assert config['optimize']['gpu']['population_size'] == 8192
-    assert config['optimize']['gpu']['batch_size'] == 8192
+    assert config['optimize']['gpu']['batch_size'] is None
     assert config['optimize']['gpu']['validate_per_generation'] == 64
     assert config['optimize']['gpu']['drift_probes'] == 32
     assert config['optimize']['gpu']['drift_window'] == 1024
@@ -187,7 +187,7 @@ def test_short_run_keeps_default_evidence_window():
 
 
 def test_pbgui_resolves_standard_cuda_profile_for_new_worker():
-    """PBGui keeps a measured RTX 3060 dispatch at its full standard width."""
+    """PBGui sizes an RTX 3060 population without disabling native batch tuning."""
     config = workload()
     result = resolve_gpu_settings(config, {'workers': 23, 'hardware': {
         'gpu': 'RTX 3060', 'vram_bytes': 12 * 1024**3}}, {
@@ -196,7 +196,7 @@ def test_pbgui_resolves_standard_cuda_profile_for_new_worker():
     assert result['automatic']['population_size'] == 8192
     assert result['applied_by'] == 'pbgui'
     assert config['optimize']['gpu']['population_size'] == 8192
-    assert config['optimize']['gpu']['batch_size'] == 8192
+    assert config['optimize']['gpu']['batch_size'] is None
     assert config['optimize']['gpu']['max_dispatch_candidate_bars'] == (
         (result['largest_candidate_bars'] * 8192 * 105 + 99) // 100
     )
@@ -297,3 +297,21 @@ def test_rental_card_preview_uses_preliminary_measured_profile(monkeypatch, tmp_
     assert profile['source'] == 'local'
     assert profile['runtime_verified'] is False
     assert profile['work_limit_is_floor'] is False
+
+
+@pytest.mark.parametrize('mode', ['auto', 'cache_only', 'off'])
+def test_native_batch_tuning_survives_execution_sizing(mode):
+    """Execution sizing must not turn an Auto batch into a native fixed batch."""
+    config = workload()
+    config['optimize']['gpu'].update(batch_size=None, tuning_mode=mode)
+    resolve_gpu_settings(config, {'workers': 8}, {'vram_gb': 12})
+    assert config['optimize']['gpu']['batch_size'] == (8192 if mode == 'off' else None)
+    assert config['optimize']['gpu']['population_size'] == 8192
+
+
+def test_explicit_batch_is_never_replaced_by_native_auto():
+    """Explicit fixed batching remains authoritative when tuning mode is Auto."""
+    config = workload()
+    config['optimize']['gpu'].update(batch_size=256, tuning_mode='auto')
+    resolve_gpu_settings(config, {'workers': 8}, {'vram_gb': 12})
+    assert config['optimize']['gpu']['batch_size'] == 256

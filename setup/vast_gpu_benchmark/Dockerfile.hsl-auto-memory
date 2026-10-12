@@ -1,0 +1,4 @@
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:0e49bae53a7f104b2ead7ab3e9dcb2c5a83aa117291086f4ad87ca0a8fc367aa
+COPY hsl_auto_memory.patch /tmp/hsl_auto_memory.patch
+RUN cd /opt/passivbot && patch -p1 < /tmp/hsl_auto_memory.patch && python -m py_compile src/optimization/gpu/autotune.py && rm /tmp/hsl_auto_memory.patch
+LABEL pbgui.pb8.gpu-hotfix="hsl-auto-memory-v1"

@@ -480,6 +480,25 @@ def _safe_codex_turn_error(error: object, status: str = "failed") -> str:
     return "ChatGPT response failed without a recognized cause. This does not establish a Free-plan restriction."
 
 
+def _safe_codex_request_error(error: object) -> str:
+    """Preserve RPC failure categories without retaining raw provider payloads."""
+    error = error if isinstance(error, dict) else {}
+    message = str(error.get("message") or "")[:16000].lower()
+    if "input exceeds the maximum length" in message:
+        return "The ChatGPT request exceeds the runtime input limit. Reduce the request size."
+    reason = _safe_codex_turn_error(error)
+    if reason != _safe_codex_turn_error({}):
+        return reason
+    code = error.get("code")
+    if code == -32603:
+        return "ChatGPT encountered a temporary server error. Try again later."
+    if code in (-32700, -32600, -32601, -32602):
+        return "ChatGPT runtime rejected the request format or parameters."
+    # An unclassified RPC rejection is not evidence of a permanent account
+    # failure. Loop callers may retry it within their existing bounded policy.
+    return "ChatGPT runtime request failed"
+
+
 class CodexRuntime:
     """Small async JSON-RPC client for the official bundled Codex app-server."""
 
@@ -1101,7 +1120,7 @@ class CodexRuntime:
                     if future is None or future.done():
                         continue
                     if "error" in message:
-                        future.set_exception(AIChatError("ChatGPT runtime request failed"))
+                        future.set_exception(AIChatError(_safe_codex_request_error(message["error"])))
                     else:
                         future.set_result(message.get("result"))
                     continue

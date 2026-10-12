@@ -1,0 +1,21 @@
+--- a/src/optimization/gpu/mps_kernel.py
++++ b/src/optimization/gpu/mps_kernel.py
+@@ -93,7 +93,7 @@
+ def _hsl_layout(capacity: int) -> tuple[int, int]:
+     blocks = (capacity + 63) // 64
+     tree_size = 1 << (blocks - 1).bit_length()
+-    storage_nodes = 2 * tree_size + (capacity + 3) // 4
++    storage_nodes = 4 * tree_size + (capacity + 3) // 4
+     return tree_size, storage_nodes
+ 
+ 
+@@ -102,6 +102,9 @@
+         return source
+     if not 1 <= capacity <= 90 * 1440 + 2:
+         raise ValueError("Invalid GPU HSL window capacity")
++    from optimization.gpu.hsl_history_cache import cache_hsl_shader
++
++    source = cache_hsl_shader(source)
+     tree_size, _ = _hsl_layout(capacity)
+     return (
+         f"#define PASSIVBOT_HSL 1\n"

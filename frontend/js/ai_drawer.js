@@ -1055,6 +1055,9 @@
   }
 
   function proposalActionLabel(action) {
+    if (action === 'save_ai_loop_config') return 'Save AI Loop definition';
+    if (action === 'run_ai_loop') return 'Run AI Loop';
+    if (action === 'save_vast_preferences') return 'Change Vast.ai rental preferences';
     if (action === 'reviewed_config_change') return 'Review config change';
     if (action === 'save') return 'Save PB8 optimizer config';
     if (action === 'save_and_queue') return 'Save PB8 config and add to queue';
@@ -1069,6 +1072,7 @@
   }
 
   function proposalDetail(preview) {
+    if (['save_ai_loop_config', 'run_ai_loop', 'save_vast_preferences'].includes(preview.action)) return String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
     if (preview.action === 'reviewed_config_change') return String(preview.version || '') + ' · ' + String(preview.kind || '') + ' · ' + String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
     if (preview.action === 'jev_analysis') return String(preview.version || '') + ' ' + String(preview.run_name || '') + ' - ' + String(preview.candidate_count || 0) + ' candidates assessed - ' + (preview.max_candidates == null ? 'Jev decides how many to mark' : 'mark at most ' + String(preview.max_candidates)) + ' - USD ' + String(preview.max_cost_usd || '') + ' maximum';
     if (preview.action === 'python_analysis') return String(preview.code_bytes || 0) + ' bytes of code - ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
@@ -1120,7 +1124,7 @@
       var matches = part.matchAll(/\[([^\]]+)\]/g);
       Array.from(matches).forEach(function (match) { labels.push(humanizeDiffName(match[1])); });
     });
-    return { section: humanizeDiffName(section), label: labels.join(' / ') || 'Value' };
+    return { section: detail ? humanizeDiffName(section) : 'Settings', label: labels.join(' / ') || humanizeDiffName(section) };
   }
 
   function changeKind(change) {
@@ -1136,12 +1140,21 @@
       Object.keys(value).forEach(function (key) {
         if (item && String(value[key]) === String(item)) return;
         fields.appendChild(el('dt', '', humanizeDiffName(key)));
-        fields.appendChild(el('dd', '', typeof value[key] === 'string' ? humanizeDiffName(value[key]) : diffValue(value[key])));
+        var field = el('dd', '');
+        appendDiffValue(field, value[key]);
+        fields.appendChild(field);
       });
       if (fields.childNodes.length) parent.appendChild(fields);
       return;
     }
-    var rendered = typeof value === 'string' ? humanizeDiffName(value) : diffValue(value);
+    var rendered = diffValue(value);
+    if (rendered.length > 600) {
+      var details = el('details', 'pai-change-value');
+      details.appendChild(el('summary', '', 'Show full text'));
+      details.appendChild(el('div', 'pai-change-value', rendered));
+      parent.appendChild(details);
+      return;
+    }
     parent.appendChild(el('div', 'pai-change-value', rendered));
   }
 
@@ -1232,7 +1245,7 @@
       var raw = el('details', 'pai-proposal-raw'); raw.appendChild(el('summary', '', 'Raw JSON')); raw.appendChild(el('pre', 'pai-review-raw', proposalReviewText(proposal))); content.appendChild(raw);
     }
     var reject = el('button', '', 'Reject'); reject.type = 'button'; reject.addEventListener('click', async function () { closeProposalReview(); await resolveProposal(proposal, false, card); }); actions.appendChild(reject);
-    var approve = el('button', 'primary', 'Approve'); approve.type = 'button'; approve.addEventListener('click', async function (event) { if (preview.action === 'reviewed_config_change' && !event.isTrusted) return; closeProposalReview(); await resolveProposal(proposal, true, card, reviewToken); }); actions.appendChild(approve);
+    var approve = el('button', 'primary', preview.action === 'save_ai_loop_config' ? 'Save definition' : 'Approve'); approve.type = 'button'; approve.addEventListener('click', async function (event) { if (preview.action === 'reviewed_config_change' && !event.isTrusted) return; closeProposalReview(); await resolveProposal(proposal, true, card, reviewToken); }); actions.appendChild(approve);
     overlay.hidden = false;
     var closeButton = overlay.querySelector('[aria-label="Close proposal review"]');
     if (closeButton) closeButton.focus();
@@ -1286,7 +1299,9 @@
     card.hidden = true;
     renderProposals([]);
     if (approve) {
-      var approvalDetail = preview.action === 'reviewed_config_change'
+      var approvalDetail = ['save_ai_loop_config', 'run_ai_loop', 'save_vast_preferences'].includes(preview.action)
+        ? String(preview.effect || '')
+        : preview.action === 'reviewed_config_change'
         ? String(preview.effect || '') + '. This approval applies only to the displayed changes; the chat remains analysis-only.'
         : preview.action === 'python_analysis'
         ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
@@ -1297,7 +1312,7 @@
         title: 'Approve PBGui action',
         message: proposalActionLabel(preview.action) + ' ' + String(preview.name || ''),
         detail: approvalDetail,
-        confirmText: 'Approve'
+        confirmText: preview.action === 'save_ai_loop_config' ? 'Save definition' : 'Approve'
       });
       if (!confirmed) {
         state.resolvingProposalIds.delete(proposalId);

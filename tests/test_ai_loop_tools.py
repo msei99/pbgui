@@ -121,6 +121,8 @@ def test_loop_create_edit_and_owner_isolation(environment):
                 'run_proxy': 100000, 'goals': {'coins': ['HYPE'], 'direction': 'long',
                     'presets': ['gain','drawdown','uptrend'], 'targets': {'drawdown': 0.5}}}})
         assert store.definitions(OWNER) == []
+        assert all(change.get('path') for change in result['preview']['changes'])
+        assert any(change['path'] == 'run_proxy' and change['after'] == 100000 for change in result['preview']['changes'])
         await approve(service, result)
         saved = store.definition(OWNER, 'HYPE_loop')
         assert saved['settings']['max_runs'] == 25
@@ -334,6 +336,43 @@ def test_native_loop_queue_requires_approval_and_is_idempotent(native_runs, oper
         assert listed['runs'][0]['status'] == result['run_status']
         with pytest.raises(AICapabilityError):
             await service.dispatch('c' * 32, CHAT, 'get_ai_loop_runs', {'loop_id': result['id']})
+    asyncio.run(scenario())
+
+
+def test_reviewed_replace_uses_existing_worker_without_normal_start(native_runs, monkeypatch):
+    """The AI can explicitly replace an owned Loop through the native handover API."""
+    from api import loop_optimizer_v8 as runtime
+    service, store, _, calls, _ = native_runs
+    definition = store.definition(OWNER, 'native_loop')
+    source = store.create(OWNER, definition['settings'], {}, {}, {}, [], {})
+    worker_id = 'c' * 32
+    def worker(loops, queue, owner, identifier):
+        """Inspect only the expected owned source during proposal preparation."""
+        assert loops is store and owner == OWNER and identifier == source['id']
+        return loops.read(owner, identifier), {'id': worker_id}
+    async def handover(owner, identifier, body):
+        """Record the dedicated transition; normal queue/start must not substitute for it."""
+        assert owner == OWNER and identifier == source['id']
+        assert body.authorization and body.worker_id == worker_id
+        assert body.source_generation == source['control_generation']
+        assert store.read(owner, body.target_loop_id)['settings']['ai_queue_proposal']
+        calls.append(('handover', identifier, body.target_loop_id))
+        store.update(owner, identifier, lambda r: r.update(status='stopping'))
+        store.update(owner, body.target_loop_id, lambda r: r.update(status='running',
+            rental_handover={'source_id': identifier, 'worker_id': worker_id, 'status': 'collecting'}))
+    monkeypatch.setattr('pb8_loop_handover.source_worker', worker)
+    monkeypatch.setattr(runtime, '_handover_owned', handover)
+    async def scenario():
+        """Freeze source/rental identity at review and expose pending transfer to the model."""
+        proposal = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_run', {
+            'operation': 'replace', 'name': 'native_loop', 'revision': 1, 'loop_id': source['id']})
+        assert store.read(OWNER, source['id'])['status'] == 'running' and calls == []
+        assert proposal['preview']['worker_id'] == worker_id
+        result = await approve(service, proposal)
+        assert result['rental_handover']['worker_id'] == worker_id
+        assert [call[0] for call in calls] == ['queue', 'handover']
+        await approve(service, proposal)
+        assert [call[0] for call in calls] == ['queue', 'handover']
     asyncio.run(scenario())
 
 

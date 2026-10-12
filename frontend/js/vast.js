@@ -1498,6 +1498,8 @@
       }
       const cards = el('queue-worker-cards'); cards.replaceChildren();
       active.forEach(item => {
+        const deleting = item.rental_state === 'destroy_pending' || item.cleanup_requested;
+        const ending = deleting || item.stop_requested;
         const job = jobRows.find(row => row.id === item.active_job)
           || jobRows.find(row => row.lease_id === item.id && ['provisioning','uploading','running','collecting'].includes(row.status));
         const observed = !job ? currentObservedOptimizer(item) : null;
@@ -1507,12 +1509,14 @@
         const instance = document.createElement('span'); instance.className = 'queue-gpu-instance'; instance.textContent = 'instance ' + (item.instance_id || 'pending'); head.appendChild(instance);
         const phase = document.createElement('span'); phase.className = 'queue-gpu-phase';
         const directInputCache = job?.status === 'uploading' && job.upload_progress?.transport === 'rsync' && job.upload_progress?.mode === 'files';
-        phase.textContent = job ? (directInputCache ? 'Input cache' : ({provisioning:'Provisioning',uploading:'Upload',running:'Running',collecting:'Collecting'}[job.status] || job.status)) : observed ? 'Observed run' : (item.status || 'Idle');
+        phase.textContent = deleting ? 'Deletion pending' : ending ? 'Ending rental' : job ? (directInputCache ? 'Input cache' : ({provisioning:'Provisioning',uploading:'Upload',running:'Running',collecting:'Collecting'}[job.status] || job.status)) : observed ? 'Observed run' : (item.status || 'Idle');
         head.appendChild(phase);
         card.appendChild(head);
-        const jobName = document.createElement('div'); jobName.className = 'queue-gpu-job'; jobName.textContent = job?.config_name || observed?.name || 'Waiting for a queued job'; card.appendChild(jobName);
+        const jobName = document.createElement('div'); jobName.className = 'queue-gpu-job'; jobName.textContent = job?.config_name || observed?.name || (ending ? 'Rental termination requested' : 'Waiting for a queued job'); card.appendChild(jobName);
         const progress = document.createElement('div'); progress.className = 'queue-gpu-progress';
-        if (job) progress.textContent = compactJobProgress(job);
+        if (deleting) progress.textContent = 'Waiting for Vast.ai to confirm deletion';
+        else if (ending) progress.textContent = job || observed ? 'Stopping optimizer and collecting results' : 'Waiting for rental cleanup';
+        else if (job) progress.textContent = compactJobProgress(job);
         else if (observed) {
           const metrics = item.runtime_metrics || {};
           const parts = [observed.activity || 'Optimizer process detected'];
@@ -1531,6 +1535,10 @@
         } else progress.textContent = 'No active optimizer';
         if (job?.status === 'uploading' && Number(job.rental?.offer?.inet_down_mbps) > 0) progress.title = 'Upload saturation compares the measured transfer rate with the provider-advertised host download bandwidth.';
         card.appendChild(progress);
+        if (item.cleanup_error) {
+          const error = document.createElement('div'); error.className = 'queue-gpu-error';
+          error.textContent = item.cleanup_error; card.appendChild(error);
+        }
         if (job?.kind === 'calibration') {
           const measured = Object.values(job.calibration_result?.cases || {})
             .filter(row => row?.valid && Number.isFinite(Number(row.population_size))
@@ -1597,7 +1605,7 @@
         results.title = job?.result_path ? 'Open this optimizer result' : 'Results become available after the first verified result snapshot';
         results.dataset.tip = results.title; results.disabled = !job?.result_path;
         results.addEventListener('click', () => openCloudResults(job)); actions.appendChild(results);
-        if (item.awaiting_queue_start) {
+        if (item.awaiting_queue_start && !ending) {
           const profile = document.createElement('button'); profile.type = 'button'; profile.className = 'act-btn'; profile.textContent = 'GPU profile';
           profile.addEventListener('click', () => {
             if (typeof window.setPanel === 'function') window.setPanel('vast', 'rental');
@@ -1608,9 +1616,10 @@
         }
         const autoReplace = !!(queueState.pool_enabled && (queueState.gpu_preferences?.auto_rent || savedPreferences?.auto_rent));
         const end = document.createElement('button'); end.type = 'button'; end.className = 'act-btn';
-        end.textContent = pending ? (pending === 'replace' ? 'Replacing…' : 'Ending…') : (autoReplace ? 'Replace GPU' : 'End rental');
+        end.textContent = pending ? (pending === 'replace' ? 'Replacing…' : 'Ending…') : ending ? 'Retry cleanup' : (autoReplace ? 'Replace GPU' : 'End rental');
         end.title = autoReplace ? 'End this rental. After provider cleanup is verified, Auto rent & start restores the pool capacity. Unstarted input is returned to the queue.' : 'End only this GPU rental.';
-        end.disabled = !!pending; end.addEventListener('click', () => runWorkerAction(item, autoReplace ? 'replace' : 'end')); actions.appendChild(end);
+        if (ending) end.title = 'Retry the existing termination request; deletion is not yet confirmed.';
+        end.disabled = !!pending; end.addEventListener('click', () => runWorkerAction(item, ending ? (item.replacement_requested ? 'replace' : 'end') : autoReplace ? 'replace' : 'end')); actions.appendChild(end);
         card.appendChild(actions); cards.appendChild(card);
       });
       banner.hidden = !active.length && !queueState.pool_enabled;

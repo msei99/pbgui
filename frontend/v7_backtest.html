@@ -2788,8 +2788,8 @@ async function loadLoopEvaluationResults(selection, filterName, options) {
     _applyResultsData(matches,filterName);
     if(selection.top){
       var availableNames=new Set(matches.map(function(item){return item.config_name;}));
-      var ranked=jobs.filter(function(job){return availableNames.has(job.name)&&typeof job.evaluation_score==='number'&&Number.isFinite(job.evaluation_score);});
-      ranked.sort(function(a,b){return Number(b.evaluation_targets_met===true)-Number(a.evaluation_targets_met===true)||b.evaluation_score-a.evaluation_score||a.round-b.round||a.name.localeCompare(b.name);});
+      var ranked=jobs.filter(function(job){return availableNames.has(job.name)&&(job.ai_selected===true||(typeof job.evaluation_score==='number'&&Number.isFinite(job.evaluation_score)));});
+      ranked.sort(function(a,b){return Number(b.ai_selected===true)-Number(a.ai_selected===true)||(a.ai_selected&&b.ai_selected?b.round-a.round:Number(b.evaluation_targets_met===true)-Number(a.evaluation_targets_met===true)||b.evaluation_score-a.evaluation_score)||a.round-b.round||a.name.localeCompare(b.name);});
       var topNames=new Set(ranked.slice(0,selection.top).map(function(job){return job.name;}));
       setSelectedResults(matches.filter(function(item){return topNames.has(item.config_name);}).map(function(item){return item.path;}));
     }else setSelectedResults(all?paths:chosen.filter(function(path){return seen.has(path);}));
@@ -2798,7 +2798,7 @@ async function loadLoopEvaluationResults(selection, filterName, options) {
     _loopEvaluationComparison={key:selection.key,paths:paths,signature:signature};
     if(new URL(window.location.href).searchParams.get('result_compare')==='1' && (previous.signature!==signature||!document.getElementById('compare-chart-div'))){
       if(selected.length)await _compareResultPaths(selected,matches,area,'compare-chart-div',function(){return current()&&new URL(window.location.href).searchParams.get('result_compare')==='1';});
-      else {area.style.display='';area.textContent=selection.top&&jobs.length?'No complete evaluations with a valid score are available for Top X.':jobs.length?'No native results remain for these Loop evaluations.':'No completed evaluations are available for this Loop run.';}
+      else {area.style.display='';area.textContent=selection.top&&jobs.length?'No complete AI-selected or historically scored evaluations are available for Top X.':jobs.length?'No native results remain for these Loop evaluations.':'No completed evaluations are available for this Loop run.';}
     }
     return results;
   } catch(error){

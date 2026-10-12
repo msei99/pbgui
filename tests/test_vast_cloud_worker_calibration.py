@@ -7,6 +7,18 @@ import pytest
 from setup.vast_gpu_benchmark import cloud_worker
 
 
+@pytest.mark.parametrize('offline', [None, False, 'true', 1])
+def test_worker_refuses_online_or_invalid_exports(offline):
+    """A worker cannot start a PB8 process with implicit/explicit online mode."""
+    with pytest.raises(ValueError, match='offline=true'):
+        cloud_worker.require_offline_config({'backtest': {'offline': offline}})
+
+
+def test_worker_accepts_explicit_offline_exports():
+    """Only the actual boolean opt-in enables native offline preparation."""
+    cloud_worker.require_offline_config({'backtest': {'offline': True}})
+
+
 def test_each_calibration_case_gets_offline_market_and_inception_caches(tmp_path: Path) -> None:
     """PB8's per-population cwd must contain the staged market metadata."""
     import os
@@ -16,6 +28,7 @@ def test_each_calibration_case_gets_offline_market_and_inception_caches(tmp_path
     market = source / 'binance/markets.json'
     market.parent.mkdir(parents=True)
     market.write_text('{"BTC/USDT:USDT": {"symbol": "BTC/USDT:USDT"}}')
+    (market.parent / 'first_timestamps.json').write_text('{"BTC": 1600041600000}')
     stamp = time.time() - 60
     os.utime(market, (stamp, stamp))
     for name in (
@@ -34,6 +47,7 @@ def test_each_calibration_case_gets_offline_market_and_inception_caches(tmp_path
     assert copied.read_text() == market.read_text()
     assert abs(copied.stat().st_mtime - stamp) < .01
     assert (case / 'caches/first_ohlcv_timestamps_unified.version').read_text() == '2'
+    assert (case / 'caches/binance/first_timestamps.json').read_text() == '{"BTC": 1600041600000}'
 
 
 def test_calibration_refuses_to_start_without_local_market_cache(tmp_path: Path, monkeypatch) -> None:

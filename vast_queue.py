@@ -31,6 +31,9 @@ def worker_compatible_jobs(store: JobStore, jobs: list[dict], *, image: str = IM
         try:
             snapshot = store.read(row['id'], 'input/optimize.json')
             errors = worker_compatibility_errors(snapshot, revision)
+            if snapshot.get('backtest', {}).get('offline') is not True:
+                errors.append({'path': 'backtest.offline',
+                               'message': 'Offline input cannot be checked or is disabled. Prepare this job again on PBGui; Vast requires offline=true.'})
         except (VastError, OSError, ValueError, TypeError) as exc:
             errors = [{'message': 'Cannot verify the prepared job for this worker. Prepare the job again.'}]
             if report_errors:
@@ -62,6 +65,9 @@ def preflight_gpu_snapshots(store: JobStore, jobs: list[dict], *, reject: bool =
         try:
             config = store.read(row['id'], 'input/optimize.json')
             errors, _warnings = validate_gpu_directions(config)
+            if config.get('backtest', {}).get('offline') is not True:
+                errors.append({'path': 'backtest.offline',
+                               'message': 'Vast requires offline input; remote exchange downloads are disabled.'})
             unresolved = next((item for item in errors if item.get('uncheckable')), None)
             if unresolved:
                 raise ValueError(unresolved['message'])
@@ -730,6 +736,11 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
             store.update(identifier, active_job=None)
         if control['stop'] or control['cleanup'] or now >= worker['deadline'] - 240:
             store.control(identifier, 'cleanup')
+            return None
+        if (worker.get('loop_handover') or {}).get('status') == 'collecting':
+            # Preserve this paid GPU during old-job collection and API restarts.
+            # Deadline, budget and explicit cleanup above still take precedence.
+            store.update(identifier, idle_since=None)
             return None
         if worker.get('awaiting_queue_start'):
             store.update(identifier, status='reserved', idle_since=None)

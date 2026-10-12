@@ -429,6 +429,39 @@ def cloud_page():
         browser.close()
 
 
+@pytest.mark.parametrize('rental_state,stop,expected', [
+    ('active', True, 'Ending rental'),
+    ('destroy_pending', False, 'Deletion pending'),
+])
+def test_rental_termination_overrides_stale_reserved_status(cloud_page, rental_state, stop, expected):
+    """Reload keeps pending termination and provider errors visible until verified deletion."""
+    page, data, _, _, _ = cloud_page
+    page.add_init_script("""document.addEventListener('DOMContentLoaded',()=>{
+      const box=document.createElement('div');box.id='queue-rental';
+      box.innerHTML='<span id="queue-rental-status"></span><div id="queue-worker-cards"></div>';
+      document.body.prepend(box);
+    });""")
+    worker = dict(id='b' * 32, rental_state=rental_state, status='reserved',
+                  gpu_name='RTX 3060', instance_id=123, stop_requested=stop,
+                  cleanup_requested=False, awaiting_queue_start=True,
+                  cleanup_error='Vast API rate limit; automatic retry is waiting')
+    data.update(workers=[worker], worker=worker)
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    card = page.locator('.queue-gpu-card')
+    assert card.locator('.queue-gpu-phase').inner_text() == expected
+    assert 'Waiting for a queued job' not in card.inner_text()
+    assert 'No active optimizer' not in card.inner_text()
+    assert 'Vast API rate limit' in card.inner_text()
+    assert card.get_by_role('button', name='Start queue', exact=True).count() == 0
+    assert card.get_by_role('button', name='Retry cleanup', exact=True).is_enabled()
+    worker['rental_state'] = 'deletion_verified'
+    data['workers'] = []
+    page.reload()
+    page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
+    assert page.locator('.queue-gpu-card').count() == 0
+
+
 def test_worker_action_lock_survives_rerender_and_failure(cloud_page):
     """Worker actions stay mutually exclusive across polling and recover after failure."""
     page, data, calls, overrides, held = cloud_page

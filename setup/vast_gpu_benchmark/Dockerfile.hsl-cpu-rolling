@@ -1,0 +1,18 @@
+FROM rust:1.90-bookworm AS rust
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:d966b601dedbf49641a85feb4b5c13963f855d998c7d465c02af89f73c272abf AS build
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+COPY hsl_cpu_Cargo.lock /opt/passivbot/passivbot-rust/Cargo.lock
+COPY hsl_cpu_rolling.patch /tmp/hsl_cpu_rolling.patch
+RUN cd /opt/passivbot && patch -p1 < /tmp/hsl_cpu_rolling.patch && maturin build --manifest-path passivbot-rust/Cargo.toml --release --locked --out /tmp/wheels && python -m pip install --no-deps --force-reinstall /tmp/wheels/*.whl
+RUN cd /opt/passivbot && PYTHONPATH=/opt/passivbot/src python -c 'import passivbot_rust; from rust_utils import source_fingerprint, stamp_compiled_extensions, verify_loaded_runtime_extension; fp=source_fingerprint(); assert fp == "0f94231023292fcc96fd42c7301272509c963dfa45ec810e7b3a026cdf5a571e", fp; stamp_compiled_extensions(fp); state=verify_loaded_runtime_extension(); assert state["runtime_compiled_source_stamp"] == fp'
+RUN cd /opt/passivbot/passivbot-rust && cargo test --release --locked --no-default-features --features abi3-py312 hsl --lib
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:d966b601dedbf49641a85feb4b5c13963f855d998c7d465c02af89f73c272abf
+COPY --from=build /opt/passivbot/passivbot-rust/Cargo.lock /opt/passivbot/passivbot-rust/Cargo.lock
+COPY --from=build /opt/passivbot/passivbot-rust/src/ /opt/passivbot/passivbot-rust/src/
+COPY --from=build /usr/local/lib/python3.12/site-packages/passivbot_rust/ /usr/local/lib/python3.12/site-packages/passivbot_rust/
+COPY cloud_worker.py /opt/pbgui/worker.py
+LABEL pbgui.pb8.cpu-hotfix="hsl-cpu-rolling-v1"
+LABEL pbgui.pb8.rust-source-fingerprint="0f94231023292fcc96fd42c7301272509c963dfa45ec810e7b3a026cdf5a571e"

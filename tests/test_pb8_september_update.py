@@ -55,7 +55,7 @@ def test_older_runtime_cannot_silently_ignore_offline(monkeypatch):
 
 
 @pytest.mark.parametrize('field,value,rejected', [
-    ('offline', True, True), ('offline', False, False),
+    ('offline', True, False), ('offline', False, False), ('offline', 'true', True),
     ('drift_rank_halt', None, False), ('drift_rank_halt', 0.8, True),
     ('drift_objective_tolerance', 1e-6, False), ('drift_objective_tolerance', 0, True),
     ('drift_objective_tolerance', float('nan'), True),

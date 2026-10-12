@@ -1,0 +1,5 @@
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae
+COPY hsl_history_cache.py /opt/passivbot/src/optimization/gpu/hsl_history_cache.py
+COPY hsl_history_cache.patch /tmp/hsl_history_cache.patch
+RUN cd /opt/passivbot && patch -p1 < /tmp/hsl_history_cache.patch && python -m py_compile src/optimization/gpu/hsl_history_cache.py src/optimization/gpu/mps_kernel.py
+LABEL pbgui.pb8.gpu-hotfix="hsl-history-cache-v1"

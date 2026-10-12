@@ -299,6 +299,10 @@ class LoopBackend:
 
     def _rent(self, record):
         """Rent only for owned jobs within the frozen and current shared limits."""
+        if record.get('rental_handover'):
+            # A reviewed replacement is bound to one existing rental, including
+            # after failure/deletion. Never silently buy another GPU for it.
+            return
         from vast_queue import CloudQueue
         from vast_pool import select_offer
         queue = CloudQueue()
@@ -415,7 +419,7 @@ class LoopBackend:
             except (ValueError, RuntimeError, OSError, HTTPException) as exc:
                 from logging_helpers import human_log
                 human_log(SERVICE, f'Saved optimizer evidence unavailable: {type(exc).__name__}', level='WARNING')
-        return sorted(result, key=lambda row: row['guidance_score'], reverse=True)[:12]
+        return result
 
     def _result_candidates(self, record, source, job):
         """Load native Pareto metrics/configs without mutating source results."""
@@ -442,11 +446,10 @@ class LoopBackend:
             candidate_id = 'c_' + digest([job['operation'], artifact])[:24]
             result.append({'id': candidate_id, 'optimizer_job': job['operation'], 'config': config,
                            'overrides': job['overrides'], 'metrics': metrics,
-                           'source': {'run': source['result'], 'modified': source['modified'], 'artifact': artifact},
-                           'guidance_score': evaluate(metrics, record['rubric'])['score']})
+                           'source': {'run': source['result'], 'modified': source['modified'], 'artifact': artifact}})
         if not result:
             raise ValueError('Optimizer result contains no usable candidate metrics')
-        return sorted(result, key=lambda row: row['guidance_score'], reverse=True)[:12]
+        return result
 
     def validation_config(self, record, candidate, holdout=False):
         config = copy.deepcopy(candidate['config'])
@@ -499,6 +502,10 @@ class LoopBackend:
             if not isinstance(value, dict):
                 return
             for key, item in value.items():
+                # Native liquidation indicators are factual booleans, not
+                # missing metrics. Keep unrelated booleans out of scoring.
+                if type(item) is bool and key in ('liquidated', 'liquidated_usd', 'liquidated_btc'):
+                    item = int(item)
                 if isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item):
                     metrics[prefix + key] = item
                     metrics.setdefault(key, item)
@@ -508,6 +515,16 @@ class LoopBackend:
         for report in reports:
             metrics = {}
             collect(report)
+            # PB8's expanded analysis retains the common liquidation flag
+            # without a currency suffix. This is a 0/1 flag, not a USD amount.
+            if 'liquidated_usd' not in metrics and type(report.get('liquidated')) is bool:
+                metrics['liquidated_usd'] = int(report['liquidated'])
+            # PB8 names quote-currency equity smoothness with an explicit USD
+            # suffix. Preserve older goal names as aliases of those same exact
+            # observations, never substitute BTC equity or a proxy metric.
+            for name in ('exponential_fit_error', 'equity_choppiness', 'equity_jerkiness'):
+                if name not in metrics and name + '_usd' in metrics:
+                    metrics[name] = metrics[name + '_usd']
             per_report.append(metrics)
         keys = set.intersection(*(set(item) for item in per_report))
         directions = {key: rule['direction'] for rule in record['rubric'] for key in rule['metrics']}
@@ -566,4 +583,14 @@ class LoopBackend:
         queue = CloudQueue()
         for worker in queue.workers():
             if worker.get('loop_id') == record['id'] and worker.get('loop_owner') == record['owner']:
+                handover = worker.get('loop_handover') or {}
+                if (handover.get('status') == 'collecting' and handover.get('source_id') == record['id']
+                        and handover.get('owner') == record['owner']):
+                    continue
                 queue.store.control(worker['id'], 'cleanup')
+
+    def handover_step(self, record):
+        """Resume durable rental transfer without starting a new rental."""
+        from pb8_loop_handover import advance
+        from vast_queue import CloudQueue
+        return advance(self.store, CloudQueue(), record)

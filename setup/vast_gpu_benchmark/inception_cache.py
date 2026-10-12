@@ -46,6 +46,24 @@ def install(root, raw, checksum, safe_path, source=Path('/opt/passivbot/src/util
             raise ValueError('Invalid inception identity')
     cache = safe_path(root, 'output/caches')
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # PB8's OHLCV manager consumes a second, per-exchange listing cache.
+    # Derive it from the same symbol-verified snapshot; never query exchanges.
+    per_exchange = {}
+    for coin, values in specific.items():
+        for exchange, timestamp in values.items():
+            canonical = 'binance' if exchange == 'binanceusdm' else exchange
+            per_exchange.setdefault(canonical, {})[coin] = timestamp
+    for exchange, timestamps in per_exchange.items():
+        directory = safe_path(cache, exchange)
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        target = safe_path(directory, 'first_timestamps.json')
+        fd, temporary = tempfile.mkstemp(dir=directory)
+        try:
+            with os.fdopen(fd, 'w') as stream:
+                stream.write(json.dumps(timestamps, indent=4))
+            os.replace(temporary, target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
     for name in (*NAMES, 'first_ohlcv_timestamps_unified.version'):
         target = safe_path(cache, name)
         value = str(version) if name.endswith('.version') else json.dumps(files[name], indent=4)

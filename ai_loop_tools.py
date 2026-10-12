@@ -158,6 +158,7 @@ class AILoopTools:
                 'execution': row['settings']['execution'], 'round': row.get('round', 0),
                 'phase': row.get('phase'), 'reason': safe(row.get('reason')),
                 'last_error': safe(row.get('last_error')), 'repair_error': safe(row.get('repair_error'))}
+        result['rental_handover'] = copy.deepcopy(row.get('rental_handover'))
         failure = row.get('failure') or {}
         result['termination_details'] = {key: safe(failure[key]) for key in
             ('at', 'phase', 'round', 'stage', 'error_type', 'reason', 'detail', 'provider', 'model', 'effort', 'attempts') if key in failure}
@@ -236,8 +237,8 @@ class AILoopTools:
         if set(args) - {'operation', 'name', 'revision', 'loop_id'}:
             raise ValueError('Unknown Loop run field')
         operation = args.get('operation')
-        if operation not in {'queue', 'queue_and_start', 'start'}:
-            raise ValueError('Choose queue, queue_and_start or start')
+        if operation not in {'queue', 'queue_and_start', 'start', 'replace'}:
+            raise ValueError('Choose queue, queue_and_start, start or replace')
         runtime = self._runtime()
         if operation == 'start':
             if args.get('name') or args.get('revision') is not None:
@@ -249,7 +250,7 @@ class AILoopTools:
             payload = {'operation': operation, 'name': settings.get('loop_name', settings['config_name']),
                        'loop_id': row['id'], 'control_generation': row['control_generation']}
         else:
-            if args.get('loop_id'):
+            if args.get('loop_id') and operation != 'replace':
                 raise ValueError('Queue uses a definition, not loop_id')
             name = self.caps._name(args.get('name'))
             revision = args.get('revision')
@@ -258,6 +259,18 @@ class AILoopTools:
                 raise ValueError('Read the current Loop definition revision before queueing')
             settings = row['settings']
             payload = {'operation': operation, 'name': name, 'revision': revision}
+            if operation == 'replace':
+                from pb8_loop_handover import source_worker
+                from vast_provider import VastError
+                try:
+                    source, worker = source_worker(runtime._controller.store, self._rental()[0], owner,
+                                                   self.caps._opaque_id(args.get('loop_id'), 'source loop'))
+                except VastError as exc:
+                    raise ValueError(str(exc)) from exc
+                if settings['execution'] != 'vast':
+                    raise ValueError('Replacement requires a Vast Loop definition')
+                payload.update(source_loop_id=source['id'], worker_id=worker['id'],
+                               source_generation=source['control_generation'])
         allowed = set(runtime.LoopStart.model_fields) - {'authorization'}
         settings = runtime.LoopStart.model_validate(dict({key: value for key, value in settings.items() if key in allowed},
                                                        **selection)).model_dump(exclude={'authorization'})
@@ -274,7 +287,14 @@ class AILoopTools:
                    'changes': [{'path': 'run.status', 'before': 'queued' if operation == 'start' else '(absent)',
                                 'after': 'queued' if operation == 'queue' else 'running'}],
                    'effect': 'Queue/start the saved Loop through native backend validation. Starting authorizes automatic jobs, AI usage and paid rentals within the displayed limits.'}
-        return payload, self.caps._strip_paths(preview)
+        if operation == 'replace':
+            preview.update(source_loop_id=payload['source_loop_id'], worker_id=payload['worker_id'],
+                           effect='Stop and collect the source Loop, preserve its current GPU rental, '
+                                  'and start this replacement on the same instance. No new rental; '
+                                  'existing rental budget, spending and deadline remain unchanged.')
+        sanitized = self.caps._strip_paths(preview)
+        sanitized['changes'] = preview['changes']
+        return payload, sanitized
 
     async def execute_run(self, proposal):
         """Preserve safe validation errors from approved native operations."""
@@ -310,7 +330,12 @@ class AILoopTools:
                 response = await runtime._start_loop(body, definition=definition, owner=proposal.owner, queue_proposal=proposal.id)
                 created = json.loads(response.body)
                 row = await asyncio.to_thread(store.read, proposal.owner, created['id'])
-        if payload['operation'] != 'queue' and row['status'] == 'queued':
+        if payload['operation'] == 'replace':
+            await runtime._handover_owned(proposal.owner, payload['source_loop_id'], runtime.LoopHandover(
+                target_loop_id=row['id'], worker_id=payload['worker_id'],
+                source_generation=payload['source_generation'], selection=payload['selection'], authorization=True))
+            row = await asyncio.to_thread(store.read, proposal.owner, row['id'])
+        elif payload['operation'] != 'queue' and row['status'] == 'queued':
             response = await runtime._loop_action_owned(proposal.owner, row['id'],
                                                        runtime.LoopAction(action='start', selection=payload['selection']))
             row = await asyncio.to_thread(store.read, proposal.owner, row['id'])
@@ -369,7 +394,10 @@ class AILoopTools:
                    'may_start_immediately': False,
                    'effect': 'Save an owned AI Loop definition only. No jobs or rentals are started.'}
         preview['changed_count'] = len(preview['changes'])
-        return payload, self.caps._strip_paths(preview)
+        sanitized = self.caps._strip_paths(preview)
+        # Validated setting names are not filesystem paths; values are already redacted.
+        sanitized['changes'] = preview['changes']
+        return payload, sanitized
 
     def _validate_rental(self, settings):
         """Keep cloud Loop settings within the shared native rental limits."""
@@ -448,8 +476,8 @@ def tool_specs():
          'schema': schema({'loop_id': {'type': 'string'}}, []), 'effect': 'read'},
         {'name': 'read_ai_loop_log', 'description': 'Read actual retained optimizer/backtest log text for an owned AI Loop job. Get operation from get_ai_loop_runs(loop_id). Starts with the last 32 KiB; pass returned next_before to read earlier chunks. Includes cloud collected logs or current mirrored logs. Read-only; no browser clicks required.',
          'schema': schema({'loop_id': {'type': 'string'}, 'operation': {'type': 'string'}, 'before': {'type': 'integer', 'minimum': 0}}, ['loop_id', 'operation']), 'effect': 'read'},
-        {'name': 'propose_ai_loop_run', 'description': 'Prepare native backend queue/start for a saved AI Loop, without clicking browser controls. Use queue_and_start when explicitly asked to queue and start; read get_ai_loop_configs and supply exact name/revision. Use start with an existing queued loop_id from get_ai_loop_runs. Requires user approval; starts may launch paid rentals/jobs within reviewed limits. Uses current shared AI selection.',
-         'schema': schema({'operation': {'type': 'string', 'enum': ['queue', 'queue_and_start', 'start']}, 'name': {'type': 'string'}, 'revision': {'type': 'integer', 'minimum': 1}, 'loop_id': {'type': 'string'}}, ['operation']), 'effect': 'draft'},
+        {'name': 'propose_ai_loop_run', 'description': 'Prepare native backend queue/start for a saved AI Loop, without clicking browser controls. Use queue_and_start to queue and start; read get_ai_loop_configs and supply exact name/revision. Use start with an existing queued loop_id. Use replace with the NEW definition name/revision and OLD loop_id to stop/collect the old Loop and start the replacement on its existing GPU without ending the rental or renting another. Existing rental spend, budget and deadline remain unchanged; transfer is asynchronous and recoverable. Inspect get_ai_loop_runs rental_handover for status. Requires user approval. Uses current shared AI selection.',
+         'schema': schema({'operation': {'type': 'string', 'enum': ['queue', 'queue_and_start', 'start', 'replace']}, 'name': {'type': 'string'}, 'revision': {'type': 'integer', 'minimum': 1}, 'loop_id': {'type': 'string'}}, ['operation']), 'effect': 'draft'},
         {'name': 'get_ai_loop_configs', 'description': 'Read owned PB8 AI Loop definitions and editable settings schema; supply name to inspect a definition before editing. Source strategy, exchanges, training windows and holdout come from a saved PB8 optimizer config. max_runs limits optimizer attempts, not completed rounds.',
          'schema': schema({'name': {'type':'string'}}, []), 'effect': 'read'},
         {'name': 'get_vast_preferences', 'description': 'Read non-secret shared Vast.ai GPU requirements, rental limits, schema and settings_digest. For two RTX 3060 rentals use gpu_name RTX 3060 and max_rentals 2, independently of AI Loop parallel variants. Preserve existing budget/duration unless requested; clarify missing material cost requirements.',

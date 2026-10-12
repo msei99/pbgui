@@ -67,6 +67,16 @@ def holdout_selection(record, number):
                'status': 'waiting' if settled < len(selected) else 'unavailable'}
     if summary['status'] == 'waiting':
         return summary
+    history = next((entry for entry in record.get('history', []) if entry['round'] == number), {})
+    if 'winner_operation' in history or number < 0:
+        candidate_id = history.get('winner_candidate_id') if number >= 0 else 'starting_config'
+        winner = next((job for job in selected if job
+                       and job.get('candidate_id') == candidate_id
+                       and job['status'] in SUCCESS and job.get('simulation_complete')), None)
+        if winner:
+            summary.update(status='selected', candidate_id=winner['candidate_id'],
+                           operation=winner['operation'], score=None)
+        return summary
     eligible = []
     for job in selected:
         assessment = (job or {}).get('assessment') or {}

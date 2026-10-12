@@ -321,7 +321,11 @@ def resolve_gpu_settings(
         scale = profile_scale
         automatic.update(
             population_size=population,
-            batch_size=rental_override['batch_size'] if rental_override is not None else population,
+            # A concrete batch disables PB8's native batch tuner, including
+            # its HSL scratch policy and production dispatch progress.
+            batch_size=(rental_override['batch_size'] if rental_override is not None
+                        else population if gpu.get('tuning_mode', 'auto') == 'off'
+                        else None),
             validate_per_generation=8 * scale,
             drift_probes=4 * scale,
             drift_window=128 * scale,

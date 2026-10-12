@@ -2,7 +2,7 @@
 
 Pool planning matches waiting jobs to idle rentals using each rental's recorded worker image, PB8 revision and CPU allocation. A free older rental cannot prevent renting a worker required by a newer job. Offer selection and rental job-profile choices use the same compatibility check as dispatch; unsupported jobs remain waiting with a useful message while compatible jobs continue.
 
-New rentals use official PB8 revision `b9d6692ea` with the merged PR #1871 invalid-candidate protection and native HSL budget scaling, without a separate source patch. The upstream HSL fix prevents a closing loss that exhausts cash from causing a false held-position candle valuation error. Existing rentals retain their original image and revision; a new rental uses the updated worker. Fresh calibration is pending, so new-revision jobs use conservative hardware fallbacks. GPU hardware and real checkpoint/resume acceptance are still pending.
+New rentals use official PB8 revision `b9d6692ea` with the merged PR #1871 invalid-candidate protection and the published HSL history-cache and adaptive CUDA memory overlays. The upstream HSL fix prevents a closing loss that exhausts cash from causing a false held-position candle valuation error. Existing rentals retain their original image and revision. Fresh calibration and real checkpoint/resume acceptance remain pending; focused offline tests and a bounded RTX 3060 memory/result comparison have passed.
 
 The jobs view reuses saved throughput measurements for completed, failed and cancelled jobs. It reads a finished job's optimizer log only when its throughput snapshot is still missing.
 
@@ -41,6 +41,8 @@ First-counter delay means the **first observed** counter relative to container s
 The PB8 queue and Performance History show **Est. coin candles / candidate**. This sums inclusive calendar days × 1,440 ÷ candle interval × distinct selected coins over active training scenarios. Scenario coin selections and exclusions are respected; the same coin on long and short counts once. Without Suite Mode, the base date range is used. Each selected exchange counts separately, including scenario-specific exchange lists. Optimizer iterations and population size are not extra multipliers. Holdout validation, warm-up, missing data and actual runtime candle consumption are excluded. Unknown or dynamic inputs show **—**. This is a data-volume estimate for one full candidate, not a runtime prediction or the run's total calculation count. Queue values use the frozen snapshot. Older history can recover estimates only while its snapshot still exists.
 
 Select two to four runs and choose **Compare configs** to describe different workloads. **Compare hardware** continues to require identical verified workload fingerprints. Both show proxy/min and exact/min separately. **Minutes / 1k exact** = 1,000 ÷ measured exact/min; **USD / 1k exact** = 1,000 ÷ measured exact/USD. These are measured-rate projections excluding startup, idle time and transfers, not total rental cost forecasts. Zero or unavailable throughput shows **—**. GPU, CPU allocation, worker version, strategy and search settings can also change throughput; config comparisons do not isolate hardware performance.
+
+Automatic batch size remains blank in the execution config so PB8 can tune real dispatches, allocate HSL scratch from available GPU memory and report internal progress. For CUDA HSL, Auto sizes history storage from actual dispatch demand and free VRAM, retaining the larger of 1 GiB or 20% total VRAM as headroom when available. It recalculates between completed replays; memory pressure keeps conservative sizing, and MPS retains its existing cap. Explicit batch sizes and manually selected rental profiles remain fixed.
 
 ## Optimizer Settings
 
@@ -297,7 +299,11 @@ default so uploaded data and the worker cache remain available for follow-up run
 Immediate cleanup and 5-minute, 30-minute or 1-hour idle periods remain selectable. Choose **Custom** under **When idle** to enter your own idle timeout in minutes (rounded to whole seconds). The rental deadline still ends the rental if it comes first.
 The GPU card shows the active retention policy and remaining time. New eligible
 work cancels a running countdown.
-A paused queue also follows the idle cleanup policy. Confirm **deletion_verified**;
+A paused queue also follows the idle cleanup policy. GPU cards retain **Ending rental** or **Deletion pending** after reload and show provider cleanup errors. **Retry cleanup** resubmits the existing termination request without creating a new rental authorization; an already authorized automatic replacement remains authorized. The card remains until provider deletion is verified.
+
+PBGui shares request pacing across its local processes: a conservative five-second minimum per endpoint, adaptive spacing up to 60 seconds after HTTP 429, and a shared exponential retry pause of 30–300 seconds (longer if instructed by the provider). Successful calls to a different endpoint do not reset a failing endpoint's backoff; successful calls gradually reduce its spacing. Accepted delete requests are repeated at most once a minute while fresh absence checks continue. Vast publishes endpoint/identity and burst limits without fixed numeric quotas; these are PBGui pacing settings, not provider quotas. See [Vast API rate limits](https://docs.vast.ai/api-reference/rate-limits-and-errors).
+
+Confirm **deletion_verified**;
 merely stopping a Vast instance can leave disk storage billable.
 
 ## Limits and recovery
@@ -383,7 +389,11 @@ During image provisioning, the progress bar counts observed image layers: downlo
 Uploads report bytes consumed by SSH, percentage and average speed, followed by input verification. The cost card uses provider-reported instance charges, not a calculated job estimate.
 
 Optimizer log snapshots refresh every 15 seconds during startup, including before
-the first evaluation. Prepared offline bundles can include public market caches;
+the first evaluation. Vast always runs with `backtest.offline=true`, including
+when the local source config allows downloads. PBGui supplies candle shards,
+public market snapshots and first-candle metadata before optimizer startup.
+Missing inputs fail explicitly instead of triggering exchange downloads on Vast.
+Prepared offline bundles can include public market caches;
 their original freshness is retained, and expired snapshots block startup.
 
 **Vast instance charges** shows the provider's billing API amount for the entire

@@ -667,6 +667,31 @@ def test_cost_estimate_stops_at_terminal_state():
     assert vast._run_cost_estimate({},rental,9000) is None
 
 
+@pytest.mark.parametrize('status', ['reserved', 'completed'])
+def test_rental_controls_survive_polling_after_optimizer_finishes(tmp_path, monkeypatch, status):
+    """Expose durable termination flags independently of the stale worker status."""
+    from fastapi import Response
+    from vast_jobs import JobStore, write_json
+    from vast_queue import CloudQueue
+    from secure_files import ensure_private_directory
+    store = JobStore(tmp_path / 'queue')
+    identifier = 'b' * 32
+    directory = ensure_private_directory(store.root / 'jobs' / identifier)
+    write_json(directory / 'state.json', {'id': identifier, 'kind': 'worker',
+               'status': status, 'rental_state': 'destroy_pending'})
+    write_json(directory / 'control.json', {'stop': True, 'cleanup': True})
+    queue = CloudQueue(store)
+    queue.update(worker_id=identifier)
+    monkeypatch.setattr(vast, 'CloudQueue', lambda: queue)
+    monkeypatch.setattr(vast, 'services_available', lambda: False)
+    response = Response()
+    result = vast.jobs(response, None)
+    for row in [result['worker'], *result['workers']]:
+        assert row['stop_requested'] is True
+        assert row['cleanup_requested'] is True
+    assert response.headers['Cache-Control'] == 'no-store'
+
+
 def test_stop_request_survives_job_polling(tmp_path, monkeypatch):
     """Expose the persisted stop request while the supervisor still reports running."""
     from fastapi import Response

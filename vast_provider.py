@@ -11,6 +11,7 @@ from secure_files import ensure_private_directory, read_regular_file_nofollow, a
 
 import json
 import math
+import re
 import threading
 import time
 import urllib.error
@@ -24,6 +25,9 @@ INSTANCE_LIST_PATH = "/api/v1/instances/"
 MAX_INSTANCE_ROWS = 10_000
 COORDINATION_ROOT = Path(__file__).resolve().parent / "data/vast/provider"
 INSTANCE_TTL = 15
+# Vast publishes endpoint/identity limits without fixed numeric quotas.
+# Spread calls proactively, then adapt to 429 instead of assuming a quota.
+ENDPOINT_INTERVAL = 5.0
 GPU_NAMES_TTL = 3600
 _GPU_NAMES_CACHE: dict[str, object] = {}
 _GPU_NAMES_LOCK = threading.Lock()
@@ -128,15 +132,37 @@ class VastClient:
             remaining = state.get('retry_at', 0) - now
             if remaining > 0:
                 raise VastRateLimit(remaining, request_sent=False)
+            endpoint = method + ' ' + re.sub(r'/\d+(?=/|$)', '/:id', path)
+            intervals = state.get('endpoint_intervals') or {}
+            interval = min(60.0, max(ENDPOINT_INTERVAL, float(intervals.get(endpoint, ENDPOINT_INTERVAL))))
+            slots = state.get('endpoint_slots') or {}
+            remaining = float(slots.get(endpoint, 0)) - now
+            if remaining > 0:
+                # Long adaptive delays must not block API handlers or guards.
+                if remaining > ENDPOINT_INTERVAL:
+                    raise VastRateLimit(remaining, request_sent=False)
+                time.sleep(remaining)
+            # Record the reservation before sending, including failed calls.
+            slots = {key: value for key, value in slots.items() if value > time.time()}
+            slots[endpoint] = time.time() + interval
+            state['endpoint_slots'] = slots
+            atomic_write_private_text(state_path, json.dumps(state, indent=4))
             try:
-                result = self._instance_pages() if listing else self._request(method, path, body)
+                result = self._instance_pages(interval=interval) if listing else self._request(method, path, body)
             except VastRateLimit as exc:
                 failures = min(int(state.get('failures', 0)) + 1, 5)
                 delay = max(exc.retry_after, min(300, 30 * 2 ** (failures - 1)))
-                state.update(failures=failures, retry_at=time.time() + delay)
+                intervals[endpoint] = min(60.0, interval * 2)
+                state.update(failures=failures, retry_at=time.time() + delay,
+                             retry_endpoint=endpoint, endpoint_intervals=intervals)
                 atomic_write_private_text(state_path, json.dumps(state, indent=4))
                 raise VastRateLimit(delay, request_sent=True) from None
-            state.update(failures=0, retry_at=0)
+            slots[endpoint] = time.time() + interval
+            intervals[endpoint] = max(ENDPOINT_INTERVAL, interval * .9)
+            state['endpoint_intervals'] = intervals
+            # A successful GET must not reset repeated DELETE failures.
+            if not state.get('retry_endpoint') or state['retry_endpoint'] == endpoint:
+                state.update(failures=0, retry_at=0, retry_endpoint=None)
             if listing and isinstance(result.get('instances'), list):
                 fields = ('id', 'label', 'actual_status', 'public_ipaddr', 'ports')
                 rows = result['instances']
@@ -196,7 +222,7 @@ class VastClient:
             raise VastError("Vast did not confirm this operation")
         return result
 
-    def _instance_pages(self) -> dict:
+    def _instance_pages(self, *, interval: float = ENDPOINT_INTERVAL) -> dict:
         """Read every official v1 instance page under one coordinated request."""
         params = {
             'select_filters': {},
@@ -220,6 +246,8 @@ class VastClient:
                 raise VastError("Vast returned an invalid instance cursor")
             cursors.add(token)
             params['after_token'] = token
+            # Pagination uses the same endpoint and must not create a burst.
+            time.sleep(interval)
 
     def account(self) -> dict:
         """Expose balance and account ID only, never email, sid or SSH material."""

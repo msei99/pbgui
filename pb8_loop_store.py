@@ -165,24 +165,11 @@ def config_defaults(config):
 
 
 def optimizer_start_candidate(record):
-    """Select the retained exact winner, never worse than the unchanged baseline."""
+    """Use the AI-selected, qualified exact winner without re-ranking its metrics."""
     candidate = {'id': 'baseline', 'config': record['initial_config'],
                  'overrides': record['initial_overrides'], 'optimizer_job': None}
     best = record.get('best') or {}
-    baseline = record.get('baseline') or {}
-
-    def rank(observation):
-        assessment = observation.get('assessment') or {}
-        score = assessment.get('score')
-        if (not observation.get('exact') or not assessment.get('comparable', True)
-                or assessment.get('simulation_complete') is False
-                or type(score) not in (int, float) or not math.isfinite(score)):
-            return None
-        return (assessment.get('hard_targets_met', True), score)
-
-    best_rank, baseline_rank = rank(best), rank(baseline)
-    if (best_rank is not None and isinstance(best.get('candidate'), dict)
-            and (baseline_rank is None or best_rank > baseline_rank)):
+    if qualified_winner(best) and isinstance(best.get('candidate'), dict):
         candidate = best['candidate']
     return {'candidate_id': candidate['id'], 'optimizer_job': candidate.get('optimizer_job'),
             'bot': copy.deepcopy(candidate['config']['bot']),
@@ -191,21 +178,22 @@ def optimizer_start_candidate(record):
 
 
 def apply_optimizer_start(record, config, overrides):
-    """Seed bot parameters without replacing the AI's optimizer experiment."""
+    """Validate the AI's complete experiment without overwriting proposed bot edits."""
     start = optimizer_start_candidate(record)
     config, overrides = copy.deepcopy(config), copy.deepcopy(overrides)
-    # A user-authorized strategy switch needs its own compatible bot template.
-    # Never insert the old strategy's parameters into that experiment.
+    # The confirmed bot is supplied to the AI as a reference, not applied here:
+    # a complete proposal may deliberately change even a value back to its
+    # initial default. Inferring intent by comparing with the initial config
+    # would silently discard such experiments.
     compatible = config['live'].get('strategy_kind', 'trailing_martingale') == start['strategy_kind']
-    if compatible:
-        config['bot'] = start['bot']
-        overrides = start['overrides']
     config = apply_run_limit(record['settings'], config)
     validate_change(record, config, overrides)
     return config, overrides, {'candidate_id': start['candidate_id'] if compatible else None,
                               'optimizer_job': start['optimizer_job'] if compatible else None,
-                              'reason': 'Best exact comparison bot; original on baseline tie' if compatible
-                              else 'Explicit strategy change requires a compatible starting bot'}
+                              'bot_modified': config['bot'] != start['bot'],
+                              'overrides_modified': overrides != start['overrides'],
+                              'reason': 'Confirmed bot supplied as reference; AI experiment preserved' if compatible
+                              else 'Explicit strategy change uses the proposed compatible bot'}
 
 
 def apply_run_limit(settings, config):
@@ -406,9 +394,16 @@ def validate_change(record, config, overrides):
     return config
 
 
+def qualified_winner(observation):
+    """Require exact, complete, comparable evidence satisfying every hard target."""
+    assessment = (observation or {}).get('assessment') or {}
+    return bool(observation and observation.get('exact') and assessment.get('comparable')
+                and assessment.get('simulation_complete') and assessment.get('hard_targets_met'))
+
+
 def evaluate(metrics, rubric):
     """Apply the pinned measurable goal rules without inventing missing observations."""
-    score, achieved, evidence = 0.0, True, []
+    achieved, evidence = True, []
     for rule in rubric:
         values = [metrics[key] for key in rule['metrics'] if isinstance(metrics.get(key), (int, float))
                   and not isinstance(metrics[key], bool) and math.isfinite(metrics[key])]
@@ -417,13 +412,11 @@ def evaluate(metrics, rubric):
         measurable = value is not None and target is not None
         passed = measurable and (value >= target if rule['direction'] == 'max' else value <= target)
         achieved = achieved and (passed if target is not None else rule['goal'] != 'custom' and value is not None)
-        if value is not None:
-            scale = max(abs(target or 0), rule.get('scale', 1), 1e-9)
-            score += rule['weight'] * (value / scale if rule['direction'] == 'max' else -value / scale)
-        evidence.append({'goal': rule['goal'], 'metric': next((k for k in rule['metrics'] if k in metrics), None),
+        evidence.append({'goal': rule['goal'], 'metric': next((k for k in rule['metrics'] if k in metrics),
+                                                            next(iter(rule['metrics']), None)),
                          'value': value, 'target': target, 'confirmed': bool(passed), 'requirement': target is not None,
                          'direction': rule['direction'], 'reducer': 'worst' if rule['direction'] == 'min' else 'mean'})
-    return {'score': score, 'achieved': bool(rubric and achieved and any(rule.get('target') is not None for rule in rubric)),
+    return {'score': None, 'achieved': bool(rubric and achieved and any(rule.get('target') is not None for rule in rubric)),
             'hard_targets_met': all(item['confirmed'] for item in evidence if item['requirement']),
             'comparable': bool(any(item['value'] is not None for item in evidence) and all(item['value'] is not None for item, rule in zip(evidence, rubric) if rule['metrics'])), 'goals': evidence}
 
@@ -687,7 +680,17 @@ class LoopStore:
             archive = ensure_private_directory(path.parent / 'evidence') / (digest(evidence_id) + '.json')
             if any(item['id'] == evidence_id for item in knowledge['entries']):
                 return
-            value = {**bounded_json(entry), 'id': evidence_id, 'loop': record['id'],
+            # A round contains several full exact reports/configs. Validate each
+            # observation with the existing strict per-object bound instead of
+            # applying the single-config limit to the whole evidence archive.
+            if isinstance(entry.get('observations'), list):
+                validated = bounded_json({key: item for key, item in entry.items() if key != 'observations'})
+                validated['observations'] = [bounded_json(item) for item in entry['observations']]
+                if len(json.dumps(validated, allow_nan=False).encode()) > 8 * 1024 * 1024:
+                    raise ValueError('Round evidence exceeds 8 MB')
+            else:
+                validated = bounded_json(entry)
+            value = {**validated, 'id': evidence_id, 'loop': record['id'],
                      'fingerprint': record['fingerprint'], 'created_at': time.time()}
             atomic_write_private_text(archive, json.dumps(value, indent=4) + '\n')
             contradictions = value.get('contradicts') or []

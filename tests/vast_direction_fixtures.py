@@ -9,7 +9,7 @@ def direction_config():
         'bot': {side: {'risk': {'total_wallet_exposure_limit': 1.0 if side == 'long' else 0.0,
                               'n_positions': 1 if side == 'long' else 0}}
                 for side in ('long', 'short')},
-        'backtest': {'exchanges': ['binance']},
+        'backtest': {'exchanges': ['binance'], 'offline': True},
         'optimize': {'iters': 512, 'n_cpus': 4, 'scoring': [{'metric': 'adg_strategy_eq', 'goal': 'max'}],
                      'limits': [], 'fixed_params': [], 'fixed_runtime_overrides': {},
                      'bounds': {f'{side}_{field}': [value, value]
@@ -21,6 +21,7 @@ def direction_config():
 def complete_direction(config):
     """Add realistic gates to older tests concerned with unrelated features."""
     result = copy.deepcopy(config)
+    result.setdefault('backtest', {}).setdefault('offline', True)
     base = direction_config()
     for side in ('long', 'short'):
         result.setdefault('bot', {}).setdefault(side, {}).setdefault('risk', base['bot'][side]['risk'])

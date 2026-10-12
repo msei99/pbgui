@@ -1060,6 +1060,12 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
         queue = CloudQueue()
         worker = queue.worker()
         workers = queue.workers()
+        # Rental controls remain relevant even after the optimizer has finished.
+        for item in workers + ([worker] if worker else []):
+            control_path = queue.store.directory(item['id']) / 'control.json'
+            control = queue.store.read(item['id'], 'control.json') if control_path.exists() else {}
+            item['stop_requested'] = bool(control.get('stop'))
+            item['cleanup_requested'] = bool(control.get('cleanup'))
         for item in workers:
             path = CLOUD_LOG_ROOT / ('vast_' + job_id(item['id']) + '_provider.log')
             item['has_provider_log'] = path.is_file() and not path.is_symlink()
