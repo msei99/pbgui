@@ -391,6 +391,10 @@ Optimize bounds now keep position counts positive and avoid the invalid long/sho
 
 In the visual scenario editor, zoom stays within the configured dates. A successful retry clears earlier errors, and cancelling scenario replacement leaves the open editor unchanged.
 
+GPU population settings are independent of CPU/Pymoo populations. Switching a CPU or Pareto preset to GPU with **population_size** left at Auto clears the inherited outer population fallback, so rental-aware GPU sizing can run. Explicit GPU populations remain explicit; older GPU configs using the outer population field show that value in the GPU field before migration. Vast ignores local **n_cpus** validation and measures its own CPU allocation; local execution still enforces the local host limit.
+
+The disabled local CPU field retains its preference as **pbgui.local_n_cpus** when saving a Vast config; **optimize.n_cpus** remains Auto for cloud execution. Reopening and switching back to Local restores that preference. Legacy Vast configs capture their existing n_cpus as the local preference when saved. Values must be positive integers, and saving for Local still rejects values above the current host limit rather than silently reducing them.
+
 ## AI Loop Optimizer (PB8 only)
 
 Setup uses the full-width optimizer editor grid: Starting configuration, Coins and positions, Result goals, then Run limits. Each goal is paired with its optional target.

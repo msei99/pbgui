@@ -107,6 +107,11 @@ def test_cpu_input_enforces_host_limit_and_backend_specific_auto() -> None:
         stepOptimizeCpuCount('opted-n-cpus',-1);
         assert.equal(input.value,'');
         assert.equal(collectOptimizeCpuCount(input.value,'gpu',true),null);
+        nodes['opted-execution']={{value:'vast'}};
+        assert.equal(collectOptimizeCpuCount('99','gpu',true),null);
+        assert.equal(collectOptimizeCpuCount('invalid-local-value','gpu',true),null);
+        nodes['opted-execution'].value='local';
+        assert.throws(()=>collectOptimizeCpuCount('99','gpu',true),/host limit of 32/);
         stepOptimizeCpuCount('opted-n-cpus',1);
         assert.equal(input.value,'1');
         input.value='32';
@@ -3680,3 +3685,126 @@ assert.equal(new URL(window.location.href).searchParams.has('open_draft'),false)
 })().catch(e=>{console.error(e);process.exit(1);});
 """)
     assert "removeItem(optimizeDraftStorageKey())" in _page_function(page, 'closeEditor')
+
+
+def test_cpu_pareto_population_cannot_override_gpu_auto_and_legacy_gpu_stays_visible() -> None:
+    """CPU→GPU→Vast clears inherited sizing; explicit GPU values migrate visibly."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'optimizeGpuEditorSettings', 'collectOptimizeGpuSettings', 'collectOptimizeCpuCount',
+    ))
+    _run_node(textwrap.dedent(f"""
+        const assert=require('node:assert/strict');
+        const optimizeEditorAdapter={{isV8:true}};
+        const deepClone=value=>JSON.parse(JSON.stringify(value));
+        const normalizeOptimizeBackendValue=value=>value;
+        const optimizeGpuDefaults=()=>({{auto_lean_parallelism:true,population_size:null,batch_size:null,
+          max_dispatch_candidate_bars:null}});
+        const nodes={{'opted-opt-backend':{{value:'pymoo'}},'opted-execution':{{value:'local'}},
+          'opted-gpu-auto-lean':{{checked:true}},'opted-gpu-population-size':{{value:''}},
+          'opted-gpu-batch-size':{{value:''}},'opted-gpu-max-dispatch-bars':{{value:''}},
+          'opted-gpu-halving-enabled':{{checked:false}}}};
+        const el=id=>nodes[id];
+        const toNullableNumber=value=>value===''||value==null?null:Number(value);
+        const optimizeCpuCountLimit=()=>6;
+        {functions}
+        const cpu={{backend:'pymoo',population_size:286,n_cpus:15,gpu:optimizeGpuDefaults()}};
+        const before=deepClone(cpu);
+        assert.equal(optimizeGpuEditorSettings(cpu).population_size,null);
+        collectOptimizeGpuSettings(cpu,true);
+        assert.equal(cpu.population_size,286); // CPU controls retain their own population.
+        nodes['opted-opt-backend'].value='gpu';
+        cpu.backend='gpu';
+        collectOptimizeGpuSettings(cpu,true);
+        assert.equal(cpu.population_size,null);
+        assert.equal(cpu.gpu.population_size,null);
+        nodes['opted-execution'].value='vast';
+        cpu.n_cpus=collectOptimizeCpuCount(cpu.n_cpus,'gpu',true);
+        collectOptimizeGpuSettings(cpu,true);
+        assert.equal(cpu.n_cpus,null);
+        assert.equal(cpu.population_size,null);
+        assert.equal(cpu.gpu.population_size,null);
+        assert.equal(cpu.gpu.batch_size,null);
+        // A selected GPU population wins and survives save/reopen.
+        nodes['opted-gpu-population-size'].value='4096';
+        collectOptimizeGpuSettings(cpu,true);
+        assert.equal(cpu.gpu.population_size,4096);
+        assert.equal(optimizeGpuEditorSettings(JSON.parse(JSON.stringify(cpu))).population_size,4096);
+        // Existing GPU configs with an outer value must display that value, never fake Auto.
+        const legacy={{backend:'gpu',population_size:286,gpu:optimizeGpuDefaults()}};
+        const legacyBefore=deepClone(legacy);
+        const displayed=optimizeGpuEditorSettings(legacy);
+        assert.equal(displayed.population_size,286);
+        assert.deepEqual(legacy,legacyBefore);
+        nodes['opted-gpu-population-size'].value=String(displayed.population_size);
+        collectOptimizeGpuSettings(legacy,true);
+        assert.equal(legacy.population_size,null);
+        assert.equal(legacy.gpu.population_size,286);
+        nodes['opted-gpu-population-size'].value='';
+        collectOptimizeGpuSettings(legacy,true);
+        assert.equal(optimizeGpuEditorSettings(legacy).population_size,null);
+        // A specific GPU value takes precedence over an older outer fallback.
+        assert.equal(optimizeGpuEditorSettings({{backend:'gpu',population_size:286,
+          gpu:{{population_size:2048}}}}).population_size,2048);
+        nodes['opted-execution'].value='local';
+        assert.throws(()=>collectOptimizeCpuCount(15,'gpu',true),/host limit of 6/);
+        assert.equal(before.population_size,286);
+    """))
+    assert "var gpu = optimizeGpuEditorSettings(optimize);" in _page_function(page, 'populateOptimizeGpuSettings')
+
+
+def test_local_cpu_preference_survives_cloud_save_reopen_and_return() -> None:
+    """Separate persistent editor preference from automatic Vast execution CPUs."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'optimizeLocalCpuValue', 'collectOptimizeCpuSettings', 'collectOptimizeCpuCount',
+    ))
+    _run_node(textwrap.dedent(f"""
+        const assert=require('node:assert/strict');
+        const optimizeEditorAdapter={{isV8:true}};
+        const node={{value:'local'}};
+        const el=id=>id==='opted-execution'?node:null;
+        const normalizeOptimizeBackendValue=x=>x;
+        const optimizeCpuCountLimit=()=>6;
+        {functions}
+        const cfg={{optimize:{{backend:'pymoo',n_cpus:6}},pbgui:{{execution:'local'}}}};
+        node.value='vast';
+        cfg.optimize.backend='gpu';
+        collectOptimizeCpuSettings(cfg,6,'gpu',true);
+        cfg.pbgui.execution='vast';
+        assert.equal(cfg.optimize.n_cpus,null);
+        assert.equal(cfg.pbgui.local_n_cpus,6);
+        const reopened=JSON.parse(JSON.stringify(cfg));
+        assert.equal(optimizeLocalCpuValue(reopened),6);
+        node.value='local';
+        reopened.optimize.backend='pymoo';
+        collectOptimizeCpuSettings(reopened,optimizeLocalCpuValue(reopened),'pymoo',true);
+        reopened.pbgui.execution='local';
+        assert.equal(reopened.optimize.n_cpus,6);
+        assert.equal(optimizeLocalCpuValue(JSON.parse(JSON.stringify(reopened))),6);
+        // Older Vast configs import their prior local value without mutating the source.
+        const legacy={{optimize:{{backend:'gpu',n_cpus:128}},pbgui:{{execution:'vast'}}}};
+        assert.equal(optimizeLocalCpuValue(legacy),128);
+        assert.equal(legacy.pbgui.local_n_cpus,undefined);
+        node.value='vast';
+        collectOptimizeCpuSettings(legacy,optimizeLocalCpuValue(legacy),'gpu',true);
+        assert.equal(legacy.optimize.n_cpus,null);
+        assert.equal(legacy.pbgui.local_n_cpus,128);
+        assert.equal(optimizeLocalCpuValue(JSON.parse(JSON.stringify(legacy))),128);
+        node.value='local';
+        assert.throws(()=>collectOptimizeCpuSettings(legacy,128,'gpu',true),/host limit of 6/);
+        assert.equal(legacy.pbgui.local_n_cpus,128); // No silent clamping.
+        node.value='vast';
+        for(const value of [0,-1,1.5,'NaN','Infinity']) {{
+          assert.throws(()=>collectOptimizeCpuSettings(legacy,value,'gpu',true),/positive integer/);
+        }}
+        collectOptimizeCpuSettings(legacy,'','gpu',true);
+        assert.equal(legacy.optimize.n_cpus,null);
+        assert.equal(legacy.pbgui.local_n_cpus,undefined);
+        // Explicit local CPU JSON edits override an older editor preference.
+        assert.equal(optimizeLocalCpuValue({{optimize:{{n_cpus:3}},
+          pbgui:{{execution:'local',local_n_cpus:6}}}}),3);
+    """))
+    assert 'optimizeLocalCpuValue(cfg)' in _page_function(page, 'populateOptimizeEditor')
+    assert 'optimizeLocalCpuValue(cfg)' in _page_function(page, 'buildOptimizeEditorHtml')
+    assert 'collectOptimizeCpuSettings(cfg,' in _page_function(page, 'collectEditorConfig')

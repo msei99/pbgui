@@ -5130,7 +5130,32 @@ function stepOptimizeCpuCount(id, direction) {
     input.value === '' || !Number.isFinite(value) ? 1 : Math.trunc(value) + direction)));
 }
 
+function optimizeLocalCpuValue(config) {
+  var optimize = config.optimize || {}, pbgui = config.pbgui || {};
+  if (pbgui.execution === 'vast' && Object.prototype.hasOwnProperty.call(pbgui, 'local_n_cpus'))
+    return pbgui.local_n_cpus;
+  return optimize.n_cpus;
+}
+
+function collectOptimizeCpuSettings(config, value, backend, strict) {
+  var optimize = config.optimize, pbgui = config.pbgui;
+  if (!optimizeEditorAdapter.isV8) {
+    optimize.n_cpus = collectOptimizeCpuCount(value, backend, strict);
+    return;
+  }
+  var cloud = el('opted-execution')?.value === 'vast';
+  var empty = value == null || String(value).trim() === '';
+  var number = empty ? null : Number(value);
+  if (cloud && strict && !empty && (!Number.isInteger(number) || number < 1))
+    throw new Error('Saved local n_cpus requires a positive integer or blank for GPU Auto.');
+  optimize.n_cpus = cloud ? null : collectOptimizeCpuCount(value, backend, strict);
+  var saved = cloud ? number : optimize.n_cpus;
+  if (saved == null) delete pbgui.local_n_cpus;
+  else pbgui.local_n_cpus = saved;
+}
+
 function collectOptimizeCpuCount(value, backend, strict) {
+  if (optimizeEditorAdapter.isV8 && el('opted-execution')?.value === 'vast') return null;
   var auto = optimizeEditorAdapter.isV8 && normalizeOptimizeBackendValue(backend) === 'gpu';
   var empty = value == null || String(value).trim() === '';
   var number = empty ? null : Number(value);
@@ -7841,6 +7866,16 @@ function optimizeGpuDefaults() {
   return deepClone(defaults && defaults.gpu && typeof defaults.gpu === 'object' ? defaults.gpu : {});
 }
 
+function optimizeGpuEditorSettings(optimize) {
+  var gpu = optimize.gpu && typeof optimize.gpu === 'object' && !Array.isArray(optimize.gpu)
+    ? deepClone(optimize.gpu) : optimizeGpuDefaults();
+  // Older GPU configs used the outer population field. Show its effective value
+  // explicitly before migrating it; CPU populations never populate GPU controls.
+  if (normalizeOptimizeBackendValue(optimize.backend) === 'gpu' && gpu.population_size == null
+      && optimize.population_size != null) gpu.population_size = optimize.population_size;
+  return gpu;
+}
+
 function optimizeGpuAutoPlaceholder(key) {
   if (el('opted-execution')?.value === 'vast') return 'auto after rent';
   var capability = optimizeBackendContractItem('gpu');
@@ -7940,12 +7975,13 @@ function collectOptimizeGpuSettings(optimize, strict) {
   }
   if (supports('successive_halving')) gpu.successive_halving = halving;
   optimize.gpu = gpu;
+  if (el('opted-opt-backend')?.value === 'gpu') optimize.population_size = null;
 }
 
 function populateOptimizeGpuSettings(optimize) {
   if (!optimizeEditorAdapter.isV8 || !el('opted-gpu-auto-lean')) return;
   var defaults = optimizeGpuDefaults();
-  var gpu = optimize.gpu && typeof optimize.gpu === 'object' && !Array.isArray(optimize.gpu) ? optimize.gpu : defaults;
+  var gpu = optimizeGpuEditorSettings(optimize);
   var halvingDefaults = defaults.successive_halving || {};
   var halving = gpu.successive_halving && typeof gpu.successive_halving === 'object' ? gpu.successive_halving : halvingDefaults;
   var values = {
@@ -9489,9 +9525,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
   var logging = cfg.logging || {};
   var pymoo = ensureOptimizePymooSection(optimize);
   var gpuDefaults = optimizeGpuDefaults();
-  var gpu = optimize.gpu && typeof optimize.gpu === 'object' && !Array.isArray(optimize.gpu)
-    ? optimize.gpu
-    : gpuDefaults;
+  var gpu = optimizeGpuEditorSettings(optimize);
   var gpuHalvingDefaults = gpuDefaults.successive_halving && typeof gpuDefaults.successive_halving === 'object' ? gpuDefaults.successive_halving : {};
   var gpuHalving = gpu.successive_halving && typeof gpu.successive_halving === 'object' ? gpu.successive_halving : gpuHalvingDefaults;
   var pymooShared = pymoo.shared || {};
@@ -9783,7 +9817,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 
     + '<div class="form-row cols-8">'
       + fieldNumber2('opted-iters', 'iters', optimize.iters == null ? 100000 : optimize.iters, 1000, 'Number of optimize iterations/evaluations.', 1)
-      + fieldOptimizeCpuCount2('opted-n-cpus', 'n_cpus', optimize.n_cpus, 1, 'Number of worker processes. GPU automatic sizing uses this as its fallback/start value.', 1)
+      + fieldOptimizeCpuCount2('opted-n-cpus', 'n_cpus', optimizeEditorAdapter.isV8 ? optimizeLocalCpuValue(cfg) : optimize.n_cpus, 1, 'Number of worker processes. GPU automatic sizing uses this as its fallback/start value.', 1)
       + fieldNumber2('opted-pareto-max-size', 'pareto_max_size', optimize.pareto_max_size == null ? 100 : optimize.pareto_max_size, 10, 'Maximum number of pareto configs retained.', 1)
       + (optimizeEditorAdapter.isV8 ? '' : fieldNumber2('opted-max-pending-starting-evals', 'max_pending_starting_evals_per_cpu', optimize.max_pending_starting_evals_per_cpu == null ? 1 : optimize.max_pending_starting_evals_per_cpu, 1, 'Throttle for starting-seed evaluations per CPU during optimizer bootstrap.', 1))
       + fieldSelect('opted-log-level', 'logging_level', LOG_LEVEL_OPTIONS, normalizeLogLevelValue(logging.level, 1), false, 'Controls global verbosity for Passivbot and tooling.')
@@ -9850,7 +9884,8 @@ function populateOptimizeEditor(config, opts) {
   el('opted-end-date').value = resolveOptimizeEditorEndDateValue(backtest.end_date);
   el('opted-starting-balance').value = backtest.starting_balance == null ? '' : String(backtest.starting_balance);
   el('opted-iters').value = optimize.iters == null ? '' : String(optimize.iters);
-  var cpuValue = collectOptimizeCpuCount(optimize.n_cpus, resolveOptimizeEditorBackendValue(optimize), false);
+  var cpuValue = optimizeEditorAdapter.isV8 ? optimizeLocalCpuValue(cfg)
+    : collectOptimizeCpuCount(optimize.n_cpus, resolveOptimizeEditorBackendValue(optimize), false);
   el('opted-n-cpus').value = cpuValue == null ? '' : String(cpuValue);
   el('opted-log-level').value = normalizeLogLevelValue(logging.level, 1);
   var seedState = getOptimizeSeedState(cfg);
@@ -10219,7 +10254,7 @@ function collectEditorConfig(baseConfig, opts) {
   var btcLtvCap = toNullableNumber(el('opted-btc-collateral-ltv-cap').value);
   backtest.btc_collateral_ltv_cap = btcLtvCap == null || btcLtvCap === 0 ? null : btcLtvCap;
   optimize.iters = toNumberOr(el('opted-iters').value, 100000);
-  optimize.n_cpus = collectOptimizeCpuCount(el('opted-n-cpus').value, el('opted-opt-backend').value, strict);
+  collectOptimizeCpuSettings(cfg, el('opted-n-cpus').value, el('opted-opt-backend').value, strict);
   optimize.pareto_max_size = toNumberOr(el('opted-pareto-max-size').value, 100);
   optimize.backend = normalizeOptimizeBackendValue(el('opted-opt-backend').value);
   collectOptimizeGpuSettings(optimize, strict);
@@ -10277,7 +10312,7 @@ function collectEditorConfig(baseConfig, opts) {
   } else if (optimize.backend === 'deap') {
     optimize.population_size = resolveOptimizeDeapPopulationDisplayValue(el('opted-deap-population-size').value);
   } else if (optimize.backend === 'gpu') {
-    // GPU population is owned by optimize.gpu.population_size; preserve the outer PB8 field.
+    // GPU population is owned by optimize.gpu.population_size; its collector clears the outer fallback.
   } else {
     var populationSize = normalizeOptimizePositiveInteger(el('opted-pymoo-population-size').value);
     if (populationSize == null) {

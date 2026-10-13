@@ -182,3 +182,18 @@ def test_invalid_hsl_panic_order_is_rejected(config):
     config['bot']['long']['hsl'] = {'enabled': True, 'panic_close_order_type': 'invalid'}
     errors = validate_cloud_config(config)
     assert any(e['path'] == 'bot.long.hsl.panic_close_order_type' for e in errors)
+
+
+def test_saved_local_cpu_preference_does_not_restrict_vast_workers(config):
+    """A large saved local preference never becomes the cloud worker seed."""
+    from vast_jobs import native_job_config
+    config['pbgui'] = {'execution': 'vast', 'local_n_cpus': 128}
+    config['optimize'].update(backend='gpu', n_cpus=None)
+    config['optimize']['gpu'] = {'exact_workers': None}
+    original = copy.deepcopy(config)
+    assert validate_cloud_config(config) == []
+    exported = native_job_config(config, 512, 8, False)
+    assert exported['optimize']['n_cpus'] == 8
+    assert exported['optimize']['gpu']['exact_workers'] == 8
+    assert 'pbgui' not in exported
+    assert config == original

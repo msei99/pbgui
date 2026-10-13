@@ -391,6 +391,10 @@ Optimize-Grenzen halten die Positionsanzahl jetzt positiv und vermeiden die ung�
 
 Im visuellen Szenarioeditor bleibt der Zoom innerhalb der konfigurierten Daten. Ein erfolgreicher neuer Versuch entfernt frühere Fehler, und beim Abbrechen des Szenarioersatzes bleibt der offene Editor unverändert.
 
+GPU-Populationen sind unabhängig von CPU-/Pymoo-Populationen. Beim Wechsel eines CPU- oder Pareto-Presets zu GPU mit **population_size** auf Auto wird der übernommene äußere Populationswert entfernt, damit die GPU-Automatik der Miete greifen kann. Explizite GPU-Populationen bleiben explizit; bei älteren GPU-Configs wird der äußere Populationswert vor der Migration im GPU-Feld angezeigt. Vast prüft die lokale **n_cpus**-Einstellung nicht und misst seine eigene CPU-Zuteilung; lokale Ausführung prüft weiterhin das lokale Host-Limit.
+
+Das gesperrte lokale CPU-Feld speichert seine Vorgabe beim Speichern einer Vast-Config als **pbgui.local_n_cpus**; **optimize.n_cpus** bleibt für die Cloud-Ausführung auf Auto. Erneutes Öffnen und Zurückwechseln zu Local stellt die Vorgabe wieder her. Ältere Vast-Configs übernehmen beim Speichern ihr bestehendes n_cpus als lokale Vorgabe. Werte müssen positive Ganzzahlen sein; beim Speichern für Local werden Werte über dem aktuellen Host-Limit weiterhin abgewiesen statt stillschweigend reduziert.
+
 ## AI Loop Optimizer (nur PB8)
 
 Die Einrichtung nutzt das Raster des Optimize Editors ueber die gesamte Breite: Startkonfiguration, Coins und Positionen, Ergebnisziele und Laufgrenzen. Jedes Ziel steht neben seinem optionalen Zielwert.
