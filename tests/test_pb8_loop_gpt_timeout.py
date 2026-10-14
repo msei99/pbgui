@@ -10,6 +10,7 @@ import pytest
 import ai_chat
 import pb8_loop_ai
 from ai_chat import CodexRuntime
+from pb8_loop_evidence import LoopAIPause
 from pb8_loop_ai import LoopAI, LoopAIRequestFailed, LoopAIRetryScheduled
 from tests.test_pb8_loop_optimizer import OWNER, record
 
@@ -49,7 +50,7 @@ def native_ai(store, tmp_path, monkeypatch, feed=None, setup_timeout=False):
     class NativeAI(LoopAI):
         """Bypass account/model catalog IO while preserving the real decision transport."""
         async def preflight(self, *_args):
-            return {'output_limit': 1000}
+            return {'output_limit': 1000, 'loop_profile': {'context': 4_000_000, 'page_tokens': 1500, 'output_tokens': 1000}}
 
     return NativeAI(store, service), runtimes, feeders
 
@@ -84,7 +85,7 @@ def test_progressive_gpt_response_exceeds_old_total_cap(record, tmp_path, monkey
             runtime.notifications.put_nowait({'method': method, 'params': {'turnId': 'turn',
                 'delta': 'private-reasoning-marker' if 'reasoning' in method else ' '}})
         runtime.notifications.put_nowait({'method': 'item/completed', 'params': {'turnId': 'turn',
-            'item': {'type': 'agentMessage', 'text': '{"reason":"accepted"}'}}})
+            'item': {'type': 'agentMessage', 'text': '{"reason":"accepted","winner_operation":null,"finish":true}'}}})
         runtime.notifications.put_nowait({'method': 'turn/completed', 'params': {'turnId': 'turn',
             'turn': {'id': 'turn', 'status': 'completed'}}})
 
@@ -93,7 +94,7 @@ def test_progressive_gpt_response_exceeds_old_total_cap(record, tmp_path, monkey
     async def scenario():
         try:
             started = time.monotonic()
-            assert await ai.decide(row, 'evaluate', {}) == {'reason': 'accepted'}
+            assert await ai.decide(row, 'evaluate', {}) == {'reason': 'accepted', 'winner_operation': None, 'finish': True}
             assert time.monotonic() - started > .09
         finally:
             await stop_feeders(feeders)
@@ -138,7 +139,7 @@ def test_progress_cannot_exceed_the_original_loop_deadline(record, tmp_path, mon
 
     async def scenario():
         try:
-            with pytest.raises(LoopAIRequestFailed, match='remaining Loop time allowance'):
+            with pytest.raises(LoopAIPause, match='authorized time boundary'):
                 await ai.decide(row, 'evaluate', {})
         finally:
             await stop_feeders(feeders)

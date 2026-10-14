@@ -26,6 +26,41 @@ from ai_chat import (
 )
 
 
+@pytest.mark.parametrize('support', [True, False, None])
+def test_go_model_projection_preserves_explicit_loop_tool_metadata(tmp_path, monkeypatch, support):
+    """Native tool capability must survive projection without optimistic inference."""
+    async def scenario():
+        """Exercise the actual public list projection with an isolated HTTP boundary."""
+        service = AIChatService(tmp_path / 'ai')
+        class Response:
+            """Minimal local response context, never a network client."""
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *_args):
+                return None
+        class Http:
+            """Expose only the catalog request expected by the projection."""
+            def get(self, *_args, **_kwargs):
+                return Response()
+        async def http():
+            return Http()
+        async def response(*_args, **_kwargs):
+            return {'data': [{'id': 'fixture'}]}
+        async def catalog(_provider):
+            return {'fixture': {'name': 'Fixture', 'protocol': 'chat', 'tools': True,
+                                'context': 256000, 'loop_tool_support': support}}
+        monkeypatch.setattr(service, '_http_session', http)
+        monkeypatch.setattr(service, '_read_json_response', response)
+        monkeypatch.setattr(service, '_go_catalog_metadata', catalog)
+        try:
+            models = await service._go_models()
+            assert models[0]['loop_tool_support'] is (support is True)
+            assert models[0]['tools'] is True
+        finally:
+            await service.shutdown()
+    asyncio.run(scenario())
+
+
 def test_codex_context_telemetry_is_bounded_and_thread_scoped(tmp_path):
     """Only valid last-request usage reaches the matching browser conversation."""
     from types import SimpleNamespace

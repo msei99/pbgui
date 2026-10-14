@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize("viewport_width", [700, 1200, 1920])
-def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
+def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width, capability_only=False):
     """Exercise real menu navigation, dynamic settings and preserved draft inputs."""
     playwright = pytest.importorskip('playwright.sync_api')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
@@ -19,7 +19,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         source = source.replace('%%' + key + '%%', value)
     loops, starts, errors, diff_queries, continuations = [], [], [], [], []
     continuation_delay = {'enabled': False, 'pending': []}
-    connection_fixture = {'fail': False, 'action_fail': False}
+    connection_fixture = {'fail': False, 'action_fail': False, 'unverified': False, 'action_requests': 0}
     knowledge_fixture = {'entries': [], 'fail': False}
     knowledge_queries = []
     instruction_versions = {'default':{'id':'default','name':'PBGui default','text':'Default Loop instructions','digest':'default-hash','created_at':None}}
@@ -134,7 +134,16 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
                     loops.append(row);route.fulfill(json=row)
                 elif route.request.method=='DELETE':
                     definitions.pop(name);route.fulfill(json={'deleted':True})
+            elif path.endswith('/ai-preview') and path.startswith('/api/optimize-v8/loops/'):
+                if connection_fixture['unverified']:
+                    route.fulfill(status=409, json={'detail': {'reason': 'context_budget',
+                        'message': 'Model context must be known and at least 256k'}})
+                    return
+                preview={'paid':False,'context':256000,'context_pending':connection_fixture.get('stale_context',False),'native_archive':{'effective':100},'maximum_decisions':42}
+                next(row for row in loops if row['id']==path.split('/')[-2])['ai_preview']=preview
+                route.fulfill(json=preview)
             elif path.endswith('/action') and path.startswith('/api/optimize-v8/loops/'):
+                connection_fixture['action_requests'] += 1
                 if connection_fixture['action_fail']:
                     route.fulfill(status=409,json={'detail':'Fixture action rejected'})
                     return
@@ -345,7 +354,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         assert not page.locator('#loop-strategy').is_checked()
         page.locator('#loop-strategy').check()
         page.locator('#loop-name').fill('My named loop')
-        assert page.locator('.loop-section > h3').all_text_contents() == ['Starting configuration', 'Coins and positions', 'Result goals', 'Run limits']
+        assert page.locator('.loop-section > h3').all_text_contents() == ['Starting configuration', 'Coins and positions', 'Result goals', 'Run limits', 'AI evidence and limits']
         layout = page.evaluate("""()=>{
           const panel=document.getElementById('panel-loops-config'), form=panel.querySelector('form');
           return {width:form.clientWidth,available:panel.clientWidth-parseFloat(getComputedStyle(panel).paddingRight),overflow:panel.scrollWidth-panel.clientWidth,columns:getComputedStyle(panel.querySelector('.loop-grid')).gridTemplateColumns.split(' ').length};
@@ -436,6 +445,23 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         assert starts[0]['model']=='pinned' and starts[0]['effort']=='high' and starts[0]['service_tier']=='priority'
         assert page.url.endswith('#loops-queue')
         assert loops[0]['status']=='queued' and loops[0]['ai_calls']==0
+        if capability_only:
+            connection_fixture['unverified'] = True
+            page.locator('#loop-queue-start').click()
+            page.wait_for_function("document.querySelector('#loops-queue-message').textContent.includes('at least 256k')")
+            assert connection_fixture['action_requests'] == 0
+            assert loops[0]['status'] == 'queued' and loops[0]['ai_calls'] == 0 and not loops[0]['jobs']
+            assert page.url.endswith('#loops-queue')
+            assert page.locator('#loop-queue-start').is_enabled()
+            connection_fixture['unverified'] = False
+            connection_fixture['stale_context'] = True
+            page.locator('#loops-queue-table tr[data-key]').first.get_by_role('button', name='Open', exact=True).click()
+            page.locator('#loop-report-body').get_by_role('button', name='Preview AI limits', exact=True).click()
+            page.wait_for_function("document.querySelector('#loop-report-body').textContent.includes('Reported by normal response')")
+            assert connection_fixture['action_requests'] == 0 and loops[0]['status'] == 'queued'
+            assert not errors, errors
+            browser.close()
+            return
         # Simulate an API restart: keep rows/navigation and clear only the
         # polling failure when the automatic next request succeeds.
         visible_queue_rows = page.locator('#loops-queue-table tr[data-key]').count()
@@ -1051,3 +1077,9 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width):
         assert parse_qs(urlparse(page.url).query)['loop_instructions_run']==['e'*32]
         assert not errors,errors
         browser.close()
+
+
+@pytest.mark.parametrize('viewport_width', [700, 1200])
+def test_pb8_unverified_model_is_visible_before_start(viewport_width):
+    """Only insufficient/unknown context blocks start, without a model allowlist."""
+    test_pb8_loop_navigation_setup_polling_and_restore(viewport_width, capability_only=True)

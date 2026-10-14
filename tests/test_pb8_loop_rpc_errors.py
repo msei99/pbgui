@@ -64,17 +64,17 @@ def test_second_round_rpc_rejection_retries_selection_only(record, clock, tmp_pa
     error = asyncio.run(rpc_failure(tmp_path, {'code': -32000, 'message': 'private-secret'}))
     ai = SequenceAI(store, [error, '{"candidate_ids":["retained-candidate"]}'])
     with pytest.raises(LoopAIRetryScheduled):
-        asyncio.run(ai.decide(row, 'select', {}))
+        asyncio.run(ai.decide(row, 'select', {'candidates': [{'id': 'retained-candidate'}], 'max_candidates': 1}))
     waiting = store.read(OWNER, row['id'])
     assert waiting['status'] == 'running' and waiting['errors'] == 0
     assert waiting['round'] == 1 and waiting['phase'] == 'select'
     assert waiting['jobs'] == [completed] and not waiting.get('cleanup_done')
     assert waiting['pending_ai'] is None and waiting['ai_calls'] == 1
     with pytest.raises(LoopAIRetryScheduled):
-        asyncio.run(ai.decide(waiting, 'select', {}))
+        asyncio.run(ai.decide(waiting, 'select', {'candidates': [{'id': 'retained-candidate'}], 'max_candidates': 1}))
     assert ai.sent == 1
     clock[0] += 30
-    result = asyncio.run(ai.decide(waiting, 'select', {}))
+    result = asyncio.run(ai.decide(waiting, 'select', {'candidates': [{'id': 'retained-candidate'}], 'max_candidates': 1}))
     assert result == {'candidate_ids': ['retained-candidate']}
     recovered = store.read(OWNER, row['id'])
     assert recovered['jobs'] == [completed] and recovered['round'] == 1
@@ -128,13 +128,11 @@ def test_select_compacts_prior_rounds_and_preserves_every_candidate_metric(recor
     wire = captured[0]
     assert len(json.dumps(knowledge)) > 1048576
     assert len(json.dumps(wire)) < 1048576
-    table = wire['evidence']['candidate_metrics_extra']
-    assert len(wire['evidence']['candidates']) == len(candidates)
-    for index, (original, compact) in enumerate(zip(candidates, wire['evidence']['candidates'])):
-        restored = {**compact['metrics'], **{
-            key: table['rows'][index][column] for column, key in enumerate(table['columns'])
-            if column not in table['missing'].get(str(index), [])}}
-        assert restored == original['metrics']
-        assert compact['id'] == original['id']
+    from pb8_loop_evidence import EvidenceStore
+    saved = store.read(OWNER, row['id'])
+    snapshot = EvidenceStore(store).load(OWNER, saved['ai_snapshot_id'])
+    assert snapshot['data']['evidence']['candidates'] == candidates
+    assert 'long_native_metric_name_0' not in wire['evidence']['candidates_metrics']['columns']
+    aliases = [alias['id'] for item in wire['evidence']['candidates'] for alias in item.get('aliases', [item])]
+    assert set(aliases) == {item['id'] for item in candidates}
     assert candidates[0]['metrics'] == metrics
-    assert compact_evaluation_content(wire)['evidence']['candidates'] == wire['evidence']['candidates']

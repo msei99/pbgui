@@ -22,6 +22,8 @@ from pb8_loop_backend import migrate_loop_bundle
 from vast_provider import VastError
 from pb8_loop_store import TERMINAL, LoopDeletionConflict, config_defaults, config_changes, digest, run_deletable, completed_round_observations
 
+from pb8_loop_evidence import LoopAIPause
+
 SERVICE = 'PB8Loop'
 router = APIRouter()
 _controller = LoopController(Path(PBGDIR))
@@ -97,6 +99,12 @@ class LoopStart(BaseModel):
     candidates: int = Field(default=2, ge=1, le=12)
     patience: int = Field(default=3, ge=1, le=100)
     jev_enabled: bool = True
+    historical_advice: bool = True
+    decision_timeout_seconds: float | None = Field(default=None, gt=0, le=604800, allow_inf_nan=False)
+    model_call_timeout_seconds: float | None = Field(default=None, gt=0, le=604800, allow_inf_nan=False)
+    ai_decision_token_limit: int | None = Field(default=None, gt=0, le=10**12)
+    ai_decision_usd_limit: float | None = Field(default=None, gt=0, le=10**6, allow_inf_nan=False)
+    ai_budget_confirmed: bool = False
     authorization: bool = False
 
     @model_validator(mode='after')
@@ -119,6 +127,8 @@ class LoopAction(BaseModel):
     model_config = ConfigDict(extra='forbid')
     action: Literal['start', 'pause', 'resume', 'stop']
     selection: dict | None = None
+    ai_settings: dict | None = None
+    acknowledge_interrupted: bool = False
 
 
 class LoopHandover(BaseModel):
@@ -155,6 +165,8 @@ def _error(exc):
     _log(SERVICE, f'Loop request failed: {type(exc).__name__}', level='WARNING', meta={'traceback': traceback.format_exc()})
     if isinstance(exc, FileNotFoundError):
         return HTTPException(404, 'Loop not found')
+    if isinstance(exc, LoopAIPause):
+        return HTTPException(409, {'reason': exc.reason, 'message': str(exc), 'details': exc.details})
     if isinstance(exc, LoopDeletionConflict):
         return HTTPException(409, str(exc))
     if isinstance(exc, (ValueError, AIChatError)):
@@ -313,8 +325,10 @@ def projection(row):
     from pb8_loop_observer import observer_selections
     return {key: row.get(key) for key in ('id', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at', 'reason',
             'last_error', 'failure', 'holdout_retryable', 'stop_reason', 'continuation', 'interpretation', 'rubric', 'history', 'bootstrap', 'ai_calls', 'ai_tokens_reserved',
-            'ai_usd_reserved', 'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover')} | {
+            'ai_usd_reserved', 'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover',
+            'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview', 'ai_preview')} | {
         'name': row['settings'].get('loop_name') or row['settings']['config_name'],
+        'has_interrupted_ai': bool(row.get('interrupted_ai')),
         'definition_name': row['settings'].get('definition_name'),
         'settings': row['settings'], 'fingerprint': row['fingerprint'], 'cycles': _cycle_reports(row),
         'observer_enabled':bool(row.get('observer_enabled')), 'observer_jobs':_observer_reports(row),
@@ -325,7 +339,7 @@ def projection(row):
         'holdout_available': bool(row['holdouts']),
         'best': {'assessment': best['assessment'], 'metrics': best['metrics'],
                  'candidate_id': best['candidate']['id'], 'round': next((job['round'] for job in row['jobs'] if job['operation'] == best.get('operation')), None)} if best else None,
-        'jobs': [{key: job.get(key) for key in ('operation', 'name', 'kind', 'round', 'status', 'started', 'reason', 'error', 'runner', 'executed_digest', 'run_started_at', 'limit_reached', 'results_consumed', 'result_count', 'result_error', 'created_at', 'ended_at')} | {
+        'jobs': [{key: job.get(key) for key in ('operation', 'name', 'kind', 'round', 'status', 'started', 'reason', 'error', 'runner', 'executed_digest', 'run_started_at', 'limit_reached', 'results_consumed', 'result_count', 'result_error', 'created_at', 'ended_at', 'optimizer_archive')} | {
                     'changes': _job_changes(row['initial_config'], job['config'], row['initial_overrides'], job['overrides']) if job['kind'] == 'optimizer' else [],
                     'native_iters': job['config'].get('optimize', {}).get('iters') if job['kind'] == 'optimizer' else None,
                     'candidate_optimizer': (job.get('candidate') or {}).get('optimizer_job'),
@@ -915,6 +929,69 @@ async def _handover_owned(owner, loop_id, body):
         raise _error(exc) from exc
 
 
+@router.post('/{loop_id}/ai-preview')
+async def ai_execution_preview(loop_id: str, body: LoopAction, session: SessionToken = Depends(require_auth)):
+    """Inspect a saved run without renting, sending model prompts or changing its source config."""
+    try:
+        owner = _owner(session)
+        row = await asyncio.to_thread(_controller.store.read, owner, loop_id)
+        if body.selection and not set(body.selection) <= {'provider','model','profile','effort','service_tier'}:
+            raise ValueError('Invalid AI selection')
+        settings = dict(row['settings'])
+        settings.update(body.selection or {})
+        if body.ai_settings:
+            allowed = {'historical_advice','decision_timeout_seconds','model_call_timeout_seconds',
+                       'ai_decision_token_limit','ai_decision_usd_limit','ai_budget_confirmed'}
+            if not set(body.ai_settings) <= allowed:
+                raise ValueError('Invalid AI budget settings')
+            settings.update(body.ai_settings)
+        checked = LoopStart.model_validate({key: value for key, value in settings.items() if key in LoopStart.model_fields})
+        settings.update(checked.model_dump(exclude={'authorization'}))
+        metadata = await _controller.ai.preflight(owner, settings, check_budget=False)
+        profile = metadata['loop_profile']
+        from pb8_loop_archive import archive_budget
+        staged = {**row, 'settings': settings, 'ai_model_profile': profile}
+        provisional = not bool(row['rubric'])
+        if provisional:
+            staged['rubric'] = [{'metrics': ['reserved_goal_metric_' + str(i) for i in range(24)]}]
+        native = archive_budget(staged, row['initial_config'])
+        from pb8_loop_archive import select_sources
+        if settings.get('historical_advice', True):
+            candidates = await asyncio.to_thread(_controller.backend.existing_candidates, staged)
+            _selected, historical = await asyncio.to_thread(select_sources, staged, {
+                'stage':'bootstrap', 'initial_config':row['initial_config'], 'rubric':staged['rubric'],
+                'goals':settings['goals'], 'evidence':{'existing_results':candidates}}, profile,
+                min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768)), metadata=metadata)
+        else:
+            historical = {'mode':'off', 'sources':[], 'in_a':0, 'in_b':0}
+        paid = settings['provider'] == 'opencode-zen' and metadata.get('free') is not True
+        cost = metadata.get('cost') or {}
+        reserve = min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768))
+        # Uncached per-call upper envelope; real complete payloads are reserved before each send.
+        from pb8_loop_ai_policy import paid_cost
+        one_call = paid_cost(metadata, profile['context'], reserve) if paid else None
+        maximum_decisions = 2 + 2 * settings['max_runs']
+        preview = {'provisional': provisional or profile.get('context_pending', False),
+                   'context': profile['context'], 'context_pending': profile.get('context_pending', False),
+                   'context_source': profile.get('context_source'),
+                   'native_archive': native,
+                   'historical_sources': historical,
+                   'paid': paid, 'cost': cost, 'uncached_call_upper_estimate_usd': one_call,
+                   'decision_token_limit': settings.get('ai_decision_token_limit'),
+                   'decision_usd_limit': settings.get('ai_decision_usd_limit'),
+                   'maximum_attempts': settings['max_runs'], 'streaming': profile.get('streaming', False),
+                   'maximum_decisions': maximum_decisions,
+                   'uncached_dialog_upper_estimate_usd': one_call * 134 if paid else None,
+                   'run_ai_spending_ceiling_usd': settings.get('ai_decision_usd_limit') * maximum_decisions
+                       if paid and settings.get('ai_decision_usd_limit') else None,
+                   'call_timeout_seconds': settings.get('model_call_timeout_seconds') or profile.get('call_timeout'),
+                   'decision_timeout_seconds': settings.get('decision_timeout_seconds')}
+        await asyncio.to_thread(_controller.store.update, owner, loop_id, lambda current: current.update(ai_preview=preview))
+        return JSONResponse(preview, headers={'Cache-Control': 'no-store'})
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
 async def _loop_action_owned(owner, loop_id, body):
     """Run native owner-scoped actions for authenticated routes and reviewed AI tools."""
     try:
@@ -928,7 +1005,19 @@ async def _loop_action_owned(owner, loop_id, body):
                 if not set(body.selection) <= {'provider','model','profile','effort','service_tier'}:
                     raise ValueError('Invalid shared AI selection')
                 raw.update(body.selection)
+            if body.ai_settings:
+                fields = {'historical_advice','decision_timeout_seconds','model_call_timeout_seconds',
+                          'ai_decision_token_limit','ai_decision_usd_limit','ai_budget_confirmed'}
+                if not set(body.ai_settings) <= fields:
+                    raise ValueError('Invalid AI budget settings')
+                raw.update(body.ai_settings)
             settings = LoopStart.model_validate(raw).model_dump(exclude={'authorization'})
+            if body.ai_settings and body.ai_settings.get('ai_budget_confirmed'):
+                from pb8_loop_ai_policy import budget_identity
+                quote = await _controller.ai.preflight(owner, settings, check_budget=False)
+                settings['ai_budget_model'] = budget_identity(settings, quote)
+            else:
+                settings['ai_budget_model'] = waiting['settings'].get('ai_budget_model')
             if settings['execution'] == 'vast':
                 from api.vast import RentalPreferences
                 from vast_queue import CloudQueue
@@ -957,6 +1046,53 @@ async def _loop_action_owned(owner, loop_id, body):
                 current.update(initial_config=config, initial_overrides=overrides, fingerprint=fingerprint, holdouts=holdouts, comparison=comparison,
                                training_exclusions=current.get('training_exclusions', []) + exclusions, status='running', started_at=time.time(), deadline=time.time() + settings['hours'] * 3600, control_generation=current['control_generation'] + 1)
             row = await asyncio.to_thread(_controller.store.update, owner, loop_id, refresh)
+        elif body.action == 'resume':
+            waiting = await asyncio.to_thread(_controller.store.read, owner, loop_id)
+            if waiting['status'] != 'paused':
+                raise ValueError('Only a paused loop can be resumed')
+            if waiting.get('interrupted_ai') and not body.acknowledge_interrupted:
+                raise LoopAIPause('evidence_recovery', 'Review the interrupted model request before authorizing another attempt')
+            selection = body.selection or {}
+            if not set(selection) <= {'provider','model','profile','effort','service_tier'}:
+                raise ValueError('Invalid shared AI selection')
+            adjustments = body.ai_settings or {}
+            fields = {'historical_advice', 'decision_timeout_seconds', 'model_call_timeout_seconds',
+                      'ai_decision_token_limit', 'ai_decision_usd_limit', 'ai_budget_confirmed'}
+            if not set(adjustments) <= fields:
+                raise ValueError('Only AI recovery budgets and advice policy may change during resume')
+            raw = {key: value for key, value in waiting['settings'].items() if key in LoopStart.model_fields}
+            raw.update(selection)
+            raw.update(adjustments)
+            validated = LoopStart.model_validate(raw).model_dump(exclude={'authorization'})
+            validated['ai_budget_model'] = waiting['settings'].get('ai_budget_model')
+            if adjustments.get('ai_budget_confirmed'):
+                from pb8_loop_ai_policy import budget_identity
+                quote = await _controller.ai.preflight(owner, validated, check_budget=False)
+                validated['ai_budget_model'] = budget_identity(validated, quote)
+            metadata = await _controller.ai.preflight(owner, validated)
+            if waiting.get('ai_snapshot_id'):
+                from pb8_loop_evidence import EvidenceStore
+                snap = await asyncio.to_thread(EvidenceStore(_controller.store).load, owner, waiting['ai_snapshot_id'])
+                from pb8_loop_ai_v2 import validate_snapshot_budget
+                validate_snapshot_budget({**waiting, 'settings': validated}, snap, metadata)
+                for evidence_id, binding in snap['history'].items():
+                    if binding.get('required'):
+                        EvidenceStore(_controller.store).resolve(snap, '/history/' + evidence_id.replace('~','~0').replace('/','~1'))
+            def resume(current):
+                if current['status'] != 'paused' or current['control_generation'] != waiting['control_generation']:
+                    raise ValueError('Loop changed while resuming')
+                current['settings'].update(validated)
+                if (current.get('ai_pause') or {}).get('reason') == 'ai_timeout':
+                    for ledger in current.get('ai_decisions', {}).values():
+                        if ledger['round'] == current['round'] and ledger['stage'] == current['phase']:
+                            limit = current['settings'].get('decision_timeout_seconds')
+                            ledger['deadline'] = min(current['deadline'] - 60, time.time() + limit) if limit else current['deadline'] - 60
+                if current.get('interrupted_ai'):
+                    current.setdefault('interrupted_ai_audit', []).append(current.pop('interrupted_ai'))
+                current.pop('ai_pause', None)
+                current.update(status='finishing' if current['phase'] == 'holdout' else 'running',
+                               control_generation=current['control_generation'] + 1, last_error=None)
+            row = await asyncio.to_thread(_controller.store.update, owner, loop_id, resume)
         else:
             row = await asyncio.to_thread(_controller.action, owner, loop_id, body.action)
         return JSONResponse(projection(row), headers={'Cache-Control': 'no-store'})

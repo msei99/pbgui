@@ -16,6 +16,12 @@
   var rentalBudgetKey='', rentalBillingKey='', rentalBillingChecked=0, rentalBillingGeneration=0, rentalBillingRequest=null;
   var workflow = savedWorkflow();
   var knowledgeEntries=[], knowledgeLoaded=false, knowledgeError='', knowledgeSignature='';
+  var recoveryDrafts=new Map(Object.entries(workflow.recovery_drafts||{}).filter(function(pair){return /^[a-f0-9]{32}$/.test(pair[0])&&pair[1]&&typeof pair[1]==='object';}));
+  function saveRecoveryDraft(id,values){
+    var allowed=['historical_advice','ai_decision_token_limit','ai_decision_usd_limit','decision_timeout_seconds','model_call_timeout_seconds'],safe={};
+    allowed.forEach(function(key){if(Object.prototype.hasOwnProperty.call(values,key))safe[key]=values[key];});
+    recoveryDrafts.set(id,safe);workflow.recovery_drafts=Object.fromEntries(Array.from(recoveryDrafts.entries()).slice(-20));persistWorkflow();
+  }
   function savedWorkflow() { try { return JSON.parse(localStorage.getItem('pbgui.pb8.loops.workflow') || '{}') || {}; } catch (_) { return {}; } }
   function persistWorkflow() {
     workflow.selected = selected; workflow.config_selection = Array.from(selectedDefinitions); workflow.run_selection = Array.from(selectedRuns); workflow.expanded = Array.from(expanded);
@@ -54,6 +60,9 @@
     byId('execution').value = settings.execution;
     byId('direction').value = goals.direction || 'config';
     byId('hsl-mode').value = settings.hsl_mode || 'auto';
+    byId('historical-advice').checked=settings.historical_advice!==false;
+    [['ai-token-limit','ai_decision_token_limit'],['ai-usd-limit','ai_decision_usd_limit'],['ai-decision-time','decision_timeout_seconds'],['ai-call-time','model_call_timeout_seconds']].forEach(function(pair){byId(pair[0]).value=settings[pair[1]]==null?'':settings[pair[1]];});
+    byId('ai-confirm').checked=settings.ai_budget_confirmed===true;
     byId('coins').value = (goals.coins || []).join(', ');
     byId('positions').value = goals.positions == null ? '' : goals.positions;
     ['long','short'].forEach(function (side) { byId(side).value = (goals.positions_by_side || {})[side] == null ? '' : goals.positions_by_side[side]; });
@@ -170,7 +179,7 @@
   async function request(path, body, method) {
     var response = await fetch(base + path, {credentials: 'same-origin', cache: 'no-store', headers: body ? {'Content-Type': 'application/json'} : {}, method: method || (body ? 'POST' : 'GET'), body: body ? JSON.stringify(body) : undefined});
     var data = await response.json();
-    if (!response.ok) { if (response.status === 401) { clearTimeout(timer); generation++; } throw new Error(typeof data.detail === 'string' ? data.detail : Array.isArray(data.detail) ? data.detail.map(function(item){return item.msg;}).join('; ') : 'Loop request failed'); }
+    if (!response.ok) { if (response.status === 401) { clearTimeout(timer); generation++; } throw new Error(typeof data.detail === 'string' ? data.detail : Array.isArray(data.detail) ? data.detail.map(function(item){return item.msg;}).join('; ') : data.detail && data.detail.message ? data.detail.message : 'Loop request failed'); }
     return data;
   }
   function showMessages(){[byId('message'),document.getElementById('loops-queue-message'),document.getElementById('loops-results-message'),document.getElementById('loops-knowledge-message')].forEach(function(node){if(node){var panel=node===byId('message')?'loops-config':node.id.replace('-message','');node.textContent=(panel===uiErrorPanel?uiError:'')||(panel===pollErrorPanel?pollError:'');node.className='loop-error';}});}
@@ -309,7 +318,7 @@
       goals: {coins: byId('coins').value.split(/[\s,;]+/).filter(Boolean), direction: byId('direction').value, positions: total, positions_by_side: sides, presets: presets, targets: targets, text: byId('goals').value},
       run_limit_mode: byId('run-mode').value, run_iters: byId('run-mode').value === 'iters' ? number('run-iters', null) : null, run_proxy: byId('run-mode').value === 'proxy' ? number('run-proxy', null) : null, run_hours: byId('run-mode').value === 'hours' ? number('run-hours', null) : null,
       max_runs: number('runs', 10), hours: number('hours', 24), parallel: number('parallel', 1), max_validations: number('validations', 30), candidates: number('candidates', 3), patience: number('patience', 3),
-      jev_enabled:jevEnabled,authorization: true};
+      jev_enabled:jevEnabled,historical_advice:byId('historical-advice').checked,decision_timeout_seconds:number('ai-decision-time',null),model_call_timeout_seconds:number('ai-call-time',null),ai_decision_token_limit:number('ai-token-limit',null),ai_decision_usd_limit:number('ai-usd-limit',null),ai_budget_confirmed:byId('ai-confirm').checked,authorization: true};
   }
   function select(id) {
     if (selected !== id) { setupGeneration++; closeReport(); }
@@ -554,6 +563,7 @@
       }
       else {if(row.best)button(reportBody,'Download best comparison config',async function(){try{var payload=await request('/'+row.id+'/best-config'),url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,4)],{type:'application/json'})),link=element('a');link.href=url;link.download='pb8-loop-'+row.id+'.json';link.click();setTimeout(function(){URL.revokeObjectURL(url);},1000);}catch(exc){error(exc);}});reportTable(reportBody,['Field','Value'],[['Status',row.status],['Execution',({cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai'}[row.settings.execution]||row.settings.execution)],['AI calls',row.ai_calls],['Token reserve',row.ai_tokens_reserved],['JEV',row.jev_status||'Not recorded'],['JEV reserved cost','$'+Number(row.jev_usd_reserved||0).toFixed(4)],['Deadline',dateText(row.deadline)],['Final holdout',row.holdout_used?'Used':row.holdout_available?'Available':'Unavailable'],['PB8 revision',(row.fingerprint||{}).pb8||'Unknown'],['Data status',(row.fingerprint||{}).data_status||'Unknown'],['AI USD reserve',row.usd_status==='subscription'?'Subscription / unavailable':'$'+Number(row.ai_usd_reserved||0).toFixed(4)]]);}
     }
+    if(reportView==='run'&&reportTab==='overview')renderAIRecovery(reportBody,row);
     if(row.status==='failed'&&['overview','analysis'].includes(reportTab)&&(reportView==='run'||reportView==='initial'&&row.phase==='bootstrap'||reportView==='cycle'&&reportRound===((row.failure||{}).round==null?row.round:row.failure.round)))terminationReport(reportBody,row);
     reportSignature=JSON.stringify([reportView,reportRound,reportTab,diffOperation,diffBaseline,row],function(key,value){return ['updated_at','duration_seconds','last_observed_at'].includes(key)?undefined:value;});
     reportBody.scrollTop=scroll;if(!reportOverlay.classList.contains('is-open')){reportOverlay.classList.add('is-open');reportOverlay.setAttribute('aria-hidden','false');reportWindow.fit();document.getElementById('loop-report-close').focus();}else if(focus){var focused=document.getElementById(focus);if(focused&&reportDialog.contains(focused))focused.focus({preventScroll:true});}
@@ -862,7 +872,45 @@
     if(selected.length!==1)return null;var id=selected[0];return panel==='queue' && id.startsWith('vast:')?{kind:'cloud',id:id.slice(5)}:{kind:{configs:'config',queue:'queue',results:'result'}[panel],id:id};
   }
   function onPanel() { if(!root)return;syncContext();if(isLoopPanel())watch(); }
-  async function action(id, name) { try { var body={action:name};if(name==='start')body.selection=await PBGuiAI.ensureSelection();await request('/' + id + '/action', body);uiError='';await poll(); } catch (exc) { error(exc); } }
+  function renderAIRecovery(parent,row) {
+    if(row.ai_pause){parent.appendChild(element('h4','AI paused · '+row.ai_pause.reason));parent.appendChild(element('p',row.ai_pause.message,'loop-analysis'));}
+    if(row.ai_evidence_status)reportTable(parent,['AI evidence','Value'],[['Mandatory pages',row.ai_evidence_status.required_pages],['Tool calls',row.ai_evidence_status.tool_calls],['Dialogs',row.ai_evidence_status.dialogs]]);
+    if(row.knowledge_summary)reportTable(parent,['Findings','Value'],[['Included',row.knowledge_summary.included],['Available',row.knowledge_summary.eligible],['Deferred',row.knowledge_summary.omitted]]);
+    (row.jobs||[]).filter(function(job){return job.optimizer_archive;}).slice(-1).forEach(function(job){reportTable(parent,['Native archive','Value'],[['Effective Pareto limit',job.optimizer_archive.effective],['Requested',job.optimizer_archive.requested],['Context',job.optimizer_archive.context]]);});
+    if(row.bootstrap_evidence_preview)reportTable(parent,['Historical advice','Value'],[['In request',row.bootstrap_evidence_preview.in_a],['Available on demand',row.bootstrap_evidence_preview.in_b]]);
+    if(row.ai_preview)reportTable(parent,['AI preview'+(row.ai_preview.provisional?' (provisional)':''),'Value'],[['Context',row.ai_preview.context],['Context source',row.ai_preview.context_pending?'Reported by normal response':row.ai_preview.context_source||'Provider'],['Effective archive limit',row.ai_preview.native_archive.effective],['Streaming',row.ai_preview.streaming?'Yes':'No'],['Per-call timeout (s)',row.ai_preview.streaming?'Progress watchdog':row.ai_preview.call_timeout_seconds||'Progress watchdog']]);
+    if(row.ai_preview&&row.ai_preview.historical_sources)reportTable(parent,['Historical preview','Value'],[['Sources',row.ai_preview.historical_sources.sources.length],['In request',row.ai_preview.historical_sources.in_a],['Available on demand',row.ai_preview.historical_sources.in_b]]);
+    if(!['queued','paused'].includes(row.status))return;
+    var values=recoveryDrafts.get(row.id)||{},saved=row.settings,sectionNode=section(parent,'AI recovery limits'),form=grid(sectionNode);
+    var fields=[['tokens','ai_decision_token_limit','Tokens per decision'],['usd','ai_decision_usd_limit','USD per decision'],['decision','decision_timeout_seconds','Optional decision timeout (s)'],['call','model_call_timeout_seconds','Optional HTTP call timeout (s)']];
+    fields.forEach(function(spec){var key=spec[1],value=Object.prototype.hasOwnProperty.call(values,key)?values[key]:saved[key],input=field(form,'recover-'+spec[0],spec[2],'number',value==null?'':value,{min:.000001,step:spec[0]==='usd'?'any':'1'},4);input.addEventListener('input',function(){values[key]=input.value;saveRecoveryDraft(row.id,values);});});
+    var advice=field(form,'recover-advice','Use historical advice','checkbox',undefined,undefined,4);advice.checked=Object.prototype.hasOwnProperty.call(values,'historical_advice')?values.historical_advice:saved.historical_advice!==false;advice.addEventListener('change',function(){values.historical_advice=advice.checked;saveRecoveryDraft(row.id,values);});
+    button(sectionNode,'Preview AI limits',function(){action(row.id,'preview');});
+    button(sectionNode,row.status==='paused'?'Resume with current AI selection':'Review and start',function(){action(row.id,row.status==='paused'?'resume':'start');});
+  }
+  async function action(id, name) {
+    try {
+      var body={action:name},row=rows.find(function(item){return item.id===id;});
+      if(name==='start'||name==='resume'||name==='preview'){
+        if(name==='preview')body.action=row.status==='paused'?'resume':'start';
+        body.selection=await PBGuiAI.ensureSelection();
+        body.ai_settings=Object.assign({},recoveryDrafts.get(id)||{});
+        Object.keys(body.ai_settings).forEach(function(key){if(key==='historical_advice')return;var value=body.ai_settings[key];body.ai_settings[key]=value===''?null:Number(value);if(value!==''&&!(body.ai_settings[key]>0))throw new Error('AI limits must be positive numbers.');});
+        var preview=await request('/'+id+'/ai-preview',body);
+        if(name==='preview'){row.ai_preview=preview;reportSignature='';renderWorkflow();return;}
+        if(preview.paid){
+          var tokenLimit=body.ai_settings.ai_decision_token_limit||row.settings.ai_decision_token_limit,usdLimit=body.ai_settings.ai_decision_usd_limit||row.settings.ai_decision_usd_limit;
+          if(!(tokenLimit>0&&usdLimit>0)){select(id);openReport('run',0,'overview');throw new Error('Set positive token and USD limits in AI recovery limits before starting paid Zen.');}
+          var accepted=await PBGuiDialogs.confirm({title:'AI spending limits',message:'Authorize up to '+tokenLimit+' tokens and $'+usdLimit+' per AI decision. Each tool follow-up re-sends its input; cache discounts are not assumed. Uncached single-call upper estimate: $'+Number(preview.uncached_call_upper_estimate_usd||0).toFixed(4)+'. Up to '+preview.maximum_decisions+' AI decisions across '+preview.maximum_attempts+' optimizer attempts (AI spending ceiling $'+Number(usdLimit*preview.maximum_decisions).toFixed(2)+'); rental charges are separate.',confirmText:'Authorize and '+name});if(!accepted)return;
+          body.ai_settings.ai_decision_token_limit=tokenLimit;body.ai_settings.ai_decision_usd_limit=usdLimit;body.ai_settings.ai_budget_confirmed=true;
+        }
+        if(row.has_interrupted_ai){
+          body.acknowledge_interrupted=await PBGuiDialogs.confirm({title:'Retry AI evidence',message:'Resume this evidence decision? Any uncertain earlier model usage remains reserved; required archives must still match their original checksums.',confirmText:'Resume'});if(!body.acknowledge_interrupted)return;
+        }
+      }
+      await request('/'+id+'/action',body);recoveryDrafts.delete(id);workflow.recovery_drafts=Object.fromEntries(recoveryDrafts);persistWorkflow();uiError='';await poll();
+    }catch(exc){error(exc);}
+  }
   async function poll() {
     var token=++generation;
     if(state.panel==='loops-instructions'){await PBGuiLoopInstructions.refresh();return;}
@@ -979,6 +1027,14 @@
     row = grid(limits);
     field(row, 'validations', 'Maximum validation backtests', 'number', 30, {min:1, max:1000}, 4);
     field(row, 'candidates', 'Candidates validated per cycle', 'number', 3, {min:1, max:12}, 4);
+
+    var aiEvidence=section(form,'AI evidence and limits');row=grid(aiEvidence);
+    field(row,'historical-advice','Use historical optimizer advice','checkbox',undefined,undefined,4).checked=true;
+    field(row,'ai-token-limit','Token limit per AI decision','number','',{min:1,step:1},4);
+    field(row,'ai-usd-limit','USD limit per AI decision (paid Zen)','number','',{min:.000001,step:'any'},4);
+    field(row,'ai-decision-time','Optional decision timeout (seconds)','number','',{min:1,step:1},4);
+    field(row,'ai-call-time','Optional HTTP call timeout (seconds)','number','',{min:1,step:1},4);
+    field(row,'ai-confirm','Confirm paid decision limits','checkbox',undefined,undefined,4);
 
     var startBar = element('div', undefined, 'loop-start-bar'); form.appendChild(startBar);
     startBar.appendChild(element('span','Queue authorizes automatic config changes, jobs and AI usage.','muted-line'));var save=button(startBar,'Save',function(){saveDefinition(false);});save.id='loop-save';var cancel=button(startBar,'Cancel',function(){editorVisible=false;workflow.draft=null;persistWorkflow();editorLocation();renderWorkflow();});

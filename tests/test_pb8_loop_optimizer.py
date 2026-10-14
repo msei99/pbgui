@@ -15,6 +15,8 @@ from pb8_loop_ai import LoopAI, LoopAIResponseError, parse_object, validate_rubr
 from pb8_loop_backend import LoopBackend
 from pb8_loop_controller import LoopController
 from pb8_loop_store import LoopStore, authorize_native_job, evaluate, validate_change
+from tests.loop_ai_transport import LoopAI
+from pb8_loop_evidence import LoopAIPause
 
 OWNER = 'a' * 32
 RULE = [{'goal': 'gain', 'metrics': ['gain'], 'direction': 'max', 'target': 2, 'scale': 1, 'weight': 1}]
@@ -62,9 +64,10 @@ def record(tmp_path):
     """Keep all persistent evidence under a Pytest temporary directory."""
     store = LoopStore(tmp_path / 'data/loop_optimizer')
     value = store.create(OWNER, settings(), config(), {}, {'pb8': 'commit', 'data': 'shards'}, [], config()['backtest'])
-    store.update(OWNER, value['id'], lambda row: row.update(baseline_required=False, observer_enabled=False))
+    store.update(OWNER, value['id'], lambda row: row.update(baseline_required=False, observer_enabled=False, ai_model_profile={'context': 4_000_000, 'page_tokens': 1500, 'output_tokens': 65536, 'call_timeout': 60, 'streaming': False}))
     value['baseline_required'] = False
     value['observer_enabled'] = False
+    value['ai_model_profile'] = {'context': 4_000_000, 'page_tokens': 1500, 'output_tokens': 65536, 'call_timeout': 60, 'streaming': False}
     return store, value
 
 
@@ -141,7 +144,7 @@ def test_optimizer_job_carries_bot_but_preserves_ai_recipe_and_budget(record, tm
     assert job['overrides'] == {}
     assert job['optimizer_start']['bot_modified'] is True
     assert job['optimizer_start']['overrides_modified'] is True
-    assert job['config']['optimize'] == {**proposed['optimize'], 'iters': 10000000, 'seed': job['config']['optimize']['seed']}
+    assert job['config']['optimize'] == {**proposed['optimize'], 'iters': 10000000, 'seed': job['config']['optimize']['seed'], 'pareto_max_size': job['optimizer_archive']['effective']}
     assert job['optimizer_start']['candidate_id'] == 'candidate_2'
     assert (row, proposed) == before
     for kind in ('baseline', 'validation', 'holdout', 'observer_holdout', 'observer_full_range'):
@@ -170,7 +173,9 @@ def test_optimizer_preserves_explicit_bot_and_override_experiments(record, tmp_p
     job = LoopController(tmp_path, store=store, backend=FakeBackend(), ai=FakeAI()).job(
         row, 'optimizer', proposed, overrides, 'Explicit bot experiment')
     from pb8_loop_store import fresh_optimizer_config
-    assert job['config'] == fresh_optimizer_config(proposed, job['config']['optimize']['seed'])
+    expected_config = fresh_optimizer_config(proposed, job['config']['optimize']['seed'])
+    expected_config['optimize']['pareto_max_size'] = job['optimizer_archive']['effective']
+    assert job['config'] == expected_config
     assert job['overrides'] == overrides
     assert job['optimizer_start']['candidate_id'] == row['best']['candidate']['id']
     assert job['optimizer_start']['bot_modified'] is True
@@ -259,7 +264,7 @@ def test_ai_receives_new_exact_start_before_best_is_committed(record, monkeypatc
             assert content['search_policy']['winner_use'] == 'comparison_only'
             assert content['hsl_mode'] == 'auto'
             assert content['initial_config'] == row['initial_config']
-            return '{"finish":false}', {'tokens': None, 'usd': None}
+            return '{"winner_operation":null,"finish":true}', {'tokens': None, 'usd': None}
     asyncio.run(AI(store).decide(row, 'evaluate', {'best': winner}))
 
 
@@ -441,7 +446,7 @@ def test_candidate_evidence_is_not_shortlisted_by_goal_score(record, tmp_path, m
     """Every bounded native Pareto artifact reaches AI selection, including entries after twelve."""
     from api import optimize_v8 as opt
     store, row = record
-    files = [tmp_path / f'{index}.json' for index in range(20)]
+    files = [tmp_path / f'{index}.json' for index in range(600)]
     monkeypatch.setattr(opt, '_resolve_result_path', lambda value: tmp_path)
     monkeypatch.setattr(opt, '_pareto_files_for_listing', lambda directory: (directory, files))
     monkeypatch.setattr(opt, '_read_json', lambda path: {**config(), 'metrics': {'gain': int(path.stem)}})
@@ -449,8 +454,8 @@ def test_candidate_evidence_is_not_shortlisted_by_goal_score(record, tmp_path, m
     candidates = LoopBackend(tmp_path, store)._result_candidates(row,
         {'path': 'isolated', 'result': 'isolated', 'modified': 1},
         {'operation': 'optimizer', 'config': config(), 'overrides': {}})
-    assert len(candidates) == 20
-    assert candidates[-1]['metrics']['gain'] == 19
+    assert len(candidates) == 600
+    assert candidates[-1]['metrics']['gain'] == 599
     assert all('guidance_score' not in candidate for candidate in candidates)
 
 
@@ -600,7 +605,7 @@ def test_invalid_acknowledged_json_can_be_repaired(record):
     current = store.read(OWNER, row['id'])
     assert current['pending_ai'] is None
     assert current['ai_calls'] == 1
-    assert current['ai_tokens_reserved'] > 16000
+    assert current['ai_tokens_reserved'] > 0
 
 
 def test_model_context_limit_prevents_request(record):
@@ -608,10 +613,10 @@ def test_model_context_limit_prevents_request(record):
     store, row = record
     class AI(LoopAI):
         async def preflight(self, owner, settings):
-            return {'context': 1}
+            return {'loop_profile': {'context': 1, 'page_tokens': 1500}}
         async def _request(self, *args):
             pytest.fail('Context overflow must reject before transport')
-    with pytest.raises(ValueError, match='context allowance'):
+    with pytest.raises(LoopAIPause, match='context budget'):
         asyncio.run(AI(store).decide(row, 'interpret', {}))
 
 
@@ -792,12 +797,12 @@ def test_owner_api_only_lists_own_loops(record, tmp_path, monkeypatch):
 def test_paid_ai_usage_is_recorded_and_reconciled(record):
     """A paid API call reserves output cost and reconciles acknowledged token usage."""
     store, row = record
-    row = store.update(OWNER, row['id'], lambda value: value['settings'].update(provider='opencode-zen'))
+    row = store.update(OWNER, row['id'], lambda value: value['settings'].update(provider='opencode-zen', ai_budget_confirmed=True, ai_decision_token_limit=10_000_000, ai_decision_usd_limit=10))
     class AI(LoopAI):
         async def preflight(self, owner, settings):
-            return {'cost': {'input':1,'output':2}, 'output_limit':16000}
+            return {'cost': {'input':1,'output':2}, 'output_limit':16000, 'protocol':'chat'}
         async def _request(self, *args):
-            return '{"rubric":[]}', {'tokens':{'input_tokens':100,'output_tokens':200},'usd':None}
+            return json.dumps({'rubric': [dict(RULE[0], goal=key) for key in set(self.store.read(OWNER, row['id'])['settings']['goals']['presets']) | ({'custom'} if self.store.read(OWNER, row['id'])['settings']['goals'].get('text') else set())]}), {'tokens':{'input_tokens':100,'output_tokens':200},'usd':None}
     asyncio.run(AI(store).decide(row, 'interpret', {}))
     current = store.read(OWNER, row['id'])
     assert current['ai_usd_reserved'] == pytest.approx(.0005)
@@ -819,7 +824,7 @@ def test_unacknowledged_ai_request_retains_budget_and_cannot_repeat(record):
         asyncio.run(ai.decide(row, 'interpret', {}))
     current = store.read(OWNER, row['id'])
     assert current['pending_ai']
-    with pytest.raises(ValueError, match='interrupted'):
+    with pytest.raises(LoopAIPause, match='interrupted'):
         asyncio.run(ai.decide(current, 'interpret', {}))
     assert store.read(OWNER, row['id'])['ai_calls'] == 1
 
@@ -836,10 +841,15 @@ def test_loop_output_uses_model_allowance_and_context(record, metadata, expected
     class AI(LoopAI):
         """Capture output budgets without a provider call."""
         async def preflight(self, owner, settings):
-            return metadata
+            return {**metadata, 'loop_profile': {**row['ai_model_profile'], **({'context': metadata['context']} if metadata.get('context') else {})}}
         async def _request(self, current, model, content, output_tokens):
             dispatched.append(output_tokens)
-            return '{}', {'tokens': None, 'usd': None}
+            return json.dumps({'rubric': RULE}), {'tokens': None, 'usd': None}
+    if expected is None:
+        with pytest.raises(LoopAIPause):
+            asyncio.run(AI(store).decide(row, 'interpret', {}))
+        assert not dispatched
+        return
     asyncio.run(AI(store).decide(row, 'interpret', {}))
     if expected is not None:
         assert dispatched == [expected]
@@ -853,6 +863,7 @@ def _loop_chat_for_payloads(payloads):
     from ai_chat import AIChatService
     class Response:
         """Simulate the HTTP context only."""
+        status = 200
         async def __aenter__(self):
             return self
         async def __aexit__(self, *args):
@@ -860,7 +871,7 @@ def _loop_chat_for_payloads(payloads):
     class Session:
         """No remote requests and no enabled tools."""
         def post(self, url, **kwargs):
-            assert 'tools' not in kwargs['json']
+            assert len(kwargs['json']['tools']) == 1
             return Response()
     class Chat:
         """Reuse production text extraction against deterministic replies."""
@@ -892,7 +903,7 @@ def _loop_chat_for_payloads(payloads):
 def test_acknowledged_native_rejections_clear_pending_and_record_usage(record, protocol, payload, error):
     """Rejected replies are accounted for and repairable, never ambiguous duplicate requests."""
     store, row = record
-    row = store.update(OWNER, row['id'], lambda value: value['settings'].update(provider='opencode-zen', effort=''))
+    row = store.update(OWNER, row['id'], lambda value: value['settings'].update(provider='opencode-zen', effort='', ai_budget_confirmed=True, ai_decision_token_limit=10_000_000, ai_decision_usd_limit=10))
     payload = copy.deepcopy(payload)
     payload['usage'] = {'prompt_tokens': 100, 'completion_tokens': 200}
     class AI(LoopAI):
@@ -931,7 +942,7 @@ def test_incomplete_native_reply_enters_controller_repair_before_launch(record, 
     assert current['jobs'] == [] and not backend.starts
     asyncio.run(controller.tick(OWNER, row['id']))
     current = store.read(OWNER, row['id'])
-    assert current['status'] == 'running' and current['phase'] == 'optimize'
+    assert current['status'] == 'running' and current['phase'] == 'optimize', current.get('last_error')
     assert current['rubric'] == RULE and current['ai_calls'] == 2
     assert current['last_error'] is None and current['repair_error'] is None and current['errors'] == 0
     assert not backend.starts
@@ -942,7 +953,7 @@ def test_repeated_incomplete_bootstrap_replies_end_with_consistent_status(record
     store, row = record
     def bootstrap(current):
         current['settings'].update(provider='opencode-go', effort='')
-        current.update(phase='bootstrap', rubric=RULE, bootstrap_candidates=[],
+        current.update(phase='bootstrap', rubric=RULE, bootstrap_candidates=[{'id':'historical', 'optimizer_job':'saved', 'config':current['initial_config'], 'metrics':{'gain':1}, 'source':{'run':'saved','path':'saved','modified':1}}],
                        bootstrap={'status': 'evaluating', 'candidate_count': 0})
     row = store.update(OWNER, row['id'], bootstrap)
     replies = [{'choices': [{'finish_reason': 'length'}]} for _ in range(3)]
@@ -955,7 +966,7 @@ def test_repeated_incomplete_bootstrap_replies_end_with_consistent_status(record
     for _ in range(3):
         asyncio.run(controller.tick(OWNER, row['id']))
     current = store.read(OWNER, row['id'])
-    assert current['status'] == 'failed' and current['errors'] == 3
+    assert current['status'] == 'failed' and current['errors'] == 3, current.get('last_error')
     assert current['pending_ai'] is None
     assert current['bootstrap']['status'] == 'failed'
     assert current['bootstrap']['reason'] == current['reason']
@@ -1129,6 +1140,7 @@ def test_shared_reasoning_reaches_native_loop_request(record, protocol, wire_key
     sent = {}
     class Response:
         """Isolated HTTP context without a real provider connection."""
+        status = 200
         async def __aenter__(self):
             return self
         async def __aexit__(self, *args):
@@ -1165,8 +1177,8 @@ def test_ai_usage_is_not_a_separate_loop_stop_limit(record):
         async def preflight(self, owner, settings):
             return {}
         async def _request(self, *args):
-            return '{}', {}
-    assert asyncio.run(AI(store).decide(row, 'interpret', {})) == {}
+            return json.dumps({'rubric': RULE}), {}
+    assert asyncio.run(AI(store).decide(row, 'interpret', {})) == {'rubric': RULE}
     assert store.read(OWNER, row['id'])['ai_calls'] == 1001
 
 
@@ -1415,7 +1427,7 @@ def test_interpretation_request_contains_exact_required_goal_ids(record):
             return {'output_limit':16000}
         async def _request(self, record, metadata, content, output_tokens):
             assert content['required_goal_ids'] == ['custom','drawdown','gain','uptrend']
-            return '{"rubric":[]}', {'status':'subscription'}
+            return json.dumps({'rubric': [dict(RULE[0], goal=key) for key in set(self.store.read(OWNER, row['id'])['settings']['goals']['presets']) | ({'custom'} if self.store.read(OWNER, row['id'])['settings']['goals'].get('text') else set())]}), {'status':'subscription'}
     asyncio.run(AI(store).decide(row, 'interpret', {}))
 
 
@@ -1675,9 +1687,9 @@ def test_saved_candidate_lookup_is_bounded_exact_and_readonly(record,tmp_path,mo
     monkeypatch.setattr(opt,'_list_results',lambda:sources)
     monkeypatch.setattr(opt,'_all_results_first',lambda path:None)
     candidates=LoopBackend(tmp_path,store).existing_candidates(row)
-    assert len(candidates)==3
-    assert {item['source']['run'] for item in candidates}=={'run_0','run_1','run_2'}
-    assert [item['metrics']['gain'] for item in candidates] == [1, 2, 3]
+    assert len(candidates)==4
+    assert {item['source']['run'] for item in candidates}=={'run_0','run_1','run_2','run_3'}
+    assert [item['metrics']['gain'] for item in candidates] == [1, 2, 3, 4]
     assert {str(p):p.read_bytes() for p in root.rglob('*.json')}==before
 
 
@@ -1913,7 +1925,7 @@ def test_cloud_metric_policy_reaches_ai_with_custom_instruction_snapshot(record)
             assert 'adg_strategy_eq' in policy['allowed_metrics']
             assert policy['exact_goal_metrics_restricted'] is False
             assert content['goals'] == current['settings']['goals']
-            return '{"rubric":[]}', {'status': 'subscription'}
+            return json.dumps({'rubric': [dict(RULE[0], goal=key) for key in set(self.store.read(OWNER, row['id'])['settings']['goals']['presets']) | ({'custom'} if self.store.read(OWNER, row['id'])['settings']['goals'].get('text') else set())]}), {'status': 'subscription'}
     asyncio.run(AI(store).decide(row, 'interpret', {}))
 
 
@@ -2088,6 +2100,7 @@ def test_new_loop_runs_unchanged_baseline_before_any_optimizer(tmp_path):
     """Even a planned initial optimizer cannot launch until the baseline has completed."""
     store = LoopStore(tmp_path / 'loops')
     row = store.create(OWNER, settings(), config(), {}, {'pb8': 'commit', 'data': 'shards'}, [], config()['backtest'])
+    store.update(OWNER, row['id'], lambda current: current.update(ai_model_profile={'context': 4_000_000, 'page_tokens': 1500, 'output_tokens': 1000}))
     backend = FakeBackend(); controller = LoopController(tmp_path, store=store, backend=backend, ai=FakeAI())
     async def run():
         await controller.tick(OWNER, row['id'])

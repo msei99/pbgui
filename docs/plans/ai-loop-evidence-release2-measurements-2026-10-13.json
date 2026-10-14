@@ -1,0 +1,415 @@
+{
+    "context_benchmark": {
+        "seconds": 1.482,
+        "traced_peak_mib": 106.56,
+        "process_peak_rss_mib": 241.41,
+        "file_bytes": 55861406
+    },
+    "request_sha256": "f9f3c09f2a900c6de1d4e1d6b0f7f38c00026d4941a7df06b4f7e249ff003341",
+    "reconstructed_hashes": {
+        "raw": "d492b65718fc3963ac54a09c6f55093ebc004d3cbb19fd1ce9a44b9faefcf84f",
+        "existing_compaction": "f9f3c09f2a900c6de1d4e1d6b0f7f38c00026d4941a7df06b4f7e249ff003341"
+    },
+    "sha_match": true,
+    "history_entries": 12,
+    "history_cutoff": 1791843339.283492,
+    "configured_pareto_max_size": 1000,
+    "actual_select_candidates": 26,
+    "current_observations": 6,
+    "reports_per_observation": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+    ],
+    "rubric_metrics": [
+        "backtest_completion_ratio",
+        "drawdown_worst",
+        "drawdown_worst_strategy_eq",
+        "equity_choppiness",
+        "equity_jerkiness",
+        "exponential_fit_error",
+        "gain_strategy_eq",
+        "liquidated",
+        "liquidated_btc",
+        "liquidated_usd",
+        "liquidation_count",
+        "n_fills",
+        "n_liquidations"
+    ],
+    "phases": {
+        "interpret": {
+            "raw": {
+                "characters": 1196464,
+                "proxy_tokens": 380352
+            },
+            "existing_compaction": {
+                "characters": 468133,
+                "proxy_tokens": 130862
+            },
+            "A_history": {
+                "characters": 382032,
+                "proxy_tokens": 112219
+            },
+            "A_min_history": {
+                "characters": 94747,
+                "proxy_tokens": 25960
+            },
+            "pages_history": {
+                "2048": {
+                    "pages": 80,
+                    "largest_response_proxy_tokens": 1971,
+                    "leaf_records": 890,
+                    "scalar_fragments": 24
+                },
+                "4096": {
+                    "pages": 36,
+                    "largest_response_proxy_tokens": 4007,
+                    "leaf_records": 878,
+                    "scalar_fragments": 0
+                },
+                "5000": {
+                    "pages": 29,
+                    "largest_response_proxy_tokens": 4897,
+                    "leaf_records": 878,
+                    "scalar_fragments": 0
+                }
+            },
+            "pages_min_history": {
+                "2048": {
+                    "pages": 21,
+                    "largest_response_proxy_tokens": 1951,
+                    "leaf_records": 617,
+                    "scalar_fragments": 2
+                },
+                "4096": {
+                    "pages": 10,
+                    "largest_response_proxy_tokens": 3982,
+                    "leaf_records": 616,
+                    "scalar_fragments": 0
+                },
+                "5000": {
+                    "pages": 8,
+                    "largest_response_proxy_tokens": 4887,
+                    "leaf_records": 616,
+                    "scalar_fragments": 0
+                }
+            }
+        },
+        "bootstrap": {
+            "raw": {
+                "characters": 1864542,
+                "proxy_tokens": 596101
+            },
+            "existing_compaction": {
+                "characters": 1077739,
+                "proxy_tokens": 330924
+            },
+            "A_history": {
+                "characters": 727124,
+                "proxy_tokens": 220145
+            },
+            "A_min_history": {
+                "characters": 439839,
+                "proxy_tokens": 133886
+            },
+            "pages_history": {
+                "2048": {
+                    "pages": 157,
+                    "largest_response_proxy_tokens": 1973,
+                    "leaf_records": 1855,
+                    "scalar_fragments": 24
+                },
+                "4096": {
+                    "pages": 69,
+                    "largest_response_proxy_tokens": 4009,
+                    "leaf_records": 1843,
+                    "scalar_fragments": 0
+                },
+                "5000": {
+                    "pages": 55,
+                    "largest_response_proxy_tokens": 4899,
+                    "leaf_records": 1843,
+                    "scalar_fragments": 0
+                }
+            },
+            "pages_min_history": {
+                "2048": {
+                    "pages": 98,
+                    "largest_response_proxy_tokens": 1954,
+                    "leaf_records": 1582,
+                    "scalar_fragments": 2
+                },
+                "4096": {
+                    "pages": 43,
+                    "largest_response_proxy_tokens": 3993,
+                    "leaf_records": 1581,
+                    "scalar_fragments": 0
+                },
+                "5000": {
+                    "pages": 34,
+                    "largest_response_proxy_tokens": 4893,
+                    "leaf_records": 1581,
+                    "scalar_fragments": 0
+                }
+            }
+        },
+        "select": {
+            "raw": {
+                "characters": 1415089,
+                "proxy_tokens": 453542
+            },
+            "existing_compaction": {
+                "characters": 552497,
+                "proxy_tokens": 170641
+            },
+            "A_history": {
+                "characters": 405189,
+                "proxy_tokens": 121645
+            },
+            "A_min_history": {
+                "characters": 117904,
+                "proxy_tokens": 35386
+            },
+            "pages_history": {
+                "2048": {
+                    "pages": 86,
+                    "largest_response_proxy_tokens": 1977,
+                    "leaf_records": 945,
+                    "scalar_fragments": 24
+                },
+                "4096": {
+                    "pages": 39,
+                    "largest_response_proxy_tokens": 4013,
+                    "leaf_records": 933,
+                    "scalar_fragments": 0
+                },
+                "5000": {
+                    "pages": 31,
+                    "largest_response_proxy_tokens": 4903,
+                    "leaf_records": 933,
+                    "scalar_fragments": 0
+                }
+            },
+            "pages_min_history": {
+                "2048": {
+                    "pages": 27,
+                    "largest_response_proxy_tokens": 1970,
+                    "leaf_records": 672,
+                    "scalar_fragments": 2
+                },
+                "4096": {
+                    "pages": 13,
+                    "largest_response_proxy_tokens": 3967,
+                    "leaf_records": 671,
+                    "scalar_fragments": 0
+                },
+                "5000": {
+                    "pages": 10,
+                    "largest_response_proxy_tokens": 4901,
+                    "leaf_records": 671,
+                    "scalar_fragments": 0
+                }
+            }
+        },
+        "evaluate": {
+            "raw": {
+                "characters": 2844746,
+                "proxy_tokens": 934388
+            },
+            "existing_compaction": {
+                "characters": 994505,
+                "proxy_tokens": 336461
+            },
+            "A_history": {
+                "characters": 461028,
+                "proxy_tokens": 137487
+            },
+            "A_min_history": {
+                "characters": 173743,
+                "proxy_tokens": 51228
+            },
+            "pages_history": {
+                "2048": {
+                    "pages": 99,
+                    "largest_response_proxy_tokens": 1980,
+                    "leaf_records": 1206,
+                    "scalar_fragments": 24
+                },
+                "4096": {
+                    "pages": 45,
+                    "largest_response_proxy_tokens": 4016,
+                    "leaf_records": 1194,
+                    "scalar_fragments": 0
+                },
+                "5000": {
+                    "pages": 35,
+                    "largest_response_proxy_tokens": 4906,
+                    "leaf_records": 1194,
+                    "scalar_fragments": 0
+                }
+            },
+            "pages_min_history": {
+                "2048": {
+                    "pages": 41,
+                    "largest_response_proxy_tokens": 1962,
+                    "leaf_records": 933,
+                    "scalar_fragments": 2
+                },
+                "4096": {
+                    "pages": 19,
+                    "largest_response_proxy_tokens": 3958,
+                    "leaf_records": 932,
+                    "scalar_fragments": 0
+                },
+                "5000": {
+                    "pages": 14,
+                    "largest_response_proxy_tokens": 4892,
+                    "leaf_records": 932,
+                    "scalar_fragments": 0
+                }
+            }
+        }
+    },
+    "synthetic_select": {
+        "100": {
+            "raw": {
+                "characters": 2036197,
+                "proxy_tokens": 660802
+            },
+            "existing_compaction": {
+                "characters": 776003,
+                "proxy_tokens": 278963
+            },
+            "A_history": {
+                "characters": 460284,
+                "proxy_tokens": 144435
+            },
+            "A_min_history": {
+                "characters": 172999,
+                "proxy_tokens": 58176
+            },
+            "pages_history_5000": {
+                "pages": 36,
+                "largest_response_proxy_tokens": 4903,
+                "leaf_records": 1081,
+                "scalar_fragments": 0
+            },
+            "pages_min_history_5000": {
+                "pages": 15,
+                "largest_response_proxy_tokens": 4873,
+                "leaf_records": 819,
+                "scalar_fragments": 0
+            }
+        },
+        "1000": {
+            "raw": {
+                "characters": 9596466,
+                "proxy_tokens": 3185347
+            },
+            "existing_compaction": {
+                "characters": 3500572,
+                "proxy_tokens": 1600208
+            },
+            "A_history": {
+                "characters": 1136701,
+                "proxy_tokens": 425197
+            },
+            "A_min_history": {
+                "characters": 849416,
+                "proxy_tokens": 338938
+            },
+            "pages_history_5000": {
+                "pages": 99,
+                "largest_response_proxy_tokens": 4898,
+                "leaf_records": 2881,
+                "scalar_fragments": 0
+            },
+            "pages_min_history_5000": {
+                "pages": 78,
+                "largest_response_proxy_tokens": 4904,
+                "leaf_records": 2619,
+                "scalar_fragments": 0
+            }
+        }
+    },
+    "evaluate_top_level": {
+        "stage": {
+            "characters": 10,
+            "proxy_tokens": 3
+        },
+        "goals": {
+            "characters": 8167,
+            "proxy_tokens": 1625
+        },
+        "required_goal_ids": {
+            "characters": 28,
+            "proxy_tokens": 8
+        },
+        "scenario_enabled": {
+            "characters": 5,
+            "proxy_tokens": 1
+        },
+        "strategy_enabled": {
+            "characters": 5,
+            "proxy_tokens": 1
+        },
+        "execution": {
+            "characters": 6,
+            "proxy_tokens": 4
+        },
+        "run_limit": {
+            "characters": 149,
+            "proxy_tokens": 38
+        },
+        "initial_config": {
+            "characters": 12560,
+            "proxy_tokens": 3770
+        },
+        "training_exclusions": {
+            "characters": 589,
+            "proxy_tokens": 194
+        },
+        "initial_overrides": {
+            "characters": 2,
+            "proxy_tokens": 1
+        },
+        "rubric": {
+            "characters": 9046,
+            "proxy_tokens": 1814
+        },
+        "search_policy": {
+            "characters": 89,
+            "proxy_tokens": 17
+        },
+        "hsl_mode": {
+            "characters": 5,
+            "proxy_tokens": 3
+        },
+        "knowledge": {
+            "characters": 420245,
+            "proxy_tokens": 118860
+        },
+        "evidence": {
+            "characters": 526027,
+            "proxy_tokens": 205457
+        },
+        "evaluation_contract": {
+            "characters": 1188,
+            "proxy_tokens": 309
+        },
+        "optimizer_metric_policy": {
+            "characters": 16102,
+            "proxy_tokens": 4314
+        }
+    },
+    "default_json_evaluate_characters": 1049701,
+    "instructions": {
+        "characters": 9068,
+        "proxy_tokens": 1717,
+        "scope": "current working-tree instructions, not historical runtime envelope"
+    },
+    "prototype_script_sha256": "25744c0c45c88de5340a06788214ceee0d4b3102aa3d4a8ba62cbb97e1de3993"
+}

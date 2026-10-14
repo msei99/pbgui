@@ -23,6 +23,7 @@ def test_fresh_jobs_drop_all_seed_sources_and_persist_unique_rng(tmp_path, execu
     initial['optimize']['backend'] = 'pymoo' if execution == 'cpu' else 'gpu'
     store = LoopStore(tmp_path)
     row = store.create('a'*32, settings(execution=execution), initial, {}, {}, [], initial['backtest'])
+    store.update(row['owner'], row['id'], lambda current: current.update(ai_model_profile={'context': 4_000_000, 'page_tokens': 1500, 'output_tokens': 1000}))
     controller = LoopController(tmp_path, store=store)
     jobs = []
     for _ in range(3):

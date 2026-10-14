@@ -8,6 +8,7 @@ from pb8_loop_store import LoopInstructionConflict, LoopStore
 from tests.test_pb8_loop_optimizer import OWNER, config, settings, _loop_chat_for_payloads
 from tests.test_pb8_loop_workflow import workflow, save
 from tests.test_pb8_loop_gpt_timeout import native_ai, stop_feeders
+from tests.loop_ai_transport import LoopAI
 
 
 def test_instruction_versions_are_owned_immutable_and_revision_checked(tmp_path):
@@ -101,8 +102,8 @@ def test_instruction_routes_save_activate_and_show_run_snapshot(workflow):
 
 @pytest.mark.parametrize('protocol,payload', [
     ('chat', {'choices':[{'finish_reason':'stop', 'message':{'content':'{}'}}]}),
-    ('responses', {'status':'completed', 'output':[{'type':'message', 'content':[{'type':'output_text', 'text':'{}'}]}]}),
-    ('messages', {'stop_reason':'end_turn', 'content':[{'type':'text', 'text':'{}'}]}),
+    ('responses', {'status':'completed', 'output':[{'type':'message', 'content':[{'type':'output_text', 'text':'{"winner_operation":null,"finish":true}'}]}]}),
+    ('messages', {'stop_reason':'end_turn', 'content':[{'type':'text', 'text':'{"winner_operation":null,"finish":true}'}]}),
 ])
 def test_saved_instructions_reach_each_http_protocol(tmp_path, protocol, payload):
     """Check actual outgoing system instructions without contacting any provider."""
@@ -131,7 +132,9 @@ def test_saved_instructions_reach_each_http_protocol(tmp_path, protocol, payload
     assert 'without overwriting it' in EVALUATION_PROTOCOL
     assert 'fresh random population' in EVALUATION_PROTOCOL
     assert 'comparison evidence only' in EVALUATION_PROTOCOL
-    assert 'only auto permits AI changes to HSL activation' in EVALUATION_PROTOCOL
+    assert 'only auto permits ai changes to hsl activation' in EVALUATION_PROTOCOL.lower()
+    assert 'off requires disabled HSL' in EVALUATION_PROTOCOL
+    assert 'on requires active, effective HSL' in EVALUATION_PROTOCOL
 
 
 def test_saved_instructions_reach_native_gpt(tmp_path, monkeypatch):
@@ -142,7 +145,7 @@ def test_saved_instructions_reach_native_gpt(tmp_path, monkeypatch):
     row = store.create(OWNER, settings(), value, {}, {}, [], value['backtest'])
     async def feed(runtime):
         """Complete a local fake native turn without a remote model."""
-        runtime.notifications.put_nowait({'method':'item/completed', 'params':{'turnId':'turn', 'item':{'type':'agentMessage', 'text':'{}'}}})
+        runtime.notifications.put_nowait({'method':'item/completed', 'params':{'turnId':'turn', 'item':{'type':'agentMessage', 'text':'{"winner_operation":null,"finish":true}'}}})
         runtime.notifications.put_nowait({'method':'turn/completed', 'params':{'turnId':'turn', 'turn':{'id':'turn', 'status':'completed'}}})
     ai, runtimes, feeders = native_ai(store, tmp_path, monkeypatch, feed)
     async def scenario():

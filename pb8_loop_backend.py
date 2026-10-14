@@ -412,10 +412,19 @@ class LoopBackend:
             name, _cloud_id = self._result_origin(source)
             if name == record['settings']['config_name'] and source not in sources:
                 sources.append(source)
-                if len(sources) == 3:
-                    break
+                # All eligible sources are counted; the AI evidence budget selects whole sources later.
         result = []
-        for source in sources:
+        def timestamp(item):
+            """Result listings use either Unix time or an ISO date string."""
+            from datetime import datetime, timezone
+            value = item.get('modified') or 0
+            if isinstance(value, str):
+                try:
+                    return datetime.fromisoformat(value.replace('Z', '+00:00')).replace(tzinfo=timezone.utc).timestamp()
+                except ValueError:
+                    return 0
+            return float(value)
+        for source in sorted(sources, key=lambda item: (item['path'] != preferred, -timestamp(item), item['path'])):
             job = {'operation': 'saved_' + digest([source['result'], source['modified']])[:24],
                    'config': record['initial_config'], 'overrides': record['initial_overrides']}
             try:
@@ -431,7 +440,7 @@ class LoopBackend:
         directory = opt._resolve_result_path(source['path'])
         _pareto_dir, files = opt._pareto_files_for_listing(directory)
         artifacts = []
-        for path in files[:512]:
+        for path in files:
             try:
                 artifacts.append((path.name, opt._read_json(path)))
             except (RuntimeError, ValueError, OSError) as exc:
@@ -450,9 +459,16 @@ class LoopBackend:
             candidate_id = 'c_' + digest([job['operation'], artifact])[:24]
             result.append({'id': candidate_id, 'optimizer_job': job['operation'], 'config': config,
                            'overrides': job['overrides'], 'metrics': metrics,
-                           'source': {'run': source['result'], 'modified': source['modified'], 'artifact': artifact}})
+                           'source': {'run': source['result'], 'path': source['path'], 'modified': source['modified'], 'artifact': artifact},
+                           'native_semantics': {'scoring': copy.deepcopy(data.get('optimize', {}).get('scoring')),
+                                                'objectives': copy.deepcopy((data.get('metrics') or {}).get('objectives')),
+                                                'constraint_violation': (data.get('metrics') or {}).get('constraint_violation')}})
         if not result:
             raise ValueError('Optimizer result contains no usable candidate metrics')
+        for candidate in result:
+            candidate['source'].update(available_artifacts=len(files), loaded_artifacts=len(artifacts),
+                                       usable_candidates=len(result), unreadable_artifacts=max(0, len(files) - len(artifacts)),
+                                       artifacts_without_metrics=max(0, len(artifacts) - len(result)))
         return result
 
     def validation_config(self, record, candidate, holdout=False):

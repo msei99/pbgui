@@ -14,6 +14,8 @@ import pb8_loop_ai
 from pb8_loop_ai import LoopAI, LoopAIRequestFailed, LoopAIRetryScheduled, LoopAITransientError
 from pb8_loop_controller import LoopController
 from tests.test_pb8_loop_optimizer import OWNER, record
+from tests.loop_ai_transport import LoopAI
+from pb8_loop_evidence import LoopAIPause
 
 
 @pytest.fixture
@@ -62,12 +64,12 @@ def test_timeout_retries_after_pause_and_preserves_completed_jobs(record, clock)
     assert scheduled['ai_retry']['history'][0]['at'] == clock[0]
     assert scheduled['jobs'] == original['jobs']
     reserved = scheduled['ai_tokens_reserved']
-    recovered = SequenceAI(store, ['{}'])
+    recovered = SequenceAI(store, ['{"winner_operation":null,"finish":true}'])
     with pytest.raises(LoopAIRetryScheduled):
         asyncio.run(recovered.decide(scheduled, 'evaluate', {}))
     assert recovered.sent == 0
     clock[0] += 30
-    assert asyncio.run(recovered.decide(store.read(OWNER, row['id']), 'evaluate', {})) == {}
+    assert asyncio.run(recovered.decide(store.read(OWNER, row['id']), 'evaluate', {})) == {'winner_operation': None, 'finish': True}
     complete = store.read(OWNER, row['id'])
     assert complete['ai_calls'] == 2 and complete['ai_tokens_reserved'] >= 2 * reserved
     assert complete['pending_ai'] is None and 'ai_retry' not in complete
@@ -85,9 +87,9 @@ def test_three_timeouts_exhaust_retries_with_a_visible_reason(record, clock):
     with pytest.raises(LoopAIRequestFailed, match='timed out.*Failed after 3 attempts'):
         asyncio.run(ai.decide(store.read(OWNER, row['id']), 'evaluate', {}))
     failed = store.read(OWNER, row['id'])
-    assert failed['ai_retry']['exhausted'] and failed['pending_ai']
+    assert failed['ai_retry']['exhausted'] and failed['pending_ai'] is None
     assert failed['ai_calls'] == ai.sent == 3
-    with pytest.raises(ValueError, match='interrupted'):
+    with pytest.raises(LoopAIRequestFailed, match='Failed after 3 attempts'):
         asyncio.run(ai.decide(failed, 'evaluate', {}))
     assert ai.sent == 3
 

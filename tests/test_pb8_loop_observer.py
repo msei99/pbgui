@@ -262,7 +262,7 @@ def test_ai_payload_and_learning_never_include_user_metrics(record,monkeypatch):
         payload=json.dumps(content)
         assert marker not in payload and '987654321' not in payload
         assert 'observer_jobs' not in payload
-        return '{"finish":false}',{}
+        return '{"winner_operation":null,"finish":true}',{}
     monkeypatch.setattr(ai,'preflight',preflight);monkeypatch.setattr(ai,'_request',request)
     asyncio.run(ai.decide(row,'evaluate',{'observations':[]}))
     assert store.knowledge(OWNER)['entries']==[]

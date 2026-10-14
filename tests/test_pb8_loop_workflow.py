@@ -602,6 +602,7 @@ def test_continue_from_best_or_exact_previous_round_keeps_provenance(workflow, m
     rubric = [{'goal': 'gain', 'metrics': ['gain'], 'target': None, 'direction': 'max'}]
     checkpoints = []
     def completed(row):
+        row['ai_model_profile'] = {'context': 4_000_000, 'page_tokens': 1500, 'output_tokens': 1000}
         row.update(status='unconfirmed', rubric=rubric, jobs=[], history=[])
         for number in (0, 1):
             config = copy.deepcopy(row['initial_config']); config['optimize']['iters'] = 1000 + number
@@ -621,6 +622,7 @@ def test_continue_from_best_or_exact_previous_round_keeps_provenance(workflow, m
         if not evaluated:
             row.update(status='failed', phase='evaluate', round=1, history=row['history'][:1],
                        observations=[copy.deepcopy(checkpoints[-1])], pending_ai={'stage':'evaluate'})
+    controller.store.update(OWNER, loop_id, lambda row: row.update(ai_model_profile={'context': 4_000_000, 'page_tokens': 1500, 'output_tokens': 1000}))
     parent = controller.store.update(OWNER, loop_id, completed)
     monkeypatch.setattr(controller.backend, 'observations', lambda row, job: next(item for item in checkpoints if item['operation'] == job['operation']), raising=False)
     response = client.post('/loops/' + loop_id + '/continue', json={'round': selected_round, 'rounds': extra, 'selection': {'provider': 'chatgpt', 'model': 'shared-current'}, 'authorization': True})

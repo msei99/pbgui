@@ -1,0 +1,190 @@
+{
+    "date": "2026-10-14",
+    "scope": "Short authorized live gates with synthetic evidence and temporary decision/profile stores. No optimizer jobs, rentals, production Loop changes, API restart or production profile activation.",
+    "cold_codex": {
+        "gate": "codex_cold_context",
+        "model": "gpt-6.1-sol",
+        "profile": "default",
+        "effort": "high",
+        "started_at": 1791996028.1450932,
+        "answer_ok": true,
+        "usage": {
+            "used_tokens": 5212,
+            "limit_tokens": 475000
+        },
+        "passed": true,
+        "elapsed_seconds": 3.306820869445801
+    },
+    "codex": {
+        "provider": "chatgpt",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "started_at": 1791996446.7562556,
+        "tool_verified": true,
+        "untruncated_verified": true,
+        "page_tokens_measured": 4994,
+        "stage": "post_compaction_recovery",
+        "native_compaction_status": "completed",
+        "context": 475000,
+        "tool_reads": [
+            {
+                "path": "/data/probe",
+                "tokens": 4994,
+                "native_id": "exec-9783c568-6532-4b50-94de-f83d5c37c058"
+            },
+            {
+                "path": "/data/probe",
+                "tokens": 2114,
+                "native_id": "exec-562abb9f-1d7d-47a3-b299-eec3a20445fa"
+            },
+            {
+                "path": "/required",
+                "tokens": 123,
+                "native_id": "exec-9f016659-4e9c-491d-b53f-3dc8246b86e9"
+            },
+            {
+                "path": "/data/probe",
+                "tokens": 4994,
+                "native_id": "exec-ec1805f3-1ff8-4740-8dd5-6ccfe0945ea9"
+            },
+            {
+                "path": "/data/probe",
+                "tokens": 2114,
+                "native_id": "exec-9701f776-f88f-4624-b7c5-fcdd61a8ba18"
+            }
+        ],
+        "compaction_verified": true,
+        "usage": {
+            "used_tokens": 13473,
+            "limit_tokens": 475000
+        },
+        "normal_decision": {
+            "passed": true,
+            "calls": 1
+        },
+        "passed": true,
+        "profile_measurements": {
+            "context": 475000,
+            "page_tokens": 5000,
+            "tool_output_tokens": 8192,
+            "output_tokens": 32768,
+            "tool_verified": true,
+            "untruncated_verified": true,
+            "context_verified": true
+        },
+        "settings": {
+            "provider": "chatgpt",
+            "model": "gpt-6.1-sol",
+            "profile": "default",
+            "effort": "high",
+            "service_tier": ""
+        },
+        "elapsed_seconds": 34.53441262245178
+    },
+    "opencode": {
+        "provider": "opencode-go",
+        "model": "longcat-2.5-preview-free",
+        "started_at": 1791996335.5504143,
+        "tool_calls": 2,
+        "calls": [
+            {
+                "elapsed_seconds": 5.3404907828662544,
+                "usage": {
+                    "prompt_tokens": 246,
+                    "completion_tokens": 100,
+                    "total_tokens": 346,
+                    "prompt_tokens_details": {
+                        "audio_tokens": 0,
+                        "cached_tokens": 0,
+                        "cache_write_tokens": 0
+                    },
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 72
+                    }
+                }
+            },
+            {
+                "elapsed_seconds": 4.266284575918689,
+                "usage": {
+                    "prompt_tokens": 7724,
+                    "completion_tokens": 73,
+                    "total_tokens": 7797,
+                    "prompt_tokens_details": {
+                        "audio_tokens": 0,
+                        "cached_tokens": 0,
+                        "cache_write_tokens": 0
+                    },
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 43
+                    }
+                }
+            },
+            {
+                "elapsed_seconds": 8.402799590025097,
+                "usage": {
+                    "prompt_tokens": 10966,
+                    "completion_tokens": 315,
+                    "total_tokens": 11281,
+                    "prompt_tokens_details": {
+                        "audio_tokens": 0,
+                        "cached_tokens": 7680,
+                        "cache_write_tokens": 0
+                    },
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 178
+                    }
+                }
+            }
+        ],
+        "streaming_verified": true,
+        "native_tool_followup_verified": true,
+        "normal_decision": {
+            "passed": true,
+            "calls": 6
+        },
+        "passed": true,
+        "context": 1000000,
+        "profile_measurements": {
+            "context": 1000000,
+            "page_tokens": 5000,
+            "tool_output_tokens": 8192,
+            "output_tokens": 32768,
+            "streaming": true,
+            "connect_timeout": 30,
+            "first_timeout": 90,
+            "idle_timeout": 90,
+            "tool_verified": true,
+            "untruncated_verified": true,
+            "context_verified": true
+        },
+        "settings": {
+            "provider": "opencode-go",
+            "model": "longcat-2.5-preview-free",
+            "profile": "default",
+            "effort": "",
+            "service_tier": ""
+        },
+        "elapsed_seconds": 66.40864419937134
+    },
+    "initial_codex_attempt": {
+        "provider": "chatgpt",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "started_at": 1791996323.8043704,
+        "passed": false,
+        "error_type": "AIChatError",
+        "error": "ChatGPT encountered a temporary server error. Try again later.",
+        "elapsed_seconds": 11.74582028388977
+    },
+    "offline_catalog_tests": {
+        "passed": 109
+    },
+    "model_catalog_fix": "Explicit loop_tool_support was computed by the metadata loader but lost in the public projection; now preserved without optimistic inference.",
+    "limitations": [
+        "OpenCode gate covers only opencode-go/longcat-2.5-preview-free, chat protocol, default profile, no reasoning override.",
+        "Paid OpenCode models, Responses and Messages have not received live acceptance.",
+        "A broader paid multi-model command was rejected by automatic approval review before execution; the executed alternative used one zero-price OpenCode model.",
+        "Successful measured profiles remain in the report and temporary test stores only; production activation is separate.",
+        "The first native compaction attempt failed transiently; one retry waiting for the native completion event passed."
+    ]
+}

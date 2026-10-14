@@ -1,0 +1,156 @@
+{
+    "measurements": {
+        "select_100": {
+            "candidate_count": 100,
+            "data_kind": "phase-shaped cyclic synthetic data, no candidate grouping applied",
+            "distinct_source_metric_config_override_fingerprints": 26,
+            "A_history": {
+                "characters": 420369,
+                "proxy_tokens": 129546
+            },
+            "A_min_history": {
+                "characters": 133084,
+                "proxy_tokens": 43287
+            },
+            "pages_history_5000": {
+                "pages": 33,
+                "largest_response_proxy_tokens": 4899,
+                "leaf_records": 1080,
+                "scalar_fragments": 0
+            },
+            "pages_min_history_5000": {
+                "pages": 12,
+                "largest_response_proxy_tokens": 4856,
+                "leaf_records": 818,
+                "scalar_fragments": 0
+            }
+        },
+        "select_512": {
+            "candidate_count": 512,
+            "data_kind": "phase-shaped cyclic synthetic data, no candidate grouping applied",
+            "distinct_source_metric_config_override_fingerprints": 26,
+            "A_history": {
+                "characters": 579067,
+                "proxy_tokens": 200900
+            },
+            "A_min_history": {
+                "characters": 291782,
+                "proxy_tokens": 114641
+            },
+            "pages_history_5000": {
+                "pages": 50,
+                "largest_response_proxy_tokens": 4903,
+                "leaf_records": 1904,
+                "scalar_fragments": 0
+            },
+            "pages_min_history_5000": {
+                "pages": 29,
+                "largest_response_proxy_tokens": 4863,
+                "leaf_records": 1642,
+                "scalar_fragments": 0
+            }
+        },
+        "select_1000": {
+            "candidate_count": 1000,
+            "data_kind": "phase-shaped cyclic synthetic data, no candidate grouping applied",
+            "distinct_source_metric_config_override_fingerprints": 26,
+            "A_history": {
+                "characters": 767040,
+                "proxy_tokens": 285414
+            },
+            "A_min_history": {
+                "characters": 479755,
+                "proxy_tokens": 199155
+            },
+            "pages_history_5000": {
+                "pages": 70,
+                "largest_response_proxy_tokens": 4899,
+                "leaf_records": 2880,
+                "scalar_fragments": 0
+            },
+            "pages_min_history_5000": {
+                "pages": 50,
+                "largest_response_proxy_tokens": 4886,
+                "leaf_records": 2618,
+                "scalar_fragments": 0
+            }
+        },
+        "bootstrap_26": {
+            "candidate_count": 26,
+            "data_kind": "phase-shaped cyclic synthetic data, no candidate grouping applied",
+            "distinct_source_metric_config_override_fingerprints": 26,
+            "A_history": {
+                "characters": 402880,
+                "proxy_tokens": 120954
+            },
+            "A_min_history": {
+                "characters": 115595,
+                "proxy_tokens": 34695
+            },
+            "pages_history_5000": {
+                "pages": 31,
+                "largest_response_proxy_tokens": 4901,
+                "leaf_records": 937,
+                "scalar_fragments": 0
+            },
+            "pages_min_history_5000": {
+                "pages": 10,
+                "largest_response_proxy_tokens": 4887,
+                "leaf_records": 675,
+                "scalar_fragments": 0
+            }
+        },
+        "bootstrap_512": {
+            "candidate_count": 512,
+            "data_kind": "phase-shaped cyclic synthetic data, no candidate grouping applied",
+            "distinct_source_metric_config_override_fingerprints": 26,
+            "A_history": {
+                "characters": 726613,
+                "proxy_tokens": 263814
+            },
+            "A_min_history": {
+                "characters": 439328,
+                "proxy_tokens": 177555
+            },
+            "pages_history_5000": {
+                "pages": 65,
+                "largest_response_proxy_tokens": 4901,
+                "leaf_records": 2422,
+                "scalar_fragments": 0
+            },
+            "pages_min_history_5000": {
+                "pages": 44,
+                "largest_response_proxy_tokens": 4860,
+                "leaf_records": 2160,
+                "scalar_fragments": 0
+            }
+        },
+        "bootstrap_1536": {
+            "candidate_count": 1536,
+            "data_kind": "phase-shaped cyclic synthetic data, no candidate grouping applied",
+            "distinct_source_metric_config_override_fingerprints": 26,
+            "A_history": {
+                "characters": 1410798,
+                "proxy_tokens": 566443
+            },
+            "A_min_history": {
+                "characters": 1123513,
+                "proxy_tokens": 480184
+            },
+            "pages_history_5000": {
+                "pages": 138,
+                "largest_response_proxy_tokens": 4899,
+                "leaf_records": 5494,
+                "scalar_fragments": 0
+            },
+            "pages_min_history_5000": {
+                "pages": 117,
+                "largest_response_proxy_tokens": 4905,
+                "leaf_records": 5232,
+                "scalar_fragments": 0
+            }
+        }
+    },
+    "prototype_script_sha256": "b062f9a60dd3297a351f3c4be27d8852bce95f4e10b42bb90c5e0316385f56cd",
+    "notes": "No candidate deduplication used for cost estimates. Metric table missing indices distinguish absent from null. Config deltas retained for bootstrap, available only in B for select."
+}

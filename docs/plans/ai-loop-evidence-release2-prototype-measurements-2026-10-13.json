@@ -1,0 +1,105 @@
+{
+    "source_loop": "c1a107cbb59845108260ee73882b864e",
+    "method": "read-only saved state; full controller evidence capture; actual implemented projector and pager; not a live runtime/context proof",
+    "knowledge": {
+        "eligible": 31,
+        "included": 16,
+        "omitted": 15,
+        "proxy_tokens": 5904
+    },
+    "phases": {
+        "interpret": {
+            "raw_characters": 63960,
+            "required_characters": 63960,
+            "required_proxy_tokens": 17781,
+            "wire_proxy_tokens": 19565,
+            "required_pages": 5,
+            "maximum_page_proxy_tokens": 4996,
+            "required_sha256": "66a390ffca6cd5873edddd0a18041f7c08fc12938f3109cd475a03068e40015f"
+        },
+        "bootstrap": {
+            "raw_characters": 732038,
+            "required_characters": 236308,
+            "required_proxy_tokens": 71669,
+            "wire_proxy_tokens": 73453,
+            "required_pages": 23,
+            "maximum_page_proxy_tokens": 4996,
+            "required_sha256": "f580a32cf551feda6c216a7175efaa54261b3a73de696727e2f68b18b6155ab1"
+        },
+        "select": {
+            "raw_characters": 621453,
+            "required_characters": 74306,
+            "required_proxy_tokens": 22578,
+            "wire_proxy_tokens": 24362,
+            "required_pages": 7,
+            "maximum_page_proxy_tokens": 4996,
+            "required_sha256": "09b13731151f613e6433d4921daf076cfe5de0e91d3b720223a8582da0926578"
+        },
+        "evaluate": {
+            "raw_characters": 1711710,
+            "required_characters": 154369,
+            "required_proxy_tokens": 45441,
+            "wire_proxy_tokens": 47225,
+            "required_pages": 13,
+            "maximum_page_proxy_tokens": 4996,
+            "required_sha256": "2a65a02176b4ba91907cb18666fba518087eda627f9562370011d8e10ff032bc"
+        }
+    },
+    "selection_envelopes": {
+        "100": {
+            "raw_characters": 2209522,
+            "required_characters": 102188,
+            "required_proxy_tokens": 35005,
+            "wire_proxy_tokens": 36789,
+            "required_pages": 10,
+            "maximum_page_proxy_tokens": 4996,
+            "required_sha256": "89bebdbb2effd765ad32eb1310039e593e39d626e7716eaa965fb4ea9c287a7d"
+        },
+        "512": {
+            "raw_characters": 11050959,
+            "required_characters": 260474,
+            "required_proxy_tokens": 105947,
+            "wire_proxy_tokens": 107731,
+            "required_pages": 26,
+            "maximum_page_proxy_tokens": 4996,
+            "required_sha256": "434b29cd2591f3badaea91490cfb21f5439dfd84910b82b89206538d08148124"
+        },
+        "1000": {
+            "raw_characters": 21523237,
+            "required_characters": 447959,
+            "required_proxy_tokens": 189973,
+            "wire_proxy_tokens": 191757,
+            "required_pages": 46,
+            "maximum_page_proxy_tokens": 4997,
+            "required_sha256": "6f9743ba865984a9489a12dac025f84c1d4986ebc9154f8942baabfcd9ca4896"
+        }
+    },
+    "native_archive_256k": {
+        "effective": 68,
+        "requested": 1000,
+        "candidate_capacity_per_job": 68,
+        "candidate_capacity_total": 68,
+        "extrema_capacity": 6,
+        "candidate_proxy_tokens": 422,
+        "context": 256000,
+        "parallel_jobs": 1,
+        "reason": "Measured-profile context reserve and current goal/safety schema",
+        "version": 1
+    },
+    "bootstrap_after_source_budget": {
+        "raw_characters": 174717,
+        "required_characters": 69598,
+        "required_proxy_tokens": 19473,
+        "wire_proxy_tokens": 21257,
+        "required_pages": 6,
+        "maximum_page_proxy_tokens": 4996,
+        "required_sha256": "a1df126c165d9c9520af21e914bf3e06bea01f20ae3ce78c4fbc1e6b0b83a098",
+        "sources_considered": 1,
+        "candidates_in_a": 0,
+        "candidates_in_b": 26,
+        "source_reasons": {
+            "native_semantics_not_reconstructable": 1
+        },
+        "fallback_fresh": true
+    }
+}

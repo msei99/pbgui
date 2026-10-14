@@ -763,6 +763,17 @@ class LoopStore:
             archive = ensure_private_directory(path.parent / 'evidence') / (digest(evidence_id) + '.json')
             if any(item['id'] == evidence_id for item in knowledge['entries']):
                 return
+            if archive.exists() or archive.is_symlink():
+                original = json.loads(read_regular_file_nofollow(archive, self.root))
+                if original.get('id') != evidence_id or original.get('loop') != record['id']:
+                    raise ValueError('Existing evidence archive identity mismatch')
+                # The mutable 200-entry UI index can evict an old ID. That must
+                # never authorize rewriting an already referenced original.
+                knowledge['entries'] = (knowledge['entries'] + [original])[-200:]
+                if original.get('holdout') and original['holdout'] not in knowledge['used_holdouts']:
+                    knowledge['used_holdouts'].append(original['holdout'])
+                atomic_write_private_text(path, json.dumps(knowledge, indent=4) + '\n')
+                return
             # A round contains several full exact reports/configs. Validate each
             # observation with the existing strict per-object bound instead of
             # applying the single-config limit to the whole evidence archive.
