@@ -250,7 +250,11 @@
     } finally { if (!disposed && current === accountGeneration) el('refresh-balance').disabled = false; }
   }
 
-  function fmt(value, digits) { return value == null ? 'Unknown' : Number(value).toFixed(digits == null ? 2 : digits); }
+  function fmt(value, digits) {
+    if (value == null) return 'Unknown';
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(digits == null ? 2 : digits) : 'Unknown';
+  }
 
   function offerDuration(seconds) {
     if (seconds == null) return 'Unknown';
@@ -1908,7 +1912,7 @@
     status.hidden = !matching;
     status.textContent = matching ? 'Measured ' + Number(profile.population_size).toLocaleString()
       + ' · ' + Number(profile.measured_power_limit_watts).toLocaleString() + ' W · '
-      + Number(profile.candidates_per_second).toFixed(2) + ' candidates/s' : '';
+      + fmt(profile.candidates_per_second, 2) + ' candidates/s' : '';
     const row = info?.result?.preview;
     const sized = ['opted-gpu-population-size', 'opted-gpu-batch-size', 'opted-gpu-max-dispatch-bars']
       .every(id => Number(el(id)?.value) > 0);

@@ -26,8 +26,13 @@ Public API:
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import os
 import sqlite3
+import stat
+import threading
+import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -47,12 +52,16 @@ from market_data_sources import (
     get_source_codes_for_day,
     get_source_index_path,
 )
+from logging_helpers import human_log as _log
+
+SERVICE = "MarketData"
 
 # ---------------------------------------------------------------------------
 # DB setup
 # ---------------------------------------------------------------------------
 
 _DB_FILENAME = "inventory_cache.db"
+_CONNECT_TIMEOUT_SECONDS = 10
 
 
 def _db_path() -> Path:
@@ -61,13 +70,159 @@ def _db_path() -> Path:
     return p
 
 
+# Setup (WAL and schema) is serialized across threads and processes. Normal
+# connections only read whether it is complete. The lock budget matches the
+# SQLite busy timeout; SQLite statements afterwards may wait additionally.
+_SETUP_LOCK_TIMEOUT_SECONDS = _CONNECT_TIMEOUT_SECONDS
+_WAL_ATTEMPT_LIMIT = 64
+_setup_thread_lock = threading.Lock()
+_state_lock = threading.Lock()
+# Resolved database paths whose WAL switch completed in this process (any
+# resulting mode). Bounded; after eviction one more attempt may happen.
+_wal_attempted: set[str] = set()
+_open_lock_fds: set[int] = set()
+
+
+def _reset_after_fork() -> None:
+    """Give a forked child fresh locks and state; a parent thread may hold the old ones."""
+    global _setup_thread_lock, _state_lock, _wal_attempted, _open_lock_fds
+    inherited = list(_open_lock_fds)
+    _setup_thread_lock = threading.Lock()
+    _state_lock = threading.Lock()
+    _wal_attempted = set()
+    _open_lock_fds = set()
+    # POSIX record locks belong to the parent and are not inherited; closing the
+    # child's descriptor copies only prevents leaks and never releases them.
+    for fd in inherited:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
+def _open_setup_lock_file(path: Path) -> int:
+    """Open the owner-only setup lock file without following links."""
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            raise sqlite3.OperationalError(f"Unsafe inventory cache setup lock file: {path}")
+        os.fchmod(fd, 0o600)
+        with _state_lock:
+            _open_lock_fds.add(fd)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _close_setup_lock_file(fd: int) -> None:
+    """Close a lock descriptor; closing also releases this process's record lock."""
+    with _state_lock:
+        _open_lock_fds.discard(fd)
+    os.close(fd)
+
+
+@contextmanager
+def _setup_lock(db_path: Path):
+    """Serialize setup between threads and processes within a bounded wait."""
+    deadline = time.monotonic() + _SETUP_LOCK_TIMEOUT_SECONDS
+    thread_lock = _setup_thread_lock
+    if not thread_lock.acquire(timeout=_SETUP_LOCK_TIMEOUT_SECONDS):
+        raise sqlite3.OperationalError("inventory cache setup lock timed out")
+    try:
+        fd = _open_setup_lock_file(db_path.with_name(db_path.name + ".lock"))
+        try:
+            while True:
+                try:
+                    fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise sqlite3.OperationalError("inventory cache setup lock timed out") from None
+                    time.sleep(0.01)
+            try:
+                yield
+            finally:
+                fcntl.lockf(fd, fcntl.LOCK_UN)
+        finally:
+            _close_setup_lock_file(fd)
+    finally:
+        thread_lock.release()
+
+
+def _table_exists(conn: sqlite3.Connection) -> bool:
+    """Read whether the schema exists; read errors propagate unchanged."""
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='inventory'"
+    ).fetchone() is not None
+
+
+def _setup_complete(conn: sqlite3.Connection, key: str) -> bool:
+    """Return whether this connection can skip setup, using only reads."""
+    if not _table_exists(conn):
+        return False
+    with _state_lock:
+        if key in _wal_attempted:
+            return True
+    return str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
+
+
+def _remember_wal_attempt(key: str) -> None:
+    """Record a completed WAL attempt within the bounded process state."""
+    with _state_lock:
+        if len(_wal_attempted) >= _WAL_ATTEMPT_LIMIT:
+            _wal_attempted.clear()
+        _wal_attempted.add(key)
+
+
+def _run_setup(conn: sqlite3.Connection, key: str) -> None:
+    """Create the schema and try WAL; caller holds the setup lock.
+
+    An existing schema gets one WAL attempt per process. A missing schema (new,
+    removed or replaced file) always gets one, so a recreated file is not left
+    in rollback mode by an earlier marker.
+    """
+    wal_result = None
+    with _state_lock:
+        attempted = key in _wal_attempted
+    if not attempted or not _table_exists(conn):
+        attempted = False
+    if str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal" and not attempted:
+        try:
+            wal_result = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+        except sqlite3.OperationalError as exc:
+            # Readers outside this lock (another PBGui version or tool) can keep
+            # the switch busy. The cache works in rollback mode; retry later.
+            if (getattr(exc, "sqlite_errorcode", 0) & 0xFF) != sqlite3.SQLITE_BUSY:
+                raise
+    _init_db(conn)
+    if wal_result is not None:
+        if wal_result != "wal":
+            _log(SERVICE, f"Inventory cache uses journal mode '{wal_result}' because WAL is unavailable", level="WARNING")
+        _remember_wal_attempt(key)
+
+
 @contextmanager
 def _get_conn():
-    conn = sqlite3.connect(str(_db_path()), timeout=10, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    _init_db(conn)
+    db_path = _db_path()
+    key = str(db_path.resolve())
+    conn = sqlite3.connect(str(db_path), timeout=_CONNECT_TIMEOUT_SECONDS, check_same_thread=False)
     try:
+        # The schema check runs per connection, so a removed or replaced
+        # database file is set up again on its next access.
+        if not _setup_complete(conn, key):
+            with _setup_lock(db_path):
+                if not _setup_complete(conn, key):
+                    _run_setup(conn, key)
+        conn.execute("PRAGMA synchronous=NORMAL")
         yield conn
     finally:
         conn.close()
@@ -98,7 +253,6 @@ def _init_db(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.commit()
 
 
 # ---------------------------------------------------------------------------
