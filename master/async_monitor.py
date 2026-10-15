@@ -2298,9 +2298,20 @@ def _count_hourly_files(files, needle, from_hour, to_hour):
     return buckets
 
 def _pb8_archive_log_matches(filename, name):
-    return os.path.basename(filename).endswith(
-        '_run_v8_' + name + '_config.json.log'
-    )
+    # Match exact instance names, current run IDs and numbered log rotations.
+    base = os.path.basename(filename)
+    suffix = '_run_v8_' + name + '_config.json'
+    prefix, separator, ending = base.rpartition(suffix)
+    if not separator or not prefix:
+        return False
+    if ending.startswith('_r'):
+        run_id, dot, ending = ending[2:].partition('.')
+        if not run_id or not run_id.isalnum() or not dot:
+            return False
+        ending = '.' + ending
+    if ending == '.log':
+        return True
+    return ending.startswith('.log.') and ending[5:].isdigit()
 
 def _pb8_pnl_summary(files):
     latest_summary = None
@@ -3005,6 +3016,14 @@ for name, cfg_dir in sorted(running.items()):
         'log_off': bc['log_off'], 'err_off': bc['err_off'], 'log_fp': bc['log_fp'], 'log_sig': bc['log_sig'], 'err_sig': bc['err_sig'],
     }
 
+# The collector is also launched from SSH, whose cwd need not be PBGDIR.
+sys.path.insert(0, PBGDIR)
+from monitor_log_cache import LogHistoryCache
+history_cache = LogHistoryCache(
+    os.path.join(PBGDIR, 'data', 'monitor_agent', 'log_history.sqlite3'),
+    [os.path.join(PB8DIR, 'logs'), os.path.join(PBGDIR, 'data', 'run_v8')],
+)
+
 for name, process_info in sorted(running_v8.items()):
     cfg_dir = process_info['dir']
     if not _is_pb8_config(cfg_dir):
@@ -3034,7 +3053,7 @@ for name, process_info in sorted(running_v8.items()):
         import glob as _glob8
         log_real = os.path.realpath(native_log) if os.path.isfile(native_log) else ''
         for fp in sorted(
-            _glob8.glob(os.path.join(PB8DIR, 'logs', '*.log')),
+            _glob8.glob(os.path.join(PB8DIR, 'logs', '*.log*')),
             key=os.path.getmtime, reverse=True,
         ):
             if not os.path.isfile(fp) or os.path.islink(fp):
@@ -3068,17 +3087,14 @@ for name, process_info in sorted(running_v8.items()):
     if os.path.isfile(native_log):
         native_history_files.append(native_log)
     traceback_history_files = [fp for fp in (old_err, err_log) if os.path.isfile(fp)]
-    bot_history[cache_key] = {
-        'from_hour': history_from_hour,
-        'to_hour': history_to_hour,
-        'errors': _count_hourly_files(
-            native_history_files, ' ERROR ', history_from_hour, history_to_hour,
-        ),
-        'tracebacks': _count_hourly_files(
-            traceback_history_files, 'Traceback', history_from_hour, history_to_hour,
-        ),
-        'pnl': _pb8_pnl_summary(native_history_files),
-    }
+    try:
+        bot_history[cache_key] = history_cache.collect(
+            cache_key, native_history_files, traceback_history_files,
+            history_from_hour, history_to_hour,
+        )
+    except Exception as exc:
+        _log(SERVICE, f'[monitor-history] Incremental log cache failed for {name}: {exc}', level='ERROR')
+        raise
 
     bc = dict(host_cache.get(cache_key, {}))
     bc.setdefault('today', TODAY)

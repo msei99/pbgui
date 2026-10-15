@@ -867,6 +867,7 @@ class ClusterSyncWorker:
             self._blob_recovery_cursors.pop(stale_peer_id, None)
         results_by_peer: dict[str, dict[str, Any]] = {}
         pending: list[tuple[str, dict[str, Any]]] = []
+        capability_probes: dict[str, str] = {}
         for peer_id in sorted(nodes):
             peer = nodes.get(peer_id) if isinstance(nodes.get(peer_id), dict) else {}
             if str(peer_id) == local_node_id:
@@ -887,8 +888,18 @@ class ClusterSyncWorker:
                 nodes,
             )
             if not allowed:
-                results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=True, status="topology_skipped", reason=reason)
-                continue
+                # A master must verify every active replica before publishing PB8
+                # operations, even when full replication uses a different route.
+                # Passive VPS nodes must still never initiate extra SSH fanout.
+                if (
+                    str(local_node.get("role") or "").strip() == "master"
+                    and peer.get("enabled") is not False
+                    and peer.get("state_replica") is not False
+                ):
+                    capability_probes[str(peer_id)] = reason
+                else:
+                    results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=True, status="topology_skipped", reason=reason)
+                    continue
             if not str(peer.get("ssh_host") or "").strip():
                 results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=False, status="config_error", reason="reachable peer has no ssh_host")
                 continue
@@ -938,6 +949,8 @@ class ClusterSyncWorker:
                         load_local_ops,
                         load_local_blob_hashes,
                         local_vector,
+                        **({"capability_only": True, "topology_reason": capability_probes[peer_id]}
+                           if peer_id in capability_probes else {}),
                     ): peer_id
                     for peer_id, peer in pending
                 }
@@ -957,20 +970,26 @@ class ClusterSyncWorker:
         load_local_ops: Callable[[], list[dict[str, Any]]],
         load_local_blob_hashes: Callable[[], dict[str, list[str]]],
         local_vector: dict[str, int],
+        *,
+        capability_only: bool = False,
+        topology_reason: str = "",
     ) -> dict[str, Any]:
         """Synchronize one peer and update its retry backoff."""
 
         backoff = self._peer_backoff.get(str(peer_id)) or {}
         try:
-            result = self._sync_peer(
-                peer,
-                local_node_id,
-                cluster_id,
-                local_materialized,
-                load_local_ops,
-                load_local_blob_hashes,
-                local_vector,
-            )
+            if capability_only:
+                result = self._probe_peer_capability(peer, local_node_id, cluster_id, topology_reason)
+            else:
+                result = self._sync_peer(
+                    peer,
+                    local_node_id,
+                    cluster_id,
+                    local_materialized,
+                    load_local_ops,
+                    load_local_blob_hashes,
+                    local_vector,
+                )
             self._peer_backoff.pop(str(peer_id), None)
             return result
         except Exception as exc:
@@ -985,6 +1004,35 @@ class ClusterSyncWorker:
             result = _peer_result(str(peer_id), peer, ok=False, status="error", reason=str(exc))
             result["retry_delay"] = delay
             return result
+
+    def _probe_peer_capability(
+        self, peer: dict[str, Any], local_node_id: str, cluster_id: str, reason: str,
+    ) -> dict[str, Any]:
+        """Verify a topology-skipped replica without exchanging operations or blobs.
+
+        Use the existing authenticated SSH transport and bounded worker pool.
+        A topology skip alone never establishes support: both identities and an
+        explicit advertised capability must come from a successful peer reply.
+        """
+        hello = self.peer_client.run(peer, local_node_id, "hello")
+        if hello.get("ok") is not True:
+            raise ClusterSyncWorkerError("peer capability handshake failed")
+        if str(hello.get("cluster_id") or "") != cluster_id:
+            raise ClusterSyncWorkerError("peer belongs to another cluster")
+        if str(hello.get("node_id") or "") != str(peer.get("node_id") or ""):
+            raise ClusterSyncWorkerError("peer node_id does not match cluster_nodes")
+        capabilities = hello.get("capabilities")
+        result = _peer_result(str(peer.get("node_id") or ""), peer, ok=True,
+                              status="topology_skipped", reason=reason)
+        result.update({
+            "capability_only": True,
+            "capability_checked_at": int(time.time()),
+            "pb8_capability": (
+                supports_cluster_operation("UPSERT_PB8_CONFIG", capabilities)
+                if isinstance(capabilities, list) else None
+            ),
+        })
+        return result
 
     def _sync_peer(
         self,

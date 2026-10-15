@@ -2076,6 +2076,11 @@ def test_embedded_pb8_archive_logs_require_exact_instance_identity() -> None:
     assert matches(exact, "HYPErQuantum") is True
     assert matches(prefixed, "HYPErQuantum") is False
     assert matches(suffixed, "HYPErQuantum") is False
+    assert matches(exact.replace('.json.log', '.json_r123abc.log'), "HYPErQuantum") is True
+    assert matches(exact + '.1', "HYPErQuantum") is True
+    assert matches(exact.replace('.json.log', '.json_r123abc.log.2'), "HYPErQuantum") is True
+    assert matches(prefixed.replace('.json.log', '.json_r123abc.log.2'), "HYPErQuantum") is False
+    assert matches(exact + '.lock', "HYPErQuantum") is False
 
 
 def test_embedded_pb8_history_uses_hourly_logs_and_latest_net_summary(tmp_path: Path) -> None:
