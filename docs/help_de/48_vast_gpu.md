@@ -145,7 +145,9 @@ Die Vorschau zeigt CPU-Modell/Zuteilung, GPU-Speicherbandbreite, maximale Mietda
 und Kompatibilität zusätzlich zu Preis, Transferkosten, Netzwerk, Standort und
 Zuverlässigkeit. **Details** klappt PCIe-Generation/Lanes/Bandbreite sowie
 Datenträgermodell und Lesegeschwindigkeit auf, ohne einen GPU-Typ auszuwählen.
-Fehlende Angaben erscheinen als **Unknown**. CUDA unter 13 oder unbekannte CUDA
+Fehlende Angaben erscheinen als **Unknown**. Fehlende oder ungültige numerische
+Metriken erscheinen ebenfalls als **Unknown**, ohne die Anzeige abzubrechen.
+CUDA unter 13 oder unbekannte CUDA
 sowie bekannte zu kurze Verfügbarkeit werden standardmäßig ausgeblendet.
 **Show incompatible hosts** zeigt sie mit Begründung; geänderte Filter mit
 **Preview available GPUs** anwenden. Kompatibilität ist eine Prüfung der

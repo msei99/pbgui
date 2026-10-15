@@ -29,6 +29,8 @@ def run_node(code):
 @pytest.mark.parametrize('value', [
     'null', 'undefined', 'NaN', 'Infinity', '-Infinity',
     "'abc'", "'NaN'", "'Infinity'",
+    "''", "'  '", 'true', 'false', '[]', '[1]', '{}',
+    "JSON.parse('{\"toString\":null,\"valueOf\":null}')",
 ])
 def test_fmt_returns_unknown_for_missing_or_nonfinite_values(vast_source, value):
     """Missing metrics and failed numeric conversions never display NaN/Infinity."""

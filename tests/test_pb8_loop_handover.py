@@ -289,7 +289,7 @@ def test_native_start_compares_persisted_rental_snapshot(environment, monkeypatc
     from api.vast import RentalPreferences
     loops, queue, source, target = environment
     frozen = RentalPreferences(hours=12, budget=2).model_dump()
-    settings = api.LoopStart(config_name='test', provider='chatgpt', model='test',
+    settings = api.LoopStart(max_rounds=10, config_name='test', provider='chatgpt', model='test',
                              execution='vast', hours=12).model_dump(exclude={'authorization'})
     settings['vast'] = frozen
     loops.update(OWNER, target['id'], lambda r: r.update(settings=settings,

@@ -91,11 +91,12 @@ def validate_decision(record, stage, evidence, text):
         remaining = evidence.get('max_variants', min(evidence.get('remaining_runs', 0),
                                                     record['settings']['parallel'], evidence.get('free_slots', 1)))
         required = evidence.get('required_rounds_remaining', 0)
-        needs_variant = stage == 'bootstrap' or (remaining > 0 and (required or not decision.get('finish')))
+        at_round_limit = stage == 'evaluate' and evidence.get('remaining_rounds') == 0
+        needs_variant = stage == 'bootstrap' or (not at_round_limit and remaining > 0 and (required or not decision.get('finish')))
         variants = decision.get('variants')
         if needs_variant and (not isinstance(variants, list) or not 1 <= len(variants) <= remaining):
             raise ValueError('Return complete next variants within the remaining allowance')
-        for variant in variants or []:
+        for variant in ([] if at_round_limit else variants or []):
             if not isinstance(variant, dict):
                 raise ValueError('Variant must be an object')
             validate_change(record, variant.get('config'), variant.get('overrides', record['initial_overrides']))
@@ -133,6 +134,9 @@ async def run_decision(ai, record, stage, evidence):
         knowledge = await owned_thread(evidence_store.findings, record)
         package, history = select_findings(knowledge, record, profile.get('knowledge_tokens', 6000))
         content = {'stage': stage, 'input_digest': input_digest, 'goals': settings['goals'],
+                   'loop_id': record['id'], 'round_number': record['round'] + 1,
+                   'completed_rounds': len({item['round'] for item in record['history'] if item.get('evaluated_at') is not None}),
+                   'max_rounds': settings.get('max_rounds'),
                    'required_goal_ids': sorted(set(settings['goals'].get('presets') or []) | ({'custom'} if settings['goals'].get('text') else set())),
                    'scenario_enabled': settings['scenario_enabled'], 'strategy_enabled': settings.get('strategy_enabled', False),
                    'execution': settings['execution'], 'initial_config': record['initial_config'],

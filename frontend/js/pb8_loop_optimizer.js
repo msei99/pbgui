@@ -74,7 +74,7 @@
       byId(goal + '-target').disabled = !byId(goal).checked;
     });
     byId('goals').value = goals.text || '';
-    [['runs','max_runs'],['hours','hours'],['parallel','parallel'],['patience','patience'],['validations','max_validations'],['candidates','candidates']].forEach(function (pair) { byId(pair[0]).value = settings[pair[1]]; });
+    [['rounds','max_rounds'],['runs','max_runs'],['hours','hours'],['parallel','parallel'],['patience','patience'],['validations','max_validations'],['candidates','candidates']].forEach(function (pair) { byId(pair[0]).value = settings[pair[1]] == null ? '' : settings[pair[1]]; });
     byId('run-mode').value = settings.run_limit_mode || 'config';
     ['iters','proxy','hours'].forEach(function (name) { if (settings['run_' + name] != null) byId('run-' + name).value = settings['run_' + name]; });
     hoursEdited = true;
@@ -317,7 +317,7 @@
     return {config_name: byId('config').value, execution: byId('execution').value, scenario_enabled: byId('scenario').checked, strategy_enabled: byId('strategy').checked, hsl_mode: byId('hsl-mode').value,
       goals: {coins: byId('coins').value.split(/[\s,;]+/).filter(Boolean), direction: byId('direction').value, positions: total, positions_by_side: sides, presets: presets, targets: targets, text: byId('goals').value},
       run_limit_mode: byId('run-mode').value, run_iters: byId('run-mode').value === 'iters' ? number('run-iters', null) : null, run_proxy: byId('run-mode').value === 'proxy' ? number('run-proxy', null) : null, run_hours: byId('run-mode').value === 'hours' ? number('run-hours', null) : null,
-      max_runs: number('runs', 10), hours: number('hours', 24), parallel: number('parallel', 1), max_validations: number('validations', 30), candidates: number('candidates', 3), patience: number('patience', 3),
+      max_rounds: number('rounds', null), max_runs: number('runs', 10), hours: number('hours', 24), parallel: number('parallel', 1), max_validations: number('validations', 30), candidates: number('candidates', 3), patience: number('patience', 3),
       jev_enabled:jevEnabled,historical_advice:byId('historical-advice').checked,decision_timeout_seconds:number('ai-decision-time',null),model_call_timeout_seconds:number('ai-call-time',null),ai_decision_token_limit:number('ai-token-limit',null),ai_decision_usd_limit:number('ai-usd-limit',null),ai_budget_confirmed:byId('ai-confirm').checked,authorization: true};
   }
   function select(id) {
@@ -1020,6 +1020,7 @@
     field(row, 'run-proxy', 'Proxy evaluations per run', 'number', 100000, {min:1, max:1000000000, step:1}, 4);
     field(row, 'run-hours', 'Hours per run', 'number', 1, {min:.001, max:168, step:'any'}, 4);
     row = grid(limits);
+    field(row, 'rounds', 'Maximum completed rounds', 'number', '', {min:1, max:200, step:1, required:true});
     field(row, 'runs', 'Maximum optimizer attempts', 'number', 10, {min:1, max:200});
     field(row, 'hours', 'Total loop hours', 'number', '', {min:.1, max:168, step:'any'});
     field(row, 'parallel', 'Parallel variants', 'number', 1, {min:1, max:16});

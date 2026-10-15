@@ -1,0 +1,7 @@
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d
+COPY gpu_fresh_population.patch worker_candidate_fresh_population.json verify_fresh_population.py /opt/pbgui/
+RUN cd /opt/passivbot \
+    && python -c 'import hashlib,json,pathlib; p=pathlib.Path("/opt/pbgui"); m=json.loads((p/"worker_candidate_fresh_population.json").read_text()); assert hashlib.sha256((p/m["patch"]).read_bytes()).hexdigest() == m["patch_sha256"]; assert hashlib.sha256(pathlib.Path("src/optimization/backends/gpu_backend.py").read_bytes()).hexdigest() == m["base_gpu_source_sha256"]' \
+    && patch --batch --forward -p1 < /opt/pbgui/gpu_fresh_population.patch \
+    && PYTHONPATH=/opt/passivbot/src python /opt/pbgui/verify_fresh_population.py
+LABEL pbgui.pb8.gpu-hotfix="fresh-population-v1"

@@ -93,6 +93,7 @@ class LoopStart(BaseModel):
     run_proxy: int | None = Field(default=None, ge=1, le=1_000_000_000)
     run_hours: float | None = Field(default=None, ge=.001, le=168, allow_inf_nan=False)
     max_runs: int = Field(default=10, ge=1, le=200)
+    max_rounds: int = Field(ge=1, le=200, strict=True, description='Required hard upper bound on completed rounds, separate from optimizer attempts')
     hours: float = Field(default=24, ge=.1, le=168, allow_inf_nan=False)
     parallel: int = Field(default=1, ge=1, le=16)
     max_validations: int = Field(default=30, ge=1, le=1000)
@@ -111,6 +112,8 @@ class LoopStart(BaseModel):
     def validate_run_limit(self):
         """Validate one explicit per-optimizer limit independently of the total loop budget."""
         field = {'iters': self.run_iters, 'proxy': self.run_proxy, 'hours': self.run_hours}
+        if self.max_rounds > self.max_runs:
+            raise ValueError('Maximum completed rounds cannot exceed maximum optimizer attempts')
         if self.run_limit_mode != 'config' and field[self.run_limit_mode] is None:
             raise ValueError('Specify the chosen per-run limit')
         if self.run_limit_mode == 'proxy' and self.execution == 'cpu':
@@ -379,7 +382,7 @@ async def options(config_name: str = Query(default='', max_length=120), session:
             defaults = config_defaults(bundle['config'])
         gpu_available, gpu_reason = False, 'Choose a configuration to check GPU compatibility'
         if selected_name and not list_only:
-            settings = LoopStart(config_name=selected_name, provider='chatgpt', model='probe', execution='gpu').model_dump()
+            settings = LoopStart(config_name=selected_name, provider='chatgpt', model='probe', execution='gpu', max_rounds=1).model_dump()
 
             try:
                 args = (selected_name, settings, bundle) if source_kind else (selected_name, settings)
@@ -1158,7 +1161,7 @@ async def continue_loop(loop_id: str, body: LoopContinue, session: SessionToken 
         config['backtest'] = copy.deepcopy(row['comparison'])
         raw = {key: value for key, value in row['settings'].items() if key in LoopStart.model_fields and key != 'authorization'}
         raw.update(body.selection)
-        raw.update(max_runs=body.rounds, patience=min(100, max(row['settings']['patience'], body.rounds)),
+        raw.update(max_runs=body.rounds, max_rounds=body.rounds, patience=min(100, max(row['settings']['patience'], body.rounds)),
                    max_validations=min(1000, body.rounds * row['settings']['candidates'] + 2), authorization=True)
         if raw['execution'] == 'vast':
             from api.vast import RentalPreferences

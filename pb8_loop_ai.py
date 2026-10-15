@@ -33,6 +33,14 @@ Native optimize.iters is the exact-validation budget for GPU jobs; run_proxy is 
 In proxy and hours modes the controller pins optimize.iters to 10000000. Do not equate these units,
 propose aligning iters with run_proxy, or claim a native iters change that the controller will overwrite.
 A quota stop is intentional; usable collected results still require candidate selection and exact backtests.
+evidence.max_rounds is the mandatory hard completed-round ceiling. remaining_rounds=0 means
+evaluate and retain/select the final winner, return finish=true and no next variants.
+completed_rounds_after_evaluation includes the current round once this AI evaluation is committed.
+Jobs with status=completed and completion_reason=proxy_limit_reached finished their authorized
+proxy work cleanly. backend_status=cancelled is the expected implementation: Passivbot has no
+native proxy-count termination, so the controller stops it after completed_evolution_proxy reaches
+the quota and collects results. Do not classify these as failed or interrupted attempts.
+Use supplied counters and proxy_overshoot rather than inferring completion from backend_status.
 Put optimizer changes inside variant.config.optimize. variant.overrides contains only referenced
 symbol/coin override bundles, keyed like initial_overrides, never dotted optimizer paths such as optimize.iters.
 Do not infer the cause of missing results or cancellation without supplied diagnostic evidence.

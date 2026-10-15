@@ -143,6 +143,7 @@ The preview shows CPU model/allocation, GPU memory bandwidth, maximum rental
 duration and compatibility alongside price, transfer cost, network, location
 and reliability. **Details** expands PCIe generation/lanes/bandwidth, disk model
 and read speed without selecting a GPU type. Missing metadata is **Unknown**.
+Missing or invalid numeric metrics also display **Unknown** instead of interrupting the display.
 By default CUDA below 13 (including unknown CUDA) and known availability shorter
 than the requested rental hours are excluded. **Show incompatible hosts** includes
 them with a reason; click **Preview available GPUs** to apply changed filters.

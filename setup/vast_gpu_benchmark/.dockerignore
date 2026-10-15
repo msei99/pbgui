@@ -20,3 +20,8 @@
 !Dockerfile.hsl-cpu-rolling
 !hsl_cpu_rolling.patch
 !hsl_cpu_Cargo.lock
+
+!Dockerfile.fresh-population
+!gpu_fresh_population.patch
+!worker_candidate_fresh_population.json
+!verify_fresh_population.py

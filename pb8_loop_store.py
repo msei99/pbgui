@@ -19,6 +19,34 @@ ACTIVE = {'running', 'finishing'}
 MAX_JSON_BYTES = 32 * 1024 * 1024
 
 
+def round_limit(settings):
+    """Require an explicit persisted round ceiling before any automatic work."""
+    value = settings.get('max_rounds')
+    attempts = settings.get('max_runs')
+    if type(value) is not int or type(attempts) is not int or not 1 <= value <= attempts <= 200:
+        raise ValueError('Configure Maximum completed rounds (1 to maximum optimizer attempts) before starting the loop')
+    return value
+
+
+def optimizer_execution_evidence(job, settings):
+    """Explain intentional quota cancellation without disguising real interruptions."""
+    result = {key: copy.deepcopy(job.get(key)) for key in
+              ('operation', 'status', 'reason', 'error', 'config', 'executed_config', 'runner',
+               'limit_reached', 'proxy_evaluations', 'result_count', 'results_consumed')}
+    result['backend_status'] = job.get('status')
+    count, target = job.get('proxy_evaluations'), settings.get('run_proxy')
+    quota_complete = (settings.get('run_limit_mode') == 'proxy' and job.get('limit_reached') == 'proxy'
+                      and type(count) is int and type(target) is int and count >= target
+                      and job.get('status') in {'cancelled', 'stopped', 'complete', 'completed'}
+                      and not job.get('error') and job.get('results_consumed') is True
+                      and (job.get('result_count') or 0) > 0)
+    result.update(status='completed' if quota_complete else job.get('status'),
+                  completion_reason='proxy_limit_reached' if quota_complete else None,
+                  completed_evolution_proxy=count,
+                  proxy_overshoot=max(0, count - target) if type(count) is int and type(target) is int else None)
+    return result
+
+
 def completed_round_observations(record, number):
     """Recover exact checkpoints even if AI evaluation never reached history commit."""
     history = next((item for item in record['history'] if item['round'] == number), None)

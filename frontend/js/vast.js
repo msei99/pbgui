@@ -251,7 +251,8 @@
   }
 
   function fmt(value, digits) {
-    if (value == null) return 'Unknown';
+    if (typeof value !== 'number' && typeof value !== 'string') return 'Unknown';
+    if (typeof value === 'string' && !value.trim()) return 'Unknown';
     const n = Number(value);
     return Number.isFinite(n) ? n.toFixed(digits == null ? 2 : digits) : 'Unknown';
   }

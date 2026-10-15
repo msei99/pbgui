@@ -31,7 +31,7 @@ def bundle():
 
 def settings():
     """Return saved loop settings without a separate AI selection."""
-    value = api_loop.LoopStart(config_name='original', provider='chatgpt', model='shared').model_dump()
+    value = api_loop.LoopStart(max_rounds=10, config_name='original', provider='chatgpt', model='shared').model_dump()
     return {key:child for key,child in value.items() if key not in {'authorization','provider','model','profile','effort','service_tier'}}
 
 

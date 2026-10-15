@@ -38,7 +38,7 @@ def test_current_image_has_offline_layer_sizes():
     from vast_image_layers import IMAGE_LAYERS
     assert IMAGE in IMAGE_LAYERS
     import json
-    receipt = json.loads((Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark/worker_release_hsl_cpu_rolling_b9d6692.json').read_text())
+    receipt = json.loads((Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark/worker_release_fresh_population_b9d6692.json').read_text())
     assert IMAGE == 'ghcr.io/msei99/pbgui-pb8-worker@' + receipt['digest']
     assert IMAGE_LAYERS[IMAGE] == {key.split(':')[1][:12]: size for key, size in receipt['layers'].items()}
 

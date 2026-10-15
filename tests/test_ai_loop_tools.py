@@ -55,6 +55,21 @@ def approve(service, result):
     return service.approve(OWNER, proposal.id, proposal.payload_digest, CHAT)
 
 
+def test_ai_must_explicitly_configure_round_ceiling(environment):
+    """The model sees a required ceiling and cannot save a proposal without it."""
+    service, store, _, _ = environment
+    async def scenario():
+        schema = (await service.dispatch(OWNER, CHAT, 'get_ai_loop_configs', {}))['schema']
+        assert 'max_rounds' in schema['required']
+        assert 'default' not in schema['properties']['max_rounds']
+        with pytest.raises(AICapabilityError, match='max_rounds'):
+            await service.dispatch(OWNER, CHAT, 'propose_ai_loop_config', {
+                'name': 'missing_limit', 'config_name': 'HYPE', 'settings': {'max_runs': 200}})
+        assert not store.definitions(OWNER)
+        assert not service.proposals
+    asyncio.run(scenario())
+
+
 def test_vast_rtx3060_settings_require_approval_and_preserve_other_limits(environment):
     """Two rentals must change GPU requirements, not optimizer variant counts."""
     service, _, rental, applied = environment
@@ -104,7 +119,7 @@ def test_cloud_loop_proposal_rejects_unsupported_scoring_before_review(environme
         """Exercise the public capability dispatcher without model or rental access."""
         with pytest.raises(AICapabilityError, match='gain_strategy_eq'):
             await service.dispatch(OWNER, CHAT, 'propose_ai_loop_config', {
-                'name': 'invalid_cloud', 'config_name': 'HYPE', 'settings': {'execution': 'vast', 'hours': 12}})
+                'name': 'invalid_cloud', 'config_name': 'HYPE', 'settings': {'max_rounds': 10, 'execution': 'vast', 'hours': 12}})
         assert store.definitions(OWNER) == []
         assert not service.proposals
     asyncio.run(scenario())
@@ -117,7 +132,7 @@ def test_loop_create_edit_and_owner_isolation(environment):
     async def scenario():
         result = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_config', {
             'name': 'HYPE_loop', 'config_name': 'HYPE', 'settings': {
-                'execution': 'vast', 'hours': 12, 'max_runs': 25, 'hsl_mode': 'off', 'run_limit_mode': 'proxy',
+                'execution': 'vast', 'hours': 12, 'max_runs': 25, 'max_rounds': 25, 'hsl_mode': 'off', 'run_limit_mode': 'proxy',
                 'run_proxy': 100000, 'goals': {'coins': ['HYPE'], 'direction': 'long',
                     'presets': ['gain','drawdown','uptrend'], 'targets': {'drawdown': 0.5}}}})
         assert store.definitions(OWNER) == []
@@ -165,7 +180,7 @@ def test_loop_stale_revision_is_rejected(environment):
 
     async def scenario():
         p = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_config', {
-            'name': 'demo', 'config_name': 'HYPE', 'settings': {}})
+            'name': 'demo', 'config_name': 'HYPE', 'settings': {'max_rounds': 10}})
         await approve(service, p)
         p = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_config', {
             'name': 'demo', 'config_name': 'HYPE', 'revision': 1, 'settings': {'max_runs': 25}})
@@ -228,7 +243,7 @@ def test_recovery_after_loop_save_does_not_duplicate_definition(environment):
 
     async def scenario():
         created = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_config', {
-            'name': 'recovered', 'config_name': 'HYPE', 'settings': {}})
+            'name': 'recovered', 'config_name': 'HYPE', 'settings': {'max_rounds': 10}})
         proposal = service.proposals[created['proposal_id']]
         journal = service._journal_payload(proposal, phase='prepared')
         service._write_private_json(service.journal_root / f'{proposal.id}.json', journal)
@@ -267,7 +282,7 @@ def native_runs(environment, monkeypatch):
     service, store, rental, applied = environment
     selection = {'provider': 'chatgpt', 'model': 'gpt-test', 'profile': 'main', 'effort': 'high', 'service_tier': ''}
     monkeypatch.setattr(runtime, 'get_ai_chat_service', lambda: SimpleNamespace(get_preferences=lambda owner: {'selection': selection}))
-    settings = runtime.LoopStart(config_name='HYPE', provider='chatgpt', model='gpt-test',
+    settings = runtime.LoopStart(max_rounds=25, config_name='HYPE', provider='chatgpt', model='gpt-test',
         execution='vast', hours=12, max_runs=25, parallel=1, run_limit_mode='proxy', run_proxy=100000).model_dump(
             exclude={'authorization', 'provider', 'model', 'profile', 'effort', 'service_tier'})
     store.save_definition(OWNER, 'native_loop', settings, {'config': {}, 'override_configs': {}}, {'kind': 'config', 'id': 'HYPE'}, None)
@@ -472,7 +487,7 @@ def diagnostic_run(environment, tmp_path, monkeypatch):
     from api.loop_optimizer_v8 import LoopStart
     import vast_jobs
     service, store, _, _ = environment
-    row = store.create(OWNER, LoopStart(config_name='source', provider='chatgpt', model='test').model_dump(), {}, {}, {}, [], {})
+    row = store.create(OWNER, LoopStart(max_rounds=10, config_name='source', provider='chatgpt', model='test').model_dump(), {}, {}, {}, [], {})
     operation = 'd' * 32
     native = {'loop_id': row['id'], 'loop_owner': OWNER}
     root = tmp_path / 'logs'; root.mkdir()

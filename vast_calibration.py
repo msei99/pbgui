@@ -17,10 +17,11 @@ PROTOCOL_VERSION = 3
 CONFIGURABLE_PROTOCOL_VERSION = 4
 SUPPORTED_PROFILE_PROTOCOLS = frozenset({1, 2, PROTOCOL_VERSION, CONFIGURABLE_PROTOCOL_VERSION})
 # The published upstream worker supports both fixed and configurable tests.
-CALIBRATION_WORKER_DIGEST: str | None = "15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d"
+CALIBRATION_WORKER_DIGEST: str | None = "1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1"
 PREVIOUS_CALIBRATION_WORKER_DIGEST = "8ad62f43decae47fe670f3ac15ba7e4d7c648f0bb030fa511cd4771321ff4327"
 # Old evidence stays readable; new tests require the pinned current image.
 COMPATIBLE_CALIBRATION_IMAGES = frozenset({
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:d966b601dedbf49641a85feb4b5c13963f855d998c7d465c02af89f73c272abf",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:0e49bae53a7f104b2ead7ab3e9dcb2c5a83aa117291086f4ad87ca0a8fc367aa",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae",

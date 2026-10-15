@@ -54,8 +54,9 @@ def config():
 
 def settings(**changes):
     """Validate controller settings through the public request model."""
-    value = LoopStart(config_name='source', provider='chatgpt', model='pinned', goals=LoopGoals(presets=['gain']), authorization=True).model_dump()
+    value = LoopStart(max_rounds=10, config_name='source', provider='chatgpt', model='pinned', goals=LoopGoals(presets=['gain']), authorization=True).model_dump()
     value.update(changes)
+    value['max_rounds'] = changes.get('max_rounds', min(10, value['max_runs']))
     return value
 
 
@@ -251,6 +252,7 @@ def test_warm_start_retains_winner_through_worse_rounds_and_restart(record, tmp_
 def test_ai_receives_new_exact_start_before_best_is_committed(record, monkeypatch):
     """The evaluation prompt specifies fresh populations without a winning starting bot."""
     store, row = record
+    row['observer_jobs'] = [{'metrics': {'gain': 'HUMAN_ONLY_OBSERVER_RESULT'}}]
     winner = _warm_start_observation(row, 2)
     class AI(LoopAI):
         """Capture the real provider payload without using a provider."""
@@ -264,6 +266,9 @@ def test_ai_receives_new_exact_start_before_best_is_committed(record, monkeypatc
             assert content['search_policy']['winner_use'] == 'comparison_only'
             assert content['hsl_mode'] == 'auto'
             assert content['initial_config'] == row['initial_config']
+            assert content['loop_id'] == row['id']
+            assert content['max_rounds'] == row['settings']['max_rounds']
+            assert 'HUMAN_ONLY_OBSERVER_RESULT' not in json.dumps(content)
             return '{"winner_operation":null,"finish":true}', {'tokens': None, 'usd': None}
     asyncio.run(AI(store).decide(row, 'evaluate', {'best': winner}))
 
@@ -382,6 +387,81 @@ class FakeAI:
         options = evidence.get('winner_options', {})
         winner = max(options, key=lambda key: options[key]['metrics']['gain']) if options else None
         return {'winner_operation': winner, 'finish': False, 'reason': 'Compare exact gain and try more iterations', 'knowledge': 'Gain below target', 'variants': [{'config': changed, 'overrides': {}}]}
+
+
+@pytest.mark.parametrize('limit', [1, 2])
+def test_hard_completed_round_ceiling_overrides_ai_continuation(record, tmp_path, limit):
+    """A persistent AI request to continue cannot launch round N+1, even after restart."""
+    store, row = record
+    store.update(OWNER, row['id'], lambda current: current['settings'].update(max_rounds=limit, max_runs=200))
+    backend = FakeBackend()
+    seen = []
+    class AI(FakeAI):
+        """Capture exact progress and ensure user-only observer data stays private."""
+        async def decide(self, current, stage, evidence):
+            assert 'HUMAN_ONLY_HOLDOUT' not in json.dumps(evidence)
+            if stage == 'evaluate':
+                seen.append(evidence)
+            return await super().decide(current, stage, evidence)
+    store.update(OWNER, row['id'], lambda current: current.update(observer_jobs=[{'metrics': 'HUMAN_ONLY_HOLDOUT'}]))
+    async def run():
+        for _ in range(limit * 6 + 5):
+            controller = LoopController(tmp_path, store=store, backend=backend, ai=AI())
+            await controller.tick(OWNER, row['id'])
+    asyncio.run(run())
+    current = store.read(OWNER, row['id'])
+    assert len(current['history']) == limit
+    assert len([job for job in current['jobs'] if job['kind'] == 'optimizer']) == limit
+    assert current['stop_reason'] == 'Maximum completed rounds reached'
+    assert seen[-1]['remaining_rounds'] == 0
+    assert seen[-1]['completed_rounds_after_evaluation'] == limit
+    assert seen[-1]['loop_id'] == row['id']
+
+
+@pytest.mark.parametrize('limit', [None, 0, -1, True, 1.5, '25'])
+def test_round_ceiling_is_explicit_and_integral(limit):
+    """Missing or malformed round authorization must fail at the API boundary."""
+    values = dict(config_name='source', provider='chatgpt', model='test', max_runs=200)
+    if limit is not None:
+        values['max_rounds'] = limit
+    with pytest.raises(ValueError):
+        LoopStart(**values)
+
+
+def test_one_hundred_rounds_are_allowed():
+    """The ceiling is chosen by the user and is not hardcoded to 25."""
+    assert LoopStart(config_name='source', provider='chatgpt', model='test', max_runs=200, max_rounds=100).max_rounds == 100
+
+
+def test_legacy_queue_without_round_ceiling_cannot_start(record, tmp_path):
+    """An old saved run must be configured explicitly instead of receiving an inferred limit."""
+    store, row = record
+    def legacy(current):
+        current.update(status='queued')
+        current['settings'].pop('max_rounds')
+    store.update(OWNER, row['id'], legacy)
+    controller = LoopController(tmp_path, store=store, backend=FakeBackend(), ai=FakeAI())
+    with pytest.raises(ValueError, match='Maximum completed rounds'):
+        controller.action(OWNER, row['id'], 'start')
+    assert store.read(OWNER, row['id'])['status'] == 'queued'
+
+
+@pytest.mark.parametrize('change,success', [({}, True), ({'proxy_evaluations': 99999}, False),
+    ({'limit_reached': None}, False), ({'error': 'worker failed'}, False),
+    ({'results_consumed': False}, False), ({'result_count': 0}, False), ({'status': 'failed'}, False)])
+def test_ai_receives_clean_proxy_completion_only_with_collected_work(change, success):
+    """Quota cancellation counts as success; user cancellation and missing results do not."""
+    from pb8_loop_store import optimizer_execution_evidence
+    job = dict(status='cancelled', limit_reached='proxy', proxy_evaluations=106496,
+               results_consumed=True, result_count=1, error=None)
+    job.update(change)
+    evidence = optimizer_execution_evidence(job, dict(run_limit_mode='proxy', run_proxy=100000))
+    assert (evidence['status'] == 'completed') is success
+    assert evidence['backend_status'] == job['status']
+    assert evidence['completed_evolution_proxy'] == job['proxy_evaluations']
+    if success:
+        assert evidence['completion_reason'] == 'proxy_limit_reached'
+        assert evidence['proxy_overshoot'] == 6496
 
 
 @pytest.mark.parametrize('selection', ['profitable', 'retain', 'unknown', 'violation', 'incomplete', 'missing', 'null'])
@@ -1047,7 +1127,7 @@ def test_pause_blocks_new_native_and_cloud_starts(record, tmp_path):
 def test_failed_attempt_consumes_run_limit(record, tmp_path):
     """A started failed optimizer is counted and cannot create a further attempt."""
     store, row = record
-    row = store.update(OWNER, row['id'], lambda value:value['settings'].update(max_runs=1))
+    row = store.update(OWNER, row['id'], lambda value:value['settings'].update(max_runs=1, max_rounds=1))
     backend = FakeBackend()
     controller = LoopController(tmp_path, store=store, backend=backend, ai=FakeAI())
     job = controller.job(row,'optimizer',config(),{},'Failed actual attempt')
@@ -1203,7 +1283,7 @@ def test_vast_loop_duration_inherits_and_obeys_saved_rental_limit(tmp_path, monk
     monkeypatch.setattr(api_loop, '_controller', SimpleNamespace(create=create))
     monkeypatch.setattr(api_loop, 'projection', lambda row: row)
     monkeypatch.setattr(api_loop, '_log', lambda *args, **kwargs: None)
-    values = {'config_name':'source', 'provider':'chatgpt','model':'pinned','execution':'vast','authorization':True}
+    values = {'max_rounds':10, 'config_name':'source', 'provider':'chatgpt','model':'pinned','execution':'vast','authorization':True}
     if requested is not None:
         values['hours'] = requested
     body = LoopStart(**values)
@@ -1229,7 +1309,7 @@ def test_vast_loop_duration_inherits_and_obeys_saved_rental_limit(tmp_path, monk
 def test_invalid_per_run_limits_are_rejected(values):
     """Missing, incompatible and oversized per-run limits cannot enter controller state."""
     with pytest.raises(ValueError):
-        LoopStart(config_name='source', provider='chatgpt', model='pinned', **values)
+        LoopStart(max_rounds=10, config_name='source', provider='chatgpt', model='pinned', **values)
 
 
 @pytest.mark.parametrize('mode,value', [('iters',500), ('hours',1), ('proxy',1000)])

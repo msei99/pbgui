@@ -2,6 +2,14 @@
 
 ## Checklist
 
+### Mandatory validation gate
+
+- Do not release when any required test fails, hangs, is interrupted, or cannot run because of an environment or sandbox restriction.
+- Resolve the cause and successfully complete the required checks before committing the release, creating its tag, pushing, or publishing it. If a sandbox blocks a check, rerun it in an authorized environment where it can complete.
+- Do not exclude or skip a failing or blocked required test merely to obtain a green result. Existing, justified test skip conditions remain valid.
+- Documenting a failed or incomplete check in release notes does not permit a release. If validation remains unresolved, stop the release and report the blocker.
+- Follow the mandatory `check_test_suite` verdict when choosing focused versus full offline validation, and record every completed full-suite run with `record_test_suite_run`.
+
 ### 1) Bump version strings
 
 - `pbgui_purefunc.py`: update `PBGUI_VERSION = "vX.YY"`

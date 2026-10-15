@@ -1,0 +1,28 @@
+{
+    "schema_version": 1,
+    "state": "locally_built_unpublished",
+    "built_at": "2026-10-15T20:14:38.614397+02:00",
+    "image_tag": "pbgui-pb8-worker:b9d6692-fresh-population-candidate",
+    "image_id": "sha256:17a8f0beaacd76f0237de45d3014363ec55e5978dd2bc997e934ed48adc0ac84",
+    "base_image": "ghcr.io/msei99/pbgui-pb8-worker@sha256:15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d",
+    "base_revision": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
+    "patch_sha256": "0c5c8c05ab7465c2d2b822e010bb64cbee4d07c9ffe7a5b7e6272048092c6b69",
+    "validation": {
+        "container_offline_smoke": {
+            "random_population_seeds": 3,
+            "checkpoint_restore": true,
+            "explicit_seed_sampling": true,
+            "rust_fingerprint_preserved": true,
+            "gpu_source_sha256": "93a3ef0430d6e8664a3fbd48a10044e674faea58627da996d9209fbc827aec81",
+            "gpu_hardware_test": "pending",
+            "real_loop_test": "pending"
+        },
+        "pbgui_worker_tests": "58 passed",
+        "upstream_focused_tests": "700 passed, 7 skipped",
+        "gpu_hardware_test": "pending",
+        "real_loop_test": "pending"
+    },
+    "active_pins_changed": false,
+    "published": false,
+    "rental_started": false
+}

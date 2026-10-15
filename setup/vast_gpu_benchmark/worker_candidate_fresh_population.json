@@ -1,0 +1,18 @@
+{
+    "schema_version": 1,
+    "state": "unpublished_candidate",
+    "base_image": "ghcr.io/msei99/pbgui-pb8-worker@sha256:15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d",
+    "base_revision": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
+    "worker_image_tag": "pbgui-pb8-worker:b9d6692-fresh-population-candidate",
+    "patch": "gpu_fresh_population.patch",
+    "patch_sha256": "0c5c8c05ab7465c2d2b822e010bb64cbee4d07c9ffe7a5b7e6272048092c6b69",
+    "base_gpu_source_sha256": "99bb7ceaec9bca2c442d7e78ea36969b3ddea7cf22ff67137e097f38657ac55f",
+    "patched_gpu_source_sha256": "93a3ef0430d6e8664a3fbd48a10044e674faea58627da996d9209fbc827aec81",
+    "retained_rust_source_fingerprint": "0f94231023292fcc96fd42c7301272509c963dfa45ec810e7b3a026cdf5a571e",
+    "validation": {
+        "upstream_focused": "700 passed, 7 skipped",
+        "gpu_hardware_test": "pending",
+        "real_loop_test": "pending"
+    },
+    "activation": "candidate only; active image pins unchanged"
+}

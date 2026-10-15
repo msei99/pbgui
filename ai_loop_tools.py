@@ -115,7 +115,7 @@ class AILoopTools:
         schema = runtime.LoopStart.model_json_schema()
         excluded = {'provider', 'model', 'profile', 'effort', 'service_tier', 'authorization', 'config_name'}
         schema['properties'] = {k: v for k, v in schema['properties'].items() if k not in excluded}
-        schema['required'] = []
+        schema['required'] = [key for key in schema.get('required', []) if key not in excluded]
         from pb8_loop_store import cloud_loop_metric_contract
         metric_policies = {'vast': cloud_loop_metric_contract()}
         if args.get('name'):
@@ -129,6 +129,7 @@ class AILoopTools:
                 'returned': min(len(rows), 100), 'total': len(rows), 'schema': schema,
                 'optimizer_metric_policies': metric_policies,
                 'semantics': {'max_runs': 'Maximum optimizer attempts, not a guarantee of completed rounds',
+                              'max_rounds': 'Required explicit hard upper bound on completed rounds; set from the user request, never infer a default. No next round starts at this bound.',
                               'parallel': 'Optimizer variants; independent of Vast.ai max_rentals',
                               'source': 'A saved PB8 optimizer config supplies strategy, exchanges, training scenarios and holdout',
                               'save': 'Saves a definition only; does not queue or start a run'}}
@@ -478,7 +479,7 @@ def tool_specs():
          'schema': schema({'loop_id': {'type': 'string'}, 'operation': {'type': 'string'}, 'before': {'type': 'integer', 'minimum': 0}}, ['loop_id', 'operation']), 'effect': 'read'},
         {'name': 'propose_ai_loop_run', 'description': 'Prepare native backend queue/start for a saved AI Loop, without clicking browser controls. Use queue_and_start to queue and start; read get_ai_loop_configs and supply exact name/revision. Use start with an existing queued loop_id. Use replace with the NEW definition name/revision and OLD loop_id to stop/collect the old Loop and start the replacement on its existing GPU without ending the rental or renting another. Existing rental spend, budget and deadline remain unchanged; transfer is asynchronous and recoverable. Inspect get_ai_loop_runs rental_handover for status. Requires user approval. Uses current shared AI selection.',
          'schema': schema({'operation': {'type': 'string', 'enum': ['queue', 'queue_and_start', 'start', 'replace']}, 'name': {'type': 'string'}, 'revision': {'type': 'integer', 'minimum': 1}, 'loop_id': {'type': 'string'}}, ['operation']), 'effect': 'draft'},
-        {'name': 'get_ai_loop_configs', 'description': 'Read owned PB8 AI Loop definitions and editable settings schema; supply name to inspect a definition before editing. Source strategy, exchanges, training windows and holdout come from a saved PB8 optimizer config. max_runs limits optimizer attempts, not completed rounds.',
+        {'name': 'get_ai_loop_configs', 'description': 'Read owned PB8 AI Loop definitions and editable settings schema; supply name to inspect a definition before editing. Source strategy, exchanges, training windows and holdout come from a saved PB8 optimizer config. max_rounds is a required explicit hard upper bound on completed rounds; set it from the user request. max_runs separately limits optimizer attempts.',
          'schema': schema({'name': {'type':'string'}}, []), 'effect': 'read'},
         {'name': 'get_vast_preferences', 'description': 'Read non-secret shared Vast.ai GPU requirements, rental limits, schema and settings_digest. For two RTX 3060 rentals use gpu_name RTX 3060 and max_rentals 2, independently of AI Loop parallel variants. Preserve existing budget/duration unless requested; clarify missing material cost requirements.',
          'schema': schema({}, []), 'effect': 'read'},
