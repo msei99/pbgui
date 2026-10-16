@@ -63,6 +63,7 @@ _HL_RATE_LIMITS_BY_USER: dict[str, dict[str, int]] = {}
 _HL_WALLET_PATTERN = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 _SERVICE_RESTART_HISTORY: dict[str, list[float]] = {}
 _LEGACY_CRON_CACHE: tuple[tuple[int, int, int], float, int] | None = None
+_SOFTWARE_PROBE_CACHE: dict[str, Any] = {}
 
 PBGUI_SERVICES = {
     "PBCluster": ("pbgui-pbcluster.service", "data/pid/pbcluster.pid", "pbcluster.py"),
@@ -486,7 +487,7 @@ def _run_instance_snapshot() -> None:
 def _run_host_meta() -> None:
     """Write the current host metadata cache."""
 
-    global _LEGACY_CRON_CACHE
+    global _LEGACY_CRON_CACHE, _SOFTWARE_PROBE_CACHE
     cron_dir = Path('/var/spool/cron/crontabs')
     try:
         cron_stat = cron_dir.stat()
@@ -495,6 +496,7 @@ def _run_host_meta() -> None:
         cron_signature = None
     now = time.monotonic()
     extra_env: dict[str, str] = {'PBGUI_SKIP_CREDENTIAL_METADATA': '1'}
+    extra_env['PBGUI_CACHED_SOFTWARE_PROBES'] = json.dumps(_SOFTWARE_PROBE_CACHE)
     if (_LEGACY_CRON_CACHE is not None and cron_signature is not None
             and _LEGACY_CRON_CACHE[0] == cron_signature
             and now - _LEGACY_CRON_CACHE[1] < LEGACY_CRON_CACHE_SECONDS):
@@ -505,6 +507,8 @@ def _run_host_meta() -> None:
         env=_script_env(extra_env),
         timeout=20,
     ) or {}
+    software_cache = payload.pop('_software_probe_cache', {})
+    _SOFTWARE_PROBE_CACHE = software_cache if isinstance(software_cache, dict) else {}
     migration = payload.get('systemd_migration')
     if isinstance(migration, dict) and cron_signature is not None:
         cron_count = migration.get('legacy_cron_count')

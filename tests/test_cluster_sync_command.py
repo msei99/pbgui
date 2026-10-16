@@ -1989,3 +1989,55 @@ def test_credential_runtime_status_is_read_only_and_membership_gated(tmp_path, m
         run_command(root, NODE_C, 'credential-runtime-status')
     with pytest.raises(ClusterSyncCommandError):
         run_command(root, NODE_B, 'credential-runtime-status extra')
+
+
+def test_handshake_mailbox_index_is_fresh_and_matches_standalone(tmp_path, monkeypatch):
+    """The authenticated handshake carries the same fresh, opaque mailbox index."""
+    root = _init_cluster(tmp_path)
+    messages = []
+
+    class Mailbox:
+        """Synthetic mailbox with index state changing between read cohorts."""
+        def __init__(self, *_args):
+            """Accept the restricted command's root."""
+        def index(self):
+            """Return detached current metadata without message bodies."""
+            return list(messages)
+
+    monkeypatch.setattr(cluster_sync_command, 'ClusterMailbox', Mailbox)
+    first = run_command(root, NODE_B, 'handshake')
+    assert first['mailbox_index'] == run_command(root, NODE_B, 'get-mailbox-index')
+    assert first['mailbox_index']['messages'] == []
+    messages.append({'message_id': 'opaque-id', 'expires_at': 12345})
+    second = run_command(root, NODE_B, 'handshake')
+    assert second['mailbox_index'] == run_command(root, NODE_B, 'get-mailbox-index')
+    assert len(second['mailbox_index']['messages']) == 1
+    assert first['mailbox_index']['messages'] == []
+
+
+def test_handshake_does_not_read_mailbox_before_peer_validation(tmp_path, monkeypatch):
+    """Bundling must never disclose mailbox metadata to an unregistered peer."""
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster_sync_command, 'ClusterMailbox',
+                        lambda *_: pytest.fail('mailbox read before authentication'))
+    with pytest.raises(ClusterSyncCommandError, match='not registered'):
+        run_command(root, NODE_C, 'handshake')
+
+
+def test_bundled_mailbox_preserves_validation_failure(tmp_path, monkeypatch):
+    """A mailbox validation failure stays visible instead of becoming an empty index."""
+    from cmc_leases import CmcLeaseError
+    root = _init_cluster(tmp_path)
+
+    class Mailbox:
+        """Fail index validation deterministically."""
+        def __init__(self, *_args):
+            """Accept the command's temporary root."""
+        def index(self):
+            """Raise the same error for bundled and standalone reads."""
+            raise CmcLeaseError('invalid mailbox index')
+
+    monkeypatch.setattr(cluster_sync_command, 'ClusterMailbox', Mailbox)
+    for command in ('handshake', 'get-mailbox-index'):
+        with pytest.raises(ClusterSyncCommandError, match='invalid mailbox index'):
+            run_command(root, NODE_B, command)

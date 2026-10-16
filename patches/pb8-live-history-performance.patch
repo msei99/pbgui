@@ -1,0 +1,1445 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 64617fb5d..4747c46e3 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
+ 
+ ## Unreleased
+ 
++- Index owned historical candle-gap metadata by range and mutation revision, avoiding full-history normalization and candle copies on unrelated recent reads and warm EMA projection hits. Preserve overlapping coverage, retry clocks, legacy timestamp defaults and external-writer invalidation.
++
++- Reuse unchanged parsed candle shards with bounded memory and file-identity invalidation, and avoid sorting the full retained history when overlapping source rows are identical. Corrections, strict audits, mutable consumer arrays and restart reconstruction retain their existing behavior.
++- Avoid a second HSL history reconstruction when a complete native minute grid lacks only the non-minute current endpoint. Preserve current-fact validation, decisions, lifecycle events and estimator diagnostics in live and simulator evaluation.
++
+ - Stop candle pagination when an exchange repeats or regresses its response tail, avoiding repeated sparse-page requests while holding the fetch lock. Keep already fetched rows and leave unresolved tails unavailable.
+ 
+ - Keep runtime config fingerprints stable across restarts with identical config content by excluding the timestamped loader transformation audit trail. Existing runtime manifests retain their original hashes.
+diff --git a/docs/ai/features/candlestick_manager.md b/docs/ai/features/candlestick_manager.md
+index bf85a77b0..3d87a0634 100644
+--- a/docs/ai/features/candlestick_manager.md
++++ b/docs/ai/features/candlestick_manager.md
+@@ -450,3 +450,37 @@ loading when it is zero. Position symbols remain first in the ordered list. It d
+ after preparing each symbol, but yields to other tasks without delay. The candle manager enforces the configured process-local spacing at
+ actual CCXT OHLCV requests, so cache-only preparation incurs no artificial per-symbol pause.
+ See [EMA preparation timings](live_events.md#ema-preparation-timings) for structured attribution.
++
++### Parsed disk-row reuse
++
++A manager may retain immutable parsed source rows for up to 16 exact ranges and
++8 MiB total. Every reuse rechecks the selected source paths and index using file
++identity, size, modification time and change time, including atomic replacements
++and in-place corrections whose modification time is restored. Failed/empty shard
++reads and changes during parsing are not certified. Strict audits always read the
++source again. Clearing the cache or restarting reconstructs identical rows.
++
++Only factual source rows are cached. Mutable consumer arrays and the one-minute
++memory cache never alias retained immutable rows. One-minute reads still merge
++against the current memory state; identical sorted overlaps may bypass the
++concatenate/sort/deduplicate work while preserving detached-array ownership and
++last-write-wins behavior. Projections, synthetic gaps, EMA values and trading
++permissions are not part of this cache.
++
++### Historical gap range views
++
++JSON-loaded and newly persisted gap lists own a single lazily built interval view.
++The view indexes only factual interval bounds, preserves source record order,
++and invalidates on list/record mutations or shared index replacement. It lives
++with its metadata cohort; no per-window views accumulate. Injected unowned lists
++retain conservative full-scan behavior instead of assuming identity/length proves
++unchanged content. The persisted JSON schema is unchanged.
++
++Recent-range checks and projection signatures select overlapping records before
++normalizing metadata. Legacy defaults are evaluated at read time, returned enhanced
++records remain detached, and retry eligibility is always computed from current
++clocks. Unknown-gap coverage retains full missing interval widths and excludes
++synthetic candles when determining real coverage. A window without unknown gaps
++skips copying/sorting the retained candle history. This optimization neither
++deletes stale historical gaps nor changes fetch, synthesis, retry or trading policy.
++Full metadata reads and index serialization still scale with total history.
+diff --git a/docs/ai/features/equity_hard_stop_loss.md b/docs/ai/features/equity_hard_stop_loss.md
+index ce37f34c2..dba992408 100644
+--- a/docs/ai/features/equity_hard_stop_loss.md
++++ b/docs/ai/features/equity_hard_stop_loss.md
+@@ -97,3 +97,16 @@ HSL-disabled trace parity. GPU values are screening estimates; exact Rust valida
+ retained candidates. Cache loss/rebuild must preserve intent. Performance acceptance compares
+ trading traces before timings and includes disabled HSL. Live trials require separate approval;
+ offline tests do not establish exchange execution correctness.
++
++### Evaluation-local minute-prefix reuse
++
++A complete minute-aligned source grid may omit only the non-minute current cut.
++The reconciler already appends that cut using the current observed position and
++mark. After ordinary snapshot validation, evaluation may reuse this call's
++prepared history if every selected pair has the exact dense positive minute
++prefix at the current observation cut. Preserve the full normalizer's endpoint
++diagnostic. Empty, sparse, off-grid, invalid or differently observed price inputs
++retain full normalization. No result is reused across evaluations; current
++balance, fills, positions, marks, policies and admission checks remain authority.
++Regression coverage compares full outputs and simulator cursors against forced
++normalization and reconstruction.
+diff --git a/passivbot-rust/src/hsl_evaluator.rs b/passivbot-rust/src/hsl_evaluator.rs
+index b1e7d6187..8bb2aa9d0 100644
+--- a/passivbot-rust/src/hsl_evaluator.rs
++++ b/passivbot-rust/src/hsl_evaluator.rs
+@@ -220,6 +220,39 @@ fn already_normalized(snapshot: &Snapshot) -> Result<bool, String> {
+     }))
+ }
+ 
++/// Native live grids contain every minute but not the non-minute current cut.
++/// Reconstruction already appends that cut using the current observed mark.
++/// Reuse is allowed only when normalization cannot change any historical price.
++fn normalized_minute_prefix(snapshot: &Snapshot) -> Result<bool, String> {
++    if snapshot.now.rem_euclid(60_000) == 0 {
++        return Ok(false);
++    }
++    let selected = snapshot::select(snapshot)?;
++    if selected.is_empty() {
++        return Ok(false);
++    }
++    let first = snapshot
++        .start
++        .checked_add((60_000 - snapshot.start.rem_euclid(60_000)) % 60_000);
++    Ok(selected.iter().all(|pair| {
++        if pair.prices_at != snapshot.now || pair.prices.is_empty() {
++            return false;
++        }
++        let mut expected = first;
++        for (&timestamp, &price) in &pair.prices {
++            if expected != Some(timestamp)
++                || timestamp >= snapshot.now
++                || !price.is_finite()
++                || price <= 0.0
++            {
++                return false;
++            }
++            expected = timestamp.checked_add(60_000);
++        }
++        expected.is_some_and(|t| t > snapshot.now)
++    }))
++}
++
+ pub fn evaluate(input: Input) -> Result<Output, String> {
+     evaluate_inner::<false>(input)
+ }
+@@ -228,7 +261,13 @@ pub(crate) fn evaluate_for_simulator(input: Input) -> Result<Output, String> {
+     evaluate_inner::<true>(input)
+ }
+ 
+-fn evaluate_inner<const SEED: bool>(mut input: Input) -> Result<Output, String> {
++fn evaluate_inner<const SEED: bool>(input: Input) -> Result<Output, String> {
++    evaluate_with_reuse::<SEED, true>(input)
++}
++
++fn evaluate_with_reuse<const SEED: bool, const REUSE: bool>(
++    mut input: Input,
++) -> Result<Output, String> {
+     validate_settings(input.span, input.threshold)?;
+     input
+         .snapshot
+@@ -261,7 +300,11 @@ fn evaluate_inner<const SEED: bool>(mut input: Input) -> Result<Output, String>
+         input.scale_budget_with_excess_allowance,
+         input.exposure_budget.as_ref(),
+     )?;
+-    let trace = if already_normalized(&input.snapshot)? {
++    let trace = if REUSE && already_normalized(&input.snapshot)? {
++        compose_prepared(&input.snapshot, prepared, false)?
++    } else if REUSE && normalized_minute_prefix(&input.snapshot)? {
++        // Preserve the reference normalizer's endpoint diagnostic as well as values.
++        reasons.insert("forward_filled_price".into());
+         compose_prepared(&input.snapshot, prepared, false)?
+     } else {
+         drop(prepared); // Do not retain an unused full history during reconstruction.
+@@ -389,6 +432,144 @@ mod tests {
+         .unwrap()
+     }
+ 
++    #[test]
++    fn minute_prefix_reuse_preserves_complete_reference_outputs() {
++        let mut actions = BTreeSet::new();
++        let mut reused = 0;
++        for case in 0..2304 {
++            let make = || {
++                let mut value = json!({
++                    "snapshot": {"now": 900001, "start": 0, "balance": 1000,
++                        "balance_at": 900001, "config_at": 900001, "max_current_age_ms": 10000,
++                        "mode": "unified", "pairs": [{"symbol": "A",
++                            "position": {"size": 10, "basis": 100, "mark": 70,
++                                "multiplier": 1, "inverse": false, "pside": "long"},
++                            "position_at": 900001, "mark_at": 900001, "prices_at": 900001,
++                            "fills_started_at": 900001, "fills_at": 900001,
++                            "fills": [], "prices": {}, "revisions": [0,0,0,0]}]},
++                    "slots": 1, "span": 2.5, "threshold": 0.05,
++                    "cooldown_ms": 3600000, "restart": "always"
++                });
++                let now = 900000 + [0, 1, 12345, 59999][case % 4];
++                let start = [0, 1, 59999][case / 4 % 3];
++                let short = case & 16 != 0;
++                let flat = case & 128 != 0;
++                let sign = if short { -1 } else { 1 };
++                let side = if short { "short" } else { "long" };
++                let mode = ["coin", "pside", "unified"][case / 32 % 3];
++                let snapshot = &mut value["snapshot"];
++                snapshot["now"] = json!(now);
++                snapshot["start"] = json!(start);
++                snapshot["balance_at"] = json!(now);
++                snapshot["config_at"] = json!(now);
++                snapshot["mode"] = json!(mode);
++                snapshot["balance"] = json!([1000, 250, 100][case % 3]);
++                if mode != "unified" {
++                    snapshot["pside"] = json!(side);
++                }
++                if mode == "coin" {
++                    snapshot["symbol"] = json!("A");
++                }
++                let pair = &mut snapshot["pairs"][0];
++                for key in [
++                    "position_at",
++                    "mark_at",
++                    "prices_at",
++                    "fills_started_at",
++                    "fills_at",
++                ] {
++                    pair[key] = json!(now);
++                }
++                pair["position"]["pside"] = json!(side);
++                pair["position"]["size"] = json!(if flat { 0 } else { 10 * sign });
++                pair["position"]["inverse"] = json!(case & 512 != 0);
++                pair["position"]["mark"] = json!([70, 100, 130][case % 3]);
++                let first = start + (60000 - start % 60000) % 60000;
++                for t in (first..now).step_by(60000) {
++                    pair["prices"][t.to_string()] =
++                        json!([80, 100, 120][(t as usize / 60000 + case) % 3]);
++                }
++                match case / 256 % 6 {
++                    1 => {
++                        pair["prices"]
++                            .as_object_mut()
++                            .unwrap()
++                            .remove(&first.to_string());
++                    }
++                    2 => {
++                        pair["prices"]["60001"] = json!(99);
++                    }
++                    3 => {
++                        pair["prices"] = json!({});
++                    }
++                    4 => {
++                        pair["prices"][now.to_string()] = json!(110);
++                    }
++                    5 => {
++                        pair["prices"]["120000"] = json!(0);
++                    }
++                    _ => {}
++                }
++                pair["fills"] = json!([{"identity": "open", "timestamp": 120000,
++                    "delta": 10 * sign, "price": 100, "realized": 0, "fee": -0.25,
++                    "sequence": 0, "revision": 0}]);
++                if flat {
++                    pair["fills"]
++                        .as_array_mut()
++                        .unwrap()
++                        .push(json!({"identity":"close",
++                        "timestamp": 600000, "delta": -10 * sign, "price": if short {120} else {80},
++                        "realized": -200, "fee": -0.25, "sequence": 1, "revision": 0}));
++                }
++                if mode != "coin" {
++                    let mut second = snapshot["pairs"][0].clone();
++                    second["symbol"] = json!("B");
++                    second["position"]["mark"] = json!(95);
++                    if case % 8 == 2 {
++                        second["prices"][now.to_string()] = json!(95);
++                    }
++                    snapshot["pairs"].as_array_mut().unwrap().push(second);
++                }
++                value["span"] = json!([1.0, 2.5, 703.0][case % 3]);
++                value["restart"] = json!(if case & 64 != 0 { "never" } else { "always" });
++                value["cooldown_ms"] = json!([0, 60000, 3600000][case % 3]);
++                value["slots"] = json!(if case % 17 == 0 { 0 } else { 1 });
++                serde_json::from_value::<Input>(value).unwrap()
++            };
++            if normalized_minute_prefix(&make().snapshot).unwrap() {
++                reused += 1;
++            }
++            let fast = evaluate_with_reuse::<false, true>(make()).unwrap();
++            let reference = evaluate_with_reuse::<false, false>(make()).unwrap();
++            if let Some(decision) = &fast.decision {
++                actions.insert(format!("{:?}", decision.action));
++            }
++            assert_eq!(
++                serde_json::to_value(&fast).unwrap(),
++                serde_json::to_value(&reference).unwrap(),
++                "case {case}"
++            );
++            // Simulator seed/cursor behavior remains unchanged too.
++            let fast = evaluate_with_reuse::<true, true>(make()).unwrap();
++            let reference = evaluate_with_reuse::<true, false>(make()).unwrap();
++            assert_eq!(
++                serde_json::to_value(&fast).unwrap(),
++                serde_json::to_value(&reference).unwrap(),
++                "seed case {case}"
++            );
++            assert_eq!(
++                format!("{:?}", fast.cursor),
++                format!("{:?}", reference.cursor),
++                "cursor case {case}"
++            );
++        }
++        assert!(reused > 100);
++        assert!(
++            actions.contains("Normal") && actions.contains("Panic") && actions.contains("Halted"),
++            "{actions:?}"
++        );
++    }
++
+     #[test]
+     fn missing_opening_uses_current_basis_without_inventing_old_exposure() {
+         let output = evaluate(fixture()).unwrap();
+diff --git a/src/candlestick_manager.py b/src/candlestick_manager.py
+index edb38d7ba..1c9825620 100644
+--- a/src/candlestick_manager.py
++++ b/src/candlestick_manager.py
+@@ -265,6 +265,173 @@ class GapEntry(TypedDict, total=False):
+     last_contextual_retry_at: int  # Latest KuCoin boundary-proof attempt (ms)
+ 
+ 
++class _GapMetadataDict(dict):
++    """Owned JSON record whose mutations invalidate the containing range view."""
++
++    __slots__ = ("_revision",)
++
++    def __init__(self, values, revision):
++        self._revision = revision
++        super().__init__((key, _track_gap_value(value, revision)) for key, value in values.items())
++
++    def __setitem__(self, key, value):
++        self._revision[0] += 1
++        super().__setitem__(key, _adopt_gap_value(value, self._revision))
++
++    def __delitem__(self, key):
++        self._revision[0] += 1
++        super().__delitem__(key)
++
++    def clear(self):
++        self._revision[0] += 1
++        super().clear()
++
++    def pop(self, *args):
++        self._revision[0] += 1
++        return super().pop(*args)
++
++    def popitem(self):
++        self._revision[0] += 1
++        return super().popitem()
++
++    def setdefault(self, key, default=None):
++        if key not in self:
++            self[key] = default
++        return self[key]
++
++    def update(self, *args, **kwargs):
++        for key, value in dict(*args, **kwargs).items():
++            self[key] = value
++
++    def __ior__(self, other):
++        self.update(other)
++        return self
++
++
++class _GapMetadataList(list):
++    """Owned metadata with one revision-bound range index, never a retry decision."""
++
++    __slots__ = ("_revision", "_range_revision", "_range_index")
++
++    def __init__(self, values=(), revision=None):
++        self._revision = [0, True] if revision is None else revision
++        self._range_revision = None
++        self._range_index = None
++        super().__init__(_track_gap_value(value, self._revision) for value in values)
++
++    def __setitem__(self, key, value):
++        value = ([_adopt_gap_value(item, self._revision) for item in value]
++                 if isinstance(key, slice) else _adopt_gap_value(value, self._revision))
++        self._revision[0] += 1
++        super().__setitem__(key, value)
++
++    def __delitem__(self, key):
++        self._revision[0] += 1
++        super().__delitem__(key)
++
++    def append(self, value):
++        self._revision[0] += 1
++        super().append(_adopt_gap_value(value, self._revision))
++
++    def extend(self, values):
++        # Materialize first, including self-extension, before changing the list.
++        values = [_adopt_gap_value(value, self._revision) for value in values]
++        self._revision[0] += 1
++        super().extend(values)
++
++    def insert(self, index, value):
++        self._revision[0] += 1
++        super().insert(index, _adopt_gap_value(value, self._revision))
++
++    def pop(self, index=-1):
++        self._revision[0] += 1
++        return super().pop(index)
++
++    def remove(self, value):
++        self._revision[0] += 1
++        super().remove(value)
++
++    def clear(self):
++        self._revision[0] += 1
++        super().clear()
++
++    def reverse(self):
++        self._revision[0] += 1
++        super().reverse()
++
++    def sort(self, *args, **kwargs):
++        # Even a failed sort may leave the list modified.
++        self._revision[0] += 1
++        super().sort(*args, **kwargs)
++
++    def __iadd__(self, values):
++        self.extend(values)
++        return self
++
++    def __imul__(self, count):
++        self._revision[0] += 1
++        super().__imul__(count)
++        return self
++
++    def _build_range_index(self):
++        entries = []
++        for ordinal, value in enumerate(self):
++            try:
++                if isinstance(value, dict):
++                    first = int(value.get("start_ts", 0))
++                    last = int(value.get("end_ts", 0))
++                elif isinstance(value, (list, tuple)) and len(value) >= 2:
++                    first, last = int(value[0]), int(value[1])
++                else:
++                    continue
++                if first <= last:
++                    entries.append((first, last, ordinal, value))
++            except Exception:
++                continue
++        entries.sort(key=lambda entry: entry[0])
++        prefix_ends = []
++        maximum = None
++        for _, last, _, _ in entries:
++            maximum = last if maximum is None else max(maximum, last)
++            prefix_ends.append(maximum)
++        return entries, prefix_ends
++
++    def overlapping_records(self, start, end):
++        if self._range_revision != self._revision[0]:
++            self._range_index = self._build_range_index()
++            self._range_revision = self._revision[0]
++        entries, prefix_ends = self._range_index
++        matches = []
++        for i in range(bisect_left(prefix_ends, int(start)), len(entries)):
++            first, last, ordinal, record = entries[i]
++            if first > int(end):
++                break
++            if last >= int(start):
++                matches.append((ordinal, record))
++        # Preserve source order, including duplicate and nested intervals.
++        return [record for _, record in sorted(matches, key=lambda item: item[0])]
++
++
++def _adopt_gap_value(value, revision):
++    """Preserve inserted aliases; an externally owned container disables reuse."""
++    if isinstance(value, (_GapMetadataDict, _GapMetadataList)) and value._revision is revision:
++        return value
++    if isinstance(value, (dict, list, tuple)):
++        revision[1] = False
++    return value
++
++
++def _track_gap_value(value, revision):
++    """Detach owned JSON containers and share their mutation revision."""
++    if isinstance(value, dict):
++        return _GapMetadataDict(value, revision)
++    if isinstance(value, list):
++        return _GapMetadataList(value, revision)
++    if isinstance(value, tuple):
++        return tuple(_track_gap_value(item, revision) for item in value)
++    return value
++
++
+ class _KnownGapIndex:
+     """Read-cohort index preserving ordered, overlapping gap records and clocks."""
+ 
+@@ -1071,6 +1238,9 @@ class CandlestickManager:
+         # Cache of primary shard paths per (symbol, tf) - avoids redundant glob scans
+         self._shard_paths_cache: Dict[Tuple[str, str], Dict[str, str]] = {}
+ 
++        # Parsed disk rows only, never projected candles, EMA values or permissions.
++        # File identities are checked on every use; returned arrays are detached.
++        self._disk_rows_cache = OrderedDict()
+         self._cache: Dict[str, np.ndarray] = {}
+         # Recent public websocket observations are RAM-only provenance used to
+         # distinguish a fresh/changed CCXT update from rows repeated out of
+@@ -2126,6 +2296,8 @@ class CandlestickManager:
+                     timeframe=tf_norm,
+                     removed=removed,
+                 )
++            if isinstance(meta.get("known_gaps"), list):
++                meta["known_gaps"] = _GapMetadataList(meta["known_gaps"])
+             self._index[key] = idx
+             self._index_mtime[key] = current_mtime
+             if migrated_pre_inception:
+@@ -2605,6 +2777,36 @@ class CandlestickManager:
+         self._legacy_day_quality_cache[cache_key] = bool(ok)
+         return bool(ok)
+ 
++    def _disk_rows_signature(self, load_keys, day_ctx, symbol, tf_norm):
++        """Identify every selected shard and index, including atomic replacements."""
++        paths = [self._index_path(symbol, tf=tf_norm)]
++        for day, path in load_keys:
++            paths.append(path)
++            ctx = day_ctx[day]
++            if ctx["source"] == "merge" and ctx["primary_path"]:
++                paths.append(ctx["primary_path"])
++        signature = []
++        for path in paths:
++            try:
++                stat = os.stat(path)
++            except OSError:
++                return None  # Never certify a partial or inaccessible source.
++            signature.append((str(path), stat.st_dev, stat.st_ino, stat.st_size,
++                              stat.st_mtime_ns, stat.st_ctime_ns))
++        return tuple(signature)
++
++    def _remember_disk_rows(self, key, signature, rows):
++        """Bound immutable parsed-source reuse to 16 ranges and eight MiB total."""
++        if signature is None or rows.nbytes > 8 * 1024 * 1024:
++            return
++        cached = rows.copy()
++        cached.flags.writeable = False
++        self._disk_rows_cache[key] = (signature, cached)
++        self._disk_rows_cache.move_to_end(key)
++        while (len(self._disk_rows_cache) > 16 or
++               sum(value[1].nbytes for value in self._disk_rows_cache.values()) > 8 * 1024 * 1024):
++            self._disk_rows_cache.popitem(last=False)
++
+     @ema_timing.timed("disk_load")
+     def _load_from_disk(
+         self,
+@@ -2699,6 +2901,20 @@ class CandlestickManager:
+                     }
+             if not load_keys:
+                 return
++            reuse_key = (symbol, tf_norm, int(start_ts), int(end_ts))
++            signature = None if strict else self._disk_rows_signature(
++                load_keys, day_ctx, symbol, tf_norm
++            )
++            cached = self._disk_rows_cache.get(reuse_key)
++            if signature is not None and cached is not None and cached[0] == signature:
++                self._disk_rows_cache.move_to_end(reuse_key)
++                merged_disk = cached[1]
++                if tf_norm == "1m" and merge_memory_cache:
++                    merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), merged_disk)
++                    self._cache[symbol] = merged
++                    return merged
++                return merged_disk.copy()
++            self._disk_rows_cache.pop(reuse_key, None)
+             self._log(
+                 "debug",
+                 "disk_load_plan",
+@@ -2821,6 +3037,10 @@ class CandlestickManager:
+             except Exception:
+                 # Disk-load telemetry must never break cache loading.
+                 pass
++            # Do not retain failed/empty shards or facts rewritten during this read.
++            if (not strict and len(arrays) == len(load_keys) and signature is not None
++                    and signature == self._disk_rows_signature(load_keys, day_ctx, symbol, tf_norm)):
++                self._remember_disk_rows(reuse_key, signature, merged_disk)
+             if tf_norm == "1m":
+                 if not merge_memory_cache:
+                     return merged_disk
+@@ -3215,6 +3435,14 @@ class CandlestickManager:
+         ):
+             prefix = a[:-1] if b["ts"][0] == a["ts"][-1] else a
+             return np.concatenate([prefix, b])
++        # Unchanged daily shards commonly overlap a much larger live history.
++        # Compare their exact rows before sorting/copying the concatenated history.
++        # Preserve last-write-wins and detached-array ownership on every path.
++        if (np.all(a["ts"][1:] > a["ts"][:-1])
++                and np.all(b["ts"][1:] > b["ts"][:-1])):
++            indices = np.searchsorted(a["ts"], b["ts"])
++            if (np.all(indices < len(a)) and np.array_equal(a[indices], b)):
++                return a.copy()
+         # Put existing first, then new; then keep last seen per ts to prefer new.
+         # Sort the scalar timestamp vector rather than structured rows: NumPy
+         # may use unspecified structured fields as tie-breakers even when
+@@ -3279,6 +3507,23 @@ class CandlestickManager:
+         """Return known gaps as enhanced GapEntry objects with full metadata."""
+         idx = self._ensure_symbol_index(symbol)
+         gaps = idx.get("meta", {}).get("known_gaps", [])
++        return self._normalize_gap_entries(gaps)
++
++    def _get_known_gaps_in_range(self, symbol: str, start_ts: int, end_ts: int) -> List[GapEntry]:
++        """Normalize only relevant records; defaults and retry clocks stay current."""
++        idx = self._ensure_symbol_index(symbol)
++        return self._normalize_gap_entries(self._gap_records_in_range(idx, start_ts, end_ts))
++
++    @staticmethod
++    def _gap_records_in_range(idx: dict, start_ts: int, end_ts: int):
++        """Use the owned revision index; unowned/injected lists retain full-scan semantics."""
++        gaps = idx.get("meta", {}).get("known_gaps", [])
++        if isinstance(gaps, _GapMetadataList) and gaps._revision[1]:
++            return gaps.overlapping_records(start_ts, end_ts)
++        return gaps
++
++    def _normalize_gap_entries(self, gaps) -> List[GapEntry]:
++        """Produce detached enhanced entries, evaluating legacy defaults on every read."""
+         out: List[GapEntry] = []
+         now_ms = self._now_ms()
+         for it in gaps:
+@@ -3445,7 +3690,7 @@ class CandlestickManager:
+                     ),
+                 }
+         idx = self._ensure_symbol_index(symbol)
+-        idx["meta"]["known_gaps"] = [
++        idx["meta"]["known_gaps"] = _GapMetadataList([
+             {
+                 "start_ts": int(g["start_ts"]),
+                 "end_ts": int(g["end_ts"]),
+@@ -3460,7 +3705,7 @@ class CandlestickManager:
+                 ),
+             }
+             for g in merged
+-        ]
++        ])
+         self._index[symbol] = idx
+         if not defer_index:
+             self._save_index(symbol)
+@@ -3839,7 +4084,7 @@ class CandlestickManager:
+     ) -> List[Tuple[int, int]]:
+         """Return unresolved unknown gaps that must remain unavailable."""
+         ranges: List[Tuple[int, int]] = []
+-        for gap in self._get_known_gaps_enhanced(symbol):
++        for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts):
+             if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+                 GAP_REASON_AUTO,
+                 GAP_REASON_FETCH_FAILED,
+@@ -3864,6 +4109,16 @@ class CandlestickManager:
+         the remaining contiguous outage, not either the caller-clipped overlap
+         or stale outer metadata bounds.
+         """
++        gaps = [
++            gap
++            for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts)
++            if str(gap.get("reason", GAP_REASON_AUTO))
++            in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
++            and int(gap["start_ts"]) <= int(end_ts)
++            and int(gap["end_ts"]) >= int(start_ts)
++        ]
++        if not gaps:
++            return []
+         cached = self._cache.get(symbol)
+         if cached is None or cached.size == 0:
+             cached = np.empty((0,), dtype=CANDLE_DTYPE)
+@@ -3879,16 +4134,9 @@ class CandlestickManager:
+                 ]
+ 
+         missing: List[Tuple[int, int]] = []
+-        for gap in self._get_known_gaps_enhanced(symbol):
+-            if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+-                GAP_REASON_AUTO,
+-                GAP_REASON_FETCH_FAILED,
+-            }:
+-                continue
++        for gap in gaps:
+             gap_start = int(gap["start_ts"])
+             gap_end = int(gap["end_ts"])
+-            if gap_start > int(end_ts) or gap_end < int(start_ts):
+-                continue
+             gap_rows = self._slice_ts_range(
+                 cached,
+                 gap_start,
+@@ -3924,7 +4172,7 @@ class CandlestickManager:
+         if now_ms is None:
+             now_ms = self._now_ms()
+         ranges: List[Tuple[int, int]] = []
+-        for gap in self._get_known_gaps_enhanced(symbol):
++        for gap in self._get_known_gaps_in_range(symbol, start_ts, end_ts):
+             if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+                 GAP_REASON_AUTO,
+                 GAP_REASON_FETCH_FAILED,
+@@ -9300,7 +9548,7 @@ class CandlestickManager:
+         gap_state: List[Tuple[int, int, str]] = []
+         known_gaps = idx.get("meta", {}).get("known_gaps", [])
+         if isinstance(known_gaps, list):
+-            for gap in known_gaps:
++            for gap in self._gap_records_in_range(idx, start_ts, end_ts):
+                 try:
+                     if isinstance(gap, dict):
+                         gap_start = int(gap.get("start_ts", 0))
+diff --git a/tests/test_live_performance_parity.py b/tests/test_live_performance_parity.py
+new file mode 100644
+index 000000000..903bf8382
+--- /dev/null
++++ b/tests/test_live_performance_parity.py
+@@ -0,0 +1,272 @@
++"""Synthetic regression coverage for disk-row reuse and live native HSL parity."""
++from pathlib import Path
++import json
++import os
++
++import numpy as np
++import pytest
++
++from candlestick_manager import CandlestickManager, CANDLE_DTYPE
++
++SYMBOL = 'TEST/USDT:USDT'
++NOW = 1_800_000_012_345
++
++
++def candles(count=32, *, step=60_000):
++    """Construct unique sorted synthetic source rows."""
++    end = (NOW // step) * step - step
++    rows = np.zeros(count, dtype=CANDLE_DTYPE)
++    rows['ts'] = np.arange(end - (count - 1) * step, end + 1, step)
++    for field in ('o', 'h', 'l', 'c'):
++        rows[field] = 100.0
++    rows['bv'] = 1.0
++    return rows
++
++
++@pytest.fixture
++def manager(tmp_path):
++    """Own every migration, shard and index write below a pytest temp directory."""
++    value = CandlestickManager(exchange=None, exchange_name='synthetic',
++                               cache_dir=str(tmp_path / 'caches'),
++                               progress_log_interval_seconds=0)
++    value._now_ms_callback = lambda: NOW
++    yield value
++    value._cleanup_on_exit()
++
++
++def persist(manager, rows, timeframe='1m'):
++    """Persist synthetic data through the normal shard writer."""
++    manager._save_range_incremental(SYMBOL, rows, timeframe=timeframe)
++
++
++def load(manager, rows, timeframe='1m', **kwargs):
++    """Read the entire synthetic range through the production loader."""
++    return manager._load_from_disk(SYMBOL, int(rows['ts'][0]), int(rows['ts'][-1]),
++                                   timeframe=timeframe, **kwargs)
++
++
++@pytest.mark.parametrize('timeframe,step', [('1m',60_000), ('5m',300_000), ('1h',3_600_000)])
++def test_unchanged_shards_are_not_read_again(manager, monkeypatch, timeframe, step):
++    """Warm reuse preserves exact rows and does no further shard parsing."""
++    rows = candles(step=step)
++    persist(manager, rows, timeframe)
++    for _ in range(3):
++        np.testing.assert_array_equal(load(manager, rows, timeframe), rows)
++    def unexpected_read(*args, **kwargs):
++        raise AssertionError('unchanged source shard was reread')
++    monkeypatch.setattr(manager, '_load_shard', unexpected_read)
++    for _ in range(4):
++        np.testing.assert_array_equal(load(manager, rows, timeframe), rows)
++
++
++@pytest.mark.parametrize('change', ['replace', 'same_size_same_mtime', 'inplace_same_mtime', 'delete', 'corrupt', 'strict'])
++def test_changed_or_unusable_sources_match_uncached_loader(manager, tmp_path, change):
++    """Corrections, failures and forced reads cannot inherit a warm certificate."""
++    rows = candles()
++    persist(manager, rows)
++    for _ in range(3):
++        load(manager, rows)
++    path = Path(manager._shard_path(SYMBOL, manager._date_key(int(rows['ts'][-1])), tf='1m'))
++    stat = path.stat()
++    corrected = rows.copy(); corrected['c'][-1] = 88.0
++    if change in ('replace', 'same_size_same_mtime'):
++        replacement = tmp_path / 'replacement.npy'
++        with replacement.open('wb') as handle:
++            np.save(handle, corrected)
++        os.replace(replacement, path)
++        if change == 'same_size_same_mtime':
++            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
++    elif change == 'inplace_same_mtime':
++        with path.open('wb') as handle:
++            np.save(handle, corrected)
++        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
++    elif change == 'delete':
++        path.unlink()
++    elif change == 'corrupt':
++        path.write_bytes(b'invalid numpy source')
++    kwargs = dict(strict=change == 'strict')
++    # Identical RAM starting state for the warm and reference reads.
++    before = manager._cache[SYMBOL].copy()
++    actual = load(manager, rows, **kwargs)
++    manager._disk_rows_cache.clear(); manager._cache[SYMBOL] = before
++    expected = load(manager, rows, **kwargs)
++    if expected is None:
++        assert actual is None
++    else:
++        np.testing.assert_array_equal(actual, expected)
++
++
++@pytest.mark.parametrize('timeframe,step', [('1m',60_000), ('5m',300_000)])
++def test_returned_array_mutation_does_not_modify_cached_disk_rows(manager, timeframe, step):
++    """Mutable consumer arrays and in-place RAM changes never mutate source reuse."""
++    rows = candles(step=step); persist(manager, rows, timeframe)
++    for _ in range(3):
++        result = load(manager, rows, timeframe)
++    result['c'][-1] = 9.0
++    np.testing.assert_array_equal(load(manager, rows, timeframe), rows)
++
++
++@pytest.mark.parametrize('case', range(48))
++def test_merge_shortcut_matches_last_write_wins_reference(manager, case):
++    """Exact unchanged subsets, corrections, duplicates and disorder retain semantics."""
++    rng = np.random.default_rng(case)
++    existing = candles(100)
++    incoming = existing[sorted(rng.choice(len(existing), size=20, replace=False))].copy()
++    if case % 6 == 1:
++        incoming['c'][0] += 1
++    elif case % 6 == 2:
++        incoming = np.concatenate([incoming, incoming[:2]])
++        incoming['c'][-1] += 1
++    elif case % 6 == 3:
++        rng.shuffle(incoming)
++    elif case % 6 == 4:
++        rng.shuffle(existing)
++    elif case % 6 == 5:
++        incoming['c'][0] = np.nan
++    combined = np.concatenate([existing, incoming])
++    ordered = combined[np.argsort(combined['ts'], kind='stable')]
++    keep = np.r_[ordered['ts'][:-1] != ordered['ts'][1:], True]
++    result = manager._merge_overwrite(existing, incoming)
++    for field in CANDLE_DTYPE.names:
++        np.testing.assert_array_equal(result[field], ordered[keep][field])
++    assert not np.shares_memory(result, existing)
++    assert not np.shares_memory(result, incoming)
++
++
++def test_reuse_bounds_and_restart_reconstruction(manager):
++    """Reuse is disposable and bounded even with many requested ranges."""
++    rows = candles(64); persist(manager, rows)
++    for offset in range(24):
++        manager._load_from_disk(SYMBOL, int(rows['ts'][offset]), int(rows['ts'][-1]))
++    assert len(manager._disk_rows_cache) <= 16
++    assert sum(v[1].nbytes for v in manager._disk_rows_cache.values()) <= 8*1024*1024
++    warm = load(manager, rows).copy()
++    manager._disk_rows_cache.clear(); manager._cache.clear()
++    np.testing.assert_array_equal(load(manager, rows), warm)
++
++
++
++def test_strict_read_propagates_failure_after_warm_reuse(manager, monkeypatch):
++    """A strict source audit cannot substitute old rows for a failed read."""
++    rows = candles(); persist(manager, rows)
++    for _ in range(3): load(manager, rows)
++    def failed_read(*args, **kwargs):
++        raise OSError('synthetic unreadable shard')
++    monkeypatch.setattr(manager, '_load_shard', failed_read)
++    with pytest.raises(OSError): load(manager, rows, strict=True)
++
++
++def test_row_reuse_byte_budget_and_immutable_storage(manager):
++    """The byte budget is enforced independently of the entry-count cap."""
++    rows = candles(200_000)
++    manager._remember_disk_rows(('a',), ('source',), rows)
++    manager._remember_disk_rows(('b',), ('source',), rows)
++    assert len(manager._disk_rows_cache) == 1
++    cached = next(iter(manager._disk_rows_cache.values()))[1]
++    assert not cached.flags.writeable
++    assert not np.shares_memory(cached, rows)
++    manager._remember_disk_rows(('oversized',), ('source',), candles(400_000))
++    assert ('oversized',) not in manager._disk_rows_cache
++
++
++
++def test_concurrent_source_rewrite_is_not_certified(manager, monkeypatch):
++    """A shard changed during parsing must be reread on the next request."""
++    rows = candles(); persist(manager, rows)
++    real_read = manager._load_shard
++    corrected = rows.copy(); corrected['c'][-1] = 77
++    rewritten = False
++    def changing_read(path, **kwargs):
++        nonlocal rewritten
++        result = real_read(path, **kwargs)
++        if not rewritten:
++            rewritten = True
++            with Path(path).open('wb') as handle:
++                np.save(handle, corrected)
++        return result
++    monkeypatch.setattr(manager, '_load_shard', changing_read)
++    load(manager, rows)
++    assert not manager._disk_rows_cache
++    np.testing.assert_array_equal(load(manager, rows), corrected)
++
++
++@pytest.mark.asyncio
++async def test_disk_reuse_retains_ema_timing_attribution(manager):
++    """Warm reuse still accounts for the complete loader in EMA diagnostics."""
++    from live.ema_timing import EmaBundleTimings
++    rows = candles(); persist(manager, rows)
++    for _ in range(3): load(manager, rows)
++    timing = EmaBundleTimings()
++    async def read(symbol):
++        return load(manager, rows)
++    await timing.run_symbol(SYMBOL, read)
++    totals = timing.summary()['stage_totals']
++    assert totals['disk_load_calls'] == 1
++    assert totals['disk_load_ms'] >= 0
++
++
++def hsl_case(index):
++    """Public synthetic corpus, shared by tests and before/after binary comparison."""
++    now = 1_800_000 + [0, 1, 12_345, 59_999][index % 4]
++    start = [0, 1, 59_999][(index // 4) % 3]
++    short = bool(index & 16); side = 'short' if short else 'long'; sign = -1 if short else 1
++    mode = ['coin','pside','unified'][(index//32)%3]
++    flat = bool(index & 128)
++    first = start + (60_000-start%60_000)%60_000
++    prices = {str(t): float([100,120,80,105][(t//60000+index)%4])
++              for t in range(first,now,60000)}
++    shape = (index//256)%6
++    if shape == 1:
++        prices.pop(next(iter(prices)), None)
++    elif shape == 2:
++        prices[str(60_001)] = 99.0
++    elif shape == 3:
++        prices.clear()
++    elif shape == 4:
++        prices[str(now)] = 110.0
++    elif shape == 5:
++        prices['120000'] = 0.0
++    fills = [dict(identity='entry', timestamp=120_000, delta=10*sign,
++                  price=100, realized=0, fee=-.25, sequence=0, revision=0)]
++    if flat:
++        fills.append(dict(identity='close',timestamp=900_000,delta=-10*sign,
++                          price=80 if not short else 120,realized=-200,fee=-.25,
++                          sequence=1,revision=0))
++    if index & 64:
++        fills.append(dict(fills[0], revision=1, price=105))
++    pair = dict(symbol=SYMBOL,position=dict(size=0 if flat else 10*sign,basis=100,
++                mark=[100,70,130][index%3],multiplier=1,inverse=bool(index&512),
++                pside=side,quantity_step=.1),position_at=now,mark_at=now,
++                fills_started_at=now,fills_at=now,prices_at=now,
++                fills=fills,prices=prices,revisions=[0,0,0,0])
++    snapshot = dict(now=now,start=start,balance=[1000,250,100][index%3],balance_at=now,
++                    config_at=now,max_current_age_ms=10000,mode=mode,pairs=[pair])
++    if mode != 'unified':snapshot['pside']=side
++    if mode == 'coin':snapshot['symbol']=SYMBOL
++    return dict(snapshot=snapshot,slots=0 if index%17==0 else 1,
++                span=[1,2.5,703][index%3],threshold=[.01,.2,.5][index%3],
++                cooldown_ms=[0,60000,3600000][index%3],
++                restart='never' if index&32 else 'always')
++
++
++@pytest.mark.parametrize('index', range(64))
++def test_real_native_binding_matches_json_reference(index):
++    """Native-grid transport and JSON input retain identical complete HSL outputs."""
++    import passivbot_rust as pbr
++    assert not getattr(pbr, '__is_stub__', False)
++    value = hsl_case(index)
++    snap = value['snapshot']; pair = snap['pairs'][0]
++    rows = [(int(ts)-60000,1,price,price,price,price,snap['now'])
++            for ts,price in pair['prices'].items() if int(ts)%60000 == 0]
++    grid = pbr.HslCandleSource(rows).project(snap['start'],snap['now'])[0]
++    pair['prices'] = grid.values()
++    expected = json.loads(pbr.hsl_evaluate(json.dumps(value)))
++    pair['prices'] = {}
++    assert expected == json.loads(pbr.hsl_evaluate_grids(json.dumps(value),[grid]))
++    # Reuse the factual grid, but re-evaluate changed current account/market facts.
++    snap['balance'] *= .5
++    pair['position']['mark'] *= .75
++    pair['prices'] = grid.values()
++    expected = json.loads(pbr.hsl_evaluate(json.dumps(value)))
++    pair['prices'] = {}
++    assert expected == json.loads(pbr.hsl_evaluate_grids(json.dumps(value),[grid]))
+diff --git a/tests/test_gap_metadata_performance_parity.py b/tests/test_gap_metadata_performance_parity.py
+new file mode 100644
+index 000000000..0bec0043b
+--- /dev/null
++++ b/tests/test_gap_metadata_performance_parity.py
+@@ -0,0 +1,480 @@
++"""Offline differential coverage for historical gap range indexing.
++
++The reference class freezes the prior full-scan algorithms. All metadata, prices,
++files and clocks are synthetic; performance checks count work rather than time.
++"""
++import copy
++import json
++import random
++from typing import Any, List, Optional, Tuple
++
++import numpy as np
++import pytest
++
++import candlestick_manager as module
++from candlestick_manager import (
++    CandlestickManager, CANDLE_DTYPE, GapEntry, ONE_MIN_MS, _GAP_MAX_RETRIES,
++    GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED, _sorted_candle_copy,
++)
++
++SYMBOL = "TEST/USDT:USDT"
++NOW = 1_800_000_012_345
++
++
++class FullScanReference(CandlestickManager):
++    """Frozen pre-index algorithms; all supporting policies use production code."""
++
++    def _get_known_gaps_enhanced(self, symbol: str) -> List[GapEntry]:
++        """Return known gaps as enhanced GapEntry objects with full metadata."""
++        idx = self._ensure_symbol_index(symbol)
++        gaps = idx.get("meta", {}).get("known_gaps", [])
++        out: List[GapEntry] = []
++        now_ms = self._now_ms()
++        for it in gaps:
++            try:
++                # Support both old format [[start, end], ...] and new format [GapEntry, ...]
++                if isinstance(it, dict):
++                    # New enhanced format
++                    entry: GapEntry = {
++                        "start_ts": int(it.get("start_ts", 0)),
++                        "end_ts": int(it.get("end_ts", 0)),
++                        "retry_count": int(it.get("retry_count", 0)),
++                        "reason": str(it.get("reason", GAP_REASON_AUTO)),
++                        "added_at": int(it.get("added_at", now_ms)),
++                        "last_retry_at": int(
++                            it.get("last_retry_at", it.get("added_at", now_ms))
++                        ),
++                        "last_contextual_retry_at": int(
++                            it.get("last_contextual_retry_at", 0)
++                        ),
++                    }
++                    if entry["start_ts"] <= entry["end_ts"]:
++                        out.append(entry)
++                elif isinstance(it, (list, tuple)) and len(it) >= 2:
++                    # Legacy format: auto-upgrade to enhanced
++                    a, b = int(it[0]), int(it[1])
++                    if a <= b:
++                        out.append(
++                            {
++                                "start_ts": a,
++                                "end_ts": b,
++                                "retry_count": _GAP_MAX_RETRIES,  # Assume old gaps are persistent
++                                "reason": GAP_REASON_AUTO,
++                                "added_at": now_ms,
++                                "last_retry_at": now_ms,
++                            }
++                        )
++            except Exception:
++                continue
++        return out
++
++    def _unverified_gap_ranges(
++        self,
++        symbol: str,
++        start_ts: int,
++        end_ts: int,
++    ) -> List[Tuple[int, int]]:
++        """Return unresolved unknown gaps that must remain unavailable."""
++        ranges: List[Tuple[int, int]] = []
++        for gap in self._get_known_gaps_enhanced(symbol):
++            if str(gap.get("reason", GAP_REASON_AUTO)) not in {
++                GAP_REASON_AUTO,
++                GAP_REASON_FETCH_FAILED,
++            }:
++                continue
++            overlap_start = max(int(start_ts), int(gap["start_ts"]))
++            overlap_end = min(int(end_ts), int(gap["end_ts"]))
++            if overlap_start <= overlap_end:
++                ranges.append((overlap_start, overlap_end))
++        return ranges
++
++    def _unverified_uncovered_gap_ranges(
++        self,
++        symbol: str,
++        start_ts: int,
++        end_ts: int,
++    ) -> List[Tuple[int, int]]:
++        """Return full still-missing spans from unknown gaps overlapping a range.
++
++        Known-gap metadata may temporarily cover minutes which a later refresh
++        has already populated. Width-sensitive provisional policy must measure
++        the remaining contiguous outage, not either the caller-clipped overlap
++        or stale outer metadata bounds.
++        """
++        cached = self._cache.get(symbol)
++        if cached is None or cached.size == 0:
++            cached = np.empty((0,), dtype=CANDLE_DTYPE)
++        else:
++            cached = _sorted_candle_copy(cached)
++            provisional_ts = self._synthetic_timestamps.get(symbol, set())
++            if provisional_ts:
++                cached = cached[
++                    ~np.isin(
++                        cached["ts"].astype(np.int64),
++                        np.asarray(tuple(provisional_ts), dtype=np.int64),
++                    )
++                ]
++
++        missing: List[Tuple[int, int]] = []
++        for gap in self._get_known_gaps_enhanced(symbol):
++            if str(gap.get("reason", GAP_REASON_AUTO)) not in {
++                GAP_REASON_AUTO,
++                GAP_REASON_FETCH_FAILED,
++            }:
++                continue
++            gap_start = int(gap["start_ts"])
++            gap_end = int(gap["end_ts"])
++            if gap_start > int(end_ts) or gap_end < int(start_ts):
++                continue
++            gap_rows = self._slice_ts_range(
++                cached,
++                gap_start,
++                gap_end,
++                assume_sorted=True,
++            )
++            missing.extend(self._missing_spans(gap_rows, gap_start, gap_end))
++
++        merged: List[Tuple[int, int]] = []
++        for gap_start, gap_end in sorted(missing):
++            if merged and int(gap_start) <= int(merged[-1][1]) + ONE_MIN_MS:
++                merged[-1] = (
++                    int(merged[-1][0]),
++                    max(int(merged[-1][1]), int(gap_end)),
++                )
++            else:
++                merged.append((int(gap_start), int(gap_end)))
++        return [
++            (gap_start, gap_end)
++            for gap_start, gap_end in merged
++            if gap_start <= int(end_ts) and gap_end >= int(start_ts)
++        ]
++
++    def _due_unverified_gap_ranges(
++        self,
++        symbol: str,
++        start_ts: int,
++        end_ts: int,
++        *,
++        now_ms: Optional[int] = None,
++    ) -> List[Tuple[int, int]]:
++        """Return retry-due unknown-gap intersections for one attempted range."""
++        if now_ms is None:
++            now_ms = self._now_ms()
++        ranges: List[Tuple[int, int]] = []
++        for gap in self._get_known_gaps_enhanced(symbol):
++            if str(gap.get("reason", GAP_REASON_AUTO)) not in {
++                GAP_REASON_AUTO,
++                GAP_REASON_FETCH_FAILED,
++            }:
++                continue
++            if not self._should_retry_gap(gap, now_ms=now_ms):
++                continue
++            overlap_start = max(int(start_ts), int(gap["start_ts"]))
++            overlap_end = min(int(end_ts), int(gap["end_ts"]))
++            if overlap_start <= overlap_end:
++                ranges.append((overlap_start, overlap_end))
++        return ranges
++
++    def _projection_shared_content_signature(
++        self,
++        symbol: str,
++        start_ts: int,
++        end_ts: int,
++        *,
++        timeframe: str,
++    ) -> Tuple[Any, ...]:
++        """Return content-bearing shared-cache state for a projection window.
++
++        The index is reloaded when another process atomically replaces it.
++        Shard checksums and gap coverage affect projection inputs; refresh and
++        retry timestamps intentionally do not.
++        """
++        idx = self._ensure_symbol_index(symbol, timeframe=timeframe)
++        shards = idx.get("shards", {})
++        shard_state: List[Tuple[Any, ...]] = []
++        if isinstance(shards, dict):
++            for date_key in self._date_keys_between(start_ts, end_ts):
++                shard = shards.get(date_key)
++                if not isinstance(shard, dict):
++                    continue
++                shard_state.append(
++                    (
++                        str(date_key),
++                        shard.get("min_ts"),
++                        shard.get("max_ts"),
++                        shard.get("count"),
++                        shard.get("crc32"),
++                    )
++                )
++
++        gap_state: List[Tuple[int, int, str]] = []
++        known_gaps = idx.get("meta", {}).get("known_gaps", [])
++        if isinstance(known_gaps, list):
++            for gap in known_gaps:
++                try:
++                    if isinstance(gap, dict):
++                        gap_start = int(gap.get("start_ts", 0))
++                        gap_end = int(gap.get("end_ts", 0))
++                        reason = str(gap.get("reason", GAP_REASON_AUTO))
++                    elif isinstance(gap, (list, tuple)) and len(gap) >= 2:
++                        gap_start = int(gap[0])
++                        gap_end = int(gap[1])
++                        reason = GAP_REASON_AUTO
++                    else:
++                        continue
++                except Exception:
++                    continue
++                clipped_start = max(int(start_ts), gap_start)
++                clipped_end = min(int(end_ts), gap_end)
++                if clipped_start <= clipped_end:
++                    gap_state.append((clipped_start, clipped_end, reason))
++
++        return (tuple(shard_state), tuple(sorted(gap_state)))
++
++@pytest.fixture
++def manager(tmp_path, monkeypatch):
++    """Keep every file write and cleanup inside the isolated fixture directory."""
++    monkeypatch.chdir(tmp_path)
++    cm = CandlestickManager(exchange=None, exchange_name="hyperliquid", cache_dir=str(tmp_path / "caches"))
++    cm._now_ms_callback = lambda: NOW
++    yield cm
++    cm._cleanup_on_exit()
++
++
++def install(manager, gaps, timeframe="1m"):
++    """Exercise the actual JSON ownership boundary rather than injecting a cache."""
++    idx = manager._ensure_symbol_index(SYMBOL, timeframe=timeframe)
++    idx["meta"]["known_gaps"] = gaps
++    manager._save_index(SYMBOL, timeframe=timeframe)
++    manager._index.clear()
++    return manager._ensure_symbol_index(SYMBOL, timeframe=timeframe)["meta"]["known_gaps"]
++
++
++def reference(manager):
++    """Share factual state while substituting only the frozen full-scan methods."""
++    value = copy.copy(manager)
++    value.__class__ = FullScanReference
++    return value
++
++
++def compare(manager, start, end, now=NOW):
++    """Compare coverage, full missing widths, retries and exact projection keys."""
++    before = reference(manager)
++    for name in ("_unverified_gap_ranges", "_unverified_uncovered_gap_ranges"):
++        assert getattr(manager, name)(SYMBOL, start, end) == getattr(before, name)(SYMBOL, start, end)
++    assert manager._due_unverified_gap_ranges(SYMBOL, start, end, now_ms=now) == before._due_unverified_gap_ranges(SYMBOL, start, end, now_ms=now)
++    assert manager._projection_shared_content_signature(SYMBOL, start, end, timeframe="1m") == before._projection_shared_content_signature(SYMBOL, start, end, timeframe="1m")
++    expected = [gap for gap in before._get_known_gaps_enhanced(SYMBOL)
++                if gap["start_ts"] <= end and gap["end_ts"] >= start]
++    actual = [gap for gap in manager._get_known_gaps_in_range(SYMBOL, start, end)
++              if gap["start_ts"] <= end and gap["end_ts"] >= start]
++    assert actual == expected
++
++
++@pytest.mark.parametrize("seed", range(8))
++def test_random_overlap_coverage_retry_and_signature_parity(manager, seed):
++    """Unsorted, nested, duplicate and malformed records retain exact semantics."""
++    rng = random.Random(seed)
++    gaps = []
++    for _ in range(180):
++        start = rng.randrange(120) * ONE_MIN_MS
++        gaps.append(dict(start_ts=start, end_ts=start + rng.randrange(25) * ONE_MIN_MS,
++                         reason=rng.choice(["auto_detected", "fetch_failed", "no_trades", "manual", "no_archive"]),
++                         retry_count=rng.randrange(5), added_at=NOW - rng.randrange(10**9),
++                         last_retry_at=NOW - rng.randrange(10**9),
++                         last_contextual_retry_at=NOW - rng.randrange(10**9)))
++    gaps += [[0, 5 * ONE_MIN_MS], {"start_ts": 0, "end_ts": 150 * ONE_MIN_MS},
++             {}, {"start_ts": "bad", "end_ts": 0}, {"start_ts": 0, "end_ts": 5, "retry_count": "bad"},
++             [4, 2], None, "bad", [0], gaps[0].copy()]
++    rng.shuffle(gaps)
++    install(manager, gaps)
++    arr = np.zeros(80, dtype=CANDLE_DTYPE)
++    arr["ts"] = np.asarray(rng.sample(range(150), 80)) * ONE_MIN_MS
++    arr["c"] = arr["o"] = arr["h"] = arr["l"] = 100.0
++    manager._cache[SYMBOL] = arr
++    manager._synthetic_timestamps[SYMBOL] = set(int(ts) for ts in arr["ts"][::3])
++    for _ in range(60):
++        start = rng.randrange(-10, 160) * ONE_MIN_MS
++        compare(manager, start, start + rng.randrange(30) * ONE_MIN_MS,
++                now=NOW + rng.randrange(10**9))
++
++
++@pytest.mark.parametrize("mutation", [
++    "set", "update", "delete", "pop_key", "popitem", "clear_record", "setdefault", "ior",
++    "append", "extend", "insert", "slice", "delete_slice", "pop", "remove", "clear",
++    "reverse", "sort", "iadd", "imul", "legacy", "replace_list", "replace_record",
++])
++def test_owned_metadata_mutations_invalidate_range_index(manager, mutation):
++    """Every supported in-place mutation is visible after the range view is warm."""
++    values = [dict(start_ts=9 * ONE_MIN_MS, end_ts=10 * ONE_MIN_MS, reason="fetch_failed"),
++              dict(start_ts=2 * ONE_MIN_MS, end_ts=3 * ONE_MIN_MS, reason="auto_detected"),
++              [4 * ONE_MIN_MS, 5 * ONE_MIN_MS]]
++    gaps = install(manager, values)
++    compare(manager, 0, 12 * ONE_MIN_MS)
++    previous_revision = gaps._revision[0]
++    new = dict(start_ts=0, end_ts=ONE_MIN_MS, reason="manual")
++    if mutation == "set": gaps[0]["start_ts"] = 0
++    elif mutation == "update": gaps[0].update(start_ts=0, reason="no_trades")
++    elif mutation == "delete": del gaps[0]["start_ts"]
++    elif mutation == "pop_key": gaps[0].pop("end_ts")
++    elif mutation == "popitem": gaps[0].popitem()
++    elif mutation == "clear_record": gaps[0].clear()
++    elif mutation == "setdefault": gaps[0].setdefault("last_retry_at", NOW)
++    elif mutation == "ior": gaps[0] |= {"start_ts": 0, "retry_count": 4}
++    elif mutation == "append": gaps.append(new)
++    elif mutation == "extend": gaps.extend([new])
++    elif mutation == "insert": gaps.insert(0, new)
++    elif mutation == "slice": gaps[1:] = [new]
++    elif mutation == "delete_slice": del gaps[1:]
++    elif mutation == "pop": gaps.pop()
++    elif mutation == "remove": gaps.remove(gaps[0])
++    elif mutation == "clear": gaps.clear()
++    elif mutation == "reverse": gaps.reverse()
++    elif mutation == "sort": gaps.sort(key=lambda item: str(item))
++    elif mutation == "iadd": gaps += [new]
++    elif mutation == "imul": gaps *= 2
++    elif mutation == "legacy": gaps[2][0] = 0
++    elif mutation == "replace_record": gaps[0] = new
++    elif mutation == "replace_list":
++        # Unowned lists must not acquire a stale identity/length certificate.
++        manager._ensure_symbol_index(SYMBOL)["meta"]["known_gaps"] = [new]
++        compare(manager, 0, 12 * ONE_MIN_MS)
++        new["start_ts"] = 11 * ONE_MIN_MS
++        new["end_ts"] = 12 * ONE_MIN_MS
++    if mutation != "replace_list": assert gaps._revision[0] > previous_revision
++    compare(manager, 0, 12 * ONE_MIN_MS)
++    compare(manager, 0, ONE_MIN_MS)
++    compare(manager, 8 * ONE_MIN_MS, 11 * ONE_MIN_MS)
++    # Wrappers preserve the on-disk JSON schema and survive cold reconstruction.
++    expected = json.loads(json.dumps(manager._ensure_symbol_index(SYMBOL)["meta"]["known_gaps"]))
++    manager._save_index(SYMBOL)
++    manager._index.clear()
++    assert manager._ensure_symbol_index(SYMBOL)["meta"]["known_gaps"] == expected
++    compare(manager, 0, 12 * ONE_MIN_MS)
++
++
++def test_legacy_clock_defaults_and_detached_read_results(manager):
++    """A warm range view freezes neither missing timestamps nor mutable results."""
++    install(manager, [[0, ONE_MIN_MS], {"start_ts": 0, "end_ts": ONE_MIN_MS}])
++    initial = manager._get_known_gaps_in_range(SYMBOL, 0, ONE_MIN_MS)
++    initial[0]["end_ts"] = 999
++    initial[1]["reason"] = "manual"
++    manager._now_ms_callback = lambda: NOW + 100_000
++    later = manager._get_known_gaps_in_range(SYMBOL, 0, ONE_MIN_MS)
++    assert all(g["added_at"] == NOW + 100_000 and g["last_retry_at"] == NOW + 100_000 for g in later)
++    assert all(g["end_ts"] == ONE_MIN_MS and g["reason"] == "auto_detected" for g in later)
++    compare(manager, 0, ONE_MIN_MS)
++
++
++@pytest.mark.parametrize("timeframe", ["1m", "5m"])
++def test_external_atomic_replacement_and_independent_timeframes(manager, timeframe):
++    """The existing shared-index check invalidates the range view after a writer."""
++    install(manager, [{"start_ts": 0, "end_ts": ONE_MIN_MS}], timeframe)
++    before = manager._projection_shared_content_signature(SYMBOL, 0, 3 * ONE_MIN_MS, timeframe=timeframe)
++    other = CandlestickManager(exchange=None, exchange_name=manager.exchange_name, cache_dir=manager.cache_dir)
++    idx = other._ensure_symbol_index(SYMBOL, timeframe=timeframe)
++    idx["meta"]["known_gaps"] = [{"start_ts": 2 * ONE_MIN_MS, "end_ts": 3 * ONE_MIN_MS, "reason": "manual"}]
++    other._save_index(SYMBOL, timeframe=timeframe)
++    after = manager._projection_shared_content_signature(SYMBOL, 0, 3 * ONE_MIN_MS, timeframe=timeframe)
++    assert after != before
++    assert after == reference(manager)._projection_shared_content_signature(SYMBOL, 0, 3 * ONE_MIN_MS, timeframe=timeframe)
++    assert after[1] == ((2 * ONE_MIN_MS, 3 * ONE_MIN_MS, "manual"),)
++    other._cleanup_on_exit()
++
++
++def test_warm_recent_window_does_not_scan_historical_gaps_or_copy_candles(manager, monkeypatch):
++    """16k old gaps cause zero normalization and zero history copies on a warm hit."""
++    count = 16_884
++    install(manager, [dict(start_ts=i * ONE_MIN_MS, end_ts=i * ONE_MIN_MS,
++                           added_at=1, last_retry_at=1, retry_count=3, reason="auto_detected")
++                      for i in range(count)])
++    start, end = (count + 5) * ONE_MIN_MS, (count + 10) * ONE_MIN_MS
++    compare(manager, start, end)
++    def unexpected(*args, **kwargs):
++        raise AssertionError("warm empty window rescanned or copied historical data")
++    monkeypatch.setattr(module._GapMetadataList, "_build_range_index", unexpected)
++    monkeypatch.setattr(module, "_sorted_candle_copy", unexpected)
++    original = manager._normalize_gap_entries
++    def empty_only(values):
++        assert len(values) == 0
++        return original(values)
++    monkeypatch.setattr(manager, "_normalize_gap_entries", empty_only)
++    for _ in range(10):
++        assert manager._unverified_gap_ranges(SYMBOL, start, end) == []
++        assert manager._unverified_uncovered_gap_ranges(SYMBOL, start, end) == []
++        assert manager._due_unverified_gap_ranges(SYMBOL, start, end) == []
++        assert manager._projection_shared_content_signature(SYMBOL, start, end, timeframe="1m")[1] == ()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("coverage", ["none", "covered", "missing", "synthetic"])
++async def test_full_candle_and_warm_ema_results_match_full_scan(manager, tmp_path, coverage):
++    """Nonconstant prices retain exact candle/EMA outputs through cold and warm reads."""
++    before = FullScanReference(exchange=None, exchange_name="hyperliquid",
++                               cache_dir=str(tmp_path / "reference"))
++    before._now_ms_callback = lambda: NOW
++    end = NOW // ONE_MIN_MS * ONE_MIN_MS - ONE_MIN_MS
++    rows = np.zeros(800, dtype=CANDLE_DTYPE)
++    rows["ts"] = np.arange(end - 799 * ONE_MIN_MS, end + 1, ONE_MIN_MS)
++    rows["c"] = 100.0 + np.sin(np.arange(800) / 13.0) * 7.0
++    rows["o"] = rows["c"] + 0.1
++    rows["h"] = rows["c"] + 0.7
++    rows["l"] = rows["c"] - 0.5
++    rows["bv"] = 2.0 + np.arange(800) % 11
++    gaps = [dict(start_ts=i * ONE_MIN_MS, end_ts=i * ONE_MIN_MS,
++                 reason="auto_detected", added_at=1, last_retry_at=1) for i in range(1500)]
++    if coverage != "none":
++        gaps.append(dict(start_ts=int(rows["ts"][600]), end_ts=int(rows["ts"][601]),
++                         reason="auto_detected", added_at=NOW, last_retry_at=NOW))
++    if coverage == "missing":
++        rows = np.delete(rows, [600, 601])
++    for cm in (manager, before):
++        install(cm, copy.deepcopy(gaps))
++        cm._cache[SYMBOL] = rows.copy()
++        if coverage == "synthetic":
++            cm._synthetic_timestamps[SYMBOL] = set(int(ts) for ts in rows["ts"][600:602])
++    try:
++        for _ in range(3):
++            kwargs = dict(start_ts=end - 499 * ONE_MIN_MS, end_ts=end,
++                          allow_remote_fetch=False, allow_provisional_internal_gaps=True)
++            actual = await manager.get_candles(SYMBOL, **kwargs)
++            expected = await before.get_candles(SYMBOL, **kwargs)
++            np.testing.assert_array_equal(actual, expected)
++        # Remove the finalized endpoint to exercise a real projected open tail.
++        for cm in (manager, before):
++            cm._cache[SYMBOL] = rows[:-1].copy()
++            cm._projected_open_tail_ema_cache.clear()
++        kwargs = dict(latest_expected_ts=end, last_cached_ts=end - ONE_MIN_MS,
++                      max_tail_gap_ms=3 * ONE_MIN_MS)
++        for _ in range(3):
++            actual = await manager.get_projected_open_tail_ema_metrics(
++                SYMBOL, {"close": [13.0, 77.0], "qv": [40.0], "log_range": [63.0]}, **kwargs)
++            expected = await before.get_projected_open_tail_ema_metrics(
++                SYMBOL, {"close": [13.0, 77.0], "qv": [40.0], "log_range": [63.0]}, **kwargs)
++            assert actual == expected
++            if coverage == "none": assert actual["close"]
++    finally:
++        before._cleanup_on_exit()
++
++
++@pytest.mark.parametrize("insertion", ["append", "replace_record", "nested_value", "owned_alias"])
++def test_inserted_container_aliases_cannot_freeze_the_range_view(manager, insertion):
++    """External aliases use conservative scans; existing owned aliases stay shared."""
++    gaps = install(manager, [dict(start_ts=0, end_ts=ONE_MIN_MS, reason="fetch_failed")])
++    compare(manager, 0, 10 * ONE_MIN_MS)
++    alias = dict(start_ts=4 * ONE_MIN_MS, end_ts=5 * ONE_MIN_MS)
++    if insertion == "append": gaps.append(alias)
++    elif insertion == "replace_record": gaps[0] = alias
++    elif insertion == "nested_value":
++        alias = [4 * ONE_MIN_MS, 5 * ONE_MIN_MS]
++        gaps.append(alias)
++    else:
++        alias = gaps[0]
++        gaps.append(alias)
++        assert gaps[0] is gaps[1]
++    compare(manager, 0, 10 * ONE_MIN_MS)
++    if isinstance(alias, dict): alias.update(start_ts=8 * ONE_MIN_MS, end_ts=9 * ONE_MIN_MS)
++    else: alias[:] = [8 * ONE_MIN_MS, 9 * ONE_MIN_MS]
++    compare(manager, 0, 10 * ONE_MIN_MS)
++    compare(manager, 0, ONE_MIN_MS)
++    compare(manager, 8 * ONE_MIN_MS, 9 * ONE_MIN_MS)

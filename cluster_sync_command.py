@@ -344,6 +344,10 @@ def run_command(
         payload = _hello_payload(root, identity, remote_node)
         materialized = _read_materialized_snapshot(root)
         payload["state_vector"] = materialized.get("state_vector") or {}
+        # Share the authenticated read cohort instead of starting another SSH
+        # forced-command Python process for the idle mailbox index request.
+        messages = _mailbox_call(lambda: ClusterMailbox(root).index())
+        payload["mailbox_index"] = {"ok": True, "count": len(messages), "messages": messages}
         return payload
     if verb == "hello":
         payload = _hello_payload(root, identity, remote_node)

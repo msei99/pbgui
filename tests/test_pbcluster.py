@@ -1664,3 +1664,93 @@ def test_cluster_sync_worker_repairs_remote_gap_before_handshake(tmp_path: Path)
 
     assert vector == {NODE_C: 3}
     assert client.calls == [("handshake", None), ("repair-op-gap", missing), ("handshake", None)]
+
+
+@pytest.mark.parametrize('bundled', [True, False])
+def test_idle_sync_consumes_bundled_mailbox_with_legacy_fallback(tmp_path, monkeypatch, bundled):
+    """A complete idle peer pass saves one RPC; older handshakes retain index fetch."""
+    root = default_cluster_root(tmp_path)
+    ensure_local_identity(root, role='master', pbname='master-a', cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(root, 'ADD_NODE', {'node_id': NODE_ID, 'role': 'master', 'pbname': 'master-a'})
+    append_operation(root, 'ADD_NODE', {'node_id': NODE_B, 'role': 'vps', 'pbname': 'runner-b',
+                                      'sync_mode': 'reachable', 'ssh_host': 'runner-b'})
+    materialized = rebuild_materialized_state(root)
+    calls = []
+
+    class Client:
+        """Advertise a converged peer with optional bundled mailbox metadata."""
+        def run(self, peer, local_node_id, command, payload=None):
+            """Serve only the expected idle sync commands."""
+            calls.append(command)
+            if command == 'handshake':
+                result = {'ok': True, 'cluster_id': CLUSTER_ID, 'node_id': NODE_B,
+                          'state_vector': materialized['state_vector'], 'mailbox_capability': True}
+                if bundled:
+                    result['mailbox_index'] = {'ok': True, 'messages': []}
+                return result
+            if command == 'get-mailbox-index':
+                return {'ok': True, 'messages': []}
+            raise AssertionError(command)
+
+    worker = ClusterSyncWorker(tmp_path, peer_client=Client())
+    result = worker._sync_peers(read_local_identity(root), materialized)
+    assert len(result) == 1
+    assert result[0]['ok'] is True, result
+    assert calls == (['handshake'] if bundled else ['handshake', 'get-mailbox-index'])
+
+
+def test_bundled_mailbox_retains_stale_message_policy(monkeypatch, tmp_path):
+    """An expired bundled entry still uses the existing bounded stale-message path."""
+    class Mailbox:
+        """Empty local mailbox; unexpected delivery would fail the test."""
+        def __init__(self, *_args, **_kwargs):
+            """Accept the worker-owned mailbox arguments."""
+        def index(self):
+            """No local messages need pushing."""
+            return []
+
+    calls = []
+
+    class Client:
+        """Simulate remote expiry between the bundled index and message read."""
+        def run(self, peer, local_node_id, command, payload=None):
+            """Reject the expired message without accepting an index fetch."""
+            calls.append(command)
+            assert command == 'get-mailbox-message expired'
+            raise RuntimeError('mailbox message has expired')
+
+    monkeypatch.setattr(cluster_sync_worker, 'ClusterMailbox', Mailbox)
+    worker = ClusterSyncWorker(tmp_path, peer_client=Client())
+    result = worker._sync_mailbox({'node_id': NODE_B}, NODE_ID,
+                                 remote_payload={'messages': [{'message_id': 'expired'}]})
+    assert result == {'supported': True, 'pulled': 0, 'pushed': 0, 'acked': 0}
+    assert calls == ['get-mailbox-message expired']
+
+
+@pytest.mark.parametrize('pulled,checkpoint', [(0, 'none'), (0, 'current'), (1, 'none'),
+                                              (0, 'local_installed'), (0, 'remote_installed')])
+def test_mailbox_snapshot_reuse_only_without_state_exchange(monkeypatch, tmp_path, pulled, checkpoint):
+    """Changed operations or checkpoints require the original later mailbox snapshot."""
+    root = default_cluster_root(tmp_path)
+    ensure_local_identity(root, role='master', pbname='synthetic', cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    materialized = rebuild_materialized_state(root)
+    vector = materialized.get('state_vector') or {}
+    worker = ClusterSyncWorker(tmp_path, peer_client=_FailingPeerClient())
+    bundled = {'messages': []}
+    hello = {'cluster_id': CLUSTER_ID, 'node_id': NODE_B, 'mailbox_capability': True,
+             'mailbox_index': bundled}
+    monkeypatch.setattr(worker, '_peer_handshake_with_gap_repair', lambda *a: (hello, vector))
+    monkeypatch.setattr(worker, '_reconcile_peer_checkpoint', lambda *a: checkpoint)
+    monkeypatch.setattr(worker, '_record_peer_cluster_ssh_metadata', lambda *a: False)
+    monkeypatch.setattr(worker, '_pull_missing_operations', lambda *a: pulled)
+    observed = []
+
+    def mailbox(*args, **kwargs):
+        """Capture the worker's transport choice without any real mailbox IO."""
+        observed.append(kwargs['remote_payload'])
+        return {'supported': True, 'pulled': 0, 'pushed': 0, 'acked': 0}
+
+    monkeypatch.setattr(worker, '_sync_mailbox', mailbox)
+    worker._sync_peer({'node_id': NODE_B}, NODE_ID, CLUSTER_ID, materialized,
+                      lambda: [], lambda: {}, vector)
+    assert observed == ([bundled] if not pulled and checkpoint in {'none', 'current'} else [None])

@@ -1170,6 +1170,11 @@ class ClusterSyncWorker:
                 peer,
                 local_node_id,
                 membership_nodes=mailbox_nodes,
+                # An operation/checkpoint exchange may change mailbox membership;
+                # in that case retain the original post-exchange index read.
+                remote_payload=(hello.get("mailbox_index") if not (
+                    pulled_ops or pushed_ops or checkpoint_action in {"local_installed", "remote_installed"}
+                ) else None),
             )
 
         if (
@@ -1327,16 +1332,18 @@ class ClusterSyncWorker:
         local_node_id: str,
         *,
         membership_nodes: Mapping[str, Mapping[str, Any]] | None = None,
+        remote_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Exchange missing mailbox messages while retaining opaque relay payloads."""
 
         counts: dict[str, Any] = {"supported": False, "pulled": 0, "pushed": 0, "acked": 0}
-        try:
-            remote_payload = self.peer_client.run(peer, local_node_id, "get-mailbox-index")
-        except Exception as exc:
-            if _is_unsupported_command_error(exc, "get-mailbox-index"):
-                return counts
-            raise
+        if remote_payload is None:
+            try:
+                remote_payload = self.peer_client.run(peer, local_node_id, "get-mailbox-index")
+            except Exception as exc:
+                if _is_unsupported_command_error(exc, "get-mailbox-index"):
+                    return counts
+                raise
         counts["supported"] = True
         remote_items = remote_payload.get("messages") if isinstance(remote_payload, dict) else []
         remote_items = remote_items if isinstance(remote_items, list) else []

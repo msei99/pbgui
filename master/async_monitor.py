@@ -3358,17 +3358,97 @@ def read_pb7_config_schema(pb7dir):
     return 'N/A'
 
 
+# Only non-secret subprocess facts cross collector invocations. Dynamic host,
+# credential, service and installation-blocker state is always collected anew.
+try:
+    _software_probes = json.loads(os.environ.get('PBGUI_CACHED_SOFTWARE_PROBES', '{}'))
+    if not isinstance(_software_probes, dict) or len(_software_probes) > 32:
+        _software_probes = {}
+except (TypeError, ValueError):
+    _software_probes = {}
+_next_software_probes = {}
+
+
+def software_probe_signature(paths):
+    """Fingerprint paths and symlink targets without reading their contents."""
+    signature = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        try:
+            resolved = path.resolve()
+            st = path.stat()
+            signature.append([str(path), str(resolved), st.st_dev, st.st_ino,
+                              st.st_size, st.st_mtime_ns, st.st_ctime_ns])
+        except FileNotFoundError:
+            signature.append([str(path), None])
+        except (OSError, RuntimeError):
+            return None
+    return signature
+
+
+def cached_software_probe(key, paths, loader):
+    """Reuse successful facts for at most 60s, invalidating observed changes."""
+    if 'PBGUI_CACHED_SOFTWARE_PROBES' not in os.environ:
+        return loader()
+    signature = software_probe_signature(paths)
+    now = time.monotonic()
+    entry = _software_probes.get(key)
+    if (signature is not None and isinstance(entry, list) and len(entry) == 3
+            and entry[0] == signature and isinstance(entry[1], (int, float))
+            and 0 <= now - entry[1] < 60 and isinstance(entry[2], str) and entry[2]):
+        _next_software_probes[key] = entry
+        return entry[2]
+    value = loader()
+    # A failed probe or update racing the probe must not certify a new cache.
+    if value and signature is not None and signature == software_probe_signature(paths):
+        if len(_next_software_probes) < 32:
+            _next_software_probes[key] = [signature, time.monotonic(), value]
+    return value
+
+
+def git_probe_paths(git_dir):
+    """Track HEAD, loose/packed refs and shared worktree metadata."""
+    root = Path(git_dir)
+    paths = [root, root / 'commondir']
+    common = root
+    try:
+        common_file = root / 'commondir'
+        if common_file.is_file():
+            common = (root / common_file.read_text().strip()).resolve()
+        for base in (root, common):
+            paths.extend(base / name for name in (
+                'HEAD', 'packed-refs', 'config', 'shallow', 'info/grafts', 'refs/replace', 'objects/pack'))
+        current = root / 'HEAD'
+        for _ in range(8):
+            text = current.read_text().strip()
+            if not text.startswith('ref: '):
+                break
+            ref = text[5:]
+            # Read only Git ref paths below the configured repository.
+            if not ref.startswith('refs/') or '..' in Path(ref).parts:
+                return paths
+            paths.extend((root / ref, common / ref))
+            current = root / ref if (root / ref).exists() else common / ref
+    except (OSError, UnicodeError, ValueError):
+        pass
+    return paths
+
+
 def git_value(git_dir, args, default=''):
     if not git_dir or not Path(git_dir).exists():
         return default
-    value = run(['git', '--git-dir', git_dir] + list(args), timeout=10)
+    command = ['git', '--git-dir', git_dir] + list(args)
+    value = cached_software_probe(json.dumps(command), git_probe_paths(git_dir),
+                                  lambda: run(command, timeout=10))
     return value or default
 
 
 def python_version(exe):
     if not exe or not Path(exe).exists():
         return ''
-    return run([exe, '-c', 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'], timeout=5)
+    return cached_software_probe(json.dumps(['python', exe]),
+                                  [exe, Path(exe).parent.parent / 'pyvenv.cfg'],
+                                  lambda: run([exe, '-c', 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'], timeout=5))
 
 
 cfg = configparser.ConfigParser()
@@ -3809,6 +3889,8 @@ if os.path.isdir(logs_dir):
             available.append('data/logs/' + f)
 result['available_logs'] = available
 result['systemd_migration'] = build_systemd_migration_status(PBGDIR, pbrun_configured, pbdata_configured, credentials['credential_active'])
+if 'PBGUI_CACHED_SOFTWARE_PROBES' in os.environ:
+    result['_software_probe_cache'] = _next_software_probes
 
 print(json.dumps(result))
 PY'''
