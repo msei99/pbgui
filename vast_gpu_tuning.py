@@ -302,7 +302,7 @@ def resolve_gpu_settings(
     profile_scale = max(1, profile_population // 1024) if profile_population is not None else None
     profile_window = 128 * profile_scale if profile_scale is not None else None
     iterations = optimize.get('iters')
-    auto_profile = (
+    auto_population = (
         vram_gb is not None
         and isinstance(iterations, int)
         and not isinstance(iterations, bool)
@@ -312,6 +312,9 @@ def resolve_gpu_settings(
         and gpu.get('population_size') is None
         and gpu.get('batch_size') is None
         and gpu.get('max_dispatch_candidate_bars') is None
+    )
+    auto_profile = (
+        auto_population
         and int(gpu.get('validate_per_generation') or 8) == 8
         and int(gpu.get('drift_probes') if gpu.get('drift_probes') is not None else 4) == 4
         and int(gpu.get('drift_window') or 128) == 128
@@ -339,6 +342,15 @@ def resolve_gpu_settings(
             )
         gpu.update(automatic)
 
+    elif auto_population:
+        # Explicit/copied evidence settings must not switch an automatic
+        # population back to PB8's standalone 1024 fallback. Preserve their
+        # chosen values while resolving population for this rental's hardware.
+        automatic['population_size'] = profile_population
+        if rental_override is not None:
+            automatic['batch_size'] = rental_override['batch_size']
+        gpu.update(automatic)
+
     if gpu.get('max_dispatch_candidate_bars') is None and vram_gb is not None:
         configured_population = gpu.get('population_size') or optimize.get('population_size')
         target_candidates = (
@@ -360,9 +372,9 @@ def resolve_gpu_settings(
         population = gpu.get('population_size')
         if population is None:
             population = optimize.get('population_size')
-        if population is not None:
+        if population is not None and 'population_size' not in automatic:
             preserved['population_size'] = population
-        if gpu.get('batch_size') is not None:
+        if gpu.get('batch_size') is not None and 'batch_size' not in automatic:
             preserved['batch_size'] = gpu['batch_size']
 
     population = gpu.get('population_size') or optimize.get('population_size')
@@ -384,7 +396,7 @@ def resolve_gpu_settings(
         'vram_gb': round(vram_gb, 2) if vram_gb is not None else None,
         'memory_bandwidth_gbps': memory_bandwidth_gbps,
         'tflops': tflops,
-        'applied_by': ('rental_override' if rental_override is not None and auto_profile
+        'applied_by': ('rental_override' if rental_override is not None and auto_population
                        else 'local_calibration' if calibrated_profile and calibrated_profile.get('source') == 'local'
                        else 'pbgui_reference' if calibrated_profile else 'pbgui'),
         'calibration_profile_id': calibrated_profile.get('id') if calibrated_profile else None,

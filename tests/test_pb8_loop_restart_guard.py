@@ -20,7 +20,7 @@ def test_inflight_request_blocks_restart_and_clears_after_response(tmp_path, mon
             await finish.wait()
             return {'decision': 'continue'}
 
-        controller = LoopController(tmp_path, store=SimpleNamespace(), backend=SimpleNamespace(),
+        controller = LoopController(tmp_path, store=SimpleNamespace(knowledge=lambda _owner: {}), backend=SimpleNamespace(),
                                     ai=SimpleNamespace(decide=decide))
         monkeypatch.setattr(loop_optimizer_v8, '_controller', controller)
         monkeypatch.setattr(PBApiServer, '_api_restart_lease', None)
@@ -28,7 +28,7 @@ def test_inflight_request_blocks_restart_and_clears_after_response(tmp_path, mon
         monkeypatch.setattr(PBApiServer, '_acquire_api_restart_leases', lambda: [object()])
         released = []
         monkeypatch.setattr(PBApiServer, '_release_api_restart_leases', lambda leases: released.extend(leases))
-        task = asyncio.create_task(controller.decision({'round': 0}, 'evaluate', {}))
+        task = asyncio.create_task(controller.decision({'round': 0, 'owner': 'a' * 32}, 'evaluate', {}))
         await started.wait()
         with pytest.raises(HTTPException) as error:
             await PBApiServer.server_restart(SimpleNamespace())
@@ -51,7 +51,7 @@ def test_restart_reservation_closes_ai_admission_before_awaited_inspection(tmp_p
             calls.append('sent')
             return {}
 
-        controller = LoopController(tmp_path, store=SimpleNamespace(), backend=SimpleNamespace(),
+        controller = LoopController(tmp_path, store=SimpleNamespace(knowledge=lambda _owner: {}), backend=SimpleNamespace(),
                                     ai=SimpleNamespace(decide=decide))
         monkeypatch.setattr(loop_optimizer_v8, '_controller', controller)
         monkeypatch.setattr(PBApiServer, '_api_restart_lease', None)
@@ -61,7 +61,7 @@ def test_restart_reservation_closes_ai_admission_before_awaited_inspection(tmp_p
 
         async def inspecting():
             with pytest.raises(LoopRestartPending):
-                await controller.decision({'round': 0}, 'evaluate', {})
+                await controller.decision({'round': 0, 'owner': 'a' * 32}, 'evaluate', {})
             return True, 'Other operation is busy'
 
         monkeypatch.setattr(PBApiServer, '_restart_block_state', inspecting)
@@ -69,7 +69,7 @@ def test_restart_reservation_closes_ai_admission_before_awaited_inspection(tmp_p
             await PBApiServer.server_restart(SimpleNamespace())
         assert calls == []
         assert PBApiServer._api_restart_lease is None
-        assert await controller.decision({'round': 0}, 'evaluate', {}) == {}
+        assert await controller.decision({'round': 0, 'owner': 'a' * 32}, 'evaluate', {}) == {}
         assert calls == ['sent']
     asyncio.run(scenario())
 
@@ -80,8 +80,8 @@ def test_failed_or_cancelled_decision_releases_restart_guard(tmp_path, error):
     async def decide(*_args):
         raise error
 
-    controller = LoopController(tmp_path, store=SimpleNamespace(), backend=SimpleNamespace(),
+    controller = LoopController(tmp_path, store=SimpleNamespace(knowledge=lambda _owner: {}), backend=SimpleNamespace(),
                                 ai=SimpleNamespace(decide=decide))
     with pytest.raises(type(error)):
-        asyncio.run(controller.decision({'round': 0}, 'evaluate', {}))
+        asyncio.run(controller.decision({'round': 0, 'owner': 'a' * 32}, 'evaluate', {}))
     assert not controller.restart_block_reason()

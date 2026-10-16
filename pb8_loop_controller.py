@@ -14,6 +14,7 @@ from logging_helpers import human_log as _log
 from pb8_loop_store import ACTIVE, TERMINAL, LoopStore, LoopDeletionConflict, digest, validate_change, config_changes, apply_optimizer_start, qualified_winner, fresh_optimizer_config, validate_hsl_policy, round_limit, optimizer_execution_evidence
 from pb8_loop_ai import LoopAI, LoopAIRetryScheduled, LoopAIRequestFailed, validate_rubric
 from pb8_loop_evidence import LoopAIPause, BootstrapWithoutAdvice
+from pb8_loop_exploration import evaluated_stagnation, validate_exploration
 from pb8_loop_backend import LoopBackend
 from pb8_loop_observer import ObserverJobs
 
@@ -253,6 +254,9 @@ class LoopController:
         return self.store.update(record['owner'], record['id'], guarded)
 
     async def decision(self, record, stage, evidence):
+        reset_at = (await owned_thread(self.store.knowledge, record['owner'])).get('learning_reset_at', 0)
+        if reset_at:
+            evidence = {**evidence, 'learning_reset_at': reset_at}
         previous = record.get('last_ai_decision') or {}
         if (previous.get('stage') == stage and previous.get('round') == record['round']
                 and previous.get('evidence_digest') == digest(evidence)
@@ -667,6 +671,19 @@ class LoopController:
                 current_best.update(operation=selected_operation, ai_selected=True, selection_reason=decision['reason'])
             previous = record.get('best') or record.get('baseline') or {}
             improved = current_best is not None and selected_operation != previous.get('operation', 'baseline')
+            # Validate before committing the evaluation, so repeated invalid proposals
+            # cannot reset the repair counter or consume an optimizer attempt.
+            next_stagnation = evaluated_stagnation(record, selected_operation)
+            continuing = (len(completed_rounds | {record['round']}) < max_rounds and remaining > 0
+                          and (len(completed_rounds | {record['round']}) < required_rounds
+                               or (not decision.get('finish') and next_stagnation < settings['patience'])))
+            if continuing:
+                for variant in decision.get('variants') or []:
+                    if isinstance(variant, dict) and isinstance(variant.get('config'), dict):
+                        validate_change(record, variant['config'], variant.get('overrides', record['initial_overrides']))
+                        changes = validate_exploration(record, variant['config'], stagnation_after=next_stagnation)
+                        if changes and (not isinstance(variant.get('reason'), str) or not variant['reason'].strip()):
+                            raise ValueError('Explain the search hypothesis in variant.reason')
             cycle_best = current_best
             entry = {'coins': settings['goals'].get('coins', []), 'hypothesis': decision.get('knowledge_hypothesis', ''),
                      'knowledge': decision.get('knowledge', ''), 'contradicts': decision.get('contradicts', []),

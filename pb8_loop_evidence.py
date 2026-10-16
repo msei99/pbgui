@@ -261,6 +261,8 @@ class EvidenceStore:
         directory = ensure_private_directory(owner / 'finding_index')
         result = {}
         with advisory_file_lock(owner / 'evidence-bindings'):
+            knowledge = self.store.knowledge(record['owner'])
+            reset_at = knowledge.get('learning_reset_at', 0)
             for path in sorted(archive_dir.glob('*.json')):
                 if path.is_symlink() or len(path.stem) != 64:
                     continue
@@ -293,13 +295,15 @@ class EvidenceStore:
                         value['_archive_binding'] = {'key': path.stem, 'sha256': hashlib.sha256(raw).hexdigest(),
                                                      'bytes': len(raw), 'loop': value['loop'], 'created_at': value['created_at']}
                         atomic_write_private_text(cached, json.dumps(value, indent=4, allow_nan=False) + '\n')
-                    if not value.get('skip_native_source'):
+                    if not value.get('skip_native_source') and (not reset_at or value.get('created_at', 0) > reset_at):
                         result[value['id']] = value
                 except (OSError, ValueError, KeyError) as exc:
                     raise LoopAIPause('evidence_recovery', 'Historical evidence index could not be verified',
                                       error_type=type(exc).__name__) from exc
             # Supersession lives in the mutable knowledge index, never by rewriting originals.
-            for entry in self.store.knowledge(record['owner'])['entries']:
+            for entry in knowledge['entries']:
+                if reset_at and entry.get('created_at', 0) <= reset_at:
+                    continue
                 if entry['id'] in result:
                     for key in ('superseded_by', 'contradiction_resolution'):
                         if key in entry:

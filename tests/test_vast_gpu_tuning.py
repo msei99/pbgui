@@ -79,8 +79,84 @@ def test_large_workload_scales_population_and_exact_evidence_together():
     assert original['optimize']['gpu']['population_size'] is None
 
 
+def test_loop_followup_preserves_automatic_population_with_copied_evidence():
+    """Copying actual drift settings into an AI proposal must not multiply CPU work eightfold."""
+    source = workload()
+    original = deepcopy(source)
+    state = {'workers': 15, 'hardware': {'gpu': 'RTX 3060', 'vram_bytes': 12 * 1024**3}}
+    offer = {'gpu_mem_bw_gbps': 318.8, 'tflops': 12.04}
+    first = deepcopy(source)
+    resolve_gpu_settings(first, state, offer)
+    followup = deepcopy(source)
+    for key in ('validate_per_generation', 'drift_probes', 'drift_window'):
+        followup['optimize']['gpu'][key] = first['optimize']['gpu'][key]
+    assert followup['optimize']['gpu']['population_size'] is None
+    result = resolve_gpu_settings(followup, state, offer)
+    for execution in (first, followup):
+        gpu = execution['optimize']['gpu']
+        assert gpu['population_size'] == 8192
+        assert gpu['population_size'] / gpu['validate_per_generation'] == 128
+    assert result['automatic']['population_size'] == 8192
+    assert 'population_size' not in result['preserved']
+    assert result['dispatch_candidates'] == 8192 and result['dispatch_chunks'] == 1
+    assert source == original
+
+
+@pytest.mark.parametrize('evidence', [(64, 32, 1024), (32, 4, 256), (8, 2, 256)])
+def test_automatic_population_does_not_overwrite_custom_evidence_settings(evidence):
+    """User-chosen evidence density remains authoritative when population is automatic."""
+    config = workload()
+    keys = ('validate_per_generation', 'drift_probes', 'drift_window')
+    config['optimize']['gpu'].update(zip(keys, evidence))
+    result = resolve_gpu_settings(config, {'hardware': {'vram_bytes': 12 * 1024**3}}, {})
+    assert result['automatic']['population_size'] == 8192
+    assert tuple(config['optimize']['gpu'][key] for key in keys) == evidence
+    assert not set(keys) & result['automatic'].keys()
+
+
+@pytest.mark.parametrize('manual', ['disabled', 'population', 'global_population', 'batch', 'dispatch', 'short_run'])
+def test_custom_evidence_does_not_bypass_manual_sizing_or_short_run_guard(manual):
+    """Independent population Auto preserves existing manual-size and resource boundaries."""
+    config = workload()
+    opt = config['optimize']
+    gpu = opt['gpu']
+    gpu.update(validate_per_generation=64, drift_probes=32, drift_window=1024)
+    if manual == 'disabled':
+        gpu['auto_lean_parallelism'] = False
+    elif manual == 'population':
+        gpu['population_size'] = 4096
+    elif manual == 'global_population':
+        opt['population_size'] = 4096
+    elif manual == 'batch':
+        gpu['batch_size'] = 512
+    elif manual == 'dispatch':
+        gpu['max_dispatch_candidate_bars'] = 1_000_000_000
+    else:
+        opt['iters'] = 256
+    before = deepcopy(config)
+    result = resolve_gpu_settings(config, {'hardware': {'vram_bytes': 12 * 1024**3}}, {})
+    assert 'population_size' not in result['automatic']
+    assert gpu['population_size'] == before['optimize']['gpu']['population_size']
+    assert opt.get('population_size') == before['optimize'].get('population_size')
+    assert gpu.get('batch_size') == before['optimize']['gpu'].get('batch_size')
+
+
+def test_rental_override_with_custom_evidence_keeps_selected_sizes():
+    """A selected rental profile also supplies Auto population when evidence is explicit."""
+    config = workload()
+    config['optimize']['gpu'].update(validate_per_generation=64, drift_probes=32, drift_window=1024)
+    selected = {'population_size': 6656, 'batch_size': 6656, 'max_dispatch_candidate_bars': 4_000_000_000}
+    result = resolve_gpu_settings(config, {'workers': 15}, {'vram_gb': 12}, selected)
+    gpu = config['optimize']['gpu']
+    assert all(gpu[key] == value for key, value in selected.items())
+    assert gpu['validate_per_generation'] == 64 and gpu['drift_window'] == 1024
+    assert result['applied_by'] == 'rental_override'
+    assert 'batch_size' not in result['preserved']
+
+
 @pytest.mark.parametrize('legacy_image', [False, True])
-def test_exact_local_calibration_profile_precedes_hardware_default(monkeypatch, legacy_image):
+@pytest.mark.parametrize('custom_evidence', [False, True])
+def test_exact_local_calibration_profile_precedes_hardware_default(monkeypatch, legacy_image, custom_evidence):
     """An exact current local profile supplies automatic coordinated sizing."""
     from vast_jobs import IMAGE, REVISION
     import vast_calibration
@@ -103,6 +179,8 @@ def test_exact_local_calibration_profile_precedes_hardware_default(monkeypatch, 
 
     monkeypatch.setattr(vast_calibration, 'CalibrationProfiles', Profiles)
     config = workload()
+    if custom_evidence:
+        config['optimize']['gpu'].update(validate_per_generation=64, drift_probes=32, drift_window=1024)
     result = resolve_gpu_settings(
         config,
         {'workers': 16, 'hardware': {'gpu': 'NVIDIA RTX 3090', 'vram_bytes': 24 * 1024**3,
@@ -115,6 +193,9 @@ def test_exact_local_calibration_profile_precedes_hardware_default(monkeypatch, 
     assert result['calibration_profile_id'] == 'a' * 64
     assert config['optimize']['gpu']['max_dispatch_candidate_bars'] == 8_000_000_000
     assert result['calibration_max_dispatch_candidate_bars'] == 8_000_000_000
+    if custom_evidence:
+        assert config['optimize']['gpu']['validate_per_generation'] == 64
+        assert 'validate_per_generation' not in result['automatic']
     broader = workload()
     broader['live']['approved_coins']['long'] += ['NEW' + str(index) for index in range(41)]
     resolve_gpu_settings(

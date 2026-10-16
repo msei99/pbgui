@@ -52,6 +52,21 @@ Keep user goal priority, scenarios, coin, strategy, side and hsl_mode unchanged 
 Fresh random populations/controller seeds are mandatory; old configs are comparison/advice only.
 Use each fresh random population without overwriting it with a previous winner.
 Winners are comparison evidence only.
+Broad exploration overrides older advice to make only targeted adjustments. At evaluate, when
+a next optimizer run is required, explain one coherent experiment in variant.reason and choose:
+(1) bounds: move endpoints of at least two related tunable bounds by 25% of previous range widths
+(one if only one tunable bound exists); (2) scoring: change effective allowed objectives or their
+scenario/reducer basis; (3) limits: add/remove an optional search filter or change a threshold by
+at least 20%. Do not loosen/remove filters enforcing hard user goals. CPU winner qualification
+always enforces the unchanged complete rubric, independently of optimizer scoring and filters.
+evidence.exploration_policy provides actual previous inputs and recent experiments with exact
+candidate results. After two non-improving rounds, the next search must be materially different
+from every tested search, not just a previous scoring choice plus tiny bound noise. Prefer an
+untested hypothesis about scoring, filters or bounds, rather than repeatedly tweaking mutation.
+Seeds, ordering, duplicates, labels, bot reference values and quantization steps do not count.
+Do not narrow automatically around the incumbent or expand into invalid parameter domains.
+Preserve user goals, fixed values, inactive sides and safety constraints. Broader search is not
+evidence of better results; test hypotheses without claiming individual causality for joint edits.
 HSL policy overrides any older saved instructions: off requires disabled HSL in every effective
 side/config/override and its search bounds; on requires active, effective HSL on the traded sides
 throughout every experiment. Only auto permits AI changes to HSL activation. Never change hsl_mode.
@@ -67,6 +82,7 @@ def validate_decision(record, stage, evidence, text):
     """Validate before commit; optional finding length never invalidates a winner."""
     from pb8_loop_ai import parse_object, validate_rubric
     from pb8_loop_store import validate_change
+    from pb8_loop_exploration import evaluated_stagnation, validate_exploration
     decision = parse_object(text)
     for key in ('knowledge', 'knowledge_hypothesis'):
         if key in decision and not isinstance(decision[key], str):
@@ -100,6 +116,11 @@ def validate_decision(record, stage, evidence, text):
             if not isinstance(variant, dict):
                 raise ValueError('Variant must be an object')
             validate_change(record, variant.get('config'), variant.get('overrides', record['initial_overrides']))
+            if stage == 'evaluate' and needs_variant:
+                changes = validate_exploration(record, variant['config'],
+                                              stagnation_after=evaluated_stagnation(record, decision['winner_operation']))
+                if changes and (not isinstance(variant.get('reason'), str) or not variant['reason'].strip()):
+                    raise ValueError('Explain the search hypothesis in variant.reason')
     return decision
 
 
@@ -108,9 +129,20 @@ async def run_decision(ai, record, stage, evidence):
     from pb8_loop_ai import instructions_for_run
     from pb8_loop_controller import owned_thread
     from pb8_loop_store import apply_run_limit, cloud_loop_metric_contract
+    from pb8_loop_exploration import exploration_policy
     settings = record['settings']
-    request_evidence_digest = sha(evidence)
+    metadata = await ai.preflight(record['owner'], settings)
+    profile = metadata.get('loop_profile') or record.get('ai_model_profile')
+    if profile is None:
+        raise LoopAIPause('context_budget', 'Model context settings are unavailable')
     evidence = copy.deepcopy(evidence)
+    if 'learning_reset_at' not in evidence:
+        reset_at = (await owned_thread(ai.store.knowledge, record['owner'])).get('learning_reset_at', 0)
+        if reset_at:
+            evidence['learning_reset_at'] = reset_at
+    request_evidence_digest = sha(evidence)
+    if stage == 'evaluate':
+        evidence['exploration_policy'] = exploration_policy(record)
     if record.get('repair_error'):
         evidence['repair_error'] = record['repair_error']
     input_digest = sha({'stage': stage, 'round': record['round'], 'evidence': evidence,
@@ -118,10 +150,6 @@ async def run_decision(ai, record, stage, evidence):
                         'initial_config': record['initial_config'], 'initial_overrides': record['initial_overrides'],
                         'training_exclusions': record.get('training_exclusions', record.get('holdouts', [])),
                         'instructions': instructions_for_run(record)['text'] + PROTOCOL})
-    metadata = await ai.preflight(record['owner'], settings)
-    profile = metadata.get('loop_profile') or record.get('ai_model_profile')
-    if profile is None:
-        raise LoopAIPause('context_budget', 'Model context settings are unavailable')
     ai.store.update(record['owner'], record['id'], lambda row: row.update(ai_model_profile=copy.deepcopy(profile)))
     fallback_fresh = False
     evidence_store = EvidenceStore(ai.store)
