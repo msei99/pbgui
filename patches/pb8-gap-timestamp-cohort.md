@@ -2,7 +2,7 @@
 
 Base: `fb8bf8c644df4d4901ac41f736b1957491393817`, the published head of [PR #1994](https://github.com/enarjord/passivbot/pull/1994).
 
-The patch is developed in `/tmp/pb8-gap-cohort-fix` on local branch `perf/gap-timestamp-cohort`. The PB8 branch is not committed, pushed, or part of the existing upstream PR. The Python-only fix was subsequently installed on manibot50 with explicit authorization; see [the deployment report](../docs/investigations/2026-10-16-gap-cohort-deployment.md). It leaves the original PB8 worker checkout untouched. It requires the earlier PR's candle/gap code; do not apply it directly to the older upstream base.
+The patch is developed in `/tmp/pb8-gap-cohort-fix` on local branch `perf/gap-timestamp-cohort`. Published as [upstream PR #1995](https://github.com/enarjord/passivbot/pull/1995), based on pending PR #1994, in commit `3876935ba`. It remains separate from the existing upstream PR; GitHub shows the parent changes until #1994 merges. The Python-only fix was subsequently installed on manibot50 with explicit authorization; see [the deployment report](../docs/investigations/2026-10-16-gap-cohort-deployment.md). It leaves the original PB8 worker checkout untouched. It requires the earlier PR's candle/gap code; do not apply it directly to the older upstream base.
 
 ## Change
 

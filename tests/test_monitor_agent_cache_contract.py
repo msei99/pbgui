@@ -2254,3 +2254,14 @@ def test_embedded_instance_collector_reports_unstamped_pb8_runtime(tmp_path: Pat
     assert row["blocked"] is True
     assert row["cluster_gate"] == "runtime_not_ready"
     assert "no source fingerprint stamp" in row["blocked_reason"]
+
+
+@pytest.mark.parametrize('argv', [[], ['python', '-m', 'worker'], ['passivbot', 'optimize'], ['config.json']])
+def test_unrelated_monitor_processes_need_no_root_resolution(monkeypatch, tmp_path, argv):
+    """Only commands containing a managed config suffix require path validation."""
+    monkeypatch.setattr(Path, 'resolve', lambda *a, **kw: pytest.fail('negative process resolved a root'))
+    assert monitor_agent._bot_identity_from_process(
+        tmp_path / 'proc', argv, pb7_main=tmp_path / 'pb7/src/main.py',
+        pb8_dir=tmp_path / 'pb8', pb8_python=tmp_path / 'venv/bin/python',
+        pb8_cli=tmp_path / 'venv/bin/passivbot',
+    ) is None

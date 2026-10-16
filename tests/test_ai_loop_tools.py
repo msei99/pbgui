@@ -2,6 +2,7 @@
 import asyncio
 import copy
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,6 +11,7 @@ from pb8_loop_store import LoopStore
 
 OWNER = 'a' * 32
 CHAT = 'b' * 32
+REQUEST = 'Optimize HYPE Long using the configured limits. Adapt optimizer settings freely.'
 
 
 @pytest.fixture
@@ -21,6 +23,9 @@ def environment(tmp_path, monkeypatch):
     service = AICapabilityService(tmp_path / 'ai')
     store = LoopStore(tmp_path / 'loops')
     monkeypatch.setattr(loops, '_controller', SimpleNamespace(store=store))
+    chat = SimpleNamespace(get_conversation=AsyncMock(return_value={
+        'messages': [{'role': 'user', 'content': REQUEST}]}), get_preferences=lambda _owner: {})
+    monkeypatch.setattr(loops, 'get_ai_chat_service', lambda: chat)
     bundle = {'config': {'config_version': 'v8.6.0', 'bot': {}, 'backtest': {}}, 'override_configs': {}}
     monkeypatch.setattr(optimize_v8, 'get_config', lambda *a, **k: copy.deepcopy(bundle))
     from contextlib import nullcontext
@@ -151,7 +156,8 @@ def test_loop_create_edit_and_owner_isolation(environment):
         assert other['configs'] == []
         current = await service.dispatch(OWNER, CHAT, 'get_ai_loop_configs', {'name': 'HYPE_loop'})
         changed = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_config', {
-            'name': 'HYPE_loop', 'config_name': 'HYPE', 'revision': current['revision'], 'settings': {'max_runs': 30}})
+            'name': 'HYPE_loop', 'config_name': 'HYPE', 'revision': current['revision'], 'reuse_existing': True,
+            'settings': {'max_runs': 30, 'max_rounds': 25, 'goals': {'coins': ['HYPE'], 'direction': 'long'}}})
         await approve(service, changed)
         saved = store.definition(OWNER, 'HYPE_loop')
         assert saved['revision'] == 2
@@ -183,7 +189,8 @@ def test_loop_stale_revision_is_rejected(environment):
             'name': 'demo', 'config_name': 'HYPE', 'settings': {'max_rounds': 10}})
         await approve(service, p)
         p = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_config', {
-            'name': 'demo', 'config_name': 'HYPE', 'revision': 1, 'settings': {'max_runs': 25}})
+            'name': 'demo', 'config_name': 'HYPE', 'revision': 1, 'reuse_existing': True,
+            'settings': {'max_runs': 25, 'max_rounds': 10}})
         row = store.definition(OWNER, 'demo')
         row['settings']['max_runs'] = 12
         store.save_definition(OWNER, 'demo', row['settings'], row['bundle'], row['source'], 1)
@@ -281,18 +288,25 @@ def native_runs(environment, monkeypatch):
     from fastapi.responses import JSONResponse
     service, store, rental, applied = environment
     selection = {'provider': 'chatgpt', 'model': 'gpt-test', 'profile': 'main', 'effort': 'high', 'service_tier': ''}
-    monkeypatch.setattr(runtime, 'get_ai_chat_service', lambda: SimpleNamespace(get_preferences=lambda owner: {'selection': selection}))
+    chat = runtime.get_ai_chat_service()
+    chat.get_preferences = lambda owner: {'selection': selection}
     settings = runtime.LoopStart(max_rounds=25, config_name='HYPE', provider='chatgpt', model='gpt-test',
         execution='vast', hours=12, max_runs=25, parallel=1, run_limit_mode='proxy', run_proxy=100000).model_dump(
             exclude={'authorization', 'provider', 'model', 'profile', 'effort', 'service_tier'})
-    store.save_definition(OWNER, 'native_loop', settings, {'config': {}, 'override_configs': {}}, {'kind': 'config', 'id': 'HYPE'}, None)
+    from ai_loop_request import bind_request, current_request
+    settings['goals'].update(text=REQUEST, presets=[], targets={})
+    request = current_request(CHAT, {'messages': [{'role': 'user', 'content': REQUEST}]})
+    source = {'kind': 'config', 'id': 'HYPE',
+              'loop_request': bind_request(request, store.instruction_version(OWNER, 'default'))}
+    store.save_definition(OWNER, 'native_loop', settings, {'config': {}, 'override_configs': {}}, source, None)
     calls = []
 
     async def queue(body, session=None, definition=None, *, owner=None, queue_proposal=None):
         """Create only a temporary native run; no AI or rental controller exists."""
         calls.append(('queue', owner, body.authorization, body.model))
         values = body.model_dump(exclude={'authorization'})
-        values.update(loop_name=definition['name'], definition_name=definition['name'], ai_queue_proposal=queue_proposal)
+        values.update(loop_name=definition['name'], definition_name=definition['name'],
+                      ai_queue_proposal=queue_proposal, source=definition['source'])
         row = store.create(owner, values, {}, {}, {}, [], {}, queued=True)
         return JSONResponse({'id': row['id']}, status_code=201)
 
@@ -316,7 +330,7 @@ def test_native_queue_proposal_rejects_incompatible_saved_source(native_runs):
     row = store.definition(OWNER, 'native_loop')
     row['bundle']['config'] = {'optimize': {'scoring': [{'metric': 'gain_strategy_eq', 'goal': 'max'}]}}
     updated = store.save_definition(OWNER, 'native_loop', row['settings'], row['bundle'],
-                                    {'kind': 'config', 'id': 'HYPE'}, row['revision'])
+                                    row['source'], row['revision'])
     async def scenario():
         """Never reach the native queue backend for an unsupported metric."""
         with pytest.raises(AICapabilityError, match='gain_strategy_eq'):
@@ -400,7 +414,8 @@ def test_native_gpu_loop_uses_owned_chat_without_saved_selection(native_runs, tm
     service, store, _, calls, _ = native_runs
     chat = AIChatService(tmp_path / 'chat')
     conversation = Conversation(id=CHAT, owner=OWNER, provider='chatgpt', model='chat-model',
-                                chatgpt_profile='gpu-profile', effort='high', service_tier='priority')
+                                chatgpt_profile='gpu-profile', effort='high', service_tier='priority',
+                                messages=[{'role': 'user', 'content': REQUEST}])
     chat.conversations[CHAT] = conversation
     chat.loaded_owners.add(OWNER)
     monkeypatch.setattr(runtime, 'get_ai_chat_service', lambda: chat)
@@ -413,7 +428,7 @@ def test_native_gpu_loop_uses_owned_chat_without_saved_selection(native_runs, tm
         assert 'selection' not in chat.get_preferences(OWNER)
         args = {'operation': operation, 'name': 'native_loop', 'revision': 2}
         if operation == 'start':
-            queued = store.create(OWNER, definition['settings'], {}, {}, {}, [], {}, queued=True)
+            queued = store.create(OWNER, {**definition['settings'], 'source': definition['source']}, {}, {}, {}, [], {}, queued=True)
             args = {'operation': 'start', 'loop_id': queued['id']}
         created = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_run', args)
         settings = created['preview']['settings']

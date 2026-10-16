@@ -877,3 +877,16 @@ def test_runv8_new_version_does_not_bypass_cluster_gate(tmp_path, monkeypatch):
     assert runner.start() is False
     assert runner._next_start_at == 0
     assert runner.cluster_gate == "version_mismatch"
+
+
+@pytest.mark.parametrize('argv', [[], ['python', '-m', 'worker'], ['passivbot', 'optimize'], ['passivbot-live']])
+def test_unrelated_processes_need_no_path_resolution(tmp_path, monkeypatch, argv):
+    """Negative commands skip config/venv resolution in PID and orphan scans."""
+    runner = _runner(tmp_path, tmp_path / 'bot')
+    process = SimpleNamespace(cmdline=lambda: argv)
+    monkeypatch.setattr(Path, 'resolve', lambda *a, **kw: pytest.fail('unrelated process resolved a path'))
+    assert runner._matches_process(process) is False
+    assert pbrun.RunV8.from_missing_config_process(
+        process, run_root=tmp_path / 'data/run_v8', pb8dir=str(tmp_path / 'pb8'),
+        pb8venv=runner.pb8venv, pbgdir=tmp_path, name='node-a',
+    ) is None

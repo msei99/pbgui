@@ -909,6 +909,10 @@ def _bot_identity_from_process(
 ) -> tuple[str, str] | None:
     """Return an exact PBRun-managed ``(name, runtime)`` process identity."""
 
+    # Both managed command shapes require one of these config arguments.
+    # Keep all root, argv and cwd validation for candidates; retain no PID cache.
+    if not any(arg.endswith(("/config_run.json", "/config.json")) for arg in argv):
+        return None
     run_v7_root = (PBGDIR / "data" / "run_v7").resolve()
     v7_configs = [Path(arg).resolve() for arg in argv if arg.endswith("/config_run.json")]
     main_args = [Path(arg).resolve() for arg in argv if arg.endswith("main.py")]

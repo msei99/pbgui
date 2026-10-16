@@ -744,9 +744,15 @@ class LoopStore:
             path.unlink()
 
     def create(self, owner, settings, config, overrides, fingerprint, holdouts, comparison, queued=False, training_exclusions=None):
+        """Create a durable run; chat-bound runs use reviewed default instructions only."""
+        binding = (settings.get('source') or {}).get('loop_request')
+        instructions = self.instruction_version(owner, 'default' if binding else None)
+        if binding:
+            from ai_loop_request import validate_request
+            validate_request(settings, binding, instructions['digest'])
         loop_id = uuid.uuid4().hex
         record = {'id': loop_id, 'owner': identifier(owner), 'settings': bounded_json(settings),
-                  'ai_instructions': self.instruction_version(owner),
+                  'ai_instructions': instructions,
                   'initial_config': bounded_json(config), 'initial_overrides': bounded_json(overrides),
                   'fingerprint': fingerprint, 'holdouts': holdouts, 'comparison': comparison,
                   'training_exclusions': bounded_json(holdouts if training_exclusions is None else training_exclusions),

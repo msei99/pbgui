@@ -1,5 +1,7 @@
 # AI Chat
 
+Neue AI-Loop-Aufträge erstellen standardmäßig frische Definitionen. Chat-Werkzeuge binden die Original-Nutzernachricht wörtlich an die geprüfte Definition und lehnen alte, chatfremde oder bereits verwendete Definitionen beim Start ab. Ausdrückliche Wiederverwendung benötigt einen Abgleichvorschlag mit vollständigen frischen Einstellungen; frühere Ziele, Presets, numerische Zielwerte und eigene Loop-Anweisungsversionen werden nicht übernommen. Ein geänderter Nutzerauftrag macht den Startvorschlag ungültig. Nur das ausgewählte Optimizer-Bundle liefert Startdaten und Konfiguration.
+
 Die AI-Loop-Prüfung benennt jede geänderte Einstellung und zeigt, ob die Freigabe eine Definition speichert oder einen Lauf startet/ersetzt. Lange Texte sind aufklappbar; **Save definition** startet keine Jobs oder Mieten.
 
 Bei Vast.ai AI Loops erhält die KI die erlaubten GPU-Metriken des festgelegten Workers beim Einrichten und bei jeder autonomen Loop-Entscheidung. Nicht unterstützte Scoring- und Limit-Metriken werden vor einem Loop-Vorschlag, beim Queuen und bei späteren Optimizer-Änderungen abgelehnt. Exakte Metriken wie `gain_strategy_eq` bleiben für die Bewertung der exakten Vergleichs-Backtests verfügbar. Als GPU-Scoring oder GPU-Limit gibt es dafür keine automatische Weiterleitung an die CPU. Die Wahl eines Proxy-Ziels muss das eigentliche Benutzerziel erhalten und Unterschiede in Bedeutung oder Einheit erklären.

@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from datetime import datetime
 from itertools import islice
+import configparser
 import json
 import os
 from pathlib import Path
@@ -306,16 +307,9 @@ def get_managed_scope_settings(scope_id: str) -> tuple[int, int]:
     """Return configured settings for one declared managed scope."""
     if scope_id not in MANAGED_LOG_SCOPES:
         raise ValueError("Unknown managed log scope")
-    default_max_bytes, default_backup_count = get_rotate_defaults()
     with advisory_file_lock(PBGUI_INI):
         cfg = _read_rotate_ini()
-    if cfg is None:
-        return DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
-    key = _normalize_rotate_key(scope_id)
-    return _bounded_rotate_settings(
-        _parse_positive_int(cfg.get("logging", f"managed_{key}_max_bytes", fallback=str(default_max_bytes)), default_max_bytes),
-        _parse_nonnegative_int(cfg.get("logging", f"managed_{key}_backup_count", fallback=str(default_backup_count)), default_backup_count),
-    )
+    return _rotation_settings_from_snapshot(cfg, scope_id=scope_id)
 
 
 def set_managed_scope_settings(scope_id: str, max_bytes: int, backup_count: int) -> None:
@@ -358,22 +352,39 @@ def _bounded_rotate_settings(max_bytes, backup_count) -> tuple[int, int]:
     )
 
 
+def _rotation_settings_from_snapshot(cfg, *, scope_id=None, key_src=None) -> tuple[int, int]:
+    """Resolve default, managed and filename/service settings from one fresh read."""
+    if cfg is None:
+        return DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
+    try:
+        settings = _bounded_rotate_settings(
+            _parse_positive_int(cfg.get('logging', 'rotate_default_max_bytes', fallback=str(DEFAULT_ROTATE_MAX_BYTES)), DEFAULT_ROTATE_MAX_BYTES),
+            _parse_nonnegative_int(cfg.get('logging', 'rotate_default_backup_count', fallback=str(DEFAULT_ROTATE_BACKUP_COUNT)), DEFAULT_ROTATE_BACKUP_COUNT),
+        )
+    except configparser.Error:
+        # The previous defaults getter treated damaged optional defaults as
+        # absent, while still allowing a valid managed/file override.
+        settings = DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
+    prefixes = []
+    if scope_id:
+        prefixes.append(f'managed_{_normalize_rotate_key(scope_id)}')
+    if key_src:
+        prefixes.append(f'rotate_{_normalize_rotate_key(key_src)}')
+    for prefix in prefixes:
+        max_bytes, backup_count = settings
+        settings = _bounded_rotate_settings(
+            _parse_positive_int(cfg.get('logging', f'{prefix}_max_bytes', fallback=str(max_bytes)), max_bytes),
+            _parse_nonnegative_int(cfg.get('logging', f'{prefix}_backup_count', fallback=str(backup_count)), backup_count),
+        )
+    return settings
+
+
 def get_rotate_defaults() -> tuple[int, int]:
     """Return default rotation settings (max_bytes, backup_count)."""
     try:
         with advisory_file_lock(PBGUI_INI):
             cfg = _read_rotate_ini()
-        if cfg is None:
-            return DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
-        max_bytes = _parse_positive_int(
-            cfg.get('logging', 'rotate_default_max_bytes', fallback=str(DEFAULT_ROTATE_MAX_BYTES)),
-            DEFAULT_ROTATE_MAX_BYTES,
-        )
-        backup_count = _parse_nonnegative_int(
-            cfg.get('logging', 'rotate_default_backup_count', fallback=str(DEFAULT_ROTATE_BACKUP_COUNT)),
-            DEFAULT_ROTATE_BACKUP_COUNT,
-        )
-        return _bounded_rotate_settings(max_bytes, backup_count)
+        return _rotation_settings_from_snapshot(cfg)
     except Exception:
         return DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
 
@@ -394,24 +405,17 @@ def get_rotate_settings(service: str = None, logfile: str = None) -> tuple[int, 
     1) [logging] rotate_<service_key>_max_bytes / rotate_<service_key>_backup_count
     2) [logging] rotate_default_max_bytes / rotate_default_backup_count
     """
-    default_max_bytes, default_backup_count = get_rotate_defaults()
     key_src = _physical_log_stem(service, logfile)
-    if not key_src:
-        return default_max_bytes, default_backup_count
-
+    defaults = DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
     try:
         with advisory_file_lock(PBGUI_INI):
             cfg = _read_rotate_ini()
-        key = _normalize_rotate_key(key_src)
-        max_option = f'rotate_{key}_max_bytes'
-        backup_option = f'rotate_{key}_backup_count'
+        # Preserve the old defaults fallback when an optional override is bad.
+        defaults = _rotation_settings_from_snapshot(cfg)
         scope_id = resolve_managed_log_scope(logfile)
-        scope_settings = get_managed_scope_settings(scope_id) if scope_id else (default_max_bytes, default_backup_count)
-        max_bytes = _parse_positive_int(cfg.get('logging', max_option, fallback=str(scope_settings[0])), scope_settings[0])
-        backup_count = _parse_nonnegative_int(cfg.get('logging', backup_option, fallback=str(scope_settings[1])), scope_settings[1])
-        return _bounded_rotate_settings(max_bytes, backup_count)
+        return _rotation_settings_from_snapshot(cfg, scope_id=scope_id, key_src=key_src)
     except Exception:
-        return default_max_bytes, default_backup_count
+        return defaults
 
 
 def set_rotate_settings(service: str, max_bytes: int, backup_count: int):

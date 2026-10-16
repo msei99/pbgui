@@ -1287,6 +1287,10 @@ class RunV8:
 
         try:
             cmdline = [str(arg) for arg in process.cmdline()]
+            # Every accepted PB8 command contains this literal argument. Reject
+            # unrelated processes before resolving config and Python paths.
+            if "live" not in cmdline:
+                return False
             expected = self.command
             configured_python = str(Path(self.pb8venv).expanduser().absolute())
             resolved_python = str(Path(configured_python).resolve())
@@ -1319,6 +1323,8 @@ class RunV8:
 
         try:
             cmdline = [str(arg) for arg in process.cmdline()]
+            if "live" not in cmdline:
+                return None
             python = str(Path(pb8venv).expanduser().absolute())
             resolved_python = str(Path(python).resolve())
             passivbot = str(Path(python).parent / "passivbot")
