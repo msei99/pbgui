@@ -1338,7 +1338,7 @@ def test_ai_queue_batch_waits_for_exact_jobs_then_opens_results_compare() -> Non
 
 
 def test_ai_approval_clients_stage_queue_compare_handoff() -> None:
-    """Both AI surfaces must stage the exact queue batch before navigating away."""
+    """The shared chat stages exact batches; AI Setup opens that same drawer."""
     nav = (ROOT / "frontend" / "pbgui_nav.js").read_text(encoding="utf-8")
     drawer = (ROOT / "frontend" / "js" / "ai_drawer.js").read_text(encoding="utf-8")
     chat = (ROOT / "frontend" / "ai_chat.html").read_text(encoding="utf-8")
@@ -1347,8 +1347,11 @@ def test_ai_approval_clients_stage_queue_compare_handoff() -> None:
     assert "filenames.length > 1000" in nav
     assert "pbgui:ai:backtest_compare:v1" in nav
     assert "openQueuedBacktestCompare(result)" in drawer
-    assert "openQueuedBacktestCompare(result)" in chat
-    assert "pbgui:ai-action-completed" in chat
+    setup = (ROOT / "frontend/js/ai_setup.js").read_text(encoding="utf-8")
+    assert "pbgui:ai-action-completed" in drawer
+    assert "open-assistant" in chat
+    assert "getElementById('pbgui-ai-btn')" in setup
+    assert "openQueuedBacktestCompare(result)" not in chat
 
 
 def test_shared_results_delete_routes_each_version_to_its_own_api() -> None:

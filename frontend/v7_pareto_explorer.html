@@ -1098,13 +1098,14 @@ input[type="range"]::-moz-range-thumb {
       <div class="ctx-actions">
         <button class="sb-btn" id="btn-back-optimize">← Back to Optimize</button>
         <button class="sb-btn" id="btn-run-backtest">🚀 Queue Backtest</button>
+        <label for="explorer-validation-mode"><span tabindex="0" data-tip="Add grouped standalone backtests and stay in the Explorer. Holdout modes require a saved Holdout plan. Existing queue autostart settings apply.">Validation periods</span></label>
         <select class="sb-input" id="explorer-validation-mode" aria-label="Validation periods" title="Create standalone backtests using the saved training and Holdout periods">
           <option value="holdout_only">Holdout only</option>
           <option value="full_timerange">Full timerange only</option>
           <option value="holdout_and_full_timerange">Holdout + Full timerange</option>
           <option value="all_timeranges">Training + Holdout + Full timerange</option>
         </select>
-        <button class="sb-btn" id="btn-validate-config" data-tip="Add grouped standalone backtests and stay in the Explorer. Holdout modes require a saved Holdout plan. Existing queue autostart settings apply.">🧪 Queue Validation</button>
+        <button class="sb-btn" id="btn-validate-config">🧪 Queue Validation</button>
         <button class="sb-btn" data-backtest-open-queue>Open Queue</button>
         <div class="muted-line" data-backtest-autostart></div>
         <div class="muted-line" role="status" aria-live="polite" data-backtest-queue-status></div>
@@ -1200,7 +1201,7 @@ input[type="range"]::-moz-range-thumb {
             </div>
             <div class="form-field full">
               <div class="button-row">
-                <button class="btn primary" id="btn-command-load" data-tip="Reload the result with the current Settings values.">Load Result Context</button>
+                <button class="btn primary" id="btn-command-load">Load Result Context</button>
               </div>
             </div>
             <div class="form-field full">
@@ -1382,17 +1383,17 @@ input[type="range"]::-moz-range-thumb {
     <section id="stage-deep-intelligence" class="stage-view" style="display:none;">
       <div class="panel-card">
         <div class="deep-tabs">
-          <button class="deep-tab-btn active" data-deep-tab="parameters" onclick="selectDeepTab('parameters')" data-tip="Find parameters that influence performance and parameters sitting close to optimize bounds.">Parameters</button>
-          <button class="deep-tab-btn" data-deep-tab="scenarios" onclick="selectDeepTab('scenarios')" data-tip="Compare the visible config set across loaded backtest scenarios.">Scenarios</button>
-          <button class="deep-tab-btn" data-deep-tab="evolution" onclick="selectDeepTab('evolution')" data-tip="Track how a selected metric evolved over optimize iterations.">Evolution</button>
-          <button class="deep-tab-btn" data-deep-tab="correlations" onclick="selectDeepTab('correlations')" data-tip="Compare selected configs across normalized multi-metric risk dimensions.">Correlations</button>
+          <button class="deep-tab-btn active" data-deep-tab="parameters" onclick="selectDeepTab('parameters')">Parameters</button>
+          <button class="deep-tab-btn" data-deep-tab="scenarios" onclick="selectDeepTab('scenarios')">Scenarios</button>
+          <button class="deep-tab-btn" data-deep-tab="evolution" onclick="selectDeepTab('evolution')">Evolution</button>
+          <button class="deep-tab-btn" data-deep-tab="correlations" onclick="selectDeepTab('correlations')">Correlations</button>
         </div>
         <p class="hint" id="deep-tab-description">Deep Intelligence tab shell for the FastAPI migration.</p>
       </div>
       <div class="panel-card" id="deep-tab-parameters-panel">
         <div class="detail-summary-row">
           <div>
-            <h3>Parameters Intelligence</h3>
+            <h3><span tabindex="0" data-tip="Find parameters that influence performance and parameters sitting close to optimize bounds.">Parameters Intelligence</span></h3>
             <p class="muted-line" id="deep-parameters-summary">Load a result to inspect parameter influence and optimize-bound pressure.</p>
           </div>
           <div class="detail-toolbar">
@@ -1412,7 +1413,7 @@ input[type="range"]::-moz-range-thumb {
       <div class="panel-card" id="deep-tab-scenarios-panel" style="display:none;">
         <div class="detail-summary-row">
           <div>
-            <h3>Scenario Analysis</h3>
+            <h3><span tabindex="0" data-tip="Compare the visible config set across loaded backtest scenarios.">Scenario Analysis</span></h3>
             <p class="muted-line" id="deep-scenarios-summary">Compare Pareto configs across loaded backtest scenarios (aggregated over visible configs).</p>
           </div>
           <div class="detail-toolbar">
@@ -1430,7 +1431,7 @@ input[type="range"]::-moz-range-thumb {
       <div class="panel-card" id="deep-tab-evolution-panel" style="display:none;">
         <div class="detail-summary-row">
           <div>
-            <h3>Optimization Evolution Timeline</h3>
+            <h3><span tabindex="0" data-tip="Track how a selected metric evolved over optimize iterations.">Optimization Evolution Timeline</span></h3>
             <p class="muted-line" id="deep-evolution-summary">Track whether later optimize iterations still improve the selected metric.</p>
           </div>
           <div class="detail-toolbar">
@@ -1456,7 +1457,7 @@ input[type="range"]::-moz-range-thumb {
       <div class="panel-card" id="deep-tab-correlations-panel" style="display:none;">
         <div class="detail-summary-row">
           <div>
-            <h3>Multi-Metric Correlation</h3>
+            <h3><span tabindex="0" data-tip="Compare selected configs across normalized multi-metric risk dimensions.">Multi-Metric Correlation</span></h3>
             <p class="muted-line" id="deep-correlations-summary">Compare multiple configs side-by-side across normalized risk dimensions.</p>
           </div>
         </div>
@@ -1484,7 +1485,7 @@ input[type="range"]::-moz-range-thumb {
           </div>
           <div class="form-field">
             <label>&nbsp;</label>
-            <div class="button-row"><button class="ghost-btn" id="btn-deep-correlations-refresh" data-tip="Reload the radar after changing the selection strategy or metric options.">Refresh</button></div>
+            <div class="button-row"><button class="ghost-btn" id="btn-deep-correlations-refresh">Refresh</button></div>
           </div>
         </div>
         <div id="deep-correlations-chart" class="placeholder-chart deep-plotly-chart">Load a result to render the risk-profile radar.</div>
@@ -1549,7 +1550,7 @@ input[type="range"]::-moz-range-thumb {
         </section>
         <section id="detail-preset-section" class="detail-block panel-card" style="display:none;">
           <details class="expander-card" id="preset-generator-details">
-            <summary><span data-tip="Build a follow-up Optimize preset from the selected config, reusing existing Optimize save/queue flows.">Create Optimize Preset from this Config</span></summary>
+            <summary><span data-tip="Build a follow-up Optimize preset from the selected config. Create Optimize Preset saves and opens it in Optimize; Create &amp; Queue saves and queues it without opening Optimize.">Create Optimize Preset from this Config</span></summary>
             <p class="muted-line">Creates a new Optimize preset with bounds tightened around the selected config's parameters. Useful for a follow-up run focused on fine-tuning instead of broad exploration.</p>
             <div class="preset-grid">
               <div class="form-field half">
@@ -1604,8 +1605,8 @@ input[type="range"]::-moz-range-thumb {
               </div>
               <div class="form-field full">
                 <div class="button-row">
-                  <button class="btn primary" id="btn-create-preset" type="button" data-tip="Save the generated Optimize config and open it in the owning Optimize version.">💾 Create Optimize Preset</button>
-                  <button class="btn" id="btn-create-queue-preset" type="button" data-tip="Save the generated Optimize config and add it to the Optimize queue without opening Optimize.">📥 Create & Queue</button>
+                  <button class="btn primary" id="btn-create-preset" type="button">💾 Create Optimize Preset</button>
+                  <button class="btn" id="btn-create-queue-preset" type="button">📥 Create & Queue</button>
                 </div>
                 <div class="muted-line" id="preset-status" style="margin-top:8px;"></div>
               </div>

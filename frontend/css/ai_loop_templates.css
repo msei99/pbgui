@@ -1,0 +1,19 @@
+.pai-loop-template{container-type:inline-size;box-sizing:border-box;flex:1 1 auto;min-height:0;overflow:auto}
+.pai-loop-template [hidden]{display:none!important}
+.pai-template-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--sp-md);margin-bottom:var(--sp-md)}
+.pai-loop-template .form-group{min-width:0}
+.pai-loop-template .panel-input{box-sizing:border-box;min-width:0}
+/* Coin/exchange fields reuse the editor's shared multi-select controls. */
+.pai-loop-template .ms-input{width:auto;min-width:60px;border:0;background:transparent;min-height:24px;padding:0}
+.pai-loop-template .ms-clear-btn{border:0;background:transparent;margin-left:var(--sp-xs)}
+.pai-loop-template .ms-dropdown{max-width:100%;overflow-x:hidden}
+.pai-template-count,.pai-template-date-status{font-size:var(--fs-xs);color:var(--text-dim)}
+.pai-template-date-status{overflow-wrap:anywhere}
+.pai-template-error{color:var(--red);font-size:var(--fs-sm);overflow-wrap:anywhere}
+.pai-template-actions{display:flex;flex-wrap:wrap;gap:var(--sp-sm);justify-content:flex-end}
+.pai-template-actions button:disabled{opacity:.5;cursor:default}
+@container(min-width:400px){.pai-template-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.pai-template-overlay{z-index:2600}
+.pai-template-window{width:var(--pbg-modal-settings-max-width)}
+.pai-template-footer{flex-shrink:0;padding:var(--sp-md) 18px;border-top:1px solid var(--border)}
+.pai-template-error:not(:empty){margin-bottom:var(--sp-sm)}

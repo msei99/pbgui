@@ -40,7 +40,7 @@
       '#pbgui-dialog-message{min-width:0;font-size:var(--fs-base);line-height:1.5;color:#e2e8f0;white-space:pre-wrap;overflow-wrap:anywhere;}',
       '#pbgui-dialog-detail{min-width:0;max-width:100%;max-height:55vh;overflow:auto;font-size:var(--fs-sm);line-height:1.45;color:#94a3b8;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}',
       '#pbgui-dialog-box.is-code-detail #pbgui-dialog-detail{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;}',
-      '#pbgui-dialog-detail[hidden],#pbgui-dialog-field[hidden],#pbgui-dialog-cancel[hidden]{display:none!important;}',
+      '#pbgui-dialog-detail[hidden],#pbgui-dialog-field[hidden],#pbgui-dialog-cancel[hidden],#pbgui-dialog-report[hidden]{display:none!important;}',
       '#pbgui-dialog-field{display:grid;gap:var(--sp-xs);}',
       '#pbgui-dialog-field label{font-size:var(--fs-sm);font-weight:600;color:#cbd5e1;}',
       '#pbgui-dialog-input{width:100%;height:var(--input-h);padding:0 var(--sp-sm);border-radius:8px;border:1px solid #2d3748;background:#0f172a;color:#e2e8f0;font-size:var(--fs-base);outline:none;}',
@@ -79,6 +79,7 @@
       +       '</div>'
       +       '<div id="pbgui-dialog-actions">'
       +         '<div id="pbgui-dialog-choices" hidden></div>'
+      +         '<button type="button" class="pbgui-dialog-btn secondary" id="pbgui-dialog-report" hidden>Report this problem</button>'
       +         '<button type="button" class="pbgui-dialog-btn secondary" id="pbgui-dialog-cancel">Cancel</button>'
       +         '<button type="button" class="pbgui-dialog-btn primary" id="pbgui-dialog-accept">Confirm</button>'
       +       '</div>'
@@ -185,6 +186,13 @@
       previous(currentMode === 'prompt' || currentMode === 'choose' ? null : currentMode === 'alert');
     }
 
+    var reportBtn = document.getElementById('pbgui-dialog-report');
+    if (reportBtn) {
+      reportBtn.hidden = mode !== 'alert' || options.reportable === false || !window.PBGuiSupport ||
+        !(options.reportable === true || /^(error|err|danger|fatal)$/.test(String(options.level || options.type || '').toLowerCase()) || /error|failed|failure/i.test(String(options.title || '')));
+      reportBtn.disabled = false; reportBtn.textContent = 'Report this problem'; delete reportBtn.dataset.reportUrl;
+      reportBtn.onclick = function () { window.PBGuiSupport.reportError({message:options.message, detail:options.detail}, reportBtn); };
+    }
     currentMode = mode;
     var box = document.getElementById('pbgui-dialog-box');
     if (box) {

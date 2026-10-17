@@ -673,7 +673,8 @@
       { page: 'info_market_data_fastapi', icon: '&#128187;', label: 'Market Data' },
       { page: 'info_hl_limits',         icon: '&#128200;', label: 'Hyperliquid Limits' },
       { page: 'info_balance_calc',    icon: '&#128176;', label: 'Balance Calculator'},
-      { page: 'info_ai_chat',         icon: '&#10024;',  label: 'AI Chat'           },
+      { page: 'info_ai_chat',         icon: '&#10024;',  label: 'AI Setup'           },
+      { page: 'info_debug_export', icon: '&#128736;', label: 'Debug export' },
       { page: 'help',                 icon: '&#10067;',  label: 'Help'              }
     ]},
     { id: 'pbv7', label: 'PBv7', items: [
@@ -1100,9 +1101,51 @@
     return value || 'info';
   }
 
+  var lastReportableError = null;
+  async function reportSupportError(options, trigger) {
+    options = options || {};
+    if (trigger && trigger.dataset.reportUrl) { window.open(trigger.dataset.reportUrl, '_blank', 'noopener,noreferrer'); return; }
+    var target = window.open('about:blank', '_blank');
+    if (target) target.opener = null;
+    var controller = new AbortController(), timeout = setTimeout(function () { controller.abort(); }, 15000);
+    function cancel() { controller.abort(); }
+    window.addEventListener('pagehide', cancel, {once:true});
+    if (trigger) trigger.disabled = true;
+    try {
+      var area = String(options.area || cfg().current || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'unknown';
+      var payload = {area:area, message:String(options.message || '').slice(0,4000), detail:String(options.detail || '').slice(0,8000)};
+      if (/^[a-f0-9]{32}$/.test(options.loop_id || '')) payload.loop_id = options.loop_id;
+      var response = await fetch(_appPath('/api/debug/error-context'), {method:'POST', credentials:'same-origin', cache:'no-store',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), signal:controller.signal});
+      var result = await response.json();
+      if (!response.ok || !/^[a-f0-9]{32}$/.test(result.context_id || '')) throw new Error('Cannot prepare error report');
+      var url = window.location.origin + _appPath('/api/debug/main_page') + '?context=' + result.context_id;
+      if (target && !target.closed) target.location.replace(url);
+      else if (trigger) { trigger.dataset.reportUrl = url; trigger.textContent = 'Open report'; }
+      return url;
+    } catch (_) {
+      if (target && !target.closed) target.close();
+      if (trigger) trigger.textContent = 'Retry report';
+      return null;
+    } finally { clearTimeout(timeout); window.removeEventListener('pagehide', cancel); if (trigger) trigger.disabled = false; }
+  }
+  window.PBGuiSupport = {reportError:reportSupportError};
+  function rememberSupportError(message) {
+    lastReportableError = {message:String(message).slice(0,4000)};
+    var bell = document.getElementById('pbgui-notify-btn');
+    if (!bell) return;
+    var action = document.getElementById('pbgui-report-error-btn');
+    if (!action) {
+      action = document.createElement('button'); action.id = 'pbgui-report-error-btn'; action.type = 'button'; action.className = 'nav-action-btn';
+      action.addEventListener('click', function () { reportSupportError(lastReportableError, action); }); bell.after(action);
+    }
+    action.textContent = 'Report error'; action.title = 'Report the most recent error'; delete action.dataset.reportUrl;
+  }
+
   function logUiNotification(message, level) {
     var text = String(message == null ? '' : message).trim();
     if (!text) return;
+    if (_normalizeNotificationLevel(level) === 'err') rememberSupportError(text);
     fetch(_getAppBase() + '/api/notify_log', {
       method: 'POST',
       credentials: 'same-origin',
@@ -1143,6 +1186,8 @@
     }, { once: true });
   }
 
+  window.addEventListener('error', function (event) { if (event.message) rememberSupportError(event.message); });
+  window.addEventListener('unhandledrejection', function (event) { var reason = event.reason; rememberSupportError(reason && reason.message || 'Unhandled JavaScript error'); });
   window.PBGuiNotify = window.PBGuiNotify || {};
   window.PBGuiNotify.log = logUiNotification;
   window.PBGuiNotify.installHooks = installNotificationHooks;
@@ -1645,6 +1690,7 @@
     'info_market_data_fastapi': '/api/market-data/main_page',
     'info_hl_limits':  '/api/vps-manager/hyperliquid-limits/main_page',
     'info_ai_chat':      '/api/ai/main_page',
+    'info_debug_export': '/api/debug/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
     'system_profit_sweep': '/api/profit-sweep/main_page',
     'system_transfers':  '/api/profit-sweep/transfers/main_page',
@@ -1654,7 +1700,7 @@
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
-    'help':               '/app/help.html?v=1770',
+    'help':               '/app/help.html?v=1773',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
@@ -1670,6 +1716,7 @@
 
   /* Every registered page must resolve to an existing EN/DE shared-help topic. */
   var GUIDE_TOPICS = {
+    'info_debug_export': '50_debug_export',
     '/':                           '19_welcome',
     'dashboards':                  '33_dashboard',
     'info_coin_data':              '27_coin_data',
@@ -1814,6 +1861,26 @@
     var c = cfg();
     var guideTopic = GUIDE_TOPICS[c.current] || '00_overview';
     installNotificationHooks();
+    if (!window.PBGuiSupportDiagnostics) {
+      var debugStorage = 'pbgui.debug.browser-events', browserEvents = [];
+      try { browserEvents = JSON.parse(sessionStorage.getItem(debugStorage) || '[]').filter(function (item) {
+        return item && ['javascript_error','unhandled_rejection'].includes(item.kind)
+          && /^[A-Za-z0-9_.-]{0,120}$/.test(item.file || '') && typeof item.time === 'number';
+      }).slice(-50).map(function (item) { return {kind:item.kind,file:item.file || '',line:Number(item.line)||0,column:Number(item.column)||0,time:item.time}; }); } catch (_) {}
+      function captureBrowserEvent(event) {
+        var file = '';
+        try { var source = new URL(event.filename || '', location.href); if (source.pathname.indexOf('/app/') >= 0) file = source.pathname.split('/').pop(); } catch (_) {}
+        browserEvents.push({kind:event.type === 'error' ? 'javascript_error' : 'unhandled_rejection',
+          file:/^[A-Za-z0-9_.-]{0,120}$/.test(file) ? file : '', line:Number(event.lineno)||0,
+          column:Number(event.colno)||0,time:Date.now()});
+        browserEvents = browserEvents.slice(-50);
+        try { sessionStorage.setItem(debugStorage,JSON.stringify(browserEvents)); } catch (_) {}
+      }
+      window.addEventListener('error', captureBrowserEvent);
+      window.addEventListener('unhandledrejection', captureBrowserEvent);
+      window.PBGuiSupportDiagnostics = {snapshot:function(){return {events:browserEvents.slice(),
+        viewport:{width:innerWidth,height:innerHeight},language:/^[A-Za-z-]{2,20}$/.test(navigator.language) ? navigator.language : 'unknown',browser:(navigator.userAgent.match(/(?:Firefox|Edg|Chrome|Version)\/[0-9.]+/) || ['unknown'])[0]};}};
+    }
 
     /* URL construction uses the application base; origin checks stay origin-only. */
     var apiOrigin = _getAppBase();
@@ -1928,7 +1995,7 @@
       _aiDrawerLoading = true;
       var link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = _appPath('/app/css/ai_drawer.css?v=22');
+      link.href = _appPath('/app/css/ai_drawer.css?v=27');
       document.head.appendChild(link);
       function loadDrawerScript() {
         var dependencies = [
@@ -1970,7 +2037,7 @@
           return;
         }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=70');
+        script.src = _appPath('/app/js/ai_drawer.js?v=77');
         script.onload = function () { _aiDrawerLoading = false; if (show && window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); window.dispatchEvent(new Event('pbgui:ai-ready')); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);
@@ -1980,7 +2047,7 @@
         return;
       }
       var dialogs = document.createElement('script');
-      dialogs.src = _appPath('/app/js/pbgui_dialogs.js?v=10');
+      dialogs.src = _appPath('/app/js/pbgui_dialogs.js?v=11');
       dialogs.onload = loadDrawerScript;
       dialogs.onerror = loadDrawerScript;
       document.head.appendChild(dialogs);

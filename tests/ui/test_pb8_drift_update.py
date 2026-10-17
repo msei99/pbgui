@@ -7,10 +7,10 @@ def test_drift_settings_round_trip_null_zero_validation_and_older_runtime():
     """New fields preserve inheritance and exact zero without leaking into old configs."""
     execute(''.join(function('v7_optimize.html', name) for name in (
         'collectOptimizeGpuSettings', 'populateOptimizeGpuSettings', 'resetOptimizeGpuSettings',
-        'parseOptimizeGpuFractions',
+        'parseOptimizeGpuFractions', 'optimizeGpuEditorSettings', 'normalizeOptimizeBackendValue',
     )) + r'''
 const assert=require('node:assert/strict');
-const optimizeEditorAdapter={isV8:true};
+const optimizeEditorAdapter={isV8:true},state={settings:{}};
 let defaults={drift_halt:0.6,drift_rank_halt:null,drift_objective_tolerance:0.000001};
 const optimizeGpuDefaults=()=>defaults,deepClone=structuredClone;
 const nodes=new Map();const el=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false});return nodes.get(id);};

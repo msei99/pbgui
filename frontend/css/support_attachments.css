@@ -1,0 +1,7 @@
+.support-attachment-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px;min-width:0}
+.support-attachment-grid button{min-height:32px;text-align:left;white-space:normal;overflow-wrap:anywhere;padding:6px 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--text);font:inherit;cursor:pointer}
+.support-attachment-grid button[aria-pressed="true"]{border-color:rgba(99,179,237,.4);background:rgba(99,179,237,.12)}
+.support-attachment-grid button:disabled{opacity:.5;cursor:default}
+.support-attachment-size{font-size:12px;overflow-wrap:anywhere}
+.support-attachment-choices{border:1px solid var(--border);border-radius:6px;padding:8px;min-width:0}
+.support-attachment-choices summary{cursor:pointer}

@@ -34,6 +34,8 @@ The Configs list starts loading in parallel with slower PB8 settings and metadat
 
 ## Parameter tooltips
 
+Explanations belong to dotted field or section labels, not action buttons. In the Pareto Explorer, use Validation periods and the Deep Intelligence section headings for help. Vast result-availability and unavailable-start explanations appear on progress/status labels.
+
 Hover a parameter label to read the original explanation from the installed Passivbot documentation. The tooltip names its local source file; long descriptions can be scrolled by moving the pointer into the tooltip. The same parameter uses the same explanation in Run, Backtest, and Optimize, including nested bounds and optimizer overrides. Documentation is loaded locally without an internet request or a working Rust extension. PBGui-specific controls retain their own input hints; generic runtime placeholders are suppressed when upstream has no matching description.
 
 
@@ -596,3 +598,11 @@ The active Cloud worker cannot run the new HSL budget-scaling policy yet. Prepar
 For older Cloud workers, an explicit `scale_budget_with_excess_allowance: false` is removed only from the exported job copy, including fixed and scenario overrides. The saved source config keeps its value. An older frozen job that still contains this unknown field must be prepared again; dispatch leaves it waiting rather than launching it on an incompatible worker.
 
 PB8 uses GPU checkpoint signature 8 and makes the final compatibility decision when resuming. Old checkpoints may be incompatible; use a fresh search or an eligible Pareto seed when resume is rejected. PBGui's resume preflight does not itself validate the native checkpoint signature.
+
+The **AI Loop Template** sidebar action opens a movable, resizable settings window and sends English optimization requests to a new AI chat from PB8 defaults or a saved optimizer configuration. It supports multiple coins, EMA Anchor/Trailing Martingale/AI choice, explicit GPU round and cost limits, training timeframe count, automatic coin/exchange-based start dates and gain/balanced/custom objectives. End defaults to the last complete UTC day; manual dates and existing source windows remain available. See **AI Chat → Optimization prompt templates**. **Send to AI Chat** sends the request; starting jobs or renting a worker requires the subsequent reviewed proposal.
+
+Use **Debug export** in an AI Loop detail window to open the universal support report with that Loop already selected. See **Debug export** in Guide / Help for scope, preview, privacy and collection limits.
+
+Failed AI Loop reports offer **Report this problem** to open a scoped diagnostic/GitHub workflow in a new tab; the source run remains open. See Debug export for selectable attachments.
+
+Reset to defaults clears the Loop Template form, source, selected coins and extra instructions, restores Binance/PB8 defaults and automatic training dates, and preserves the window geometry. In Training windows, Automatic from selected coins determines dates after you select valid markets; Manual date range preserves your own dates. Legacy saved manual templates without complete dates migrate to automatic mode once; current manual drafts keep their edits.

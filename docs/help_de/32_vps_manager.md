@@ -20,9 +20,9 @@ Die Hauptansicht zeigt eine Tabelle mit allen Servern (Master + VPS) und ihrem a
 | **Online** | ✅ erreichbar / ❌ offline |
 | **Bots** | Anzahl eindeutig laufender Bots, die aktuell für diesen VPS per Telemetrie gemeldet werden |
 | **Started** | Letzter Boot-Zeitpunkt |
-| **Updates** | Security-Updates in Rot / normale Updates ohne Security-Einstufung in Blau, z. B. **3 / 2**. Ein Klick öffnet die Paketdetails. **0 / 0** bedeutet keine ausstehenden Updates; **? / ?** kennzeichnet eine unvollständige Einordnung (die Gesamtzahl bleibt sichtbar), **N/A** eine fehlende nutzbare Anzahl. Wenn APT Pakete zurückstellt, bleiben die bekannten Security-/Normal-Zahlen sichtbar; ein separater Hinweis nennt die noch nicht klassifizierten zurückgestellten Updates. |
+| **Updates** | Security-Updates in Rot / normale Updates ohne Security-Einstufung in Blau, z. B. **3 / 2**. Ein Klick öffnet die Paketdetails. **0 / 0** bedeutet keine aktuell installierbaren Updates; **? / ?** kennzeichnet eine unvollständige Einordnung (die Gesamtzahl bleibt sichtbar), **N/A** eine fehlende nutzbare Anzahl. Wenn APT Pakete zurückstellt, bleiben die bekannten Security-/Normal-Zahlen sichtbar; sind alle Updates zurückgestellt, steht dort **0 / 0**. Der Mouseover der Zahlen nennt die Anzahl der noch nicht klassifizierten zurückgestellten Updates. |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installierte Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
-| **PB7 / PB7 Branch / PB7 GitHub** | PB7-Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
+| **PB7 / PB7 Branch / PB7 GitHub** | PB7-Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt. Ist PB7 nicht installiert, zeigen alle drei Spalten **-** ohne Warnsymbol. |
 | **PB8 / PB8 Branch / PB8 GitHub** | PB8-Version, Branch und ob sie mit der aktuellen Upstream-PB8-Revision uebereinstimmt |
 
 Der Dialog Linux Updates lässt sich über **×** im Kopf oder **Close** unten schließen. Eine vorherige Passwortprüfung lässt den Schließen-Knopf nicht mehr gesperrt zurück. Normale Updates umfassen auch Kernel-Upgrades ohne Security-Einstufung; Neuinstallationen und Paketentfernungen stehen separat in den Details. Veraltete Cache-Werte behalten ihren sichtbaren Warnhinweis.

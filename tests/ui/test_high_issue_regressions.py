@@ -9,16 +9,17 @@ from test_remaining_issue_regressions import ROOT, execute, function
 
 def test_stop_before_conversation_creation_invalidates_pending_send():
     """A late conversation ID cannot send the prompt after local Stop (#297)."""
-    execute(function('ai_chat.html', 'selectedProvider') + function('ai_chat.html', 'sendMessage') + function('ai_chat.html', 'stopCurrentTurn') + r'''
+    execute(function('js/ai_drawer.js', 'sendMessage') + function('js/ai_drawer.js', 'newConversation') + function('js/ai_drawer.js', 'stopTurn') + r'''
 const assert=require('node:assert/strict');
-const nodes={prompt:{value:'hello'},'provider-select':{value:'test',selectedOptions:[{textContent:'Test'}]},'model-select':{value:'model'},'effort-select':{value:''},'speed-select':{hidden:true,value:''},stop:{},'retry-turn':{}};
-const $=id=>nodes[id]; const state={conversationId:'',chatGeneration:1,retryMessages:{},busy:false};
-let finish, turns=0, composed=0;
-const api=path=>{if(path==='/conversations')return new Promise(resolve=>finish=resolve);turns++;};
-const updateComposer=()=>composed++;const setNotice=()=>{};const stopActivityPolling=()=>{};
-const loadConversationSummary=async()=>{};const renderPendingMessage=()=>{};
-(async()=>{const sending=sendMessage();await stopCurrentTurn();assert.equal(state.busy,false);
-finish({conversation_id:'late'});await sending;assert.equal(turns,0);assert.equal(state.conversationId,'');assert.equal(state.pendingMessage,'');assert(composed>=2);
+const nodes={'textarea':{value:'hello',focus:()=>{}},'#pai-model':{value:'model'},'#pai-effort':{value:''},'#pai-speed':{hidden:true,value:''},'#pai-context-toggle':{checked:false}};
+const root={querySelector:key=>nodes[key]};
+const state={current:'',sendGeneration:0,requestGeneration:0,sending:false,busy:false,imageReads:Promise.resolve(),imageDrafts:{},retryMessages:{},retryImages:{}};
+let finish, requests=[];
+const api=(path,options)=>{requests.push([path,options?.method]);if(path==='/conversations')return new Promise(resolve=>finish=resolve);return Promise.resolve({});};
+const selectedProvider=()=> 'test',selectedProfile=()=> 'default',setBusy=value=>state.busy=value,setStatus=()=>{},stopPoll=()=>{},renderChatImageDrafts=()=>{},loadConversations=async()=>{};
+(async()=>{const sending=sendMessage();await new Promise(resolve=>setImmediate(resolve));assert.equal(state.busy,true);await stopTurn();assert.equal(state.busy,false);
+finish({conversation_id:'late'});await sending;assert.equal(state.current,'');assert.equal(state.sending,false);assert(!requests.some(([path])=>path.endsWith('/turns')));assert(requests.some(([path,method])=>path==='/conversations/late'&&method==='DELETE'));
+const creating=newConversation({type:'click'});await new Promise(resolve=>setImmediate(resolve));finish({conversation_id:'fresh'});await creating;assert.equal(state.current,'fresh');assert(!requests.some(([path,method])=>path==='/conversations/fresh'&&method==='DELETE'));
 })().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 

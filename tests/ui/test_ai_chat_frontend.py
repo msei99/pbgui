@@ -1,150 +1,60 @@
-"""Static security and behavior checks for the minimal AI chat page."""
-
+"""Security and entry-point contracts for the former full chat, now AI Setup."""
 from pathlib import Path
+import re
+
+ROOT=Path(__file__).resolve().parents[2]
+HTML=(ROOT/'frontend/ai_chat.html').read_text()
+JS=(ROOT/'frontend/js/ai_setup.js').read_text()
+DRAWER=(ROOT/'frontend/js/ai_drawer.js').read_text()
 
 
-ROOT = Path(__file__).resolve().parents[2]
-HTML = (ROOT / "frontend" / "ai_chat.html").read_text(encoding="utf-8")
+def test_setup_uses_shared_page_shell_and_local_assets():
+    """The setup destination fills the normal shared shell rather than a chat modal."""
+    for identifier in ['sidebar','sidebar-sticky','sidebar-header','sidebar-toolbar','sidebar-inner','sidebar-resize','main-content']:
+        assert 'id="'+identifier+'"' in HTML
+    assert 'sidebar_layout.css' in HTML and 'sidebar_resize.js' in HTML
+    assert '<title>AI Setup' in HTML
+    assert 'credentials:\'same-origin\'' in JS
+    assert 'Authorization' not in HTML+JS and 'Bearer' not in HTML+JS
+    assert 'sessionStorage' not in JS and 'localStorage' not in JS
+    assert '/app/css/data_tip.css?v=1' in HTML and '/app/js/data_tip.js?v=1' in HTML
+    assert 'details class="field-help"' not in HTML
+    assert 'data-tip=' in HTML
+    assert not re.search(r'<button\b[^>]*\bdata-tip=',HTML)
 
 
-def test_ai_chat_uses_cookie_only_same_origin_requests() -> None:
-    """The page must not expose or persist PBGui authentication material."""
-    assert "credentials: 'same-origin'" in HTML
-    assert "Authorization" not in HTML
-    assert "Bearer" not in HTML
-    assert "localStorage" not in HTML
-    assert "sessionStorage" not in HTML
-    assert "%%TOKEN%%" not in HTML
+def test_setup_has_no_second_chat_or_conversation_actions():
+    """The drawer owns conversations; setup cannot create, delete, rewind or submit turns."""
+    for identifier in ['prompt','composer','conversation-list','messages','delete-chat','proposal-list']:
+        assert 'id="'+identifier+'"' not in HTML
+    assert '/conversations' not in JS and '/turns' not in JS
+    assert "document.getElementById('pbgui-ai-btn')" in JS
+    assert 'buildSupportConnection' not in DRAWER
 
 
-def test_ai_chat_renders_provider_content_as_text() -> None:
-    """Untrusted model text and login values must not enter innerHTML."""
-    assert ".textContent = text" in HTML
-    assert "login-link').textContent" in HTML
-    assert "login-code').textContent" in HTML
-    assert "innerHTML" not in HTML
-    assert "document.write" not in HTML
+def test_setup_credentials_stay_in_password_fields_and_are_cleared():
+    """Provider keys and GitHub tokens never become model prompts or browser state."""
+    for identifier in ['go-key','openrouter-key','github-token']:
+        assert 'id="'+identifier+'" type="password"' in HTML
+    assert "input.value=''" in JS and 'clearSecrets()' in JS
+    assert "history.replaceState" in JS and 'secret' not in JS.split('function remember()',1)[1].split('function clearSecrets',1)[0]
+    assert 'innerHTML' not in HTML+JS and 'document.write' not in HTML+JS
+    assert 'window.confirm' not in JS and 'window.alert' not in JS
 
 
-def test_ai_chat_clears_unsaved_secret_and_uses_only_ai_action_routes() -> None:
-    """The agent UI must clear keys and execute proposals only through the AI API."""
-    assert "$('go-key').value = ''" in HTML
-    assert "api('/conversations'" in HTML
-    assert "/cancel" in HTML
-    assert "/providers/chatgpt/browser-login" in HTML
-    assert "/providers/chatgpt/device-login" in HTML
-    assert "training enabled" in HTML
-    assert "['opencode-zen', 'OpenCode Zen']" in HTML
-    assert "freeGroup.label = 'Free'" in HTML
-    assert "model.free ? ' · Free'" in HTML
-    assert "' · Chat only'" in HTML
-    assert "cannot inspect installed Passivbot documentation" in HTML
-    assert 'href="/api/ai/providers/opencode-go/subscribe"' in HTML
-    assert "Get OpenCode Go" in HTML
-    assert "Referral link:" not in HTML
-    assert "always require your explicit approval" in HTML
-    for forbidden in ("/api/optimize", "/api/backtest", "/api/v7", "/api/v8", "/api/jobs"):
-        assert forbidden not in HTML
+def test_setup_retains_profiles_native_login_usage_and_model_configuration():
+    """Existing providers retain login, profile management, usage and model-specific controls."""
+    for identifier in ['chatgpt-profile','chatgpt-profile-add','chatgpt-profile-rename','chatgpt-profile-remove','chatgpt-device-connect','jev-max-cost','openrouter-usage','go-usage','effort-select','speed-select']:
+        assert 'id="'+identifier+'"' in HTML
+    assert "model.reasoning_variants" in JS and 'model.service_tiers' in JS
+    assert "'/test-model'" in JS and "selection:chosen" in JS
+    assert '/providers/chatgpt/' in JS and 'device-login' in JS and 'browser-login' in JS
+    assert 'refresh-health' not in HTML and 'Refresh' not in HTML
 
 
-def test_ai_chat_offers_openrouter_as_decision_provider() -> None:
-    """The full page connects OpenRouter without rendering its API key."""
-    assert 'id="openrouter-key" type="password"' in HTML
-    assert "/providers/openrouter/connect" in HTML
-    assert "/providers/openrouter/connection" in HTML
-    assert "model.decision ? ' · Decision'" in HTML
-    assert 'id="openrouter-usage"' in HTML
-    assert "refreshOpenRouterUsage(!!openrouter.connected)" in HTML
-    assert "/app/js/ai_usage.js?v=2" in HTML
-
-
-def test_ai_chat_avoids_native_confirmation_dialogs_and_external_assets() -> None:
-    """The page should follow PBGui dialog and offline asset policies."""
-    assert "window.confirm" not in HTML
-    assert "window.alert" not in HTML
-    assert 'src="https://' not in HTML
-    assert 'href="https://' not in HTML
-
-
-def test_ai_chat_requires_shared_dialog_approval_for_proposals() -> None:
-    """Mutation proposals must use the explicit PBGui modal before approval."""
-    assert "/app/js/pbgui_dialogs.js?v=10" in HTML
-    assert "window.PBGuiDialogs.confirm" in HTML
-    assert "/proposals/" in HTML
-    assert "Review & approve" in HTML
-    assert "payload_digest: proposal.payload_digest" in HTML
-    assert "preview: preview" in HTML
-    assert "Review exact code and input" in HTML
-    assert "preview.input_data" in HTML
-    assert "preview.input_resource" in HTML
-    assert "analysisResultText" in HTML
-    assert "Start PB8 optimizer queue jobs" in HTML
-    assert "exact reviewed PB8 optimizer queue jobs immediately" in HTML
-    resolve = HTML.split("async function resolveProposal", 1)[1].split("async function sendMessage", 1)[0]
-    assert resolve.index("card.hidden = true") < resolve.index("await api('/proposals/")
-    assert "Applying approved action..." in resolve
-    assert "card.hidden = false" in resolve
-
-
-def test_ai_chat_uses_persistent_history_and_detached_turn_polling() -> None:
-    """The full page should share persistent detached-turn behavior with the drawer."""
-    assert 'id="stop"' in HTML
-    assert 'id="conversation-list"' in HTML
-    assert 'id="delete-chat"' in HTML
-    assert 'id="retry-turn"' in HTML
-    assert "retryMessages" in HTML
-    assert "loadConversations" in HTML
-    assert "loadConversation" in HTML
-    assert "startActivityPolling" in HTML
-    assert "'/turns'" in HTML
-    assert "/app/js/jev_transfer_preview.js?v=1" in HTML
-    assert "jev_preview_id: jevPreviewId || null" in HTML
-    assert "api('/chat'" not in HTML
-    assert "applyConversationSnapshot" in HTML
-    assert "chat.quick_replies" in HTML
-    assert "renderUiActions" in HTML
-    assert "Jev decides how many to mark" in HTML
-    assert "Write your own answer…" in HTML
-    quick_reply = HTML.split("function renderUiActions", 1)[1].split("async function loadConversation", 1)[0]
-    assert "sendMessage(value)" in quick_reply
-    assert "/ack" not in quick_reply
-    assert "detectedQuickReplies" in HTML
-    assert "appendDetectedQuickReplies" in HTML
-    assert "reconcileProposals" in HTML
-    reconcile = HTML.split("async function reconcileProposals", 1)[1].split("function renderProposals", 1)[0]
-    assert "if (state.busy) { renderProposals([]); return; }" in reconcile
-    assert "conversationId === state.conversationId && !state.busy" in reconcile
-    assert "result.continuation" in HTML
-    assert "await loadConversation(conversationId)" in HTML
-    assert "the AI continuation could not start" in HTML
-    assert "selected effort may take several minutes" in HTML
-    assert "stopCurrentTurn" in HTML
-    assert 'id="reasoning-summary"' in HTML
-    assert 'id="activity-history"' in HTML
-    assert "conversation.reasoning_summary" in HTML
-    assert HTML.index('id="messages"') < HTML.index('id="chat-status-row"')
-    assert "AbortController" not in HTML
-    assert "provider: provider" in HTML
-    assert "else await loadModels();" in HTML
-    assert "await newChat(true); await loadModels();" not in HTML
-    send_message = HTML.split("async function sendMessage", 1)[1].split("async function loadConversationSummary", 1)[0]
-    assert "renderPendingMessage();" in send_message
-    assert "renderConversationMessages([]);" not in send_message
-    assert "querySelectorAll('.message.pending-message')" in HTML
-    pagehide = HTML.split("pagehide", 1)[1]
-    assert "/cancel" not in pagehide
-
-
-def test_ai_chat_builds_model_specific_reasoning_variants() -> None:
-    """The effort picker must use each model's metadata instead of a fixed variant list."""
-    assert 'id="effort-select"' in HTML
-    assert "rebuildEffortOptions" in HTML
-    assert "model.reasoning_variants" in HTML
-    assert "variant.description" in HTML
-    assert "model.default_effort" in HTML
-    assert '<option value="low">Low</option>' not in HTML
-    assert '<option value="medium">Medium</option>' not in HTML
-    assert '<option value="high">High</option>' not in HTML
-    assert "effort: effort" in HTML
-    assert 'id="refresh-health"' not in HTML
-    assert "await refreshStatus()" in HTML
+def test_setup_suspends_work_and_rejects_late_results():
+    """Automatic updates preserve selections and clean up on hidden/unloaded pages."""
+    assert 'modelGeneration' in JS and 'githubGeneration' in JS and 'testGeneration' in JS
+    assert "visibilitychange" in JS and "pagehide" in JS and "pageshow" in JS
+    assert 'controllers.forEach' in JS and 'controller.abort()' in JS
+    assert "state.nameDirty" in JS and "url.searchParams.set('section'" in JS

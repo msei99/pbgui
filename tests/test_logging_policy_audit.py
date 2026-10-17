@@ -2,18 +2,21 @@
 
 import ast
 import builtins
+import os
 from pathlib import Path
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXCLUDED_PARTS = {".local-work", "tests", "data", "pb7", "upstream", "vendor", "generated", ".git", ".venv", "venv"}
+EXCLUDED_PARTS = {".local", ".gitnexus", ".local-work", "tests", "data", "pb7", "upstream", "vendor", "generated", ".git", ".venv", "venv"}
 DOCUMENTED_SCRIPT_DIRS = {
     "scripts": "One-off maintenance and diagnostic scripts are human-facing CLIs.",
     "tools": "Developer audit and comparison tools intentionally report to stdout.",
 }
 PRINT_ALLOWLIST = {
+    "scripts/stress_inventory_cache_init.py": "Temporary-database concurrency stress CLI reports isolated trial results without production data.",
+    "support_debug_crypto.py": "The operator-only decryption CLI prints a fixed completion message, never report contents or key material.",
     "setup/vast_gpu_benchmark/verify_fresh_population.py": "Offline worker-verification CLI emits its non-secret validation result as JSON.",
     "setup/vast_gpu_benchmark/resolve_local_inception.py": "Isolated resolver returns machine-readable candle metadata to its parent on stdout.",
     "setup/vast_gpu_benchmark/sync_input.py": "Remote input-sync helper returns a JSON manifest on stdout to its caller.",
@@ -86,6 +89,7 @@ HUMAN_LOG_SERVICE_MODULES = {
     "hyperliquid_aws.py", "tradfi_sync.py", "api/live.py",
 }
 TIER_3_SERVICES = {
+    "SupportDebug",
     "PB7Bridge",
     "TaskQueue",
     "AIChat", "AIResearch", "PB8Loop", "PB8Config", "OptimizerWorkload",
@@ -104,13 +108,19 @@ DEDICATED_SERVICES = {
 
 def _production_trees(*, include_documented_scripts=False):
     """Yield parsed production modules while excluding documented script trees."""
-    for path in ROOT.rglob("*.py"):
-        relative = path.relative_to(ROOT)
-        if any(part in EXCLUDED_PARTS for part in relative.parts):
-            continue
-        if not include_documented_scripts and relative.parts[0] in DOCUMENTED_SCRIPT_DIRS:
-            continue
-        yield relative.as_posix(), ast.parse(path.read_text(encoding="utf-8"), filename=str(relative))
+    for directory, subdirs, files in os.walk(ROOT, followlinks=False):
+        # Prune before traversing: ignored research/runtime trees are not product code.
+        subdirs[:] = [name for name in subdirs if name not in EXCLUDED_PARTS
+                      and not (Path(directory) == ROOT and not include_documented_scripts
+                               and name in DOCUMENTED_SCRIPT_DIRS)]
+        for name in files:
+            if not name.endswith('.py'):
+                continue
+            path = Path(directory) / name
+            if path.is_symlink():
+                continue
+            relative = path.relative_to(ROOT)
+            yield relative.as_posix(), ast.parse(path.read_text(encoding="utf-8"), filename=str(relative))
 
 
 def _call_name(node):
@@ -332,3 +342,20 @@ def test_append_detector_distinguishes_archive_members_from_file_modes():
     """A ZIP member name containing 'a' is not an append mode; real appends remain detected."""
     tree = ast.parse("archive.open('candles.npy')\npath.open('ab')\nopen('file', 'a+')")
     assert [node.lineno for node in _append_open_calls(tree)] == [2, 3]
+
+
+@pytest.mark.parametrize('include_scripts', [False, True])
+def test_production_audit_does_not_read_private_or_runtime_trees(tmp_path, monkeypatch, include_scripts):
+    """Audit shipped code and explicit CLIs, never local research, runtime or index artifacts."""
+    import sys
+
+    for directory in ['.local', '.local-work', '.gitnexus', 'data', 'tests']:
+        root = tmp_path / directory
+        root.mkdir()
+        (root / 'private.py').write_text('This is deliberately not parseable Python')
+    (tmp_path / 'active.py').write_text('SERVICE = "Active"')
+    (tmp_path / 'tools').mkdir()
+    (tmp_path / 'tools' / 'cli.py').write_text('print("CLI")')
+    monkeypatch.setattr(sys.modules[__name__], 'ROOT', tmp_path)
+    names = {relative for relative, _ in _production_trees(include_documented_scripts=include_scripts)}
+    assert names == ({'active.py', 'tools/cli.py'} if include_scripts else {'active.py'})

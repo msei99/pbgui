@@ -1,8 +1,16 @@
 (function () {
   'use strict';
-  var apiBase = window.location.origin + '/api/ai';
+  var apiBase = window.location.origin + (window.PBGUI_BASE_PREFIX || window.BASE_PREFIX || '') + '/api/ai';
+  if (document.currentScript && document.currentScript.src) apiBase = new URL('../../api/ai', document.currentScript.src).href;
   var state = {
     open: false,
+    imageDrafts: {},
+    imageEpochs: {},
+    retryImages: {},
+    imageReads: Promise.resolve(),
+    sending: false,
+    sendGeneration: 0,
+    sendOwner: 0,
     conversations: [],
     current: '',
     providers: {},
@@ -23,6 +31,7 @@
     proposalGeneration: 0,
     history: false,
     busy: false,
+    loopPromptSending: false,
     workTimer: null,
     workSince: 0,
     workIdentity: '',
@@ -117,10 +126,10 @@
     pin.setAttribute('aria-pressed', 'false');
     pin.addEventListener('click', togglePinned);
     head.appendChild(pin);
-    var full = el('button', '', 'Full');
+    var full = el('button', '', 'Setup');
     full.type = 'button';
-    full.title = 'Open full AI Chat';
-    full.addEventListener('click', function () { window.location.assign(window.location.origin + '/api/ai/main_page'); });
+    full.title = 'Open AI Setup';
+    full.addEventListener('click', function () { window.location.assign(apiBase + '/main_page'); });
     head.appendChild(full);
     var remove = el('button', '', 'Delete');
     remove.type = 'button';
@@ -207,11 +216,35 @@
     var compose = el('div', 'pai-compose');
     var prompt = document.createElement('textarea');
     prompt.maxLength = 12000;
-    prompt.placeholder = 'Ask about this page...';
+    prompt.placeholder = 'Type a message, paste an image, or drop images here...';
     prompt.addEventListener('keydown', function (event) {
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); }
     });
     compose.appendChild(prompt);
+    var images = el('div', 'pai-image-drafts');
+    images.setAttribute('aria-label', 'Attached images');
+    images.hidden = true;
+    compose.appendChild(images);
+    prompt.addEventListener('paste', function (event) {
+      var files = Array.from(event.clipboardData && event.clipboardData.files || []);
+      if (!files.length) return;
+      event.preventDefault();
+      addChatImages(files);
+    });
+    chat.addEventListener('dragover', function (event) {
+      if (Array.from(event.dataTransfer && event.dataTransfer.types || []).indexOf('Files') < 0) return;
+      event.preventDefault();
+      if (!state.busy) compose.classList.add('pai-image-drop');
+    });
+    chat.addEventListener('dragleave', function (event) {
+      if (!chat.contains(event.relatedTarget)) compose.classList.remove('pai-image-drop');
+    });
+    chat.addEventListener('drop', function (event) {
+      if (!event.dataTransfer || !event.dataTransfer.files.length) return;
+      event.preventDefault();
+      compose.classList.remove('pai-image-drop');
+      addChatImages(Array.from(event.dataTransfer.files));
+    });
     var send = el('button', 'primary', 'Send');
     send.type = 'button';
     send.addEventListener('click', function () { sendMessage(); });
@@ -229,6 +262,67 @@
     document.body.appendChild(buildReviewOverlay());
     renderContext(collectDisplayContext());
     selectionReady = refreshAll();
+  }
+
+  function readChatImage(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('Could not read image.')); };
+      reader.onload = function () { resolve({ media_type: file.type, data_base64: String(reader.result).split(',')[1] }); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function addChatImages(files) {
+    if (state.busy || state.sending) { setStatus('Wait for this response before adding images.', true); return; }
+    if (selectedProvider() === 'openrouter') { setStatus('Jev does not accept images. Select ChatGPT or an image-capable OpenCode model.', true); return; }
+    var key = state.current, epoch = state.imageEpochs[key] || 0;
+    state.imageReads = state.imageReads.then(async function () {
+      if ((state.imageEpochs[key] || 0) !== epoch) return;
+      var previous = state.imageDrafts[key] || [];
+      if (previous.length + files.length > 5) throw new Error('Attach at most five images per message.');
+      if (files.some(function (file) { return ['image/png', 'image/jpeg', 'image/webp'].indexOf(file.type) < 0 || !file.size || file.size > 4 * 1024 * 1024; })) {
+        throw new Error('Use PNG, JPEG or WebP images up to 4 MiB each.');
+      }
+      var added = await Promise.all(files.map(readChatImage));
+      if ((state.imageEpochs[key] || 0) !== epoch) return;
+      state.imageDrafts[key] = previous.concat(added);
+      if (key === state.current) { renderChatImageDrafts(); setStatus('', false); }
+    }).catch(function (error) { if (key === state.current) setStatus(error.message, true); });
+  }
+
+  function clearChatImages(key) {
+    state.imageEpochs[key] = (state.imageEpochs[key] || 0) + 1;
+    delete state.imageDrafts[key];
+    renderChatImageDrafts();
+  }
+
+  function renderChatImageDrafts() {
+    if (!root) return;
+    var box = root.querySelector('.pai-image-drafts');
+    if (!box) return;
+    box.replaceChildren();
+    var key = state.current, images = state.imageDrafts[key] || [];
+    box.hidden = !images.length;
+    images.forEach(function (image, index) {
+      var item = el('div', 'pai-image-draft');
+      var preview = document.createElement('img');
+      preview.alt = 'Attached image ' + (index + 1);
+      preview.src = 'data:' + image.media_type + ';base64,' + image.data_base64;
+      item.appendChild(preview);
+      var remove = el('button', '', 'Remove'); remove.type = 'button'; remove.disabled = state.busy || state.sending;
+      remove.setAttribute('aria-label', 'Remove image ' + (index + 1));
+      remove.addEventListener('click', function () {
+        state.imageEpochs[key] = (state.imageEpochs[key] || 0) + 1;
+        state.imageDrafts[key] = images.filter(function (_, current) { return current !== index; });
+        renderChatImageDrafts();
+      });
+      item.appendChild(remove); box.appendChild(item);
+    });
+  }
+
+  function chatImageUrl(conversationId, image) {
+    return apiBase + '/conversations/' + encodeURIComponent(conversationId) + '/images/' + encodeURIComponent(image.id);
   }
 
   function bindComposeResize(compose, prompt) {
@@ -330,7 +424,7 @@
       note = el('div', 'pai-jev-availability');
       container.appendChild(note);
     }
-    note.textContent = 'Jev unavailable: connect OpenRouter in AI Chat.';
+    note.textContent = 'Jev unavailable: connect OpenRouter in AI Setup.';
   }
 
   async function refreshUsage() {
@@ -434,8 +528,10 @@
     meter.title = available ? 'Context: ' + usage.used_tokens.toLocaleString() + ' / ' + usage.limit_tokens.toLocaleString() + ' tokens (last reported)' : 'Context usage unavailable from this provider';
     meter.setAttribute('aria-label', meter.title);
     root.querySelector('.primary').hidden = busy;
+    root.querySelector('.primary').disabled = !busy && state.sending;
     root.querySelector('.danger').hidden = !busy;
     root.querySelector('textarea').disabled = busy;
+    renderChatImageDrafts();
     root.querySelector('.pai-retry').disabled = busy;
     root.querySelector('#pai-provider').disabled = busy || !root.querySelector('#pai-provider').options.length;
     root.querySelector('#pai-model').disabled = busy || state.modelsLoading || !Object.keys(state.models).length;
@@ -629,7 +725,7 @@
     var profile = selectedProfile();
     root.querySelector('.pai-compose textarea').placeholder = provider === 'openrouter'
       ? 'Ask Jev to choose, rate, or judge yes/no from supplied data.'
-      : 'Ask about this page...';
+      : 'Type a message, paste an image, or drop images here...';
     refreshUsage();
     var select = root.querySelector('#pai-model');
     var current = preferred || select.value;
@@ -817,6 +913,7 @@
       dispatchUiActions(id, uiActions, !!conversation.busy);
       window.PBGuiAIMessageView.restore(box, savedScroll);
       if (conversation.retry_message) state.retryMessages[id] = conversation.retry_message;
+      state.retryImages[id] = conversation.retry_images || [];
       renderContext(collectDisplayContext());
       setBusy(!!conversation.busy, conversation);
       var retry = root.querySelector('.pai-retry');
@@ -948,6 +1045,12 @@
       var bubble = el('div', 'pai-bubble', message.content || '');
       if (message.role !== 'user') window.PBGuiAIMessageView.render(bubble, message.content || '');
       if (message.role !== 'user') appendDetectedQuickReplies(bubble, message.content || '');
+      (message.images || []).forEach(function (image, imageIndex) {
+        var preview = document.createElement('img');
+        preview.className = 'pai-chat-image'; preview.alt = 'Attached image ' + (imageIndex + 1);
+        preview.loading = 'lazy'; preview.src = chatImageUrl(state.current, image);
+        bubble.appendChild(preview);
+      });
       row.appendChild(bubble);
       var actions = el('div', 'pai-message-actions');
       var copy = el('button', '', 'Copy'); copy.type = 'button'; copy.addEventListener('click', function () { copyMessage(message.content || ''); }); actions.appendChild(copy);
@@ -1055,6 +1158,7 @@
   }
 
   function proposalActionLabel(action) {
+    if (action === 'publish_github_issue') return 'Publish GitHub issue';
     if (action === 'save_ai_loop_config') return 'Save AI Loop definition';
     if (action === 'run_ai_loop') return 'Run AI Loop';
     if (action === 'save_vast_preferences') return 'Change Vast.ai rental preferences';
@@ -1072,6 +1176,7 @@
   }
 
   function proposalDetail(preview) {
+    if (preview.action === 'publish_github_issue') return String(preview.target || '') + ' · ' + String(preview.login || '') + (preview.encrypted_attachment ? ' · encrypted diagnostic attachment' : '') + (preview.reconcile_only ? ' · check previous publication only' : ' · public');
     if (['save_ai_loop_config', 'run_ai_loop', 'save_vast_preferences'].includes(preview.action)) return String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
     if (preview.action === 'reviewed_config_change') return String(preview.version || '') + ' · ' + String(preview.kind || '') + ' · ' + String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
     if (preview.action === 'jev_analysis') return String(preview.version || '') + ' ' + String(preview.run_name || '') + ' - ' + String(preview.candidate_count || 0) + ' candidates assessed - ' + (preview.max_candidates == null ? 'Jev decides how many to mark' : 'mark at most ' + String(preview.max_candidates)) + ' - USD ' + String(preview.max_cost_usd || '') + ' maximum';
@@ -1239,13 +1344,18 @@
     content.textContent = ''; actions.textContent = '';
     content.appendChild(el('h3', '', proposalActionLabel(preview.action) + (preview.name ? ': ' + String(preview.name) : '')));
     content.appendChild(el('div', 'pai-proposal-detail', proposalDetail(preview)));
-    if (preview.action === 'python_analysis') content.appendChild(el('pre', 'pai-review-raw', proposalReviewText(proposal)));
+    if (preview.action === 'publish_github_issue') {
+      content.appendChild(el('h4', '', preview.title));
+      content.appendChild(el('pre', 'pai-review-raw', preview.body));
+      if (preview.assets_repository) content.appendChild(el('div', 'pai-proposal-detail', 'Encrypted diagnostics will be uploaded to the public asset repository ' + String(preview.assets_repository) + '. Only PBGui support can decrypt them.'));
+    }
+    else if (preview.action === 'python_analysis') content.appendChild(el('pre', 'pai-review-raw', proposalReviewText(proposal)));
     else {
       content.appendChild(buildProposalDiff(preview));
       var raw = el('details', 'pai-proposal-raw'); raw.appendChild(el('summary', '', 'Raw JSON')); raw.appendChild(el('pre', 'pai-review-raw', proposalReviewText(proposal))); content.appendChild(raw);
     }
     var reject = el('button', '', 'Reject'); reject.type = 'button'; reject.addEventListener('click', async function () { closeProposalReview(); await resolveProposal(proposal, false, card); }); actions.appendChild(reject);
-    var approve = el('button', 'primary', preview.action === 'save_ai_loop_config' ? 'Save definition' : 'Approve'); approve.type = 'button'; approve.addEventListener('click', async function (event) { if (preview.action === 'reviewed_config_change' && !event.isTrusted) return; closeProposalReview(); await resolveProposal(proposal, true, card, reviewToken); }); actions.appendChild(approve);
+    var approve = el('button', 'primary', preview.action === 'publish_github_issue' ? (preview.reconcile_only ? 'Check previous publication' : 'Publish issue') : preview.action === 'save_ai_loop_config' ? 'Save definition' : 'Approve'); approve.type = 'button'; approve.addEventListener('click', async function (event) { if (preview.action === 'reviewed_config_change' && !event.isTrusted) return; closeProposalReview(); await resolveProposal(proposal, true, card, reviewToken); }); actions.appendChild(approve);
     overlay.hidden = false;
     var closeButton = overlay.querySelector('[aria-label="Close proposal review"]');
     if (closeButton) closeButton.focus();
@@ -1297,8 +1407,7 @@
     buttons.forEach(function (button) { button.disabled = true; });
     state.resolvingProposalIds.add(proposalId);
     card.hidden = true;
-    renderProposals([]);
-    if (approve) {
+    if (approve && preview.action !== 'publish_github_issue') {
       var approvalDetail = ['save_ai_loop_config', 'run_ai_loop', 'save_vast_preferences'].includes(preview.action)
         ? String(preview.effect || '')
         : preview.action === 'reviewed_config_change'
@@ -1315,6 +1424,7 @@
         confirmText: preview.action === 'save_ai_loop_config' ? 'Save definition' : 'Approve'
       });
       if (!confirmed) {
+        card.hidden = false;
         state.resolvingProposalIds.delete(proposalId);
         buttons.forEach(function (button) { button.disabled = false; });
         await reconcileProposals(conversationId);
@@ -1334,6 +1444,11 @@
       });
       if (result.status === 'executed' && result.action === 'python_analysis') appendAnalysisResult(result);
       if (result.status === 'executed') {
+        if (result.action === 'publish_github_issue' && /^https:\/\/github\.com\/msei99\/pbgui\/issues\/\d+$/.test(String(result.issue_url || ''))) {
+          var issueRow = el('div', 'pai-message assistant'), issueLink = el('a', '', 'Open published GitHub issue');
+          issueLink.href = result.issue_url; issueLink.target = '_blank'; issueLink.rel = 'noopener noreferrer';
+          issueRow.appendChild(issueLink); root.querySelector('.pai-messages').appendChild(issueRow);
+        }
         if (window.PBGuiAI && typeof window.PBGuiAI.openQueuedBacktestCompare === 'function') {
           window.PBGuiAI.openQueuedBacktestCompare(result);
         }
@@ -1362,7 +1477,14 @@
     }
   }
 
-  async function newConversation() {
+  async function newConversation(sendGeneration) {
+    if (typeof sendGeneration !== 'number') sendGeneration = null;
+    if (state.pendingSetupSelection) {
+      var setup = state.pendingSetupSelection; state.pendingSetupSelection = null;
+      state.profile = setup.profile || 'default'; state.selectionDirty = true;
+      await rebuildProviders(setup.provider === 'chatgpt' ? 'chatgpt:' + state.profile : setup.provider, setup.model);
+      rebuildEfforts(setup.effort || ''); rebuildSpeeds(setup.service_tier || '');
+    }
     var provider = selectedProvider();
     var profile = selectedProfile();
     var model = root.querySelector('#pai-model').value;
@@ -1374,30 +1496,55 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: provider, profile: profile, model: model, effort: root.querySelector('#pai-effort').value, service_tier: root.querySelector('#pai-speed').hidden ? '' : root.querySelector('#pai-speed').value, context: context })
       });
+      if (sendGeneration != null && sendGeneration !== state.sendGeneration) {
+        await api('/conversations/' + encodeURIComponent(data.conversation_id), {method:'DELETE'});
+        return;
+      }
       state.selectionDirty = false;
       state.current = data.conversation_id;
       await loadConversations(state.current);
       root.querySelector('textarea').focus();
-    } catch (error) { setStatus(error.message, true); }
+      return data.conversation_id;
+    } catch (error) { if (sendGeneration == null || sendGeneration === state.sendGeneration) setStatus(error.message, true); }
   }
 
-  async function sendMessage(override) {
+  async function sendMessage(override, retryImages) {
+    if (state.busy || state.sending) return;
+    state.sending = true;
+    var sendGeneration = ++state.sendGeneration, submitted = false;
+    state.sendOwner = sendGeneration;
+    try {
+    var draftKey = state.current;
+    await state.imageReads;
+    if (draftKey !== state.current || sendGeneration !== state.sendGeneration) return;
+    var images = retryImages || (override == null ? (state.imageDrafts[draftKey] || []).slice() : []);
     var prompt = root.querySelector('textarea');
     var message = String(override == null ? prompt.value : override).trim();
-    if (!message) return;
+    if (!message && !images.length) return;
+    if (!message) message = "Please inspect the attached images.";
     var turnProvider = selectedProvider();
     var turnModel = root.querySelector('#pai-model').value;
     var turnEffort = root.querySelector('#pai-effort').value;
     var turnServiceTier = root.querySelector('#pai-speed').hidden ? '' : root.querySelector('#pai-speed').value;
-    if (!state.current) await newConversation();
-    if (!state.current) return;
+    setBusy(true);
+    if (!state.current) await newConversation(sendGeneration);
+    if (!state.current || sendGeneration !== state.sendGeneration) return;
+    setBusy(true);
     var conversationId = state.current;
+    if (draftKey !== conversationId && override == null) {
+      if (images.length) state.imageDrafts[conversationId] = images;
+      clearChatImages(draftKey);
+      draftKey = conversationId;
+      renderChatImageDrafts();
+    }
     state.retryMessages[conversationId] = message;
-    if (override == null) prompt.value = '';
+    state.retryImages[conversationId] = [];
     var turnContext = root.querySelector('#pai-context-toggle').checked ? collectContext() : null;
     renderContext(turnContext || {});
     var securitySnapshot = await api('/conversations/' + encodeURIComponent(conversationId));
-    var localResult = securitySnapshot.conversation_id === conversationId && securitySnapshot.analysis_only === false && window.PBGuiAI && typeof window.PBGuiAI.tryLocalCommand === 'function'
+    if (sendGeneration !== state.sendGeneration || conversationId !== state.current) return;
+    if (override == null) prompt.value = '';
+    var localResult = !images.length && securitySnapshot.conversation_id === conversationId && securitySnapshot.analysis_only === false && window.PBGuiAI && typeof window.PBGuiAI.tryLocalCommand === 'function'
       ? window.PBGuiAI.tryLocalCommand(message)
       : { handled: false };
     if (localResult.handled) {
@@ -1438,7 +1585,7 @@
         }
         jevPreviewId = review.previewId;
       }
-      if (conversationId !== state.current) {
+      if (conversationId !== state.current || sendGeneration !== state.sendGeneration) {
         if (jevPreviewId) await window.PBGuiJevTransferPreview.discard(api, conversationId, jevPreviewId);
         return;
       }
@@ -1452,9 +1599,16 @@
           service_tier: turnServiceTier,
           model: turnModel,
           provider: turnProvider,
-          jev_preview_id: jevPreviewId || null
+          jev_preview_id: jevPreviewId || null,
+          images: images
         })
       });
+      submitted = true;
+      if (sendGeneration !== state.sendGeneration) {
+        await api('/conversations/' + encodeURIComponent(conversationId) + '/cancel', {method:'POST'});
+        return;
+      }
+      if (override == null) clearChatImages(draftKey);
       state.selectionDirty = false;
       if (conversationId === state.current) {
         schedulePoll(conversationId);
@@ -1464,41 +1618,64 @@
       if (jevPreviewId && window.PBGuiJevTransferPreview) {
         await window.PBGuiJevTransferPreview.discard(api, conversationId, jevPreviewId).catch(function () {});
       }
-      if (conversationId === state.current) {
+      if (conversationId === state.current && sendGeneration === state.sendGeneration) {
+        if (override == null) prompt.value = message;
         setBusy(false);
         root.querySelector('.pai-retry').hidden = false;
         setStatus(error.message, true);
       }
     }
+    } catch (error) { if (sendGeneration === state.sendGeneration) setStatus(error.message, true); }
+    finally {
+      if (state.sendOwner === sendGeneration) {
+        state.sending = false; state.sendOwner = 0;
+        if (sendGeneration === state.sendGeneration && !submitted) setBusy(false);
+        else setBusy(state.busy);
+        renderChatImageDrafts();
+      }
+    }
   }
 
-  function retryTurn() {
-    var message = state.retryMessages[state.current];
-    if (message) sendMessage(message);
+  async function retryTurn() {
+    var id = state.current, message = state.retryMessages[id];
+    if (!message || state.busy || state.sending) return;
+    try {
+      var images = await Promise.all((state.retryImages[id] || []).map(async function (image) {
+        var response = await fetch(chatImageUrl(id, image), { credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) throw new Error('Could not load attached image for retry.');
+        var blob = await response.blob();
+        return readChatImage(blob);
+      }));
+      if (id === state.current) await sendMessage(message, images.length ? images : (state.imageDrafts[id] || []));
+    } catch (error) { setStatus(error.message, true); }
   }
 
   async function stopTurn() {
-    if (!state.current) return;
+    var generation = ++state.sendGeneration, conversationId = state.current;
+    state.requestGeneration++; stopPoll(); setBusy(false);
+    if (!conversationId) { setStatus('Request stopped.', false); return; }
     try {
-      await api('/conversations/' + encodeURIComponent(state.current) + '/cancel', { method: 'POST' });
-      await loadConversation(state.current);
-    } catch (error) { setStatus(error.message, true); }
+      await api('/conversations/' + encodeURIComponent(conversationId) + '/cancel', { method: 'POST' });
+      if (generation === state.sendGeneration && conversationId === state.current) await loadConversation(conversationId);
+    } catch (error) { if (generation === state.sendGeneration) setStatus(error.message, true); }
   }
 
   async function deleteConversation() {
     if (!state.current) return;
+    var conversationId = state.current;
     var confirmed = await confirmAction({
       title: 'Delete AI chat',
       message: 'Delete this conversation and its history?',
       confirmText: 'Delete'
     });
-    if (!confirmed) return;
-    var conversationId = state.current;
+    if (!confirmed || conversationId !== state.current) return;
+    stopPoll(); state.requestGeneration++; state.sendGeneration++; state.sending = false; state.sendOwner = 0;
     try {
       await api('/conversations/' + encodeURIComponent(conversationId), { method: 'DELETE' });
-      delete state.retryMessages[conversationId];
-      state.current = '';
-      await loadConversations();
+      delete state.retryMessages[conversationId]; delete state.retryImages[conversationId];
+      clearChatImages(conversationId);
+      if (conversationId === state.current) { state.current = ''; setBusy(false); }
+      await loadConversations(state.current);
     } catch (error) { setStatus(error.message, true); }
   }
 
@@ -1561,10 +1738,28 @@
     if (!model || !state.models[model]) throw new Error('Select a connected model in the PBGui AI assistant.');
     return currentSelection();
   };
+  facade.isBusy = function () { return state.busy || state.sending || state.loopPromptSending; };
+  facade.sendLoopPrompt = async function (message) {
+    if (typeof message !== 'string' || !message.trim() || message.length > 8000) throw new Error('Invalid Loop request.');
+    if (facade.isBusy()) throw new Error('Wait for the current AI turn to finish.');
+    state.loopPromptSending = true;
+    try {
+      await facade.getSelection();
+      if (state.busy) throw new Error('Wait for the current AI turn to finish.');
+      openDrawer();
+      var conversationId = await newConversation();
+      if (!conversationId || state.current !== conversationId) throw new Error('Could not select the new AI chat. Try again.');
+      await sendMessage(message);
+    } finally { state.loopPromptSending = false; }
+  };
   facade.open = openDrawer;
   facade.close = closeDrawer;
   facade.toggle = function () { state.open ? closeDrawer() : openDrawer(); };
   window.PBGuiAI = facade;
+  window.addEventListener('pbgui:ai-setup-saved', function (event) {
+    var value = event.detail;
+    if (value && typeof value.provider === 'string' && typeof value.model === 'string') state.pendingSetupSelection = Object.assign({}, value);
+  });
   window.addEventListener('resize', function () { if (root) applyWidth(state.drawerWidth); });
   window.addEventListener('pagehide', function () {
     if (state.workTimer) clearInterval(state.workTimer);
@@ -1573,4 +1768,5 @@
     stopPoll();
     stopContextWatch();
   });
+
 }());

@@ -72,6 +72,7 @@ from api.auth import (
     unauthenticated_page_redirect,
 )
 from api.ai import router as ai_router
+from api.support_debug import router as support_debug_router
 from ai_chat import shutdown as ai_chat_shutdown
 from ai_capabilities import (
     restart_block_reason as ai_restart_block_reason,
@@ -1089,6 +1090,7 @@ app.add_middleware(BrowserOriginMiddleware)
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
+app.include_router(support_debug_router, prefix="/api/debug", tags=["debug"])
 app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(dashboards_router, prefix="/api/dashboards", tags=["dashboards"])

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def function(page, name):
     """Extract one page-local declaration without running unrelated page startup."""
-    source = (ROOT / 'frontend' / (page + '.html')).read_text()
+    source = (ROOT / 'frontend' / (page if page.endswith('.js') else page + '.html')).read_text()
     match = re.search(r'^( +)(?:async )?function ' + name + r'\([^\n]*\) \{', source, re.M)
     assert match, name
     end = source.index('\n' + match[1] + '}', match.end()) + len(match[1]) + 2
@@ -106,20 +106,20 @@ await assert.rejects(readQueueResponse(response),new RegExp({json.dumps(expected
 
 def test_delete_ai_chat_stops_polling_and_unlocks_composer():
     """Successful deletion invalidates old responses and clears active turn state."""
-    run_js(function('ai_chat','deleteCurrentConversation') + '''
-const state={conversationId:'old',transitioning:false,retryMessages:{old:'x'},busy:true,pendingMessage:'x',chatGeneration:1};let stopped=0;
-const window={PBGuiDialogs:{confirm:async()=>true}},setTransitioning=x=>state.transitioning=x,api=async()=>{},stopActivityPolling=()=>stopped++,rememberProfile=()=>{},loadConversations=async()=>{},setNotice=()=>{};
-(async()=>{await deleteCurrentConversation();assert.equal(stopped,1);assert(!state.busy);assert.equal(state.pendingMessage,'');assert.equal(state.conversationId,'');assert.equal(state.chatGeneration,2);})().catch(e=>{console.error(e);process.exitCode=1});
+    run_js(function('js/ai_drawer.js','deleteConversation') + '''
+const state={current:'old',retryMessages:{old:'x'},retryImages:{},busy:true,requestGeneration:1,sendGeneration:0};let stopped=0;
+const confirmAction=async()=>true,api=async()=>{},stopPoll=()=>stopped++,clearChatImages=()=>{},loadConversations=async()=>{},setStatus=()=>{},setBusy=value=>state.busy=value;
+(async()=>{await deleteConversation();assert.equal(stopped,1);assert(!state.busy);assert.equal(state.current,'');assert.equal(state.requestGeneration,2);assert.equal(state.sendGeneration,1);})().catch(e=>{console.error(e);process.exitCode=1});
 ''')
 
 
 def test_approval_cancel_preserves_other_proposal_cards():
     """Only the reviewed proposal is hidden; cancelling restores it."""
-    run_js(function('ai_chat','resolveProposal') + '''
-const state={chatGeneration:1,conversationId:'chat',resolvingProposalIds:new Set()};let confirm,clears=0;
-const window={PBGuiDialogs:{confirm:()=>new Promise(r=>confirm=r)}},proposalActionLabel=()=>'',reconcileProposals=async()=>{},renderProposals=()=>clears++;
+    run_js(function('js/ai_drawer.js','resolveProposal') + '''
+const state={current:'chat',resolvingProposalIds:new Set()};let confirm,clears=0;
+const confirmAction=()=>new Promise(r=>confirm=r),proposalActionLabel=()=>'',reconcileProposals=async()=>{},renderProposals=()=>clears++;
 const button={disabled:false},card={hidden:false,querySelectorAll:()=>[button]};
-(async()=>{const task=resolveProposal({proposal_id:'a'},true,card);assert.equal(clears,0);confirm(false);await task;assert(!card.hidden);assert(!button.disabled);})().catch(e=>{console.error(e);process.exitCode=1});
+(async()=>{const task=resolveProposal({proposal_id:'a',preview:{action:'save_vast_preferences'}},true,card);assert.equal(clears,0);confirm(false);await task;assert(!card.hidden);assert(!button.disabled);assert(!state.resolvingProposalIds.has('a'));})().catch(e=>{console.error(e);process.exitCode=1});
 ''')
 
 

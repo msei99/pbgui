@@ -1,0 +1,22 @@
+.support-report-view{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;container-type:inline-size}
+.support-report-view [hidden]{display:none!important}
+.support-report-categories{display:flex;flex-wrap:wrap;gap:6px;flex-shrink:0;margin-bottom:10px}
+.support-report-view button{background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font:inherit;cursor:pointer;overflow-wrap:anywhere}
+.support-report-view button[aria-selected="true"],.support-report-view button[aria-pressed="true"]{background:rgba(77,166,255,.12);border-color:var(--accent)}
+.support-report-view button:disabled{opacity:.45;cursor:default}
+.support-report-layout{display:grid;grid-template-columns:minmax(190px,28%) minmax(0,1fr);flex:1;min-height:0;gap:12px}
+.support-report-sources{display:flex;flex-direction:column;min-height:0;min-width:0;gap:8px}
+.support-report-sources input{width:100%;box-sizing:border-box;min-width:0;min-height:32px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px}
+.support-report-list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px}
+.support-report-list button{text-align:left;flex-shrink:0;display:flex;flex-direction:column;gap:4px}
+.support-report-list button span{opacity:.7;font-size:12px}
+.support-report-detail{min-width:0;min-height:0;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg2);padding:14px}
+.support-report-detail h2{margin:0 0 12px;font-size:16px;overflow-wrap:anywhere}
+.support-report-field{border-bottom:1px solid var(--border);padding:8px 0;overflow-wrap:anywhere;min-width:0}
+.support-report-field summary,.support-report-leaf{display:grid;grid-template-columns:minmax(110px,30%) minmax(0,1fr);gap:12px}
+.support-report-field summary{cursor:pointer;display:list-item}
+.support-report-field summary span{margin-left:12px;opacity:.7}
+.support-report-nested{margin:8px 0 0 12px;padding-left:12px;border-left:2px solid var(--border)}
+.support-report-value{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;font:12px/1.6 monospace;margin:0}
+.support-report-pager{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px;padding:8px 0;font-size:12px}
+@container(max-width:580px){.support-report-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(130px,32%) minmax(0,1fr)}.support-report-field summary,.support-report-leaf{grid-template-columns:minmax(0,1fr);gap:4px}.support-report-categories button{padding:5px 7px;font-size:12px}}

@@ -227,6 +227,9 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
     message_names = {item["name"] for item in service.messages_tools()}
 
     assert {
+        "read_pbgui_support_evidence",
+        "get_github_support_status",
+        "propose_github_issue",
         "get_ai_loop_configs",
         "get_ai_loop_runs",
         "read_ai_loop_log",

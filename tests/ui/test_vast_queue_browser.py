@@ -825,6 +825,8 @@ def test_pool_summary_and_explicit_start_consent():
             first_card.get_by_role('button', name='Results').click()
             assert page.evaluate('openedResults') == 'first'
             assert page.locator('.queue-gpu-card').nth(1).get_by_role('button', name='Results').is_disabled()
+            assert page.locator('.queue-gpu-card button[data-tip]').count() == 0
+            assert page.locator('.queue-gpu-card').nth(1).locator('[data-tip]').filter(has_text='Downloading worker image').count() == 1
             page.evaluate("queueState.paused=true; jobRows.push({id:'queued',config_name:'Queued optimizer',status:'ready'}); renderQueueOverview()")
             assert page.locator('.queue-pool-state').inner_text() == 'Paused'
             assert page.get_by_role('button', name='Resume auto start').is_visible()

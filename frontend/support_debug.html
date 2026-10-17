@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Debug export - PBGui</title>
+<link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+<link rel="stylesheet" href="/app/css/modals_shared.css?v=6">
+<link rel="stylesheet" href="/app/css/support_issue.css?v=11">
+<link rel="stylesheet" href="/app/css/support_attachments.css?v=1">
+<link rel="stylesheet" href="/app/css/support_report_view.css?v=1">
+<style>
+:root{--bg:#0b1220;--bg2:#111a28;--text:#e5edf7;--border:#26364d;--accent:#60a5fa}
+*{box-sizing:border-box}body{margin:0;height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font:14px/1.5 system-ui}
+#topnav{flex-shrink:0}#page-body{display:flex;flex:1;min-height:0}#main-content{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden;padding:20px}#debug-summary{overflow:auto;min-height:0}#debug-report{display:flex;flex:1;min-height:0}h1,.debug-tabs{flex-shrink:0}
+h1{margin-top:0}.debug-tabs{display:flex;gap:8px;margin-bottom:12px}.debug-tabs button{padding:7px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--text);cursor:pointer}.debug-tabs button[aria-selected="true"]{border-color:var(--accent)}
+.debug-table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th{position:sticky;top:0;background:var(--bg2);border-bottom:2px solid var(--border);text-align:left}td,th{padding:8px;border-bottom:1px solid var(--border);overflow-wrap:anywhere}#debug-status{overflow-wrap:anywhere}#debug-error{color:#fca5a5} [hidden]{display:none!important}
+</style>
+<link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
+<script src="/app/js/sidebar_resize.js?v=3"></script>
+</head>
+<body>
+<nav id="topnav"></nav>
+<div id="page-body">
+<aside id="sidebar"><div id="sidebar-sticky"><div id="sidebar-header"><span class="sb-title">DEBUG EXPORT</span></div><div id="sidebar-toolbar">
+<button id="debug-collect" class="sb-btn primary" type="button">Collect debug report</button>
+<button id="debug-download" class="sb-btn" type="button" disabled>Download report</button>
+<button id="debug-issue" class="sb-btn info" type="button">Report issue on GitHub</button>
+</div></div><div id="sidebar-inner"><details class="support-attachment-choices"><summary>Report contents</summary><div id="debug-attachment-picker"></div></details><div id="debug-context"></div><div id="debug-status" role="status">Ready to collect.</div><div id="debug-error" role="alert"></div></div><div id="sidebar-resize"></div></aside>
+<main id="main-content"><h1>Debug export</h1>
+<div class="debug-tabs" role="tablist"><button id="debug-tab-summary" role="tab" aria-selected="true">Summary</button><button id="debug-tab-report" role="tab" aria-selected="false">Report preview</button></div>
+<section id="debug-summary"><p id="debug-intro">All application areas · versions, operational status, errors and log excerpts.</p><div class="debug-table-wrap"><table><thead><tr><th>Data</th><th>Collected</th></tr></thead><tbody id="debug-counts"></tbody></table></div><h3 id="debug-limits-heading" hidden>Collection limits / unavailable sources</h3><ul id="debug-omitted"></ul></section>
+<section id="debug-report" hidden><div id="debug-structured" aria-label="Structured debug report preview"></div></section>
+</main></div>
+<script>
+window.API_BASE = "%%API_BASE%%";
+window.PBGUI_BASE_PREFIX = "%%BASE_PREFIX%%";
+window.PBGUI_VERSION = "%%VERSION%%";
+window.PBGUI_SERIAL = "%%SERIAL%%";
+window.PBGUI_NAV_CONFIG = {subtitle:'DEBUG EXPORT',current:'info_debug_export',authenticated:true};
+</script>
+<script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+<script src="/app/js/support_report_view.js?v=1"></script>
+<script src="/app/js/support_attachments.js?v=2"></script>
+<script src="/app/js/support_debug.js?v=5"></script>
+<script src="/app/js/floating_window.js?v=1"></script>
+<script src="/app/js/support_screenshots.js?v=2"></script>
+<script src="/app/js/support_issue_ai.js?v=5"></script>
+<script src="/app/js/support_github.js?v=2"></script>
+<script src="/app/js/support_issue.js?v=14"></script>
+</body></html>

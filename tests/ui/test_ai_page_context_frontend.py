@@ -149,6 +149,8 @@ def test_productive_pages_register_explicit_context_adapters() -> None:
     )
     for name in pages:
         source = (FRONTEND / name).read_text(encoding="utf-8")
+        if name == 'ai_chat.html':
+            source += (FRONTEND / 'js/ai_setup.js').read_text(encoding='utf-8')
         assert "PBGUI_AI_PAGE_CONTEXT" in source or "registerPageContext" in source, name
 
 

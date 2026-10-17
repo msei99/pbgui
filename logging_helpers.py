@@ -45,6 +45,7 @@ LOG_GROUPS: dict[str, str] = {
     'Vast':            'PBGui',
     'OptimizerWorkload': 'PBGui',
     'ApiLogging':      'PBGui',
+    'SupportDebug':    'PBGui',
     'ApiKeys':         'PBGui',
     'BalanceCalc':     'PBGui',
     'BitgetUTA':       'PBGui',

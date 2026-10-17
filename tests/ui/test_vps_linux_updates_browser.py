@@ -1,4 +1,5 @@
 """Isolated real-page regressions for Linux update counts and reusable dialog closing."""
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -72,6 +73,27 @@ def publish_state(page, **changes):
     page.evaluate('''status => handleMessage({type:'state',data:{overview:{rows:[{
       name:'test-host',hostname:'test-host',nav:'vps',role:'slave',online:true,
       package_status:status}]},vps:[],deploys:{}}})''', status)
+
+
+def test_missing_pb7_is_neutral_and_live_updates_restore_diagnostics(manager):
+    """Absent PB7 has no warnings; installed and unknown states retain diagnostics."""
+    page = manager
+    for installed in (False, True, None, False):
+        row = dict(name='test-host', hostname='test-host', nav='vps', online=True,
+                   pb7='N/A', pb7_branch='unknown ()', pb7_github='⚠ unknown')
+        if installed is not None:
+            row['pb7_installed'] = installed
+        page.evaluate("""row => handleMessage({type:'state',data:{
+          overview:{rows:[row]},vps:[],deploys:{}}})""", row)
+        cells = page.locator('#overview-table-live tbody tr td')
+        headers = page.locator('#overview-table-live .th-sort-main').all_text_contents()
+        for label, diagnostic in [('PB7', 'N/A ⚠'), ('PB7 Branch', 'unknown ()'),
+                                  ('PB7 GitHub', '⚠ unknown')]:
+            index = next(i for i, text in enumerate(headers)
+                         if re.sub(r'[▲▼↕]', '', text).strip() == label)
+            expect(cells.nth(index)).to_have_text('-' if installed is False else diagnostic)
+            if installed is False:
+                expect(cells.nth(index).locator('.tag')).to_have_count(0)
 
 
 def test_linux_update_x_recovers_after_busy_password_prompt(manager):
@@ -181,7 +203,26 @@ def test_deferred_updates_preserve_known_counts(manager):
                   packages=[dict(name=f'package-{i}', installed_version='1', security=i < 7)
                             for i in range(20)])
     expect(page.locator('[data-vps-action="package-updates"]')).to_have_text('7 / 13')
-    expect(page.locator('tr[data-overview-host="test-host"]')).to_contain_text('1 deferred update unclassified')
+    expect(page.locator('[data-vps-action="package-updates"]')).to_have_attribute('title', re.compile('1 deferred update unclassified'))
+    expect(page.locator('tr[data-overview-host="test-host"]')).not_to_contain_text('deferred')
     # Missing details must still be shown as unknown, never guessed to be normal.
     publish_state(page, upgrades=21, deferred_updates=1, classification_complete=False, packages=[])
     expect(page.locator('[data-vps-action="package-updates"]')).to_have_text('? / ?')
+
+
+@pytest.mark.parametrize('deferred', [1, 4])
+def test_all_deferred_updates_show_zero_counts_with_hover_details(manager, deferred):
+    """Fully deferred batches show no installable updates and retain clickable details."""
+    page = manager
+    publish_state(page, upgrades=deferred, installable_updates=0, deferred_updates=deferred,
+                  details_complete=False, classification_complete=False, packages=[])
+    counts = page.locator('[data-vps-action="package-updates"]')
+    expect(counts).to_have_text('0 / 0')
+    expect(counts).to_have_attribute('title', re.compile(rf'{deferred} deferred update'))
+    expect(page.locator('tr[data-overview-host="test-host"]')).not_to_contain_text('deferred')
+    counts.click()
+    expect(page.locator('#alertModalOverlay')).to_have_class('visible')
+    # Automatic incoming state restores real counts without a page reload.
+    page.locator('#alertModalClose').click()
+    publish_state(page, upgrades=5, deferred_updates=0, classification_complete=True, security_updates=3)
+    expect(page.locator('[data-vps-action="package-updates"]')).to_have_text('3 / 2')

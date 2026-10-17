@@ -64,7 +64,13 @@ def test_sidebar_assets_are_loaded_once_in_the_required_order():
         source = (FRONTEND / name).read_text().replace('./css/', '/app/css/').replace('./js/', '/app/js/')
         for asset in ('css/sidebar.css?v=6', 'css/sidebar_layout.css?v=4', 'js/sidebar_resize.js?v=3'):
             assert source.count('/app/' + asset) == 1, name
-        assert source.index('/app/css/sidebar_layout.css?v=4') > source.rindex('</style>'), name
+        layout_position = source.index('/app/css/sidebar_layout.css?v=4')
+        assert layout_position > source.rfind('</style>'), name
+        # Pages with external CSS (AI Setup/Debug export) have no inline style block.
+        for link in re.finditer(r'<link\b[^>]*>', source.split('</head>', 1)[0]):
+            tag = link.group(0)
+            if 'stylesheet' in tag and '/css/sidebar_layout.css' not in tag:
+                assert link.start() < layout_position, (name, tag)
         assert re.search(r'\bid=[\'\"]sidebar-resize[\'\"]', source), name
 
 

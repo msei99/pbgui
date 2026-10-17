@@ -26,8 +26,10 @@ def _asset(route, path):
 
 @pytest.mark.parametrize('connected_provider', ['', 'openrouter'])
 def test_ai_chat_disconnected_profile_has_actionable_notice(connected_provider):
-    """No doomed ChatGPT request occurs; another connected provider remains usable."""
-    html = (ROOT / 'frontend/ai_chat.html').read_text().replace('%%API_BASE%%', '/api/ai')
+    """The former chat URL is AI Setup: login is actionable and connected models remain usable."""
+    html = (ROOT / 'frontend/ai_chat.html').read_text()
+    for marker, value in {'API_BASE':'/api/ai','BASE_PREFIX':'','VERSION':'fixture','SERIAL':'1','NAV_HASH':'test'}.items():
+        html = html.replace('%%' + marker + '%%', value)
     model_requests = []
     errors = []
     with sync_playwright() as playwright:
@@ -55,16 +57,18 @@ def test_ai_chat_disconnected_profile_has_actionable_notice(connected_provider):
 
         page.route('**/*', respond)
         page.goto('http://pbgui.test/api/ai/main_page')
-        expect(page.locator('#clear-chat')).to_be_enabled()
+        expect(page.locator('#open-assistant')).to_be_visible()
+        expect(page.locator('#prompt')).to_have_count(0)
         if connected_provider:
-            expect(page.locator('#provider-select')).to_have_value(connected_provider)
-            expect(page.locator('#prompt')).to_be_enabled()
-            assert model_requests == [connected_provider]
+            page.locator('#provider-select').select_option(connected_provider)
+            expect(page.locator('#model-select')).to_have_value('test-model')
+            expect(page.locator('#test-model')).to_be_enabled()
+            assert model_requests and set(model_requests) == {connected_provider}
         else:
-            expect(page.locator('#chat-status')).to_contain_text('Connect the selected provider')
-            expect(page.locator('#prompt')).to_be_disabled()
-            page.locator('#clear-chat').click()
-            expect(page.locator('#chat-status')).to_contain_text('Connect the selected provider')
+            expect(page.locator('#model-info')).to_contain_text('Connect')
+            page.locator('[data-section="chatgpt"]').click()
+            expect(page.locator('#chatgpt-connect')).to_be_visible()
+            expect(page.locator('#chatgpt-connect')).to_be_enabled()
             assert model_requests == []
         assert errors == []
         browser.close()

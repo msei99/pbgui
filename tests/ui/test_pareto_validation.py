@@ -33,3 +33,12 @@ assert.throws(()=>window.PBGuiParetoValidation.buildItems({...detail,override_er
 assert.throws(()=>window.PBGuiParetoValidation.buildItems(detail,'invalid','c','g'),/mode/);
 '''
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_explorer_help_belongs_to_labels():
+    """Action clicks remain free of help while validation guidance stays available."""
+    import re
+
+    html = Path('frontend/v7_pareto_explorer.html').read_text()
+    assert not re.search(r'<button\b[^>]*\bdata-tip=', html)
+    assert re.search(r'<label for="explorer-validation-mode"><span[^>]*data-tip=', html)

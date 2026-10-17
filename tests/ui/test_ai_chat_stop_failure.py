@@ -1,48 +1,32 @@
-"""Execute real inline chat functions against a minimal DOM and failed requests."""
-
-import json
-from pathlib import Path
-import subprocess
+"""The replacement setup model probe cleans up when its browser or API owner cancels."""
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+import ai_setup
 
-@pytest.mark.parametrize("scenario", ["retry", "finished", "switched", "generation"])
-def test_stop_failure_recovers_current_composer(scenario):
-    """Failures restore current controls without modifying a newer chat view."""
-    html = (Path(__file__).resolve().parents[2] / "frontend/ai_chat.html").read_text()
-    stop = "async function stopCurrentTurn" + html.split("async function stopCurrentTurn", 1)[1].split("async function deleteCurrentConversation", 1)[0]
-    composer = "function updateComposer" + html.split("function updateComposer", 1)[1].split("function updateEffortControl", 1)[0]
-    script = r"""
-const assert = require('node:assert/strict');
-const state = {busy: true, transitioning: false, conversationId: 'one', chatGeneration: 1};
-const nodes = {};
-function $(id) { return nodes[id] ||= {value: 'selected', options: [1], disabled: false}; }
-function updateEffortControl() {}
-let notice = '';
-function setNotice(text) { notice = text; }
-let rejectRequest;
-function api() { return new Promise((resolve, reject) => { rejectRequest = reject; }); }
-async function loadConversation() { throw new Error('unexpected load'); }
-""" + composer + stop + r"""
-(async () => {
-  updateComposer();
-  const pending = stopCurrentTurn();
-  assert.equal($('stop').disabled, true);
-  if (scenario === 'finished') state.busy = false;
-  if (scenario === 'switched') state.conversationId = 'two';
-  if (scenario === 'generation') state.chatGeneration++;
-  rejectRequest(new Error('cancel failed'));
-  await pending;
-  if (scenario === 'switched' || scenario === 'generation') {
-    assert.equal(notice, 'Stopping current response...');
-    assert.equal($('stop').disabled, true);
-  } else {
-    assert.equal(notice, 'cancel failed');
-    assert.equal($('stop').disabled, !state.busy);
-    assert.equal($('send').hidden, state.busy);
-    assert.equal($('send').disabled, state.busy);
-  }
-})().catch(error => { console.error(error); process.exitCode = 1; });
-"""
-    subprocess.run(["node", "-e", "const scenario = " + json.dumps(scenario) + ";\n" + script], check=True, capture_output=True, text=True, timeout=10)
+
+@pytest.mark.parametrize('disconnect',[True,False])
+def test_setup_probe_cancellation_releases_runtime_registry(monkeypatch,disconnect):
+    """Browser loss and shutdown cancellation leave no detached test or watcher running."""
+    async def scenario():
+        """Hold a synthetic provider until the owning request is cancelled."""
+        started=asyncio.Event();finished=asyncio.Event()
+        async def provider(*args,**kwargs):
+            """Represent a provider transport with deterministic cancellation cleanup."""
+            started.set()
+            try:await asyncio.Event().wait()
+            finally:finished.set()
+        monkeypatch.setattr(ai_setup,'provider_reply',provider)
+        chat=SimpleNamespace(accepting_turns=True,active_tasks={})
+        request=SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
+        task=asyncio.create_task(ai_setup.test_model(chat,'a'*32,ai_setup.ModelTestRequest(provider='chatgpt',model='fixture-model'),request))
+        await started.wait()
+        if disconnect:request.is_disconnected.return_value=True
+        else:next(iter(chat.active_tasks.values())).cancel()
+        with pytest.raises(asyncio.CancelledError):await task
+        assert finished.is_set() and not chat.active_tasks
+        assert not [item for item in asyncio.all_tasks() if item is not asyncio.current_task() and not item.done()]
+    asyncio.run(scenario())

@@ -535,3 +535,26 @@ def test_page_action_ack_passes_current_context(monkeypatch):
     body = ai_api.UIActionAcknowledgement(context={'page_key': 'v8_optimize', 'section': 'loops-queue'})
     response = asyncio_run(ai_api.acknowledge_ui_action('a' * 32, 'c' * 32, SimpleNamespace(user_id='owner'), body))
     assert json_body(response) == {'status': 'acknowledged'}
+
+
+def test_approved_github_issue_url_is_forwarded_to_original_chat(monkeypatch) -> None:
+    """The assistant sees the actual completed issue URL and publication receipt."""
+    class FakeCapabilities:
+        """Return one completed, already published issue."""
+        async def approve(self, owner, proposal_id, payload_digest, conversation_id):
+            """Represent the trusted approval result without making any external request."""
+            return {'status':'executed','action':'publish_github_issue','publication_status':'published',
+                    'issue_url':'https://github.com/msei99/pbgui/issues/123','review_id':'d'*32}
+    class FakeChat:
+        """Capture the continuation data delivered to the original model."""
+        async def start_turn(self, owner, conversation_id, message, *args):
+            """Require the published issue evidence rather than an inferred success."""
+            assert 'https://github.com/msei99/pbgui/issues/123' in message
+            assert '"review_id":"'+('d'*32)+'"' in message
+            assert '"publication_status":"published"' in message
+            return {'status':'queued'}
+    monkeypatch.setattr(ai_api,'get_ai_capability_service',lambda:FakeCapabilities())
+    monkeypatch.setattr(ai_api,'get_ai_chat_service',lambda:FakeChat())
+    response=asyncio_run(ai_api.approve_proposal('a'*32,ai_api.ProposalDecisionRequest(
+        payload_digest='sha256:'+'b'*64,conversation_id='c'*32),SimpleNamespace(user_id='owner')))
+    assert json_body(response)['continuation']['status']=='queued'

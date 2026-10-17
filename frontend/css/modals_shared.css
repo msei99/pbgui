@@ -3,6 +3,8 @@
   --pbg-modal-wide-width: min(1100px, calc(100vw - 32px));
   --pbg-modal-settings-max-width: min(760px, calc(100vw - 32px));
   --pbg-modal-max-h: calc(100vh - 80px);
+  --pbg-modal-viewport-width: calc(100vw - 32px);
+  --pbg-modal-viewport-height: calc(100dvh - 32px);
 }
 
 /* ── V7 Optimize modal system (.modal) ─────────────────────── */
@@ -32,6 +34,10 @@
   background:rgba(3,6,12,.68); align-items:center; justify-content:center;
 }
 .pbg-modal-overlay.is-open {display:flex;}
+.pbg-modal-window.pbg-modal-viewport {
+  width:var(--pbg-modal-viewport-width);height:var(--pbg-modal-viewport-height);
+  max-height:var(--pbg-modal-viewport-height);
+}
 .pbg-modal-window {
   box-sizing:border-box; display:flex; flex-direction:column; min-width:0; min-height:0;
   width:var(--pbg-modal-wide-width); max-width:100%; max-height:var(--pbg-modal-max-h);

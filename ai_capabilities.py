@@ -191,6 +191,8 @@ class AICapabilityService:
         self.reviewed_changes = ReviewedConfigChanges(self)
         from ai_loop_tools import AILoopTools
         self.loop_tools = AILoopTools(self)
+        from ai_support_tools import ChatSupportTools
+        self.support_tools = ChatSupportTools(self)
 
     def _analysis_marker(self, owner: str, conversation_id: str) -> Path:
         """Use an opaque, owner-bound monotonic security marker across processes."""
@@ -347,6 +349,7 @@ class AICapabilityService:
         """Validate and execute one model-requested capability."""
         if self.analysis_only(owner, conversation_id) and tool not in {
             "get_capability_registry", "list_optimizer_configs", "get_optimizer_config",
+            "read_pbgui_support_evidence", "get_github_support_status",
             "list_run_configs", "get_run_config", "list_backtest_configs", "get_backtest_config",
             "get_backtest_result_config", "get_optimizer_metadata", "preview_pb8_scenario_template",
             "list_optimizer_runs", "list_pb8_optimizer_queue", "list_backtests",
@@ -366,6 +369,9 @@ class AICapabilityService:
             raise AICapabilityError("Tool arguments are too large")
         from ai_bot_log_tools import query as bot_log_query
         handlers = {
+            "read_pbgui_support_evidence": self.support_tools.evidence,
+            "get_github_support_status": self.support_tools.status,
+            "propose_github_issue": self.support_tools.propose,
             "list_bot_logs": lambda owner, cid, args: bot_log_query(args),
             "read_bot_log": lambda owner, cid, args: bot_log_query(args, read=True),
             "get_capability_registry": lambda unused: self.capability_registry(owner),
@@ -436,7 +442,7 @@ class AICapabilityService:
             raise AICapabilityError("PBGui capability capacity is busy") from exc
         try:
             try:
-                if tool.startswith("propose_") or tool in {"get_python_analysis_result", "list_research_results", "read_research_result", "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "list_bot_logs", "read_bot_log"}:
+                if tool.startswith("propose_") or tool in {"read_pbgui_support_evidence", "get_github_support_status", "get_python_analysis_result", "list_research_results", "read_research_result", "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "list_bot_logs", "read_bot_log"}:
                     result = await handler(owner, conversation_id, args)
                 elif tool in {"list_config_drafts", "get_config_draft", "create_config_draft", "update_config_draft"}:
                     result = await self._to_thread_uncancellable(handler, owner, args)
@@ -538,7 +544,7 @@ class AICapabilityService:
                     )
                     if durable.get("status") != "awaiting_approval":
                         raise AICapabilityError("Proposal is no longer pending")
-                    if proposal.action not in {"python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"}:
+                    if proposal.action not in {"publish_github_issue", "python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"}:
                         self._write_private_json(
                             self.journal_root / f"{proposal.id}.json",
                             self._journal_payload(proposal, phase="prepared"),
@@ -604,6 +610,8 @@ class AICapabilityService:
             async with self.approval_semaphore:
                 if proposal.action == "reviewed_config_change":
                     result = await self._to_thread_uncancellable(self.reviewed_changes.execute, proposal)
+                elif proposal.action == "publish_github_issue":
+                    result = await self.support_tools.execute(proposal)
                 elif proposal.action == "python_analysis":
                     result = await self._execute_python_analysis(proposal)
                 elif proposal.action == "jev_analysis":
@@ -4108,7 +4116,7 @@ class AICapabilityService:
                 if status == "executing":
                     status = (
                         "interrupted"
-                        if payload.get("action") in {"python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"}
+                        if payload.get("action") in {"publish_github_issue", "python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"}
                         else "approved_recovery"
                     )
                 self.proposals[proposal_id] = ActionProposal(
@@ -4303,7 +4311,7 @@ class AICapabilityService:
                         continue
                     try:
                         payload = self._read_private_json(path, self.proposal_root)
-                        if payload.get("action") not in {"python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"} or payload.get("status") not in {
+                        if payload.get("action") not in {"publish_github_issue", "python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"} or payload.get("status") not in {
                             "executing",
                             "approved_recovery",
                         }:
@@ -4512,10 +4520,12 @@ class AICapabilityService:
         from ai_openrouter import research_jev_question_schema
         from ai_loop_tools import tool_specs as loop_tool_specs
         from ai_bot_log_tools import tool_specs as bot_log_tool_specs
+        from ai_support_tools import tool_specs as support_tool_specs
         version_schema = {"type": "string", "enum": ["v7", "v8"]}
         return [
             *loop_tool_specs(),
             *bot_log_tool_specs(),
+            *support_tool_specs(),
             {
                 "name": "propose_web_research",
                 "description": "When the user asks for internet/web research or current public evidence, draft a public-information-only research prompt and show it for approval inside this chat. Uses the current configured model/provider; unsupported connections return an explicit error without fallback. Does NOT search or execute anything. Exclude secrets, private account/host names, wallets, positions and complete configs. Results are initially display-only. If the user also requests Jev, include jev_questions for an automatic tool-free Jev analysis after research, covered by the same approval. For subsequent chat analysis use read_research_result; it permanently disables PBGui actions in this chat.",

@@ -427,6 +427,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width, capabilit
         page.locator('#loop-hours').fill('24')
         assert not page.locator('#loop-hours').evaluate('(node)=>node.checkValidity()')
         page.locator('#loop-hours').fill('8')
+        page.locator('#loop-rounds').fill('5')
         page.locator('#loop-parallel').fill('3')
         page.locator('#loop-goals').fill('Prefer stable equity')
         if viewport_width == 700:

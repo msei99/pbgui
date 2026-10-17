@@ -3022,7 +3022,7 @@
   </div>
 
   <script src='/app/js/log_viewer_panel.js?v=50'></script>
-  <script src='/app/js/pbgui_dialogs.js?v=10'></script>
+  <script src='/app/js/pbgui_dialogs.js?v=11'></script>
   <script>
     const API_BASE = "%%API_BASE%%";
     const WS_BASE = "%%WS_BASE%%";
@@ -10247,7 +10247,7 @@
           if (totalKnown && total === 0) { splitKnown = true; security = 0; }
           let unclassified = 0;
           const deferred = Number(packageStatus.deferred_updates || 0);
-          if (!splitKnown && totalKnown && Number.isInteger(deferred) && deferred > 0 && deferred < total
+          if (!splitKnown && totalKnown && Number.isInteger(deferred) && deferred > 0 && deferred <= total
               && packageStatus.details_truncated !== true) {
             const upgrades = (Array.isArray(packageStatus.packages) ? packageStatus.packages : []).filter(function (item) {
               return !item.removed && String(item.installed_version || '').trim();
@@ -10274,16 +10274,16 @@
             ? ''
             : `<div class='status-sub'>${levelTag(model.tone === 'error' ? 'error' : 'warning', model.label)}${model.state === 'stale' ? ' · Last-known' : ''}</div>`;
           const updateValue = totalKnown && total > 0
-            ? `<button class='table-button update-count-button' type='button' data-vps-action='package-updates' data-host='${escAttr(row.hostname || '')}' title='${escAttr(countTitle)}' aria-label='${escAttr(countTitle)}'>${updates}</button>${classificationNote ? `<div class='field-help'>${esc(classificationNote)}</div>` : ''}`
+            ? `<button class='table-button update-count-button' type='button' data-vps-action='package-updates' data-host='${escAttr(row.hostname || '')}' title='${escAttr(countTitle)}' aria-label='${escAttr(countTitle)}'>${updates}</button>${classificationNote && unclassified === 0 ? `<div class='field-help'>${esc(classificationNote)}</div>` : ''}`
             : `<span title='${escAttr(countTitle)}'>${updates}</span>`;
           return `<div>${updateValue} ${packageStatus.reboot_required === true ? levelTag('warning', 'Reboot') : ''}</div>${statusLine}`;
         }
         if (column.key === 'pbgui') return renderOverviewVersionCell(row.pbgui, row.pbgui_github);
         if (column.key === 'pbgui_branch') return esc(row.pbgui_branch || '-');
         if (column.key === 'pbgui_github') return renderOverviewGithubCell(row.pbgui_github);
-        if (column.key === 'pb7') return renderOverviewVersionCell(row.pb7, row.pb7_github);
-        if (column.key === 'pb7_branch') return esc(row.pb7_branch || '-');
-        if (column.key === 'pb7_github') return renderOverviewGithubCell(row.pb7_github);
+        if (column.key === 'pb7') return row.pb7_installed === false ? '-' : renderOverviewVersionCell(row.pb7, row.pb7_github);
+        if (column.key === 'pb7_branch') return row.pb7_installed === false ? '-' : esc(row.pb7_branch || '-');
+        if (column.key === 'pb7_github') return row.pb7_installed === false ? '-' : renderOverviewGithubCell(row.pb7_github);
         if (column.key === 'pb8') return renderOverviewVersionCell(row.pb8, row.pb8_github, row.pb8_runtime_blocked, row.pb8_runtime_reason);
         if (column.key === 'pb8_branch') return esc(row.pb8_branch || '-');
         if (column.key === 'pb8_github') return renderOverviewGithubCell(row.pb8_github);

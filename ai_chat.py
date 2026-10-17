@@ -27,6 +27,7 @@ from ai_capabilities import (
     get_ai_capability_service,
     shutdown as capability_shutdown,
 )
+from ai_chat_images import ChatImageStore
 from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR
@@ -916,9 +917,10 @@ class CodexRuntime:
         return thread_id
 
     async def chat(
-        self, thread_id: str, message: str, model: str | None = None, effort: str = "", service_tier: str = ""
+        self, thread_id: str, message: str, model: str | None = None, effort: str = "", service_tier: str = "",
+        image_paths: list[str] | None = None,
     ) -> str:
-        """Run one text-only turn and collect streamed response text."""
+        """Run one text/image turn and collect streamed response text."""
         async with self.turn_lock:
             loop_diagnostics = getattr(self, "loop_request_diagnostics", None)
             if isinstance(loop_diagnostics, dict):
@@ -929,6 +931,8 @@ class CodexRuntime:
                 "approvalPolicy": "never",
                 "sandboxPolicy": {"type": "readOnly", "networkAccess": False},
             }
+            if image_paths:
+                params["input"].extend({"type": "localImage", "path": path} for path in image_paths)
             if model:
                 params["model"] = model
             if effort:
@@ -1352,6 +1356,7 @@ class AIChatService:
         self.opencode_model_catalog: dict[str, dict[str, dict[str, Any]]] = {}
         self.opencode_model_catalog_at: dict[str, float] = {}
         self.conversation_root = ensure_private_directory(self.root / "conversations")
+        self.image_store = ChatImageStore(self.root / "images")
         self.conversation_lock_target = self.conversation_root / ".write"
         self.preference_root = ensure_private_directory(self.root / "preferences")
         self.preference_lock_target = self.preference_root / ".write"
@@ -1839,6 +1844,10 @@ class AIChatService:
                         await self._release_codex_thread(conversation, runtime)
                         if runtime.closing or runtime.process is None:
                             runtime = self._profile_runtime(owner, conversation.chatgpt_profile)
+                    image_messages = [pending_user] if conversation.codex_thread_id else conversation.messages
+                    image_paths = [str(self.image_store.read(owner, conversation.id, image)[0])
+                                   for item in image_messages if item and not item.get("failed")
+                                   for image in item.get("images", [])]
                     if conversation.codex_thread_id is None:
                         handoff = self._provider_handoff_prompt(conversation.messages, pending_user)
                         if handoff:
@@ -1859,6 +1868,7 @@ class AIChatService:
                         lambda: runtime.chat(
                             conversation.codex_thread_id, provider_message, model or None, clean_effort,
                             conversation.service_tier,
+                            **({"image_paths": image_paths} if image_paths else {}),
                         ),
                     )
                     if reply.rstrip().endswith(("?", "？")) and not any(
@@ -1942,6 +1952,7 @@ class AIChatService:
                         {
                             "role": item.get("role", ""),
                             "content": provider_message if item is current_user else item.get("content", ""),
+                            **({"images": item["images"]} if item.get("images") else {}),
                         }
                         for item in conversation.messages
                         if not item.get("failed") and item.get("role") in {"user", "assistant"}
@@ -1965,7 +1976,8 @@ class AIChatService:
                         if provider in _OPENCODE_PROVIDERS:
                             self._record_model_health(owner, provider, model, "available")
                     except BaseException:
-                        conversation.messages.pop()
+                        if not current_user.get("images"):
+                            conversation.messages.pop()
                         raise
                 else:
                     raise AIChatError("Unsupported AI provider")
@@ -2174,6 +2186,7 @@ class AIChatService:
         with advisory_file_lock(self.conversation_lock_target):
             with suppress(OSError):
                 path.unlink()
+            self.image_store.clear(owner, conversation_id)
 
     async def rewind_conversation(
         self, owner: str, conversation_id: str, message_index: int
@@ -2524,14 +2537,22 @@ class AIChatService:
         internal: bool = False,
         jev_preview_id: str | None = None,
         service_tier: str | None = None,
+        images: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Start one API-owned turn that survives browser navigation."""
         if not self.accepting_turns:
             raise AIChatError("AI runtime is shutting down")
         await self._ensure_owner_loaded(owner)
         clean_message = self._validate_message(message)
+        from support_debug_crypto import decoded_screenshots
+        try:
+            decoded_screenshots({"screenshots": images or []})
+        except ValueError as exc:
+            raise AIChatError(str(exc)) from exc
         existing = self._owned_conversation(owner, conversation_id)
         selected_provider = str(provider or existing.provider).strip()
+        if selected_provider == "openrouter" and (images or any(item.get("images") for item in existing.messages)):
+            raise AIChatError("Jev does not accept images. Select ChatGPT or an image-capable OpenCode model.")
         provider_changed = selected_provider != existing.provider
         if provider_changed and not str(model or "").strip():
             raise AIChatError("Select a model when changing AI provider")
@@ -2601,11 +2622,16 @@ class AIChatService:
                 if action.get("type") != "chat.quick_replies"
             ]
             self._compact_persisted_user_messages(conversation.messages)
+            try:
+                saved_images = self.image_store.save(owner, conversation_id, images or [])
+            except (ValueError, OSError) as exc:
+                raise AIChatError(str(exc) if isinstance(exc, ValueError) else "Could not save chat images") from exc
             conversation.messages.append(
                 {
                     "role": "user",
                     "content": clean_message,
                     "display_content": clean_message,
+                    **({"images": saved_images} if saved_images else {}),
                     "pending": True,
                     **({"hidden": True} if internal else {}),
                 }
@@ -3095,6 +3121,7 @@ class AIChatService:
                     "role": item.get("role", ""),
                     "content": item.get("display_content", item.get("content", "")),
                     **({"failed": True} if item.get("failed") else {}),
+                    **({"images": copy.deepcopy(item["images"])} if item.get("images") else {}),
                 }
                 for item in conversation.messages
                 if item.get("role") in {"user", "assistant"} and not item.get("hidden")
@@ -3105,6 +3132,7 @@ class AIChatService:
                 if item.get("role") == "user" and item.get("failed")
             ]
             payload["retry_message"] = failed_prompts[-1] if failed_prompts else ""
+            payload["retry_images"] = next((copy.deepcopy(item.get("images", [])) for item in reversed(conversation.messages) if item.get("role") == "user" and item.get("failed")), [])
         return payload
 
     def _conversation_path(self, owner: str, conversation_id: str) -> Path:
@@ -3332,6 +3360,7 @@ class AIChatService:
                     "training": training,
                     "free": free,
                     "cost": cost if isinstance(cost, dict) else {},
+                    "image_input": "image" in inputs if isinstance(inputs, list) else None,
                     "reasoning": bool(raw_metadata.get("reasoning")),
                     "tools": raw_metadata.get("tool_call") is not False,
                     "loop_tool_support": raw_metadata.get("tool_call") is True,
@@ -3467,6 +3496,13 @@ class AIChatService:
             raise AIChatError("Conversation context exceeds the supported provider payload")
         key = self.credentials.load_go_key(owner)
         selected_protocol = str(available[model]["protocol"])
+        if any(item.get("images") for item in history):
+            if available[model].get("image_input") is False:
+                raise AIChatError("Selected model does not accept images. Select an image-capable model.")
+            try:
+                history = self.image_store.native_history(owner, conversation_id, history, selected_protocol)
+            except (ValueError, OSError) as exc:
+                raise AIChatError("Chat images are unavailable or invalid") from exc
         if conversation_id and available[model].get("tools"):
             if selected_protocol == "chat":
                 return await self._go_chat_completion_agent(
@@ -4525,6 +4561,7 @@ class AIChatService:
                 ):
                     continue
                 path.unlink()
+                self.image_store.clear(owner, conversation_id)
                 if current is not None:
                     current.closed = True
                     self.conversations.pop(conversation_id, None)

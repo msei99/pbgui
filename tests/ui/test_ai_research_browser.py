@@ -32,7 +32,7 @@ def research_page(request):
                 </script><script src="/prefix/app/pbgui_nav.js?v=test"></script>''')
             elif path == '/prefix/api/ai/main_page':
                 html = (ROOT / 'frontend/ai_chat.html').read_text()
-                for key, value in {'API_BASE': '/prefix/api/ai', 'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test'}.items():
+                for key, value in {'API_BASE': '/prefix/api/ai', 'BASE_PREFIX':'/prefix', 'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test'}.items():
                     html = html.replace('%%' + key + '%%', value)
                 route.fulfill(content_type='text/html; charset=utf-8', body=html.replace('/app/', '/prefix/app/'))
             elif path.startswith('/prefix/app/'):
@@ -83,18 +83,15 @@ def research_page(request):
 
 
 def open_research(page, surface):
-    """Request research through the ordinary composer and Send action."""
-    if surface == 'drawer':
-        page.locator('#pbgui-ai-btn').click()
-        expect(page.locator('#pai-model')).to_have_value('selected-model')
-        page.locator('.pai-compose textarea').fill('Bitte im Internet recherchieren: BTC risk')
-        page.locator('.pai-compose button', has_text='Send').click()
-    else:
+    """Chat from any page, including AI Setup, uses the shared drawer."""
+    if surface == 'page':
         page.locator('.nav-group-btn', has_text='Information').click()
         page.locator('.nav-item[data-page="info_ai_chat"]').click()
-        expect(page.locator('#model-select')).to_have_value('selected-model')
-        page.locator('#prompt').fill('Bitte im Internet recherchieren: BTC risk')
-        page.get_by_role('button', name='Send', exact=True).click()
+        expect(page.locator('h1')).to_have_text('AI Setup')
+    page.locator('#pbgui-ai-btn').click()
+    expect(page.locator('#pai-model')).to_have_value('selected-model')
+    page.locator('.pai-compose textarea').fill('Bitte im Internet recherchieren: BTC risk')
+    page.locator('.pai-compose button', has_text='Send').click()
     expect(page.locator('.pbgui-research-card')).to_be_visible()
     expect(page.locator('.pbgui-research-overlay')).to_have_count(0)
     expect(page.get_by_role('button', name='Web research', exact=True)).to_have_count(0)
@@ -243,10 +240,10 @@ def test_table_render_and_scroll_survive_long_research_snapshot(research_page, s
     conversation['busy'] = True
     conversation['messages'].append({'role': 'assistant', 'content': 'End of report'})
     page.reload()
-    if surface == 'drawer' and not page.locator('.pbgui-research-card').is_visible():
+    if not page.locator('.pbgui-research-card').is_visible():
         page.locator('#pbgui-ai-btn').click()
     expect(page.locator('.pbgui-research-answer')).to_contain_text('Public report line.')
-    box = page.locator('.pai-messages' if surface == 'drawer' else '#messages')
+    box = page.locator('.pai-messages')
     expect(box).to_contain_text('End of report')
     # Initial restoration follows the bottom only after the large card is attached.
     assert box.evaluate('(e) => e.scrollHeight - e.clientHeight - e.scrollTop') < 55
@@ -283,6 +280,6 @@ def test_final_analysis_appears_as_safe_table_without_new_turn(research_page, su
     expect(card.locator('img')).to_have_count(0)
     assert [kind for kind, _ in sent] == ['turn', 'start']
     page.reload()
-    if surface == 'drawer' and not card.is_visible():
+    if not card.is_visible():
         page.locator('#pbgui-ai-btn').click()
     expect(page.locator('.pbgui-research-summary table')).to_have_count(1)

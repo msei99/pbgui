@@ -34,6 +34,8 @@ Die Configs-Liste startet parallel zu den langsameren PB8-Settings und -Metadate
 
 ## Parameter-Tooltips
 
+Erklärungen gehören an gepunktete Feld- oder Abschnittsbeschriftungen, nicht an Aktionsbuttons. Im Pareto Explorer stehen sie bei Validation periods und den Abschnittstiteln von Deep Intelligence. Vast erklärt die Verfügbarkeit von Ergebnissen und gesperrte Starts an Fortschritts- bzw. Statusbeschriftungen.
+
 Beim Überfahren eines Parameterlabels erscheint die Originalbeschreibung aus der Dokumentation des installierten Passivbot. Der Tooltip nennt die lokale Quelldatei; längere Texte lassen sich scrollen, wenn der Mauszeiger in den Tooltip bewegt wird. Derselbe Parameter erhält in Run, Backtest und Optimize dieselbe Erklärung, auch bei verschachtelten Bounds und Optimizer-Overrides. Die Dokumentation wird lokal geladen, ohne Internetanfrage oder funktionsfähige Rust-Erweiterung. PBGui-eigene Bedienelemente behalten ihre Eingabehinweise; generische Laufzeit-Platzhalter werden ausgeblendet, wenn upstream keine passende Beschreibung vorhanden ist.
 
 
@@ -598,3 +600,11 @@ Der aktive Cloud-Worker unterstützt die neue HSL-Budget-Skalierung noch nicht. 
 Für ältere Cloud-Worker wird ein ausdrückliches `scale_budget_with_excess_allowance: false` nur aus der exportierten Job-Kopie entfernt, einschließlich fester und Szenario-Overrides. Die gespeicherte Quellconfig behält ihren Wert. Ein bereits eingefrorener Job mit diesem unbekannten Feld muss erneut vorbereitet werden; der Dispatch lässt ihn wartend, statt ihn auf einem inkompatiblen Worker zu starten.
 
 PB8 verwendet GPU-Checkpoint-Signatur 8 und entscheidet beim Resume abschließend über die Kompatibilität. Alte Checkpoints können inkompatibel sein; bei einer Ablehnung eine neue Suche oder eine zulässige Pareto-Seed-Übernahme verwenden. Die Resume-Vorprüfung von PBGui validiert die native Checkpoint-Signatur nicht selbst.
+
+Die Sidebar-Aktion **AI Loop Template** öffnet ein verschiebbares, skalierbares Einstellungsfenster und sendet englische Optimierungsaufträge in einen neuen AI-Chat aus PB8-Defaults oder einer gespeicherten Optimizer-Konfiguration. Es bietet mehrere Coins, EMA Anchor/Trailing Martingale/KI-Auswahl, explizite GPU-Runden- und Kostengrenzen, eine Trainingsfensteranzahl, automatische Coin-/Börsen-Startdaten sowie Gain-/Balanced-/eigene Ziele. Das Ende steht zunächst auf dem letzten vollständigen UTC-Tag; manuelle Daten und bestehende Quellfenster bleiben verfügbar. Siehe **AI Chat → Vorlagen für Optimierungsaufträge**. **Send to AI Chat** sendet den Auftrag; Job-Start und Miete erfordern den anschließenden geprüften Vorschlag.
+
+Über **Debug export** im AI-Loop-Detailfenster öffnest du den universellen Support-Bericht mit vorausgewähltem Loop. Umfang, Vorschau, Datenschutz und Sammlungsgrenzen stehen im Guide-/Help-Thema **Debug-Export**.
+
+Fehlgeschlagene AI-Loop-Reports bieten **Report this problem** für den Diagnose-/GitHub-Ablauf mit vorausgewähltem Bereich in einem neuen Tab. Der ursprüngliche Lauf bleibt geöffnet; siehe Debug-Export für die Anhangsauswahl.
+
+Reset to defaults setzt das Loop Template einschließlich Quelle, Coin-Auswahl und Zusatzanweisungen auf Binance/PB8-Standardwerte und automatische Trainingsdaten zurück. Die Fensterposition bleibt erhalten. Unter Training windows ermittelt Automatic from selected coins die Daten nach der Auswahl gültiger Märkte; Manual date range behält eigene Daten bei. Alte manuelle Vorlagen ohne vollständige Datumswerte wechseln einmalig zur Automatik; aktuelle manuelle Entwürfe behalten ihre Eingaben.

@@ -20,9 +20,9 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | **Online** | ✅ reachable / ❌ offline |
 | **Bots** | Count of unique running bots currently reported for that VPS |
 | **Started** | Last boot time |
-| **Updates** | Security updates in red / normal (non-security) updates in blue, for example **3 / 2**. Click the counts for package details. **0 / 0** means no pending updates; **? / ?** means classification is incomplete (the pending total remains visible), and **N/A** means no usable count. When APT defers packages, known security/normal counts remain visible and a separate notice identifies the unclassified deferred updates. |
+| **Updates** | Security updates in red / normal (non-security) updates in blue, for example **3 / 2**. Click the counts for package details. **0 / 0** means no currently installable updates; **? / ?** means classification is incomplete (the pending total remains visible), and **N/A** means no usable count. When APT defers packages, known security/normal counts remain visible; an entirely deferred batch shows **0 / 0**. Hover over the counts for the number of unclassified deferred updates. |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installed version, branch, and whether it matches GitHub origin |
-| **PB7 / PB7 Branch / PB7 GitHub** | PB7 version, branch, and whether it matches GitHub origin |
+| **PB7 / PB7 Branch / PB7 GitHub** | PB7 version, branch, and whether it matches GitHub origin. When PB7 is not installed, all three columns show **-** without a warning icon. |
 | **PB8 / PB8 Branch / PB8 GitHub** | PB8 version, branch, and whether it matches the current upstream PB8 revision |
 
 The Linux Updates dialog closes with either **×** in its header or **Close** at the bottom. A previous password-validation dialog no longer leaves its close button disabled. Normal updates include non-security kernel upgrades; new installations and package removals are listed separately in the details. Stale cached counts retain their visible stale warning.

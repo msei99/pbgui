@@ -7,13 +7,15 @@ from pathlib import Path
 import traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from ai_chat import AIChatError, get_ai_chat_service, owner_key
 from ai_capabilities import AICapabilityError, get_ai_capability_service
 from api.auth import SessionToken, require_auth
 from logging_helpers import human_log as _log
+from ai_setup import ModelTestRequest
+from ai_chat_images import ChatImage
 
 
 SERVICE = "AIChat"
@@ -71,6 +73,7 @@ class TurnCreateRequest(BaseModel):
     model: str | None = Field(default=None, max_length=128)
     provider: str | None = Field(default=None, min_length=1, max_length=32)
     jev_preview_id: str | None = Field(default=None, max_length=32)
+    images: list[ChatImage] = Field(default_factory=list, max_length=5)
 
 
 class LocalActionRequest(BaseModel):
@@ -146,15 +149,12 @@ def _provider_error(operation: str, exc: Exception) -> HTTPException:
 
 @router.get("/main_page", response_class=HTMLResponse)
 def main_page(request: Request, session: SessionToken = Depends(require_auth)) -> HTMLResponse:
-    """Serve the cookie-authenticated full AI chat page."""
+    """Serve AI Setup at the existing stable page URL."""
     del session
     html_path = Path(__file__).parent.parent / "frontend" / "ai_chat.html"
     html = html_path.read_text(encoding="utf-8")
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    html = html.replace('"%%API_BASE%%"', json.dumps(origin + "/api/ai"))
+    from api.page_templates import render_page_urls
+    html = render_page_urls(request,html,'/api/ai')
 
     from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION
 
@@ -164,6 +164,16 @@ def main_page(request: Request, session: SessionToken = Depends(require_auth)) -
     nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
     html = html.replace("%%NAV_HASH%%", nav_hash)
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+
+
+@router.post('/test-model')
+async def test_model_connection(body: ModelTestRequest, request: Request, session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Run one explicit fixed-input model test without creating a chat or exposing tools."""
+    from ai_setup import test_model
+    try:
+        return _json(await test_model(get_ai_chat_service(),_owner(session),body,request))
+    except Exception as exc:
+        raise _provider_error('test_model',exc) from exc
 
 
 @router.get("/status")
@@ -450,10 +460,28 @@ async def start_turn(
             _owner(session), conversation_id, body.message, body.context, body.effort, body.model, body.provider,
             jev_preview_id=body.jev_preview_id,
             service_tier=body.service_tier,
+            **({"images": [image.model_dump() for image in body.images]} if body.images else {}),
         )
         return _json(result, status_code=202)
     except Exception as exc:
         raise _provider_error("start_turn", exc) from exc
+
+
+@router.get("/conversations/{conversation_id}/images/{image_id}")
+async def chat_image(conversation_id: str, image_id: str, session: SessionToken = Depends(require_auth)) -> Response:
+    """Serve only images referenced by the authenticated owner's retained messages."""
+    try:
+        service = get_ai_chat_service()
+        conversation = await service.get_conversation(_owner(session), conversation_id)
+        image = next((image for item in conversation.get('messages', []) for image in item.get('images', []) if image.get('id') == image_id), None)
+        if image is None:
+            raise AIChatError('Chat image not found')
+        _, data = service.image_store.read(_owner(session), conversation_id, image)
+        return Response(data, media_type=image['media_type'], headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
+    except (ValueError, OSError) as exc:
+        raise _provider_error('chat_image', AIChatError('Chat image is unavailable')) from exc
+    except Exception as exc:
+        raise _provider_error('chat_image', exc) from exc
 
 
 @router.post("/conversations/{conversation_id}/local-action")
@@ -624,7 +652,7 @@ async def approve_proposal(
             chat_service = get_ai_chat_service()
             continuation_result = {
                 key: result.get(key)
-                for key in ("proposal_id", "status", "action", "name", "queued_count", "template", "jev_result")
+                for key in ("proposal_id", "status", "action", "name", "queued_count", "template", "jev_result", "issue_url", "review_id", "publication_status")
                 if result.get(key) is not None
             }
             if result.get("action") == "python_analysis":
@@ -737,3 +765,20 @@ async def cancel_research(research_id: str, session: SessionToken = Depends(requ
         return _json(await service.research.cancel(_owner(session), research_id))
     except Exception as exc:
         raise _provider_error("research cancel", exc) from exc
+
+
+@router.get('/loop-template-options')
+def loop_template_options(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Return local prompt-builder choices without starting jobs or fetching markets."""
+    from api.optimize_v8 import _configs_dir, _CONFIG_FILENAME
+
+    # Only names are needed here. The full listing scans managed backtests and
+    # seed metadata, delaying choices even when result summaries are disabled.
+    root = _configs_dir()
+    configs = []
+    if root.is_dir() and not root.is_symlink():
+        configs = [{'name': directory.name} for directory in sorted(root.iterdir())
+                   if directory.is_dir() and not directory.is_symlink()
+                   and (directory / _CONFIG_FILENAME).is_file()
+                   and not (directory / _CONFIG_FILENAME).is_symlink()]
+    return _json({'configs': configs})

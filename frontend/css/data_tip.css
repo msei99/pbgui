@@ -1,0 +1,4 @@
+/* PBGui field-help appearance, shared from the existing editor data-tip convention. */
+[data-tip]{cursor:help;border-bottom:none;text-decoration-line:underline;text-decoration-style:dotted;text-decoration-color:#64748b;text-underline-offset:2px;text-decoration-thickness:1px}
+#data-tip-tooltip{position:fixed;z-index:9999;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:5px;font-size:var(--fs-xs,12px);font-weight:normal;padding:6px 10px;white-space:pre-wrap;overflow-wrap:anywhere;max-width:min(480px,calc(100vw - 16px));max-height:calc(100dvh - 16px);overflow:auto;box-shadow:0 4px 12px rgba(0,0,0,.5)}
+#data-tip-tooltip[hidden]{display:none!important}

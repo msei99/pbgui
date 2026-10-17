@@ -228,5 +228,12 @@ def test_dialog_cache_version_is_bumped_for_all_consumers() -> None:
         "v7_run.html",
         "welcome.html",
     }
+    import re
+    nav = (ROOT / 'frontend/pbgui_nav.js').read_text(encoding='utf-8')
+    version = re.search(r'pbgui_dialogs\.js\?v=(\d+)', nav).group(1)
+    assert int(version) >= 11
     for filename in expected_consumers:
-        assert "pbgui_dialogs.js?v=10" in html_sources[filename]
+        assert 'pbgui_dialogs.js?v=' + version in html_sources[filename]
+    for source in html_sources.values():
+        if 'pbgui_dialogs.js?v=' in source:
+            assert set(re.findall(r'pbgui_dialogs\.js\?v=(\d+)', source)) == {version}

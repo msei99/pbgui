@@ -41,7 +41,7 @@ def review_page(request):
                 route.fulfill(content_type='text/html', body='<nav id="topnav"></nav><script>window.PBGUI_NAV_CONFIG={current:"welcome",authenticated:true,apiBase:"/api/start"};</script><script src="/app/pbgui_nav.js"></script>')
             elif path == '/api/ai/main_page':
                 html = (ROOT / 'frontend/ai_chat.html').read_text()
-                for key, value in {'API_BASE': '/api/ai', 'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test'}.items():
+                for key, value in {'API_BASE': '/api/ai', 'BASE_PREFIX':'', 'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test'}.items():
                     html = html.replace('%%' + key + '%%', value)
                 route.fulfill(content_type='text/html', body=html)
             elif path.startswith('/app/'):
@@ -91,20 +91,16 @@ def test_only_trusted_review_and_explicit_apply_can_cross_bridge(review_page, su
     else:
         page.locator('.nav-group-btn', has_text='Information').click()
         page.locator('.nav-item[data-page="info_ai_chat"]').click()
-        review = page.get_by_role('button', name='Review & approve', exact=True)
+        page.locator('#pbgui-ai-btn').click()
+        review = page.get_by_role('button', name='Review changes', exact=True)
     expect(review).to_be_visible()
     review.evaluate('(button) => button.click()')
     assert calls == []
     review.click()
-    if surface == 'drawer':
-        dialog = page.locator('.pai-review-dialog')
-        expect(dialog).to_contain_text('ETH')
-        expect(dialog).to_contain_text('Save config only')
-        approve = dialog.get_by_role('button', name='Approve', exact=True)
-    else:
-        expect(page.locator('.proposal-review').first).to_have_attribute('open', '')
-        expect(page.locator('.proposal-review').first).to_contain_text('ETH')
-        approve = page.get_by_role('button', name='Apply reviewed changes', exact=True)
+    dialog = page.locator('.pai-review-dialog')
+    expect(dialog).to_contain_text('ETH')
+    expect(dialog).to_contain_text('Save config only')
+    approve = dialog.get_by_role('button', name='Approve', exact=True)
     assert [kind for kind, _ in calls] == ['review']
     approve.evaluate('(button) => button.click()')
     assert [kind for kind, _ in calls] == ['review']
@@ -123,20 +119,18 @@ def test_only_trusted_review_and_explicit_apply_can_cross_bridge(review_page, su
 def test_loop_review_names_settings_and_save_effect(review_page, surface):
     """Both real UI surfaces explain a save without authorizing jobs or rentals."""
     page, calls = review_page
-    if surface == 'drawer':
-        page.locator('#pbgui-ai-btn').click()
-        page.get_by_role('button', name='Review changes', exact=True).click()
-        dialog = page.locator('.pai-review-dialog')
-        expect(dialog).to_contain_text('Save AI Loop definition')
-        expect(dialog).to_contain_text('No jobs or rentals are started.')
-        expect(dialog).to_contain_text('Max runs')
-        expect(dialog).to_contain_text('Run proxy')
-        expect(dialog.get_by_role('button', name='Save definition', exact=True)).to_be_visible()
-        expect(dialog.get_by_text('Keep exact_gain and HSL unchanged. ', exact=False).first).not_to_be_visible()
-        dialog.get_by_text('Show full text', exact=True).click()
-        expect(dialog.locator('.pai-change-value').filter(has_text='Keep exact_gain').last).to_be_visible()
-    else:
+    if surface == 'page':
         page.locator('.nav-group-btn', has_text='Information').click()
         page.locator('.nav-item[data-page="info_ai_chat"]').click()
-        expect(page.locator('.proposal-detail').first).to_contain_text('No jobs or rentals are started.')
+    page.locator('#pbgui-ai-btn').click()
+    page.get_by_role('button', name='Review changes', exact=True).click()
+    dialog = page.locator('.pai-review-dialog')
+    expect(dialog).to_contain_text('Save AI Loop definition')
+    expect(dialog).to_contain_text('No jobs or rentals are started.')
+    expect(dialog).to_contain_text('Max runs')
+    expect(dialog).to_contain_text('Run proxy')
+    expect(dialog.get_by_role('button', name='Save definition', exact=True)).to_be_visible()
+    expect(dialog.get_by_text('Keep exact_gain and HSL unchanged. ', exact=False).first).not_to_be_visible()
+    dialog.get_by_text('Show full text', exact=True).click()
+    expect(dialog.locator('.pai-change-value').filter(has_text='Keep exact_gain').last).to_be_visible()
     assert calls == []

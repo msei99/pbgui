@@ -12,15 +12,15 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=70" in NAV
+    assert "/app/js/ai_drawer.js?v=77" in NAV
     assert "/app/js/ai_usage.js?v=2" in NAV
     assert "/app/js/jev_transfer_preview.js?v=1" in NAV
     assert "jev_preview_id: jevPreviewId || null" in DRAWER
     assert "PBGuiAIUsage.renderOpenRouter(container, usage)" in DRAWER
-    assert "/app/css/ai_drawer.css?v=22" in NAV
-    assert "/app/js/pbgui_dialogs.js?v=10" in NAV
+    assert "/app/css/ai_drawer.css?v=27" in NAV
+    assert "/app/js/pbgui_dialogs.js?v=11" in NAV
     loader = NAV.split("function loadDrawerScript", 1)[1].split("var pendingAIAction", 1)[0]
-    assert loader.index("pbgui_dialogs.js?v=10") < loader.index("dialogs.onload = loadDrawerScript")
+    assert loader.index("pbgui_dialogs.js?v=11") < loader.index("dialogs.onload = loadDrawerScript")
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
 
@@ -168,7 +168,8 @@ def test_drawer_renders_untrusted_values_as_text_and_has_explicit_close() -> Non
     assert "Collapse AI assistant" in DRAWER
     assert "window.confirm" not in DRAWER
     assert "window.alert" not in DRAWER
-    assert "https://" not in DRAWER
+    assert "buildSupportConnection" not in DRAWER
+    assert "Open AI Setup" in DRAWER
     assert "position:fixed" in CSS
     assert "transform:translateX(100%)" in CSS
     assert "@media(max-width:760px)" in CSS

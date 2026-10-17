@@ -1607,8 +1607,11 @@
           else if (observed) openObservedOptimizer(item);
         }); actions.appendChild(log);
         const results = document.createElement('button'); results.type = 'button'; results.className = 'act-btn'; results.textContent = 'Results';
-        results.title = job?.result_path ? 'Open this optimizer result' : 'Results become available after the first verified result snapshot';
-        results.dataset.tip = results.title; results.disabled = !job?.result_path;
+        results.disabled = !job?.result_path;
+        if (!job?.result_path) {
+          progress.dataset.tip = 'Results become available after the first verified result snapshot';
+          progress.tabIndex = 0;
+        }
         results.addEventListener('click', () => openCloudResults(job)); actions.appendChild(results);
         if (item.awaiting_queue_start && !ending) {
           const profile = document.createElement('button'); profile.type = 'button'; profile.className = 'act-btn'; profile.textContent = 'GPU profile';
@@ -2498,6 +2501,10 @@
       if (index === 3) {
         const badge = document.createElement('span');
         badge.className = 'badge badge-' + item.status;
+        if (!supervision && item.status === 'queued') {
+          badge.dataset.tip = 'Start unavailable: rental supervision requires user systemd and OpenSSH on the PBGui host.';
+          badge.tabIndex = 0;
+        }
         badge.textContent = deletingJobs.has(job.id) ? 'Deleting…' : requeuingJobs.has(job.id) ? 'Preparing…' : stopPhase(job) || (startingJobId === job.id ? 'Starting…' : value); cell.appendChild(badge);
         const progress = job.input_progress || {};
         if (job.status === 'preparing') {
@@ -2546,7 +2553,6 @@
       node.textContent = label; node.title = title;
       if (title === 'Start') {
         node.disabled = startingQueue || !!workerAction || !supervision || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || deletingJobs.has(job.id);
-        if (!supervision) node.dataset.tip = 'Start unavailable: rental supervision requires user systemd and OpenSSH on the PBGui host.';
       }
       if (['Requeue', 'Delete queue item'].includes(title)) node.disabled = requeuingJobs.has(job.id) || deletingJobs.has(job.id);
       if (title === 'Stop') node.disabled = !!stopPhase(job);

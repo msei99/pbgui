@@ -27,15 +27,30 @@ Top navigation (#topnav)
 - Do not add outside-click dismissal to dialogs. Retain explicit close actions.
 - The shared AI drawer message input resizes vertically using the separator along its top edge. Drag upward to enlarge; Arrow Up/Down and Home/End provide keyboard control. Persist only its browser-local height, clamp it to the viewport, and preserve the draft while resizing. The drawer's side handle remains responsible for width.
 - The AI drawer shows activity and streamed ChatGPT assistant text inline in chronological order after the current turn’s last visible message while working (after the previous assistant answer for approval continuations), then collapses it into an expandable history after completion. Its header shows elapsed work time and a compact context usage ring based on provider telemetry; unavailable usage is shown explicitly rather than estimated.
+- Information → AI Setup owns provider/model configuration, isolated connection tests and GitHub credentials. The global AI drawer owns conversations and issue reviews; do not place credential panels above its messages. The Setup header action opens the stable setup destination. Native support proposals use the existing chat review overlay to show exact public title/body, account, repository and encrypted-attachment destination. The final Publish issue action is the publication approval; do not add a second generic confirmation. Source investigation and English issue drafting remain in the conversation without redirecting to Debug export.
 - Embedded components, such as an internal LogViewerPanel sidebar, keep their component layout. Do not give them duplicate page-shell IDs or the global page-sidebar width.
 
 ### Concise UI text and on-demand help
 
 - Keep the GUI focused on controls, data and short, clear labels. Do not add long feature explanations, instructional paragraphs or permanent explanatory banners to pages, panels, forms or dialogs.
-- Put field-specific explanations behind the existing **…** help control beside the field. Show that help only on request; do not duplicate it as always-visible text below the field.
+- Short field-specific explanations use PBGui's existing **`data-tip` tooltip on the associated label/text**: dotted underline and help cursor. They appear on hover or keyboard focus, without expanding the page. Do not create a standalone **…** button, `<details>/<summary>` help expander, accordion, permanent explanatory paragraph or page-local alternative to this pattern. Expanders for actual report/log content are a different use case.
 - Put detailed feature descriptions, workflows, examples and background information in the relevant **Guide / Help** topic. Guide / Help is the primary place for product documentation; keep its English and German topics in sync.
 - Keep necessary validation errors, current status and information needed for an explicit decision visible, but brief and specific. They must not turn into general feature tutorials.
 - Apply this rule to new UI and when updating existing UI. Move explanatory prose into field help or Guide / Help instead of adding another explanation block.
+
+#### Technical implementation of help
+
+- Load the local shared `frontend/css/data_tip.css` and `frontend/js/data_tip.js` for generic field help. The renderer follows the existing editor `data-tip` convention, uses plain text, supports hover/focus/tap and Escape, clamps to the viewport and cleans up on page unload. Do not copy an editor's old inline tooltip renderer into another page. Existing PB8 parameter documentation is supplied by `pb8_parameter_help.js`; preserve that specialized original-documentation integration when working in a PB8 editor.
+- Place `data-tip` on the label's text span, not on the whole form group containing its input. Make non-interactive help text keyboard-focusable with `tabindex="0"`. **Do not attach explanatory tooltips to action buttons**: hovering, focusing or clicking an action must not open help. Keep button labels self-explanatory. For example, explain a connection test on the **Test model** label above its selector, never on **Test connection**. Actions without an associated field belong in Guide if they need further explanation. A short accessible name/title identifying an icon-only control is distinct from explanatory help. Never leave an anonymous help trigger on its own line.
+- Static help text must be HTML-attribute escaped. Set dynamic text using `element.dataset.tip` / `setAttribute`, never concatenate untrusted values into HTML. Tooltips are plain text; do not place secrets or HTML in them.
+- Longer documentation belongs in the mapped EN/DE Markdown Guide topic. The top **Guide** opens the existing `PBGuiSharedHelp` overlay. A contextual Guide entry uses `PBGuiSharedHelp.open(topic, {anchor: 'section-id'})` after loading the shared overlay, as in the Optimize page's `_openOptimizeHelp`; do not build another help modal. Keep translations and topic/anchor mappings consistent. This is distinct from **Information → Help**, the full-page documentation destination.
+
+```html
+<label for="example-setting">
+  <span tabindex="0" data-tip="Short explanation of this setting.">Example setting</span>
+</label>
+<input id="example-setting">
+```
 
 ## 2. Shared files and stylesheet order
 
@@ -191,6 +206,7 @@ An inventory on 2026-10-01 found 18 existing window-bearing frontend implementat
 - Open a full-viewport fixed overlay with a dim backdrop and a **centered** window. The main view remains at its current position behind it. Do not rely on native `<dialog>` user-agent margins/positioning: the global CSS reset can place it in the top-left corner.
 - The window uses `--bg2`, `--border`, existing text/font/spacing tokens, an 8–10 px radius, and the established shadow. The title/header is visually separated by a bottom border. Put the explicit close action at the top right.
 - Use `frontend/css/modals_shared.css` sizing tokens: wide detail windows `--pbg-modal-wide-width` (1100 px bounded by viewport), settings windows `--pbg-modal-settings-max-width` (760 px), and `--pbg-modal-max-h`. Keep viewport margins on narrow/short screens; no off-screen controls.
+- The approved `.pbg-modal-viewport` variant uses `--pbg-modal-viewport-width` / `--pbg-modal-viewport-height` to initially fill the browser viewport with 16 px margins. Keep the shared header/footer and floating drag/resize behavior; explicit user geometry is preserved. The GitHub issue form uses this variant with description fields and preview/attachment options side by side, stacking when space is limited.
 - New interactive detail windows use the reusable `.pbg-modal-overlay` → `.pbg-modal-window` shell from `modals_shared.css`, with `.pbg-modal-head`, optional `.pbg-modal-tabs` and `.pbg-modal-body`. Domain CSS may style content, not replace the shared positioning/header/body geometry. Existing modal families remain valid; do not mass-migrate unrelated pages.
 - The header and tabs stay visible; only the content body scrolls. Wide content tables scroll inside their own container. Use regular-size tabs with an active state, not miniature action buttons. Do not force a large empty window for a short message.
 - Confirmation, warning and prompt workflows use `PBGuiDialogs`. Detail windows use safe DOM rendering (`textContent`), `role="dialog"`, `aria-modal="true"` and a labelled title. Keep keyboard focus inside the window; restore focus to the trigger on close. Escape and the close control are explicit close actions. **Never close on backdrop/outside clicks.**
@@ -211,6 +227,13 @@ Minimal detail-window shell (opened by adding `.is-open` and setting `aria-hidde
   </div>
 </div>
 ```
+
+### Coin and exchange selection architecture
+
+- AI Loop Template must use the same `PBGuiEditorShared.createMultiselectController` and `.ms-wrap` / `.ms-tag` / `.ms-dropdown` controls as Backtest, Run and Optimize editors. Do not build a separate coin grid or single-exchange selector for this workflow.
+- Exchange options come from the Optimize editor capability list (`optimizeExchangeOptions`), including Hyperliquid. Allow multiple exchanges and coins, search, removable selection tags, clear controls and the shared keyboard behavior.
+- PB8 coins must use the editors' authenticated `POST /api/v8/coins/status` endpoint for the complete selected exchange set. Preserve official `config_id` values, display labels, normalization and invalid-selection metadata, including Hyperliquid USDC/HIP-3 and collision-qualified identifiers. Do not substitute a USDT-only mapping scan or independently merge per-exchange coin names.
+- Show exchange choices immediately and load market data separately from lightweight source configuration names. Source choices must not scan results or managed backtests. Reject stale market responses, preserve selections and edits on automatic updates, and block sending while market validation is pending or invalid.
 
 ## 6. Navigation, loading and state
 
