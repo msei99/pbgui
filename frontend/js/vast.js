@@ -145,6 +145,7 @@
   let disposed = false, bfcacheSuspended = false;
   let selectedJobId = null;
   let savedPreferences = null, jobRows = [], supervision = false, jobGeneration = 0, jobTimer = null;
+  let unreadableJobs = [];
   const controllers = new Set();
   const requeuingJobs = new Set();
   const stoppingJobs = new Map();
@@ -1482,7 +1483,7 @@
       summary.replaceChildren();
       const title = document.createElement('strong'); title.textContent = 'GPU pool'; summary.appendChild(title);
       const capacity = document.createElement('span');
-      capacity.textContent = active.length + ' / ' + limit + ' rentals';
+      capacity.textContent = unreadableJobs.length ? active.length + ' known rentals · inventory incomplete' : active.length + ' / ' + limit + ' rentals';
       summary.appendChild(capacity);
       const state = document.createElement('span');
       state.className = 'queue-pool-state' + (queueState.paused ? ' is-paused' : '');
@@ -1671,6 +1672,14 @@
     try {
       const data = await request('/jobs');
       if (disposed || current !== jobGeneration) return;
+      unreadableJobs = Array.isArray(data.unreadable) ? data.unreadable : [];
+      ['cloud-inventory-warning', 'cloud-inventory-detail-warning'].forEach(id => {
+        const notice = el(id); if (!notice) return;
+        notice.hidden = !unreadableJobs.length;
+        notice.textContent = unreadableJobs.length
+          ? 'Cloud inventory incomplete: ' + unreadableJobs.length + ' unreadable record(s). Healthy jobs remain visible; new rentals and history removal require repair.'
+          : '';
+      });
       const previousPollError = el('queue-message');
       if (previousPollError && previousPollError.dataset.jobPollError === previousPollError.textContent) {
         delete previousPollError.dataset.jobPollError;

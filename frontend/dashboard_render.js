@@ -1811,6 +1811,7 @@
         if (!P) { chartDiv.textContent = 'Plotly not loaded'; return; }
 
         var bars = (data && data.bars) ? data.bars : [];
+        chartDiv._pbguiPplSumPeriod = data && data.sum_period;
 
         var periods = bars.map(function (b) { return b.period; });
         var profits = bars.map(function (b) { return b.profits; });
@@ -1846,7 +1847,7 @@
             margin: { l: 65, r: 20, t: 40, b: 65 },
             barmode: 'relative',
             xaxis:  { tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0',
-                      type: 'category', nticks: 20, automargin: true },
+                      type: 'category', nticks: 20, automargin: true, autorange: true },
             yaxis:  { gridcolor: '#2d3748', color: '#e2e8f0',
                       zeroline: true, zerolinecolor: '#4a5568',
                       range: [yMin - padding, yMax + padding], automargin: true },
@@ -1861,7 +1862,7 @@
         /* restore zoom */
         if (opts.savedZoom) {
             if (opts.savedZoom.fracRange && periods.length > 0) {
-                /* Proportional remap — used on sum-period switch (DAY↔WEEK↔MONTH).
+                /* Proportional remap — used on sum-period switches.
                    fracRange stores [xr[0]/n, xr[1]/n]; multiply back by new n. */
                 var m = periods.length;
                 var newLo = opts.savedZoom.fracRange[0] * m;
@@ -1924,9 +1925,11 @@
         if (_fc && data && (data.bars || []).length > 0) {
             var _dr = container.querySelector('.dt-daterange');
             if (_dr) _dr.textContent = (data.from_date && data.to_date) ? 'From: ' + data.from_date + '  To: ' + data.to_date : '';
-            /* Preserve current zoom state across WS-triggered data updates */
+            /* Preserve zoom on data updates; category indices and totals change
+               meaning when switching aggregation, so let the axes rescale. */
             var _z = opts.savedZoom || null;
-            if (!_z && _fc.layout) {
+            var sameAggregation = _fc._pbguiPplSumPeriod === data.sum_period;
+            if (!_z && sameAggregation && _fc.layout) {
                 var _xa = _fc.layout.xaxis || {}, _ya = _fc.layout.yaxis || {};
                 var _xr = (_xa.autorange === false && _xa.range) ? _xa.range.slice() : null;
                 var _yr = (_ya.autorange === false && _ya.range) ? _ya.range.slice() : null;
@@ -4158,7 +4161,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20260930b',
+        VERSION:            '20261017a',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from file_lock import advisory_file_lock
 from secure_files import ensure_private_directory, read_regular_file_nofollow
-from vast_jobs import JobStore, IMAGE, PROJECT, REVISION, TERMINAL, job_id, write_json
+from vast_jobs import JobStore, IMAGE, PROJECT, REVISION, TERMINAL, IncompleteJobStore, job_id, write_json
 from vast_provider import VastError, positive_id, gpu_name_matches
 
 SERVICE = "VastRunner"
@@ -378,16 +378,14 @@ class CloudQueue:
                 if len(checked_jobs) != len(jobs) or final_inputs != current_inputs:
                     raise VastError('Cloud inputs changed during local metadata preparation; retry rental', 409)
             identifier = uuid.uuid4().hex
-            directory = ensure_private_directory(self.root / 'jobs' / identifier)
-            write_json(directory / 'state.json', {'id': identifier, 'kind': 'worker', 'status': 'ready',
+            self.store.publish({'id': identifier, 'kind': 'worker', 'status': 'ready',
                        'rental_state': 'none', 'workers': max((1 if row.get('auto_cpu_workers') else row['workers'] for row in jobs), default=1),
                        'created_at': time.time(), 'generation': 0, 'idle_seconds': idle_seconds,
                        'awaiting_queue_start': manual, 'rental_gpu_profile': rental_gpu_profile,
                        'rental_job_gpu_profiles': job_profiles,
                        **({'calibration_job_id': calibration_id} if calibration_id else {}),
-                       **({'loop_id': loop_id, 'loop_owner': loop_owner} if loop_id else {})})
-            write_json(directory / 'control.json', {'stop': False, 'cleanup': False})
-            write_json(directory / 'intent.json', {'id': identifier, 'image': IMAGE, 'pb8_revision': REVISION,
+                       **({'loop_id': loop_id, 'loop_owner': loop_owner} if loop_id else {})},
+                intent={'id': identifier, 'image': IMAGE, 'pb8_revision': REVISION,
                        'bundle_bytes': sum(row.get('input_bytes', 0) for row in jobs), 'job_count': len(jobs),
                        'rental_gpu_profile': rental_gpu_profile, 'rental_job_gpu_profiles': job_profiles})
             # Starting the local supervisor is not proof that Vast accepted a
@@ -708,7 +706,8 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
                     except VastError:
                         # Any existing result remains available and requires an explicit requeue.
                         store.update(replacement_job, error='GPU replaced; existing optimizer progress was preserved. Requeue explicitly to start a fresh run.')
-            for job in store.list():
+            known_jobs, unreadable = store.list_with_errors()
+            for job in known_jobs:
                 if job.get('lease_id') != identifier or job['status'] in TERMINAL or job['status'] == 'ready':
                     continue
                 stopped = control['stop'] or store.read(job['id'], 'control.json')['stop']
@@ -720,16 +719,28 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
             if (missing or creation_message) and not queue.read().get('pool_enabled'):
                 queue.update(paused=True)
             store.update(identifier, status='failed' if missing or creation_message else 'completed', active_job=None,
-                         replacement_requested=False, replacement_job=None)
+                         replacement_requested=False, replacement_job=None,
+                         inventory_error='Some job records remain unreadable' if unreadable else None)
             return None
         active = worker.get('active_job')
         if not active:
-            claimed = [row for row in store.list() if row.get('lease_id') == identifier and row['status'] not in TERMINAL and row['status'] != 'ready']
+            inventory, unreadable = store.list_with_errors()
+            claimed = [row for row in inventory if row.get('lease_id') == identifier and row['status'] not in TERMINAL and row['status'] != 'ready']
             if len(claimed) > 1:
                 raise VastError('Multiple unfinished jobs claim this worker; inspection required', 409)
             if claimed:
+                # Restore an existing durable association, never a new lease.
+                # A foreign unreadable record must not skip result collection
+                # just because the worker's active_job pointer was lost.
                 active = claimed[0]['id']
                 store.update(identifier, active_job=active)
+            elif unreadable:
+                # No known unfinished work to collect. Keep stop/deadline
+                # handling reachable, but never infer capacity for a new job.
+                if control['stop'] or control['cleanup'] or now >= worker['deadline'] - 240:
+                    store.control(identifier, 'cleanup')
+                    return None
+                raise IncompleteJobStore(unreadable)
         if active and store.read(job_id(active))['status'] not in TERMINAL:
             return active
         if active:
@@ -837,7 +848,12 @@ def worker_loop(store: JobStore, identifier: str) -> None:
     queue = CloudQueue(store)
     last_idle_observation = 0.0
     while True:
-        next_job = worker_step(queue, identifier)
+        try:
+            next_job = worker_step(queue, identifier)
+        except IncompleteJobStore:
+            # Keep the controller alive so repair and future deadlines are seen.
+            time.sleep(2)
+            continue
         worker = store.read(identifier)
         if worker['rental_state'] == 'deletion_verified' or store.read(identifier, 'control.json')['cleanup']:
             return

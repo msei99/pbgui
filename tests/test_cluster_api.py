@@ -10,9 +10,13 @@ import stat
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
-from fastapi import HTTPException, Request
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.testclient import TestClient
 
 from api import cluster
 from api import v7_instances, v8_instances
@@ -20,6 +24,7 @@ from api.page_templates import script_json
 from cluster_credential_publisher import ClusterCredentialPublisher
 from cluster_credentials import ensure_node_key_material, sign_operation
 from credential_store import CredentialStore
+from master import cluster_state
 from master.cluster_state import (
     append_operation as _append_operation,
     build_config_manifest,
@@ -136,6 +141,202 @@ def _init_cluster(tmp_path: Path) -> Path:
         created_at=100,
     )
     return root
+
+
+@pytest.fixture
+def snapshot_reads(tmp_path, monkeypatch):
+    """Track real snapshot replays using only temporary cluster state."""
+
+    root = _init_cluster(tmp_path)
+    ensure_local_identity(root, role="vps", pbname="master", created_at=100)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "_get_master_pbname", lambda: "master")
+    replay = Mock(wraps=cluster_state._rebuild_materialized_state_unlocked)
+    monkeypatch.setattr(cluster_state, "_rebuild_materialized_state_unlocked", replay)
+    return root, replay
+
+
+def _identity_stamp(root: Path) -> tuple:
+    """Capture identity replacement as well as content changes."""
+
+    path = root / "node_identity.json"
+    info = path.stat()
+    return info.st_ino, info.st_ctime_ns, info.st_mtime_ns, path.read_bytes()
+
+
+def _assert_committed_snapshot(root: Path) -> None:
+    """Check that the commit describes all three persisted snapshot files."""
+
+    materialized = {
+        name: json.loads((root / f"{name}.json").read_text())
+        for name in ("cluster_nodes", "desired_state", "state_vector")
+    }
+    raw = json.dumps(materialized, sort_keys=True, separators=(",", ":"))
+    commit = json.loads((root / "snapshot_commit.json").read_text())
+    assert commit["snapshot_hash"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert materialized["cluster_nodes"]["cluster_id"] == materialized["desired_state"]["cluster_id"]
+
+
+@pytest.mark.parametrize("empty_pbname", [False, True])
+def test_cluster_read_cycle_reuses_snapshot_and_preserves_identity(snapshot_reads, monkeypatch, empty_pbname):
+    """All four UI endpoints reuse snapshots while oplog validation still runs."""
+
+    root, replay = snapshot_reads
+    if empty_pbname:
+        path = root / "node_identity.json"
+        metadata = json.loads(path.read_text())
+        metadata["created_from_pbname"] = ""
+        path.write_text(json.dumps(metadata))
+    append_operation(root, "STOP_INSTANCE", {"instance": "offline-test"}, created_at=101)
+    expected_identity = read_local_identity(root)
+    before = _identity_stamp(root)
+    # Supply isolated OpenSSH material without depending on an OS passwd entry.
+    ssh_dir = root / "ssh"
+    ssh_dir.mkdir(mode=0o700)
+    private = Ed25519PrivateKey.generate()
+    key_path = ssh_dir / "pbgui_cluster_ed25519"
+    key_path.write_bytes(private.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption(),
+    ))
+    key_path.chmod(0o600)
+    key_path.with_suffix(".pub").write_bytes(private.public_key().public_bytes(
+        serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH,
+    ) + f" pbgui-cluster:{NODE_A}\n".encode())
+    key = Mock(wraps=cluster.ensure_cluster_ssh_key)
+    monkeypatch.setattr(cluster, "ensure_cluster_ssh_key", key)
+    validations = Mock(wraps=cluster_state.validate_operation)
+    monkeypatch.setattr(cluster_state, "validate_operation", validations)
+    app = FastAPI()
+    app.include_router(cluster.router, prefix="/api/cluster")
+    app.dependency_overrides[cluster.require_auth] = lambda: object()
+    with TestClient(app) as client:
+        first = client.get("/api/cluster/status")
+        assert first.status_code == 200
+        assert first.json()["identity"] == expected_identity
+        assert replay.call_count == 1
+        commit = (root / "snapshot_commit.json").read_bytes()
+        for _ in range(2):
+            for endpoint in ("nodes", "status", "desired-state", "oplog?limit=50"):
+                response = client.get(f"/api/cluster/{endpoint}")
+                assert response.status_code == 200, response.text
+                if endpoint == "nodes":
+                    ssh = response.json()["local_cluster_ssh"]
+                    assert ssh["ok"] is True and ssh["error"] == ""
+                    assert ssh["fingerprint"].startswith("SHA256:")
+                    public_key = Path(ssh["public_key_path"]).read_text()
+                    assert public_key.strip().endswith(f"pbgui-cluster:{NODE_A}")
+                if endpoint == "status":
+                    assert response.json()["identity"] == expected_identity
+        assert replay.call_count == 1
+        assert validations.call_count >= 3  # Initial replay plus each explicit oplog read.
+        assert (root / "snapshot_commit.json").read_bytes() == commit
+    assert _identity_stamp(root) == before
+    key.assert_called_with(root, node_id=NODE_A)
+    _assert_committed_snapshot(root)
+
+
+def test_nodes_ssh_failure_preserves_identity_and_snapshot(snapshot_reads, monkeypatch):
+    """SSH failures retain the public error shape without invalidating identity."""
+
+    root, replay = snapshot_reads
+    cluster.get_status(session=None)
+    before = _identity_stamp(root)
+    key = Mock(side_effect=RuntimeError("isolated SSH failure"))
+    monkeypatch.setattr(cluster, "ensure_cluster_ssh_key", key)
+    payload = cluster.get_nodes(session=None)
+    assert payload["local_cluster_ssh"] == {
+        "ok": False, "fingerprint": "", "public_key_path": "", "error": "isolated SSH failure",
+    }
+    cluster.get_status(session=None)
+    assert replay.call_count == 1
+    assert _identity_stamp(root) == before
+    key.assert_called_once_with(root, node_id=NODE_A)
+
+
+def test_status_rebuilds_once_after_new_operation(snapshot_reads):
+    """A changed history becomes visible once, then returns to snapshot reads."""
+
+    root, replay = snapshot_reads
+    assert cluster.get_status(session=None)["counts"]["oplog"] == 0
+    append_operation(root, "STOP_INSTANCE", {"instance": "offline-test"}, created_at=101)
+    assert cluster.get_status(session=None)["counts"]["oplog"] == 1
+    assert replay.call_count == 2
+    assert cluster.get_status(session=None)["counts"]["oplog"] == 1
+    assert replay.call_count == 2
+    _assert_committed_snapshot(root)
+
+
+@pytest.mark.parametrize("damage", ["missing_commit", "invalid_json", "hash_mismatch"])
+def test_status_repairs_snapshot_once(snapshot_reads, damage):
+    """Missing, malformed and partially published snapshots are repaired once."""
+
+    root, replay = snapshot_reads
+    expected = cluster.get_status(session=None)
+    if damage == "missing_commit":
+        (root / "snapshot_commit.json").unlink()
+    else:
+        (root / "cluster_nodes.json").write_text("{" if damage == "invalid_json" else "{}")
+    assert cluster.get_status(session=None) == expected
+    assert replay.call_count == 2
+    _assert_committed_snapshot(root)
+    assert cluster.get_status(session=None) == expected
+    assert replay.call_count == 2
+
+
+@pytest.mark.parametrize("damage", [
+    "cluster_id", "node_id", "node_identity.json", "invalid_json", "non_object",
+    "missing_pbname", "missing_created_at", "missing_role", "string_created_at",
+])
+def test_status_heals_identity_once(snapshot_reads, damage):
+    """Existing identity healing remains available without recurring replacements."""
+
+    root, replay = snapshot_reads
+    path = root / "node_identity.json"
+    if damage in {"cluster_id", "node_id", "node_identity.json"}:
+        (root / damage).unlink()
+    elif damage in {"invalid_json", "non_object"}:
+        path.write_text("{" if damage == "invalid_json" else "[]")
+    else:
+        metadata = json.loads(path.read_text())
+        if damage == "string_created_at":
+            metadata["created_at"] = "100"
+        else:
+            field = {"missing_pbname": "created_from_pbname", "missing_created_at": "created_at", "missing_role": "role"}[damage]
+            metadata.pop(field)
+        path.write_text(json.dumps(metadata))
+    status = cluster.get_status(session=None)
+    identity = status["identity"]
+    assert {"role", "created_at", "created_from_pbname", "cluster_id", "node_id", "schema_version"} <= identity.keys()
+    expected_role = "master" if damage in {"node_identity.json", "invalid_json", "non_object", "missing_role"} else "vps"
+    assert identity["role"] == expected_role
+    stamp = _identity_stamp(root)
+    assert cluster.get_status(session=None) == status
+    assert replay.call_count == 1
+    assert _identity_stamp(root) == stamp
+    _assert_committed_snapshot(root)
+
+
+@pytest.mark.parametrize("invalid_id", ["cluster_id", "node_id"])
+@pytest.mark.parametrize("companion", ["intact", "missing_id", "missing_metadata", "invalid_json", "non_object"])
+def test_status_rejects_invalid_ids_without_overwriting(snapshot_reads, invalid_id, companion):
+    """An invalid persisted ID never becomes silently healed metadata."""
+
+    root, replay = snapshot_reads
+    target = root / invalid_id
+    target.write_text("invalid-persisted-id")
+    if companion == "missing_id":
+        (root / ("node_id" if invalid_id == "cluster_id" else "cluster_id")).unlink()
+    elif companion == "missing_metadata":
+        (root / "node_identity.json").unlink()
+    elif companion != "intact":
+        (root / "node_identity.json").write_text("{" if companion == "invalid_json" else "[]")
+    for _ in range(2):
+        with pytest.raises(HTTPException) as caught:
+            cluster.get_status(session=None)
+        assert caught.value.status_code == 500
+        assert f"invalid {invalid_id}" in caught.value.detail
+        assert target.read_text() == "invalid-persisted-id"
+    assert replay.call_count == 0
 
 
 def _write_v7_config(tmp_path: Path, name: str, version: int, enabled_on: str = "disabled") -> Path:
@@ -947,8 +1148,7 @@ def test_get_status_initializes_empty_cluster_identity(monkeypatch, tmp_path: Pa
         "oplog": 0,
     }
     assert status["warnings"] == ["No cluster node membership operation has been recorded yet."]
-    assert not (tmp_path / "data" / "cluster" / "cluster_nodes.json").exists()
-    assert not (tmp_path / "data" / "cluster" / "desired_state.json").exists()
+    _assert_committed_snapshot(tmp_path / "data" / "cluster")
 
 
 def test_get_nodes_defaults_local_connection_metadata(monkeypatch, tmp_path: Path) -> None:
@@ -964,7 +1164,7 @@ def test_get_nodes_defaults_local_connection_metadata(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(cluster, "_local_ssh_user_value", lambda: "mani")
     monkeypatch.setattr(
         cluster,
-        "ensure_local_cluster_ssh_material",
+        "ensure_cluster_ssh_key",
         lambda *args, **kwargs: {"ok": True, "fingerprint": "SHA256:local", "public_key_path": str(pbgui_dir / "cluster.pub")},
     )
     append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
@@ -988,7 +1188,7 @@ def test_credential_status_endpoints_expose_ids_but_no_keys_ciphertext_or_secret
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(
         cluster,
-        "ensure_local_cluster_ssh_material",
+        "ensure_cluster_ssh_key",
         lambda *args, **kwargs: {"ok": True, "fingerprint": "SHA256:local"},
     )
     store = CredentialStore(tmp_path / "data" / "credentials")
@@ -2022,7 +2222,7 @@ def test_repair_all_cluster_ssh_uses_temporary_passwords(monkeypatch, tmp_path: 
 
 
 def test_bootstrap_preview_reports_missing_local_config(monkeypatch, tmp_path: Path) -> None:
-    """Bootstrap preview lists local V7 configs not yet in desired state without writing state files."""
+    """Preview may persist a snapshot but must not publish the unrecorded config."""
 
     _init_cluster(tmp_path)
     _write_v7_config(tmp_path, "test_inst", 3)
@@ -2035,7 +2235,10 @@ def test_bootstrap_preview_reports_missing_local_config(monkeypatch, tmp_path: P
     assert preview["can_apply"] is True
     assert preview["items"][0]["instance"] == "test_inst"
     assert preview["items"][0]["action"] == "add"
-    assert not (tmp_path / "data" / "cluster" / "desired_state.json").exists()
+    root = tmp_path / "data" / "cluster"
+    _assert_committed_snapshot(root)
+    assert json.loads((root / "desired_state.json").read_text())["instances"] == {}
+    assert load_operations(root) == []
 
 
 def test_bootstrap_preview_errors_on_unknown_folder_without_config(monkeypatch, tmp_path: Path) -> None:

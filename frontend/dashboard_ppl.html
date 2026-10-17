@@ -38,8 +38,8 @@
                     'LAST_7_DAYS','LAST_30_DAYS','LAST_90_DAYS','LAST_180_DAYS','LAST_365_DAYS',
                     'THIS_QUARTER','LAST_QUARTER','LAST_QUARTER_NOW',
                     'THIS_YEAR','LAST_YEAR','LAST_YEAR_NOW','ALL_TIME','CUSTOM'];
-    var PPL_SUM  = ['DAY','WEEK','MONTH'];
-    /* Normalize: legacy configs may store 'ALL_TIME' or 'YEAR' — clamp to valid PPL_SUM value */
+    var PPL_SUM  = ['DAY','WEEK','MONTH','YEAR','ALL_TIME'];
+    /* Preserve supported saved aggregations; fall back to DAY for invalid values. */
     var currentSumPeriod = PPL_SUM.indexOf(SUM_PERIOD) >= 0 ? SUM_PERIOD : PPL_SUM[0];
 
     if (window[_wsKey]) {
@@ -117,7 +117,7 @@
                     sumCtrl.appendChild(opt);
                 });
                 sumCtrl.addEventListener('change', function () {
-                    _savedZoom = _getFracZoom(); /* proportional fraction — works across DAY/WEEK/MONTH */
+                    _savedZoom = _getFracZoom(); /* proportional fraction across aggregation levels */
                     currentSumPeriod = this.value;
                     load();
                 });
@@ -248,7 +248,7 @@
         else { setTimeout(function () { waitForPlotly(cb); }, 50); }
     }
 
-    var DR_VERSION = '20260930b';
+    var DR_VERSION = '20261017a';
 
     function _loadRenderScript(cb) {
         if (window.DashRender && window.DashRender.VERSION !== DR_VERSION) {

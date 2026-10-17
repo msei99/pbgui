@@ -46,6 +46,19 @@ def collected(loops, source, target):
     return loops.update(OWNER, target['id'], lambda r: r.update(status='running', deadline=time.time() + 43200))
 
 
+def test_unreadable_job_blocks_handover_without_changing_rental(environment):
+    """Missing unfinished-job evidence cannot authorize ownership transfer."""
+    from vast_jobs import IncompleteJobStore
+    loops, queue, source, target = environment
+    begin(loops, queue, OWNER, source['id'], target['id'])
+    target = collected(loops, source, target)
+    (queue.root / 'jobs' / ('b' * 32)).mkdir()
+    before = queue.store.read(WORKER)
+    with pytest.raises(IncompleteJobStore):
+        advance(loops, queue, target)
+    assert queue.store.read(WORKER) == before
+
+
 def test_handover_preserves_rental_limits_and_survives_restart(environment):
     """Old-job collection holds the same GPU; transfer never renews paid allowances."""
     loops, queue, source, target = environment

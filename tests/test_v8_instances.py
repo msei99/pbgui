@@ -30,6 +30,8 @@ def isolated_local_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(v8_instances.pbgui_purefunc, "pb8_runtime_status", lambda: {"ready": False})
     monkeypatch.setattr(pb8_config, "pb8_runtime_status", lambda: {"ready": False, "pb8dir": str(tmp_path / "pb8")})
     monkeypatch.setattr(PBRun.psutil, "process_iter", lambda: iter([]))
+    monkeypatch.setattr(v8_instances, "_runtime_fingerprint", lambda: ("isolated-test-runtime",))
+    v8_instances._invalidate_instance_list()
 
 
 def _install_test_pipeline(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
@@ -47,7 +49,7 @@ def _install_test_pipeline(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         atomic_write_private_text(Path(path), json.dumps(config, indent=4) + "\n")
         return copy.deepcopy(config)
 
-    def load(path: Path) -> dict:
+    def load(path: Path, **_kwargs) -> dict:
         return json.loads(Path(path).read_text(encoding="utf-8"))
 
     monkeypatch.setattr(v8_instances, "prepare_pb8_config", prepare)
@@ -114,16 +116,22 @@ def test_restart_uses_persisted_remote_assignment(tmp_path: Path, monkeypatch: p
     class FakeMonitor:
         """Record one remote instance stop without touching a host."""
 
+        store = SimpleNamespace(v8_instances={"worker-a": [{"name": "alice", "running": True, "rv": 1}]})
+
         async def kill_instance(self, host: str, name: str, version: str) -> dict:
             calls.append((host, name, version))
+            self.store.v8_instances["worker-a"][0]["running"] = False
             return {"success": True, "pid": "4321"}
 
     monkeypatch.setattr(v8_instances, "_monitor", FakeMonitor())
+    _install_test_pipeline(monkeypatch)
+    assert v8_instances.get_v8_instances(session=None)["instances"][0]["running_on"] == ["worker-a"]
 
     result = asyncio.run(v8_instances.restart_v8_instance("alice", session=None))
 
     assert result == {"success": True, "name": "alice", "host": "worker-a", "pid": "4321"}
     assert calls == [("worker-a", "alice", "8")]
+    assert v8_instances.get_v8_instances(session=None)["instances"][0]["running_on"] == []
 
 
 def test_restart_rejects_disabled_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1080,7 +1088,7 @@ def test_instance_list_distinguishes_runtime_failure_from_config_error(
     monkeypatch.setattr(
         v8_instances,
         "load_pb8_config",
-        lambda _path: (_ for _ in ()).throw(RuntimeError("invalid live.user" if runtime_ready else reason)),
+        lambda _path, **_kwargs: (_ for _ in ()).throw(RuntimeError("invalid live.user" if runtime_ready else reason)),
     )
     monkeypatch.setattr(v8_instances, "_desired_pb8_state", lambda: ({}, {}, {}))
 
@@ -1411,7 +1419,7 @@ def test_local_hsl_migration_gate_does_not_override_vps_status(monkeypatch, tmp_
     }))
     before = path.read_bytes()
 
-    def reject_local_schema(_path):
+    def reject_local_schema(_path, **_kwargs):
         raise v8_instances.PB8ConfigurationError(
             'pre-v8.6 HSL configuration requires explicit migration with passivbot tool migrate-hsl and re-backtesting before use')
 
@@ -1523,3 +1531,40 @@ def test_save_migrated_config_backs_up_legacy_hsl_verbatim(monkeypatch, tmp_path
     saved = json.loads((bundle / "config.json").read_bytes())
     assert saved["config_version"] == "v8.6.0"
     assert saved["bot"]["long"]["hsl"] == {"enabled": hsl_enabled}
+
+
+def test_mutations_invalidate_warm_list_before_returning(monkeypatch, tmp_path):
+    """Save, forced-mode, copy, restore and delete bypass a still-valid list snapshot."""
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    monkeypatch.setattr(v8_instances, "_LIST_TTL_SECONDS", 3600.0)
+    monkeypatch.setattr(v8_instances, "_available_users", lambda: [
+        {"name": "alice", "exchange": "binance"}, {"name": "bob", "exchange": "bybit"}])
+    monkeypatch.setattr(v8_instances, "_assert_v8_instance_stopped", lambda *_args: None)
+
+    async def activate(*_args):
+        """Keep this mutation sequence entirely offline and disabled."""
+        return {"ok": True}
+
+    monkeypatch.setattr(v8_instances, "_activate_pb8_target", activate)
+
+    def rows():
+        """Exercise the actual HTTP handler against the shared cache."""
+        return {row["name"]: row for row in v8_instances.get_v8_instances(session=None)["instances"]}
+
+    assert rows() == {}
+    asyncio.run(v8_instances.save_v8_instance_config("alice", _payload(note="original"), False, session=None))
+    assert rows()["alice"]["note"] == "original"
+    asyncio.run(v8_instances.save_v8_instance_config("alice", _payload(note="changed"), False, session=None))
+    assert rows()["alice"]["note"] == "changed"
+    asyncio.run(v8_instances.set_v8_instance_forced_mode("alice", {"mode": "tp_only"}, session=None))
+    assert rows()["alice"]["forced_mode_long"] == "tp_only"
+    source = json.loads((tmp_path / "data/run_v8/alice/config.json").read_text())
+    asyncio.run(v8_instances.copy_v8_instance_config(
+        "alice", {"target_user": "bob", "config": source, "override_configs": {}}, session=None))
+    assert rows()["bob"]["enabled_on"] == "disabled"
+    asyncio.run(v8_instances.restore_v8_instance("alice", "1", session=None))
+    assert rows()["alice"]["note"] == "original"
+    assert rows()["alice"]["forced_mode_long"] == ""
+    v8_instances.delete_v8_instance("bob", session=None)
+    assert set(rows()) == {"alice"}

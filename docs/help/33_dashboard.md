@@ -130,10 +130,17 @@ The ADG percentage (average daily gain) is displayed in the widget header.
 
 Same period and users controls as PNL.
 
-### 📉 P+L — Cumulative PnL per symbol
+### 📉 P+L — Profits and Losses
 
-Plots **separate cumulative PnL lines** for each symbol in one chart.
-Makes it easy to see which coins drive gains or losses over a time period.
+Plots **separate profit and loss bars** for the selected users and date range.
+
+- **Period** selects the date range.
+- **Sum Period** selects the aggregation: `DAY`, `WEEK`, `MONTH`, `YEAR`, or `ALL_TIME`.
+- `YEAR` groups income by UTC calendar year within the selected date range.
+- `ALL_TIME` shows one aggregate for the selected date range and users; it does not override **Period**. With no matching income, profits and losses are both zero.
+
+Save the dashboard or view layout to retain the selected aggregation after reloading.
+Changing **Sum Period** rescales the chart to keep the new totals visible. Automatic data updates preserve the current zoom.
 
 ### 💰 INCOME — Income by symbol
 

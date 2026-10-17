@@ -2489,6 +2489,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
         <button class="act-btn" onclick="selectAllQueue()" title="Select all visible rows">Select All</button>
         <button class="act-btn" onclick="deselectAllQueue()" title="Deselect all">Deselect</button>
       </div>
+      <p id="cloud-inventory-warning" class="muted-line" role="status" aria-live="polite" hidden></p>
       <section id="queue-rental" class="queue-gpu-overview" aria-label="GPU rentals" hidden>
         <div id="queue-rental-status" class="queue-gpu-summary"></div>
         <div id="queue-worker-cards" class="queue-gpu-grid"></div>
@@ -15711,6 +15712,6 @@ window.PBGUI_NAV_CONFIG = {
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=3"></script>
 <script src="/app/js/optimizer_log_layout.js?v=5"></script>
-<script src="/app/js/vast.js?v=167"></script>
+<script src="/app/js/vast.js?v=168"></script>
 </body>
 </html>

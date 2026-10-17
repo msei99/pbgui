@@ -14,6 +14,8 @@ Die Seite öffnet mit einem Kachel-Raster, das alle Services auf einen Blick zei
 
 Klicke auf eine Kachel, um das Detail-Panel des Service zu öffnen.
 
+Während der Status lädt, zeigen Übersicht und Detail-Panels **Loading status…**, mit neutralen Punkten in Sidebar und Statusanzeige und ohne Service-Aktionsschaltflächen. Schlägt eine Statusabfrage fehl, erscheint **Status unavailable**, statt die Dienste als gestoppt anzuzeigen. Service-Aktionen bleiben bis zur nächsten erfolgreichen Statusabfrage ausgeblendet. Die Seite fragt den Status bei sichtbarem Tab automatisch alle fünf Sekunden erneut ab und setzt die Abfragen beim Zurückkehren fort. Nach der Erholung erscheinen aktueller Status und Aktionen wieder, ohne Panel, Tab oder ungespeicherte Einstellungen zurückzusetzen. Worker- und Migrationsstatus sind von diesen Fehlern der Service-Statusabfrage unabhängig.
+
 Die Übersicht enthält jetzt auch eine eigene **Workers**-Kachel. Sie öffnet den nur für Administration gedachten Worker-Bereich für Queue-Worker, Sync-/Watcher-Worker und interne Helper-Tasks.
 
 Die Übersicht liest den aktuellen Worker-Status direkt; detaillierte Warteschlangenstatistiken werden beim Öffnen von Workers geladen. Statusänderungen werden automatisch aktualisiert.

@@ -14,6 +14,8 @@ The page opens with a card grid showing all services at a glance. While the serv
 
 Click a card to open that service's detail panel.
 
+While status is loading, the overview and detail panels show **Loading status…**, with neutral sidebar and status indicators and no service action buttons. If a status request fails, they show **Status unavailable** instead of reporting services as stopped. Service actions remain hidden until a successful status update. Polling retries automatically every five seconds while the page is visible and resumes when you return; recovery restores the current status and actions without resetting your panel, tab, or unsaved settings. Worker and migration status are independent of these service status failures.
+
 The Overview also includes a dedicated **Workers** card. It opens the admin-only worker area for queue workers, sync/watcher workers, and internal helper tasks.
 
 Overview reads live worker state directly; detailed queue statistics are loaded when opening Workers. Status updates run automatically.

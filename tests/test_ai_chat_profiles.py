@@ -1,8 +1,10 @@
 """Owner and subscription isolation for persistent ChatGPT profiles, entirely offline."""
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -10,6 +12,145 @@ from ai_chat import AIChatError, AIChatService
 
 OWNER = 'a' * 32
 OTHER = 'b' * 32
+
+
+@pytest.mark.parametrize('name', ['Default', ' Default '])
+def test_implicit_default_name_collision_does_not_create_registry(tmp_path, name):
+    """The synthetic Default profile reserves its name before any registry exists."""
+    service = AIChatService(tmp_path / 'ai')
+    with pytest.raises(AIChatError, match='already exists'):
+        service.save_chatgpt_profile(OWNER, name)
+    assert not service._profile_path(OWNER).exists()
+
+
+@pytest.mark.parametrize('rename', [False, True])
+def test_profile_name_collisions_leave_registry_unchanged(tmp_path, rename):
+    """Trimmed labels collide on create and rename without changing persisted bytes."""
+    service = AIChatService(tmp_path / 'ai')
+    service.save_chatgpt_profile(OWNER, 'Trading')
+    other = service.save_chatgpt_profile(OWNER, 'Other')
+    path = service._profile_path(OWNER)
+    before = path.read_bytes()
+    with pytest.raises(AIChatError) as error:
+        service.save_chatgpt_profile(OWNER, ' Trading ', other['id'] if rename else None)
+    assert str(error.value) == 'A profile named "Trading" already exists. Choose a different name.'
+    assert path.read_bytes() == before
+    assert service.save_chatgpt_profile(OWNER, 'trading')['name'] == 'trading'
+    assert service.save_chatgpt_profile(OTHER, 'Trading')['name'] == 'Trading'
+
+
+@pytest.mark.parametrize('rename', [False, True])
+def test_concurrent_profile_name_collisions_are_serialized(tmp_path, rename):
+    """Concurrent same-name writes have exactly one winner under the file lock."""
+    service = AIChatService(tmp_path / 'ai')
+    profiles = [service.save_chatgpt_profile(OWNER, f'Profile {i}')['id'] for i in range(4)] if rename else [None] * 4
+    barrier = Barrier(4)
+
+    def save(profile):
+        """Start contenders together and retain expected collision failures."""
+        barrier.wait(timeout=10)
+        try:
+            return service.save_chatgpt_profile(OWNER, 'Trading', profile)
+        except AIChatError as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(save, profiles))
+    assert sum(isinstance(result, dict) for result in results) == 1
+    assert results.count('A profile named "Trading" already exists. Choose a different name.') == 3
+    rows = service.chatgpt_profiles(OWNER)
+    assert sum(row['name'] == 'Trading' for row in rows) == 1
+    assert len(rows) == (5 if rename else 2)
+
+
+def test_legacy_duplicate_names_load_noop_rename_and_remove(tmp_path, monkeypatch):
+    """Old duplicates retain IDs, permit unchanged renames without writes and delete normally."""
+    from secure_files import atomic_write_private_text
+
+    async def scenario():
+        """Exercise only metadata and unused temporary profile directories."""
+        service = AIChatService(tmp_path / 'ai')
+        rows = [{'id': 'default', 'name': 'Default'},
+                {'id': 'c' * 32, 'name': 'Trading'}, {'id': 'd' * 32, 'name': 'Trading'}]
+        path = service._profile_path(OWNER)
+        atomic_write_private_text(path, json.dumps(rows, indent=4) + '\n')
+        before = path.read_bytes()
+        assert service.chatgpt_profiles(OWNER) == rows
+        with monkeypatch.context() as patch:
+            write = Mock(side_effect=AssertionError('Unexpected write'))
+            patch.setattr('ai_chat.atomic_write_private_text', write)
+            assert service.save_chatgpt_profile(OWNER, ' Trading ', rows[1]['id']) == rows[1]
+            write.assert_not_called()
+        assert path.read_bytes() == before
+        service.save_chatgpt_profile(OWNER, 'Office', rows[1]['id'])
+        await service.remove_chatgpt_profile(OWNER, rows[2]['id'])
+        assert service.chatgpt_profiles(OWNER) == [rows[0], {'id': rows[1]['id'], 'name': 'Office'}]
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('foreign', [False, True])
+def test_profile_ownership_error_precedes_name_collision(tmp_path, foreign):
+    """Unknown or foreign rename targets keep the existing ownership error."""
+    service = AIChatService(tmp_path / 'ai')
+    profile = service.save_chatgpt_profile(OTHER, 'Elsewhere')['id'] if foreign else 'c' * 32
+    with pytest.raises(AIChatError, match='removed or does not belong'):
+        service.save_chatgpt_profile(OWNER, 'Default', profile)
+    assert not service._profile_path(OWNER).exists()
+
+
+def test_profile_name_validation_preserves_twenty_profile_limit(tmp_path):
+    """Unique creates still stop at twenty while existing profiles can be renamed."""
+    service = AIChatService(tmp_path / 'ai')
+    for i in range(19):
+        service.save_chatgpt_profile(OWNER, f'Profile {i}')
+    path = service._profile_path(OWNER)
+    before = path.read_bytes()
+    with pytest.raises(AIChatError, match='already exists'):
+        service.save_chatgpt_profile(OWNER, 'Profile 0')
+    with pytest.raises(AIChatError, match='limit reached'):
+        service.save_chatgpt_profile(OWNER, 'New profile')
+    assert path.read_bytes() == before
+    service.save_chatgpt_profile(OWNER, 'Personal', 'default')
+    assert len(service.chatgpt_profiles(OWNER)) == 20
+
+
+def test_profile_collisions_over_http_preserve_status_inventory(tmp_path, monkeypatch):
+    """Real authenticated routes reject create/rename collisions and expose one new ID."""
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from api import ai as routes
+    from ai_chat import CodexRuntime, owner_key
+
+    async def scenario():
+        """Use ASGI transport with synthetic authentication and no provider processes."""
+        service = AIChatService(tmp_path / 'ai')
+        monkeypatch.setattr(routes, 'get_ai_chat_service', lambda: service)
+        monkeypatch.setattr(service, '_ensure_reaper', lambda: None)
+        monkeypatch.setattr(service, '_ensure_health_monitor', lambda: None)
+        monkeypatch.setattr(CodexRuntime, 'available', staticmethod(lambda: False))
+        session = SimpleNamespace(user_id='profile-test-user')
+        app = FastAPI()
+        app.include_router(routes.router, prefix='/api/ai')
+        app.dependency_overrides[routes.require_auth] = lambda: session
+        async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+            before_status = (await client.get('/api/ai/status')).json()['providers']['chatgpt']['profiles']
+            created = await client.post('/api/ai/providers/chatgpt/profiles', json={'name': 'Trading'})
+            assert created.status_code == 200
+            path = service._profile_path(owner_key(session.user_id))
+            before = path.read_bytes()
+            for body in [{'name': ' Trading '}, {'name': 'Trading', 'profile': 'default'}]:
+                response = await client.post('/api/ai/providers/chatgpt/profiles', json=body)
+                assert response.status_code == 400
+                assert response.headers['cache-control'] == 'no-store'
+                assert response.json()['detail'] == 'A profile named "Trading" already exists. Choose a different name.'
+                assert path.read_bytes() == before
+            after = (await client.get('/api/ai/status')).json()['providers']['chatgpt']['profiles']
+            assert after == before_status + [created.json()]
+        await service.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_profile_registry_preserves_default_and_isolates_owners(tmp_path):

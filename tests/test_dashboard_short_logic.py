@@ -6,6 +6,7 @@ snapshot and live API paths for DCA counting plus nearest DCA/TP prices.
 
 import asyncio
 import json
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -91,7 +92,17 @@ def test_dashboard_websocket_fragments_reject_stale_generations(filename: str) -
     assert "=== socket) socket.close();" in source
 
 
-def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket() -> None:
+@pytest.fixture
+def dashboard_render_version() -> str:
+    """Use the real renderer version without bypassing fragment consistency checks."""
+    source = (ROOT / "frontend" / "dashboard_render.js").read_text(encoding="utf-8")
+    match = re.search(r"VERSION:\s*'([^']+)'", source)
+    if match is None or not match.group(1).strip():
+        pytest.fail("dashboard_render.js must declare a non-empty VERSION")
+    return match.group(1)
+
+
+def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket(dashboard_render_version: str) -> None:
     """A reconnect callback already dequeued before rerender must not revive its old fragment."""
     html = (ROOT / "frontend" / "dashboard_top.html").read_text(encoding="utf-8")
     source = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
@@ -119,7 +130,7 @@ def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket() -> None:
         window.location = {{ protocol: 'http:', host: 'localhost', href: 'http://localhost/app/dashboard_top.html' }};
         global.document = {{ getElementById: function () {{ return {{}}; }} }};
         global.DashRender = {{
-            VERSION: '20260930b',
+            VERSION: {json.dumps(dashboard_render_version)},
             injectCSS: function () {{}}
         }};
         window.DashRender = global.DashRender;
@@ -180,7 +191,7 @@ def test_dashboard_editor_orders_rejects_stale_position_response() -> None:
     assert "if (expectedSeq != null && expectedSeq !== window[_loadSeqKey]) return;" in orders_source
 
 
-def test_dashboard_top_older_fetch_cannot_overwrite_newer_render() -> None:
+def test_dashboard_top_older_fetch_cannot_overwrite_newer_render(dashboard_render_version: str) -> None:
     """Resolve two Top requests in reverse order and render only the newer payload."""
     html = (ROOT / "frontend" / "dashboard_top.html").read_text(encoding="utf-8")
     source = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
@@ -216,7 +227,7 @@ def test_dashboard_top_older_fetch_cannot_overwrite_newer_render() -> None:
             createTextNode: function () {{ return {{}}; }}
         }};
         global.DashRender = {{
-            VERSION: '20260930b',
+            VERSION: {json.dumps(dashboard_render_version)},
             injectCSS: function () {{}},
             buildTop: function (target, data) {{ renders.push(data.id); }}
         }};
@@ -266,7 +277,7 @@ def test_dashboard_top_older_fetch_cannot_overwrite_newer_render() -> None:
     )
 
 
-def test_dashboard_positions_waits_for_live_before_rendering_db_fallback() -> None:
+def test_dashboard_positions_waits_for_live_before_rendering_db_fallback(dashboard_render_version: str) -> None:
     """Do not flash the DB snapshot while an allowed live positions request is pending."""
     html = (ROOT / "frontend" / "dashboard_positions.html").read_text(encoding="utf-8")
     source = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
@@ -293,7 +304,7 @@ def test_dashboard_positions_waits_for_live_before_rendering_db_fallback() -> No
         window.location = {{ protocol: 'http:', host: 'localhost', href: 'http://localhost/app/dashboard_positions.html' }};
         global.document = {{ getElementById: function () {{ return container; }} }};
         global.DashRender = {{
-            VERSION: '20260930b',
+            VERSION: {json.dumps(dashboard_render_version)},
             injectCSS: function () {{}},
             buildPositions: function (target, data) {{ renders.push(data.id); }}
         }};

@@ -16,10 +16,26 @@ def test_setup_profiles_models_probe_github_and_restoration(prefix,width):
     state={'github':False,'probe_error':None,'profiles':[{'id':'default','name':'Personal'},{'id':work,'name':'Work'}],
            'preferences':{'selection':{'provider':'chatgpt','profile':'default','model':'model-default','effort':'','service_tier':''},'jev_max_cost_usd':.01}}
     tests=[];mutations=[];requests=[];errors=[];permission_checks=[]
+    held_saves=[];held_status=[]
     with sync_playwright() as driver:
         browser=driver.chromium.launch()
         page=browser.new_page(viewport={'width':width,'height':900})
+        page.clock.install()
         page.on('pageerror',lambda error:errors.append(str(error)))
+
+        def save_profile(route):
+            """Model registry responses, including stale-client conflicts, without real files."""
+            chosen=route.request.post_data_json;name=chosen['name'].strip()
+            item=next((item for item in state['profiles'] if item['id']==chosen['profile']),None)
+            if item and item['name'].strip()==name:
+                route.fulfill(json=item);return
+            if any(row['name'].strip()==name and row is not item for row in state['profiles']):
+                route.fulfill(status=400,json={'detail':'A profile named "'+name+'" already exists. Choose a different name.'});return
+            if item:item['name']=name
+            else:
+                item={'id':format(len(state['profiles']),'032x'),'name':name};state['profiles'].append(item)
+            route.fulfill(json=item)
+
         def respond(route):
             """All provider/GitHub calls are synthetic and every asset is local."""
             url=urlparse(route.request.url);path=url.path.removeprefix(prefix);query=parse_qs(url.query)
@@ -35,7 +51,10 @@ def test_setup_profiles_models_probe_github_and_restoration(prefix,width):
                 route.fulfill(body=asset.read_bytes() if asset.is_file() else b'',content_type='text/css' if asset.suffix=='.css' else 'text/javascript')
             elif path=='/api/ai/status':
                 profile=query.get('profile',['default'])[0]
-                route.fulfill(json={'providers':{'chatgpt':{'available':True,'connected':True,'profiles':state['profiles'],'email':profile+'@example.test'},'opencode-go':{'connected':True},'opencode-zen':{'connected':True},'openrouter':{'connected':True}}})
+                payload=json.loads(json.dumps({'providers':{'chatgpt':{'available':True,'connected':True,'profiles':state['profiles'],'email':profile+'@example.test'},'opencode-go':{'connected':True},'opencode-zen':{'connected':True},'openrouter':{'connected':True}}}))
+                if state.pop('hold_status',False):
+                    held_status.append((route,payload));page.evaluate('window.profileStatusHeld=true')
+                else:route.fulfill(json=payload)
             elif path=='/api/ai/models':
                 profile=query.get('profile',['default'])[0]
                 model='typesafe/jev-1.13' if query.get('provider')==['openrouter'] else 'model-'+profile
@@ -57,9 +76,12 @@ def test_setup_profiles_models_probe_github_and_restoration(prefix,width):
                 permission_checks.append(route.request.method)
                 route.fulfill(json={'login':'fixture-user','ready':True,'permissions':'verified','issue_target_available':True,'write_test_performed':False})
             elif path=='/api/ai/providers/chatgpt/profiles':
-                chosen=route.request.post_data_json
-                item=next(item for item in state['profiles'] if item['id']==chosen['profile']);item['name']=chosen['name']
-                route.fulfill(json=item)
+                if state.pop('hold_save',False):
+                    held_saves.append(route);page.evaluate('window.profileSaveHeld=true')
+                else:save_profile(route)
+            elif path.startswith('/api/ai/providers/chatgpt/profiles/') and route.request.method=='DELETE':
+                state['profiles']=[row for row in state['profiles'] if row['id']!=path.rsplit('/',1)[1]]
+                route.fulfill(json={'success':True})
             elif path=='/api/help/index':route.fulfill(json=[{'file':'45_ai_chat','title':'AI Setup and Chat'}])
             elif path=='/api/help/content':route.fulfill(json={'content':'# AI Setup and Chat\nModels, connections and support.'})
             elif path=='/api/ai/conversations':route.fulfill(json={'conversations':[]})
@@ -122,6 +144,113 @@ def test_setup_profiles_models_probe_github_and_restoration(prefix,width):
         page.locator('#chatgpt-profile-name').fill('Renamed work')
         page.get_by_role('button',name='Rename',exact=True).click()
         expect(page.locator('#chatgpt-profile-name')).to_have_value('Renamed work')
+
+        # Exercise registry mutations through the real menu/page, with no provider calls.
+        name_input=page.locator('#chatgpt-profile-name')
+        add=page.get_by_role('button',name='Add profile',exact=True)
+        rename=page.get_by_role('button',name='Rename',exact=True)
+        status=page.locator('#setup-status')
+
+        def post_count():
+            """Count only profile writes, not model/preferences requests."""
+            return requests.count(('POST','/api/ai/providers/chatgpt/profiles'))
+
+        def hold_next_status():
+            """Delay a normal visibility-triggered update until the test releases it."""
+            state['hold_status']=True
+            page.evaluate('window.profileStatusHeld=false;document.dispatchEvent(new Event("visibilitychange"))')
+            page.wait_for_function('window.profileStatusHeld')
+
+        def release_status():
+            """Deliver the captured snapshot, which may now be stale."""
+            route,payload=held_status.pop(0);route.fulfill(json=payload)
+
+        def start_delayed_save(button,label):
+            """Allow edits while the server response is pending."""
+            state['hold_save']=True;page.evaluate('window.profileSaveHeld=false')
+            name_input.fill(label);button.click()
+            page.wait_for_function('window.profileSaveHeld')
+            expect(add).to_be_disabled()
+
+        count_before=len(state['profiles']);posts=post_count()
+        name_input.fill('Trading');add.click()
+        expect(name_input).to_have_value('');expect(add).to_be_enabled()
+        trading=state['profiles'][-1]['id']
+        expect(page.locator('#chatgpt-profile')).to_have_value(trading)
+        assert len(state['profiles'])==count_before+1 and post_count()==posts+1
+        # Delayed automatic status must preserve both intentional emptiness and newer edits.
+        hold_next_status();release_status();expect(name_input).to_have_value('')
+        with page.expect_response('**/api/ai/status?*'):
+            page.clock.run_for(15001)
+        expect(name_input).to_have_value('')
+        add.click();expect(status).to_have_text('Enter a profile name.')
+        assert post_count()==posts+1
+        inventory=page.evaluate('async (url)=>(await (await fetch(url)).json()).providers.chatgpt.profiles',prefix+'/api/ai/status')
+        assert len(inventory)==count_before+1 and sum(row['name']=='Trading' for row in inventory)==1
+        name_input.fill(' Trading ');add.click()
+        expect(status).to_have_text('A profile named "Trading" already exists. Choose a different name.')
+        assert post_count()==posts+1
+        name_input.fill('Renamed work');rename.click()
+        expect(status).to_have_text('A profile named "Renamed work" already exists. Choose a different name.')
+        assert post_count()==posts+1
+
+        # The server can learn about another profile before this browser does.
+        state['profiles'].append({'id':'e'*32,'name':'Remote'})
+        name_input.fill('Remote');add.click()
+        expect(add).to_be_enabled()
+        expect(page.locator('#chatgpt-profile option[value="'+('e'*32)+'"]')).to_have_count(1)
+        expect(status).to_have_text('A profile named "Remote" already exists. Choose a different name.')
+        expect(name_input).to_have_value('Remote')
+        assert post_count()==posts+2 and len(state['profiles'])==count_before+2
+
+        hold_next_status();name_input.fill('Status draft');release_status()
+        expect(name_input).to_have_value('Status draft')
+        start_delayed_save(add,'Delayed')
+        name_input.fill('Newer add draft');save_profile(held_saves.pop(0))
+        expect(add).to_be_enabled();expect(name_input).to_have_value('Newer add draft')
+        delayed=state['profiles'][-1]['id']
+        expect(page.locator('#chatgpt-profile')).to_have_value(delayed)
+        start_delayed_save(rename,'Renamed delayed')
+        name_input.fill('Newer rename draft');save_profile(held_saves.pop(0))
+        expect(add).to_be_enabled();expect(name_input).to_have_value('Newer rename draft')
+        assert next(row for row in state['profiles'] if row['id']==delayed)['name']=='Renamed delayed'
+
+        # Both profile selectors must reset the post-Add empty state.
+        name_input.fill('Switch test');add.click()
+        expect(add).to_be_enabled();expect(name_input).to_have_value('')
+        page.locator('#chatgpt-profile').select_option(work)
+        expect(name_input).to_have_value('Renamed work')
+        name_input.fill('Provider switch test');add.click()
+        expect(add).to_be_enabled();expect(name_input).to_have_value('')
+        page.locator('[data-section="models"]').click()
+        page.locator('#provider-select').select_option('chatgpt:'+work)
+        page.locator('[data-section="chatgpt"]').click()
+        expect(page.locator('#chatgpt-profile')).to_have_value(work)
+        expect(name_input).to_have_value('Renamed work')
+        name_input.fill('Remove test');add.click()
+        expect(add).to_be_enabled();expect(name_input).to_have_value('')
+        page.get_by_role('button',name='Remove',exact=True).click()
+        page.get_by_role('button',name='Remove profile',exact=True).click()
+        expect(name_input).to_have_value('Personal')
+
+        # Pre-existing duplicate labels remain distinct, selectable and removable by ID.
+        legacy_ids=['c'*32,'d'*32]
+        state['profiles'].extend({'id':identifier,'name':'Legacy'} for identifier in legacy_ids)
+        hold_next_status();release_status()
+        expect(page.locator('#chatgpt-profile option',has_text='Legacy')).to_have_count(2)
+        page.locator('#chatgpt-profile').select_option(legacy_ids[0])
+        expect(name_input).to_have_value('Legacy')
+        rename.click();expect(add).to_be_enabled()
+        expect(status).to_have_text('Profile saved.')
+        page.get_by_role('button',name='Remove',exact=True).click()
+        page.get_by_role('button',name='Remove profile',exact=True).click()
+        expect(page.locator('#chatgpt-profile option',has_text='Legacy')).to_have_count(1)
+        assert any(row['id']==legacy_ids[1] for row in state['profiles'])
+        page.locator('#chatgpt-profile').select_option(work)
+        expect(name_input).to_have_value('Renamed work')
+        page.locator('[data-section="models"]').click()
+        page.locator('#effort-select').select_option('high');page.locator('#speed-select').select_option('priority')
+        page.locator('[data-section="chatgpt"]').click()
         page.locator('#chatgpt-test').click()
         expect(page.locator('#chatgpt-test-result')).to_contain_text('Connection verified: chatgpt')
         assert tests[-1]['profile']==work and tests[-1]['model']=='model-'+work

@@ -28,7 +28,7 @@ def save_record(queue, identifier, state, offer=None):
     """Create minimal historical records without invoking any supervisor."""
     folder = queue.root / 'jobs' / identifier
     folder.mkdir(parents=True)
-    write_json(folder / 'state.json', dict(id=identifier, **state))
+    write_json(folder / 'state.json', {'id': identifier, 'status': 'completed', **state})
     write_json(folder / 'intent.json', dict(offer=offer or {}))
     return folder
 

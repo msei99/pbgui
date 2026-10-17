@@ -392,6 +392,130 @@ async function cards() {
 }
 
 
+async function ppl() {
+    const html = source('dashboard_editor.html');
+    const allowed = ['DAY', 'WEEK', 'MONTH', 'YEAR', 'ALL_TIME'];
+    const labels = {
+        DAY: ['2023-12-31', '2024-01-01', '2024-06-01', '2025-01-01'],
+        WEEK: ['2023-52', '2024-01', '2024-22', '2025-00'],
+        MONTH: ['2023-12', '2024-01', '2024-06', '2025-01'],
+        YEAR: ['2023', '2024', '2025'], ALL_TIME: ['ALL_TIME']
+    };
+    const key = 'dashboard_ppl_sum_period_1_1';
+    for (const viewOnly of [false, true]) for (const savedSum of ['YEAR', 'ALL_TIME']) {
+        let saved = {name: 'portfolio', rows: 1, cols: 1, [key]: savedSum,
+            dashboard_ppl_users_1_1: ['alice'], dashboard_ppl_period_1_1: 'CUSTOM:2023-01-01:2025-12-31'};
+        const requests = [], messages = [];
+        let revision = 0;
+        function open() {
+            const document = new Element();
+            document.createElement = tag => new Element(tag);
+            document.createTextNode = value => Object.assign(new Element('text'), {textContent: value});
+            document.getElementById = () => new Element();
+            const window = {screen: {width: 1200, availHeight: 900},
+                parent: {postMessage: message => messages.push(message)}};
+            const Plotly = {
+                react(chart, traces, layout) {chart.data = traces; chart.layout = layout;},
+                Plots: {resize() {}}
+            };
+            window.Plotly = Plotly;
+            const fetch = async (url, options = {}) => {
+                if (url.startsWith('/api/dashboard/ppl_data')) {
+                    const query = new URL(url, location.origin).searchParams;
+                    requests.push(Object.fromEntries(query));
+                    return {ok: true, json: async () => ({sum_period: query.get('sum_period'),
+                        bars: labels[query.get('sum_period')].map(period => ({period, profits: 10 + revision, losses: -2}))})};
+                }
+                assert.equal(url, '/api/dashboards/portfolio');
+                saved = JSON.parse(options.body);
+                return {ok: true};
+            };
+            const ctx = vm.createContext({window, document, Plotly, location, encodeURIComponent,
+                state: JSON.parse(JSON.stringify(saved)), _buildGen: {}, API_BASE: '/api',
+                VIEW_ONLY: viewOnly, ORIG_NAME: 'portfolio', PERIODS_TOP: ['CUSTOM'],
+                setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {},
+                fetch, apiFetch: (url, opts) => fetch('/api' + url, opts),
+                _ensureRenderScript: cb => cb(), makeUsersDropdown: () => new Element(),
+                _widgetIcon() {}, _makeDeleteCb() {}, _attachViewDrag() {},
+                reportHeight() {}, scheduleSync() {}, setStatus() {}, closeAllUsersDropdowns() {}
+            });
+            vm.runInContext(source('dashboard_render.js'), ctx);
+            ctx.DashRender = window.DashRender;
+            vm.runInContext(html.match(/var PPL_SUM = \[[^;]+;/)[0], ctx);
+            for (const name of ['persistCardControlChange', 'markViewDirty', 'buildPplInline', 'doSave', 'saveViewLayout']) {
+                vm.runInContext(functionCode(html, name), ctx);
+            }
+            const container = new Element();
+            container.connected = true;
+            ctx.buildPplInline(container, 1, 1);
+            return {ctx, container};
+        }
+        let {ctx, container} = open();
+        await tick();
+        function sumControl() {return container.querySelector('select');}
+        function chart() {return container.querySelector('.dt-chart');}
+        assert.deepEqual(sumControl().children.map(option => option.value), allowed);
+        assert.equal(sumControl().children.find(option => option.selected).value, savedSum);
+        for (const aggregation of allowed) {
+            if (aggregation === 'YEAR') {
+                chart().layout.xaxis.range = [1, 2];
+                chart().layout.xaxis.autorange = false;
+                chart().layout.yaxis.range = [-1, 5];
+                chart().layout.yaxis.autorange = false;
+            }
+            const control = sumControl();
+            control.value = aggregation;
+            for (const handler of control.listeners.change) handler.call(control, {});
+            await tick();
+            assert.deepEqual(requests.at(-1), {users: 'alice', period: saved.dashboard_ppl_period_1_1, sum_period: aggregation});
+            assert.deepEqual([...chart().data[0].x], labels[aggregation]);
+            if (aggregation === 'ALL_TIME') {
+                const range = chart().layout.xaxis.range;
+                assert.ok(chart().layout.xaxis.autorange !== false || (range[0] <= 0 && range[1] >= 0),
+                    'ALL_TIME must stay visible after changing aggregation from a zoomed chart');
+                assert.ok(chart().layout.yaxis.range[1] > 10, 'totals must not be clipped by the old value zoom');
+            }
+        }
+        for (const aggregation of ['YEAR', 'ALL_TIME']) {
+            const control = sumControl();
+            control.value = aggregation;
+            for (const handler of control.listeners.change) handler.call(control, {});
+            await tick();
+            ctx[viewOnly ? 'saveViewLayout' : 'doSave']();
+            await tick();
+            assert.equal(saved[key], aggregation);
+            ({ctx, container} = open());
+            await tick();
+            assert.equal(sumControl().children.find(option => option.selected).value, aggregation);
+            revision++;
+            const existingChart = chart();
+            chart().layout.xaxis.range = [0, 0.3];
+            chart().layout.xaxis.autorange = false;
+            chart().layout.yaxis.range = [-4, 14];
+            chart().layout.yaxis.autorange = false;
+            // Run the same builder used by income_updated without discarding state.
+            ctx.buildPplInline(container, 1, 1);
+            await tick();
+            assert.equal(chart(), existingChart, 'live updates must reuse the existing chart');
+            assert.deepEqual([...chart().layout.xaxis.range], [0, 0.3]);
+            assert.deepEqual([...chart().layout.yaxis.range], [-4, 14]);
+            assert.equal(chart().data[0].y[0], 10 + revision);
+            assert.equal(ctx.state[key], aggregation);
+            assert.equal(requests.at(-1).sum_period, aggregation);
+        }
+        assert.ok(messages.some(message => message.type === (viewOnly ? 'pbgui_view_saved' : 'pbgui_editor_saved')));
+    }
+    // The legacy template has no runtime loader, but must retain supported values.
+    const legacy = source('dashboard_ppl.html');
+    const normalization = legacy.slice(legacy.indexOf('    var PPL_SUM'), legacy.indexOf('\n', legacy.indexOf('    var currentSumPeriod')));
+    for (const value of [...allowed, 'invalid']) {
+        const ctx = vm.createContext({SUM_PERIOD: value});
+        vm.runInContext(normalization, ctx);
+        assert.equal(ctx.currentSumPeriod, value === 'invalid' ? 'DAY' : value);
+    }
+}
+
+
 async function emptyOrders() {
     const position = {user: 'u', symbol: 'AAVEUSDC', side: 'long'};
     const responses = [[], [{t: 1, o: 1, h: 1, l: 1, c: 1, v: 1}]];
@@ -742,7 +866,7 @@ async function candles() {
     assert.equal(candleRows.at(-1).close, 8, 'destroyed chart ignores pending snapshot');
 }
 
-({creation, templates, cancel, resize, charts, cards, emptyOrders, messages, assets, candles, page})[process.argv[2]]().catch(error => {
+({creation, templates, cancel, resize, charts, cards, ppl, emptyOrders, messages, assets, candles, page})[process.argv[2]]().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

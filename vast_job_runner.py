@@ -296,7 +296,8 @@ def optimizer_started_at(connection) -> float:
 def recover_cancelled_empty_results(store: JobStore) -> int:
     """Repair legacy requested stops that failed only while importing an empty result."""
     recovered = 0
-    for state in store.list():
+    rows, _unreadable = store.list_with_errors()
+    for state in rows:
         if not (state.get('status') == 'failed'
                 and state.get('final_collected') is True
                 and state.get('stop_reason') == 'requested'

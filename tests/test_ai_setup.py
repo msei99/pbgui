@@ -71,6 +71,6 @@ def test_setup_page_preserves_mount_without_trusting_host_headers():
                      'path':'/api/ai/main_page','headers':[],'query_string':b''})
     page=main_page(request,object()).body.decode()
     assert 'window.API_BASE = "/mounted/api/ai"' in page
-    assert '/mounted/app/js/ai_setup.js?v=3' in page
+    assert '/mounted/app/js/ai_setup.js?v=4' in page
     assert 'href="/mounted/api/ai/providers/opencode-go/subscribe"' in page
     assert 'forged-host.test' not in page and '%%BASE_PREFIX%%' not in page

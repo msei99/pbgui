@@ -53,6 +53,7 @@ from master.cluster_state import (
     normalize_node_sync_mode,
     PB8_OPERATION_CAPABILITY,
     read_local_identity,
+    read_materialized_state,
     rebuild_materialized_state,
     stage_membership_operations,
     validate_operation,
@@ -60,6 +61,7 @@ from master.cluster_state import (
     write_operation,
 )
 from master.cluster_ssh_keys import (
+    ensure_cluster_ssh_key,
     ensure_local_cluster_ssh_material,
     install_authorized_cluster_key,
     public_key_fingerprint,
@@ -878,12 +880,37 @@ def _get_master_pbname() -> str:
 
 
 def _load_cluster_snapshot() -> dict[str, Any]:
-    """Load local identity and rebuild materialized cluster state."""
+    """Read coherent cluster state, initializing or repairing identity only as needed."""
 
     root = _cluster_root()
     try:
-        identity = ensure_local_identity(root, role="master", pbname=_get_master_pbname())
-        materialized = rebuild_materialized_state(root, write=False)
+        # Serialize repair with snapshot publication and concurrent UI reads.
+        with advisory_file_lock(root / ".append_sequence"):
+            paths = ClusterPaths.from_root(root)
+            metadata: dict[str, Any] = {}
+            if paths.node_identity.exists():
+                try:
+                    stored = json.loads(paths.node_identity.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    stored = None  # Preserve the existing one-time identity repair.
+                if isinstance(stored, dict):
+                    metadata = stored
+            role = metadata.get("role")
+            role = role if isinstance(role, str) and role.strip() else "master"
+            complete = (
+                {"schema_version", "cluster_id", "node_id", "created_at", "created_from_pbname", "role"}
+                <= metadata.keys()
+                and isinstance(metadata.get("role"), str)
+                and bool(metadata["role"].strip())
+                and type(metadata.get("created_at")) is int
+                and metadata["created_at"] != 0
+                and isinstance(metadata.get("created_from_pbname"), str)
+            )
+            if complete and paths.cluster_id.exists() and paths.node_id.exists():
+                identity = read_local_identity(root)
+            else:
+                identity = ensure_local_identity(root, role=role, pbname=_get_master_pbname())
+            materialized = read_materialized_state(root)
     except ClusterStateError as exc:
         _log(SERVICE, f"Failed to load cluster state: {exc}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -5213,8 +5240,11 @@ def get_nodes(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     snapshot = _load_cluster_snapshot()
     cluster_nodes = snapshot["cluster_nodes"]
     try:
-        local_cluster_ssh = ensure_local_cluster_ssh_material(Path(PBGDIR), role=str(snapshot["identity"].get("role") or "master"), pbname=_get_master_pbname())
+        local_cluster_ssh = ensure_cluster_ssh_key(
+            _cluster_root(), node_id=str(snapshot["identity"].get("node_id") or "")
+        )
     except Exception as exc:
+        _log(SERVICE, f"Failed to load local Cluster SSH key: {exc}", level="ERROR")
         local_cluster_ssh = {"ok": False, "error": str(exc)}
     nodes = _node_list(cluster_nodes)
     local_node_id = str(snapshot["identity"].get("node_id") or "")

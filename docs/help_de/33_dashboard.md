@@ -130,10 +130,17 @@ Der ADG-Wert (durchschnittlicher Tagesgewinn in %) wird im Widget-Kopf angezeigt
 
 Gleiche Zeitraum- und Benutzer-Steuerung wie PNL.
 
-### 📉 P+L — Kumulatives PnL pro Symbol
+### 📉 P+L — Gewinne und Verluste
 
-Zeichnet **separate kumulative PnL-Linien** für jedes Symbol in einem Chart.
-Zeigt auf einen Blick, welche Coins Gewinne oder Verluste über einen Zeitraum treiben.
+Zeigt **getrennte Gewinn- und Verlustbalken** für die gewählten Benutzer und den gewählten Zeitraum.
+
+- **Period** legt den Datumsbereich fest.
+- **Sum Period** legt die Aggregation fest: `DAY`, `WEEK`, `MONTH`, `YEAR` oder `ALL_TIME`.
+- `YEAR` gruppiert Erträge innerhalb des gewählten Zeitraums nach UTC-Kalenderjahr.
+- `ALL_TIME` zeigt ein einziges Aggregat für den gewählten Zeitraum und die gewählten Benutzer; **Period** bleibt wirksam. Ohne passende Erträge sind Gewinne und Verluste jeweils null.
+
+Dashboard oder Ansichtslayout speichern, damit die gewählte Aggregation nach dem Neuladen erhalten bleibt.
+Beim Wechsel von **Sum Period** wird das Diagramm neu skaliert, damit die neuen Summen sichtbar bleiben. Automatische Datenaktualisierungen erhalten den aktuellen Zoom.
 
 ### 💰 INCOME — Einnahmen nach Symbol
 

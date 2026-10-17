@@ -26,7 +26,7 @@ from optimizer_workload import estimate_coin_candles, estimate_snapshot
 from logging_helpers import human_log as _log
 from vast_credentials import VastCredentialStore
 from vast_provider import REFERRAL_URL, VastClient, VastError, gpu_name_matches, positive_id
-from vast_jobs import JobStore, config_name, digest, services_available, job_id
+from vast_jobs import JobStore, config_name, digest, services_available, job_id, _warn_unreadable
 from vast_queue import CloudQueue, can_remove_job, blocked_machine_ids, offer_host_allowed
 from vast_hosts import host_history, set_host_preference, search_host_offers, offer_priority
 from file_lock import advisory_file_lock
@@ -1058,12 +1058,33 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
     response.headers["Cache-Control"] = "no-store"
     try:
         queue = CloudQueue()
-        worker = queue.worker()
-        workers = queue.workers()
+        stored, errors = queue.store.list_with_errors()
+        unreadable = {item['id']: item for item in errors}
+        queue_state = queue.read()
+        by_id = {item['id']: item for item in stored}
+        selected_worker = queue_state.get('worker_id')
+        worker = by_id.get(selected_worker)
+        if selected_worker and worker is None:
+            identifier = job_id(selected_worker)
+            unreadable.setdefault(identifier, {'id': identifier, 'category': 'record_unreadable'})
+        workers = [item for item in stored if item.get('kind') == 'worker'
+                   and item.get('rental_state') not in ('none', 'deletion_verified')]
+
+        def display_read(identifier, filename):
+            """Isolate only expected record failures in this read-only projection."""
+            try:
+                return queue.store.read(identifier, filename)
+            except VastError as exc:
+                if exc.status not in (404, 500):
+                    raise
+                identifier = job_id(identifier)
+                unreadable.setdefault(identifier, {'id': identifier, 'category': 'record_unreadable'})
+                return {}
+
         # Rental controls remain relevant even after the optimizer has finished.
         for item in workers + ([worker] if worker else []):
             control_path = queue.store.directory(item['id']) / 'control.json'
-            control = queue.store.read(item['id'], 'control.json') if control_path.exists() else {}
+            control = display_read(item['id'], 'control.json') if control_path.exists() else {}
             item['stop_requested'] = bool(control.get('stop'))
             item['cleanup_requested'] = bool(control.get('cleanup'))
         for item in workers:
@@ -1075,7 +1096,6 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
             worker = dict(worker, has_provider_log=provider_log.is_file() and not provider_log.is_symlink())
         rows = []
         rentals = {}
-        stored = queue.store.list()
         active_job_ids = {
             item.get('active_job') for item in workers if item.get('active_job')
         }
@@ -1124,7 +1144,7 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
             is_terminal = row.get('status') in _TERMINAL_JOB_STATES
             # Stop requests are moot once a job has finished; skip the control file read.
             control_exists = not is_terminal and (queue.store.directory(row['id']) / 'control.json').exists()
-            row['stop_requested'] = bool(queue.store.read(row['id'], 'control.json').get('stop')) if control_exists else False
+            row['stop_requested'] = bool(display_read(row['id'], 'control.json').get('stop')) if control_exists else False
             row['has_provider_log'] = provider_log.is_file() and not provider_log.is_symlink()
             if row['has_provider_log'] and row.get('status') == 'provisioning':
                 from vast_provisioning_log import image_layer_progress
@@ -1133,17 +1153,25 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
                         row['provider_log_fetched_at'] = os.fstat(stream.fileno()).st_mtime
                         text = stream.read(1024 * 1024).decode('utf-8', errors='replace')
                     rental_id = job_id(row.get('lease_id') or row['id'])
-                    intent_path = queue.store.directory(rental_id) / 'intent.json'
-                    image = queue.store.read(rental_id, 'intent.json').get('image') if intent_path.is_file() else None
+                    image = display_read(rental_id, 'intent.json').get('image')
                     row['image_progress'] = image_layer_progress(text, row.get('image_progress'), image=image)
                 except OSError:
                     _log(SERVICE, 'Provisioning progress snapshot unavailable', level='WARNING')
             lease = row.get('lease_id')
             if lease:
                 if lease not in rentals:
-                    rentals[lease] = _rental_details(queue.store, lease)
+                    try:
+                        if lease not in by_id:
+                            raise VastError('Cloud rental state unavailable', 404)
+                        rentals[lease] = _rental_details(queue.store, lease)
+                    except VastError as exc:
+                        if exc.status not in (404, 500):
+                            raise
+                        lease = job_id(lease)
+                        unreadable.setdefault(lease, {'id': lease, 'category': 'record_unreadable'})
+                        rentals[lease] = None
                 row['rental'] = rentals[lease]
-                row['cost_estimate'] = _run_cost_estimate(row, rentals[lease], time.time())
+                row['cost_estimate'] = _run_cost_estimate(row, rentals[lease], time.time()) if rentals[lease] else None
             if isinstance(row.get('throughput'), dict):
                 row['throughput'] = {key: value for key, value in row['throughput'].items() if key != 'samples'}
             if row['has_log'] and len(rows) < 100 and (not is_terminal or not row.get('throughput')):
@@ -1152,8 +1180,11 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
         _prune_throughput_log_seen({row.get('id') for row in stored})
         from vast_calibration import calibration_worker_available
         from vast_jobs import IMAGE
+        if unreadable:
+            _warn_unreadable(len(unreadable))
         return {"jobs": rows[:100],
-                "worker": worker, "workers": workers, "queue": queue.read(),
+                "worker": worker, "workers": workers, "queue": queue_state,
+                "unreadable": list(unreadable.values()),
                 "supervision_available": services_available(),
                 "calibration_worker_available": calibration_worker_available(IMAGE)}
     except VastError as exc:

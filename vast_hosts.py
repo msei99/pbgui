@@ -62,7 +62,7 @@ def host_history(store, state: dict) -> dict[int, dict]:
         row = profile(int(machine))
         row.update(preferred=flags.get('preferred', False), working_marked=flags.get('working', False))
         row['working'] = row['working_marked']
-    rows = store.list()
+    rows, _unreadable = store.list_with_errors()
     by_id = {job_id(row['id']): row for row in rows}
     machines = {}
     rental_offers = {}

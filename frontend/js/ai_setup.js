@@ -8,7 +8,7 @@
     profile:params.get('chatgpt_profile') || 'default', provider:params.get('model_provider') || '',
     model:params.get('model') || '', effort:params.get('effort') || '', speed:params.get('speed') || '',
     profiles:[], providers:{}, models:{}, statusGeneration:0, modelGeneration:0,
-    githubGeneration:0, testGeneration:0, writing:false, testing:false, nameDirty:false,
+    githubGeneration:0, testGeneration:0, writing:false, testing:false, nameDirty:false, nameCleared:false, nameRevision:0,
     loginProfile:'', loginGeneration:0, loginDeadline:0, loginTimer:null, timer:null, stopped:false};
   var controllers = new Map();
   var connectionTests = {};
@@ -136,7 +136,7 @@
     var generation=++state.statusGeneration,profile=state.profile;
     try {
       var result=await api('/status?profile='+encodeURIComponent(profile),{},'status');
-      if(generation!==state.statusGeneration || profile!==state.profile || state.stopped)return;
+      if(generation!==state.statusGeneration || profile!==state.profile || state.stopped || state.writing)return;
       function inventory(value) {return JSON.stringify(Object.entries(value).map(function(pair){return [pair[0],!!pair[1].connected,pair[1].profiles || []];}));}
       var fingerprint=inventory(state.providers);state.providers=result.providers || {};
       var chat=state.providers.chatgpt || {}, go=state.providers['opencode-go'] || {}, router=state.providers.openrouter || {};
@@ -144,7 +144,7 @@
       $('chatgpt-profile').replaceChildren();state.profiles.forEach(function(item){option($('chatgpt-profile'),item.id,item.name);});
       var current=state.profiles.find(function(item){return item.id===profile;});
       if(!current)option($('chatgpt-profile'),profile,'Removed profile');$('chatgpt-profile').value=profile;
-      if(!state.nameDirty)$('chatgpt-profile-name').value=current ? current.name : '';
+      if(!state.nameDirty && !state.nameCleared)$('chatgpt-profile-name').value=current ? current.name : '';
       $('chatgpt-account').textContent=chat.email || '';window.PBGuiAIUsage.render($('chatgpt-limits'),chat);
       providerStatus('chatgpt',chat.connected,chat.connected ? 'Connected'+(chat.plan ? ' · '+chat.plan : '') : chat.available ? 'Not connected' : 'Runtime missing',!chat.available);
       providerStatus('go',go.connected,go.connected ? 'Connected' : 'Not connected');providerStatus('openrouter',router.connected,router.connected ? 'Connected' : 'Not connected');
@@ -173,6 +173,7 @@
   }
   async function mutate(action,message) {
     if(state.writing || state.testing)return;
+    ++state.statusGeneration;
     state.writing=true;controls();
     try {await action();notice(message);}
     catch(error){report(error);}
@@ -203,7 +204,7 @@
   }
   async function changeProfile(profile) {
     ++state.statusGeneration;++state.modelGeneration;++state.testGeneration;
-    state.profile=profile;state.nameDirty=false;$('chatgpt-account').textContent='';$('chatgpt-limits').replaceChildren();
+    state.profile=profile;state.nameDirty=false;state.nameCleared=false;++state.nameRevision;$('chatgpt-account').textContent='';$('chatgpt-limits').replaceChildren();
     if(state.provider.startsWith('chatgpt:')){state.provider='chatgpt:'+profile;state.model='';state.effort='';state.speed='';}
     remember();await refreshStatus(true);
   }
@@ -220,10 +221,28 @@
     } catch(error){if(!state.stopped){output.textContent=error.name==='AbortError' ? 'Permission check stopped or timed out.' : error.message;output.classList.add('error');}}
     finally {state.writing=false;controls();}
   });
-  $('chatgpt-profile-name').addEventListener('input',function(){state.nameDirty=true;});
+  $('chatgpt-profile-name').addEventListener('input',function(){state.nameDirty=true;state.nameCleared=false;++state.nameRevision;});
   $('chatgpt-profile').addEventListener('change',function(){changeProfile($('chatgpt-profile').value).catch(report);});
-  ['add','rename'].forEach(function(action){$('chatgpt-profile-'+action).addEventListener('click',function(){var name=$('chatgpt-profile-name').value.trim();if(!name){notice('Enter a profile name.',true);return;}mutate(async function(){var result=await api('/providers/chatgpt/profiles',json('POST',{name:name,profile:action==='add' ? null : state.profile}));state.nameDirty=false;if(action==='add'){state.profile=result.id;if(state.provider.startsWith('chatgpt:')){state.provider='chatgpt:'+result.id;state.model='';}}remember();},'Profile saved.');});});
-  $('chatgpt-profile-remove').addEventListener('click',async function(){var profile=state.profile;if(!await window.PBGuiDialogs.confirm({title:'Remove ChatGPT profile',message:'Disconnect and remove this profile? Existing conversation history remains.',confirmText:'Remove profile'}) || profile!==state.profile)return;mutate(async function(){await api('/providers/chatgpt/profiles/'+encodeURIComponent(profile),{method:'DELETE'});state.profile=(state.profiles.find(function(item){return item.id!==profile;}) || {id:'default'}).id;state.nameDirty=false;if(state.provider.startsWith('chatgpt:')){state.provider='chatgpt:'+state.profile;state.model='';}remember();},'Profile removed.');});
+  ['add','rename'].forEach(function(action){$('chatgpt-profile-'+action).addEventListener('click',function(){
+    var name=$('chatgpt-profile-name').value.trim(),profile=state.profile,revision=state.nameRevision;
+    if(!name){notice('Enter a profile name.',true);return;}
+    var current=state.profiles.find(function(item){return item.id===profile;});
+    var unchanged=action==='rename' && current && current.name.trim()===name;
+    if(!unchanged && state.profiles.some(function(item){return (action==='add' || item.id!==profile) && item.name.trim()===name;})){
+      notice('A profile named "'+name+'" already exists. Choose a different name.',true);return;
+    }
+    mutate(async function(){
+      var result=await api('/providers/chatgpt/profiles',json('POST',{name:name,profile:action==='add' ? null : profile}));
+      if(state.stopped || profile!==state.profile)return;
+      if(revision===state.nameRevision){
+        state.nameDirty=false;state.nameCleared=action==='add';
+        $('chatgpt-profile-name').value=action==='add' ? '' : result.name;
+      }
+      if(action==='add'){state.profile=result.id;if(state.provider.startsWith('chatgpt:')){state.provider='chatgpt:'+result.id;state.model='';}}
+      remember();
+    },'Profile saved.');
+  });});
+  $('chatgpt-profile-remove').addEventListener('click',async function(){var profile=state.profile;if(!await window.PBGuiDialogs.confirm({title:'Remove ChatGPT profile',message:'Disconnect and remove this profile? Existing conversation history remains.',confirmText:'Remove profile'}) || profile!==state.profile)return;var revision=state.nameRevision;mutate(async function(){await api('/providers/chatgpt/profiles/'+encodeURIComponent(profile),{method:'DELETE'});state.profile=(state.profiles.find(function(item){return item.id!==profile;}) || {id:'default'}).id;state.nameCleared=false;if(revision===state.nameRevision)state.nameDirty=false;if(state.provider.startsWith('chatgpt:')){state.provider='chatgpt:'+state.profile;state.model='';}remember();},'Profile removed.');});
   $('chatgpt-connect').addEventListener('click',function(){startLogin('browser');});$('chatgpt-device-connect').addEventListener('click',function(){startLogin('device');});
   $('login-cancel').addEventListener('click',async function(){var profile=state.loginProfile;stopLogin();if(profile)try{await api('/providers/chatgpt/login-cancel?profile='+encodeURIComponent(profile),{method:'POST'});}catch(error){report(error);}});
   $('chatgpt-disconnect').addEventListener('click',function(){mutate(function(){return api('/providers/chatgpt/connection?profile='+encodeURIComponent(state.profile),{method:'DELETE'});},'ChatGPT disconnected.');});
@@ -233,7 +252,7 @@
     $(name+'-disconnect').addEventListener('click',function(){input.value='';mutate(function(){return api(github ? '/github' : '/providers/'+remote+'/connection',{method:'DELETE'},name+'-disconnect',github);},'Disconnected.');});
   });
   $('jev-max-cost-save').addEventListener('click',function(){var cost=Number($('jev-max-cost').value);if(!Number.isFinite(cost) || cost<.000001 || cost>1){notice('Enter a limit between $0.000001 and $1.',true);return;}mutate(function(){return api('/preferences',json('PUT',{jev_max_cost_usd:cost}));},'Jev limit saved.');});
-  $('provider-select').addEventListener('change',async function(){++state.testGeneration;state.provider=$('provider-select').value;state.model='';state.effort='';state.speed='';$('test-result').hidden=true;if(state.provider.startsWith('chatgpt:'))state.profile=state.provider.slice(8);remember();await refreshStatus(true);});
+  $('provider-select').addEventListener('change',async function(){++state.testGeneration;state.provider=$('provider-select').value;state.model='';state.effort='';state.speed='';$('test-result').hidden=true;if(state.provider.startsWith('chatgpt:') && state.profile!==state.provider.slice(8)){await changeProfile(state.provider.slice(8));return;}remember();await refreshStatus(true);});
   $('model-select').addEventListener('change',function(){++state.testGeneration;state.model=$('model-select').value;state.effort='';state.speed='';$('test-result').hidden=true;modelDetails();remember();});
   [['effort-select','effort'],['speed-select','speed']].forEach(function(pair){$(pair[0]).addEventListener('change',function(){state[pair[1]]=$(pair[0]).value;remember();});});
   $('save-model').addEventListener('click',function(){var chosen=selection();mutate(async function(){var result=await api('/preferences',json('PUT',{selection:chosen}));window.dispatchEvent(new CustomEvent('pbgui:ai-setup-saved',{detail:result.selection || chosen}));},'Default model saved for new chats.');});

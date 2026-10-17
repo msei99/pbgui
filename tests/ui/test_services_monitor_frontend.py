@@ -1,4 +1,4 @@
-"""Behavioral regressions for Services Monitor worker requests."""
+"""Behavioral regressions for Services Monitor status and worker requests."""
 
 import json
 from pathlib import Path
@@ -288,6 +288,7 @@ const assert = require('node:assert/strict');
 const window = {};
 const API_BASE = '/api/services';
 var _serviceActionPending = {};
+var _statusRequestState = 'ready';
 let resolveRestart;
 function serviceSkipped() { return false; }
 function serviceActionProgressText() { return 'Restarting...'; }
@@ -383,3 +384,164 @@ assert.match(grid.innerHTML, /Running/);
 assert.match(grid.innerHTML, /<button>Stop<\\/button>/);
 """
     _run_node(script)
+
+
+def _service_status_harness() -> str:
+    """Run the actual status renderers and poller against isolated DOM and timers."""
+    source = PAGE.read_text(encoding="utf-8")
+    registry = source[source.index("  var SERVICES = ["):source.index("\n  ];", source.index("  var SERVICES = [")) + 5]
+    functions = (
+        "authOptions", "fetchStatus", "scheduleStatus", "serviceSkipped",
+        "serviceStatusClass", "serviceStatusText", "serviceStatusTitle",
+        "serviceActionProgressText", "renderServiceButtons", "updateStatusUI",
+        "workerResponseJson", "renderOverviewCards", "updateWorkersSummary",
+        "migrationStatusMeta", "updateMigrationSummary",
+    )
+    visibility_start = source.index("  document.addEventListener('visibilitychange'")
+    visibility_end = source.index("\n  });", visibility_start) + 6
+    return r"""
+const assert = require('node:assert/strict');
+const API_BASE = '/api/services';
+const window = {fetchWorkers: () => { workerFetches++; }};
+const esc = value => String(value);
+const elements = {};
+const listeners = {};
+const document = {
+  hidden: false,
+  getElementById: id => elements[id] || null,
+  addEventListener: (name, callback) => { listeners[name] = callback; },
+};
+let _status = {}, _statusRequestState = 'loading';
+let _statusInFlight = false, _statusRefreshQueued = false, _statusTimer = null;
+let _workersTimer = null, workerFetches = 0;
+let _serviceActionPending = {};
+const _workerActionPending = {};
+const _workers = {counts: {running: 6, total: 7}};
+const _migrationStatus = {};
+const requests = [], timers = new Map();
+let timerId = 0;
+function setTimeout(callback, delay) { timers.set(++timerId, {callback, delay}); return timerId; }
+function clearTimeout(id) { timers.delete(id); }
+function fetch(url, options) {
+  return new Promise((resolve, reject) => requests.push({url, options, resolve, reject}));
+}
+function response(data, ok = true) { return {ok, status: ok ? 200 : 503, json: () => Promise.resolve(JSON.parse(JSON.stringify(data)))}; }
+async function settle() { for (let i = 0; i < 30; i++) await Promise.resolve(); }
+function runPollTimer() {
+  const timer = timers.get(_statusTimer);
+  assert.ok(timer, 'Status poll must remain scheduled');
+  assert.equal(timer.delay, 5000);
+  timers.delete(_statusTimer);
+  timer.callback();
+}
+""" + registry + "\n" + "\n".join(_extract_function(source, name) for name in functions) + "\n" + source[visibility_start:visibility_end] + r"""
+SERVICES.forEach(svc => {
+  for (const prefix of ['dot-', 'cs-', 'sl-', 'ctrl-btns-']) {
+    elements[prefix + svc.id] = {className: 'running', textContent: '', innerHTML: '<button>Old action</button>'};
+  }
+});
+for (const id of ['workers', 'migration']) {
+  for (const prefix of ['dot-', 'cs-', 'sl-']) elements[prefix + id] = {};
+}
+elements['overview-grid'] = {innerHTML: ''};
+const healthy = Object.fromEntries(SERVICES.map(svc => [svc.id, {running: svc.isApiServer, can_enable: true, enabled: true}]));
+function assertUnknown(state) {
+  assert.equal(_statusRequestState, state);
+  const label = state === 'loading' ? 'Loading status…' : 'Status unavailable';
+  for (const svc of SERVICES) {
+    assert.equal(elements['dot-' + svc.id].className.trim(), 'sb-dot');
+    assert.equal(elements['cs-' + svc.id].className.trim(), 'status-dot');
+    assert.equal(elements['sl-' + svc.id].textContent, label);
+    assert.equal(elements['sl-' + svc.id].title, label);
+    assert.equal(elements['ctrl-btns-' + svc.id].innerHTML, '');
+    assert.equal(renderServiceButtons(svc, healthy[svc.id], true), '');
+  }
+  assert.equal(elements['overview-grid'].innerHTML.split(label).length - 1, 14);
+  assert.doesNotMatch(elements['overview-grid'].innerHTML, /class="card-btn (start|stop|restart|enable|disable)"/);
+  assert.equal(elements['sl-workers'].textContent, '6 / 7 running');
+  assert.equal(elements['sl-migration'].textContent, 'Ready');
+}
+function assertRecovered() {
+  assert.equal(_statusRequestState, 'ready');
+  assert.equal(elements['sl-api-server'].textContent, 'Running · Enabled');
+  assert.match(elements['ctrl-btns-api-server'].innerHTML, /Restart/);
+  assert.match(elements['overview-grid'].innerHTML, /class="card-btn restart"/);
+  assert.equal(elements['sl-pbrun'].textContent, 'Stopped · Enabled');
+}
+"""
+
+
+@pytest.mark.parametrize("after_success", [False, True], ids=["initial", "after-success"])
+@pytest.mark.parametrize("failure", ["http", "network", "json"])
+def test_service_status_failure_and_automatic_recovery(after_success: bool, failure: str) -> None:
+    """Failures neutralize every service surface and preserve the last valid snapshot."""
+    script = _service_status_harness() + "\nconst afterSuccess = " + json.dumps(after_success) + ";\nconst failure = " + json.dumps(failure) + r""";
+(async () => {
+  updateStatusUI(); assertUnknown('loading');
+  if (afterSuccess) {
+    fetchStatus(); requests.at(-1).resolve(response(healthy)); await settle(); assertRecovered();
+  }
+  const previous = _status;
+  const snapshot = JSON.stringify(_status);
+  fetchStatus();
+  const request = requests.at(-1);
+  if (failure === 'http') request.resolve(response({detail: 'Unavailable'}, false));
+  if (failure === 'network') request.reject(new Error('Network failure'));
+  if (failure === 'json') request.resolve({ok: true, status: 200, json: () => Promise.reject(new SyntaxError('Invalid JSON'))});
+  await settle();
+  assertUnknown('unavailable');
+  assert.strictEqual(_status, previous); assert.equal(JSON.stringify(_status), snapshot);
+  assert.equal(_statusInFlight, false);
+  runPollTimer(); requests.at(-1).resolve(response(healthy)); await settle();
+  assertRecovered(); assert.ok(timers.has(_statusTimer));
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    _run_node(script)
+
+
+def test_service_status_queued_poll_and_visibility_resume() -> None:
+    """Queued polls survive failure, hidden tabs pause, and returning resumes once."""
+    _run_node(_service_status_harness() + r"""
+(async () => {
+  fetchStatus(); fetchStatus(); fetchStatus();
+  assert.equal(requests.length, 1); assert.equal(_statusRefreshQueued, true);
+  requests[0].resolve(response({detail: 'Unavailable'}, false)); await settle();
+  assertUnknown('unavailable'); assert.equal(requests.length, 2);
+  assert.equal(_statusRefreshQueued, false); assert.equal(_statusInFlight, true);
+  requests[1].resolve(response(healthy)); await settle(); assertRecovered();
+  document.hidden = true; listeners.visibilitychange();
+  assert.equal(_statusTimer, null); assert.equal(timers.size, 0);
+  fetchStatus(); requests[2].reject(new Error('Network failure')); await settle();
+  assertUnknown('unavailable'); assert.equal(timers.size, 0);
+  document.hidden = false; listeners.visibilitychange(); listeners.visibilitychange();
+  assert.equal(requests.length, 4); assert.equal(workerFetches, 2);
+  requests[3].resolve(response(healthy)); await settle(); assertRecovered();
+  runPollTimer(); assert.equal(requests.length, 5);
+  requests[4].resolve(response(healthy)); await settle(); assertRecovered();
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""")
+
+
+def test_service_action_response_cannot_restore_unavailable_status() -> None:
+    """A delayed action response and its finally renderer cannot revive stale controls."""
+    source = PAGE.read_text(encoding="utf-8")
+    _run_node(_service_status_harness() + "\n" + _extract_window_function(source, "svcAction") + r"""
+function _resultPopup() { throw new Error('Unexpected action failure'); }
+(async () => {
+  fetchStatus(); requests[0].resolve(response(healthy)); await settle(); assertRecovered();
+  const action = window.svcAction('pbrun', 'start');
+  assert.equal(requests[1].options.method, 'POST');
+  fetchStatus(); requests[2].resolve(response({detail: 'Unavailable'}, false)); await settle();
+  assertUnknown('unavailable');
+  // Check every render from the action response, including the finally branch.
+  const originalUpdate = updateStatusUI;
+  let actionRenders = 0;
+  updateStatusUI = function () { originalUpdate(); assertUnknown('unavailable'); actionRenders++; };
+  requests[1].resolve(response({running: true})); await action;
+  assert.equal(actionRenders, 2);
+  assert.equal(_status.pbrun.running, true); assert.deepEqual(_serviceActionPending, {});
+  assert.equal(requests.length, 4); assertUnknown('unavailable');
+  updateStatusUI = originalUpdate;
+  requests[3].resolve(response(healthy)); await settle(); assertRecovered();
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""")

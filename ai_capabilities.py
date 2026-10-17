@@ -2411,7 +2411,7 @@ class AICapabilityService:
                 prepared[f"dashboard_{prefix}_mode_{suffix}"] = mode
             if "sum_period" in cell:
                 value = str(cell.get("sum_period") or "").upper()
-                if widget != "P+L" or value not in {"DAY", "WEEK", "MONTH"}:
+                if widget != "P+L" or value not in {"DAY", "WEEK", "MONTH", "YEAR", "ALL_TIME"}:
                     raise AICapabilityError("Dashboard P+L sum period is invalid")
                 prepared[f"dashboard_ppl_sum_period_{suffix}"] = value
             for field, key_prefix, minimum, maximum in (
@@ -5038,7 +5038,7 @@ class AICapabilityService:
                                     "users": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string", "maxLength": 128}},
                                     "period": {"type": "string", "maxLength": 32},
                                     "mode": {"type": "string", "enum": ["bar", "line"]},
-                                    "sum_period": {"type": "string", "enum": ["DAY", "WEEK", "MONTH"]},
+                                    "sum_period": {"type": "string", "enum": ["DAY", "WEEK", "MONTH", "YEAR", "ALL_TIME"]},
                                     "top_n": {"type": "integer", "minimum": 1, "maximum": 100},
                                     "last_n": {
                                         "type": "integer",

@@ -1448,14 +1448,20 @@ class AIChatService:
         path = self._profile_path(owner)
         with advisory_file_lock(path):
             rows = self.chatgpt_profiles(owner)
+            row = None
+            if profile is not None:
+                self._require_profile(owner, profile)
+                row = next(item for item in rows if item["id"] == profile)
+                if row["name"].strip() == name:
+                    return dict(row)
+            if any(item["id"] != profile and item["name"].strip() == name for item in rows):
+                raise AIChatError(f'A profile named "{name}" already exists. Choose a different name.')
             if profile is None:
                 if len(rows) >= 20:
                     raise AIChatError("ChatGPT profile limit reached (20)")
                 row = {"id": uuid4().hex, "name": name}
                 rows.append(row)
             else:
-                self._require_profile(owner, profile)
-                row = next(item for item in rows if item["id"] == profile)
                 row["name"] = name
             atomic_write_private_text(path, json.dumps(rows, indent=4) + "\n")
             return dict(row)

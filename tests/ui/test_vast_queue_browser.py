@@ -798,7 +798,7 @@ def test_pool_summary_and_explicit_start_consent():
                      upload_progress:{stage:'sending',transport:'rsync',mode:'files',bytes:0,transferred_bytes:70000000,total:191600000,bytes_per_second:650000}}
                 ];
                 let queueState={pool_enabled:true,pool_authorization:{settings:{max_rentals:3}}};
-                let savedPreferences={max_rentals:3,auto_rent:true,budget:2,hours:1};
+                let savedPreferences={max_rentals:3,auto_rent:true,budget:2,hours:1}, unreadableJobs=[];
                 let renting=false,startingQueue=false,workerAction=null,disposed=false,supervision=true,startingJobId=null;
                 const deletingJobs=new Set(), workerActions=new Map(), fmt=(n,d)=>Number(n).toFixed(d);
                 const el=id=>document.getElementById(id), renderJob=()=>{}, refreshJobs=async()=>{}, message=()=>{};

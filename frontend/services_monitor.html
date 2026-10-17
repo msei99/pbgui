@@ -1208,13 +1208,11 @@ window.PBGUI_NAV_CONFIG = {
     _statusInFlight = true;
     _statusRefreshQueued = false;
     fetch(API_BASE + '/status', authOptions())
-      .then(function (r) { return r.json(); })
+      .then(function (r) { return workerResponseJson(r, 'Status request failed.'); })
       .then(function (data) { _status = data; _statusRequestState = 'ready'; updateStatusUI(); })
       .catch(function () {
-        if (_statusRequestState !== 'ready') {
-          _statusRequestState = 'unavailable';
-          renderOverviewCards();
-        }
+        _statusRequestState = 'unavailable';
+        updateStatusUI();
       })
       .then(function () {
         _statusInFlight = false;
@@ -1290,6 +1288,7 @@ window.PBGUI_NAV_CONFIG = {
   }
 
   function renderServiceButtons(svc, item, compact) {
+    if (_statusRequestState !== 'ready') return '';
     var cls = compact ? 'card-btn' : 'ctrl-btn';
     var stopProp = compact ? ';event.stopPropagation()' : '';
     var running = !!item.running;
@@ -1321,17 +1320,19 @@ window.PBGUI_NAV_CONFIG = {
   }
 
   function updateStatusUI() {
+    var awaitingStatus = _statusRequestState !== 'ready';
+    var unavailableLabel = _statusRequestState === 'loading' ? 'Loading status…' : 'Status unavailable';
     SERVICES.forEach(function (svc) {
       var item = _status[svc.id] || {};
-      var cls = serviceStatusClass(item);
+      var cls = awaitingStatus ? '' : serviceStatusClass(item);
       var dotSb = document.getElementById('dot-' + svc.id);
       var dotCs = document.getElementById('cs-' + svc.id);
       var lbl   = document.getElementById('sl-' + svc.id);
       if (dotSb) dotSb.className = 'sb-dot ' + cls;
       if (dotCs) dotCs.className = 'status-dot ' + cls;
       if (lbl) {
-        lbl.textContent = serviceStatusText(item, svc.id);
-        lbl.title = serviceStatusTitle(item);
+        lbl.textContent = awaitingStatus ? unavailableLabel : serviceStatusText(item, svc.id);
+        lbl.title = awaitingStatus ? unavailableLabel : serviceStatusTitle(item);
       }
       /* ctrl-strip buttons */
       var ctrlSlot = document.getElementById('ctrl-btns-' + svc.id);
@@ -3773,7 +3774,7 @@ window.PBGUI_NAV_CONFIG = {
 
 
   /* ── Init ──────────────────────────────────────────────── */
-  renderOverviewCards();
+  updateStatusUI();
   fetchStatus();
   if (_workersGeneration === 0) window.fetchWorkers(false);
   loadMigrationStatus(false);

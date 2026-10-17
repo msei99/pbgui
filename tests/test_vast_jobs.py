@@ -396,6 +396,22 @@ def test_guard_deletes_only_owned_instance_and_verifies_absence(job):
     assert store.read(identifier)['provider_status'] == 'deleted'
 
 
+def test_worker_guard_finishes_despite_unreadable_foreign_job(job):
+    """Provider deletion and local finalization never enumerate foreign corrupt state strictly."""
+    store, identifier, intent = job
+    store.update(identifier, kind='worker', deadline=2000)
+    (store.root / 'jobs' / ('b' * 32)).mkdir()
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    assert not guard_step(store, identifier, client, intent, '', now=2001)
+    assert client.calls == [('DELETE', '/instances/123/')]
+    client.rows = []
+    assert not guard_step(store, identifier, client, intent, '', now=2010)
+    assert guard_step(store, identifier, client, intent, '', now=2020)
+    assert store.read(identifier)['rental_state'] == 'deletion_verified'
+    assert store.read(identifier)['status'] == 'completed'
+    assert store.read(identifier)['inventory_error']
+
+
 def test_guard_spaces_accepted_deletes_without_delaying_absence_checks(job):
     """Provider propagation never causes repeated DELETEs every guard tick."""
     store, identifier, intent = job

@@ -12,6 +12,7 @@ import shutil
 import threading
 import time
 import uuid
+from concurrent.futures import Future
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,8 +21,8 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
-from api.auth import SessionToken, authenticate_websocket, require_auth
-from file_lock import advisory_file_lock
+from api.auth import SessionToken, authenticated_push_websocket, require_auth
+from file_lock import _HELD_LOCKS, advisory_file_lock
 from logging_helpers import human_log as _log
 from master.cluster_state import (
     PB8_OPERATION_CAPABILITY,
@@ -39,6 +40,7 @@ from master.cluster_state import (
 )
 from master.cluster_sync_worker import push_pb8_activation
 from pb8_config import (
+    _runtime_fingerprint,
     PB8ConfigurationError,
     PB8MarketDataUnavailableError,
     PB8MarketRequestError,
@@ -79,6 +81,207 @@ _drafts: dict[str, tuple[float, dict[str, Any]]] = {}
 _draft_lock = threading.RLock()
 _user_exchange_cache: tuple[float, dict[str, str]] = (0.0, {})
 _user_exchange_lock = threading.RLock()
+
+# Cache only current validated bundles; share one in-flight calculation across readers.
+_LIST_TTL_SECONDS = 1.0
+_LIST_ERROR_TTL_SECONDS = 2.0
+_WS_INTERVAL_SECONDS = 2.0
+_WS_SEND_TIMEOUT_SECONDS = 10.0
+_list_guard = threading.RLock()
+_list_generation = 0
+_list_snapshot = None
+_list_flight = None
+_list_configs: dict[str, tuple] = {}
+
+
+def _invalidate_instance_list(name: str | None = None, *, configs: bool = True) -> None:
+    """Discard snapshots before returning a successful local mutation."""
+    global _list_generation, _list_snapshot
+    with _list_guard:
+        _list_generation += 1
+        _list_snapshot = None
+        if configs:
+            if name is None:
+                _list_configs.clear()
+            else:
+                _list_configs.pop(str(_run_root() / name / "config.json"), None)
+
+
+def _prune_instance_configs(active_paths: set[str], generation: int) -> None:
+    """Bound projections to current bundles, without evicting other rows in this scan."""
+    with _list_guard:
+        if generation == _list_generation:
+            for key in list(_list_configs):
+                if key not in active_paths:
+                    _list_configs.pop(key, None)
+
+
+@contextmanager
+def _list_read_lock():
+    """Read complete bundles under the writer lock without cleaning transaction stages."""
+    root = _run_root()
+    if root.is_symlink():
+        raise RuntimeError("PB8 live root must not be a symlink")
+    with advisory_file_lock(root / ".write"):
+        yield
+
+
+def _claim_instance_list():
+    """Claim single-flight work; never call while this thread owns the writer lock."""
+    global _list_flight
+    lock_key = str((_run_root() / ".write").resolve(strict=False))
+    if lock_key in getattr(_HELD_LOCKS, "entries", {}):
+        raise RuntimeError("PB8 listing must be requested outside the live transaction lock")
+    scope = (str(_run_root()), id(_monitor))
+    with _list_guard:
+        if _list_snapshot is not None:
+            key, generation, deadline, rows = _list_snapshot
+            if key == scope and generation == _list_generation and time.monotonic() < deadline:
+                return rows, None, False
+        if _list_flight is not None:
+            return None, _list_flight[2], False
+        future = Future()
+        _list_flight = (scope, _list_generation, future)
+        return None, future, True
+
+
+def _finish_instance_list(future: Future) -> None:
+    """Complete request-owned work, rejecting snapshots invalidated during the scan."""
+    global _list_snapshot, _list_flight
+    with _list_guard:
+        scope, generation, _ = _list_flight
+    try:
+        fingerprint = _runtime_fingerprint()
+        rows = _scan_instances(fingerprint, generation)
+        runtime_current = _runtime_fingerprint() == fingerprint
+        with _list_guard:
+            valid = (generation == _list_generation and runtime_current
+                     and scope == (str(_run_root()), id(_monitor)))
+            if valid:
+                _list_snapshot = (scope, generation, time.monotonic() + _LIST_TTL_SECONDS, rows)
+            elif not runtime_current:
+                _list_configs.clear()
+            _list_flight = None
+        future.set_result((scope, generation, rows) if valid else None)
+    except BaseException as exc:
+        with _list_guard:
+            _list_flight = None
+        future.set_exception(exc)
+        _log(SERVICE, f"PB8 list snapshot failed: {exc}", level="WARNING")
+
+
+def _list_instances() -> list[dict[str, Any]]:
+    """Return an isolated shared snapshot; callers must not own the live write lock."""
+    for _attempt in range(3):
+        rows, future, owner = _claim_instance_list()
+        if future is None:
+            return copy.deepcopy(rows)
+        if owner:
+            _finish_instance_list(future)
+        completed = future.result()
+        if completed is not None:
+            scope, generation, rows = completed
+            # A different root/monitor can only arise during reconfiguration/tests.
+            with _list_guard:
+                valid = generation == _list_generation and scope == (str(_run_root()), id(_monitor))
+            if valid:
+                return copy.deepcopy(rows)
+    raise PB8RuntimeBusyError("PB8 instance state changed repeatedly; retry shortly")
+
+
+async def _list_instances_async() -> list[dict[str, Any]]:
+    """Await shared work without occupying one executor thread per browser tab."""
+    global _list_flight
+    for _attempt in range(3):
+        rows, future, owner = _claim_instance_list()
+        if future is None:
+            return copy.deepcopy(rows)
+        if owner:
+            # The worker always resolves the registered future, even if this socket leaves.
+            try:
+                asyncio.get_running_loop().run_in_executor(None, _finish_instance_list, future)
+            except RuntimeError as exc:
+                with _list_guard:
+                    _list_flight = None
+                future.set_exception(exc)
+                _log(SERVICE, f"PB8 list worker unavailable: {exc}", level="WARNING")
+                raise
+        waiting = asyncio.wrap_future(future)
+        waiting.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        completed = await asyncio.shield(waiting)
+        if completed is not None:
+            scope, generation, rows = completed
+            with _list_guard:
+                valid = generation == _list_generation and scope == (str(_run_root()), id(_monitor))
+            if valid:
+                return copy.deepcopy(rows)
+    raise PB8RuntimeBusyError("PB8 instance state changed repeatedly; retry shortly")
+
+
+def _bundle_signature(path: Path) -> tuple:
+    """Fingerprint safe config/override files, including atomic inode replacement."""
+    def signature(source: Path) -> tuple:
+        """Return identity for a safe file or mark a missing referenced override."""
+        if source.is_symlink():
+            raise PB8ConfigurationError("PB8 bundle files must not be symlinks")
+        try:
+            stat = source.stat()
+        except FileNotFoundError:
+            return (source.name, None)
+        return (source.name, stat.st_mtime_ns, stat.st_size, stat.st_ino)
+
+    base = signature(path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return (base,)
+    references = _referenced_overrides(raw)
+    return (base, *(signature(path.parent / name) for name in sorted(set(references.values()))))
+
+
+def _list_config(path: Path, fingerprint: tuple, generation: int) -> tuple[dict, str]:
+    """Cache list-only canonical data; revision misses must bypass the inner TTL cache."""
+    key = str(path)
+    revision = (_bundle_signature(path), fingerprint)
+    with _list_guard:
+        cached = _list_configs.get(key)
+        if cached and cached[0] == revision and time.monotonic() < cached[1]:
+            return copy.deepcopy(cached[2]), cached[3]
+    deadline = float("inf")
+    try:
+        config = load_pb8_config(path, use_cache=False)
+        load_error = ""
+    except Exception as exc:
+        local_hsl_migration = (isinstance(exc, PB8ConfigurationError)
+                              and "pre-v8.6 HSL configuration requires explicit migration" in str(exc))
+        if not local_hsl_migration:
+            _log(SERVICE, f"PB8 loader could not canonicalize live config '{path.parent.name}': {exc}", level="WARNING")
+            deadline = time.monotonic() + _LIST_ERROR_TTL_SECONDS
+        config = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            raise PB8ConfigurationError("PB8 config must be an object")
+        load_error = "" if local_hsl_migration else str(exc)
+    # Retain list fields only, rather than optimizer/editor configuration trees.
+    projected = {}
+    for section, fields in (
+        ("live", ("user", "strategy_kind", "forced_mode_long", "forced_mode_short")),
+        ("pbgui", ("enabled_on", "version", "note", "runtime")),
+    ):
+        source = config.get(section) if isinstance(config.get(section), dict) else {}
+        projected[section] = {field: source.get(field) for field in fields}
+    bot = config.get("bot") if isinstance(config.get("bot"), dict) else {}
+    projected["bot"] = {}
+    for side in ("long", "short"):
+        side_config = bot.get(side) if isinstance(bot.get(side), dict) else {}
+        risk = side_config.get("risk") if isinstance(side_config.get("risk"), dict) else {}
+        projected["bot"][side] = {"risk": {field: risk.get(field) for field in ("n_positions", "total_wallet_exposure_limit")}}
+    config = projected
+    if _bundle_signature(path) == revision[0]:
+        with _list_guard:
+            if generation == _list_generation:
+                _list_configs[key] = (revision, deadline, copy.deepcopy(config), load_error)
+    return config, load_error
+
 
 router = APIRouter()
 _monitor = None
@@ -1158,8 +1361,8 @@ def _last_active_v8_host(name: str) -> dict[str, Any]:
     return {"name": name, "host": host, "version": str(record.get("version") or ""), "master": master, "source": "desired" if host else "none"}
 
 
-def _list_instances() -> list[dict[str, Any]]:
-    """Load canonical local PB8 configs and merge desired deployment state."""
+def _scan_instances(fingerprint: tuple, generation: int) -> list[dict[str, Any]]:
+    """Build canonical local PB8 rows and merge fresh deployment observations."""
 
     desired, tombstones, nodes = _desired_pb8_state()
     try:
@@ -1173,34 +1376,40 @@ def _list_instances() -> list[dict[str, Any]]:
         ) or "The local PB8 runtime is not ready; run Update PB8."
     root = _run_root()
     if not root.is_dir() or root.is_symlink():
+        _prune_instance_configs(set(), generation)
         return []
     result: list[dict[str, Any]] = []
-    with _run_lock():
+    with _list_read_lock():
+        directories = []
         for directory in sorted(root.iterdir(), key=lambda item: item.name):
             config_path = directory / "config.json"
             if directory.name.startswith(".") or not directory.is_dir() or directory.is_symlink() or not config_path.is_file() or config_path.is_symlink():
                 continue
             try:
-                config = load_pb8_config(config_path)
-            except Exception as exc:
-                # The local schema gate says nothing about a running VPS using
-                # an earlier PB8 version. Let observed host state classify this
-                # row; editor/save/start validation remains strict.
-                local_hsl_migration = (
-                    isinstance(exc, PB8ConfigurationError)
-                    and "pre-v8.6 HSL configuration requires explicit migration" in str(exc)
-                )
-                if not local_hsl_migration:
-                    _log(SERVICE, f"PB8 loader could not canonicalize live config '{directory.name}': {exc}", level="WARNING")
+                _validate_name(directory.name)
+            except HTTPException as exc:
+                _log(SERVICE, f"PB8 list rejected an invalid instance name: {exc.detail}", level="WARNING")
+                continue
+            directories.append(directory)
+        # Memory follows the current list size, rather than growing across past
+        # instances/roots or thrashing when a fleet exceeds an arbitrary entry cap.
+        _prune_instance_configs({str(directory / "config.json") for directory in directories}, generation)
+        for directory in directories:
+            config_path = directory / "config.json"
+            try:
+                config, load_error = _list_config(config_path, fingerprint, generation)
+            except (PB8ConfigurationError, HTTPException) as exc:
+                _log(SERVICE, f"PB8 list rejected unsafe bundle '{directory.name}': {exc}", level="WARNING")
                 try:
                     config = json.loads(config_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
+                except (OSError, ValueError):
                     continue
                 if not isinstance(config, dict):
                     continue
-                load_error = "" if local_hsl_migration else str(exc)
-            else:
-                load_error = ""
+                load_error = str(exc)
+            except (OSError, ValueError) as exc:
+                _log(SERVICE, f"PB8 list could not read '{directory.name}': {exc}", level="WARNING")
+                continue
             live = config.get("live") if isinstance(config.get("live"), dict) else {}
             pbgui = config.get("pbgui") if isinstance(config.get("pbgui"), dict) else {}
             bot = config.get("bot") if isinstance(config.get("bot"), dict) else {}
@@ -1691,6 +1900,7 @@ async def restart_v8_instance(name: str, session: SessionToken = Depends(require
         _log(SERVICE, f"PB8 restart could not stop {name} on {target}", level="WARNING")
         raise HTTPException(status_code=409, detail=f"PB8 instance '{name}' is not running on {target}")
 
+    _invalidate_instance_list(configs=False)
     _log(SERVICE, f"PB8 restart requested for {name} on {target}")
     return {"success": True, "name": name, "host": host, "pid": result.get("pid")}
 
@@ -1849,6 +2059,7 @@ async def save_v8_instance_config(
             cache_prepared_pb8_config(saved, path)
         except Exception as exc:
             _log(SERVICE, f"PB8 config cache warmup skipped for '{name}': {exc}", level="WARNING")
+    _invalidate_instance_list(name)
     if background_tasks is not None:
         # Response-owned work is awaited by ASGI after sending the response.
         # The durable cluster operation remains recoverable across API restarts.
@@ -1856,6 +2067,7 @@ async def save_v8_instance_config(
         activation = {"ok": False, "pending": True, "direct": False, "status": "queued"}
     else:
         activation = await _activate_pb8_target(name, operation)
+        _invalidate_instance_list(configs=False)
     _log(SERVICE, f"Saved PB8 live config '{name}' (v{saved['pbgui']['version']})", level="INFO")
     return {
         "ok": True,
@@ -2137,6 +2349,7 @@ def delete_v8_instance(name: str, session: SessionToken = Depends(require_auth))
         except OSError as exc:
             _log(SERVICE, f"PB8 instance '{name}' was tombstoned but local cleanup failed: {exc}", level="ERROR")
             raise HTTPException(status_code=500, detail="PB8 instance was tombstoned, but local cleanup failed") from exc
+    _invalidate_instance_list(name)
     _log(SERVICE, f"Deleted PB8 live instance '{name}'", level="INFO")
     return {
         "ok": True,
@@ -2501,20 +2714,27 @@ def get_v8_edit_page(
 
 
 @router.websocket("/ws/v8")
+@authenticated_push_websocket
 async def ws_v8(websocket: WebSocket) -> None:
-    """Push PB8 desired-state list updates to authenticated browser sessions."""
-
-    if await authenticate_websocket(websocket) is None:
-        return
+    """Push changed PB8 snapshots on a fixed cadence, independent of client messages."""
+    previous = None
     try:
         while True:
-            instances = await asyncio.to_thread(_list_instances)
-            await websocket.send_json({"type": "instances", "data": instances, "generated_at": time.time()})
-            try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=2.0)
-            except asyncio.TimeoutError:
-                pass
+            started = time.monotonic()
+            instances = await _list_instances_async()
+            if instances != previous:
+                await asyncio.wait_for(
+                    websocket.send_json({"type": "instances", "data": instances, "generated_at": time.time()}),
+                    timeout=_WS_SEND_TIMEOUT_SECONDS,
+                )
+                previous = instances
+            await asyncio.sleep(max(0.0, _WS_INTERVAL_SECONDS - (time.monotonic() - started)))
     except (WebSocketDisconnect, asyncio.CancelledError):
         pass
     except Exception as exc:
         _log(SERVICE, f"PB8 status websocket failed: {exc}", level="WARNING")
+    finally:
+        try:
+            await websocket.close()
+        except (RuntimeError, WebSocketDisconnect):
+            pass

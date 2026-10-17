@@ -757,10 +757,12 @@ def read_pb8_backup_metadata(path: Path | str) -> dict:
     return {key: config[key] for key in ("pbgui", "coin_overrides") if key in config}
 
 
-def load_pb8_config(path: Path | str) -> dict:
-    """Load and canonicalize a PB8 config through the installed PB8 loader."""
+def load_pb8_config(path: Path | str, *, use_cache: bool = True) -> dict:
+    """Canonicalize a config; revision-aware readers may bypass cache reads/writes."""
     source = Path(path).resolve()
     key = str(source)
+    if not use_cache:
+        return copy.deepcopy(_call_helper("load", config_path=key)["config"])
     signature = _file_signature(source)
     fingerprint = _runtime_fingerprint()
     with _cache_lock:

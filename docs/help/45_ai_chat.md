@@ -319,6 +319,8 @@ ChatGPT failed responses distinguish recognized usage/rate limits, model access,
 
 Use **ChatGPT profile** to manage separate logins for your PBGui user. The existing login and older chats belong to **Default**. Enter a profile name and choose **Add profile**, then use Browser login or Device code to sign in to that subscription. You can rename, disconnect, or remove each profile separately. Check the displayed account and plan after login; the browser may still be signed into your previous OpenAI account.
 
+Profile names must be unique within your PBGui user after trimming surrounding whitespace; names are case-sensitive. **Add profile** selects the new profile and clears **Profile name**. Automatic updates keep the field empty or preserve your newer draft. Selecting another profile fills its name for **Rename**. Existing profiles with duplicate names remain available and can be renamed or removed separately.
+
 Selecting another profile in the chat drawer starts a new chat; changing profiles in AI Setup only changes the setup view. Existing chats retain their profile, including after an API restart or browser reload. Each ChatGPT conversation shows its profile name in the history. Removing a profile retains conversation history but does not redirect those chats to another subscription. An exhausted allowance never triggers an automatic account switch.
 
 Account, plan, and available usage windows update automatically for the selected profile. Limits are shown only when OpenAI provides them. Credentials stay in isolated server-side profile directories. Only profile identifiers and navigation context appear in the browser URL. Up to 20 profiles can be managed per PBGui user.

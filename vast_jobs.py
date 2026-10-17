@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import copy
+import ctypes
+import errno
+import math
 import os
 import psutil
 import hashlib
@@ -14,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import threading
 import uuid
 from pathlib import Path
 
@@ -63,6 +67,51 @@ from vast_config_validation import METRICS, validate_cloud_config
 TERMINAL = {"completed", "cancelled", "failed"}
 MAX_JOB_RECORD_BYTES = 16 * 1024 * 1024
 MAX_INPUT_MANIFEST_BYTES = 1024**3
+_SCAN_WARNING_LOCK = threading.Lock()
+_SCAN_WARNING_AT = 0.0
+
+
+class IncompleteJobStore(VastError):
+    """Reject decisions which require a complete local rental inventory."""
+
+    def __init__(self, unreadable: list[dict]) -> None:
+        """Keep structured diagnostics while exposing a safe conflict message."""
+        self.unreadable = unreadable
+        super().__init__('Cloud job inventory is incomplete; inspect unreadable records before starting or removing jobs', 409)
+
+
+def _warn_unreadable(count: int) -> None:
+    """Bound repeated scan diagnostics across short-lived store objects."""
+    global _SCAN_WARNING_AT
+    with _SCAN_WARNING_LOCK:
+        now = time.monotonic()
+        if now - _SCAN_WARNING_AT < 60:
+            return
+        _SCAN_WARNING_AT = now
+    _log(SERVICE, f'Cloud job inventory contains {count} unreadable record(s)', level='WARNING')
+
+
+def _rename_job_directory(source: Path, target: Path) -> None:
+    """Publish under the caller's namespace lock, preferring atomic no-replace."""
+    if sys.platform == 'linux':
+        libc = ctypes.CDLL(None, use_errno=True)
+        try:
+            rename = libc.renameat2
+        except AttributeError:
+            rename = None
+        if rename is not None:
+            rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            rename.restype = ctypes.c_int
+            if rename(-100, os.fsencode(source), -100, os.fsencode(target), 1) == 0:  # RENAME_NOREPLACE
+                return
+            error = ctypes.get_errno()
+            if error not in (errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP):
+                raise OSError(error, os.strerror(error))
+    # Compatibility path: all PBGui publishers hold the same cross-process
+    # namespace lock across this check and rename. Never replace an empty target.
+    if os.path.lexists(target):
+        raise FileExistsError('Cloud job already exists')
+    os.rename(source, target)
 
 
 def job_id(value: str) -> str:
@@ -262,23 +311,73 @@ class JobStore:
             return state
 
     def list(self) -> list[dict]:
-        """Read saved jobs, newest first, with no remote or service mutations."""
+        """Require complete inventory for capacity, ownership and deletion decisions."""
+        rows, unreadable = self.list_with_errors()
+        if unreadable:
+            raise IncompleteJobStore(unreadable)
+        return rows
+
+    def list_with_errors(self) -> tuple[list[dict], list[dict]]:
+        """Explicitly expose healthy records and non-secret per-record diagnostics."""
         folder = self.root / "jobs"
-        if not folder.exists():
-            return []
-        if folder.is_symlink():
-            raise VastError("Invalid cloud jobs directory", 500)
         rows = []
-        for path in folder.iterdir():
-            if not path.is_dir() or not re.fullmatch(r"[0-9a-f]{32}", path.name):
-                continue
-            try:
-                rows.append(self.read(path.name))
-            except VastError:
-                if not path.exists():
+        unreadable = []
+        try:
+            if folder.is_symlink():
+                raise VastError('Invalid cloud jobs directory', 500)
+            if not folder.exists():
+                return [], []
+            for path in folder.iterdir():
+                if not re.fullmatch(r'[0-9a-f]{32}', path.name) or not path.is_dir():
                     continue
-                raise
-        return sorted(rows, key=lambda row: row.get("created_at", 0), reverse=True)
+                category = 'record_unreadable'
+                try:
+                    row = self.read(path.name)
+                    category = 'record_invalid'
+                    stamp = row.get('created_at', 0)
+                    if (row.get('id') != path.name or not isinstance(row.get('status'), str)
+                            or type(stamp) not in (int, float) or not math.isfinite(stamp)
+                            or ('rental_state' in row and not isinstance(row['rental_state'], str))):
+                        raise ValueError('Invalid job state')
+                    for key in ('lease_id', 'active_job'):
+                        if row.get(key) is not None:
+                            job_id(row[key])
+                    rows.append(row)
+                except (VastError, ValueError, OverflowError):
+                    try:
+                        path.lstat()
+                    except FileNotFoundError:
+                        continue
+                    unreadable.append({'id': path.name, 'category': category})
+        except OSError as exc:
+            _log(SERVICE, 'Cloud jobs directory cannot be scanned: ' + type(exc).__name__, level='ERROR')
+            raise VastError('Cloud jobs directory cannot be scanned', 500) from None
+        if unreadable:
+            _warn_unreadable(len(unreadable))
+        return sorted(rows, key=lambda row: row.get('created_at', 0), reverse=True), unreadable
+
+    def publish(self, state: dict, *, intent: dict | None = None) -> Path:
+        """Make complete initial records visible in one namespace transition."""
+        identifier = job_id(state['id'])
+        ensure_private_directory(self.root)
+        jobs = self.root / 'jobs'
+        if jobs.is_symlink():
+            raise VastError('Invalid cloud jobs directory', 500)
+        ensure_private_directory(jobs)
+        staging = jobs / f'.creating-{identifier}-{uuid.uuid4().hex}'
+        ensure_private_directory(staging)
+        try:
+            write_json(staging / 'state.json', state)
+            write_json(staging / 'control.json', {'stop': False, 'cleanup': False})
+            if intent is not None:
+                write_json(staging / 'intent.json', intent)
+            with advisory_file_lock(self.root / '.lock'):
+                _rename_job_directory(staging, jobs / identifier)
+        except BaseException as exc:
+            _log(SERVICE, 'Cloud job publication failed: ' + type(exc).__name__, level='ERROR')
+            shutil.rmtree(staging)
+            raise
+        return jobs / identifier
 
     def exchanges(self, row: dict) -> list[str]:
         """Read frozen exchange metadata, with an export-manifest fallback for older jobs."""
@@ -386,7 +485,6 @@ class JobStore:
         ensure_private_directory(self.root)
         ensure_private_directory(self.root / "jobs")
         identifier = uuid.uuid4().hex
-        directory = ensure_private_directory(self.root / "jobs" / identifier)
         state = {"id": identifier, "config_name": config_name(name), "status": "preparing", "rental_state": "none",
                  "iterations": iterations, "workers": workers, "auto_cpu_workers": True, "created_at": time.time(), "generation": 0,
                  "preparation_owner": {"pid": os.getpid(), "created_at": psutil.Process().create_time()},
@@ -395,8 +493,7 @@ class JobStore:
                                     "bytes_completed": 0, "bytes_total": 0}}
         if requeue_from is not None:
             state['requeue_from'] = job_id(requeue_from)
-        write_json(directory / "state.json", state)
-        write_json(directory / "control.json", {"stop": False, "cleanup": False})
+        self.publish(state)
         return state
 
     def prepare(self, name: str, source: dict, source_sha256: str, market_root: Path,

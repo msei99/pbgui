@@ -473,3 +473,7 @@ Performance comparison actions are disabled while a comparison request is runnin
 The October upstream worker candidate targets PB8 `b9d6692ea` and includes merged PR #1871 without the temporary patch. It is not the active published image yet. New HSL budget scaling is blocked during preparation and checked again against each actual rental at dispatch. Blocked jobs remain waiting; compatible following jobs can run. Activation also requires compatibility-aware pool scheduling so an idle older rental cannot suppress a required compatible rental. Old calibration profiles remain tied to their measured revision and must not be reused for the candidate.
 
 Older workers reject the new HSL field even when it is `false`. Preparation removes only that disabled field from the Cloud copy and preserves the original config. Previously frozen jobs containing it must be prepared again; their immutable snapshots are not rewritten during dispatch.
+
+## Unreadable local job records
+
+In **PBv8 → Optimize → Queue**, an incomplete-inventory warning identifies unreadable local records while healthy jobs and rentals remain visible. The warning updates automatically and clears after the records are repaired. New rentals, job reassignment and reference-based history removal remain blocked until the inventory is complete. Stop, deadline and cleanup handling for healthy, identified rentals remains available. PBGui preserves unreadable records; it does not recreate lost rental state.

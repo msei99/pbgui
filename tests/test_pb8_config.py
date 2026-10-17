@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import io
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -970,3 +972,28 @@ def test_backup_metadata_rejects_symlink(tmp_path):
     link.symlink_to(target)
     with pytest.raises(pb8_config.PB8ConfigurationError, match="backup metadata"):
         pb8_config.read_pb8_backup_metadata(link)
+
+
+def test_load_cache_bypass_leaves_default_cache_untouched(tmp_path, monkeypatch):
+    """Revision-aware callers bypass cache metadata while default callers retain it."""
+    path = tmp_path / "config.json"
+    path.write_text('{"value": 1}', encoding="utf-8")
+    _reset_cache(monkeypatch)
+    monkeypatch.setattr(pb8_config, "_runtime_fingerprint", lambda: ("test-runtime",))
+    calls = []
+
+    def helper(operation, **kwargs):
+        """Read the file through a simulated helper, counting fresh canonicalizations."""
+        calls.append(operation)
+        return {"config": json.loads(Path(kwargs["config_path"]).read_text())}
+
+    monkeypatch.setattr(pb8_config, "_call_helper", helper)
+    assert pb8_config.load_pb8_config(path) == {"value": 1}
+    cached = copy.deepcopy(pb8_config._config_cache)
+    stat = path.stat()
+    path.write_text('{"value": 2}', encoding="utf-8")
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert pb8_config.load_pb8_config(path, use_cache=False) == {"value": 2}
+    assert pb8_config._config_cache == cached
+    assert pb8_config.load_pb8_config(path) == {"value": 1}
+    assert calls == ["load", "load"]
