@@ -78,6 +78,13 @@ throughout every experiment. Only auto permits AI changes to HSL activation. Nev
 Return one complete JSON decision. knowledge should be at most 1000 characters, and optional
 knowledge_hypothesis at most 600; longer text is archived, never treated as proof or a hard constraint.
 Metrics tables preserve exact values; missing column indices mean absent, not zero or null.
+per_report_context explicitly maps each report_index to its window label and requested/effective
+dates. Join per_report by report_index, NEVER by list position in the requested scenarios or
+filesystem order. If identity is unavailable, do not attribute that report to a named window.
+training_candidate_coverage describes nominations from the complete optimizer training stream,
+including CPU-criterion leaders outside the native Pareto front. Context capacity can bound the
+offered distinct candidates; inspect the stated criteria and coverage. These optimizer results
+are nominations, never independent CPU qualification or evidence from Holdout/Full Time Range.
 winner_options may refer to an observation_path in this initial package.
 Do not use holdout/observer results or legacy weighted scores to select a winner.
 For reviewed Template runs, exploration_policy mode adaptive overrides the broad

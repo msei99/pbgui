@@ -455,6 +455,11 @@ class LoopBackend:
             except (RuntimeError, ValueError, OSError) as exc:
                 from logging_helpers import human_log
                 human_log(SERVICE, f'Optimizer candidate unavailable: {type(exc).__name__}', level='WARNING')
+        native_loaded = len(artifacts)
+        coverage = None
+        if not historical:
+            from pb8_loop_candidates import supplemental_candidates
+            artifacts, coverage = supplemental_candidates(record, job, directory, artifacts, opt._pareto_summary)
         if not artifacts:
             first = opt._all_results_first(directory / 'all_results.bin')
             if first:
@@ -482,9 +487,11 @@ class LoopBackend:
         if not result:
             raise ValueError('Optimizer result contains no usable candidate metrics')
         for candidate in result:
-            candidate['source'].update(available_artifacts=len(files), loaded_artifacts=len(artifacts),
-                                       usable_candidates=len(result), unreadable_artifacts=max(0, len(files) - len(artifacts)),
+            candidate['source'].update(available_artifacts=len(files), loaded_artifacts=native_loaded,
+                                       usable_candidates=len(result), unreadable_artifacts=max(0, len(files) - native_loaded),
                                        artifacts_without_metrics=max(0, len(artifacts) - len(result)))
+        if coverage is not None:
+            result[0]['source']['training_candidate_coverage'] = coverage
         return result
 
     def validation_config(self, record, candidate, holdout=False):
@@ -532,6 +539,8 @@ class LoopBackend:
         if not paths:
             raise ValueError('Exact validation results are not yet available')
         reports = [bt._read_json(path) for path in paths]
+        from pb8_loop_reports import report_contexts
+        contexts = report_contexts(paths, reports, job, bt._read_json)
         metrics = {}
         import math
         def collect(value, prefix=''):
@@ -577,7 +586,7 @@ class LoopBackend:
         assessment['hard_targets_met'] = all(evaluate(item, record['rubric'])['hard_targets_met'] for item in per_report)
         assessment['qualification'] = 'incomplete' if not complete else ('target violated' if not assessment['hard_targets_met'] else 'comparable')
         return {'metrics': metrics, 'reports': len(reports), 'exact': True,
-                'per_report': per_report, 'assessment': assessment}
+                'per_report': per_report, 'per_report_context': contexts, 'assessment': assessment}
 
     def failed_before_data(self, record, job):
         """Prove the specific schema failure using an owned native state and absent reports."""
