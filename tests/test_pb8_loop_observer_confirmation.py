@@ -1,4 +1,4 @@
-"""Offline final Holdout reuse, immutable selection and model-context isolation."""
+"""Training completion is independent of isolated background report results."""
 import asyncio
 import copy
 from pathlib import Path
@@ -59,18 +59,17 @@ def prepared(record, tmp_path, target=2):
 
 @pytest.mark.parametrize('target', [2, None])
 def test_selected_holdout_completes_without_new_jobs_or_ai(record, tmp_path, target):
-    """Reuse the chosen exact candidate, including targetless preference-only goals."""
+    """Training finishes directly without interpreting a user-only Holdout."""
     store, row, controller, backend = prepared(record, tmp_path, target)
     before = copy.deepcopy(row)
     asyncio.run(controller.finish(row, 'Requested loops are complete'))
     checking = store.read(OWNER, row['id'])
-    assert checking['status'] == 'finishing' and checking['phase'] == 'observer_confirmation'
+    assert checking['status'] == 'completed'
     asyncio.run(controller._tick(checking))
     after = store.read(OWNER, row['id'])
     assert after['status'] == 'completed'
-    result = after['final_validation'][0]
-    assert result['assessment']['checked_candidate_id'] == 'candidate_0'
-    assert result['metrics']['gain'] == 3
+    assert not after.get('final_validation')
+    assert after['final_validation_status'] == 'observer_only'
     assert after['best'] == before['best'] and after['history'] == before['history']
     assert after['jobs'] == before['jobs'] and after['observer_jobs'] == before['observer_jobs']
     assert after['validation_count'] == before['validation_count'] and after['ai_calls'] == before['ai_calls']
@@ -78,8 +77,8 @@ def test_selected_holdout_completes_without_new_jobs_or_ai(record, tmp_path, tar
 
 
 @pytest.mark.parametrize('failure', ['targets', 'incomplete', 'snapshot', 'native_failure', 'qualitative'])
-def test_failed_selected_check_stays_unconfirmed_without_adaptive_repair(record, tmp_path, failure):
-    """A better other-candidate Holdout cannot repair the selected candidate's failure."""
+def test_bad_user_report_cannot_change_training_completion(record, tmp_path, failure):
+    """Neither bad nor better Holdout results control training completion or search."""
     store, row, controller, backend = prepared(record, tmp_path)
     if failure == 'targets':
         backend.gain = 1
@@ -95,19 +94,20 @@ def test_failed_selected_check_stays_unconfirmed_without_adaptive_repair(record,
     asyncio.run(controller.finish(row, 'Search stopped'))
     asyncio.run(controller._tick(store.read(OWNER, row['id'])))
     after = store.read(OWNER, row['id'])
-    assert after['status'] == 'unconfirmed' and after['errors'] == 0
+    assert after['status'] == 'completed' and after['errors'] == 0
+    assert not after.get('final_validation')
     assert after['ai_calls'] == row['ai_calls'] and not after.get('repair_error') and not backend.starts
     assert after['best'] == row['best']
 
 
-def test_confirmation_waits_for_selected_report_and_survives_reconstruction(record, tmp_path):
-    """The frozen selection is checked after background reporting finishes."""
+def test_training_never_waits_for_user_report_after_reconstruction(record, tmp_path):
+    """Pending reports remain independent of completion across API reconstruction."""
     store, row, controller, backend = prepared(record, tmp_path)
     row = store.update(OWNER, row['id'], lambda current: [job.update(status='running')
         for job in current['observer_jobs'] if job['candidate_id'] == 'candidate_0'])
     asyncio.run(controller.finish(row, 'Search stopped'))
     asyncio.run(controller._tick(store.read(OWNER, row['id'])))
-    assert store.read(OWNER, row['id'])['status'] == 'finishing'
+    assert store.read(OWNER, row['id'])['status'] == 'completed'
     store.update(OWNER, row['id'], lambda current: [job.update(status='complete')
         for job in current['observer_jobs'] if job['candidate_id'] == 'candidate_0'])
     replacement = LoopController(tmp_path, backend=backend)
@@ -145,6 +145,9 @@ function outcome(status,source,requirement){
 }
 assert.equal(outcome('completed','observer_holdout',false),'Holdout checked');
 assert.equal(outcome('completed','observer_holdout',true),'Holdout checked · numeric targets met');
+context.resultSummary({appendChild(){}},{status:'completed',settings:{},final_holdout_policy:'observer_only'});
+assert.equal(rendered.find(item=>item[0]==='User evaluation')[1],'Independent background backtests');
+assert.ok(!rendered.some(item=>item[0]==='Final confirmation'));
 assert.equal(outcome('unconfirmed','observer_holdout',true),'Unconfirmed — inspect holdout goals');
 assert.equal(outcome('completed',undefined,true),'Confirmed');
 """

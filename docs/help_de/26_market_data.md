@@ -465,6 +465,8 @@ Auf Hyperliquid verwendet das fokussierte `Best 1m`-Build-Panel jetzt ebenfalls 
 
 ### Job-Verwaltung
 
+Unter **System → PBGUI Services → Workers → Market Data Queue** zeigt der Job-Monitor für verteilte Bitget-Jobs **Downloader Traffic**; **View** öffnet **Downloader Traffic Details**. Strukturierte Downloader-Statistiken haben Vorrang. Fehlen diese, liest der Monitor automatisch höchstens die letzten 5.000 Logzeilen und kennzeichnet die daraus berechneten Statistiken als **Recent log excerpt**: Ältere Beiträge können fehlen, daher sind dies keine vollständigen Job-Gesamtsummen. Die separate Aktion **Log** behält ihren Ausschnitt von 500 Zeilen.
+
 Das Job-Panel zeigt drei Bereiche:
 - **Pending** — eingereihte Jobs
 - **Running** — aktuell laufender Job mit Live-Fortschritt

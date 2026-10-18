@@ -219,7 +219,7 @@ def test_durable_run_creation_rejects_inconsistent_request_hash(native_runs):
     settings = {**definition['settings'], 'source': copy.deepcopy(definition['source'])}
     settings['source']['loop_request']['digest'] = 'f' * 64
     with pytest.raises(ValueError, match='provenance'):
-        store.create(OWNER, settings, {}, {}, {}, [], {}, queued=True)
+        store.create(OWNER, settings, definition['bundle']['config'], {}, {}, [], {}, queued=True)
     assert store.list(OWNER) == []
 
 

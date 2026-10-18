@@ -46,6 +46,7 @@ class LoopGoals(BaseModel):
     coins: list[str] = Field(default_factory=list, max_length=200)
     direction: Literal['config', 'long', 'short', 'both'] = 'config'
     positions: int | None = Field(default=None, ge=1, le=1000)
+    max_twe: float | None = Field(default=None, gt=0, le=1000, allow_inf_nan=False)
     positions_by_side: dict[str, int] = Field(default_factory=dict)
     presets: list[str] = Field(default_factory=lambda: ['gain', 'drawdown', 'uptrend'], max_length=6)
     targets: dict[str, float] = Field(default_factory=dict)
@@ -97,7 +98,8 @@ class LoopStart(BaseModel):
     hours: float = Field(default=24, ge=.1, le=168, allow_inf_nan=False)
     parallel: int = Field(default=1, ge=1, le=16)
     max_validations: int = Field(default=30, ge=1, le=1000)
-    candidates: int = Field(default=2, ge=1, le=12)
+    candidates: int | None = Field(default=None, ge=1, le=1000, exclude=True, deprecated=True,
+        description='Legacy compatibility only; AI chooses candidates within max_validations, without a per-cycle cap')
     patience: int = Field(default=3, ge=1, le=100)
     jev_enabled: bool = True
     historical_advice: bool = True
@@ -312,7 +314,7 @@ def _observer_reports(row):
                                           for entry in row.get('history', []) if entry['round'] == job['round']),
                        'holdout_score':score if job['kind']=='observer_holdout' and type(score) in (int,float) and math.isfinite(score) else None,
                        'selected_for_full_range': selection.get('status') == 'selected' and job.get('candidate_id') == selection.get('candidate_id'),
-                       'previous_selection': job['kind']=='observer_full_range' and selection.get('status') == 'selected' and job.get('candidate_id') != selection.get('candidate_id'),
+                       'previous_selection': job['kind']=='observer_full_range' and job.get('selection_policy') != 'all_candidates_both_reports' and selection.get('status') == 'selected' and job.get('candidate_id') != selection.get('candidate_id'),
                        'windows':[{key:window.get(key, backtest.get(key)) for key in ('label','start_date','end_date','exchanges')}
                                   for window in windows or [backtest]],
                        'delta_start':comparison_deltas(job, baseline) if job['round'] >= 0 else {},
@@ -335,6 +337,8 @@ def projection(row):
         'definition_name': row['settings'].get('definition_name'),
         'settings': row['settings'], 'fingerprint': row['fingerprint'], 'cycles': _cycle_reports(row),
         'observer_enabled':bool(row.get('observer_enabled')), 'observer_jobs':_observer_reports(row),
+        'final_holdout_policy':row.get('final_holdout_policy'),
+        'final_validation_status':row.get('final_validation_status'),
         'observer_selections':observer_selections(row),
         'comparison': {key: row['comparison'].get(key) for key in ('start_date','end_date','exchanges','suite_enabled')},
         'baseline': {key: row['baseline'][key] for key in ('assessment', 'metrics') if key in row['baseline']} if row.get('baseline') else None,
@@ -1162,7 +1166,7 @@ async def continue_loop(loop_id: str, body: LoopContinue, session: SessionToken 
         raw = {key: value for key, value in row['settings'].items() if key in LoopStart.model_fields and key != 'authorization'}
         raw.update(body.selection)
         raw.update(max_runs=body.rounds, max_rounds=body.rounds, patience=min(100, max(row['settings']['patience'], body.rounds)),
-                   max_validations=min(1000, body.rounds * row['settings']['candidates'] + 2), authorization=True)
+                   authorization=True)
         if raw['execution'] == 'vast':
             from api.vast import RentalPreferences
             from vast_queue import CloudQueue
@@ -1212,6 +1216,8 @@ async def retry_holdout(loop_id: str, session: SessionToken = Depends(require_au
                            jobs=current['jobs'] + [job], validation_count=current['validation_count'] + 1,
                            control_generation=current['control_generation'] + 1,
                            cleanup_done=False, errors=0, last_error=None)
+            if current.get('final_holdout_policy') == 'final_only':
+                current['final_validation_status'] = 'running'
         row = await asyncio.to_thread(_controller.store.update, row['owner'], row['id'], retry)
         return JSONResponse(projection(row), headers={'Cache-Control': 'no-store'})
     except Exception as exc:

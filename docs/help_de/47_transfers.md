@@ -69,3 +69,10 @@ PBGui erkennt Standard / Manual, Unified Account und Portfolio Margin. Unified u
 **Max** trägt den aktuell übertragbaren Betrag der gewählten Richtung ein. Der Transfer muss weiterhin geprüft und bestätigt werden; das gesamte Guthaben ist nicht immer übertragbar.
 
 Guthaben und Transferhistorie aktualisieren sich automatisch, solange diese Seite sichtbar ist. Offene manuelle Transfers werden regelmäßig mit der Börsenhistorie abgeglichen, ohne erneute Überweisung oder manuellen Refresh-Button.
+
+
+### Automatische Aktualisierung bei Börsenausfällen
+
+Guthaben und Transferhistorie werden unabhängig aktualisiert. Erfolgreiche Abfragen starten fünf Sekunden nach Abschluss erneut. Fehlgeschlagene Guthabenabfragen führen zu automatischen Wartezeiten von 10, 20, 40, 80, 160 und höchstens 300 Sekunden, mit einem kleinen Zufallsaufschlag unterhalb der Obergrenze. Eine serverseitige `Retry-After`-Frist kann die Wartezeit verlängern. Der Status zeigt den nächsten automatischen Versuch; erfolgreiche Historienabfragen verdecken Guthabenfehler nicht. Gespeicherte Vorgänge und **Reconcile** bleiben bei fehlenden Guthabendaten zugänglich, **Review transfer** bleibt bis zu einer erfolgreichen frischen Vorschau gesperrt.
+
+Nach der Wiederherstellung laufen Aktualisierungen automatisch weiter. Verborgene Tabs starten keine neuen Abfragen; die Rückkehr zur Seite erhält die verbleibende Wartezeit. Eine ausdrückliche Accountauswahl kann früher erneut abfragen, berücksichtigt aber weiterhin `Retry-After`. Automatische Aktualisierungen erhalten **Amount**, **Direction** und eine gegebenenfalls zurückbehaltene Operation-ID. Lesefehler, auch HTTP 403, 404, 409 und 422, verwenden weiterhin diesen Backoff, damit korrigierte Account-Einstellungen oder wiederhergestellter Zugriff automatisch erkannt werden. HTTP 401 bleibt dem gemeinsamen Login-Ablauf überlassen. Diese Wiederholungen laden ausschließlich Daten; ein Transfer wird niemals erneut gesendet. Dieser Schutz gilt pro geöffneter Seite; mehrere Tabs und andere API-Clients werden nicht gemeinsam koordiniert.

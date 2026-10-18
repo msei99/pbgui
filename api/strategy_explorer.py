@@ -6,6 +6,8 @@ import copy
 import json
 import secrets
 import time
+import traceback
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,9 @@ from api.auth import SessionToken, require_auth
 from api.page_templates import render_page_urls, script_json
 from api.strategy_explorer_movie import movie_builder_status
 from api.strategy_explorer_sim import simulation_modes
+from api.strategy_explorer_errors import StrategyExplorerConfigurationError, safe_failure_reason
+from logging_helpers import human_log as _log
+from pb7_config import PB7ConfigurationError
 from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION
 
 SERVICE = "StrategyExplorer"
@@ -29,6 +34,46 @@ _draft_store: dict[str, tuple[float, dict[str, Any]]] = {}
 _movie_progress: dict[str, dict[str, Any]] = {}
 _compare_progress: dict[str, dict[str, Any]] = {}
 _simulation_progress: dict[str, dict[str, Any]] = {}
+
+
+def _progress_failure_reason(exc: Exception) -> str:
+    """Expose expected reasons to progress polling without leaking internal errors."""
+    if isinstance(exc, (StrategyExplorerConfigurationError, PB7ConfigurationError)):
+        return safe_failure_reason(exc)
+    if isinstance(exc, HTTPException):
+        return safe_failure_reason(Exception(str(exc.detail)))
+    if isinstance(exc, RuntimeError) and str(exc) == "Movie Builder stopped.":
+        return "Movie Builder stopped."
+    return "Strategy Explorer operation failed."
+
+
+def _api_errors(function):
+    """Translate failures after handlers have finalized their progress records."""
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        """Keep the route signature and successful response unchanged."""
+        try:
+            return function(*args, **kwargs)
+        except HTTPException:
+            raise
+        except StrategyExplorerConfigurationError as exc:
+            detail = f"Strategy Explorer could not normalize this configuration: {safe_failure_reason(exc)}"
+            _log(SERVICE, f"{function.__name__}: {detail}", level="WARNING")
+            raise HTTPException(status_code=422, detail=detail) from exc
+        except PB7ConfigurationError as exc:
+            detail = f"Passivbot V7 runtime unavailable: {safe_failure_reason(exc)}"
+            _log(SERVICE, f"{function.__name__}: {detail}", level="WARNING")
+            raise HTTPException(status_code=503, detail=detail) from exc
+        except Exception as exc:
+            if function.__name__ == "get_movie_frames" and isinstance(exc, RuntimeError) and str(exc) == "Movie Builder stopped.":
+                _log(SERVICE, "Movie Builder stopped.", level="INFO")
+                # Preserve the existing failure status and polling contract on Stop.
+                raise HTTPException(status_code=500, detail="Movie Builder stopped.") from exc
+            # Omit exception values: upstream errors can include the full config.
+            trace = "".join(traceback.format_tb(exc.__traceback__)) + f"{type(exc).__name__}: internal operation failure"
+            _log(SERVICE, f"{function.__name__} failed unexpectedly", level="ERROR", meta={"traceback": trace})
+            raise HTTPException(status_code=500, detail="Strategy Explorer operation failed.") from exc
+    return guarded
 
 
 def _safe_download_filename(value: str, default: str = "movie.mp4") -> str:
@@ -165,6 +210,7 @@ def main_page(
 
 
 @router.get("/session")
+@_api_errors
 def get_session(
     draft_id: str = Query(default="", description="Optional Strategy Explorer config draft id"),
     result_path: str = Query(default="", description="Optional source backtest result path"),
@@ -192,8 +238,12 @@ def get_session(
             if isinstance(loaded, dict):
                 config = loaded
                 source = "result"
+        except HTTPException:
+            raise
         except Exception as exc:
-            messages.append({"level": "warning", "text": f"Failed to load Strategy Explorer result config: {exc}"})
+            reason = safe_failure_reason(exc)
+            _log(SERVICE, f"Failed to load Strategy Explorer result config: {reason}", level="WARNING")
+            messages.append({"level": "warning", "text": f"Failed to load Strategy Explorer result config: {reason}"})
     if config is None:
         config = default_strategy_config()
     handoff = backtest_result_handoff_options(config, str(result_dir)) if result_dir else {"options": {"load_candles": True}, "messages": [], "meta": {}}
@@ -257,6 +307,7 @@ def get_draft(draft_id: str, session: SessionToken = Depends(require_auth)) -> d
 
 
 @router.get("/markets")
+@_api_errors
 def get_markets(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Return available Strategy Explorer exchanges and coins."""
     from api.strategy_explorer_calc import market_options
@@ -265,6 +316,7 @@ def get_markets(session: SessionToken = Depends(require_auth)) -> dict[str, Any]
 
 
 @router.post("/markets")
+@_api_errors
 def post_markets(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Return Strategy Explorer exchanges/coins for the posted config and OHLCV source."""
     from api.strategy_explorer_calc import market_options
@@ -275,6 +327,7 @@ def post_markets(body: dict[str, Any], session: SessionToken = Depends(require_a
 
 
 @router.post("/snapshot")
+@_api_errors
 def build_snapshot(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Build a Strategy Explorer snapshot from a posted config."""
     from api.strategy_explorer_calc import build_strategy_snapshot
@@ -287,6 +340,7 @@ def build_snapshot(body: dict[str, Any], session: SessionToken = Depends(require
 
 
 @router.post("/simulate")
+@_api_errors
 def run_simulation(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Run a Strategy Explorer simulation for the posted config."""
     from api.strategy_explorer_calc import build_strategy_simulation
@@ -321,7 +375,8 @@ def run_simulation(body: dict[str, Any], session: SessionToken = Depends(require
         return result
     except Exception as exc:
         if progress_id:
-            _set_simulation_progress(progress_id, progress=1.0, message=str(exc), done=True, error=str(exc))
+            reason = _progress_failure_reason(exc)
+            _set_simulation_progress(progress_id, progress=1.0, message=reason, done=True, error=reason)
         raise
 
 
@@ -336,6 +391,7 @@ def get_simulation_progress(progress_id: str, session: SessionToken = Depends(re
 
 
 @router.post("/compare")
+@_api_errors
 def run_compare(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Run Strategy Explorer PB7/B/C compare for the posted config."""
     from api.strategy_explorer_calc import build_strategy_compare
@@ -367,7 +423,8 @@ def run_compare(body: dict[str, Any], session: SessionToken = Depends(require_au
         return result
     except Exception as exc:
         if progress_id:
-            _set_compare_progress(progress_id, progress=1.0, message=str(exc), done=True, error=str(exc))
+            reason = _progress_failure_reason(exc)
+            _set_compare_progress(progress_id, progress=1.0, message=reason, done=True, error=reason)
         raise
 
 
@@ -382,6 +439,7 @@ def get_compare_progress(progress_id: str, session: SessionToken = Depends(requi
 
 
 @router.post("/movie/frames")
+@_api_errors
 def get_movie_frames(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Build Strategy Explorer Movie Builder replay frames."""
     from api.strategy_explorer_calc import build_movie_frames
@@ -417,7 +475,8 @@ def get_movie_frames(body: dict[str, Any], session: SessionToken = Depends(requi
         return result
     except Exception as exc:
         if progress_id:
-            _set_movie_progress(progress_id, progress=1.0, message=str(exc), done=True, error=str(exc))
+            reason = _progress_failure_reason(exc)
+            _set_movie_progress(progress_id, progress=1.0, message=reason, done=True, error=reason)
         raise
 
 

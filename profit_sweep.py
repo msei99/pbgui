@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from file_lock import advisory_file_lock
 
@@ -1722,6 +1722,52 @@ class ProfitSweepStore:
                 (user,),
             ).fetchall()
             return [self._intent_dict(row) for row in rows]
+
+        return self._read(load)
+
+    def list_live_intents_grouped(
+        self,
+        user_names: Sequence[str],
+        *,
+        unresolved_only: bool = False,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Read policies' intents in one snapshot, omitting missing policies.
+
+        Existing policies without matching intents have empty lists. All batches
+        share one hardened connection and read transaction, including when the
+        SQLite parameter limit requires splitting a large account selection.
+        """
+
+        users = list(dict.fromkeys(_validate_identifier(name, "user_name") for name in user_names))
+        if not users:
+            return {}
+
+        def load(connection: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
+            """Group joined rows without losing policies with no matching intent."""
+
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            batch_size = max(1, connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER))
+            state_filter = " AND i.state IN ('prepared', 'submitting', 'unknown')" if unresolved_only else ""
+            connection.execute("BEGIN")
+            try:
+                for offset in range(0, len(users), batch_size):
+                    batch = users[offset:offset + batch_size]
+                    placeholders = ",".join("?" for _ in batch)
+                    rows = connection.execute(
+                        f"""SELECT p.user_name AS policy_user, i.* FROM policies p
+                            LEFT JOIN live_intents i ON i.user_name = p.user_name{state_filter}
+                            WHERE p.user_name IN ({placeholders})
+                            ORDER BY p.user_name, i.prepared_at, i.operation_id""",
+                        batch,
+                    )
+                    for row in rows:
+                        intents = grouped.setdefault(row["policy_user"], [])
+                        if row["operation_id"] is not None:
+                            intents.append(self._intent_dict(row))
+                return grouped
+            finally:
+                # End the read snapshot on success as well as on query/parse errors.
+                connection.rollback()
 
         return self._read(load)
 

@@ -26,7 +26,9 @@ def environment(tmp_path, monkeypatch):
     chat = SimpleNamespace(get_conversation=AsyncMock(return_value={
         'messages': [{'role': 'user', 'content': REQUEST}]}), get_preferences=lambda _owner: {})
     monkeypatch.setattr(loops, 'get_ai_chat_service', lambda: chat)
-    bundle = {'config': {'config_version': 'v8.6.0', 'bot': {}, 'backtest': {}}, 'override_configs': {}}
+    from tests.test_pb8_loop_optimizer import valid_gpu_config
+    bundle = {'config': valid_gpu_config(), 'override_configs': {}}
+    bundle['config']['config_version'] = 'v8.6.0'
     monkeypatch.setattr(optimize_v8, 'get_config', lambda *a, **k: copy.deepcopy(bundle))
     from contextlib import nullcontext
     monkeypatch.setattr(optimize_v8, '_config_lock', nullcontext)
@@ -298,7 +300,8 @@ def native_runs(environment, monkeypatch):
     request = current_request(CHAT, {'messages': [{'role': 'user', 'content': REQUEST}]})
     source = {'kind': 'config', 'id': 'HYPE',
               'loop_request': bind_request(request, store.instruction_version(OWNER, 'default'))}
-    store.save_definition(OWNER, 'native_loop', settings, {'config': {}, 'override_configs': {}}, source, None)
+    from tests.test_pb8_loop_optimizer import valid_gpu_config
+    store.save_definition(OWNER, 'native_loop', settings, {'config': valid_gpu_config(), 'override_configs': {}}, source, None)
     calls = []
 
     async def queue(body, session=None, definition=None, *, owner=None, queue_proposal=None):
@@ -307,7 +310,7 @@ def native_runs(environment, monkeypatch):
         values = body.model_dump(exclude={'authorization'})
         values.update(loop_name=definition['name'], definition_name=definition['name'],
                       ai_queue_proposal=queue_proposal, source=definition['source'])
-        row = store.create(owner, values, {}, {}, {}, [], {}, queued=True)
+        row = store.create(owner, values, definition['bundle']['config'], {}, {}, [], {}, queued=True)
         return JSONResponse({'id': row['id']}, status_code=201)
 
     async def start(owner, loop_id, body):
@@ -324,16 +327,25 @@ def native_runs(environment, monkeypatch):
     return service, store, rental, calls, start
 
 
-def test_native_queue_proposal_rejects_incompatible_saved_source(native_runs):
+@pytest.mark.parametrize('invalid', ['metric', 'bounds'])
+def test_native_queue_proposal_rejects_incompatible_saved_source(native_runs, invalid):
     """Existing definitions are rechecked before a queue/start approval is offered."""
     service, store, _, calls, _ = native_runs
     row = store.definition(OWNER, 'native_loop')
-    row['bundle']['config'] = {'optimize': {'scoring': [{'metric': 'gain_strategy_eq', 'goal': 'max'}]}}
-    updated = store.save_definition(OWNER, 'native_loop', row['settings'], row['bundle'],
-                                    row['source'], row['revision'])
+    if invalid == 'metric':
+        row['bundle']['config']['optimize']['scoring'][0]['metric'] = 'gain_strategy_eq'
+        expected = 'gain_strategy_eq'
+    else:
+        row['bundle']['config']['optimize']['bounds']['long_total_wallet_exposure_limit'][0] = 0
+        expected = 'includes 0'
+    # Reconstruct legacy invalid state without going through the now-protected save gate.
+    import json
+    from secure_files import atomic_write_private_text
+    atomic_write_private_text(store.definition_path(OWNER, 'native_loop'), json.dumps(row, indent=4))
+    updated = row
     async def scenario():
         """Never reach the native queue backend for an unsupported metric."""
-        with pytest.raises(AICapabilityError, match='gain_strategy_eq'):
+        with pytest.raises(AICapabilityError, match=expected):
             await service.dispatch(OWNER, CHAT, 'propose_ai_loop_run', {
                 'operation': 'queue_and_start', 'name': 'native_loop', 'revision': updated['revision']})
         assert calls == [] and store.list(OWNER) == []
@@ -374,7 +386,7 @@ def test_reviewed_replace_uses_existing_worker_without_normal_start(native_runs,
     from api import loop_optimizer_v8 as runtime
     service, store, _, calls, _ = native_runs
     definition = store.definition(OWNER, 'native_loop')
-    source = store.create(OWNER, definition['settings'], {}, {}, {}, [], {})
+    source = store.create(OWNER, definition['settings'], definition['bundle']['config'], {}, {}, [], {})
     worker_id = 'c' * 32
     def worker(loops, queue, owner, identifier):
         """Inspect only the expected owned source during proposal preparation."""
@@ -428,7 +440,7 @@ def test_native_gpu_loop_uses_owned_chat_without_saved_selection(native_runs, tm
         assert 'selection' not in chat.get_preferences(OWNER)
         args = {'operation': operation, 'name': 'native_loop', 'revision': 2}
         if operation == 'start':
-            queued = store.create(OWNER, {**definition['settings'], 'source': definition['source']}, {}, {}, {}, [], {}, queued=True)
+            queued = store.create(OWNER, {**definition['settings'], 'source': definition['source']}, definition['bundle']['config'], {}, {}, [], {}, queued=True)
             args = {'operation': 'start', 'loop_id': queued['id']}
         created = await service.dispatch(OWNER, CHAT, 'propose_ai_loop_run', args)
         settings = created['preview']['settings']
@@ -566,6 +578,26 @@ def test_loop_log_read_enforces_ownership_and_paths(diagnostic_run, boundary):
     else: path.write_text('private')
     with pytest.raises(AICapabilityError):
         asyncio.run(service.dispatch(owner, CHAT, 'read_ai_loop_log', {'loop_id': loop_id, 'operation': operation}))
+
+
+@pytest.mark.parametrize('kind', ['observer_holdout', 'observer_full_range', 'holdout'])
+def test_ai_cannot_read_user_only_report_logs(diagnostic_run, kind):
+    """Knowing an owned report operation must not reveal its metrics to the model."""
+    service, store, loop_id, operation, root, _ = diagnostic_run
+    marker = 'PRIVATE_USER_REPORT_GAIN_987654321'
+    (root / ('e' * 32 + '.log')).write_text(marker)
+    def report(current):
+        """Move only observer jobs to their independent collection."""
+        current['jobs'][0].update(kind=kind, error=marker)
+        if kind != 'holdout':
+            job = current['jobs'].pop()
+            job['observer_only'] = True
+            current['observer_jobs'] = [job]
+    store.update(OWNER, loop_id, report)
+    summary = asyncio.run(service.dispatch(OWNER, CHAT, 'get_ai_loop_runs', {'loop_id': loop_id}))
+    assert marker not in str(summary) and summary['runs'][0]['jobs'] == []
+    with pytest.raises(AICapabilityError):
+        asyncio.run(service.dispatch(OWNER, CHAT, 'read_ai_loop_log', {'loop_id': loop_id, 'operation': operation}))
 
 
 def test_loop_log_chunks_cover_older_evidence_without_unbounded_reads(tmp_path):

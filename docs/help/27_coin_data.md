@@ -1,6 +1,12 @@
 # Coin Data
 
-Progress checks run sequentially, without overlapping requests. After dismissing the progress overlay, checks slow down to every 2.5 seconds; hidden browser tabs use 5 seconds. Completion still applies the updated data automatically. Leaving the page stops its polling without cancelling the server-side job.
+Coin Data updates automatically when opened, when changing exchanges, on returning to the page, and while it remains open. There are no manual refresh controls. Cached snapshots never start exchange or CMC requests. Server-side checks start only missing or expired work using the configured mapping, CMC listings and metadata intervals, even if PBCoinData is stopped or idle.
+
+Progress checks run sequentially. **Dismiss to background** or Escape hides only the busy overlay; the sidebar status and job monitoring remain active. Failed network requests reconnect with bounded backoff without replacing the job. Reload and returning to the page rediscover running jobs. Session expiry stops requests and displays an authentication message.
+
+Current filters, focused drafts, selected symbols and sorting survive automatic updates; view, selection and sorting are restored on browser reload. Job results cannot restore obsolete filters. If a selected symbol disappears, the status explains that it is no longer available.
+
+A missing mapping or rejected view does not stop background job monitoring. Saved quotes are retained while mapping data is unavailable. If a quote disappears, the page keeps any remaining valid quotes or explains the fallback to the exchange default. HIP-3 DEX options also update automatically: a valid selection stays selected; a removed DEX falls back to **All DEXes** with a status message.
 
 Failed Coin Data loads display an error while cached data remains available; filters can be retried without reloading the page.
 
@@ -28,18 +34,6 @@ Browser requests use the HttpOnly PBGui session cookie; the session token is nev
 
 ## Sidebar actions
 
-- `Refresh Selected Exchange`
-  - Fetches markets, updates the copy-trading cache, rebuilds mapping, and refreshes prices for the current exchange
-- `Refresh All Exchanges`
-  - Runs the same workflow for all V7 exchanges
-  - If only some exchanges succeed, their new state is available immediately and the status line lists the failed exchanges; a run where every exchange fails is reported as an error
-- `Refresh CMC + Selected Exchange`
-  - Reloads CMC listings and metadata, then refreshes the selected exchange so the visible table immediately uses the new CMC data
-  - Shows a centered busy overlay with real percentage progress based on the completed refresh steps while the existing workflow is running
-- `Refresh CMC + All Exchanges`
-  - Reloads CMC listings and metadata, then rebuilds all exchanges so every exchange mapping is aligned with the new CMC data in one run
-  - Uses the same real-percentage busy overlay across the longer full rebuild workflow
-  - Uses the same partial/error summary as `Refresh All Exchanges` and retains per-exchange diagnostics for polling
 - `Matched Symbols`
   - Shows the matched main result table
 - `CMC Unmatched`
@@ -58,7 +52,7 @@ Coin Data shows freshness information as one inline status next to `Filtered sym
 
 ## CMC readiness
 
-CMC refresh actions require at least one active credential generation in the local materialized CMC pool. Coin Data checks this before starting a CMC job and reports a direct error when the pool is unavailable; exchange-only refreshes remain available. Add or inspect keys under **System -> Services -> PBCoinData -> Pool**. Do not add a key to `pbgui.ini`.
+Automatic CMC updates require at least one active credential generation in the local materialized CMC pool. Without a key, the sidebar reports the limitation; exchange updates and cached Coin Data remain available. Listings are published before metadata and exchange enrichment. Failed producers retry automatically with backoff; fresh data is reused under the same resource locks as daemon and API work. Add or inspect keys under **System -> Services -> PBCoinData -> Pool**. Do not add a key to `pbgui.ini`.
 
 On VPS targets, readiness is secret-free capability metadata: protocol version, active-key count, and catalog/materialized generations. A node is ready only after the required sealed generation is materialized locally.
 
@@ -101,7 +95,7 @@ The page contains:
 
 - Quote preference defaults to `USDC`, then `USDT0`
 - The default includes both quote families when both are available; selecting either quote explicitly filters matched, unmatched, and HIP-3 rows. This Coin Data view selection does not change the USDT-linear rules used by PB7/PB8 configurations.
-- If no HIP-3 symbols are found, Coin Data can auto-rebuild Hyperliquid mapping once
+- Missing or expired Hyperliquid mappings are updated automatically; loading a cached snapshot never forces a HIP-3 rebuild
 - HIP-3 rows are shown separately and use the dedicated `DEX` selector; CMC-based filters such as `market_cap`, `vol/mcap`, and tags apply to matched non-HIP-3 rows
 
 ## Data files
@@ -118,21 +112,21 @@ Coin Data reads and writes under:
 
 ### No rows shown
 
-- Refresh the selected exchange
+- Wait for the automatic update and inspect the sidebar status
 - Relax filters temporarily (`market_cap=0`, higher `vol/mcap`, no tags)
 - Check the CMC and mapping timestamps
 - Disable `Only Copy Trading` if it is active
 
 ### Price is missing for some symbols
 
-- Refresh the selected exchange again
+- Read the automatic update status; incomplete price coverage is retried with backoff
 - Verify that the exchange markets timestamp is current
 - For Hyperliquid, keep in mind that some symbols rely on market-info fallback pricing
 
 ### CMC unmatched count is high
 
-- Refresh CMC data first, then refresh the selected exchange
+- Inspect the automatic CMC update status and the data timestamps
 - Check whether symbols are newly listed or use exchange-specific naming variants
-- If CMC refresh is blocked, confirm the PBCoinData Pool is ready before retrying
+- If CMC updates are unavailable, confirm the PBCoinData Pool has an active local key; updates resume automatically
 
-Reset Filters also clears the HIP-3 DEX selector. Escape closes the selected coin details card. Coin Data refresh actions stay disabled while their request is starting.
+Reset Filters also clears the HIP-3 DEX selector. Escape closes the selected coin details card. The status line remains visible during background work and reports partial results or errors.

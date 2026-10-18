@@ -221,11 +221,13 @@ def get_job_log(job_id: str, lines: int = 500, session: SessionToken = Depends(r
     
     Args:
         job_id: Job ID
-        lines: Number of lines to return (default: 500)
+        lines: Number of trailing lines to return (default: 500, maximum: 5000).
+            Zero or negative values only check existence without reading content.
     
     Returns:
         {"log": ["line1", "line2", ...], "exists": bool}
     """
+    from collections import deque
     from pathlib import Path
     from pbgui_purefunc import PBGDIR
     
@@ -246,12 +248,14 @@ def get_job_log(job_id: str, lines: int = 500, session: SessionToken = Depends(r
     
     if not log_file.exists():
         return {"log": [], "exists": False}
+
+    if lines <= 0:
+        return {"log": [], "exists": True}
     
     try:
-        # Read last N lines efficiently
+        # Retain only the bounded tail while streaming through the file.
         with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
-            all_lines = f.readlines()
-            log_lines = all_lines[-lines:] if lines > 0 else all_lines
+            log_lines = deque(f, maxlen=min(lines, 5000))
             log_lines = [line.rstrip('\n\r') for line in log_lines]
         
         return {"log": log_lines, "exists": True}

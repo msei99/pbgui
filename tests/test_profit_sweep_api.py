@@ -418,23 +418,97 @@ def test_overview_refresh_settings_persist_without_exchange_reads(isolated_api, 
     assert isolated_api.store.list_policies() == before
 
 
-def test_overview_policy_deletion_does_not_drop_other_accounts(isolated_api, monkeypatch):
+@pytest.mark.parametrize("deleted", [("alice",), ("alice", "vault")])
+def test_overview_policy_deletion_does_not_drop_other_accounts(isolated_api, monkeypatch, deleted):
     """A policy disappearing during a read must not fail every overview row."""
     store = isolated_api.store
     for name in ("alice", "vault"):
         store.create_policy(name, "hyperliquid", {"operating_mode": "dry", "asset": "USDC"})
-    original = store.list_live_intents
+    original = store.list_policies
 
-    def read_intents(name, **kwargs):
-        """Simulate deletion after the initial policy list snapshot."""
-        if name == "alice":
-            raise KeyError(name)
-        return original(name, **kwargs)
+    def list_then_delete():
+        """Really delete isolated policies after taking the initial list."""
+        records = original()
+        for name in deleted:
+            assert store.delete_policy(name)
+        return records
 
-    monkeypatch.setattr(store, "list_live_intents", read_intents)
+    monkeypatch.setattr(store, "list_policies", list_then_delete)
     monkeypatch.setattr(profit_sweep_api, "_OVERVIEW", None)
     response = asyncio.run(profit_sweep_api.get_overview(object()))
-    assert [row["name"] for row in json.loads(response.body)["accounts"]] == ["vault"]
+    assert [row["name"] for row in json.loads(response.body)["accounts"]] == [
+        name for name in ("alice", "vault") if name not in deleted
+    ]
+
+
+@pytest.mark.parametrize("active_count,disabled_count", [(0, 0), (0, 3), (1, 1), (4, 1), (16, 1)])
+def test_overview_connection_count_is_independent_of_accounts(
+    isolated_api, monkeypatch, active_count, disabled_count
+):
+    """Overview uses two read connections with active accounts and one otherwise."""
+    store = isolated_api.store
+    names = [f"account{index:02}" for index in range(active_count)]
+    for name in names:
+        store.create_policy(name, "hyperliquid", {"operating_mode": "dry", "asset": "USDC"})
+    for index in range(disabled_count):
+        store.create_policy(f"disabled{index}", "hyperliquid", {"operating_mode": "disabled"})
+    connections = []
+    selections = []
+    original_connect = store._connect
+    original_grouped = store.list_live_intents_grouped
+
+    def counting_connect():
+        """Count connections only after all policy setup has completed."""
+        connections.append(1)
+        return original_connect()
+
+    def grouped_selection(users):
+        """Ensure disabled policies are excluded from the batched selection."""
+        selections.append(users)
+        return original_grouped(users)
+
+    monkeypatch.setattr(store, "_connect", counting_connect)
+    monkeypatch.setattr(store, "list_live_intents_grouped", grouped_selection)
+    monkeypatch.setattr(profit_sweep_api, "_OVERVIEW", None)
+    response = asyncio.run(profit_sweep_api.get_overview(object()))
+    assert [row["name"] for row in json.loads(response.body)["accounts"]] == names
+    assert len(connections) == (2 if active_count else 1)
+    assert selections == ([names] if active_count else [])
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("latest_state,evaluated_at,transfer_error", [
+    ("failed", 20, True), ("failed", 40, False), ("confirmed", 20, False),
+])
+def test_overview_grouping_preserves_last_sweep_and_transfer_errors(
+    isolated_api, monkeypatch, latest_state, evaluated_at, transfer_error
+):
+    """Grouped reads preserve confirmed sweep times and the latest Live failure status."""
+    store = isolated_api.store
+    store.create_policy("alice", "hyperliquid", {"operating_mode": "live", "asset": "USDC"})
+
+    def seed(connection):
+        """Seed only local intent history and accounting timestamps."""
+        connection.execute("UPDATE live_state SET last_evaluation_at=? WHERE user_name='alice'", (evaluated_at,))
+        for operation, state, prepared, resolved in (
+            ("confirmed-first", "confirmed", 10, 15), ("latest", latest_state, 20, 30)
+        ):
+            connection.execute(
+                "INSERT INTO live_intents(operation_id,user_name,leg,route,descriptor_json,"
+                "state,reserved_amount,prepared_at,updated_at,resolved_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (operation, "alice", 1, "perp_to_spot", "{}", state, "0", prepared, resolved, resolved),
+            )
+
+    store._write(seed)
+    record = store.get_policy("alice")
+    last_sweep = 30 if latest_state == "confirmed" else 15
+    minutes = profit_sweep_api.load_refresh_minutes(store.db_path.with_name("overview_settings.json"))
+    expected = profit_sweep_api.overview_row(record, {}, last_sweep, refresh_seconds=minutes * 60)
+    if transfer_error:
+        expected.update(status="Transfer error", level="error", reason="last_transfer_failed")
+    monkeypatch.setattr(profit_sweep_api, "_OVERVIEW", None)
+    response = asyncio.run(profit_sweep_api.get_overview(object()))
+    assert json.loads(response.body)["accounts"] == [expected]
 
 
 def test_overview_shutdown_waits_for_owned_thread(isolated_api):

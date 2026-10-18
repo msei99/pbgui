@@ -1162,6 +1162,7 @@
                     host: String(row.host || row.hostname || 'Downloader'),
                     mode: String(row.mode || '').toUpperCase(),
                     status: String(row.status || ''),
+                    fromLog: !rawRows.length,
                     segments: numberValue(row.segments),
                     pages: numberValue(row.pages),
                     rows: numberValue(row.rows),
@@ -1238,7 +1239,9 @@
                     </div>
                 `;
             }).join('');
-            const title = options.compact ? 'Downloader Traffic' : 'Downloader Traffic Details';
+            const fromLog = rows.some(row => row.fromLog);
+            const title = (options.compact ? 'Downloader Traffic' : 'Downloader Traffic Details')
+                + (fromLog ? ' · Recent log excerpt' : '');
             const totalText = `${formatBytes(totalPayload)} · ${formatCount(totalRows)} rows · ${formatCount(totalPages)} pages · ${formatCount(totalSegments)} segments`;
             const hasLogFallback = Array.isArray(options.logLines) && options.logLines.length > 0;
             const hint = totalPayload + totalRows + totalPages + totalSegments > 0
@@ -1271,7 +1274,7 @@
                 if (cached && now - Number(cached.ts || 0) < 5000) return;
                 if (downloaderLogFetches.has(job.id)) return;
                 downloaderLogFetches.add(job.id);
-                fetch(`${API_BASE}/jobs/${job.id}/log?lines=0`, authOptions())
+                fetch(`${API_BASE}/jobs/${job.id}/log?lines=5000`, authOptions())
                     .then(resp => resp.ok ? resp.json() : null)
                     .then(payload => {
                         const lines = payload && Array.isArray(payload.log) ? payload.log : [];
@@ -1734,7 +1737,7 @@
                 content.innerHTML = renderJobDetails(job || {});
                 if (job && job.type === 'bitget_best_1m_distributed') {
                     try {
-                        const logResp = await fetch(`${API_BASE}/jobs/${jobId}/log?lines=0`, authOptions());
+                        const logResp = await fetch(`${API_BASE}/jobs/${jobId}/log?lines=5000`, authOptions());
                         if (logResp.ok) {
                             const logPayload = await logResp.json();
                             const logLines = Array.isArray(logPayload.log) ? logPayload.log : [];

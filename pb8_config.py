@@ -497,7 +497,7 @@ def _call_helper(operation: str, **payload) -> dict:
     """Execute one helper request in PB8's Python environment."""
     if operation in {"prepare", "load", "validate_overrides", "validate_optimizer_overrides",
                      "default", "result_metrics", "optimize_metadata", "optimize_metadata_static",
-                     "coin_override_metadata", "exchange_metadata", "optimizer_backend_contract"}:
+                     "coin_override_metadata", "exchange_metadata", "optimizer_backend_contract", "optimize_preflight"}:
         # Reuse the lifespan-owned helper for local config work. Propagate validation
         # and shutdown errors unchanged; a cold retry would hide failures and double work.
         return _call_migration_helper(operation, **payload)

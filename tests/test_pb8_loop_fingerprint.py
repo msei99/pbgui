@@ -29,7 +29,7 @@ def snapshot(tmp_path, monkeypatch):
     backend = LoopBackend(tmp_path, store)
     config = {'backtest': {}, 'optimize': {}, 'bot': {}, 'live': {}}
     fingerprint = backend.fingerprint(config)
-    row = store.create(OWNER, {'hours': 12, 'max_runs': 20}, config, {}, fingerprint, [], {})
+    row = store.create(OWNER, {'hours': 12, 'max_runs': 20, 'execution': 'cpu'}, config, {}, fingerprint, [], {})
     monkeypatch.setattr(backend, 'poll', lambda *args: {'status': 'completed'})
     return source, backend, store, row
 

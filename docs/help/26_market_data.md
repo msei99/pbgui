@@ -465,6 +465,8 @@ On Hyperliquid, the focused `Best 1m` build panel now uses the same `Filter enab
 
 ### Job Management
 
+In **System → PBGUI Services → Workers → Market Data Queue**, the job monitor shows **Downloader Traffic** and **View** opens **Downloader Traffic Details** for distributed Bitget jobs. Structured downloader statistics take precedence. If these are unavailable, the monitor automatically reads at most the last 5,000 log lines and labels the derived statistics **Recent log excerpt**: older contributions may be missing, so these are not complete job totals. The separate **Log** action keeps its 500-line tail.
+
 The job panel shows three sections:
 - **Pending** — jobs queued for execution
 - **Running** — currently executing job with live progress

@@ -13,6 +13,7 @@ import pandas as pd
 
 from pbgui_purefunc import PBGDIR, pb7dir
 from pb7_config import prepare_pb7_config_dict
+from api.strategy_explorer_errors import StrategyExplorerConfigurationError, is_configuration_rejection
 from strategy_explorer_types import BotParams, Order, Position, Side
 
 import api.strategy_explorer_core as strategy_explorer_core
@@ -249,7 +250,12 @@ def normalize_strategy_config(config: dict[str, Any] | None, *, neutralize_added
     """Normalize Strategy Explorer configs through PB7's canonical config pipeline."""
     source = copy.deepcopy(config) if isinstance(config, dict) else default_strategy_config()
     existing_status = copy.deepcopy(source.get("_pbgui_param_status")) if isinstance(source.get("_pbgui_param_status"), dict) else None
-    prepared = prepare_pb7_config_dict(source, neutralize_added=neutralize_added)
+    try:
+        prepared = prepare_pb7_config_dict(source, neutralize_added=neutralize_added)
+    except Exception as exc:
+        if is_configuration_rejection(exc):
+            raise StrategyExplorerConfigurationError(exc) from exc
+        raise
     if existing_status and "_pbgui_param_status" not in prepared:
         prepared["_pbgui_param_status"] = existing_status
     return prepared

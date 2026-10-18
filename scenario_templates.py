@@ -118,6 +118,13 @@ def generate_scenario_template(payload: dict[str, Any]) -> dict[str, Any]:
     """Generate a deterministic PB8 training/holdout scenario preview."""
     if not isinstance(payload, dict):
         raise ScenarioTemplateError("request body must be an object")
+    if payload.get('template') == 'ai_loop_windows':
+        from ai_loop_windows import validate_plan
+        from scenario_windows import preview_windows
+        try:
+            return preview_windows(validate_plan(payload))
+        except ValueError as exc:
+            raise ScenarioTemplateError(str(exc)) from exc
     if 'windows' in payload:
         from scenario_windows import preview_windows
         return preview_windows(payload)

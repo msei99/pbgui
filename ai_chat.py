@@ -1302,6 +1302,7 @@ class Conversation:
     effort: str = ""
     service_tier: str = ""
     messages: list[dict[str, str]] = field(default_factory=list)
+    loop_window_request: str | None = None
     codex_thread_id: str | None = None
     codex_runtime: CodexRuntime | None = None
     codex_jev_available: bool | None = None
@@ -1835,6 +1836,9 @@ class AIChatService:
             runtime: CodexRuntime | None = None
             started = time.monotonic()
             try:
+                if not _pre_reserved:
+                    self._retain_loop_window_request(conversation, clean_message)
+                    self._persist_conversation(conversation)
                 if provider == "chatgpt":
                     self._ensure_reaper()
                     await self._close_idle_codex_runtimes()
@@ -2604,6 +2608,7 @@ class AIChatService:
                 raise AIChatError("Conversation is busy")
             if sum(1 for item in self.conversations.values() if item.busy) >= _MAX_ACTIVE_TURNS:
                 raise AIChatError("AI turn capacity reached")
+            self._retain_loop_window_request(conversation, None if internal else clean_message)
             approved_jev_payload = None
             if jev_preview_id:
                 pending = self.jev_previews.get(jev_preview_id)
@@ -3121,6 +3126,8 @@ class AIChatService:
             "ui_actions": [] if self.analysis_policy.analysis_only(conversation.owner, conversation.id) else copy.deepcopy(conversation.ui_actions),
         }
         if include_messages:
+            if conversation.loop_window_request is not None:
+                payload["loop_window_request"] = conversation.loop_window_request
             payload["research_items"] = self.research.conversation_items(conversation)
             payload["messages"] = [
                 {
@@ -3150,8 +3157,25 @@ class AIChatService:
         owner_root = ensure_private_directory_tree(self.conversation_root, self.conversation_root / owner)
         return owner_root / f"{conversation_id}.json"
 
+    @staticmethod
+    def _retain_loop_window_request(conversation: Conversation, message: str | None = None) -> None:
+        """Retain a reviewed visible user request independently of bounded history."""
+        from ai_loop_windows import MARKER, conversation_window_request
+        try:
+            if message is not None and MARKER in message:
+                _, text = conversation_window_request({'loop_window_request': message})
+            else:
+                _, text = conversation_window_request({
+                    'loop_window_request': conversation.loop_window_request,
+                    'messages': conversation.messages,
+                })
+            conversation.loop_window_request = text
+        except ValueError as exc:
+            raise AIChatError(str(exc)) from exc
+
     def _persist_conversation(self, conversation: Conversation) -> None:
         """Atomically persist one bounded owner-only conversation."""
+        self._retain_loop_window_request(conversation)
         payload = {
             "schema_version": 1,
             "conversation_id": conversation.id,
@@ -3162,6 +3186,7 @@ class AIChatService:
             "effort": conversation.effort,
             "service_tier": conversation.service_tier,
             "messages": conversation.messages,
+            "loop_window_request": conversation.loop_window_request,
             "updated_at": conversation.updated_at,
             "created_at": conversation.created_at,
             "title": conversation.title,
@@ -3206,6 +3231,10 @@ class AIChatService:
                         if len(raw) > 4 * 1024 * 1024:
                             continue
                         data = json.loads(raw.decode("utf-8"))
+                        if data.get("owner", owner) != owner:
+                            continue
+                        from ai_loop_windows import conversation_window_request
+                        _, loop_window_request = conversation_window_request(data)
                         self._profile_key(owner, str(data.get("chatgpt_profile") or "default"))
                         conversation = Conversation(
                             id=str(data.get("conversation_id") or ""),
@@ -3215,6 +3244,7 @@ class AIChatService:
                             effort=str(data.get("effort") or ""),
                             service_tier=self._validate_service_tier(data.get("service_tier")),
                             messages=list(data.get("messages") or [])[-_MAX_HISTORY_MESSAGES:],
+                            loop_window_request=loop_window_request,
                             updated_at=float(data.get("updated_at") or time.time()),
                             created_at=float(data.get("created_at") or time.time()),
                             title=str(data.get("title") or "New chat")[:80],

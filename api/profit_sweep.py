@@ -2511,14 +2511,15 @@ async def get_overview(session: SessionToken = Depends(require_auth)) -> JSONRes
     minutes = await _run_owned_thread(load_refresh_minutes, _store().db_path.with_name("overview_settings.json"))
     cache = _OVERVIEW.cache if _OVERVIEW is not None else {}
     rows = []
-    for record in records:
-        if record["policy"]["operating_mode"] == "disabled":
+    active = [record for record in records if record["policy"]["operating_mode"] != "disabled"]
+    grouped = await _run_owned_thread(
+        _store().list_live_intents_grouped, [record["user_name"] for record in active]
+    ) if active else {}
+    for record in active:
+        # A concurrently deleted policy must not fail or reappear among its siblings.
+        if record["user_name"] not in grouped:
             continue
-        try:
-            intents = await _run_owned_thread(_store().list_live_intents, record["user_name"])
-        except KeyError:
-            # A concurrent policy deletion must not fail the other account rows.
-            continue
+        intents = grouped[record["user_name"]]
         last_sweep = max((item.get("resolved_at") or 0 for item in intents if item["state"] == "confirmed"), default=0)
         row = overview_row(record, cache.get(record["user_name"], {}), last_sweep or None, refresh_seconds=minutes * 60)
         if row["mode"] == "live" and intents:

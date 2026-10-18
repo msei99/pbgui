@@ -457,11 +457,11 @@ def test_coin_data_frontend_gates_only_cmc_refresh_and_keeps_cached_state() -> N
     """The page consumes pool readiness, preserves cached views, and shows exact rejection detail."""
     source = Path("frontend/coin_data.html").read_text(encoding="utf-8")
 
-    assert "var pool = serverState.cmc_pool || {};" in source
-    assert "button.disabled = !hasMaterializedKey;" in source
-    assert "Cached Coin Data remains readable." in source
+    assert "payload.cmc_pool" in source
+    assert "Cached Coin Data remains available." in source
     assert "response.status + ': ' + (payload.detail" in source
-    assert "document.getElementById('btn-refresh-exchange').addEventListener" in source
+    assert "/ensure" in source
+    assert 'id="action-status" role="status" aria-live="polite"' in source
 
 
 def _capture_refresh_outcome(
@@ -837,63 +837,30 @@ def test_failed_refresh_job_retains_diagnostics_for_polling() -> None:
             coin_data_api._REFRESH_JOBS.pop(job_id, None)
 
 
-def test_coin_data_frontend_applies_partial_state_and_summarizes_failures() -> None:
-    """Polling applies partial state and visibly names failed exchanges."""
+def test_coin_data_frontend_summarizes_partial_jobs_without_applying_stale_state() -> None:
+    """Terminal polling reports partial failure while snapshots own current filters."""
     source = Path("frontend/coin_data.html").read_text(encoding="utf-8")
-    message_start = source.index("    function refreshJobMessage(")
-    message_end = source.index("\n    function toggleButtonState(", message_start)
-    poll_start = source.index("    function pollRefreshJob(")
-    poll_end = source.index("\n    function startRefreshJobPolling(", poll_start)
-    functions = source[message_start:message_end] + "\n" + source[poll_start:poll_end]
-    script = textwrap.dedent(
-        f"""
-        const assert = require('node:assert/strict');
-        var busyJobId = 'partial-job';
-        var busyPollGeneration = 1;
-        var applied = null;
-        var status = null;
-        var hidden = false;
-        function buildRefreshJobUrl() {{ return '/job'; }}
-        function updateBusyProgress() {{}}
-        function applyServerState(state) {{ applied = state; }}
-        function setActionStatus(message, level) {{ status = [message, level]; }}
-        function hideBusy() {{ hidden = true; }}
-        function fetch() {{
-          return Promise.resolve({{
-            ok: true,
-            json: function () {{
-              return Promise.resolve({{job: {{
-                status: 'partial',
-                percent: 100,
-                message: '1/2 exchanges refreshed',
-                state: {{generation: 2}},
-                exchange_results: [
-                  {{exchange: 'binance', ok: true}},
-                  {{exchange: 'bitget', ok: false}}
-                ]
-              }}}});
-            }}
-          }});
-        }}
-        {functions}
-        (async function () {{
-          await pollRefreshJob('partial-job', 'fallback', busyPollGeneration);
-          assert.deepEqual(applied, {{generation: 2}});
-          assert.match(status[0], /Failed: bitget/);
-          assert.equal(status[1], 'warning');
-          assert.equal(hidden, true);
-        }})().catch(function (error) {{ console.error(error); process.exit(1); }});
-        """
-    )
-    completed = subprocess.run(
-        ["node", "-e", script],
-        text=True,
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-
-    assert completed.returncode == 0, completed.stderr or completed.stdout
+    message = source[source.index("    function refreshJobMessage("):source.index("    function toggleButtonState(")]
+    poll = source[source.index("    function pollRefreshJob("):source.index("    async function runAutomaticUpdate(")]
+    script = r"""
+const assert = require('node:assert/strict');
+var autoGeneration=1, autoStopped=false, autoJobs={partial:{}}, autoStatus='', status;
+var autoResults=[],autoStatusLevel=false;
+function buildRefreshJobUrl(id){return id}
+function updateBusyProgress(){}
+function setActionStatus(message,level){status=[message,level]}
+function requestJson(){return Promise.resolve({job:{status:'partial',state:{stale:true},
+ message:'1/2 exchanges refreshed',exchange_results:[{exchange:'bitget',ok:false}]}})}
+""" + message + poll + r"""
+(async()=>{
+ await pollRefreshJob('partial',1);
+ assert.equal(Object.keys(autoJobs).length,0);
+ assert.match(status[0],/Failed: bitget/);
+ assert.equal(status[1],'warning');
+})().catch(e=>{console.error(e);process.exitCode=1});
+"""
+    result = subprocess.run(["node", "-e", script], text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_coin_data_frontend_reports_partial_price_coverage() -> None:

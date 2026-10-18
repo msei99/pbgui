@@ -124,14 +124,12 @@ class ObserverJobs:
     @staticmethod
     def sources(record):
         """Keep every successful exact comparison candidate eligible for a Holdout."""
-        if not record.get('observer_enabled'):
-            return []
         sources = []
         if record.get('baseline'):
             sources.append((-1, {'id': 'starting_config', 'config': record['initial_config'],
                                  'overrides': record['initial_overrides']}))
-        by_operation = {job['operation']: job for job in record['jobs'] if job['kind'] == 'validation'}
-        rounds = {entry['round'] for entry in record['history']} | {record['round']}
+        by_operation = {job['operation']: job for job in record.get('jobs', []) if job['kind'] == 'validation'}
+        rounds = {entry['round'] for entry in record.get('history', [])} | {job['round'] for job in by_operation.values()}
         for number in sorted(rounds):
             eligible = completed_round_observations(record, number)
             sources.extend((number, by_operation[item['operation']]['candidate']) for item in eligible)
@@ -139,19 +137,9 @@ class ObserverJobs:
 
     @classmethod
     def targets(cls, record):
-        """Plan every Holdout first, then only its round winner's Full Time Range."""
-        sources = cls.sources(record)
-        targets = [(number, candidate, 'observer_holdout') for number, candidate in sources]
-        for number in sorted({number for number, _ in sources}):
-            selection = holdout_selection(record, number)
-            if selection['status'] == 'selected':
-                if selection.get('source_round', number) != number:
-                    # Its original round owns collection and any pending Full Range.
-                    continue
-                candidate = next(candidate for round_number, candidate in sources
-                                 if round_number == number and candidate['id'] == selection['candidate_id'])
-                targets.append((number, candidate, 'observer_full_range'))
-        return targets
+        """Always schedule both user reports, independently of either result."""
+        kinds = KINDS if record.get('observer_holdouts', record.get('training_exclusions', record.get('holdouts'))) else ('observer_full_range',)
+        return [(number, candidate, kind) for number, candidate in cls.sources(record) for kind in kinds]
 
     @classmethod
     def pending(cls, record):
@@ -174,7 +162,7 @@ class ObserverJobs:
             token = uuid.uuid4().hex
             job = {'operation': token, 'name': 'loop_' + record['id'][:8] + '_' + token[:8],
                    'kind': kind, 'round': number, 'observer_only': True, 'candidate_id': candidate['id'],
-                   'selection_policy': 'all_holdouts_best_full_range',
+                   'selection_policy': 'all_candidates_both_reports',
                    'overrides': copy.deepcopy(candidate['overrides']), 'backend': None,
                    'status': 'planned', 'started': False, 'created_at': time.time(),
                    'reason': 'User-only evaluation; excluded from all optimization decisions'}
@@ -202,8 +190,6 @@ class ObserverJobs:
 
     async def tick(self, record):
         """Reconcile a bounded number of jobs without waiting for their simulations."""
-        if not record.get('observer_enabled'):
-            return
         record = self.plan(record)
         pending = [job for job in record.get('observer_jobs', [])
                    if job['status'] not in FINISHED or needs_observer_report(job)]
@@ -212,9 +198,8 @@ class ObserverJobs:
             starting = False
             try:
                 current = self.store.read(record['owner'], record['id'])
-                cancelling = current['status'] in {'stopping', 'stopped'}
-                launch = current['status'] in {'running', 'finishing', 'completed', 'unconfirmed', 'failed'} and time.time() < current['deadline'] - 60
-                if cancelling or not launch and current['status'] != 'paused' and not job.get('started'):
+                launch = current['status'] in {'running', 'finishing', 'completed', 'unconfirmed', 'failed', 'stopping', 'stopped'}
+                if not launch and current['status'] != 'paused' and not job.get('started'):
                     if job.get('backend') and job['status'] not in FINISHED:
                         await self.thread(self.backend.stop, current, job)
                         state = await self.thread(self.backend.poll, current, job)
@@ -224,8 +209,6 @@ class ObserverJobs:
                         record = self.update(current, job, status='cancelled', ended_at=time.time(), report_done=True)
                     elif job['status'] in FINISHED:
                         record = self.update(current, job, report_done=True, selection_error=True)
-                    if cancelling:
-                        continue
                 if job.get('backend') is None:
                     if not launch:
                         continue

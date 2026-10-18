@@ -1344,10 +1344,13 @@ def list_integrity_issues(
     repair_enabled = ex in SUPPORTED_EXCHANGES
     for row in payload_rows:
         coin = str(row.get("coin") or "")
-        market_statuses.setdefault(coin, storage_market_status(ex, coin))
-        row["market_status"] = market_statuses[coin]["status"]
-        row["market_reason"] = market_statuses[coin]["reason"]
-        row["repair_supported"] = repair_enabled and market_statuses[coin]["status"] != "removed"
+        status = market_statuses.get(coin)
+        if status is None:
+            # Resolve once per coin; setdefault would evaluate the lookup for every row.
+            status = market_statuses[coin] = storage_market_status(ex, coin)
+        row["market_status"] = status["status"]
+        row["market_reason"] = status["reason"]
+        row["repair_supported"] = repair_enabled and status["status"] != "removed"
     return {
         "exchange": ex,
         "total": total,

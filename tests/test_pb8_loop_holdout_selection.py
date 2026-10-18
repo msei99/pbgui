@@ -92,7 +92,7 @@ def test_retained_incumbent_reuses_original_holdout_and_full_range(record):
             assert job['delta_previous'] == {'gain': 0.0, 'drawdown': 0.0}
     assert not observer.pending(row)
     assert observer.plan(row) == original and row == original
-    assert len([job for job in row['observer_jobs'] if job['kind'] == 'observer_full_range']) == 1
+    assert len([job for job in row['observer_jobs'] if job['kind'] == 'observer_full_range']) == 3
 
 
 @pytest.mark.parametrize('problem', ['unknown_operation', 'wrong_candidate', 'future_origin', 'incomplete', 'unread_report'])
@@ -125,48 +125,46 @@ def test_new_full_range_follows_ai_training_selection_without_holdout_ranking(re
     backend.finished.add('candidate_2')
     observer = ObserverJobs(store, backend, owned_thread)
     row = observer.plan(row)
-    asyncio.run(observer.tick(row))
+    for _ in range(3):
+        asyncio.run(observer.tick(store.read(OWNER, row['id'])))
     row = store.read(OWNER, row['id'])
     assert holdout_selection(row, 0)['candidate_id'] == 'candidate_0'
     ranges = [job for job in observer.plan(row)['observer_jobs'] if job['kind'] == 'observer_full_range']
-    assert len(ranges) == 1 and ranges[0]['candidate_id'] == 'candidate_0'
+    assert {job['candidate_id'] for job in ranges} == {'candidate_0', 'candidate_1', 'candidate_2'}
 
 
-def test_all_holdouts_settle_before_best_holdout_full_range(record):
-    """Full range uses Holdout target/score ranking, not the comparison winner."""
-    store, row = record; row = candidates(store, row)
+def test_full_range_is_scheduled_without_waiting_for_holdout(record):
+    """An unfinished or bad Holdout never suppresses either candidate's full report."""
+    store, row = record
+    row = candidates(store, row)
     original = copy.deepcopy(row)
-    backend = RankedBackend(); observer = ObserverJobs(store, backend, owned_thread)
+    backend = RankedBackend()
+    backend.finished.clear()
+    observer = ObserverJobs(store, backend, owned_thread)
     row = observer.plan(row)
-    assert len(row['observer_jobs']) == 3
-    assert all(job['kind'] == 'observer_holdout' for job in row['observer_jobs'])
-    assert len(observer.plan(row)['observer_jobs']) == 3
+    assert len(row['observer_jobs']) == 6
+    for candidate in ('candidate_0', 'candidate_1', 'candidate_2'):
+        assert {job['kind'] for job in row['observer_jobs'] if job['candidate_id'] == candidate} == {
+            'observer_holdout', 'observer_full_range'}
+    # Launch both report types while Holdouts are still unfinished.
     asyncio.run(observer.tick(row))
     row = store.read(OWNER, row['id'])
+    assert any(job['kind'] == 'observer_full_range' and job['started'] for job in row['observer_jobs'])
     assert holdout_selection(row, 0)['status'] == 'waiting'
-    assert not any(job['kind'] == 'observer_full_range' for job in observer.plan(row)['observer_jobs'])
-    backend.finished.add('candidate_2')
-    asyncio.run(observer.tick(row))
+    backend.finished.update({'candidate_0', 'candidate_1', 'candidate_2'})
+    for _ in range(3):
+        asyncio.run(observer.tick(store.read(OWNER, row['id'])))
     row = store.read(OWNER, row['id'])
-    assert holdout_selection(row, 0)['candidate_id'] == 'candidate_2'
-    asyncio.run(observer.tick(row))
-    row = store.read(OWNER, row['id'])
-    ranges = [job for job in row['observer_jobs'] if job['kind'] == 'observer_full_range']
-    assert len(ranges) == 1 and ranges[0]['candidate_id'] == 'candidate_2'
-    assert ranges[0]['overrides']['BTC.json']['test'] == 2
-    assert ranges[0]['config']['bot']['long']['risk']['total_wallet_exposure_limit'] == 3
-    assert not observer.pending(row) and len(observer.plan(row)['observer_jobs']) == 4
+    assert not observer.pending(row) and len(observer.plan(row)['observer_jobs']) == 6
     assert all(row[key] == original[key] for key in ('history', 'best', 'rubric', 'stagnation', 'errors', 'validation_count'))
-    reports = _observer_reports(row)
-    assert [job['metrics']['gain'] for job in reports[:3]] == [10, 11, 12]
-    assert [job['comparison_label'] for job in reports[:3]] == ['Comparison backtest 1', 'Comparison backtest 2', 'Comparison backtest 3']
-    assert [job['candidate_id'] for job in reports if job['selected_for_full_range']] == ['candidate_2', 'candidate_2']
-    assert projection(row)['observer_selections'][0]['candidate_id'] == 'candidate_2'
+    ranges = [job for job in row['observer_jobs'] if job['kind'] == 'observer_full_range']
+    assert all(job['status'] == 'complete' for job in ranges)
+    assert next(job for job in ranges if job['candidate_id'] == 'candidate_2')['overrides']['BTC.json']['test'] == 2
 
 
 @pytest.mark.parametrize('problem', ['incomplete', 'incomparable', 'missing_score'])
 def test_no_valid_holdout_never_invents_full_range_winner(record, problem):
-    """A failed selection terminates diagnostics without using comparison ranking."""
+    """A bad Holdout cannot remove the independently scheduled Full Time Range."""
     store, row = record; row = candidates(store, row)
     observer = ObserverJobs(store, Backend(), owned_thread)
     row = observer.plan(row)
@@ -178,7 +176,7 @@ def test_no_valid_holdout_never_invents_full_range_winner(record, problem):
                                    'comparable': problem != 'incomparable', 'score': None if problem == 'missing_score' else 1})
     row = store.update(OWNER, row['id'], invalid)
     assert holdout_selection(row, 0)['status'] == 'unavailable'
-    assert not observer.pending(row) and len(observer.plan(row)['observer_jobs']) == 3
+    assert not observer.pending(row) and len(observer.plan(row)['observer_jobs']) == 6
 
 
 def test_legacy_reports_are_rescored_and_existing_full_range_is_retained(record):

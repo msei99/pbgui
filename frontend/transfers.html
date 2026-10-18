@@ -110,13 +110,14 @@
     'use strict';
     var PENDING_KEY='pbgui:transfers:pending-top-up:v1';
     var state={users:[],selected:'',preview:null,operations:[],generation:0,controller:null,busy:false,routeSelections:Object.create(null),pendingRequest:loadPendingRequest()};
+    var accountPolls=Object.create(null), refreshTimer=null, stopped=false, requestSequence=0, activeAction=null, usersRequest=null;
     function el(id){return document.getElementById(id)}
     function text(value,fallback){return value===null||value===undefined||value===''?(fallback===undefined?'-':fallback):String(value)}
-    async function requestJson(path,options){var opts=Object.assign({credentials:'same-origin',cache:'no-store'},options||{});opts.headers=Object.assign({},opts.headers||{});if(opts.body)opts.headers['Content-Type']='application/json';var response=await fetch(window.API_BASE+path,opts);var payload=await response.json().catch(function(){return{}});if(!response.ok){var error=new Error(text(payload.detail,'Request failed with HTTP '+response.status));error.status=response.status;throw error}return payload}
+    async function requestJson(path,options){var opts=Object.assign({credentials:'same-origin',cache:'no-store'},options||{});opts.headers=Object.assign({},opts.headers||{});if(opts.body)opts.headers['Content-Type']='application/json';var response=await fetch(window.API_BASE+path,opts);var payload=await response.json().catch(function(){return{}});if(!response.ok){var error=new Error(text(payload.detail,'Request failed with HTTP '+response.status));error.status=response.status;error.retryUntil=parseRetryAfter(response.headers.get('Retry-After'));throw error}return payload}
     function setStatus(message,tone){el('status').textContent=String(message||'');el('status').className=tone||''}
     function loadPendingRequest(){try{var value=JSON.parse(sessionStorage.getItem(PENDING_KEY)||'null');if(!value||!/^[A-Za-z0-9 _@:+-]{1,128}$/.test(String(value.user||''))||!/^[A-Za-z0-9_]{1,64}$/.test(String(value.route||'main_perps_to_vault'))||!/^[0-9a-f-]{36}$/i.test(String(value.operation_id||''))||!/^(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(String(value.amount||''))||Date.now()-Number(value.created_at||0)>86400000)return null;value.route=String(value.route||'main_perps_to_vault');return value}catch(_error){return null}}
     function savePendingRequest(value){state.pendingRequest=value;try{if(value)sessionStorage.setItem(PENDING_KEY,JSON.stringify(value));else sessionStorage.removeItem(PENDING_KEY)}catch(_error){}}
-    function setBusy(value){state.busy=!!value;renderUsers();updateSubmit()}
+    function setBusy(value){state.busy=!!value;if(state.busy){state.generation+=1;cancelAccountRequests()}renderUsers();updateSubmit();scheduleAccountUpdate()}
     function append(parent,tag,value,className){var node=document.createElement(tag);if(className)node.className=className;node.textContent=text(value);parent.appendChild(node);return node}
     function renderUsers(){var query=el('account-search').value.trim().toLowerCase();var visible=state.users.filter(function(user){return !query||String(user.name||'').toLowerCase().includes(query)||String(user.exchange||'').toLowerCase().includes(query)});el('account-list').replaceChildren();visible.forEach(function(user){var button=document.createElement('button');button.type='button';button.disabled=state.busy;button.className='account-button'+(user.name===state.selected?' selected':'');button.setAttribute('role','option');button.setAttribute('aria-selected',user.name===state.selected?'true':'false');append(button,'span',user.name,'account-name');append(button,'span',text(user.exchange,'unknown')+' / '+text(user.detected_type||(user.exchange==='hyperliquid'&&user.account_type!=='vault'?'mode not checked':user.account_type),'mode not checked'),'account-meta');button.addEventListener('click',function(){selectAccount(String(user.name||''))});el('account-list').appendChild(button)});if(!visible.length)append(el('account-list'),'div',query?'No matching accounts.':'No supported internal-transfer accounts found.','empty');el('account-count').textContent=visible.length+' of '+state.users.length}
     function routeLabel(value){return {perp_to_spot:'Perps → Spot',spot_to_perp:'Spot → Perps',vault_to_main_perps:'Vault → Main Perps',main_perps_to_vault:'Main Perps → Vault',main_perps_to_spot:'Main Perps → Main Spot',main_spot_to_perps:'Main Spot → Main Perps',unified_to_fund:'Unified → Funding',fund_to_unified:'Funding → Unified',umfuture_to_funding:'USD-M Futures → Funding',funding_to_umfuture:'Funding → USD-M Futures',usdt_futures_to_spot:'USDT Futures → Spot',spot_to_usdt_futures:'Spot → USDT Futures',uta_to_spot:'UTA → Spot',spot_to_uta:'Spot → UTA'}[value]||String(value||'')}
@@ -128,63 +129,193 @@
     function renderHistory(){var host=el('history');host.replaceChildren();if(!state.operations.length){append(host,'div','No manual transfers have been recorded for this account.','empty');return}var table=document.createElement('table');table.className='history-table';var head=document.createElement('thead');var hr=document.createElement('tr');['Operation','Route','State','Requested','Received','Prepared','Resolved','Detail','Action'].forEach(function(label){append(hr,'th',label)});head.appendChild(hr);table.appendChild(head);var body=document.createElement('tbody');state.operations.forEach(function(operation){var row=document.createElement('tr');append(row,'td',operation.operation_id);append(row,'td',routeLabel(operation.route));var stateCell=document.createElement('td');append(stateCell,'span',operation.status,'state '+String(operation.status||''));row.appendChild(stateCell);append(row,'td',operation.requested_amount+' '+operation.asset);append(row,'td',operation.actual_amount?operation.actual_amount+' '+operation.asset:'-');append(row,'td',formatTime(operation.prepared_at));append(row,'td',formatTime(operation.resolved_at));append(row,'td',operationDetail(operation));var action=document.createElement('td');if(operation.can_reconcile===true){var button=append(action,'button','Reconcile','btn warning');button.type='button';button.addEventListener('click',function(){reconcile(operation.operation_id)})}else append(action,'span','-');row.appendChild(action);body.appendChild(row)});table.appendChild(body);host.appendChild(table)}
     function formatTime(value){if(!value)return'-';var date=new Date(Number(value)*1000);return Number.isNaN(date.getTime())?'-':date.toLocaleString()}
     function updateSubmit(){var route=selectedRoute();var amount=Number(el('amount').value);var minimum=Number(route&&route.minimum_amount||0);var balance=Number(route&&route.max_transferable||0);var pending=state.pendingRequest;var pendingMismatch=!!(pending&&(pending.user!==state.selected||pending.route!==String(route&&route.id||'')||String(pending.amount)!==el('amount').value.trim()));el('max-amount').disabled=state.busy||!route||!!pending||Boolean(state.preview&&state.preview.blocked_reason)||!Number.isFinite(balance)||balance<minimum||balance<=0;el('submit').disabled=state.busy||!state.selected||!route||Boolean(state.preview&&state.preview.blocked_reason)||pendingMismatch||!Number.isFinite(amount)||amount<minimum||amount>balance}
-    async function loadAccountData(userName, generation, background, signal) {
-      var values = await Promise.allSettled([
-        requestJson('/transfers/preview/' + encodeURIComponent(userName), {signal:signal}),
-        requestJson('/transfers/operations/' + encodeURIComponent(userName), {signal:signal})
-      ]);
-      if (generation !== state.generation || (background && state.busy)) return;
-      var amount = el('amount').value;
-      if (background && state.preview) state.routeSelections[userName] = el('route-select').value;
-      state.preview = values[0].status === 'fulfilled' ? values[0].value : null;
-      renderPreview();
-      if (background) el('amount').value = amount;
-      if (values[1].status === 'fulfilled') {
-        state.operations = Array.isArray(values[1].value.operations) ? values[1].value.operations : [];
-        var pending = state.pendingRequest;
-        if (pending && pending.user === userName) {
-          if (state.operations.some(function(operation){return operation.operation_id===pending.operation_id})) savePendingRequest(null);
-          else if (!background) el('amount').value = String(pending.amount);
-        }
-        renderHistory();
-      } else {
-        renderHistory();
-        if (!state.operations.length) el('history').replaceChildren();
-        append(el('history'), 'div', 'Transfer history unavailable: ' + values[1].reason.message, 'empty');
+    function parseRetryAfter(value) {
+      if (!value || !String(value).trim()) return 0;
+      var raw=String(value).trim();
+      var deadline=/^\d+$/.test(raw)?Date.now()+Number(raw)*1000:Date.parse(raw);
+      return Number.isFinite(deadline)&&deadline>Date.now()?deadline:0;
+    }
+    function accountPolling(userName) {
+      if (!accountPolls[userName]) {
+        function source(){return {failures:0,nextAt:0,retryUntil:0,error:'',terminal:false,request:null}}
+        accountPolls[userName]={preview:source(),history:source()};
       }
-      updateSubmit();
-      var errors = values.filter(function(value){return value.status === 'rejected';});
-      if (errors.length) setStatus(errors.map(function(value){return value.reason.message;}).join(' '), 'error');
-      else setStatus(state.preview.blocked_reason || ((state.pendingRequest && state.pendingRequest.user === userName) ? 'A previous response was lost. Retry only the unchanged route and amount to reuse its operation ID.' : 'Balances and transfer history updated automatically.'), state.preview.blocked_reason ? '' : 'ok');
+      return accountPolls[userName];
+    }
+    function cancelAccountRequests() {
+      clearTimeout(refreshTimer);refreshTimer=null;
+      Object.keys(accountPolls).forEach(function(user){
+        ['preview','history'].forEach(function(kind){
+          var source=accountPolls[user][kind];
+          if(source.request){source.request.controller.abort();source.request=null}
+        });
+      });
+    }
+    function renderCurrentPreview() {
+      var amount=el('amount').value, route=el('route-select').value;
+      if(route)state.routeSelections[state.selected]=route;
+      renderPreview();el('amount').value=amount;updateSubmit();
+    }
+    function renderAccountStatus() {
+      var polling=accountPolling(state.selected), messages=[];
+      ['preview','history'].forEach(function(kind){
+        var source=polling[kind];
+        if(!source.error)return;
+        var retry=source.terminal?'':' Next automatic attempt at '+new Date(source.nextAt).toLocaleTimeString()+'.';
+        messages.push((kind==='preview'?'Balances unavailable: ':'Transfer history unavailable: ')+source.error+retry);
+      });
+      if(messages.length){setStatus(messages.join(' '),'error');return}
+      var preview=state.preview;
+      if(!preview){setStatus('Loading fresh balances and routes...');return}
+      var pending=state.pendingRequest&&state.pendingRequest.user===state.selected;
+      setStatus(preview.blocked_reason||(pending?'A previous response was lost. Retry only the unchanged route and amount to reuse its operation ID.':'Balances and transfer history updated automatically.'),preview.blocked_reason?'':'ok');
+    }
+    function scheduleAccountUpdate() {
+      clearTimeout(refreshTimer);refreshTimer=null;
+      if(stopped||state.busy||!state.selected||document.visibilityState!=='visible')return;
+      var polling=accountPolling(state.selected), due=Infinity;
+      ['preview','history'].forEach(function(kind){
+        var source=polling[kind];
+        if(!source.request&&!source.terminal)due=Math.min(due,Math.max(source.nextAt,source.retryUntil));
+      });
+      if(!Number.isFinite(due))return;
+      var generation=state.generation, user=state.selected;
+      refreshTimer=setTimeout(function(){
+        if(stopped||generation!==state.generation||user!==state.selected)return;
+        refreshTimer=null;loadAccountData(user,generation);
+      },Math.min(2147483647,Math.max(0,due-Date.now())));
+    }
+    async function loadAccountSource(userName,generation,kind) {
+      var source=accountPolling(userName)[kind];
+      if(stopped||state.busy||generation!==state.generation||userName!==state.selected||document.visibilityState!=='visible'||source.request||source.terminal||Date.now()<Math.max(source.nextAt,source.retryUntil))return;
+      var request={id:++requestSequence,controller:new AbortController()};source.request=request;
+      function current(){return !stopped&&generation===state.generation&&userName===state.selected&&source.request===request}
+      try {
+        var path=kind==='preview'?'/transfers/preview/':'/transfers/operations/';
+        var value=await requestJson(path+encodeURIComponent(userName),{signal:request.controller.signal});
+        if(!current())return;
+        source.failures=0;source.error='';source.terminal=false;source.retryUntil=0;source.nextAt=Date.now()+5000;
+        if(kind==='preview'){state.preview=value;renderCurrentPreview()}
+        else {
+          state.operations=Array.isArray(value.operations)?value.operations:[];
+          var pending=state.pendingRequest;
+          if(pending&&pending.user===userName&&state.operations.some(function(operation){return operation.operation_id===pending.operation_id}))savePendingRequest(null);
+          renderHistory();updateSubmit();
+        }
+      } catch(error) {
+        if(!current())return;
+        if(error.name==='AbortError'){source.nextAt=Math.max(source.nextAt,Date.now()+5000);return}
+        source.error=error.message;
+        source.retryUntil=Math.max(source.retryUntil,Number(error.retryUntil)||0);
+        // Revalidate read-only data after any error; only 401 belongs to the shared login flow.
+        source.terminal=Number(error.status)===401;
+        source.failures=Math.min(source.failures+1,6);
+        var delay=Math.min(300000,10000*Math.pow(2,source.failures-1));
+        delay=Math.min(300000,delay+Math.floor(Math.random()*Math.min(1000,delay/10)));
+        source.nextAt=Math.max(Date.now()+delay,source.retryUntil);
+        if(kind==='preview'){state.preview=null;renderCurrentPreview()}
+        else {
+          renderHistory();
+          append(el('history'),'div','Transfer history unavailable: '+error.message,'empty');
+        }
+      } finally {
+        if(current()){
+          source.request=null;renderAccountStatus();scheduleAccountUpdate();
+        }
+      }
+    }
+    function loadAccountData(userName,generation) {
+      // Each source settles and renders independently; a slow snapshot never holds history back.
+      return Promise.all(['preview','history'].map(function(kind){return loadAccountSource(userName,generation,kind)}));
     }
     async function selectAccount(userName,force){
       if(state.busy&&!force)return;
-      if(!state.users.some(function(user){return user.name===userName}))return;
-      state.generation+=1;
-      var generation=state.generation;
-      if(state.controller)state.controller.abort();
-      state.controller=new AbortController();
-      state.selected=userName;state.preview=null;state.operations=[];
-      renderUsers();renderPreview();el('history').replaceChildren();
-      append(el('history'),'div','Loading account data...','empty');
-      setStatus('Loading fresh balances and routes...');
-      await loadAccountData(userName,generation,false,state.controller.signal);
+      if(stopped||!state.users.some(function(user){return user.name===userName}))return;
+      var sameAccount=userName===state.selected;
+      if(state.selected&&el('route-select').value)state.routeSelections[state.selected]=el('route-select').value;
+      state.generation+=1;cancelAccountRequests();
+      var generation=state.generation, polling=accountPolling(userName);
+      ['preview','history'].forEach(function(kind){
+        var source=polling[kind];
+        if(!force){source.failures=0;source.error='';source.terminal=false;source.nextAt=Math.max(Date.now(),source.retryUntil)}
+        else if(!source.failures&&!source.terminal)source.nextAt=Math.max(Date.now(),source.retryUntil);
+      });
+      state.selected=userName;state.preview=null;
+      if(!sameAccount){state.operations=[];el('route-select').replaceChildren()}
+      renderUsers();renderCurrentPreview();renderHistory();
+      if(!sameAccount&&state.pendingRequest&&state.pendingRequest.user===userName)el('amount').value=String(state.pendingRequest.amount);
+      renderAccountStatus();
+      await loadAccountData(userName,generation);
+      if(!stopped&&generation===state.generation)scheduleAccountUpdate();
     }
-    async function submitTopUp(){updateSubmit();if(el('submit').disabled)return;var userName=state.selected;var route=selectedRoute();var amount=el('amount').value.trim();var accepted=await window.PBGuiDialogs.confirm({title:'Review internal transfer',message:'Move '+amount+' '+route.asset+' from '+route.source+' to '+route.destination+'?',detail:'Fixed route: '+routeLabel(route.id)+'. This does not change Profit Sweep accounting. The transfer is persisted before submission and is never blindly retried.',confirmText:'Submit transfer'});if(!accepted||userName!==state.selected||route.id!==el('route-select').value)return;var pending=state.pendingRequest||{user:userName,route:route.id,amount:amount,operation_id:newOperationId(),created_at:Date.now()};if(pending.user!==userName||pending.route!==route.id||String(pending.amount)!==amount){setStatus('Resolve the retained pending transfer before changing account, route, or amount.','error');return}savePendingRequest(pending);setBusy(true);setStatus('Submitting the reviewed internal transfer...');try{var result=await requestJson('/transfers/execute/'+encodeURIComponent(userName),{method:'POST',body:JSON.stringify({amount:amount,route:route.id,operation_id:pending.operation_id})});savePendingRequest(null);if(userName===state.selected)await selectAccount(userName,true);setStatus(result.status==='confirmed'?'Transfer confirmed.':result.status==='unknown'?'Transfer status is unknown. Use Reconcile; do not submit another transfer.':'Transfer '+String(result.status||'completed')+'.',result.status==='confirmed'?'ok':result.status==='failed'?'error':'')}catch(error){if(Number(error.status)>=400&&Number(error.status)<500)savePendingRequest(null);setStatus(error.message+(state.pendingRequest?' The same operation ID will be reused if you retry this exact request.':''),'error')}finally{setBusy(false)}}
-    function newOperationId(){if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();var bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;var hex=Array.from(bytes,function(value){return value.toString(16).padStart(2,'0')}).join('');return hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20)}
-    async function reconcile(operationId){if(state.busy)return;var userName=state.selected;setBusy(true);setStatus('Reconciling the existing transfer without resubmission...');try{var result=await requestJson('/transfers/operations/'+encodeURIComponent(userName)+'/'+encodeURIComponent(operationId)+'/reconcile',{method:'POST'});if(userName===state.selected)await selectAccount(userName,true);setStatus(result.status==='confirmed'?'Transfer confirmed.':'Reconciliation result: '+String(result.status||'unknown')+'.',result.status==='confirmed'?'ok':result.status==='failed'?'error':'')}catch(error){setStatus(error.message,'error')}finally{setBusy(false)}}
-    async function loadUsers(){if(state.busy)return;setStatus('Loading supported accounts...');var data=await requestJson('/transfers/users');state.users=Array.isArray(data.users)?data.users:[];renderUsers();var requested=(state.pendingRequest&&state.pendingRequest.user)||new URL(window.location.href).searchParams.get('user')||'';var next=(requested&&state.users.some(function(user){return user.name===requested})?requested:state.selected&&state.users.some(function(user){return user.name===state.selected})?state.selected:state.users.length?state.users[0].name:'');if(next)await selectAccount(next);else setStatus('No supported internal-transfer accounts found.','error')}
-    var autoUpdating=false;
-    var refreshTimer=setInterval(async function(){
-      if(state.busy||autoUpdating||!state.selected||document.visibilityState!=='visible')return;
-      autoUpdating=true;var user=state.selected,generation=state.generation;
+    function beginAccountAction(userName) {
+      setBusy(true);
+      var action={user:userName,controller:new AbortController()};activeAction=action;return action;
+    }
+    function currentAccountAction(action){return !stopped&&activeAction===action&&action.user===state.selected}
+    function finishAccountAction(action){if(currentAccountAction(action)){activeAction=null;setBusy(false)}}
+    async function submitTopUp(){
+      updateSubmit();if(stopped||el('submit').disabled)return;
+      var userName=state.selected, route=selectedRoute(), amount=el('amount').value.trim();
+      var accepted=await window.PBGuiDialogs.confirm({title:'Review internal transfer',message:'Move '+amount+' '+route.asset+' from '+route.source+' to '+route.destination+'?',detail:'Fixed route: '+routeLabel(route.id)+'. This does not change Profit Sweep accounting. The transfer is persisted before submission and is never blindly retried.',confirmText:'Submit transfer'});
+      if(stopped||state.busy||!accepted||userName!==state.selected||route.id!==el('route-select').value)return;
+      var pending=state.pendingRequest||{user:userName,route:route.id,amount:amount,operation_id:newOperationId(),created_at:Date.now()};
+      if(pending.user!==userName||pending.route!==route.id||String(pending.amount)!==amount){setStatus('Resolve the retained pending transfer before changing account, route, or amount.','error');return}
+      savePendingRequest(pending);
+      var action=beginAccountAction(userName);setStatus('Submitting the reviewed internal transfer...');
       try{
-        await loadAccountData(user,generation,true,state.controller && state.controller.signal);
-      }catch(error){if(generation===state.generation)setStatus(error.message,'error')}
-      finally{autoUpdating=false}
-    },5000);
-    window.addEventListener('pagehide',function(){clearInterval(refreshTimer);if(state.controller)state.controller.abort()});
-    el('account-search').addEventListener('input',renderUsers);el('route-select').addEventListener('change',function(){state.routeSelections[state.selected]=el('route-select').value;applyRoute()});el('max-amount').addEventListener('click',function(){updateSubmit();if(el('max-amount').disabled)return;el('amount').value=String(selectedRoute().max_transferable);updateSubmit()});el('amount').addEventListener('input',updateSubmit);el('submit').addEventListener('click',submitTopUp);window.PBGuiSidebarResize.init();loadUsers().catch(function(error){setStatus(error.message,'error')});
+        var result=await requestJson('/transfers/execute/'+encodeURIComponent(userName),{method:'POST',signal:action.controller.signal,body:JSON.stringify({amount:amount,route:route.id,operation_id:pending.operation_id})});
+        if(!currentAccountAction(action))return;
+        savePendingRequest(null);await selectAccount(userName,true);
+        if(currentAccountAction(action))setStatus(result.status==='confirmed'?'Transfer confirmed.':result.status==='unknown'?'Transfer status is unknown. Use Reconcile; do not submit another transfer.':'Transfer '+String(result.status||'completed')+'.',result.status==='confirmed'?'ok':result.status==='failed'?'error':'');
+      }catch(error){
+        if(!currentAccountAction(action))return;
+        if(Number(error.status)>=400&&Number(error.status)<500)savePendingRequest(null);
+        setStatus(error.message+(state.pendingRequest?' The same operation ID will be reused if you retry this exact request.':''),'error');
+      }finally{finishAccountAction(action)}
+    }
+    function newOperationId(){if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();var bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;var hex=Array.from(bytes,function(value){return value.toString(16).padStart(2,'0')}).join('');return hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20)}
+    async function reconcile(operationId){
+      if(stopped||state.busy)return;
+      var userName=state.selected, action=beginAccountAction(userName);
+      setStatus('Reconciling the existing transfer without resubmission...');
+      try{
+        var result=await requestJson('/transfers/operations/'+encodeURIComponent(userName)+'/'+encodeURIComponent(operationId)+'/reconcile',{method:'POST',signal:action.controller.signal});
+        if(!currentAccountAction(action))return;
+        await selectAccount(userName,true);
+        if(currentAccountAction(action))setStatus(result.status==='confirmed'?'Transfer confirmed.':'Reconciliation result: '+String(result.status||'unknown')+'.',result.status==='confirmed'?'ok':result.status==='failed'?'error':'');
+      }catch(error){if(currentAccountAction(action))setStatus(error.message,'error')}
+      finally{finishAccountAction(action)}
+    }
+    async function loadUsers(){
+      if(stopped||state.busy)return;
+      if(usersRequest)usersRequest.controller.abort();
+      var request={generation:state.generation,controller:new AbortController()};usersRequest=request;
+      setStatus('Loading supported accounts...');
+      try{
+        var data=await requestJson('/transfers/users',{signal:request.controller.signal});
+        if(stopped||usersRequest!==request||request.generation!==state.generation)return;
+        state.users=Array.isArray(data.users)?data.users:[];
+        Object.keys(accountPolls).forEach(function(user){if(!state.users.some(function(item){return item.name===user}))delete accountPolls[user]});
+        renderUsers();
+        var requested=(state.pendingRequest&&state.pendingRequest.user)||new URL(window.location.href).searchParams.get('user')||'';
+        var next=(requested&&state.users.some(function(user){return user.name===requested})?requested:state.selected&&state.users.some(function(user){return user.name===state.selected})?state.selected:state.users.length?state.users[0].name:'');
+        if(next)await selectAccount(next);else setStatus('No supported internal-transfer accounts found.','error');
+      }catch(error){
+        if(!stopped&&usersRequest===request&&request.generation===state.generation&&error.name!=='AbortError')throw error;
+      }finally{if(usersRequest===request)usersRequest=null}
+    }
+    function visibilityChanged(){scheduleAccountUpdate()}
+    function stopAccountUpdates(){
+      stopped=true;state.generation+=1;cancelAccountRequests();
+      if(usersRequest){usersRequest.controller.abort();usersRequest=null}
+      if(activeAction){activeAction.controller.abort();activeAction=null;state.busy=false;state.preview=null}
+      document.removeEventListener('visibilitychange',visibilityChanged);
+    }
+    document.addEventListener('visibilitychange',visibilityChanged);
+    window.addEventListener('pagehide',stopAccountUpdates);
+    window.addEventListener('pageshow',function(event){if(event.persisted){stopped=false;renderUsers();renderCurrentPreview();document.addEventListener('visibilitychange',visibilityChanged);if(!state.selected)loadUsers().catch(function(error){if(!stopped)setStatus(error.message,'error')});else scheduleAccountUpdate()}});
+    el('account-search').addEventListener('input',renderUsers);el('route-select').addEventListener('change',function(){state.routeSelections[state.selected]=el('route-select').value;applyRoute()});el('max-amount').addEventListener('click',function(){updateSubmit();if(el('max-amount').disabled)return;el('amount').value=String(selectedRoute().max_transferable);updateSubmit()});el('amount').addEventListener('input',updateSubmit);el('submit').addEventListener('click',submitTopUp);window.PBGuiSidebarResize.init();loadUsers().catch(function(error){if(!stopped)setStatus(error.message,'error')});
   }());
   </script>
 </body>

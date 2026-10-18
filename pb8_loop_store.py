@@ -398,12 +398,36 @@ def validate_cloud_loop_metrics(config, execution):
                                      'Use max for a worst-window upper limit or min for a worst-window lower limit.')
 
 
+def validate_cloud_loop_config(config, execution):
+    """Use the native effective GPU/scenario preflight before approval and execution."""
+    validate_cloud_loop_metrics(config, execution)
+    if execution == 'vast':
+        from vast_config_validation import validate_cloud_config
+        errors = validate_cloud_config(config)
+    elif execution == 'gpu':
+        from vast_direction_validation import validate_gpu_directions
+        errors, _warnings = validate_gpu_directions(config)
+    else:
+        return
+    if errors:
+        raise ValueError('GPU configuration rejected: ' + '; '.join(
+            item['path'] + ': ' + item['message'] for item in errors[:8]))
+
+
 def validate_change(record, config, overrides):
     """Permit free optimizer edits while preserving user intent and editor state."""
     bounded_json(config)
     bounded_json(overrides)
+    from ai_loop_windows import bound_plan, verify_config
+    plan = bound_plan(record['settings'])
+    if plan is not None:
+        verify_config(plan, config)
+        from ai_loop_objectives import validate_template_rubric
+        validate_template_rubric(record, config, record.get('rubric'))
     if not all(isinstance(config.get(key), dict) for key in ('backtest', 'bot', 'live', 'optimize')):
         raise ValueError('A complete PB8 optimizer configuration is required')
+    from ai_loop_search_limits import exposure_ceiling, validate_exposure_ceiling
+    validate_exposure_ceiling(config, exposure_ceiling(record['settings']))
     validate_hsl_policy(record, config, overrides)
     if not record['settings']['scenario_enabled'] and scenario_state(config) != scenario_state(record['initial_config']):
         raise ValueError('Scenario Editor is disabled; its effective settings must remain unchanged')
@@ -444,7 +468,7 @@ def validate_change(record, config, overrides):
     expected = 'gpu' if record['settings']['execution'] in {'gpu', 'vast'} else 'pymoo'
     if config['optimize'].get('backend') != expected:
         raise ValueError('Configuration must honor the selected execution target')
-    validate_cloud_loop_metrics(config, record['settings']['execution'])
+    validate_cloud_loop_config(config, record['settings']['execution'])
     if expected == 'gpu':
         validate_gpu_drift(config)
     for row in windows(config):
@@ -669,6 +693,9 @@ class LoopStore:
 
     def save_definition(self, owner, name, settings, bundle, source, revision=None):
         """Atomically save a named snapshot and reject stale editor revisions."""
+        validate_cloud_loop_config(apply_run_limit(settings, bundle['config']), settings['execution'])
+        from ai_loop_search_limits import exposure_ceiling, validate_exposure_ceiling
+        validate_exposure_ceiling(bundle['config'], exposure_ceiling({**settings, 'source': source}))
         path = self.definition_path(owner, name)
         with advisory_file_lock(path):
             previous = self.definition(owner, name) if path.exists() else None
@@ -714,6 +741,12 @@ class LoopStore:
         result = json.loads(read_regular_file_nofollow(path, self.root))
         if result.get('owner') != owner or result.get('id') != loop_id:
             raise ValueError('Loop ownership mismatch')
+        # Report scheduling is mandatory, including restored Template runs.
+        result['observer_enabled'] = True
+        if result.get('final_holdout_policy') in {'final_only', 'disabled'}:
+            result['final_holdout_policy'] = 'observer_only'
+            result['final_validation_status'] = 'observer_only' if result.get('observer_holdouts') else 'not_requested'
+            result['holdout_retryable'] = False
         return result
 
     def write(self, record):
@@ -745,11 +778,14 @@ class LoopStore:
 
     def create(self, owner, settings, config, overrides, fingerprint, holdouts, comparison, queued=False, training_exclusions=None):
         """Create a durable run; chat-bound runs use reviewed default instructions only."""
+        validate_cloud_loop_config(apply_run_limit(settings, config), settings['execution'])
+        from ai_loop_search_limits import exposure_ceiling, validate_exposure_ceiling
+        validate_exposure_ceiling(config, exposure_ceiling(settings))
         binding = (settings.get('source') or {}).get('loop_request')
         instructions = self.instruction_version(owner, 'default' if binding else None)
         if binding:
             from ai_loop_request import validate_request
-            validate_request(settings, binding, instructions['digest'])
+            validate_request(settings, binding, instructions['digest'], config)
         loop_id = uuid.uuid4().hex
         record = {'id': loop_id, 'owner': identifier(owner), 'settings': bounded_json(settings),
                   'ai_instructions': instructions,
@@ -761,8 +797,16 @@ class LoopStore:
                   'rubric': [], 'best': None, 'history': [], 'stagnation': 0, 'ai_calls': 0,
                   'ai_tokens_reserved': 0, 'ai_usd_reserved': 0.0, 'jev_usd_reserved': 0.0,
                   'baseline_required': True, 'validation_count': 0, 'holdout_used': False, 'pending_ai': None, 'errors': 0}
+        from ai_loop_windows import bound_plan
+        plan = bound_plan(settings)
         record.update(observer_enabled=True, observer_jobs=[],
                       observer_holdouts=copy.deepcopy(record['training_exclusions']))
+        if plan is not None:
+            record.update(final_holdout_policy='observer_only',
+                          final_validation_status='observer_only' if plan['use_holdout'] else 'not_requested')
+            if plan['use_holdout']:
+                from ai_loop_windows import HOLDOUT_EVIDENCE_POLICY
+                record['holdout_evidence_policy'] = HOLDOUT_EVIDENCE_POLICY
         self.write(record)
         return record
 
@@ -884,8 +928,11 @@ class LoopStore:
 
     def context(self, record):
         """Provide bounded relevant findings and provenance, without repeated configs."""
+        from ai_loop_windows import protected_holdout_plan
+        protected = protected_holdout_plan(record) is not None
         entries = self.knowledge(record['owner'])['entries']
         relevant = [item for item in entries if not item.get('holdout') and not item.get('observer_only')
+                    and (not protected or item.get('loop') == record['id'])
                     and item.get('kind') not in {'observer_holdout', 'observer_full_range'}
                     and item['fingerprint'].get('pb8') == record['fingerprint'].get('pb8')
                     and item.get('coins') == record['settings']['goals'].get('coins', [])][-12:]
@@ -906,8 +953,8 @@ def authorize_native_job(root, data, loop_id):
                          and (job.get('backend') or {}).get('id') == data.get('filename')), None) if data.get('loop_observer') else None
         if data.get('loop_observer') and observer is None:
             raise ValueError('Observer ownership mismatch')
-        allowed = ACTIVE | {'completed', 'unconfirmed', 'failed'} if observer else ACTIVE
-        if current['status'] not in allowed or time.time() >= current['deadline'] - 60:
+        allowed = ACTIVE | {'completed', 'unconfirmed', 'failed', 'stopping', 'stopped'} if observer else ACTIVE
+        if current['status'] not in allowed or (not observer and time.time() >= current['deadline'] - 60):
             raise ValueError('Loop is paused, stopped or expired')
     except (ValueError, KeyError, OSError, TypeError):
         raise HTTPException(status_code=409, detail='This job can only be started by its active PB8 loop') from None

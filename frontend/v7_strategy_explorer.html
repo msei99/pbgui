@@ -721,7 +721,13 @@ function apiFetch(path, opts) {
   opts.headers = Object.assign({}, opts.headers || {});
   if (opts.body && !opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
   return fetch(API_BASE + path, opts).then(function(res) {
-    if (!res.ok) return res.text().then(function(text) { throw new Error(text || ('HTTP ' + res.status)); });
+    if (!res.ok) return res.text().then(function(text) {
+      try {
+        var detail = JSON.parse(text).detail;
+        if (typeof detail === 'string' && detail.trim()) text = detail;
+      } catch (_ignored) {}
+      throw new Error(text || ('HTTP ' + res.status));
+    });
     return res.json();
   });
 }
@@ -3164,6 +3170,15 @@ function loadSession() {
     });
   }).catch(function(err) {
     if (generation === sessionRequestGeneration && snapshotGeneration === snapshotRequestGeneration) {
+      if (!state.snapshot) {
+        document.getElementById('source-chip').textContent = 'Session unavailable';
+        document.getElementById('source-chip').className = 'chip err';
+        document.getElementById('engine-chip').textContent = 'Engine unavailable';
+        document.getElementById('engine-chip').className = 'chip err';
+        document.getElementById('ohlcv-chip').textContent = 'OHLCV: unavailable';
+        document.getElementById('market-chip').textContent = 'Market: unavailable';
+        syncRawFromState();
+      }
       setMessages([{ level: 'error', text: 'Failed to load Strategy Explorer session: ' + err.message }]);
     }
   });

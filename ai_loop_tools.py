@@ -164,7 +164,7 @@ class AILoopTools:
         result['termination_details'] = {key: safe(failure[key]) for key in
             ('at', 'phase', 'round', 'stage', 'error_type', 'reason', 'detail', 'provider', 'model', 'effort', 'attempts') if key in failure}
         if detailed:
-            jobs = row.get('jobs', []) + row.get('observer_jobs', [])
+            jobs = [job for job in row.get('jobs', []) if not job.get('observer_only') and job.get('kind') != 'holdout']
             result['jobs'] = [{key: safe(job.get(key)) for key in
                 ('operation', 'name', 'kind', 'round', 'status', 'error', 'result_error', 'result_count', 'started')}
                 for job in jobs]
@@ -181,8 +181,9 @@ class AILoopTools:
         loop_id = self.caps._opaque_id(args.get('loop_id'), 'loop')
         operation = self.caps._opaque_id(args.get('operation'), 'operation')
         row = self._runtime()._controller.store.read(owner, loop_id)
-        job = next((item for item in row.get('jobs', []) + row.get('observer_jobs', [])
-                    if item.get('operation') == operation), None)
+        job = next((item for item in row.get('jobs', [])
+                    if item.get('operation') == operation and not item.get('observer_only')
+                    and item.get('kind') != 'holdout'), None)
         if not job or not job.get('backend'):
             raise ValueError('This Loop operation has no native job/log yet')
         backend = job['backend']
@@ -276,7 +277,8 @@ class AILoopTools:
         from ai_loop_request import validate_request
         store = runtime._controller.store
         bound_settings = settings if operation == 'start' else {**settings, 'source': row['source']}
-        binding = validate_request(bound_settings, request, store.instruction_version(owner, 'default')['digest'])
+        binding = validate_request(bound_settings, request, store.instruction_version(owner, 'default')['digest'],
+                                   row['initial_config'] if operation == 'start' else row['bundle']['config'])
         if operation == 'start':
             if (row.get('ai_instructions') or {}).get('digest') != binding['instruction_digest']:
                 raise ValueError('Queued Loop contains different instructions; create a fresh reviewed definition')
@@ -288,9 +290,9 @@ class AILoopTools:
         settings = runtime.LoopStart.model_validate(dict({key: value for key, value in settings.items() if key in allowed},
                                                        **selection)).model_dump(exclude={'authorization'})
         self._validate_rental(settings)
-        from pb8_loop_store import validate_cloud_loop_metrics
+        from pb8_loop_store import apply_run_limit, validate_cloud_loop_config
         source_config = row['initial_config'] if operation == 'start' else row['bundle']['config']
-        validate_cloud_loop_metrics(source_config, settings['execution'])
+        validate_cloud_loop_config(apply_run_limit(settings, source_config), settings['execution'])
         payload['selection'] = {key: settings[key] for key in ('provider', 'model', 'profile', 'effort', 'service_tier')}
         rental = self._rental()[1].model_dump() if settings['execution'] == 'vast' else None
         payload['rental'] = rental
@@ -340,9 +342,11 @@ class AILoopTools:
             row = await asyncio.to_thread(store.read, proposal.owner, payload['loop_id'])
             if row['status'] != 'queued' or row['control_generation'] != payload['control_generation']:
                 raise ValueError('Queued loop changed since review; request a new proposal')
-            binding = validate_request(row['settings'], request, store.instruction_version(proposal.owner, 'default')['digest'])
+            binding = validate_request(row['settings'], request, store.instruction_version(proposal.owner, 'default')['digest'], row['initial_config'])
             if (row.get('ai_instructions') or {}).get('digest') != binding['instruction_digest']:
                 raise ValueError('Queued Loop instructions changed since review')
+            from pb8_loop_store import apply_run_limit, validate_cloud_loop_config
+            validate_cloud_loop_config(apply_run_limit(row['settings'], row['initial_config']), row['settings']['execution'])
         else:
             rows = await asyncio.to_thread(store.list, proposal.owner)
             row = next((row for row in rows if row['settings'].get('ai_queue_proposal') == proposal.id), None)
@@ -350,8 +354,11 @@ class AILoopTools:
                 definition = await asyncio.to_thread(store.definition, proposal.owner, payload['name'])
                 if definition['revision'] != payload['revision']:
                     raise ValueError('Loop definition changed since review; request a new proposal')
+                from pb8_loop_store import apply_run_limit, validate_cloud_loop_config
+                validate_cloud_loop_config(apply_run_limit(definition['settings'], definition['bundle']['config']),
+                                           definition['settings']['execution'])
                 binding = validate_request({**definition['settings'], 'source': definition['source']}, request,
-                                           store.instruction_version(proposal.owner, 'default')['digest'])
+                                           store.instruction_version(proposal.owner, 'default')['digest'], definition['bundle']['config'])
                 await self.caps._to_thread_uncancellable(claim_request, self.caps.root, proposal.owner,
                                                         binding['binding_id'], proposal.id)
                 body = runtime.LoopStart.model_validate(dict(definition['settings'], **payload['selection'], authorization=True))
@@ -434,15 +441,26 @@ class AILoopTools:
         # Interpret objectives only from the actual request. Inherited presets,
         # numeric targets and expanded free text must not add hidden requirements.
         changes['goals'] = {**goals, 'text': request['text'], 'presets': [], 'targets': {}}
+        plan = request.get('window_plan') or {}
+        if 'max_twe' in plan:
+            if goals.get('max_twe') is not None and goals['max_twe'] != plan['max_twe']:
+                raise ValueError('Preserve the reviewed maximum TWE ceiling')
+            changes['goals']['max_twe'] = plan['max_twe']
+        if 'max_validations' in plan:
+            if 'max_validations' in changes and changes['max_validations'] != plan['max_validations']:
+                raise ValueError('Preserve the reviewed CPU training validation budget')
+            changes['max_validations'] = plan['max_validations']
         settings = runtime.LoopStart.model_validate(dict(**changes, config_name=config_name,
             provider='chatgpt', model='shared-selection')).model_dump(
                 exclude={'authorization','provider','model','profile','effort','service_tier'})
         self._validate_rental(settings)
         migrated = runtime.migrate_loop_bundle(copy.deepcopy(bundle))
-        from pb8_loop_store import validate_cloud_loop_metrics
-        validate_cloud_loop_metrics(migrated['config'], settings['execution'])
+        from pb8_loop_store import apply_run_limit, validate_cloud_loop_config
+        validate_cloud_loop_config(apply_run_limit(settings, migrated['config']), settings['execution'])
         from ai_loop_request import bind_request
         source = {**source, 'loop_request': bind_request(request, runtime._controller.store.instruction_version(owner, 'default'), reuse)}
+        from ai_loop_request import validate_request
+        validate_request({**settings, 'source': source}, request, config=migrated['config'])
         payload = {'name': name, 'revision': revision, 'settings': settings, 'bundle': migrated, 'source': source}
         preview = {'action': LOOP_ACTION, 'name': name, 'settings': settings,
                    'original_request': request['text'], 'definition_mode': source['loop_request']['mode'],

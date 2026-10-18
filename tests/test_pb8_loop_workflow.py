@@ -15,6 +15,7 @@ from api import loop_optimizer_v8 as api_loop
 from api.auth import require_auth
 from pb8_loop_controller import LoopController
 from pb8_loop_store import LoopStore, apply_run_limit
+from tests.test_pb8_loop_optimizer import valid_gpu_config
 
 OWNER = 'a' * 32
 OTHER = 'b' * 32
@@ -403,7 +404,8 @@ def test_normal_queue_projection_excludes_loop_jobs(monkeypatch,module_name):
 
 def test_waiting_vast_run_rechecks_current_rental_limits(workflow,monkeypatch,tmp_path):
     """Rental duration/concurrency changes apply before a waiting loop can start."""
-    client,controller,_,_,preflights=workflow
+    client,controller,source,_,preflights=workflow
+    source['config']=valid_gpu_config()
     from api.vast import RentalPreferences
     import vast_queue
     import vast_credentials
@@ -538,7 +540,8 @@ def test_gpu_snapshot_preflight_uses_captured_overrides_and_cleans_temp(tmp_path
     import pb8_config
     import scenario_windows
     from pathlib import Path
-    snapshot=bundle();recorded=[];values=dict(settings(),execution='gpu')
+    snapshot=bundle();snapshot['config']=valid_gpu_config()
+    original=copy.deepcopy(snapshot);recorded=[];values=dict(settings(),execution='gpu')
     monkeypatch.setattr('pb8_loop_backend.migrate_loop_bundle',lambda value:copy.deepcopy(value))
     backend=LoopBackend(tmp_path,LoopStore(tmp_path/'loops'))
     monkeypatch.setattr(optimize_v8,'_config_file',lambda name:tmp_path/'deleted-source.json')
@@ -560,7 +563,7 @@ def test_gpu_snapshot_preflight_uses_captured_overrides_and_cleans_temp(tmp_path
     config,overrides,_,_,_=backend.initial('original',values,snapshot)
     assert config['optimize']['backend']=='gpu' and overrides==snapshot['override_configs']
     assert recorded and not recorded[0].exists()
-    assert snapshot==bundle()
+    assert snapshot==original
 
 
 def test_queue_double_click_and_late_response_preserve_new_navigation():

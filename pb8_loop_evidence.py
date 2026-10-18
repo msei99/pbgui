@@ -24,7 +24,7 @@ SAFE_METRICS = {'backtest_completion_ratio', 'drawdown_worst_strategy_eq', 'draw
 TOOL_SCHEMA = {'type': 'object', 'properties': {'path': {'type': 'string', 'maxLength': 8192},
                'offset': {'type': 'integer', 'minimum': 0}}, 'required': ['path', 'offset'],
                'additionalProperties': False}
-TOOL_DESCRIPTION = 'Read exact immutable evidence for this decision. Start at /required or /history/index; follow next_offset.'
+TOOL_DESCRIPTION = 'Read exact immutable evidence and installed PB8 manuals for this decision. Start at /required, /history/index or a passivbot_manual evidence_path; follow next_offset.'
 
 
 class LoopAIPause(Exception):
@@ -144,7 +144,10 @@ def compact_finding(entry):
 
 def select_findings(entries, record, budget=6000):
     """Choose whole findings by scope, loop, open contradictions, age and ID."""
+    from ai_loop_windows import protected_holdout_plan
+    protected = protected_holdout_plan(record) is not None
     eligible = [item for item in entries if not item.get('holdout') and not item.get('observer_only')
+                and (not protected or item.get('loop') == record['id'])
                 and item.get('kind') not in {'observer_holdout', 'observer_full_range'}
                 and (item.get('fingerprint') or {}).get('pb8') == record['fingerprint'].get('pb8')
                 and item.get('coins', (item.get('goals') or {}).get('coins', [])) == record['settings']['goals'].get('coins', [])]
@@ -192,7 +195,10 @@ def required_content(content):
             else:
                 result[name] = walk(item, name)
         return result
-    result = {key: copy.deepcopy(value) for key, value in raw.items() if key != 'evidence'}
+    result = {key: copy.deepcopy(value) for key, value in raw.items() if key not in {'evidence', 'passivbot_manual'}}
+    if 'passivbot_manual' in raw:
+        from ai_loop_manual import manual_summary
+        result['passivbot_manual'] = manual_summary(raw['passivbot_manual'])
     evidence = walk(raw['evidence'])
     # Qualification references existing complete observations instead of duplicating them.
     locations = {}

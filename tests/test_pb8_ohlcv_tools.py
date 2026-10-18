@@ -5,6 +5,11 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import json
+import io
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -169,49 +174,18 @@ def test_start_date_job_streams_progress_and_publishes_result(pb8_runtime, monke
     del status
     released = []
 
-    class Input:
-        """Capture the helper request body."""
-
-        def __init__(self):
-            self.value = ""
-
-        def write(self, value):
-            self.value += value
-
-        def close(self):
-            return None
-
-    class Output:
-        """Return one complete helper result."""
-
-        def read(self):
-            return json.dumps(
-                {
-                    "ok": True,
-                    "result": {
-                        "start_date_options": {
-                            "earliest": {"available": True, "start_date": "2021-01-01"}
-                        }
-                    },
-                }
-            )
-
     class Process:
         """Minimal completed helper process with two progress events."""
 
         pid = 4242
 
         def __init__(self):
-            self.stdin = Input()
-            self.stdout = Output()
-            self.stderr = iter(
-                [
-                    pb8_ohlcv_tools._START_DATE_PROGRESS_PREFIX
-                    + '{"phase":"starting","completed":0,"total":2,"message":"Preparing"}\n',
-                    pb8_ohlcv_tools._START_DATE_PROGRESS_PREFIX
-                    + '{"phase":"resolving_pair","completed":2,"total":2,"coin":"ETH","exchange":"bybit","message":"Resolved ETH"}\n',
-                ]
-            )
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(json.dumps({"ok": True, "result": {
+                "start_date_options": {"earliest": {"available": True, "start_date": "2021-01-01"}}
+            }}).encode())
+            self.stderr = io.BytesIO((pb8_ohlcv_tools._START_DATE_PROGRESS_PREFIX
+                + '{"phase":"resolving_pair","completed":2,"total":2,"message":"Resolved ETH"}\n').encode())
             self.returncode = None
 
         def wait(self, timeout=None):
@@ -651,3 +625,145 @@ def test_gpu_suite_readiness_requires_every_scenario_exchange() -> None:
     }
     config["optimize"]["backend"] = "pymoo"
     assert pb8_ohlcv_runtime_helper._gpu_suite_exchange_requirements(config, ["binance"]) == {}
+
+
+@pytest.fixture
+def start_date_helper_process(pb8_runtime, monkeypatch):
+    """Launch only isolated Python helpers with short test deadlines and owned pipes."""
+    _status, pb8_dir, _python, _cli, _market_root = pb8_runtime
+    real_popen = subprocess.Popen
+    processes = []
+    released = []
+    monkeypatch.setattr(pb8_ohlcv_tools, "_acquire_runtime_lease", lambda: _Lease(released))
+    monkeypatch.setattr(pb8_ohlcv_tools, "_START_DATE_TIMEOUT_SECONDS", 0.6)
+    monkeypatch.setattr(pb8_ohlcv_tools, "_START_DATE_TERM_SECONDS", 0.1)
+    monkeypatch.setattr(pb8_ohlcv_tools, "_START_DATE_KILL_SECONDS", 0.5)
+
+    def start(script, config=None):
+        """Substitute the helper executable without touching a configured PB8 runtime."""
+        def spawn(_command, **kwargs):
+            process = real_popen([sys.executable, "-I", "-c", script], **kwargs)
+            processes.append(process)
+            return process
+
+        monkeypatch.setattr(pb8_ohlcv_tools.subprocess, "Popen", spawn)
+        return pb8_ohlcv_tools.start_pb8_ohlcv_start_date_job(config or {"backtest": {}})["job_id"]
+
+    yield start, processes, released
+    pb8_ohlcv_tools.shutdown_pb8_ohlcv_start_date_jobs()
+    for process in processes:
+        assert process.poll() is not None
+        assert all(getattr(process, name).closed for name in ("stdin", "stdout", "stderr"))
+    assert released == [True] * len(processes)
+
+
+def _finished_start_date_job(job_id):
+    """Wait for the isolated worker and its I/O threads to finish, with a hard test bound."""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with pb8_ohlcv_tools._START_DATE_LOCK:
+            finished = job_id not in pb8_ohlcv_tools._START_DATE_THREADS
+        if finished:
+            assert job_id not in pb8_ohlcv_tools._START_DATE_PROCESSES
+            assert not any(thread.name.startswith(f"pb8-start-{job_id}-") for thread in threading.enumerate())
+            return pb8_ohlcv_tools.get_pb8_ohlcv_start_date_job(job_id)
+        time.sleep(0.01)
+    pytest.fail("isolated start-date helper or its owned I/O threads did not finish")
+
+
+@pytest.mark.parametrize("result_size", [524288, 4 * 1024 * 1024])
+def test_start_date_large_stdout_does_not_deadlock_progress_pipe(start_date_helper_process, result_size):
+    """A result larger than pipe capacity completes while stderr remains open until exit."""
+    start, _processes, _released = start_date_helper_process
+    script = '''import sys,json,time
+json.load(sys.stdin)
+print('PBGUI_OHLCV_START_PROGRESS '+json.dumps({'phase':'complete','message':'OHLCV start dates resolved'}),file=sys.stderr,flush=True)
+print(json.dumps({'ok':True,'result':{'start_date_options':{'all_markets':{'available':True,'start_date':'2024-01-01'}},'padding':'x'*524288}}),flush=True)
+time.sleep(0.05)
+'''
+    result = _finished_start_date_job(start(script.replace("524288", str(result_size))))
+    assert result["status"] == "completed"
+    assert len(result["result"]["padding"]) == result_size
+
+
+@pytest.mark.parametrize("scenario", ["after_complete", "blocked_stdin", "closed_pipes", "oversized", "oversized_progress"])
+def test_start_date_deadline_bounds_all_helper_io(start_date_helper_process, monkeypatch, scenario):
+    """A stalled read/write or excessive response fails without retaining worker capacity."""
+    start, _processes, _released = start_date_helper_process
+    scripts = {
+        "after_complete": "import sys,time,json; json.load(sys.stdin); print('PBGUI_OHLCV_START_PROGRESS '+json.dumps({'phase':'complete','message':'OHLCV start dates resolved'}),file=sys.stderr,flush=True); time.sleep(60)",
+        "blocked_stdin": "import time; time.sleep(60)",
+        "closed_pipes": "import sys,json,os,time; json.load(sys.stdin); os.close(1); os.close(2); time.sleep(60)",
+        "oversized": "import sys,json,time; json.load(sys.stdin); sys.stdout.write('x'*131072); sys.stdout.flush(); time.sleep(60)",
+        "oversized_progress": "import sys,json,time; json.load(sys.stdin); sys.stderr.write('PBGUI_OHLCV_START_PROGRESS '+ 'x'*20000); sys.stderr.flush(); time.sleep(60)",
+    }
+    if scenario == "oversized":
+        monkeypatch.setattr(pb8_ohlcv_tools, "_START_DATE_OUTPUT_LIMIT", 65536)
+    config = {"backtest": {}, "padding": "x" * (2 * 1024 * 1024)} if scenario == "blocked_stdin" else None
+    result = _finished_start_date_job(start(scripts[scenario], config))
+    assert result["status"] == "error"
+    assert "size limit" in result["error"] if scenario.startswith("oversized") else "timed out" in result["error"]
+    assert result["result"] is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX private process groups")
+@pytest.mark.parametrize("action", ["timeout", "stop", "shutdown"])
+def test_start_date_leader_exit_does_not_abandon_pipe_owning_child(
+    start_date_helper_process, tmp_path, action
+):
+    """Terminate the owned group even after its leader exits with inherited pipes open."""
+    start, processes, _released = start_date_helper_process
+    pid_file = tmp_path / "child.pid"
+    child_script = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)"
+    script = (
+        "import sys,json,subprocess,pathlib; json.load(sys.stdin); "
+        f"child=subprocess.Popen([sys.executable,'-I','-c',{child_script!r}]); "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))"
+    )
+    job_id = start(script)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if pid_file.exists() and processes and processes[0].poll() is not None:
+            break
+        time.sleep(0.01)
+    assert pid_file.exists()
+    assert processes[0].poll() == 0
+    child_pid = int(pid_file.read_text())
+    if action == "stop":
+        pb8_ohlcv_tools.stop_pb8_ohlcv_start_date_job(job_id)
+    elif action == "shutdown":
+        pb8_ohlcv_tools.shutdown_pb8_ohlcv_start_date_jobs()
+    result = _finished_start_date_job(job_id)
+    assert result["status"] == ("error" if action == "timeout" else "stopped")
+    try:
+        child = pb8_ohlcv_tools.psutil.Process(child_pid)
+        assert child.status() == pb8_ohlcv_tools.psutil.STATUS_ZOMBIE
+    except pb8_ohlcv_tools.psutil.NoSuchProcess:
+        pass
+
+
+def test_start_date_stop_during_result_parse_wins_over_completion(start_date_helper_process, monkeypatch):
+    """A stop accepted during JSON parsing cannot be overwritten by completed publication."""
+    start, _processes, _released = start_date_helper_process
+    parsing = threading.Event()
+    resume = threading.Event()
+    original_loads = json.loads
+
+    def paused_loads(value, *args, **kwargs):
+        """Pause only the completed helper response, outside the job lock."""
+        if isinstance(value, bytes):
+            parsing.set()
+            assert resume.wait(timeout=3)
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(pb8_ohlcv_tools.json, "loads", paused_loads)
+    job_id = start("import sys,json; json.load(sys.stdin); print(json.dumps({'ok':True,'result':{'start_date_options':{}}}))")
+    try:
+        assert parsing.wait(timeout=3)
+        response = pb8_ohlcv_tools.stop_pb8_ohlcv_start_date_job(job_id)
+        assert response["stop_requested"] is True
+    finally:
+        resume.set()
+    result = _finished_start_date_job(job_id)
+    assert result["status"] == "stopped"
+    assert result["result"] is None

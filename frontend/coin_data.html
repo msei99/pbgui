@@ -1465,17 +1465,13 @@
         </div>
 
         <div id="sidebar-toolbar">
-          <button class="sb-btn primary" id="btn-refresh-exchange">Refresh Selected Exchange</button>
-          <button class="sb-btn info" id="btn-refresh-all">Refresh All Exchanges</button>
-          <button class="sb-btn info" id="btn-refresh-cmc">Refresh CMC + Selected Exchange</button>
-          <button class="sb-btn info" id="btn-refresh-cmc-all">Refresh CMC + All Exchanges</button>
-          <hr class="sb-sep">
           <button class="sb-btn" id="btn-view-main">Matched Symbols</button>
           <button class="sb-btn" id="btn-view-unmatched">CMC Unmatched</button>
           <button class="sb-btn" id="btn-view-hip3">HIP-3 Symbols</button>
           <button class="sb-btn" id="btn-only-cpt">Only Copy Trading</button>
         </div>
       </div>
+      <div id="sidebar-inner"><div id="action-status" role="status" aria-live="polite">Loading Coin Data...</div></div>
       <div id="sidebar-resize"></div>
     </aside>
 
@@ -1743,10 +1739,12 @@
     var filterInputDebounceTimer = 0;
     var loadStateRequestSeq = 0;
     var loadStateController = null;
-    var busyJobPollTimer = 0;
-    var busyJobId = '';
-    var busyPollGeneration = 0;
-    var busyPollController = null;
+    var snapshotRejectedContext = '';
+    var autoTimer = 0, autoController = null, autoGeneration = 0;
+    var autoStopped = false, autoInFlight = false, autoAgain = false, autoFailures = 0;
+    var autoJobs = {}, autoStatus = '', autoDismissed = false;
+    var autoResults = [], autoStatusLevel = false;
+    var renderedTagOptions = '', renderedQuoteOptions = '';
     var sortState = {
       main: { key: 'market_cap', dir: 'desc' },
       unmatched: { key: 'coin', dir: 'asc' },
@@ -1772,8 +1770,17 @@
         if (parsed && typeof parsed === 'object') {
           if (parsed.activeView === 'main' || parsed.activeView === 'unmatched' || parsed.activeView === 'hip3') {
             uiState.activeView = parsed.activeView;
-            uiState.selectedTable = parsed.activeView;
+            uiState.selectedTable = ['main', 'unmatched', 'hip3'].indexOf(parsed.selectedTable) !== -1
+              ? parsed.selectedTable : parsed.activeView;
           }
+          if (typeof parsed.selectedKey === 'string') uiState.selectedKey = parsed.selectedKey;
+          Object.keys(sortState).forEach(function (table) {
+            var saved = parsed.sortState && parsed.sortState[table];
+            var validKey = saved && Array.prototype.some.call(document.querySelectorAll('th.sortable'), function (header) {
+              return header.dataset.table === table && header.dataset.key === saved.key;
+            });
+            if (validKey && (saved.dir === 'asc' || saved.dir === 'desc')) sortState[table] = saved;
+          });
         }
       } catch (error) {
         console.warn('Failed to load Coin Data UI state', error);
@@ -1783,7 +1790,8 @@
     function saveUiState() {
       try {
         localStorage.setItem(getUiStorageKey(), JSON.stringify({
-          activeView: uiState.activeView
+          activeView: uiState.activeView, selectedKey: uiState.selectedKey,
+          selectedTable: uiState.selectedTable, sortState: sortState
         }));
       } catch (error) {
         console.warn('Failed to save Coin Data UI state', error);
@@ -1860,32 +1868,20 @@
       }
     }
 
-    function stopBusyPolling() {
-      if (busyJobPollTimer) {
-        window.clearTimeout(busyJobPollTimer);
-        busyJobPollTimer = 0;
-      }
-      busyJobId = '';
-      busyPollGeneration += 1;
-      if (busyPollController) busyPollController.abort();
-      busyPollController = null;
-    }
-
     function showBusy(title, subtle) {
-      stopBusyPolling();
-      document.getElementById('busy-title').textContent = title || 'Working...';
+      document.getElementById('busy-title').textContent = title || 'Updating Coin Data';
       updateBusyProgress(0, subtle || 'Please wait.');
-      document.getElementById('busy-overlay').classList.add('visible');
+      if (!autoDismissed) document.getElementById('busy-overlay').classList.add('visible');
     }
 
     function hideBusy() {
-      stopBusyPolling();
       document.getElementById('busy-overlay').classList.remove('visible');
     }
 
     function dismissBusy() {
-      document.getElementById('busy-overlay').classList.remove('visible');
-      setActionStatus('Refresh continues in background.', false);
+      autoDismissed = true;
+      hideBusy();
+      setActionStatus('Update continues in background.', false);
     }
 
     function setActionStatus(message, isError) {
@@ -1976,8 +1972,9 @@
       return API_BASE + '/state?' + params.toString();
     }
 
-    function applyServerState(nextState) {
+    function applyServerState(nextState, background) {
       serverState = nextState;
+      if (!background) {
       filters.exchange = nextState.filters.exchange;
       filters.market_cap = Number(nextState.filters.market_cap || 0);
       filters.vol_mcap = Number(nextState.filters.vol_mcap || 0);
@@ -1985,6 +1982,7 @@
       filters.quotes = (nextState.filters.quotes || []).slice();
       filters.only_cpt = !!nextState.filters.only_cpt;
       normalizeExchangeSpecificState(filters.exchange);
+      }
       if (uiState.selectedKey) {
         var allRows = [].concat(nextState.rows || [], nextState.hip3_rows || [], nextState.unmatched_rows || []);
         var exists = allRows.some(function (row) {
@@ -1992,129 +1990,238 @@
         });
         if (!exists) {
           uiState.selectedKey = '';
-          uiState.selectedTable = 'main';
+          uiState.selectedTable = uiState.activeView;
+          autoStatus = 'The selected symbol is no longer available in this view.';
+          setActionStatus(autoStatus, 'warning');
         }
       }
-      renderPage();
+      if (background) {
+        if (supportsHip3(filters.exchange) && uiState.activeView === 'hip3') renderHip3DexFilter();
+        if (!filters.quotes.length) filters.quotes = (nextState.filters.quotes || []).slice();
+        if (renderedQuoteOptions !== JSON.stringify(nextState.options.available_quotes)
+            && !document.getElementById('quote-picker').contains(document.activeElement)) renderQuoteFilter();
+        if (renderedTagOptions !== JSON.stringify(nextState.options.tags)
+            && !document.getElementById('tag-filter-wrap').contains(document.activeElement)) renderTagFilter();
+        var scrolls = Array.prototype.map.call(document.querySelectorAll('.table-wrap'), function (node) {
+          return {node:node, top:node.scrollTop, left:node.scrollLeft};
+        });
+        renderWarnings(); renderSidebarMeta(); renderSummaries();
+        renderUnmatchedRows(); renderMainRows(); renderHip3Rows(); renderSelectedRow();
+        renderSortPill(); bindRowSelection();
+        scrolls.forEach(function (saved) { saved.node.scrollTop = saved.top; saved.node.scrollLeft = saved.left; });
+      } else renderPage();
       saveFiltersToQuery();
       saveUiState();
     }
 
-    function loadState() {
+    function loadState(background) {
+      if (autoStopped) return Promise.resolve();
+      if (!background) scheduleAutomaticUpdate(0);
       var requestSeq = ++loadStateRequestSeq;
+      var contextUrl = buildStateUrl();
+      if (snapshotRejectedContext === contextUrl) return Promise.resolve();
+      var requestedQuotes = filters.quotes.slice();
       if (loadStateController) loadStateController.abort();
       loadStateController = new AbortController();
-      setActionStatus('Loading Coin Data...', false);
-      return fetch(buildStateUrl(), { cache: 'no-store', credentials: 'same-origin', signal: loadStateController.signal })
-        .then(function (response) {
-          if (!response.ok) throw new Error('HTTP ' + response.status);
-          return response.json();
+      if (!background && !Object.keys(autoJobs).length && !autoStatus) setActionStatus('Loading Coin Data...', false);
+      var options = { cache: 'no-store', credentials: 'same-origin', signal: loadStateController.signal };
+      return requestJson(contextUrl, options)
+        .then(function (data) { return {data:data}; })
+        .catch(function (error) {
+          if (error.status !== 422 || typeof error.detail !== 'string'
+              || error.detail.indexOf('Quote not available for ') !== 0) throw error;
+          // Discover published quotes through another read-only snapshot; never weaken API validation.
+          var fallbackUrl = new URL(contextUrl, window.location.href);
+          fallbackUrl.searchParams.delete('quotes');
+          return requestJson(fallbackUrl.toString(), options).then(function (data) {
+            var available = data.options.available_quotes || [];
+            if (!available.length) return {pending:true};
+            var remaining = available.filter(function (quote) { return requestedQuotes.indexOf(quote) !== -1; });
+            var selection = remaining.length ? remaining : data.filters.quotes.slice();
+            if (JSON.stringify(selection) === JSON.stringify(data.filters.quotes)) {
+              return {data:data, recoveredQuotes:selection};
+            }
+            selection.forEach(function (quote) { fallbackUrl.searchParams.append('quotes', quote); });
+            return requestJson(fallbackUrl.toString(), options).then(function (selected) {
+              return {data:selected, recoveredQuotes:selection};
+            });
+          });
         })
-        .then(function (data) {
-          if (requestSeq !== loadStateRequestSeq) return;
-          applyServerState(data);
+        .then(function (result) {
+          if (autoStopped || requestSeq !== loadStateRequestSeq || contextUrl !== buildStateUrl()) return;
+          if (result.pending) {
+            autoStatus = 'Mapping is not available yet. Background updates remain monitored.';
+            setActionStatus(autoStatus, 'warning');
+            return;
+          }
+          var data = result.data;
+          snapshotRejectedContext = '';
+          if (result.recoveredQuotes) {
+            filters.quotes = result.recoveredQuotes;
+            autoStatus = 'The previous quote selection is no longer available. Using ' + filters.quotes.join(', ') + '.';
+            autoStatusLevel = 'warning';
+            setActionStatus(autoStatus, 'warning');
+          } else if (autoStatus === 'Mapping is not available yet. Background updates remain monitored.'
+                     || autoStatus.indexOf('Coin Data view unavailable: ') === 0) {
+            autoStatus = '';
+            autoStatusLevel = false;
+            setActionStatus(Object.keys(autoJobs).length ? 'Updating Coin Data...' : 'Ready.', false);
+          }
+          applyServerState(data, !!background && !!serverState);
+          if (result.recoveredQuotes) renderQuoteFilter();
           var pool = data.cmc_pool || {};
           var reason = pool.error || pool.reason || 'No active materialized CoinMarketCap key is available.';
-          setActionStatus(pool.ready ? 'Ready.' : reason + ' Cached Coin Data remains available.', !pool.ready);
+          if (!Object.keys(autoJobs).length && !autoStatus) {
+            setActionStatus(pool.ready ? 'Ready.' : reason + ' Cached Coin Data remains available.', !pool.ready);
+          }
         })
         .catch(function (error) {
           if (requestSeq !== loadStateRequestSeq || error.name === 'AbortError') return;
+          if (error.status === 401 || error.status === 403) {
+            stopAutomaticUpdates(); hideBusy();
+            setActionStatus('Authentication lost. Sign in again to continue.', true);
+            return;
+          }
+          if (error.status >= 400 && error.status < 500 && error.status !== 429) {
+            // Invalid view parameters are not terminal states of the independently running jobs.
+            snapshotRejectedContext = contextUrl;
+            autoStatus = 'Coin Data view unavailable: ' + error.message + '. Background updates remain monitored.';
+            setActionStatus(autoStatus, 'warning');
+            return null;
+          }
+          if (background) throw error;
           setActionStatus('Failed to load Coin Data: ' + error.message, true);
           return null;
         });
     }
 
-    function pollRefreshJob(jobId, okFallback, generation, signal) {
-      return fetch(buildRefreshJobUrl(jobId), { cache: 'no-store', credentials: 'same-origin', signal: signal })
-        .then(function (response) {
-          if (!response.ok) {
-            return response.json().catch(function () { return {}; }).then(function (payload) {
-              throw new Error(response.status + ': ' + (payload.detail || payload.reason || response.statusText || 'Refresh rejected'));
-            });
-          }
-          return response.json();
-        })
+    function requestJson(url, options) {
+      return fetch(url, options).then(function (response) {
+        if (response.ok) return response.json();
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          var error = new Error(response.status + ': ' + (payload.detail || response.statusText || 'Request failed'));
+          error.status = response.status;
+          error.detail = payload.detail;
+          throw error;
+        });
+      });
+    }
+
+    function stopAutomaticUpdates() {
+      autoStopped = true;
+      autoGeneration += 1;
+      window.clearTimeout(autoTimer);
+      if (autoController) autoController.abort();
+      if (loadStateController) loadStateController.abort();
+      window.clearTimeout(filterInputDebounceTimer);
+      loadStateRequestSeq += 1;
+    }
+
+    function scheduleAutomaticUpdate(delay) {
+      if (autoStopped) return;
+      if (autoInFlight) { autoAgain = true; return; }
+      window.clearTimeout(autoTimer);
+      autoTimer = window.setTimeout(runAutomaticUpdate, delay);
+    }
+
+    function pollRefreshJob(jobId, generation, signal) {
+      return requestJson(buildRefreshJobUrl(jobId), {cache:'no-store', credentials:'same-origin', signal:signal})
         .then(function (payload) {
+          if (generation !== autoGeneration || autoStopped) return;
           var job = payload.job || {};
-          if (busyJobId !== jobId || generation !== busyPollGeneration) return;
+          autoJobs[jobId] = job;
           updateBusyProgress(Number(job.percent || 0), job.message || 'Working...');
-          if (job.status === 'completed' || job.status === 'partial') {
-            if (job.state) applyServerState(job.state);
-            setActionStatus(refreshJobMessage(job, okFallback), job.status === 'partial' ? 'warning' : false);
-            hideBusy();
-            return;
+          if (['completed', 'partial', 'error'].indexOf(job.status) !== -1) {
+            delete autoJobs[jobId];
+            autoResults.push({message:refreshJobMessage(job, 'Coin Data updated.'), level:job.status});
+            autoResults = autoResults.slice(-8);
+            autoStatus = autoResults.map(function (result) { return result.message; }).join(' ');
+            autoStatusLevel = autoResults.some(function (result) { return result.level === 'error'; }) ? true
+              : (autoResults.some(function (result) { return result.level === 'partial'; }) ? 'warning' : false);
+            setActionStatus(autoStatus, autoStatusLevel);
+          } else {
+            setActionStatus((autoStatus ? autoStatus + ' ' : '') + (job.message || 'Updating Coin Data...'), autoStatusLevel);
           }
-          if (job.status === 'error') {
-            if (job.state) applyServerState(job.state);
-            setActionStatus(refreshJobMessage(job, 'Refresh failed'), true);
-            hideBusy();
-          }
+        }).catch(function (error) {
+          if (error.status !== 404) throw error;
+          if (generation !== autoGeneration || autoStopped) return;
+          delete autoJobs[jobId];
+          autoStatus = 'Update job is no longer available; checking current data.';
+          setActionStatus(autoStatus, 'warning');
         });
     }
 
-    function startRefreshJobPolling(jobId, okFallback) {
-      stopBusyPolling();
-      busyJobId = jobId;
-      var generation = busyPollGeneration;
-      busyPollController = new AbortController();
-      var signal = busyPollController.signal;
-      function nextPoll() {
-        if (generation !== busyPollGeneration || busyJobId !== jobId) return;
-        busyJobPollTimer = 0;
-        pollRefreshJob(jobId, okFallback, generation, signal)
-          .then(function () {
-            if (generation !== busyPollGeneration || busyJobId !== jobId) return;
-            var visible = document.getElementById('busy-overlay').classList.contains('visible');
-            var delay = document.hidden ? 5000 : (visible ? 750 : 2500);
-            busyJobPollTimer = window.setTimeout(nextPoll, delay);
-          })
-          .catch(function (error) {
-            if (generation !== busyPollGeneration || busyJobId !== jobId) return;
-            setActionStatus(error.message, true);
-            hideBusy();
-          });
-      }
-      nextPoll();
-    }
-    window.addEventListener('pagehide', stopBusyPolling);
-
-    var refreshPending = false;
-    function runRefresh(path, busyTitle, okFallback) {
-      if (refreshPending) return Promise.resolve();
-      refreshPending = true;
-      var refreshButtons = ['btn-refresh-exchange', 'btn-refresh-all', 'btn-refresh-cmc', 'btn-refresh-cmc-all'].map(function (id) { return document.getElementById(id); });
-      refreshButtons.forEach(function (button) { if (button) button.disabled = true; });
-      showBusy(busyTitle, 'Starting refresh...');
-      setActionStatus(busyTitle + '...', false);
-      return fetch(API_BASE + path, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: jsonHeaders(),
-        body: JSON.stringify(buildRefreshPayload())
-      })
-        .then(function (response) {
-          if (!response.ok) {
-            return response.json().catch(function () { return {}; }).then(function (payload) {
-              throw new Error(response.status + ': ' + (payload.detail || payload.reason || response.statusText || 'Refresh rejected'));
-            });
-          }
-          return response.json();
-        })
-        .then(function (payload) {
-          if (!payload.job_id) {
-            throw new Error('Refresh job did not return a job id');
-          }
-          startRefreshJobPolling(payload.job_id, okFallback);
-        })
-        .catch(function (error) {
-          setActionStatus(error.message, true);
+    async function runAutomaticUpdate() {
+      if (autoStopped || autoInFlight) return;
+      autoInFlight = true;
+      autoAgain = false;
+      var generation = ++autoGeneration;
+      autoController = new AbortController();
+      var signal = autoController.signal;
+      try {
+        var payload = await requestJson(API_BASE + '/ensure', {
+          method:'POST', credentials:'same-origin', headers:jsonHeaders(),
+          body:JSON.stringify(buildRefreshPayload()), signal:signal
+        });
+        if (generation !== autoGeneration || autoStopped) return;
+        if (!Object.keys(autoJobs).length && (payload.job_ids || []).length) {
+          autoResults = []; autoStatus = ''; autoStatusLevel = false;
+        }
+        (payload.job_ids || []).forEach(function (id) { if (!autoJobs[id]) autoJobs[id] = {}; });
+        if (Object.keys(autoJobs).length) showBusy('Updating Coin Data', 'Checking progress...');
+        for (var id of Object.keys(autoJobs)) await pollRefreshJob(id, generation, signal);
+        if (generation !== autoGeneration || autoStopped) return;
+        if (!Object.keys(autoJobs).length) hideBusy();
+        if (autoFailures && autoStatus === 'Connection interrupted; reconnecting automatically.') {
+          autoStatus = 'Connection restored.';
+          setActionStatus(autoStatus, false);
+        }
+        autoFailures = 0;
+        if (payload.retry_at > Date.now() / 1000) {
+          autoStatus = 'Automatic update retry scheduled.';
+          setActionStatus(autoStatus, 'warning');
+        }
+        if (!Object.keys(autoJobs).length && !(payload.retry_at > Date.now() / 1000)) {
+          if (!(payload.cmc_pool && payload.cmc_pool.active_credentials)) {
+            setActionStatus((autoStatus ? autoStatus + ' ' : '')
+              + 'No active local CoinMarketCap key. Cached Coin Data remains available.', autoStatusLevel || 'warning');
+          } else if (autoStatus) setActionStatus(autoStatus, autoStatusLevel);
+        }
+        await loadState(true);
+      } catch (error) {
+        if (generation !== autoGeneration || autoStopped || error.name === 'AbortError') return;
+        autoStatus = 'Connection interrupted; reconnecting automatically.';
+        if (error.status === 401 || error.status === 403) {
+          autoStatus = 'Authentication lost. Sign in again to continue.';
+          stopAutomaticUpdates();
           hideBusy();
-        })
-        .finally(function () {
-          refreshPending = false;
-          refreshButtons.forEach(function (button) { if (button) button.disabled = false; });
-        });
+        } else if (error.status && error.status < 500 && error.status !== 429) {
+          autoStatus = error.message;
+          stopAutomaticUpdates();
+          hideBusy();
+        } else {
+          autoFailures += 1;
+        }
+        setActionStatus(autoStatus, true);
+      } finally {
+        autoInFlight = false;
+        autoController = null;
+        if (!autoStopped) {
+          var delay = autoFailures ? Math.min(30000, 1000 * Math.pow(2, autoFailures))
+            : (document.hidden ? 15000 : (Object.keys(autoJobs).length ? (autoDismissed ? 2500 : 750) : 15000));
+          scheduleAutomaticUpdate(!autoFailures && autoAgain ? 0 : delay);
+        }
+      }
     }
+
+    window.addEventListener('pagehide', stopAutomaticUpdates);
+    window.addEventListener('pageshow', function () {
+      autoStopped = false;
+      scheduleAutomaticUpdate(0);
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) scheduleAutomaticUpdate(0);
+    });
 
     function renderWarnings() {
       var node = document.getElementById('warning-box');
@@ -2135,15 +2242,6 @@
       if (uiState.activeView === 'unmatched') currentCount = serverState.counts.unmatched_visible || 0;
       if (uiState.activeView === 'hip3') currentCount = getFilteredHip3Rows().length;
       document.getElementById('sb-count').textContent = currentCount + ' rows';
-      var pool = serverState.cmc_pool || {};
-      var hasMaterializedKey = pool.ready === true && Number(pool.active_credentials || 0) > 0;
-      var reason = pool.error || pool.reason || 'No active materialized CoinMarketCap key is available.';
-      ['btn-refresh-cmc', 'btn-refresh-cmc-all'].forEach(function (id) {
-        var button = document.getElementById(id);
-        button.disabled = !hasMaterializedKey;
-        if (hasMaterializedKey) button.removeAttribute('title');
-        else button.title = reason + ' Cached Coin Data remains readable.';
-      });
     }
 
     function renderSummaries() {
@@ -2218,10 +2316,15 @@
       options = getHip3DexOptions();
       if (filters.hip3_dex && options.indexOf(filters.hip3_dex) === -1) {
         filters.hip3_dex = '';
+        autoStatus = 'The selected DEX is no longer available. Showing All DEXes.';
+        autoStatusLevel = 'warning';
+        setActionStatus(autoStatus, 'warning');
       }
 
       field.classList.remove('hidden');
       select.disabled = !options.length;
+      var currentOptions = Array.prototype.map.call(select.options, function (option) { return option.value; });
+      if (JSON.stringify(currentOptions) === JSON.stringify([''].concat(options)) && select.value === filters.hip3_dex) return;
       select.innerHTML = '<option value="">All DEXes</option>' + options.map(function (dex) {
         var selected = dex === filters.hip3_dex ? ' selected' : '';
         return '<option value="' + escapeHtml(dex) + '"' + selected + '>' + escapeHtml(dex) + '</option>';
@@ -2251,11 +2354,13 @@
       input.value = '';
       input.placeholder = tags.length ? 'Select tags...' : 'No tags available';
       tagMsController.rebuild('tag-filter-wrap', tags, filters.tags, { silent: true });
+      renderedTagOptions = JSON.stringify(tags);
     }
 
     function renderQuoteFilter() {
       var picker = document.getElementById('quote-picker');
       var quotes = (serverState.options.available_quotes || []).slice();
+      renderedQuoteOptions = JSON.stringify(quotes);
       picker.innerHTML = quotes.map(function (quote) {
         var selected = filters.quotes.indexOf(quote) !== -1;
         return '<button type="button" class="quote-picker-button' + (selected ? ' selected' : '') + '"' +
@@ -2772,6 +2877,7 @@
           uiState.selectedKey = row.getAttribute('data-key') || '';
           renderTableRows(uiState.selectedTable);
           renderSelectedRow();
+          saveUiState();
         });
       });
     }
@@ -2808,6 +2914,7 @@
       }
       renderTableRows(tableName);
       renderSortPill();
+      saveUiState();
     }
 
     function closeSelectedDetails() {
@@ -2815,6 +2922,7 @@
       uiState.selectedTable = uiState.activeView;
       resetSelectedCardLayout();
       renderPage();
+      saveUiState();
     }
 
     function setActiveView(viewName) {
@@ -3003,18 +3111,6 @@
         } catch (_) {}
       });
 
-      document.getElementById('btn-refresh-exchange').addEventListener('click', function () {
-        runRefresh('/refresh/exchange', 'Refreshing selected exchange...', 'Refreshed selected exchange.');
-      });
-      document.getElementById('btn-refresh-all').addEventListener('click', function () {
-        runRefresh('/refresh/all', 'Refreshing all exchanges...', 'All exchanges refreshed.');
-      });
-      document.getElementById('btn-refresh-cmc').addEventListener('click', function () {
-        runRefresh('/refresh/cmc', 'Refreshing CMC + selected exchange...', 'CoinMarketCap data and the selected exchange refreshed.');
-      });
-      document.getElementById('btn-refresh-cmc-all').addEventListener('click', function () {
-        runRefresh('/refresh/cmc_all', 'Refreshing CMC + all exchanges...', 'CoinMarketCap data and all exchanges refreshed.');
-      });
       document.getElementById('btn-busy-dismiss').addEventListener('click', dismissBusy);
       document.addEventListener('keydown', function (event) {
         if (event.key !== 'Escape') return;

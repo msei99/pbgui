@@ -84,26 +84,34 @@ def test_fixed_periods_and_overrides_are_immutable(record):
     assert row==original
     observer=ObserverJobs(store,backend,owned_thread)
     planned=observer.plan(row)
-    assert len(planned['observer_jobs'])==2
+    assert len(planned['observer_jobs'])==4
     assert all(job['overrides']==candidate['overrides'] for job in planned['observer_jobs'] if job['round']==0)
-    assert len(observer.plan(planned)['observer_jobs'])==2
+    assert len(observer.plan(planned)['observer_jobs'])==4
 
 
-def test_missing_holdout_is_explicit_and_does_not_invent_full_range_winner(record):
-    """Without a valid Holdout, no Full Time Range winner can be selected."""
-    store,row=record
-    row=reference(store,row)
-    row=store.update(OWNER,row['id'],lambda current:current.update(observer_holdouts=[]))
-    backend=Backend();observer=ObserverJobs(store,backend,owned_thread)
+def test_missing_holdout_still_runs_full_range(record):
+    """An omitted Holdout cannot suppress Full Time Range reports."""
+    store, row = record
+    row = reference(store, row)
+    row = store.update(OWNER, row['id'], lambda current: current.update(observer_holdouts=[]))
+    backend = Backend()
+    backend.done = True
+    observer = ObserverJobs(store, backend, owned_thread)
     asyncio.run(observer.tick(row))
-    jobs=store.read(OWNER,row['id'])['observer_jobs']
-    assert [job['status'] for job in jobs if job['kind']=='observer_holdout']==['skipped','skipped']
-    assert not backend.starts and not observer.pending(store.read(OWNER,row['id']))
+    current = store.read(OWNER, row['id'])
+    assert len(current['observer_jobs']) == 2
+    assert all(job['kind'] == 'observer_full_range' and job['report_done'] for job in current['observer_jobs'])
+    assert not observer.pending(current)
 
 
-def test_next_optimizer_and_terminal_collection_do_not_wait_for_observers(record, tmp_path):
+@pytest.mark.parametrize('template', [False, True])
+def test_next_optimizer_and_terminal_collection_do_not_wait_for_observers(record, tmp_path, template):
     """A background monitor cannot block the next round or final normal completion."""
-    store,row=record;row=reference(store,row)
+    store,row=record
+    if template:
+        from tests.test_ai_loop_windows import run_record
+        store, row = run_record(tmp_path)
+    row=reference(store,row)
     row=store.update(OWNER,row['id'],lambda current:current.update(phase='optimize',round=1,
         jobs=current['jobs']+[{'operation':'f'*32,'name':'next','kind':'optimizer','round':1,
                              'config':config(),'overrides':{},'status':'planned','started':False,'backend':None}]))
@@ -111,7 +119,7 @@ def test_next_optimizer_and_terminal_collection_do_not_wait_for_observers(record
     asyncio.run(controller.tick(OWNER,row['id']))
     assert 'f'*32 in backend.starts
     current=store.read(OWNER,row['id'])
-    assert len(current['observer_jobs'])==2
+    assert len(current['observer_jobs'])==4
     assert all(job['status']=='running' for job in current['observer_jobs'])
     history=copy.deepcopy(current['history'])
     assert store.knowledge(OWNER)['entries']==[]
@@ -123,22 +131,22 @@ def test_next_optimizer_and_terminal_collection_do_not_wait_for_observers(record
     current=store.read(OWNER,row['id'])
     assert all(job['report_done'] and job['simulation_complete'] for job in current['observer_jobs'])
     assert current['status']=='unconfirmed' and current['history']==history
-    assert current['validation_count']==0 and current['best'] is None and current['stagnation']==0
+    assert current['validation_count']==0 and current['best']==row['best'] and current['stagnation']==0
     assert store.knowledge(OWNER)['entries']==[]
     assert not controller.observers.pending(current)
 
 
 @pytest.mark.parametrize('status', ['paused','stopped'])
 def test_pause_and_explicit_stop_guard_observer_launch(record,status):
-    """Pause preserves jobs; explicit stop cancels without new workers."""
+    """Pause preserves planned jobs; stopping training does not discard user reports."""
     store,row=record;row=reference(store,row)
     row=store.update(OWNER,row['id'],lambda current:current.update(status=status))
     backend=Backend();observer=ObserverJobs(store,backend,owned_thread)
     asyncio.run(observer.tick(row))
     current=store.read(OWNER,row['id'])
-    assert not backend.starts
-    assert all(job['status']==('planned' if status=='paused' else 'cancelled') for job in current['observer_jobs'])
-    assert observer.pending(current)==(status=='paused')
+    assert bool(backend.starts) == (status == 'stopped')
+    assert all(job['status'] == ('planned' if status == 'paused' else 'running') for job in current['observer_jobs'])
+    assert observer.pending(current)
 
 
 def test_failed_ai_evaluation_recovers_current_round_without_changing_history(record):
@@ -177,8 +185,8 @@ def test_current_checkpoint_requires_complete_exact_owned_round(record,rejection
     assert completed_round_observations(row,0)==[]
 
 
-def test_running_observers_cancel_and_completed_reports_do_not_leave_pending(record):
-    """Stopping cancels real workers and resolves a completed but unread report."""
+def test_running_observers_finish_after_training_stop(record):
+    """Stopping training preserves already required background reports."""
     store,row=record;row=reference(store,row)
     backend=Backend();observer=ObserverJobs(store,backend,owned_thread)
     asyncio.run(observer.tick(row))
@@ -187,14 +195,15 @@ def test_running_observers_cancel_and_completed_reports_do_not_leave_pending(rec
         current['observer_jobs'][0].update(status='complete',report_done=False)
     row=store.update(OWNER,row['id'],stop)
     assert not run_deletable(row)
+    backend.done = True
     asyncio.run(observer.tick(row))
     current=store.read(OWNER,row['id'])
-    assert len(backend.stops)==1 and run_deletable(current)
+    assert not backend.stops and run_deletable(current)
     assert not observer.pending(current)
 
 
-def test_deadline_prevents_new_jobs_but_collects_running_ones(record):
-    """The budget deadline prevents launching any later user evaluation."""
+def test_training_deadline_does_not_discard_background_reports(record):
+    """Local reports complete independently of the optimizer/rental time limit."""
     store,row=record;row=reference(store,row)
     backend=Backend();observer=ObserverJobs(store,backend,owned_thread)
     asyncio.run(observer.tick(row))
@@ -202,10 +211,10 @@ def test_deadline_prevents_new_jobs_but_collects_running_ones(record):
     backend.done=True
     asyncio.run(observer.tick(row))
     assert all(job['simulation_complete'] for job in store.read(OWNER,row['id'])['observer_jobs'])
-    assert len(backend.starts)==2
+    assert len(backend.starts)==4
     asyncio.run(observer.tick(store.read(OWNER,row['id'])))
-    assert len(backend.starts)==2
-    assert all(job['status']=='cancelled' for job in store.read(OWNER,row['id'])['observer_jobs'] if job['kind']=='observer_full_range')
+    assert len(backend.starts)==4
+    assert all(job['status']=='complete' for job in store.read(OWNER,row['id'])['observer_jobs'])
 
 
 def test_report_failure_never_changes_optimizer_state(record, tmp_path):
@@ -236,7 +245,7 @@ def test_permanent_observer_start_failure_cancels_only_owned_waiting_jobs(record
     backend=Rejected();observer=ObserverJobs(store,backend,owned_thread)
     asyncio.run(observer.tick(row))
     current=store.read(OWNER,row['id'])
-    assert len(backend.stops)==2 and not backend.starts
+    assert len(backend.stops)==4 and not backend.starts
     assert not observer.pending(current) and current['errors']==0
     assert all(job['report_done'] and job['error']=='PB8 version changed' for job in current['observer_jobs'])
 
@@ -268,12 +277,14 @@ def test_ai_payload_and_learning_never_include_user_metrics(record,monkeypatch):
     assert store.knowledge(OWNER)['entries']==[]
 
 
-@pytest.mark.parametrize('status',['unconfirmed','completed','failed'])
-def test_native_authorization_requires_exact_owned_observer_binding(record,tmp_path,status):
-    """Only an owned observer can launch after completion/failure, within its deadline."""
+@pytest.mark.parametrize('status',['unconfirmed','completed','failed','stopping','stopped'])
+@pytest.mark.parametrize('expired', [False, True])
+def test_native_authorization_requires_exact_owned_observer_binding(record,tmp_path,status,expired):
+    """Only an owned user report can launch after training stops or expires."""
     store,row=record
     data={'loop_id':row['id'],'loop_owner':OWNER,'filename':'native','operation_id':'f'*32,'loop_observer':True}
-    row=store.update(OWNER,row['id'],lambda current:current.update(status=status,observer_jobs=[{
+    row=store.update(OWNER,row['id'],lambda current:current.update(status=status,
+        deadline=time.time()-1 if expired else current['deadline'], observer_jobs=[{
         'observer_only':True,'operation':'f'*32,'backend':{'id':'native'}}]))
     authorize_native_job(tmp_path,data,row['id'])
     backend=LoopBackend(tmp_path,store)

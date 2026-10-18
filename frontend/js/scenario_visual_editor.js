@@ -13,7 +13,7 @@
     return node;
   }
   function mount(host, options) {
-    if (owner) owner.dispose();
+    if (!options.fixedWindows && owner) owner.dispose();
     if (!host) return;
     let windows = copy(options.windows || []), selected = windows[0]?.id, undo = [], redo = [];
     const referenceKey=JSON.stringify([options.context.exchanges||[],options.context.coins||[]]);
@@ -25,8 +25,9 @@
     }
     const events = new AbortController();
     const on = (node, event, fn) => node.addEventListener(event, fn, {signal: events.signal});
-    owner = {dispose() { disposed = true; events.abort(); chartController?.abort(); }};
-    on(window,'pagehide',()=>owner?.dispose());
+    const instance = {dispose() { disposed = true; events.abort(); chartController?.abort(); }};
+    if (!options.fixedWindows) owner = instance;
+    on(window,'pagehide',()=>instance.dispose());
     host.replaceChildren();
     host.classList.add('scenario-visual');
     function field(control, caption) {
@@ -56,6 +57,7 @@
     const redoButton=iconButton('Redo','m15 5 5 5-5 5 M20 10H10a6 6 0 0 0 0 12',()=>history(true));
     const trash=iconButton('Delete selected window','M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',removeSelected);
     trash.classList.add('scenario-trash');trash.title='Delete selected window or drop a window here';
+    trash.hidden=!!options.fixedWindows;
     iconButton('Full range','M8 3H3v5 M16 3h5v5 M3 16v5h5 M21 16v5h-5 M3 3l6 6 M21 3l-6 6 M3 21l6-6 M21 21l-6-6',()=>{viewStart=minimum;viewEnd=maximum;render();});
     const magnet=iconButton('Snap windows','M5 3v9a7 7 0 0 0 14 0V3h-5v9a2 2 0 0 1-4 0V3z M5 7h5 M14 7h5',()=>{
       magnetEnabled=!magnetEnabled;magnet.setAttribute('aria-pressed',String(magnetEnabled));
@@ -64,6 +66,7 @@
     magnet.title='Snap windows to nearby boundaries (on/off)';
     const ghost=element('div',null,host);ghost.className='scenario-drag-ghost';ghost.hidden=true;
     const canvas = element('div', null, host); canvas.className='scenario-canvas';
+    const dateFields = options.fixedWindows ? element('div', null, host) : null;
     const svg = document.createElementNS('http://www.w3.org/2000/svg','svg'); canvas.appendChild(svg);
     svg.setAttribute('preserveAspectRatio','xMinYMin meet');
     svg.setAttribute('role','group'); svg.setAttribute('aria-label','Price chart and editable training and holdout windows');
@@ -82,6 +85,7 @@
 
     },actions);
     apply.className='btn primary';
+    apply.hidden=!!options.fixedWindows;
     function windowCaption(w){return w.start_date+' — '+w.end_date+' · '+(day(w.end_date)-day(w.start_date)+1)+' days';}
     function snapWindow(w,part){
       if(!magnetEnabled)return;
@@ -155,9 +159,11 @@
         if(!(day(a.start_date)>=minimum&&day(a.end_date)<maximum&&day(a.start_date)<=day(a.end_date)))errors.push(a.label+': invalid dates.');
         windows.slice(i+1).forEach(b=>{if(shared(a,b)&&a.role!==b.role&&a.start_date<=b.end_date&&b.start_date<=a.end_date)errors.push('Training/Holdout overlap: '+a.label+' / '+b.label+'.');});
       });
+      if(options.validate){try{options.validate(copy(windows));}catch(error){errors.push(error.message);}}
       return [...new Set(errors)];
     }
     function split(){
+      if(options.fixedWindows)return copy(windows);
       const result=[],usedLabels=new Set(windows.map(w=>w.label));
       windows.forEach(w=>{
         if(w.role!=='training'){result.push(w);return;}
@@ -178,6 +184,21 @@
     let plotWidth=880;
     const x=d=>100+plotWidth*(d-viewStart)/(viewEnd-viewStart);
     function render(){
+      if(dateFields && !dateFields.contains(document.activeElement)){
+        dateFields.replaceChildren();
+        let number=0;
+        windows.forEach(w=>{
+          const row=element('div',null,dateFields);row.className='form-row';
+          element('span',w.role==='training'?'Training '+(++number):'Holdout',row);
+          ['start_date','end_date'].forEach(key=>{
+            const input=element('input',null,row);input.type='date';input.className='panel-input';
+            input.value=w[key];input.min=iso(minimum);input.max=iso(maximum-1);
+            input.setAttribute('aria-label',(w.role==='training'?'Training '+number:'Holdout')+(key==='start_date'?' start (UTC)':' end (UTC)'));
+            input.addEventListener('input',()=>{windows.find(row=>row.id===w.id)[key]=input.value;options.change(copy(windows));});
+            input.addEventListener('change',()=>{save();windows.find(row=>row.id===w.id)[key]=input.value;changed();});
+          });
+        });
+      }
       const width=Math.max(650,canvas.clientWidth||1000);plotWidth=width-120;
       svg.replaceChildren();const tracks=[];
       const layoutWindows=drag?.part==='move'?drag.before:windows;
@@ -267,7 +288,7 @@
         selected=id;drag={part:'joint',id,next:event.target.dataset.next,before:copy(windows)};return;
       }
       if(id){selected=id;const w=windows.find(w=>w.id===id);drag={id,part:event.target.dataset.part,start:pointerDay(event),original:copy(w),grabX:event.clientX-event.target.getBoundingClientRect().left,grabY:event.clientY-event.target.getBoundingClientRect().top,barWidth:event.target.getBoundingClientRect().width,holdoutY:345+Math.max(1,trainingLanes)*34+14,before:copy(windows)};}
-      else {
+      else if(!options.fixedWindows) {
         const localY=event.clientY-svg.getBoundingClientRect().top;
         drawRole=localY>=345+Math.max(1,trainingLanes)*34+14?'holdout':'training';
         drag={part:'draw',clientX:event.clientX,start:Math.max(minimum,Math.min(maximum-1,pointerDay(event))),before:copy(windows)};
@@ -294,7 +315,7 @@
         ghost.style.width=drag.barWidth+'px';
         ghost.style.left=(event.clientX-drag.grabX)+'px';ghost.style.top=(event.clientY-drag.grabY)+'px';
       }
-      const dropping=drag.part==='move'&&overTrash(event);
+      const dropping=!options.fixedWindows&&drag.part==='move'&&overTrash(event);
       trash.classList.toggle('is-drop-target',dropping);
       if(dropping){render();return;}
       const d=pointerDay(event);
@@ -317,13 +338,13 @@
       if(drag.part==='pan'){drag=null;return;}
       ghost.hidden=true;
       trash.classList.remove('is-drop-target');
-      if(drag.part==='move'&&!overTrash(event)){
+      if(!options.fixedWindows&&drag.part==='move'&&!overTrash(event)){
         const rect=svg.getBoundingClientRect(),localY=event.clientY-rect.top;
         if(event.clientX>=rect.left+100&&event.clientX<=rect.right-20&&localY>=345&&localY<rect.height-25){
           windows.find(w=>w.id===drag.id).role=localY>=drag.holdoutY?'holdout':'training';
         }
       }
-      if(drag.part==='move'&&overTrash(event)){
+      if(!options.fixedWindows&&drag.part==='move'&&overTrash(event)){
         windows=drag.before.filter(w=>w.id!==drag.id);selected=windows[0]?.id;
       }
       if(drag.part==='draw'&&Math.abs(event.clientX-drag.clientX)>4&&windows.length<64){const d=Math.max(minimum,Math.min(maximum-1,pointerDay(event)));const w={id:uid(),label:uniqueLabel(drawRole+'_window'),role:drawRole,start_date:iso(Math.min(d,drag.start)),end_date:iso(Math.max(d,drag.start)),scenario:{}};windows.push(w);selected=w.id;}
@@ -357,16 +378,17 @@
         if(chosen>=0)await loadChart();else{feedback.textContent=sourceRows.length?'Choose a reference coin. No local source matches the configured coins.':'No local candles found. Window editing remains available.';render();}}catch(error){if(error.name!=='AbortError'&&!disposed&&current===generation)feedback.textContent=error.message;}
     }
     on(exchange,'change',loadSources);on(source,'change',loadChart);
-    const previousDispose=owner.dispose;
+    const previousDispose=instance.dispose;
     let observedWidth=canvas.clientWidth;
     const observer=new ResizeObserver(()=>{
       if(disposed||canvas.clientWidth===observedWidth)return;
       observedWidth=canvas.clientWidth;
       render();
     });
-    owner.dispose=()=>{observer.disconnect();previousDispose();};
+    instance.dispose=()=>{observer.disconnect();previousDispose();};
     observer.observe(canvas);
     render();if(exchange.value)loadSources();
+    return instance;
   }
   window.PBGuiScenarioVisual={mount,dispose(){owner?.dispose();owner=null;}};
 }());

@@ -124,6 +124,188 @@ def _insert_sample(paths: dict[str, Path], user: str, prefix: str, ts: int) -> N
         conn.commit()
 
 
+@pytest.fixture
+def listing_paths(tmp_path):
+    """Create nullable user tables for listing-only edge cases without runtime data."""
+    paths = {name: tmp_path / name for name in db_tools.DB_FILE_NAMES}
+    for spec in db_tools.TABLE_SPECS:
+        with closing(sqlite3.connect(paths[spec.db_name])) as conn:
+            conn.execute(f'CREATE TABLE "{spec.table}" (user TEXT)')
+            conn.commit()
+    return paths
+
+
+@pytest.fixture
+def track_listing_connections(monkeypatch):
+    """Instrument real SQLite connections, SQL and bundle ownership on demand."""
+    original_connect = sqlite3.connect
+    original_bundle = db_tools._connect_bundle
+
+    def start(*, dqs=None):
+        """Install counters after isolated test data has been prepared."""
+        records = SimpleNamespace(bundles=0, connections=[], closed=[], statements=[])
+
+        class TrackedConnection(sqlite3.Connection):
+            """Record deterministic cleanup while exercising real SQLite."""
+
+            def close(self):
+                """Count each close, including accidental double closes."""
+                records.closed.append(self)
+                super().close()
+
+        def connect(*args, **kwargs):
+            """Create a tracked connection with optional strict identifier parsing."""
+            conn = original_connect(*args, factory=TrackedConnection, **kwargs)
+            records.connections.append(conn)
+            if dqs is not None:
+                conn.setconfig(sqlite3.SQLITE_DBCONFIG_DQS_DML, dqs)
+            conn.set_trace_callback(records.statements.append)
+            return conn
+
+        def bundle(paths):
+            """Count calls independently of underlying connection creation."""
+            records.bundles += 1
+            return original_bundle(paths)
+
+        monkeypatch.setattr(db_tools.sqlite3, "connect", connect)
+        monkeypatch.setattr(db_tools, "_connect_bundle", bundle)
+        return records
+
+    return start
+
+
+def _assert_listing_connections_closed(records):
+    """Require exactly one bundle, two connections, and one close per connection."""
+    assert records.bundles == 1
+    assert len(records.connections) == 2
+    assert records.closed == records.connections
+    for conn in records.connections:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+
+
+@pytest.mark.parametrize("user_count", [2, 50])
+def test_list_users_grouped_query_budget(tmp_path, track_listing_connections, user_count):
+    """Production schemas need one bundle and seven data queries at either scale."""
+    paths = _bundle(tmp_path, "listing")
+    names = [f"user-{index:03}" for index in range(user_count)]
+    for name in names:
+        _insert_sample(paths, name, name, 1000)
+    records = track_listing_connections()
+
+    rows = db_tools.list_users_with_counts(paths)
+
+    keys = [f"{spec.db_name}:{spec.table}" for spec in db_tools.TABLE_SPECS]
+    assert rows == [{"user": name, "total": 7, "tables": dict.fromkeys(keys, 1)} for name in names]
+    _assert_listing_connections_closed(records)
+    selects = [sql for sql in records.statements if sql.startswith("SELECT")]
+    metadata = [sql for sql in selects if "sqlite_master" in sql]
+    data_queries = [sql for sql in selects if "sqlite_master" not in sql]
+    assert len(metadata) == len(db_tools.TABLE_SPECS)
+    assert len(data_queries) == len(db_tools.TABLE_SPECS)
+    assert all("GROUP BY" in sql and "DISTINCT" not in sql for sql in data_queries)
+    for row in rows:
+        assert list(row["tables"]) == keys
+        assert db_tools.count_user_rows(paths, [row["user"]]) == {
+            "total": row["total"], "tables": row["tables"],
+        }
+
+
+def test_list_users_preserves_names_counts_and_union(listing_paths):
+    """Raw display names retain trimmed selection counts, including empty selections."""
+    data = {
+        "history": ["alice", "alice", "bob", " bob", " bob", "   ", None, ""],
+        "position": ["alice"],
+        "history_scan_meta": ["Zed"],
+        "executions": ["bob", "bob", "trade-only"],
+    }
+    for spec in db_tools.TABLE_SPECS:
+        with closing(sqlite3.connect(listing_paths[spec.db_name])) as conn:
+            conn.executemany(f'INSERT INTO "{spec.table}" VALUES (?)', [(name,) for name in data.get(spec.table, [])])
+            conn.commit()
+
+    rows = db_tools.list_users_with_counts(listing_paths)
+
+    assert [row["user"] for row in rows] == ["   ", " bob", "alice", "bob", "trade-only", "Zed"]
+    assert rows[0] == {"user": "   ", "total": 0, "tables": {}}
+    expected = {
+        " bob": {"history": 1, "executions": 2},
+        "alice": {"history": 2, "position": 1},
+        "bob": {"history": 1, "executions": 2},
+        "trade-only": {"executions": 1},
+        "Zed": {"history_scan_meta": 1},
+    }
+    for row in rows[1:]:
+        tables = {f"{spec.db_name}:{spec.table}": expected[row["user"]].get(spec.table, 0) for spec in db_tools.TABLE_SPECS}
+        assert row == {"user": row["user"], "total": sum(tables.values()), "tables": tables}
+        assert list(row["tables"]) == list(tables)
+        assert db_tools.count_user_rows(listing_paths, [row["user"]]) == {"total": row["total"], "tables": tables}
+
+
+@pytest.mark.parametrize("drop_tables", [False, True])
+def test_list_users_empty_bundle(listing_paths, track_listing_connections, drop_tables):
+    """Empty or absent handled tables return no users and release both connections."""
+    if drop_tables:
+        for spec in db_tools.TABLE_SPECS:
+            with closing(sqlite3.connect(listing_paths[spec.db_name])) as conn:
+                conn.execute(f'DROP TABLE "{spec.table}"')
+                conn.commit()
+    records = track_listing_connections()
+    assert db_tools.list_users_with_counts(listing_paths) == []
+    _assert_listing_connections_closed(records)
+
+
+def test_list_users_missing_table_counts_zero(listing_paths):
+    """Absent tables retain their zero-valued keys in the response."""
+    with closing(sqlite3.connect(listing_paths[db_tools.MAIN_DB_NAME])) as conn:
+        conn.execute("DROP TABLE history")
+        conn.execute("INSERT INTO position VALUES ('alice')")
+        conn.commit()
+    tables = {f"{spec.db_name}:{spec.table}": int(spec.table == "position") for spec in db_tools.TABLE_SPECS}
+    assert db_tools.list_users_with_counts(listing_paths) == [{"user": "alice", "total": 1, "tables": tables}]
+    assert db_tools.count_user_rows(listing_paths, ["alice"]) == {"total": 1, "tables": tables}
+
+
+@pytest.mark.parametrize("name", ["..", ".", "a/b", "a\\b", "a\x00b"])
+def test_list_users_invalid_name_closes_bundle(listing_paths, track_listing_connections, name):
+    """Persisted invalid names still raise HTTP 400 and close the full bundle."""
+    from fastapi import HTTPException
+
+    with closing(sqlite3.connect(listing_paths[db_tools.MAIN_DB_NAME])) as conn:
+        conn.execute("INSERT INTO history VALUES (?)", (name,))
+        conn.commit()
+    records = track_listing_connections()
+    with pytest.raises(HTTPException) as error:
+        db_tools.list_users_with_counts(listing_paths)
+    assert error.value.status_code == 400
+    _assert_listing_connections_closed(records)
+
+
+@pytest.mark.parametrize("dqs", [True, False])
+def test_list_users_missing_column_preserves_sqlite_behavior(listing_paths, track_listing_connections, dqs):
+    """Missing columns keep SQLite's literal fallback or strict SQL error behavior."""
+    if not hasattr(sqlite3.Connection, "setconfig"):
+        pytest.skip("Explicit SQLite DQS configuration requires Python 3.12+")
+    with closing(sqlite3.connect(listing_paths[db_tools.MAIN_DB_NAME])) as conn:
+        conn.execute("DROP TABLE history")
+        conn.execute("CREATE TABLE history (other TEXT)")
+        conn.execute("INSERT INTO history VALUES ('sample')")
+        conn.commit()
+    records = track_listing_connections(dqs=dqs)
+    if dqs:
+        tables = {f"{spec.db_name}:{spec.table}": int(spec.table == "history") for spec in db_tools.TABLE_SPECS}
+        assert db_tools.list_users_with_counts(listing_paths) == [{"user": "user", "total": 1, "tables": tables}]
+    else:
+        with pytest.raises(sqlite3.OperationalError):
+            db_tools.list_users_with_counts(listing_paths)
+    _assert_listing_connections_closed(records)
+    if dqs:
+        assert db_tools.count_user_rows(listing_paths, ["user"]) == {"total": 1, "tables": tables}
+    else:
+        with pytest.raises(sqlite3.OperationalError):
+            db_tools.count_user_rows(listing_paths, ["user"])
+
+
 def test_delete_user_rows_removes_all_user_tables(tmp_path: Path) -> None:
     """Deleting a user removes rows from every handled table only for that user."""
 

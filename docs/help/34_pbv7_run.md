@@ -126,3 +126,5 @@ Dynamic Ignore is a target-host capability, not a per-instance or per-VPS key se
 JSON Import asks for confirmation before replacing the current editor values, including unsaved changes. Cancel keeps the editor draft and import text intact.
 
 The Run list updates automatically via its authenticated WebSocket; there is no manual Refresh button in the sidebar. Search and status filters remain selected during updates.
+
+Search text, status filter, and the selected sort column/direction are restored after a browser reload in the same tab, separately for PB7 and PB8. Reload still loads current instance data. Only non-secret navigation state is stored in session storage; when browser storage is unavailable, filtering and sorting remain usable without reload restoration.

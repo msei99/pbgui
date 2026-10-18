@@ -122,7 +122,8 @@ def test_transfer_history_survives_preview_failure_and_recovers(history_failure)
             expect(page.locator('#history')).to_contain_text('existing-operation')
             expect(page.locator('#history button')).to_have_text('Reconcile')
         recovery['ready'] = True
-        page.clock.fast_forward(5000)
+        # The first failure retries after 10 seconds plus bounded jitter.
+        page.clock.fast_forward(11_000)
         expect(page.locator('#status')).to_contain_text('updated automatically')
         expect(page.locator('#history')).to_contain_text('existing-operation')
         page.locator('#amount').fill('17')

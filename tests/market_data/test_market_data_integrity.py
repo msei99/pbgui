@@ -468,6 +468,149 @@ def test_all_exchange_issues_include_market_status_and_repair(monkeypatch, tmp_p
     assert issues["rows"][0]["repair_supported"] is True
 
 
+@pytest.fixture
+def integrity_issues_db(tmp_path: Path) -> Path:
+    """Seed repeated coin-days in isolated catalogs for every supported exchange."""
+    db_path = tmp_path / "checksums.sqlite"
+    with sqlite3.connect(db_path) as conn:
+        integrity._initialize_schema(conn)
+        conn.executemany(
+            """
+            INSERT INTO daily_checksums (
+                exchange, timeframe, coin, day, candles, missing_minutes,
+                status, sha256, file_mtime_ns, file_size, validated_at, error, scan_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (exchange, integrity.TIMEFRAME, coin, day, 1000, 440,
+                 "invalid", "test-checksum", 1, 2, 123, "gap", "test-scan")
+                for exchange in integrity.SUPPORTED_EXCHANGES
+                for coin in ("BTC_USDT:USDT", "ETH_USDT:USDT", "OLD_USDT:USDT")
+                for day in ("2026-01-01", "2026-01-02", "2026-01-03")
+            ],
+        )
+    return db_path
+
+
+@pytest.mark.parametrize("exchange", integrity.SUPPORTED_EXCHANGES)
+def test_integrity_issues_resolves_market_status_once_per_coin(
+    monkeypatch, integrity_issues_db: Path, exchange: str,
+) -> None:
+    """Repeated coin-days share one lookup while preserving the complete response."""
+    statuses = {
+        "BTC_USDT:USDT": {"status": "available", "reason": "active test market"},
+        "ETH_USDT:USDT": {"status": "unknown", "reason": "test mapping unavailable"},
+        "OLD_USDT:USDT": {"status": "removed", "reason": "inactive test market"},
+    }
+    calls = []
+
+    def market_status(ex: str, coin: str) -> dict[str, str]:
+        """Count resolver calls without reading any real exchange mapping."""
+        calls.append((ex, coin))
+        return statuses[coin]
+
+    monkeypatch.setattr(integrity, "storage_market_status", market_status)
+
+    result = integrity.list_integrity_issues(exchange=exchange, db_path=integrity_issues_db)
+
+    assert calls == [(exchange, coin) for coin in statuses]
+    assert result == {
+        "exchange": exchange,
+        "total": 9,
+        "repair_supported": True,
+        "rows": [
+            {
+                "exchange": exchange,
+                "timeframe": integrity.TIMEFRAME,
+                "coin": coin,
+                "day": day,
+                "candles": 1000,
+                "missing_minutes": 440,
+                "status": "invalid",
+                "sha256": "test-checksum",
+                "validated_at": 123,
+                "error": "gap",
+                "market_status": status["status"],
+                "market_reason": status["reason"],
+                "repair_supported": status["status"] != "removed",
+            }
+            for day in ("2026-01-03", "2026-01-02", "2026-01-01")
+            for coin, status in statuses.items()
+        ],
+    }
+
+
+@pytest.mark.parametrize("limit,offset", [(2, 0), (4, 2), (2, 9)])
+def test_integrity_issues_resolves_only_coins_on_returned_page(
+    monkeypatch, integrity_issues_db: Path, limit: int, offset: int,
+) -> None:
+    """Pagination keeps total and ordering while looking up only returned coins."""
+    calls = []
+
+    def market_status(exchange: str, coin: str) -> dict[str, str]:
+        """Record page lookups without consulting runtime data."""
+        calls.append((exchange, coin))
+        return {"status": "unknown", "reason": "test mapping unavailable"}
+
+    monkeypatch.setattr(integrity, "storage_market_status", market_status)
+    expected_page = [
+        (coin, day)
+        for day in ("2026-01-03", "2026-01-02", "2026-01-01")
+        for coin in ("BTC_USDT:USDT", "ETH_USDT:USDT", "OLD_USDT:USDT")
+    ][offset:offset + limit]
+
+    result = integrity.list_integrity_issues(
+        exchange="bybit", db_path=integrity_issues_db, limit=limit, offset=offset,
+    )
+
+    assert result["total"] == 9
+    assert [(row["coin"], row["day"]) for row in result["rows"]] == expected_page
+    assert calls == [("bybit", coin) for coin in dict.fromkeys(coin for coin, _day in expected_page)]
+
+
+def test_integrity_issues_empty_catalog_does_not_resolve_market_status(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """An empty catalog requires no mapping reads or status resolution."""
+    def unexpected_status(_exchange: str, _coin: str) -> dict[str, str]:
+        """Fail if an empty result attempts to inspect a market mapping."""
+        pytest.fail("Empty issue lists must not resolve market status")
+
+    monkeypatch.setattr(integrity, "storage_market_status", unexpected_status)
+
+    assert integrity.list_integrity_issues(db_path=tmp_path / "empty.sqlite") == {
+        "exchange": "bybit", "total": 0, "repair_supported": True, "rows": [],
+    }
+
+
+def test_integrity_issues_resolves_status_again_on_next_request(
+    monkeypatch, integrity_issues_db: Path,
+) -> None:
+    """Per-request memoization lets later lists reflect changed market status."""
+    current_status = {"status": "available", "reason": "active test market"}
+    calls = []
+
+    def market_status(exchange: str, coin: str) -> dict[str, str]:
+        """Return the current synthetic mapping classification for each request."""
+        calls.append((exchange, coin))
+        return dict(current_status)
+
+    monkeypatch.setattr(integrity, "storage_market_status", market_status)
+    first = integrity.list_integrity_issues(db_path=integrity_issues_db)
+    current_status.update(status="removed", reason="inactive test market")
+    second = integrity.list_integrity_issues(db_path=integrity_issues_db)
+
+    expected_calls = [("bybit", coin) for coin in ("BTC_USDT:USDT", "ETH_USDT:USDT", "OLD_USDT:USDT")]
+    assert calls == expected_calls * 2
+    assert all(row["market_status"] == "available" and row["repair_supported"] for row in first["rows"])
+    assert all(
+        row["market_status"] == "removed"
+        and row["market_reason"] == "inactive test market"
+        and row["repair_supported"] is False
+        for row in second["rows"]
+    )
+
+
 def test_integrity_repair_resolves_colliding_cat_storage_exactly(tmp_path: Path) -> None:
     """Integrity repair maps CAT storage directories back to distinct downloader coins."""
     mapping_path = tmp_path / "mapping.json"

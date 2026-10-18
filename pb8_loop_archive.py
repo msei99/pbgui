@@ -102,6 +102,8 @@ def select_sources(record, content, profile, output_tokens, *, metadata=None):
     candidates = content['evidence'].get('existing_results') or []
     if not record['settings'].get('historical_advice', True):
         return [], {'mode': 'off', 'sources': [], 'in_a': 0, 'in_b': len(candidates)}
+    from ai_loop_windows import filter_historical_candidates
+    candidates = filter_historical_candidates(record, candidates)
     preferred = (record['settings'].get('source') or {}).get('result_path')
     groups = {}
     for candidate in candidates:

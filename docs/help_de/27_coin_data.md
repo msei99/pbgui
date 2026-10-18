@@ -1,6 +1,12 @@
 # Coin Data
 
-Fortschrittsabfragen laufen nacheinander ohne überlappende Anfragen. Nach dem Ausblenden der Fortschrittsanzeige erfolgen die Abfragen alle 2,5 Sekunden, in verborgenen Browser-Tabs alle 5 Sekunden. Nach Abschluss werden die aktualisierten Daten automatisch übernommen. Beim Verlassen der Seite enden deren Abfragen; der serverseitige Auftrag läuft weiter.
+Coin Data aktualisiert sich beim Öffnen, beim Exchangewechsel, bei der Rückkehr und während die Seite geöffnet bleibt automatisch. Es gibt keine manuellen Refresh-Steuerungen. Lesende Cache-Abfragen starten keine Exchange- oder CMC-Abrufe. Serverseitige Prüfungen starten nur fehlende oder abgelaufene Arbeit anhand der konfigurierten Mapping-, CMC-Listings- und Metadatenintervalle, auch wenn PBCoinData gestoppt ist oder pausiert.
+
+Fortschrittsabfragen laufen nacheinander. **Dismiss to background** oder Escape blendet ausschließlich die Fortschrittsanzeige aus; Sidebar-Status und Jobüberwachung bleiben aktiv. Netzwerkfehler führen zu einer verzögerten Wiederverbindung, ohne den Job zu ersetzen. Browser-Neuladen und Rückkehr finden laufende Jobs wieder. Bei abgelaufener Sitzung enden die Abfragen mit einer Authentifizierungsmeldung.
+
+Aktuelle Filter, fokussierte Eingaben, ausgewählte Symbole und Sortierung bleiben bei automatischen Updates erhalten; Ansicht, Auswahl und Sortierung werden beim Browser-Neuladen wiederhergestellt. Job-Ergebnisse dürfen keine alten Filter zurücksetzen. Verschwindet ein ausgewähltes Symbol, erklärt dies die Statuszeile.
+
+Ein fehlendes Mapping oder eine abgewiesene Ansicht beendet die Jobüberwachung nicht. Gespeicherte Quotes bleiben erhalten, solange Mapping-Daten fehlen. Verschwindet eine Quote, bleiben die übrigen gültigen Quotes ausgewählt; andernfalls erklärt die Seite den Rückfall auf die Exchange-Vorgabe. Auch die HIP-3-DEX-Optionen aktualisieren sich automatisch: Eine gültige Auswahl bleibt bestehen; eine entfernte DEX fällt mit Statusmeldung auf **All DEXes** zurück.
 
 Fehlgeschlagene Coin-Data-Abfragen zeigen einen Fehler, während zwischengespeicherte Daten verfügbar bleiben; Filter können ohne Neuladen erneut angewendet werden.
 
@@ -28,18 +34,6 @@ Browser-Anfragen verwenden das HttpOnly-PBGui-Session-Cookie; der Session-Token 
 
 ## Sidebar-Aktionen
 
-- `Refresh Selected Exchange`
-  - Holt Markets, aktualisiert den Copy-Trading-Cache, baut das Mapping neu und aktualisiert Preise fuer die aktuelle Exchange
-- `Refresh All Exchanges`
-  - Fuehrt denselben Ablauf fuer alle V7-Exchanges aus
-  - Wenn nur einige Exchanges erfolgreich sind, ist deren neuer Stand sofort verfuegbar und die Statuszeile nennt die fehlgeschlagenen Exchanges; schlagen alle Exchanges fehl, wird der Lauf als Fehler gemeldet
-- `Refresh CMC + Selected Exchange`
-  - Laedt CMC-Listings und Metadaten neu und aktualisiert danach die gewaehlte Exchange, damit die sichtbare Tabelle die neuen CMC-Daten sofort nutzt
-  - Zeigt waehrend des laufenden bestehenden Refresh-Workflows ein zentriertes Busy-Overlay mit echten Prozentwerten auf Basis der bereits abgeschlossenen Refresh-Schritte
-- `Refresh CMC + All Exchanges`
-  - Laedt CMC-Listings und Metadaten neu und baut danach alle Exchanges neu auf, damit alle Exchange-Mappings in einem Lauf auf den neuen CMC-Datenstand gebracht werden
-  - Nutzt dasselbe Busy-Overlay mit echten Prozentwerten fuer den laengeren Komplettlauf
-  - Nutzt dieselbe Partial-/Fehler-Zusammenfassung wie `Refresh All Exchanges` und behaelt Exchange-spezifische Diagnosen fuer das Polling
 - `Matched Symbols`
   - Zeigt nur die gematchte Haupttabelle an
 - `CMC Unmatched`
@@ -58,7 +52,7 @@ Coin Data zeigt den Frische-Status als eine gemeinsame Inline-Zeile neben `Filte
 
 ## CMC-Readiness
 
-CMC-Refresh-Aktionen benötigen mindestens eine aktive Credential-Generation im lokal materialisierten CMC-Pool. Coin Data prüft das vor dem Start eines CMC-Jobs und meldet bei fehlendem Pool einen direkten Fehler; reine Exchange-Refreshes bleiben verfügbar. Keys werden unter **System -> Services -> PBCoinData -> Pool** angelegt und geprüft, nicht in `pbgui.ini`.
+Automatische CMC-Updates benötigen mindestens eine aktive Credential-Generation im lokal materialisierten CMC-Pool. Ohne Schlüssel meldet die Sidebar die Einschränkung; Exchange-Updates und Cacheansicht bleiben verfügbar. Listings werden vor Metadaten und Exchange-Anreicherung veröffentlicht. Fehlgeschlagene Abrufe werden mit Backoff automatisch wiederholt; aktuelle Daten werden unter denselben Ressourcensperren wie Daemon- und API-Arbeit wiederverwendet. Keys werden unter **System -> Services -> PBCoinData -> Pool** angelegt und geprüft, nicht in `pbgui.ini`.
 
 Auf VPS-Zielen besteht Readiness aus secret-freien Capability-Metadaten: Protokollversion, aktive Key-Anzahl sowie Katalog-/Materialisierungs-Generation. Ein Node ist erst bereit, nachdem die benötigte versiegelte Generation lokal materialisiert wurde.
 
@@ -101,7 +95,7 @@ Die Seite enthaelt:
 
 - Quote-Prioritaet ist standardmaessig `USDC`, danach `USDT0`
 - Sind beide Quote-Familien verfuegbar, umfasst die Voreinstellung beide; eine explizite Auswahl filtert Matched-, Unmatched- und HIP-3-Zeilen. Diese Auswahl in Coin Data aendert nicht die USDT-Linear-Regeln fuer PB7-/PB8-Konfigurationen.
-- Wenn keine HIP-3-Symbole gefunden werden, kann Coin Data das Hyperliquid-Mapping einmal automatisch neu bauen
+- Fehlende oder abgelaufene Hyperliquid-Mappings werden automatisch aktualisiert; Cache-Abfragen erzwingen keinen HIP-3-Neuaufbau
 - HIP-3-Zeilen werden separat angezeigt und nutzen den eigenen `DEX`-Filter; CMC-basierte Filter wie `market_cap`, `vol/mcap` und Tags gelten fuer gematchte Nicht-HIP-3-Zeilen
 
 ## Daten-Dateien
@@ -118,21 +112,21 @@ Coin Data liest und schreibt unter:
 
 ### Keine Zeilen sichtbar
 
-- Die ausgewaehlte Exchange aktualisieren
+- Die automatische Aktualisierung abwarten und den Sidebar-Status prüfen
 - Filter testweise lockern (`market_cap=0`, hoeheres `vol/mcap`, keine Tags)
 - CMC- und Mapping-Zeitstempel pruefen
 - `Only Copy Trading` deaktivieren, falls aktiv
 
 ### Preis fehlt bei einigen Symbolen
 
-- Die ausgewaehlte Exchange erneut aktualisieren
+- Den automatischen Update-Status prüfen; unvollständige Preisabdeckung wird mit Backoff erneut geprüft
 - Pruefen, ob der Markets-Datei-Zeitstempel aktuell ist
 - Bei Hyperliquid beachten: manche Symbole nutzen Market-Info-Fallback-Preise
 
 ### CMC unmatched ist hoch
 
-- Erst CMC-Daten aktualisieren, dann die ausgewaehlte Exchange
+- Den automatischen CMC-Update-Status und die Datenzeitstempel prüfen
 - Pruefen, ob Symbole neu gelistet sind oder Exchange-spezifische Namensvarianten verwenden
-- Wenn der CMC-Refresh blockiert ist, vor dem Retry die Readiness des PBCoinData-Pools prüfen
+- Bei nicht verfügbaren CMC-Updates einen aktiven lokalen Schlüssel im PBCoinData-Pool prüfen; Updates werden automatisch fortgesetzt
 
-Filter zurücksetzen setzt auch die HIP-3-DEX-Auswahl zurück. Escape schließt die Detailkarte der ausgewählten Coin. Aktionen zur Aktualisierung von Coin Data bleiben während des Starts ihrer Anfrage deaktiviert.
+Filter zurücksetzen setzt auch die HIP-3-DEX-Auswahl zurück. Escape schließt die Detailkarte der ausgewählten Coin. Die Statuszeile bleibt während der Hintergrundarbeit sichtbar und meldet Teilergebnisse oder Fehler.

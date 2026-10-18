@@ -21,6 +21,160 @@ def _store(tmp_path: Path, policy: dict | None = None, *, baseline: str = "0") -
     return store
 
 
+def _seed_grouped_intent(store, user, operation, state="confirmed", prepared_at=10):
+    """Insert synthetic intent history without exchange or runtime access."""
+
+    def insert(connection):
+        """Persist the minimal complete intent record in the isolated store."""
+        connection.execute(
+            "INSERT INTO live_intents(operation_id,user_name,leg,route,descriptor_json,"
+            "state,reserved_amount,prepared_at,updated_at,resolved_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (operation, user, 1, "perp_to_spot", "{}", state, "0", prepared_at, prepared_at,
+             prepared_at if state in {"confirmed", "failed"} else None),
+        )
+
+    store._write(insert)
+
+
+@pytest.mark.parametrize("unresolved_only", [False, True])
+def test_grouped_live_intents_matches_individual_reads(tmp_path, unresolved_only):
+    """Grouping preserves every state, tie ordering, empty policies and filters."""
+    store = _store(tmp_path)
+    _seed_grouped_intent(store, "alice", "z-tie")
+    _seed_grouped_intent(store, "alice", "a-tie", "failed")
+    _seed_grouped_intent(store, "alice", "early", prepared_at=9)
+    names = ["alice", "empty"]
+    store.create_policy("empty", "hyperliquid", {"operating_mode": "dry"})
+    for state in ("prepared", "submitting", "unknown", "confirmed", "failed"):
+        store.create_policy(state, "hyperliquid", {"operating_mode": "dry"})
+        _seed_grouped_intent(store, state, f"{state}-intent", state)
+        names.append(state)
+
+    grouped = store.list_live_intents_grouped(
+        [*reversed(names), "ghost", "alice"], unresolved_only=unresolved_only
+    )
+    assert grouped == {
+        name: store.list_live_intents(name, unresolved_only=unresolved_only) for name in names
+    }
+    assert grouped["empty"] == []
+    assert "ghost" not in grouped
+    if unresolved_only:
+        assert grouped["confirmed"] == grouped["failed"] == grouped["alice"] == []
+    else:
+        assert [intent["operation_id"] for intent in grouped["alice"]] == ["early", "a-tie", "z-tie"]
+    with pytest.raises(KeyError):
+        store.list_live_intents("ghost")
+    assert store.list_live_intents_grouped(["ghost"]) == {}
+
+
+@pytest.mark.parametrize("invalid", ["../etc/passwd", "", None])
+def test_grouped_live_intents_validates_before_connecting(tmp_path, monkeypatch, invalid):
+    """Every identifier is validated before a read connection can be opened."""
+    store = _store(tmp_path)
+
+    def forbidden_connect():
+        """Fail if empty or invalid input touches SQLite."""
+        raise AssertionError("unexpected connection")
+
+    monkeypatch.setattr(store, "_connect", forbidden_connect)
+    assert store.list_live_intents_grouped([]) == {}
+    with pytest.raises(ValueError):
+        store.list_live_intents_grouped(["alice", invalid])
+    with pytest.raises(ValueError):
+        store.list_live_intents(invalid)
+
+
+def test_grouped_live_intents_batches_share_snapshot(tmp_path, monkeypatch):
+    """A writer between parameter-limited batches cannot change the read snapshot."""
+    store = _store(tmp_path)
+    for name in ("bob", "carol"):
+        store.create_policy(name, "hyperliquid", {"operating_mode": "dry"})
+    for name in ("alice", "bob"):
+        _seed_grouped_intent(store, name, f"{name}-intent")
+    names = ["alice", "bob", "carol"]
+    expected = {name: store.list_live_intents(name) for name in names}
+    writer = sqlite3.connect(store.db_path)
+    writer.execute("PRAGMA foreign_keys=ON")
+    connections = []
+    statements = []
+    transactions = []
+    original_connect = store._connect
+    original_read = store._read
+    original_intent_dict = store._intent_dict
+    changed = False
+
+    def limited_connect():
+        """Force one account per batch while counting hardened connections."""
+        connection = original_connect()
+        connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 1)
+        connection.set_trace_callback(statements.append)
+        connections.append(connection)
+        return connection
+
+    def checked_read(callback):
+        """Observe the transaction before _read closes the connection."""
+        def check(connection):
+            """Capture transaction completion even when the callback fails."""
+            try:
+                return callback(connection)
+            finally:
+                transactions.append(connection.in_transaction)
+        return original_read(check)
+
+    def change_between_batches(row):
+        """Commit real isolated changes after the first batch starts reading."""
+        nonlocal changed
+        if not changed:
+            writer.execute("UPDATE live_intents SET state='failed' WHERE user_name='bob'")
+            writer.execute("DELETE FROM policies WHERE user_name='carol'")
+            writer.commit()
+            changed = True
+        return original_intent_dict(row)
+
+    monkeypatch.setattr(store, "_connect", limited_connect)
+    monkeypatch.setattr(store, "_read", checked_read)
+    monkeypatch.setattr(store, "_intent_dict", change_between_batches)
+    try:
+        assert store.list_live_intents_grouped([*names, "alice"]) == expected
+        assert changed
+        assert len(connections) == 1
+        assert sum("SELECT p.user_name AS policy_user" in sql for sql in statements) == 3
+        assert transactions == [False]
+        assert store.list_live_intents("bob")[0]["state"] == "failed"
+        assert "carol" not in store.list_live_intents_grouped(names)
+    finally:
+        writer.close()
+
+
+def test_grouped_live_intents_parse_failure_ends_transaction(tmp_path, monkeypatch):
+    """A deserialization failure rolls back the snapshot before _read closes it."""
+    store = _store(tmp_path)
+    _seed_grouped_intent(store, "alice", "broken-intent")
+    original_read = store._read
+    transactions = []
+
+    def checked_read(callback):
+        """Inspect transaction state while the reader is still open."""
+        def check(connection):
+            """Check cleanup even when deserialization raises."""
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 1)
+            try:
+                return callback(connection)
+            finally:
+                transactions.append(connection.in_transaction)
+        return original_read(check)
+
+    def fail_deserialization(row):
+        """Simulate a corrupt persisted payload without touching runtime data."""
+        raise ValueError("synthetic parse failure")
+
+    monkeypatch.setattr(store, "_read", checked_read)
+    monkeypatch.setattr(store, "_intent_dict", fail_deserialization)
+    with pytest.raises(ValueError, match="synthetic parse failure"):
+        store.list_live_intents_grouped(["alice", "ghost"])
+    assert transactions == [False]
+
+
 def _assert_no_live_artifacts(value: object) -> None:
     """Assert recursively that a dry response exposes no live-allocation fields."""
     forbidden = ("transfer_id", "clientoid", "nonce", "signature", "intent", "signed_action")

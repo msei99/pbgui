@@ -8,13 +8,13 @@ from pb8_loop_backend import LoopBackend
 from pb8_loop_controller import LoopController
 from pb8_loop_store import (LoopStore, apply_hsl_policy, fresh_optimizer_config,
                             validate_change, validate_hsl_policy)
-from tests.test_pb8_loop_optimizer import config, settings
+from tests.test_pb8_loop_optimizer import config, settings, valid_gpu_config
 
 
 @pytest.mark.parametrize('execution', ['cpu', 'gpu', 'vast'])
 def test_fresh_jobs_drop_all_seed_sources_and_persist_unique_rng(tmp_path, execution):
     """No inherited self/Pareto/resume source or winner enters the launch population."""
-    source = config()
+    source = valid_gpu_config() if execution != 'cpu' else config()
     source['optimize'].update(starting_configs='old', starting_config='older', checkpoint='resume', seed=7)
     source['pbgui'].update(optimize_runtime={'mode':'checkpoint_resume', 'source':'old'},
                           optimize_seed_mode='self', optimize_seed_path='old', starting_config=True)
@@ -126,7 +126,7 @@ def test_backend_initial_clears_population_sources_and_applies_hsl(tmp_path, mon
     import pb8_loop_backend as backend_module
     from api import optimize_v8 as opt
     import scenario_windows
-    source = config()
+    source = valid_gpu_config() if execution != 'cpu' else config()
     source['pbgui'].update(optimize_runtime={'mode':'pareto_seed', 'source':'__self__'}, optimize_seed_mode='self')
     source['optimize']['starting_configs'] = 'old'
     original = copy.deepcopy(source)

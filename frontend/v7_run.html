@@ -718,6 +718,39 @@ var COLS = [
 ];
 if (runListAdapter.isV8) COLS.splice(2, 0, { key: 'strategy', label: 'Strategy' });
 
+/* Persist only this tab's non-secret Run-list navigation state. */
+var RUN_NAVIGATION_KEY = 'pbgui:run:' + runListAdapter.version + ':navigation:v1';
+
+function restoreRunNavigation() {
+  try {
+    var saved = JSON.parse(window.sessionStorage.getItem(RUN_NAVIGATION_KEY) || '{}');
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return;
+    if (typeof saved.search === 'string') filterSearch = saved.search;
+    if (typeof saved.status === 'string' && Array.from(document.getElementById('f-status').options).some(function(option) {
+      return option.value === saved.status;
+    })) filterStatus = saved.status;
+    if (typeof saved.sortCol === 'string' && COLS.some(function(column) {
+      return column.key !== '_actions' && column.key === saved.sortCol;
+    })) sort.col = saved.sortCol;
+    if (typeof saved.sortAsc === 'boolean') sort.asc = saved.sortAsc;
+  } catch (error) {
+    // Navigation remains usable when storage is unavailable or malformed.
+  }
+}
+
+function persistRunNavigation() {
+  try {
+    window.sessionStorage.setItem(RUN_NAVIGATION_KEY, JSON.stringify({
+      search: filterSearch,
+      status: filterStatus,
+      sortCol: sort.col,
+      sortAsc: sort.asc
+    }));
+  } catch (error) {
+    // Filtering and sorting still work when browser storage is unavailable.
+  }
+}
+
 var STATUS_LABELS = {
   synced:          'synced',
   outdated:        'outdated',
@@ -835,6 +868,7 @@ function renderHeader() {
       var key = th.dataset.sort;
       if (sort.col === key) sort.asc = !sort.asc;
       else { sort.col = key; sort.asc = true; }
+      persistRunNavigation();
       render();
     };
   });
@@ -1634,10 +1668,12 @@ function setBanner(state) {
 /* ─── Event binding ───────────────────────────────────────── */
 document.getElementById('f-search').oninput = function(e) {
   filterSearch = e.target.value;
+  persistRunNavigation();
   render();
 };
 document.getElementById('f-status').onchange = function(e) {
   filterStatus = e.target.value;
+  persistRunNavigation();
   render();
 };
 
@@ -1663,6 +1699,9 @@ document.getElementById('tbody').addEventListener('dblclick', function(e) {
 
 /* ─── Auto-refresh via WebSocket ──────────────────────────── */
 runListAdapter.configureUi();
+restoreRunNavigation();
+document.getElementById('f-search').value = filterSearch;
+document.getElementById('f-status').value = filterStatus;
 loadInstances();  /* initial REST fetch for immediate data */
 connectWS();      /* then switch to real-time WebSocket */
 window.addEventListener('beforeunload', function() {

@@ -3,6 +3,7 @@
 Endpoints:
     GET  /main_page           -> serve the standalone HTML page
     GET  /state               -> return filtered Coin Data page state
+    POST /ensure              -> discover jobs and update missing or expired data
     POST /refresh/exchange    -> refresh selected exchange data
     POST /refresh/all         -> refresh all exchanges
     POST /refresh/cmc         -> refresh CoinMarketCap data and selected exchange
@@ -32,6 +33,8 @@ from api.page_templates import render_page_urls, script_json
 from Exchange import V7
 from PBCoinData import CoinData, compute_coin_name
 from logging_helpers import human_log as _log
+from file_lock import advisory_file_lock
+from secure_files import atomic_write_private_text
 
 SERVICE = "CoinDataUI"
 router = APIRouter()
@@ -197,6 +200,7 @@ def _create_refresh_job(
     total_steps: int,
     *,
     coalesce_key: str | None = None,
+    resources: tuple[str, ...] = (),
 ) -> str:
     now = time.time()
     job_id = uuid.uuid4().hex
@@ -216,6 +220,7 @@ def _create_refresh_job(
             "exchange_results": [],
             "warnings": [],
             "_coalesce_key": coalesce_key,
+            "_resources": resources,
             "created_at": now,
             "updated_at": now,
         }
@@ -290,7 +295,7 @@ def _get_refresh_job(job_id: str) -> dict[str, Any] | None:
         if not job:
             return None
         result = dict(job)
-        result.pop("_coalesce_key", None)
+        result = {key: value for key, value in result.items() if not key.startswith("_")}
         return result
 
 
@@ -301,6 +306,7 @@ def _start_refresh_job(
     runner: Any,
     *,
     coalesce_key: str,
+    resources: tuple[str, ...] = (),
 ) -> str:
     with _REFRESH_JOBS_LOCK:
         if not _REFRESH_ACCEPTING:
@@ -324,6 +330,7 @@ def _start_refresh_job(
             message,
             total_steps,
             coalesce_key=coalesce_key,
+            resources=resources,
         )
 
     def _worker() -> None:
@@ -628,7 +635,18 @@ def _new_coindata(
     only_cpt: bool = False,
     hide_notices: bool = False,
 ) -> CoinData:
-    coindata = CoinData()
+    class CachedCoinData(CoinData):
+        """Keep implicit enrichment loads local, including property setters."""
+
+        def load_data(self):
+            """Load published listings without implicitly spending CMC credits."""
+            self.data = _read_cached_json(COINDATA_DIR / "coindata.json", None)
+
+        def load_metadata(self):
+            """Load published metadata without implicitly starting a fetch."""
+            self.metadata = _read_cached_json(COINDATA_DIR / "metadata.json", None)
+
+    coindata = CachedCoinData()
     supported_exchanges = [exchange_id for exchange_id in coindata.exchanges if exchange_id in SUPPORTED_EXCHANGES]
     if supported_exchanges and coindata.exchange not in supported_exchanges:
         coindata.exchange = supported_exchanges[0]
@@ -646,6 +664,152 @@ def _new_coindata(
     coindata.only_cpt = bool(only_cpt)
     coindata.notices_ignore = bool(hide_notices)
     return coindata
+
+
+def _read_cached_json(path: Path, fallback: Any) -> Any:
+    """Read a published local snapshot without triggering any producer."""
+    if not path.exists():
+        return fallback
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _log(SERVICE, f"Cannot read Coin Data cache {path.name}: {exc}", level="WARNING")
+        return fallback
+
+
+def _auto_lock_target(resource: str) -> Path:
+    """Use the very same locks as the daemon and explicit refresh operations."""
+    if resource.startswith("exchange:") and resource[9:] in SUPPORTED_EXCHANGES:
+        name = "exchange-" + resource[9:]
+    elif resource in {"cmc:listings", "cmc:metadata"}:
+        name = resource.replace(":", "-") + "-refresh"
+    else:
+        raise HTTPException(status_code=422, detail="Unknown Coin Data resource")
+    return COINDATA_DIR / ".locks" / name
+
+
+def _auto_retry(resource: str) -> dict[str, Any]:
+    """Read bounded, non-secret retry state shared with other API processes."""
+    value = _read_cached_json(_auto_lock_target(resource).with_suffix(".retry.json"), {})
+    return value if isinstance(value, dict) else {}
+
+
+def _auto_label(resource: str) -> str:
+    """Present the data being updated instead of internal resource identifiers."""
+    if resource.startswith("exchange:"):
+        return resource[9:].capitalize() + " market data"
+    return "CoinMarketCap " + resource.split(":", 1)[1]
+
+
+def _auto_due(resource: str, coindata: CoinData) -> bool:
+    """Evaluate published timestamps independently of display filters."""
+    if resource.startswith("exchange:"):
+        directory = COINDATA_DIR / resource[9:]
+        mapping_ts = _file_mtime(directory / "mapping.json") or 0
+        markets_ts = _file_mtime(directory / "ccxt_markets.json") or 0
+        source_ts = max(_file_mtime(COINDATA_DIR / name) or 0
+                        for name in ("coindata.json", "metadata.json"))
+        mapping = _read_cached_json(directory / "mapping.json", None)
+        markets = _read_cached_json(directory / "ccxt_markets.json", None)
+        return (not isinstance(mapping, list) or not mapping or not isinstance(markets, dict) or not markets
+                or min(mapping_ts, markets_ts) < time.time() - coindata.mapping_interval * 3600
+                or mapping_ts < source_ts
+                or mapping_ts <= float(_auto_retry(resource).get("failed_at", 0)))
+    name, seconds = (("coindata.json", coindata.fetch_interval * 3600)
+                     if resource == "cmc:listings"
+                     else ("metadata.json", coindata.metadata_interval * 86400))
+    timestamp = _file_mtime(COINDATA_DIR / name) or 0
+    cached = _read_cached_json(COINDATA_DIR / name, None)
+    return (not isinstance(cached, dict) or not cached.get("data")
+            or timestamp < time.time() - seconds
+            or timestamp <= float(_auto_retry(resource).get("failed_at", 0)))
+
+
+def _run_auto_resource(resource: str, job_id: str, _total: int) -> _RefreshJobOutcome:
+    """Recheck freshness under the producer lock, then run only required work."""
+    with advisory_file_lock(_auto_lock_target(resource)):
+        retry = _auto_retry(resource)
+        result = None
+        try:
+            coindata = _new_coindata(exchange=resource[9:] if resource.startswith("exchange:") else None)
+            if float(retry.get("next_retry_at", 0)) > time.time() or not _auto_due(resource, coindata):
+                return _RefreshJobOutcome("completed", "Coin Data is current or retry is scheduled.", None, [], [])
+            _set_refresh_job_progress(job_id, 0, 1, "Updating " + _auto_label(resource) + "...")
+            if resource.startswith("exchange:"):
+                result = _refresh_single_exchange(coindata, resource[9:])
+                if not result["ok"]:
+                    raise RuntimeError(_exchange_result_warning(result))
+            else:
+                _require_cmc_pool_ready(coindata)
+                coindata.load_data()
+                coindata.load_metadata()
+                fetcher = coindata.fetch_data if resource == "cmc:listings" else coindata.fetch_metadata
+                if fetcher() is False:
+                    raise RuntimeError("CoinMarketCap fetch returned False")
+            atomic_write_private_text(_auto_lock_target(resource).with_suffix(".retry.json"), "{}\n")
+            return _RefreshJobOutcome("completed", "Updated " + _auto_label(resource) + ".", None, [], [])
+        except Exception as exc:
+            failures = min(6, int(retry.get("failures", 0)) + 1)
+            record = {"failures": failures, "failed_at": time.time(),
+                      "next_retry_at": time.time() + min(3600, 30 * 2 ** failures)}
+            atomic_write_private_text(_auto_lock_target(resource).with_suffix(".retry.json"),
+                                      json.dumps(record, indent=4) + "\n")
+            _log(SERVICE, f"Automatic Coin Data update failed ({resource}): {exc}", level="ERROR")
+            return _RefreshJobOutcome(
+                "partial" if result and result.get("partial") else "error",
+                "Automatic update failed for " + _auto_label(resource) + "; retry scheduled.",
+                None, [result] if result else [], [],
+            )
+
+
+@router.post("/ensure")
+def ensure_current(
+    payload: CoinDataRefreshRequest,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Discover current work and ensure stale resources, even without the daemon."""
+    del session
+    exchange = str(payload.exchange or SUPPORTED_EXCHANGES[0]).strip().lower()
+    if exchange not in SUPPORTED_EXCHANGES:
+        raise HTTPException(status_code=422, detail="Unsupported exchange")
+    _validate_nonempty_quote_selection(payload.quotes)
+    coindata = _new_coindata(exchange=exchange)
+    pool = coindata.cmc_pool_status()
+    cmc_ready = int(pool.get("active_credentials") or 0) > 0 and not pool.get("error")
+    resources = ("cmc:listings", "cmc:metadata", "exchange:" + exchange)
+    retry_at = 0.0
+    with _REFRESH_JOBS_LOCK:
+        if not _REFRESH_ACCEPTING:
+            raise HTTPException(status_code=503, detail="Coin Data refresh is shutting down")
+        _prune_refresh_jobs_locked()
+        for resource in resources:
+            if resource.startswith("cmc:") and not cmc_ready:
+                continue
+            active_resources = {item for job in _REFRESH_JOBS.values() if job["status"] == "running"
+                                for item in job.get("_resources", ())}
+            if resource in active_resources:
+                continue
+            # Publish CMC before building an enriched mapping; never force a CMC fetch from a mapping load.
+            if resource != "cmc:listings" and "cmc:listings" in active_resources:
+                continue
+            if resource.startswith("exchange:") and "cmc:metadata" in active_resources:
+                continue
+            if not _auto_due(resource, coindata):
+                continue
+            retry = float(_auto_retry(resource).get("next_retry_at", 0))
+            if retry > time.time():
+                retry_at = max(retry_at, retry)
+                continue
+            if sum(job["status"] == "running" for job in _REFRESH_JOBS.values()) >= _REFRESH_ACTIVE_JOB_LIMIT:
+                continue
+            _start_refresh_job(
+                "Updating Coin Data", "Waiting for " + _auto_label(resource), 1,
+                lambda job_id, total, resource=resource: _run_auto_resource(resource, job_id, total),
+                coalesce_key="auto:" + resource, resources=(resource,),
+            )
+        job_ids = [job_id for job_id, job in _REFRESH_JOBS.items() if job["status"] == "running"
+                   and set(job.get("_resources", ())).intersection(resources)]
+    return {"job_ids": job_ids, "cmc_pool": pool, "retry_at": retry_at}
 
 
 def _require_cmc_pool_ready(coindata: CoinData) -> None:
@@ -725,7 +889,7 @@ def _build_state(
     only_cpt: bool = False,
     hide_notices: bool = False,
     quotes: list[str] | None = None,
-    allow_refresh: bool = True,
+    allow_refresh: bool = False,
 ) -> dict[str, Any]:
     coindata = _new_coindata(
         exchange=exchange,
@@ -749,7 +913,7 @@ def _build_state(
 
     if not mapping_rows:
         warnings.append(
-            f"No mapping data available for {coindata.exchange}. Refresh market data and try again."
+            f"No mapping data available for {coindata.exchange}. Automatic update pending."
         )
 
     if allow_refresh and coindata.exchange == "hyperliquid" and mapping_rows and not any(
@@ -1061,6 +1225,7 @@ def refresh_exchange(
         total_steps,
         _runner,
         coalesce_key=_refresh_job_key("exchange", coindata, payload),
+        resources=("exchange:" + coindata.exchange,),
     )
     return {"ok": True, "job_id": job_id}
 
@@ -1109,6 +1274,7 @@ def refresh_all(
         total_steps,
         _runner,
         coalesce_key=_refresh_job_key("all", coindata, payload),
+        resources=tuple("exchange:" + item for item in exchanges),
     )
     return {"ok": True, "job_id": job_id}
 
@@ -1165,6 +1331,7 @@ def refresh_cmc(
         total_steps,
         _runner,
         coalesce_key=_refresh_job_key("cmc", coindata, payload),
+        resources=("cmc:listings", "cmc:metadata", "exchange:" + coindata.exchange),
     )
     return {"ok": True, "job_id": job_id}
 
@@ -1231,5 +1398,6 @@ def refresh_cmc_all(
         total_steps,
         _runner,
         coalesce_key=_refresh_job_key("cmc_all", coindata, payload),
+        resources=("cmc:listings", "cmc:metadata", *("exchange:" + item for item in exchanges)),
     )
     return {"ok": True, "job_id": job_id}

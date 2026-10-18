@@ -958,7 +958,7 @@
           + '<span id="pbgui-auth-mode-pill" role="status">NO LOGIN</span>'
           + '<span id="pbgui-master-pill"><span class="pbgui-master-label">Master</span><span id="pbgui-master-name"></span></span>'
           + '<button class="nav-action-btn restart" id="pbgui-restart-btn"><span class="nav-restart-dot"></span>Restart</button>'
-          + '<button class="nav-action-btn notify" id="pbgui-notify-btn" title="Notification log">&#128276;</button>'
+          + '<button class="nav-action-btn notify" id="pbgui-notify-btn" title="Notification log" aria-label="Notification log" aria-controls="pbgui-notify-panel" aria-haspopup="dialog" aria-expanded="false">&#128276;</button>'
           + '<span class="nav-divider" aria-hidden="true"></span>'
            + '<button class="nav-action-btn alerts" id="pbgui-alert-btn" title="VPSMonitor alerts">&#128737; <span class="nav-badge" id="pbgui-alert-badge">0/0</span></button>'
            + '<button class="nav-action-btn accent" id="pbgui-ai-btn" title="Open AI assistant" aria-label="Open AI assistant" aria-expanded="false" aria-controls="pbgui-ai-drawer" style="display:none">&#10024; AI</button>'
@@ -997,6 +997,9 @@
      NOTIFICATION LOG PANEL
      ════════════════════════════════════ */
   var _notifyViewer = null;
+  var _notifyOpenRequested = false;
+  var _notifyOpenGeneration = 0;
+  var _notifyViewerLoad = null;
   var _navAlerts = { items: [], history: [], summary: { new_count: 0, ack_count: 0, total_active: 0 } };
   var _alertsTimer = null;
   var _alertsRequest = null;
@@ -1010,6 +1013,9 @@
     if (document.getElementById('pbgui-notify-panel')) return;
     var d = document.createElement('div');
     d.id = 'pbgui-notify-panel';
+    d.setAttribute('role', 'dialog');
+    d.setAttribute('aria-labelledby', 'pbgui-notify-title');
+    d.setAttribute('aria-hidden', 'true');
     d.innerHTML =
       '<div class="pnr pnr-n" data-dir="n"></div>' +
       '<div class="pnr pnr-s" data-dir="s"></div>' +
@@ -1021,19 +1027,38 @@
       '<div class="pnr pnr-se" data-dir="se"></div>' +
       '<div id="pbgui-notify-hdr">' +
         '<span id="pbgui-notify-title">Notifications</span>' +
-        '<button id="pbgui-notify-close">\u2715</button>' +
+        '<button id="pbgui-notify-close" aria-label="Close notification log">\u2715</button>' +
       '</div>' +
       '<div id="pbgui-notify-target" style="flex:1;min-height:0;overflow:hidden"></div>';
     document.body.appendChild(d);
   }
 
-  function _ensureLogViewer(cb) {
+  function _ensureLogViewer(cb, onError) {
     // A classic-script class is a global lexical binding, not a window property.
     if (typeof LogViewerPanel === 'function') { cb(); return; }
+    // Only the latest opening owns completion; keep one script in flight.
+    if (_notifyViewerLoad) {
+      _notifyViewerLoad.ready = cb;
+      _notifyViewerLoad.failed = onError;
+      return;
+    }
     var s = document.createElement('script');
+    var load = { ready: cb, failed: onError };
+    _notifyViewerLoad = load;
+    function finish() {
+      if (_notifyViewerLoad !== load) return;
+      _notifyViewerLoad = null;
+      s.onload = s.onerror = null;
+      s.remove();
+      if (typeof LogViewerPanel === 'function') {
+        load.ready();
+      } else {
+        console.warn('Failed to load log_viewer_panel.js');
+        if (load.failed) load.failed();
+      }
+    }
     s.src = _appPath('/app/js/log_viewer_panel.js?v=50');
-    s.onload = cb;
-    s.onerror = function() { console.warn('Failed to load log_viewer_panel.js'); };
+    s.onload = s.onerror = finish;
     document.head.appendChild(s);
   }
 
@@ -1191,16 +1216,20 @@
   window.PBGuiNotify = window.PBGuiNotify || {};
   window.PBGuiNotify.log = logUiNotification;
   window.PBGuiNotify.installHooks = installNotificationHooks;
+  window.PBGuiNotify.closePanel = closeNotifyPanel;
 
   function toggleNotifyPanel() {
     var panel = document.getElementById('pbgui-notify-panel');
     if (!panel) return;
-    if (panel.classList.contains('visible')) {
+    if (_notifyOpenRequested || panel.classList.contains('visible')) {
       closeNotifyPanel();
       return;
     }
+    _notifyOpenRequested = true;
+    var generation = ++_notifyOpenGeneration;
+    var openingFocus = document.activeElement;
     _ensureLogViewer(function() {
-      if (_notifyViewer) { _notifyViewer.close(); _notifyViewer = null; }
+      if (!_notifyOpenRequested || generation !== _notifyOpenGeneration || _notifyViewer) return;
       _notifyViewer = new LogViewerPanel({
         containerId: 'pbgui-notify-target',
         wsBase: _getWsBase(),
@@ -1217,15 +1246,37 @@
         panel.style.left = ''; panel.style.top = '';
       }
       panel.classList.add('visible');
+      panel.setAttribute('aria-hidden', 'false');
+      var button = document.getElementById('pbgui-notify-btn');
+      if (button) button.setAttribute('aria-expanded', 'true');
       _bindNotifyDrag(panel);
       _bindNotifyResize(panel);
+      var closeButton = document.getElementById('pbgui-notify-close');
+      var higherOverlay = document.querySelector(
+        '#pbgui-confirm-ovl.visible, #pbgui-dialog-ovl.visible, ' +
+        '#pbgui-alert-ovl.visible, #pbgui-about-ovl.visible, #pbgui-shared-help-ovl.visible'
+      );
+      // Completion must not take focus from a newer interaction or a higher dialog.
+      if (closeButton && !higherOverlay && document.activeElement === openingFocus) closeButton.focus();
+    }, function() {
+      if (generation === _notifyOpenGeneration) closeNotifyPanel();
     });
   }
 
-  function closeNotifyPanel() {
+  function closeNotifyPanel(options) {
     var panel = document.getElementById('pbgui-notify-panel');
+    var wasVisible = panel && panel.classList.contains('visible');
+    var returnFocus = wasVisible && ((options && options.restoreFocus) || panel.contains(document.activeElement));
+    _notifyOpenRequested = false;
+    ++_notifyOpenGeneration;
     if (panel) panel.classList.remove('visible');
     if (_notifyViewer) { _notifyViewer.close(); _notifyViewer = null; }
+    var button = document.getElementById('pbgui-notify-btn');
+    if (button) {
+      button.setAttribute('aria-expanded', 'false');
+      if (returnFocus) button.focus();
+    }
+    if (panel) panel.setAttribute('aria-hidden', 'true');
   }
 
   function buildAlertOverlay() {
@@ -1700,7 +1751,7 @@
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
-    'help':               '/app/help.html?v=1773',
+    'help':               '/app/help.html?v=1775',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
@@ -2103,10 +2154,13 @@
       logoutBtn.addEventListener('click', function () { performLogout(); });
     }
 
-    /* Esc key closes about overlay */
+    /* Escape closes one overlay, in stacking order. */
     document.addEventListener('keydown', function (e) {
       var confirmOvl = document.getElementById('pbgui-confirm-ovl');
       if (e.key === 'Escape') {
+        // Shared dialogs may run before or after this handler. Respect both orders.
+        var sharedDialog = document.getElementById('pbgui-dialog-ovl');
+        if (e.defaultPrevented || (sharedDialog && sharedDialog.classList.contains('visible'))) return;
         if (confirmOvl && confirmOvl.classList.contains('visible')) {
           closeNavConfirm(false);
           return;
@@ -2116,7 +2170,18 @@
           closeAlertOverlay();
           return;
         }
-        if (aboutOvl) aboutOvl.classList.remove('visible');
+        if (aboutOvl && aboutOvl.classList.contains('visible')) {
+          aboutOvl.classList.remove('visible');
+          return;
+        }
+        // The separate Guide owns Escape while its overlay is open.
+        var helpOvl = document.getElementById('pbgui-shared-help-ovl');
+        if (helpOvl && helpOvl.classList.contains('visible')) return;
+        var notifyPanel = document.getElementById('pbgui-notify-panel');
+        if (_notifyOpenRequested || (notifyPanel && notifyPanel.classList.contains('visible'))) {
+          closeNotifyPanel({ restoreFocus: true });
+          return;
+        }
       }
       if (e.key === 'Enter' && confirmOvl && confirmOvl.classList.contains('visible')) {
         if (e.target && e.target.id === 'pbgui-confirm-cancel') return;

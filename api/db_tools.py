@@ -1801,17 +1801,26 @@ def list_users_with_counts(db_paths: dict[str, Path]) -> list[dict[str, Any]]:
     conns = _connect_bundle(db_paths)
     try:
         users: set[str] = set()
+        grouped_tables: dict[str, dict[str, int]] = {}
         for spec in TABLE_SPECS:
             conn = conns[spec.db_name]
+            grouped = grouped_tables[f"{spec.db_name}:{spec.table}"] = {}
             if not _table_exists(conn, spec.table):
                 continue
-            for row in conn.execute(f'SELECT DISTINCT "{spec.user_col}" FROM "{spec.table}"'):
+            for row in conn.execute(
+                f'SELECT "{spec.user_col}", COUNT(*) FROM "{spec.table}" GROUP BY "{spec.user_col}"'
+            ):
                 if row and row[0]:
-                    users.add(str(row[0]))
+                    name = str(row[0])
+                    users.add(name)
+                    grouped[name] = int(row[1])
         result: list[dict[str, Any]] = []
         for user in sorted(users, key=str.lower):
-            counts = count_user_rows(db_paths, [user])
-            result.append({"user": user, "total": counts["total"], "tables": counts["tables"]})
+            # Preserve count_user_rows' validation and trimmed selection while
+            # keeping the original discovered name in the listing.
+            selected = _clean_users([user])
+            tables = {key: grouped.get(selected[0], 0) for key, grouped in grouped_tables.items()} if selected else {}
+            result.append({"user": user, "total": sum(tables.values()), "tables": tables})
         return result
     finally:
         _close_bundle(conns)

@@ -42,6 +42,11 @@ _START_DATE_PROGRESS_PREFIX = "PBGUI_OHLCV_START_PROGRESS "
 _START_DATE_JOB_TTL_MS = 60 * 60 * 1000
 _MAX_START_DATE_JOBS = 32
 _MAX_ACTIVE_START_DATE_JOBS = 2
+_START_DATE_TIMEOUT_SECONDS = 180.0
+_START_DATE_TERM_SECONDS = 3.0
+_START_DATE_KILL_SECONDS = 2.0
+_START_DATE_OUTPUT_LIMIT = 32 * 1024 * 1024
+_START_DATE_PROGRESS_LINE_LIMIT = 16 * 1024
 
 
 class PB8OhlcvError(RuntimeError):
@@ -266,33 +271,143 @@ def _parse_start_date_progress_line(line: str) -> dict[str, Any] | None:
 
 
 def _terminate_start_date_process(process: subprocess.Popen) -> None:
-    """Terminate one registered inception helper process group idempotently."""
-    if process.poll() is not None:
-        return
-    try:
-        if platform.system() != "Windows":
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
-            process.terminate()
-        process.wait(timeout=3)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
+    """Stop and reap only this lookup's process and its privately created group."""
+    termination_lock = getattr(process, "_pbgui_termination_lock", None)
+    if termination_lock is None:
+        termination_lock = threading.Lock()
+        process._pbgui_termination_lock = termination_lock
+    with termination_lock:
+        if getattr(process, "_pbgui_terminated", False):
+            return
+        own_group = bool(getattr(process, "_pbgui_owned_group", False))
+        if process.poll() is not None and not own_group:
+            return
         try:
-            if process.poll() is None:
-                if platform.system() != "Windows":
-                    os.killpg(process.pid, signal.SIGKILL)
+            if own_group:
+                os.killpg(process.pid, signal.SIGTERM)
+                deadline = time.monotonic() + _START_DATE_TERM_SECONDS
+                while time.monotonic() < deadline:
+                    process.poll()
+                    try:
+                        os.killpg(process.pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(min(0.05, max(0, deadline - time.monotonic())))
                 else:
+                    os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.terminate()
+                try:
+                    process.wait(timeout=_START_DATE_TERM_SECONDS)
+                except subprocess.TimeoutExpired:
                     process.kill()
-                process.wait(timeout=2)
-        except (ProcessLookupError, subprocess.TimeoutExpired, OSError):
+        except ProcessLookupError:
             pass
-    except OSError:
-        pass
+        except OSError as exc:
+            _log(SERVICE, f"Cannot stop PB8 start-date helper: {exc}", level="WARNING")
+        try:
+            process.wait(timeout=_START_DATE_KILL_SECONDS)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            _log(SERVICE, f"Cannot reap PB8 start-date helper: {exc}", level="WARNING")
+        process._pbgui_terminated = True
+
+
+def _collect_start_date_output(
+    process: subprocess.Popen, job_id: str, request: dict[str, Any], deadline: float
+) -> tuple[bytes, int]:
+    """Drain both pipes concurrently while bounding input, output and helper exit."""
+    output: list[bytes] = []
+    errors: list[Exception] = []
+    changed = threading.Event()
+
+    def write_request() -> None:
+        """Feed the helper without blocking the deadline coordinator."""
+        remaining = memoryview(json.dumps(request).encode("utf-8"))
+        while remaining:
+            written = process.stdin.write(remaining)
+            if not written:
+                raise PB8OhlcvUnavailableError("PB8 OHLCV start-date helper rejected its request")
+            remaining = remaining[written:]
+        process.stdin.close()
+
+    def read_output() -> None:
+        """Read bounded result chunks while stderr is being drained separately."""
+        total = 0
+        while chunk := process.stdout.read(65536):
+            total += len(chunk)
+            if total > _START_DATE_OUTPUT_LIMIT:
+                raise PB8OhlcvError("PB8 OHLCV start-date helper response exceeds the size limit")
+            output.append(chunk)
+
+    def read_progress() -> None:
+        """Consume bounded progress lines and discard oversized diagnostic lines."""
+        discarding = False
+        while line := process.stderr.readline(_START_DATE_PROGRESS_LINE_LIMIT + 1):
+            oversized = len(line) > _START_DATE_PROGRESS_LINE_LIMIT
+            if not discarding and oversized and line.startswith(_START_DATE_PROGRESS_PREFIX.encode("ascii")):
+                raise PB8OhlcvError("PB8 OHLCV start-date helper progress exceeds the size limit")
+            if not discarding and not oversized:
+                progress = _parse_start_date_progress_line(line.decode("utf-8", errors="replace").strip())
+                if progress is not None:
+                    with _START_DATE_LOCK:
+                        job = _START_DATE_JOBS.get(job_id)
+                        if job:
+                            job["progress"] = progress
+            discarding = not line.endswith(b"\n") and (discarding or oversized)
+
+    def run_io(operation, done: threading.Event) -> None:
+        """Report each owned I/O task's completion or failure to the coordinator."""
+        try:
+            operation()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+            changed.set()
+
+    tasks = []
+    try:
+        for name, operation in (("input", write_request), ("output", read_output), ("progress", read_progress)):
+            done = threading.Event()
+            thread = threading.Thread(target=run_io, args=(operation, done), name=f"pb8-start-{job_id}-{name}")
+            thread.start()
+            tasks.append((thread, done))
+        while True:
+            changed.clear()
+            with _START_DATE_LOCK:
+                stopped = bool((_START_DATE_JOBS.get(job_id) or {}).get("stop_requested"))
+            if stopped:
+                raise PB8OhlcvError("PB8 OHLCV start-date lookup stopped")
+            if errors:
+                raise errors[0]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PB8OhlcvUnavailableError(
+                    f"PB8 OHLCV start-date lookup timed out after {_START_DATE_TIMEOUT_SECONDS:g} seconds"
+                )
+            if all(done.is_set() for _thread, done in tasks):
+                try:
+                    return b"".join(output), process.wait(timeout=min(remaining, 0.05))
+                except subprocess.TimeoutExpired:
+                    pass
+            changed.wait(min(remaining, 0.05))
+    finally:
+        # A child can retain pipes after the helper leader exits. Kill the
+        # owned group before joining readers or closing their file objects.
+        if process.poll() is None or any(not done.is_set() for _thread, done in tasks):
+            _terminate_start_date_process(process)
+        for thread, _done in tasks:
+            thread.join()
 
 
 def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
     """Run one PB8 start-date helper and publish its streamed pair progress."""
     runtime_lease = None
     process = None
+    with _START_DATE_LOCK:
+        deadline = (_START_DATE_JOBS.get(job_id) or {}).get(
+            "_deadline", time.monotonic() + _START_DATE_TIMEOUT_SECONDS
+        )
     try:
         runtime_lease = _acquire_runtime_lease()
         status = _runtime()
@@ -310,6 +425,8 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
             if job.get("stop_requested"):
                 job.update(status="stopped", finished_at=_utc_ms())
                 return
+            if time.monotonic() >= deadline:
+                raise PB8OhlcvUnavailableError("PB8 OHLCV start-date lookup timed out before helper launch")
             job.update(status="running", started_at=_utc_ms())
         process = subprocess.Popen(
             [status["pb8venv"], "-I", str(helper)],
@@ -317,10 +434,11 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
+            bufsize=0,
             start_new_session=platform.system() != "Windows",
         )
+        process._pbgui_owned_group = platform.system() != "Windows"
+        process._pbgui_termination_lock = threading.Lock()
         with _START_DATE_LOCK:
             _START_DATE_PROCESSES[job_id] = process
             should_stop = bool((_START_DATE_JOBS.get(job_id) or {}).get("stop_requested"))
@@ -328,22 +446,7 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
             _terminate_start_date_process(process)
         if process.stdin is None or process.stdout is None or process.stderr is None:
             raise PB8OhlcvUnavailableError("PB8 OHLCV start-date helper pipes are unavailable")
-        try:
-            process.stdin.write(json.dumps(request))
-            process.stdin.close()
-        except (BrokenPipeError, OSError) as exc:
-            if not should_stop:
-                raise PB8OhlcvUnavailableError("PB8 OHLCV start-date helper rejected its request") from exc
-        for line in process.stderr:
-            progress = _parse_start_date_progress_line(line.strip())
-            if progress is None:
-                continue
-            with _START_DATE_LOCK:
-                job = _START_DATE_JOBS.get(job_id)
-                if job:
-                    job["progress"] = progress
-        stdout = process.stdout.read()
-        returncode = process.wait()
+        stdout, returncode = _collect_start_date_output(process, job_id, request, deadline)
         with _START_DATE_LOCK:
             stopped = bool((_START_DATE_JOBS.get(job_id) or {}).get("stop_requested"))
         if stopped:
@@ -364,6 +467,9 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
         with _START_DATE_LOCK:
             job = _START_DATE_JOBS.get(job_id)
             if job:
+                if job.get("stop_requested"):
+                    job.update(status="stopped", finished_at=_utc_ms(), result=None, error=None)
+                    return
                 progress = dict(job.get("progress") or {})
                 progress.update(phase="complete", percent=100.0, message="OHLCV start dates resolved")
                 job.update(
@@ -417,6 +523,7 @@ def start_pb8_ohlcv_start_date_job(raw_config: dict[str, Any]) -> dict[str, Any]
             "job_id": job_id,
             "status": "queued",
             "created_at": _utc_ms(),
+            "_deadline": time.monotonic() + _START_DATE_TIMEOUT_SECONDS,
             "started_at": None,
             "finished_at": None,
             "stop_requested": False,

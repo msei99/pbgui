@@ -69,3 +69,10 @@ PBGui detects Standard / Manual, Unified Account, and Portfolio Margin. Unified 
 **Max** fills the currently transferable amount for the selected route. Review and confirm the transfer separately; the full account balance may not be transferable.
 
 Balances and transfer history refresh automatically while this page is visible. Pending manual transfers are checked against exchange history periodically, without resubmission or a manual Refresh button.
+
+
+### Automatic updates during exchange outages
+
+Balances and transfer history update independently. Successful requests run again five seconds after completion. Failed balance requests use automatic retry delays of 10, 20, 40, 80, 160 and at most 300 seconds, with a small random offset below the cap. A server `Retry-After` deadline can extend the wait. The status shows the next automatic attempt; successful history updates do not hide balance errors. Recorded operations and **Reconcile** remain available while balances are unavailable, but **Review transfer** stays disabled until a fresh preview succeeds.
+
+Retries resume automatically after recovery. Hidden tabs start no new updates; returning to the page keeps the remaining wait. Selecting an account explicitly can retry sooner, while still respecting `Retry-After`. Automatic updates preserve **Amount**, **Direction** and any retained pending operation ID. Read errors, including HTTP 403, 404, 409 and 422, keep using this backoff so corrected account settings or restored access are detected automatically. HTTP 401 is left to the shared login flow. These retries only reload data; they never resubmit a transfer. This browser-side protection applies to each page independently; it does not coordinate multiple tabs or other API clients.

@@ -17,8 +17,8 @@ def test_refresh_overlay_can_be_dismissed_without_stopping_background_polling() 
 
     assert 'id="btn-busy-dismiss">Dismiss to background</button>' in HTML
     dismiss = _function("dismissBusy", "setActionStatus")
-    assert "classList.remove('visible')" in dismiss
-    assert "stopBusyPolling" not in dismiss
+    assert "hideBusy();" in dismiss
+    assert "stopAutomaticUpdates" not in dismiss
     assert "addEventListener('click', dismissBusy)" in HTML
     assert "event.key !== 'Escape'" in HTML
 

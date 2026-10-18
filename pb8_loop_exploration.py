@@ -11,6 +11,37 @@ LIMIT_CHANGE_FRACTION = 0.20
 NOVEL_AFTER_STAGNATION = 2
 
 
+def _template_search_coverage(record):
+    """Describe observed proxy coverage without imposing experiment quotas."""
+    from ai_loop_windows import bound_plan
+    if record.get('settings', {}).get('execution') not in {'gpu', 'vast'} or bound_plan(record['settings']) is None:
+        return None
+    from vast_config_validation import METRICS, REDUCERS
+    protected = {metric for rule in record.get('rubric', []) if rule.get('target') is not None
+                 for metric in rule.get('metrics', [])}
+    def optional(config):
+        """Hard goal filters cannot count as optional-filter exploration."""
+        return {key: value for key, value in _limits(config).items() if json.loads(key)[0] not in protected}
+    history_rounds = {row['round'] for row in record.get('history', []) if row.get('observations')}
+    jobs = [job for job in record.get('jobs', []) if job.get('kind') == 'optimizer'
+            and ((job.get('results_consumed') and job.get('result_count', 0) > 0)
+                 or (job.get('started') and job.get('round') in history_rounds))]
+    jobs.sort(key=lambda job: job.get('round', -1))
+    configs = [job.get('executed_config') or job['config'] for job in jobs]
+    scores = [_scoring(config) for config in configs]
+    filters = [optional(config) for config in configs]
+    tested = sorted({row['metric'] for score in scores for row in score})
+    return {'required': False, 'catalog': {'metrics': sorted(METRICS), 'reducers': sorted(REDUCERS),
+            'goals': ['min', 'max'], 'combinations': 'AI chooses any supported combination; no fixed shortlist'},
+            'tested_scoring_signatures': list(dict.fromkeys(digest(score) for score in scores)),
+            'tested_metrics': tested, 'untested_metrics': sorted(set(METRICS) - set(tested)),
+            'require_untested_metric': False,
+            'require_new_optional_limits': False,
+            'tested_optional_limit_signatures': list(dict.fromkeys(digest(value) for value in filters)),
+            'optional_limits_reference': filters[-1] if filters else {},
+            'protected_limit_metrics': sorted(protected)}
+
+
 def _ranges(value, prefix=''):
     """Collect finite numeric bounds without counting their quantization step."""
     result = {}
@@ -111,7 +142,11 @@ def _limits(config):
 
 def _material_limits(before, after):
     """A new/removed filter or a 20-percent threshold change is a distinct experiment."""
-    old, new = _limits(before), _limits(after)
+    return _material_limit_values(_limits(before), _limits(after))
+
+
+def _material_limit_values(old, new):
+    """Compare normalized optional filters using the same materiality threshold."""
     if old.keys() != new.keys():
         return True
     for key, value in old.items():
@@ -189,16 +224,20 @@ def exploration_policy(record):
                  if reference_job else record['initial_config'])
     ranges = _tunable_ranges(reference)
     history = {item['round']: item for item in record.get('history', [])}
+    validated = {job['operation'] for job in record.get('jobs', [])
+                 if job.get('kind') == 'validation' and job.get('status') in {'complete', 'completed'}}
     experiments = []
     for job in jobs:
         config = job.get('executed_config') or job['config']
-        exact = history.get(job.get('round'), {}).get('observations') or []
+        exact = [o for o in history.get(job.get('round'), {}).get('observations', [])
+                 if (o.get('exact') or o.get('operation') in validated) and not o.get('observer_only')]
         experiments.append({'round': job.get('round', 0) + 1, 'operation': job.get('operation'),
                             'search_signature': digest(_search_state(config)),
                             'scoring': _scoring(config), 'limits': _limits(config),
                             'exact_candidate_gains': [o['metrics']['gain_strategy_eq'] for o in exact
-                                                     if o.get('exact') and 'gain_strategy_eq' in o.get('metrics', {})]})
-    return {'mode': 'broad', 'allowed_approaches': ['bounds', 'scoring', 'limits'],
+                                                     if 'gain_strategy_eq' in o.get('metrics', {})],
+                            'exact_training_metrics': [o.get('metrics', {}) for o in exact]})
+    policy = {'mode': 'broad', 'allowed_approaches': ['bounds', 'scoring', 'limits'],
             'minimum_material_bound_changes': min(MIN_BOUND_CHANGES, len(ranges)),
             'material_fraction': MATERIAL_BOUND_FRACTION,
             'limit_change_fraction': LIMIT_CHANGE_FRACTION,
@@ -209,6 +248,22 @@ def exploration_policy(record):
             'reference_operation': reference_job.get('operation') if reference_job else None,
             'reference_scoring': _scoring(reference), 'reference_limits': _limits(reference),
             'reference_bounds': ranges}
+    coverage = _template_search_coverage(record)
+    if coverage is not None:
+        policy['scoring_exploration'] = coverage
+        policy['mode'] = 'adaptive'
+        policy['minimum_material_bound_changes'] = 0
+        policy['material_fraction'] = None
+        policy['limit_change_fraction'] = None
+        policy['novel_after_non_improving_rounds'] = None
+        policy['experiment_selection'] = 'AI chooses order, combinations and controlled repetitions from training evidence'
+        policy['scoring_reasoning_requirements'] = [
+            'State each metric direction and training reducer/basis and why the combination may serve the user request.',
+            'ADG measures daily compounding, not arithmetic mean total-period Gain across windows.',
+            'Multiple objectives expose tradeoffs on a Pareto front; explain candidate selection using independent CPU training evidence.',
+            'Compare actual training evidence, including failed hypotheses; never infer results for untested variants.',
+            'Use only training windows; never select a scoring or limit from Holdout or Full Time Range results.']
+    return policy
 
 
 def validate_exploration(record, config, *, stagnation_after=None):
@@ -217,6 +272,11 @@ def validate_exploration(record, config, *, stagnation_after=None):
     previous = max(enumerate(jobs), key=lambda item: (item[1].get('round', -1), item[0]))[1] if jobs else None
     reference = (previous.get('executed_config') or previous['config']) if previous else record['initial_config']
     _protect_hard_filters(record, config)
+    coverage = _template_search_coverage(record)
+    if coverage is not None:
+        # Repeated seeds and single-axis experiments can establish whether a result repeats.
+        # The AI chooses the experiment; hard filters are still checked above.
+        return _differences(reference, config)[0]
     approaches, bounds = _differences(reference, config)
     state = _search_state(reference)
     if not state['bounds'] and not state['scoring'] and not state['limits']:

@@ -137,11 +137,13 @@ showView('viewer');showView('settings');assert.equal(settingsVisible,true);
 
 def test_coin_data_error_is_handled():
     """The fire-and-forget loader fulfills with null after displaying the failure."""
-    execute(function('coin_data.html','loadState')+r'''
+    execute(function('coin_data.html','requestJson')+function('coin_data.html','loadState')+r'''
 const assert=require('node:assert/strict');let loadStateRequestSeq=0,loadStateController=null,messages=[];
+let autoStopped=false,snapshotRejectedContext='',autoJobs={},autoStatus='',filters={quotes:[]},scheduled=0;
+function scheduleAutomaticUpdate(delay){assert.equal(delay,0);scheduled++;}
 function setActionStatus(message){messages.push(message);}function buildStateUrl(){return '/state';}
-const fetch=async()=>({ok:false,status:500});
-(async()=>{assert.equal(await loadState(),null);assert.match(messages.at(-1),/HTTP 500/);})().catch(e=>{console.error(e);process.exitCode=1;});
+const fetch=async()=>({ok:false,status:500,json:async()=>({detail:'Server failed'})});
+(async()=>{assert.equal(await loadState(),null);assert.match(messages.at(-1),/Failed to load Coin Data: 500: Server failed/);assert.equal(scheduled,1);})().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 
 

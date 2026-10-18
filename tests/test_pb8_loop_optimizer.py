@@ -52,6 +52,15 @@ def config():
             'optimize': {'backend': 'pymoo', 'bounds': {}, 'n_cpus': 1}, 'pbgui': {}}
 
 
+def valid_gpu_config():
+    """Complete synthetic GPU gates without changing CPU policy fixtures."""
+    from tests.vast_direction_fixtures import complete_direction
+    value = config()
+    value['live'].update(strategy_kind='ema_anchor', approved_coins={'long': ['BTC', 'ETH'], 'short': ['BTC', 'ETH']})
+    value['optimize'].update(backend='gpu', iters=512, scoring=[{'metric':'adg_strategy_eq','goal':'max'}], limits=[])
+    return complete_direction(value)
+
+
 def settings(**changes):
     """Validate controller settings through the public request model."""
     value = LoopStart(max_rounds=10, config_name='source', provider='chatgpt', model='pinned', goals=LoopGoals(presets=['gain']), authorization=True).model_dump()
@@ -61,8 +70,11 @@ def settings(**changes):
 
 
 @pytest.fixture
-def record(tmp_path):
+def record(tmp_path, monkeypatch):
     """Keep all persistent evidence under a Pytest temporary directory."""
+    monkeypatch.setattr('ai_loop_manual.installed_manual', lambda: {
+        'source': 'offline_test_fixture', 'digest': 'test-manual', 'index': [],
+        'documents': [], 'omitted': []})
     store = LoopStore(tmp_path / 'data/loop_optimizer')
     value = store.create(OWNER, settings(), config(), {}, {'pb8': 'commit', 'data': 'shards'}, [], config()['backtest'])
     store.update(OWNER, value['id'], lambda row: row.update(baseline_required=False, observer_enabled=False, ai_model_profile={'context': 4_000_000, 'page_tokens': 1500, 'output_tokens': 65536, 'call_timeout': 60, 'streaming': False}))
@@ -382,7 +394,7 @@ class FakeAI:
         if stage == 'interpret':
             return {'rubric': RULE}
         if stage == 'select':
-            return {'candidate_ids': [evidence['candidates'][0]['id']]}
+            return {'candidate_ids': [evidence['candidates'][0]['id']], 'reason': 'Validate the distinct candidate while preserving budget for future rounds'}
         changed = copy.deepcopy(row['initial_config']); changed['optimize']['iters'] = 777
         options = evidence.get('winner_options', {})
         winner = max(options, key=lambda key: options[key]['metrics']['gain']) if options else None
@@ -550,7 +562,7 @@ def test_invalid_gpu_variant_is_repaired_before_job_allocation(record, tmp_path,
     def bootstrap(value):
         """Capture an isolated GPU input before initial AI variant selection."""
         value['settings']['execution'] = 'vast'
-        value['initial_config']['optimize']['backend'] = 'gpu'
+        value['initial_config'] = valid_gpu_config()
         value.update(phase='bootstrap', rubric=RULE, bootstrap_candidates=[],
                      bootstrap={'status': 'evaluating', 'candidate_count': 0, 'sources': []})
     store.update(OWNER, row['id'], bootstrap)
@@ -587,16 +599,17 @@ def test_invalid_gpu_variant_is_repaired_before_job_allocation(record, tmp_path,
 ])
 def test_gpu_variant_drift_evidence_contract(record, gpu, valid):
     """Validate coordinated evidence windows before any native job is allocated."""
+    from pb8_loop_store import validate_gpu_drift
     _store, row = record
     row['settings']['execution'] = 'vast'
     row['initial_config']['optimize']['backend'] = 'gpu'
     proposed = copy.deepcopy(row['initial_config'])
     proposed['optimize']['gpu'] = gpu
     if valid:
-        validate_change(row, proposed, {})
+        validate_gpu_drift(proposed)
     else:
         with pytest.raises(ValueError, match='optimize.gpu'):
-            validate_change(row, proposed, {})
+            validate_gpu_drift(proposed)
 
 
 def test_autonomous_second_cycle_survives_controller_replacement(record, tmp_path):
@@ -723,7 +736,7 @@ def test_three_vast_slots_use_frozen_budget_and_reject_fourth(tmp_path, monkeypa
     from vast_direction_fixtures import direction_config
     store = LoopStore(tmp_path / 'data/loop_optimizer')
     preferences = RentalPreferences(gpu_name='RTX 3060', budget=5, max_rentals=3).model_dump()
-    row = store.create(OWNER, settings(execution='vast', vast=preferences), config(), {}, {'pb8': 'commit'}, [], config()['backtest'])
+    row = store.create(OWNER, settings(execution='vast', vast=preferences), valid_gpu_config(), {}, {'pb8': 'commit'}, [], config()['backtest'])
     jobs = JobStore(tmp_path / 'vast'); queue = vast_queue.CloudQueue(jobs)
     queue.update(gpu_preferences=preferences)
     directory = ensure_private_directory(jobs.root / 'jobs' / ('b' * 32))
@@ -1192,11 +1205,15 @@ def test_initial_use_config_does_not_rewrite_direction_settings(tmp_path, monkey
     """Use config retains the user's risk defaults and search bounds verbatim."""
     from api import optimize_v8 as opt
     import pb8_config
-    initial = config()
+    initial = valid_gpu_config() if execution == 'vast' else config()
     initial['config_version'] = 'v8.6.0'
     for side in ('long', 'short'):
         if direction not in {'both', side}:
             initial['bot'][side]['risk']['total_wallet_exposure_limit'] = 0
+            if execution == 'vast':
+                initial['bot'][side]['risk']['n_positions'] = 0
+                initial['optimize']['bounds'][side+'_total_wallet_exposure_limit'] = [0, 0]
+                initial['optimize']['bounds'][side+'_n_positions'] = [0, 0]
     path = tmp_path / 'source.json'; path.write_text(json.dumps(initial))
     monkeypatch.setattr(opt, '_config_file', lambda name:path)
     monkeypatch.setattr(opt, 'get_config', lambda name,session=None:{'config':copy.deepcopy(initial),'override_configs':{}})
@@ -1855,7 +1872,8 @@ def test_proxy_limit_stops_from_generation_profile_before_next_summary(record, t
     backend = Backend()
     controller = LoopController(tmp_path, store=store, backend=backend, ai=FakeAI())
     row['settings'].update(execution=execution, run_limit_mode='proxy', run_proxy=100000)
-    gpu_config = config()
+    gpu_config = valid_gpu_config()
+    row['initial_config'] = copy.deepcopy(gpu_config)
     gpu_config['optimize']['backend'] = 'gpu'
     job = controller.job(row, 'optimizer', gpu_config, {}, 'Proxy quota')
     job.update(backend={'id':job['operation'],'execution':execution}, status='running', started=True)
@@ -1879,7 +1897,7 @@ def test_skipped_quota_results_recovered_after_active_round_once(record, tmp_pat
     class AI(FakeAI):
         """Select the recovered earlier candidate when it is offered."""
         async def decide(self, current, stage, evidence):
-            if stage=='select':return {'candidate_ids':[evidence['candidates'][-1]['id']]}
+            if stage=='select':return {'candidate_ids':[evidence['candidates'][-1]['id']], 'reason': 'Validate the recovered distinct candidate within the remaining CPU budget'}
             return await super().decide(current,stage,evidence)
     backend = Backend(); controller = LoopController(tmp_path, store=store, backend=backend, ai=AI())
     old = controller.job(row, 'optimizer', config(), {}, 'Initial optimizer')
@@ -1932,7 +1950,8 @@ def test_cloud_loop_rejects_exact_only_metrics_before_queue(record, group):
     """Cloud metric checks retain user objectives and report an explicit alternative."""
     _, row = record
     row['settings']['execution'] = 'vast'
-    proposed = config()
+    proposed = valid_gpu_config()
+    row['initial_config'] = copy.deepcopy(proposed)
     proposed['optimize'].update(backend='gpu', **{group: [{'metric': 'gain_strategy_eq', 'goal': 'max'}]})
     original = copy.deepcopy(proposed)
     with pytest.raises(ValueError, match=r'Vast.ai optimize.*gain_strategy_eq') as error:
@@ -1940,6 +1959,8 @@ def test_cloud_loop_rejects_exact_only_metrics_before_queue(record, group):
     assert 'adg_strategy_eq' in str(error.value)
     assert proposed == original
     proposed['optimize'][group][0]['metric'] = 'adg_strategy_eq'
+    if group == 'limits':
+        proposed['optimize'][group][0].update(penalize_if='less_than', value=0.0)
     assert validate_change(row, proposed, {}) == proposed
 
 

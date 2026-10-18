@@ -2,6 +2,7 @@
 from pathlib import Path
 from datetime import datetime, timezone
 import re
+import json
 from urllib.parse import urlparse
 
 import pytest
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize('width,prefix', [(1400, ''), (700, '/mounted')])
 def test_loop_template_sidebar_window_and_send(width, prefix):
     """Use real menus, resize/drag/focus behavior and exactly one explicit chat send."""
+    __tracebackhide__ = True
     errors, mutations, turns, conversations = [], [], [], []
     hide_newest_chat = {'enabled': False}
     delayed_markets = {'enabled': False, 'routes': []}
@@ -31,6 +33,7 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
     with sync_playwright() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': width, 'height': 900})
+        page.set_default_timeout(7000)
         page.clock.set_fixed_time(datetime(2026,10,16,12,tzinfo=timezone.utc))
         page.on('pageerror', lambda error: errors.append(str(error)))
         def respond(route):
@@ -54,6 +57,11 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
                 route.fulfill(json=choices)
             elif path == '/api/optimize-v8/configs/new-config':
                 route.fulfill(json={'config':{'live':{},'backtest':{},'optimize':{}}})
+            elif path.startswith('/api/optimize-v8/configs/'):
+                route.fulfill(json={'config':{'backtest':{'start_date':'2025-01-01','end_date':'2025-12-31','suite_enabled':True,
+                    'scenarios':[{'label':'train_1','start_date':'2025-01-01','end_date':'2025-04-30'},
+                                 {'label':'train_2','start_date':'2025-05-01','end_date':'2025-08-31'}]},
+                    'pbgui':{'scenario_template':{'holdout_scenarios':[{'label':'holdout_1','start_date':'2025-09-01','end_date':'2025-12-31'}]}}}})
             elif path == '/api/optimize-v8/ohlcv-start-dates':
                 assert raw == prefix + path
                 date_requests.append(route.request.post_data_json)
@@ -177,6 +185,8 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
         page.locator('#pai-template-coins .ms-option[data-val="ETH"]').click()
         expect(page.locator('#pai-template-start')).to_have_value('2024-01-01')
         expect(page.locator('#pai-template-end')).to_have_value('2026-10-15')
+        expect(page.locator('.pai-template-error')).to_have_text('')
+        expect(page.locator('#pai-template-window-preview input[type="date"]')).to_have_count(18)
         assert date_requests[-1]['config']['live']['approved_coins']=={'long':['ETH'],'short':[]}
         assert date_requests[-1]['config']['backtest']['exchanges']==['binance']
         expect(page.locator('#pai-template-timeframes')).to_have_value('8')
@@ -245,6 +255,12 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
         # A saved source retains its windows; changing objective exposes its threshold.
         page.locator('#pai-template-source').select_option('Saved HYPE')
         expect(page.locator('#pai-template-windows')).to_have_value('source')
+        source_holdout = page.locator('#pai-template-window-preview').get_by_role('textbox',name='Holdout start (UTC)',exact=True)
+        source_holdout.fill('2025-09-02')
+        page.reload()
+        expect(dialog).to_be_visible()
+        expect(source_holdout).to_have_value('2025-09-02')
+        page.locator('#pai-template-validations').fill('137')
         page.locator('#pai-template-objective').select_option('balanced')
         expect(page.locator('#pai-template-drawdown')).to_have_value('25')
         page.get_by_role('button', name='Send to AI Chat', exact=True).click()
@@ -255,8 +271,16 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
         text = turns[0]['message']
         assert 'using optimizer configuration "Saved HYPE"' in text
         assert 'BTC, HYPE on binance, hyperliquid' in text and 'Allow EMA Anchor and Trailing Martingale' in text
-        assert 'max_rounds=25, max_runs=25, max_validations=50' in text
+        assert 'max_rounds=25, max_runs=25, max_validations=137' in text
+        assert 'Use holdout: enabled.' in text and 'PBGUI_LOOP_WINDOWS_V1:' in text
+        assert 'Holdout: 2025-09-02 → 2025-12-31' in text
         assert 'drawdown ≤25%' in text
+        assert 'no GPU scoring formula is prescribed' in text
+        assert 'arithmetic mean of adg_strategy_eq' not in text
+        reviewed = json.loads(text.split('PBGUI_LOOP_WINDOWS_V1:')[1].split('\n')[0])
+        assert 'objective' not in reviewed
+        assert reviewed['max_twe'] == 8 and reviewed['max_validations'] == 137
+        assert 'There is no per-round candidate cap' in text
         assert page.locator('#pbgui-ai-drawer .pai-loop-template').count() == 0
         assert not any('/loops' in p or '/vast' in p or '/configs' in p for p in mutations)
         # Existing draft is preserved; another template starts another new chat.
@@ -296,8 +320,9 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
             route.fulfill(json={'status':'completed','result':{'start_date_options':{'all_markets':{'available':True,'start_date':'2024-06-01'}}}})
         expect(page.locator('#pai-template-start')).to_have_value('2025-01-01')
         assert any(path.startswith('/api/optimize-v8/ohlcv-start-dates/') for path in mutations)
-        page.locator('#pai-template-timeframes').fill('100')
-        page.get_by_role('button',name='Send to AI Chat',exact=True).click()
+        page.locator('#pai-template-holdout').uncheck()
+        page.locator('#pai-template-timeframes').fill('49')
+        expect(page.get_by_role('button',name='Send to AI Chat',exact=True)).to_be_disabled()
         expect(page.locator('.pai-template-error')).to_contain_text('at least two calendar days')
         page.locator('#pai-template-timeframes').fill('4')
         hide_newest_chat['enabled']=False

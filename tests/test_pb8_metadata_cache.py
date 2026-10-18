@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 import threading
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -232,7 +232,8 @@ def test_update_writer_signal_bypasses_scan_debounce(isolated, tmp_path):
     assert client._runtime_source_signature(tmp_path, "", (2, 1)) != first
 
 
-@pytest.mark.parametrize("operation", ["default", "result_metrics", "optimize_metadata_static",
+@pytest.mark.parametrize("operation", ["default", "result_metrics", "optimize_metadata",
+                                      "optimize_preflight", "optimize_metadata_static",
                                       "optimizer_backend_contract", "coin_override_metadata",
                                       "exchange_metadata"])
 def test_metadata_operations_use_persistent_helper(isolated, operation):
@@ -444,3 +445,110 @@ def test_network_and_warmup_operations_remain_cold(isolated, operation):
     isolated.setattr(client.subprocess, "run", run)
     assert client._call_helper(operation) == {"ok": True}
     assert requests == [operation]
+
+
+@pytest.mark.parametrize("operation,payload", [
+    ("optimize_metadata", {}),
+    ("optimize_preflight", {"config": {"optimize": {"backend": "gpu"}},
+                            "base_config_path": "/isolated/config.json"}),
+])
+def test_optimizer_operations_preserve_persistent_payload(isolated, operation, payload):
+    """Forward optimizer requests unchanged without spawning a cold interpreter."""
+    calls = []
+    isolated.setattr(client, "_call_migration_helper", lambda name, **kwargs:
+                     calls.append((name, kwargs)) or {"valid": True})
+    isolated.setattr(client.subprocess, "run", lambda *_args, **_kwargs:
+                     pytest.fail("cold interpreter"))
+    assert client._call_helper(operation, **payload) == {"valid": True}
+    assert calls == [(operation, payload)]
+    if "config" in payload:
+        assert calls[0][1]["config"] is payload["config"]
+
+
+def test_preflight_validation_error_has_no_cold_retry(isolated):
+    """The public preflight client preserves persistent validation failures."""
+    error = client.PB8ConfigurationError("Unsupported GPU metric")
+
+    def reject(operation, **payload):
+        """Reject the request through the persistent helper boundary."""
+        assert operation == "optimize_preflight"
+        raise error
+
+    isolated.setattr(client, "_call_migration_helper", reject)
+    isolated.setattr(client.subprocess, "run", lambda *_args, **_kwargs:
+                     pytest.fail("cold retry"))
+    with pytest.raises(client.PB8ConfigurationError) as caught:
+        client.validate_pb8_optimize_preflight({"optimize": {"backend": "gpu"}})
+    assert caught.value is error
+
+
+def test_persistent_preflights_revalidate_after_gpu_failure(isolated, tmp_path):
+    """One helper handles success, GPU failure and recovery without caching requests."""
+    root = ModuleType("optimization")
+    root.__path__ = []
+    backend = ModuleType("optimization.backends.gpu_backend")
+    package = ModuleType("optimization.backends")
+    package.__path__ = []
+    package.gpu_backend = backend
+    gpu = ModuleType("optimization.gpu")
+    gpu.__path__ = []
+    metrics = ModuleType("optimization.gpu.metrics")
+    gpu.metrics = metrics
+    root.backends = package
+    root.gpu = gpu
+    suite = ModuleType("suite_runner")
+    for module in (root, package, backend, gpu, metrics, suite):
+        isolated.setitem(sys.modules, module.__name__, module)
+    validated, materialized, requests, probes = [], [], [], []
+    availability = iter([True, False, True])
+
+    def probe(backends):
+        """Return fresh device availability for each request in the same helper."""
+        assert backends == ["gpu"]
+        probes.append(True)
+        return {"device_available": next(availability), "reason": "GPU unavailable",
+                "probe": len(probes)}
+
+    def materialize(config):
+        """Exercise native mutation of the helper's private config copy."""
+        materialized.append(config["optimize"]["scoring"][0]["metric"])
+        config["native_prepared"] = True
+        return config
+
+    backend.materialize_gpu_preparation_config = materialize
+    backend.validate_gpu_preparation_scope = lambda config, _suite: validated.append(config)
+    metrics.validate_gpu_metric_names = lambda names: validated.append(list(names))
+    suite.extract_suite_config = lambda config, _path: {}
+    isolated.setattr(helper, "_load_pb8_modules", lambda _path: {"backends": ["gpu"]})
+    isolated.setattr(helper, "_gpu_runtime_contract", probe)
+
+    def persistent(operation, **payload):
+        """Keep the real dispatcher and native validation in one fake transport."""
+        requests.append((operation, json.loads(json.dumps(payload))))
+        response = helper._response({"operation": operation, "pb8_dir": str(tmp_path), **payload})
+        if not response["ok"]:
+            raise client.PB8ConfigurationError(response["detail"])
+        return response["result"]
+
+    isolated.setattr(client, "_call_migration_helper", persistent)
+    isolated.setattr(client.subprocess, "run", lambda *_args, **_kwargs:
+                     pytest.fail("cold interpreter"))
+    configs = [{"optimize": {"backend": "gpu", "scoring": [{"metric": metric}]}}
+               for metric in ("adg", "drawdown_worst", "sharpe_ratio")]
+    first = client.validate_pb8_optimize_preflight(configs[0], base_config_path="/isolated/first.json")
+    assert first["valid"] is True
+    first["runtime"]["device_available"] = False
+    with pytest.raises(client.PB8ConfigurationError, match="GPU unavailable"):
+        client.validate_pb8_optimize_preflight(configs[1], base_config_path="/isolated/second.json")
+    last = client.validate_pb8_optimize_preflight(configs[2], base_config_path="/isolated/last.json")
+    assert last["valid"] is True
+    assert last["runtime"]["device_available"] is True
+    assert last["runtime"]["probe"] == 3
+    assert len(probes) == 3
+    assert materialized == ["adg", "sharpe_ratio"]
+    assert validated == [["adg"], {**configs[0], "native_prepared": True},
+                         ["sharpe_ratio"], {**configs[2], "native_prepared": True}]
+    assert requests == [("optimize_preflight", {"config": config, "base_config_path": path})
+                        for config, path in zip(configs, ("/isolated/first.json", "/isolated/second.json",
+                                                         "/isolated/last.json"))]
+    assert all("native_prepared" not in config for config in configs)

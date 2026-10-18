@@ -101,6 +101,8 @@ When saving is blocked by Cluster readiness, the message distinguishes a failed 
 
 The Run list updates automatically via its authenticated WebSocket; there is no manual Refresh button in the sidebar. Search and status filters remain selected during updates.
 
+Search text, status filter, and the selected sort column/direction are restored after a browser reload in the same tab, separately for PB7 and PB8. Reload still loads current instance data. Only non-secret navigation state is stored in session storage; when browser storage is unavailable, filtering and sorting remain usable without reload restoration.
+
 ## PB8 8.6: HSL and adaptive entry cooldown
 
 Opening a saved pre-8.6 HSL config automatically creates an unsaved draft using the installed PB8 migration tool. The existing Long/Short JSON editors mark changed HSL lines. Raw JSON marks all compatibility changes by their exact parameter paths, including cooldown/EMA moves, added defaults and optimizer changes; removed parameters mark their surviving parent line. Corresponding structured GUI fields have an amber outline. These marks remain while editing and clear after a successful save. Removed HSL fields appear with their exact old values directly below the corresponding JSON editor; they are read-only and are not saved back into the config. Unchanged fields remain unmarked. Existing valid restart choices are preserved. An active `threshold` policy needs `always` or `never`, selected directly in the editor. Missing unified portfolio values remain blank for explicit entry. Only **Save** validates and writes the draft. HSL behavior changed: re-backtest before live use. Invalid optimizer or override references still require correction.

@@ -65,6 +65,7 @@
     byId('ai-confirm').checked=settings.ai_budget_confirmed===true;
     byId('coins').value = (goals.coins || []).join(', ');
     byId('positions').value = goals.positions == null ? '' : goals.positions;
+    byId('max-twe').value = goals.max_twe == null ? '' : goals.max_twe;
     ['long','short'].forEach(function (side) { byId(side).value = (goals.positions_by_side || {})[side] == null ? '' : goals.positions_by_side[side]; });
     byId('scenario').checked = Boolean(settings.scenario_enabled);
     byId('strategy').checked = Boolean(settings.strategy_enabled);
@@ -74,7 +75,7 @@
       byId(goal + '-target').disabled = !byId(goal).checked;
     });
     byId('goals').value = goals.text || '';
-    [['rounds','max_rounds'],['runs','max_runs'],['hours','hours'],['parallel','parallel'],['patience','patience'],['validations','max_validations'],['candidates','candidates']].forEach(function (pair) { byId(pair[0]).value = settings[pair[1]] == null ? '' : settings[pair[1]]; });
+    [['rounds','max_rounds'],['runs','max_runs'],['hours','hours'],['parallel','parallel'],['patience','patience'],['validations','max_validations']].forEach(function (pair) { byId(pair[0]).value = settings[pair[1]] == null ? '' : settings[pair[1]]; });
     byId('run-mode').value = settings.run_limit_mode || 'config';
     ['iters','proxy','hours'].forEach(function (name) { if (settings['run_' + name] != null) byId('run-' + name).value = settings['run_' + name]; });
     hoursEdited = true;
@@ -90,7 +91,7 @@
     return true;
   }
   function defaultSettings(name, execution) {
-    return {config_name:name,execution:execution || 'cpu',scenario_enabled:false,strategy_enabled:false,hsl_mode:'auto',goals:{coins:[],direction:'config',positions:null,positions_by_side:{},presets:['gain','drawdown','uptrend'],targets:{},text:''},run_limit_mode:'config',run_iters:null,run_proxy:null,run_hours:null,max_runs:10,hours:options.vast ? options.vast.hours : 24,parallel:1,max_validations:30,candidates:3,patience:3};
+    return {config_name:name,execution:execution || 'cpu',scenario_enabled:false,strategy_enabled:false,hsl_mode:'auto',goals:{coins:[],direction:'config',positions:null,max_twe:null,positions_by_side:{},presets:['gain','drawdown','uptrend'],targets:{},text:''},run_limit_mode:'config',run_iters:null,run_proxy:null,run_hours:null,max_runs:10,hours:options.vast ? options.vast.hours : 24,parallel:1,max_validations:30,patience:3};
   }
   function editorLocation() {
     var url=new URL(location.href); if(editorVisible)url.searchParams.set('loop_edit',byId('name').value || 'new');else url.searchParams.delete('loop_edit');history.replaceState(null,'',url);
@@ -315,9 +316,9 @@
     var sides = {}, total = number('positions', null);
     if (byId('direction').value === 'both' && (byId('long').value !== '' || byId('short').value !== '')) { sides = {long: number('long', 0), short: number('short', 0)}; if (total === null) total = sides.long + sides.short; }
     return {config_name: byId('config').value, execution: byId('execution').value, scenario_enabled: byId('scenario').checked, strategy_enabled: byId('strategy').checked, hsl_mode: byId('hsl-mode').value,
-      goals: {coins: byId('coins').value.split(/[\s,;]+/).filter(Boolean), direction: byId('direction').value, positions: total, positions_by_side: sides, presets: presets, targets: targets, text: byId('goals').value},
+      goals: {coins: byId('coins').value.split(/[\s,;]+/).filter(Boolean), direction: byId('direction').value, positions: total, max_twe: number('max-twe', null), positions_by_side: sides, presets: presets, targets: targets, text: byId('goals').value},
       run_limit_mode: byId('run-mode').value, run_iters: byId('run-mode').value === 'iters' ? number('run-iters', null) : null, run_proxy: byId('run-mode').value === 'proxy' ? number('run-proxy', null) : null, run_hours: byId('run-mode').value === 'hours' ? number('run-hours', null) : null,
-      max_rounds: number('rounds', null), max_runs: number('runs', 10), hours: number('hours', 24), parallel: number('parallel', 1), max_validations: number('validations', 30), candidates: number('candidates', 3), patience: number('patience', 3),
+      max_rounds: number('rounds', null), max_runs: number('runs', 10), hours: number('hours', 24), parallel: number('parallel', 1), max_validations: number('validations', 30), patience: number('patience', 3),
       jev_enabled:jevEnabled,historical_advice:byId('historical-advice').checked,decision_timeout_seconds:number('ai-decision-time',null),model_call_timeout_seconds:number('ai-call-time',null),ai_decision_token_limit:number('ai-token-limit',null),ai_decision_usd_limit:number('ai-usd-limit',null),ai_budget_confirmed:byId('ai-confirm').checked,authorization: true};
   }
   function select(id) {
@@ -644,8 +645,10 @@
     var finalAssessment=row.final_validation&&row.final_validation[0]&&row.final_validation[0].assessment;
     var confirmation=row.status==='completed'?'Confirmed':row.final_validation&&row.final_validation.length?'Unconfirmed — inspect holdout goals':'Not confirmed';
     if(row.status==='completed'&&finalAssessment&&finalAssessment.confirmation_source==='observer_holdout')confirmation=(finalAssessment.goals||[]).some(function(goal){return goal.requirement;})?'Holdout checked · numeric targets met':'Holdout checked';
+    var backgroundReports=row.final_holdout_policy==='observer_only'||row.final_validation_status==='observer_only';
+    if(backgroundReports)confirmation='Independent background backtests';
     if(row.holdout_retryable)button(parent,'Retry unchanged final holdout',async function(){try{await request('/'+row.id+'/retry-holdout',{});await poll();}catch(exc){error(exc);}});
-    reportTable(parent,['Outcome','Details'],[['Search stopped',row.status==='failed'?failureReason(row):row.stop_reason||row.reason||row.status],['Best comparison',best?'Round '+(best.round==null?'unknown':best.round+1)+' · '+(best.candidate_id||'Selected'):'None'],['Hard numeric targets',assessment?(assessment.hard_targets_met===false?'Violated':assessment.hard_targets_met===true?'Met':'See goal evidence'):'Unknown'],['Final confirmation',confirmation],['Start comparison',baseline?'Exact baseline recorded':'Not recorded for this older run']]);
+    reportTable(parent,['Outcome','Details'],[['Search stopped',row.status==='failed'?failureReason(row):row.stop_reason||row.reason||row.status],['Best comparison',best?'Round '+(best.round==null?'unknown':best.round+1)+' · '+(best.candidate_id||'Selected'):'None'],['Hard numeric targets',assessment?(assessment.hard_targets_met===false?'Violated':assessment.hard_targets_met===true?'Met':'See goal evidence'):'Unknown'],[backgroundReports?'User evaluation':'Final confirmation',confirmation],['Start comparison',baseline?'Exact baseline recorded':'Not recorded for this older run']]);
     if(best){reportTable(parent,['Goal / metric','Unchanged start','Best comparison','Change vs start'],assessment.goals.map(function(goal){var initial=baseline&&(baseline.assessment.goals||[]).find(function(item){return item.goal===goal.goal&&item.metric===goal.metric;});return [goal.goal+' · '+goal.metric,metricValue(initial&&initial.value,goal),metricValue(goal.value,goal),initial&&initial.value!=null?metricValue(goal.value-initial.value,goal):'Unknown'];}));}
     if(row.final_validation&&row.final_validation.length){parent.appendChild(element('h4','Final holdout'));row.final_validation.forEach(function(item){goalTable(parent,item.assessment.goals||[]);});}
     (row.jev_answers||[]).forEach(function(answer){parent.appendChild(element('p',typeof answer==='string'?answer:JSON.stringify(answer),'loop-analysis'));});
@@ -998,6 +1001,7 @@
     var direction = field(row, 'direction', 'Direction', 'select');
     choices(direction, [{id:'config', label:'Use config'}, {id:'both', label:'Long and short'}, {id:'long', label:'Long'}, {id:'short', label:'Short'}]);
     field(row, 'positions', 'Total position capacity', 'number', '', {min:1, max:1000, placeholder:'From config'});
+    field(row, 'max-twe', 'Maximum TWE per active side', 'number', '', {min:.000001, max:1000, step:'any', placeholder:'Optional ceiling'});
     row = grid(trading);
     var hsl = field(row, 'hsl-mode', 'HSL', 'select', undefined, undefined, 4);
     choices(hsl, [{id:'off',label:'Off'}, {id:'on',label:'On'}, {id:'auto',label:'Auto · AI decides'}], 'auto');
@@ -1033,8 +1037,7 @@
     field(row, 'parallel', 'Parallel variants', 'number', 1, {min:1, max:16});
     field(row, 'patience', 'Cycles without improvement', 'number', 3, {min:1, max:100});
     row = grid(limits);
-    field(row, 'validations', 'Maximum validation backtests', 'number', 30, {min:1, max:1000}, 4);
-    field(row, 'candidates', 'Candidates validated per cycle', 'number', 3, {min:1, max:12}, 4);
+    field(row, 'validations', 'CPU training validation budget', 'number', 30, {min:1, max:1000}, 4);
 
     var aiEvidence=section(form,'AI evidence and limits');row=grid(aiEvidence);
     field(row,'historical-advice','Use historical optimizer advice','checkbox',undefined,undefined,4).checked=true;

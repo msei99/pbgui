@@ -17,3 +17,7 @@
 .pai-template-window{width:var(--pbg-modal-settings-max-width)}
 .pai-template-footer{flex-shrink:0;padding:var(--sp-md) 18px;border-top:1px solid var(--border)}
 .pai-template-error:not(:empty){margin-bottom:var(--sp-sm)}
+.pai-loop-template input[type="checkbox"]{width:auto;align-self:flex-start}
+#pai-template-window-preview{min-width:0}
+#pai-template-window-preview .form-row{display:grid;grid-template-columns:minmax(80px,1fr) repeat(2,minmax(0,1fr));gap:var(--sp-sm);align-items:center}
+#pai-template-window-preview .scenario-canvas{overflow-x:auto}

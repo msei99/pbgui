@@ -126,3 +126,5 @@ Dynamic Ignore ist eine Capability des Ziel-Hosts und keine Key-Einstellung pro 
 JSON Import fragt vor dem Ersetzen der aktuellen Editorwerte einschliesslich ungespeicherter Aenderungen nach einer Bestaetigung. Abbrechen behaelt den Entwurf und den Importtext bei.
 
 Die Run-Liste aktualisiert sich automatisch über ihren authentifizierten WebSocket; in der Sidebar gibt es keinen manuellen Refresh-Button. Such- und Statusfilter bleiben bei Aktualisierungen erhalten.
+
+Suchtext, Statusfilter sowie Sortierspalte und -richtung werden nach einem Browser-Reload im selben Tab wiederhergestellt, getrennt für PB7 und PB8. Dabei werden weiterhin aktuelle Instanzdaten geladen. Gespeichert wird nur nicht geheimer Navigationszustand im Sitzungsspeicher; ist der Browser-Speicher nicht verfügbar, bleiben Filtern und Sortieren ohne Wiederherstellung nach einem Reload nutzbar.
