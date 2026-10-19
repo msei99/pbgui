@@ -503,15 +503,21 @@ class JobStore:
         from pb8_config import save_prepared_pb8_config
         from setup.vast_gpu_benchmark.prepare import select_shards
         from sweep_cycles import build_sweep_plan
+        from vast_ohlcv_integrity import certify_manifest, file_signature, preflight_shards
 
         config = native_job_config(source, iterations, workers, use_adg)
         try:
             shards = select_shards(config, market_root, mapping_root)
+            total_bytes = sum(p.stat().st_size for p, _ in shards)
+            if total_bytes > 10 * 1024**3:
+                raise VastError("This cloud profile supports input bundles up to 10 GB", 422)
+            checked_files = preflight_shards(config, shards, market_root, mapping_root)
+        except VastError as exc:
+            if identifier is not None:
+                self.update(identifier, status='failed', error=str(exc))
+            raise
         except (ValueError, OSError) as exc:
             raise VastError("Market data export failed: " + str(exc), 422) from None
-        total_bytes = sum(p.stat().st_size for p, _ in shards)
-        if total_bytes > 10 * 1024**3:
-            raise VastError("This cloud profile supports input bundles up to 10 GB", 422)
         if identifier is None:
             identifier = self.create_preparation(name, iterations, workers, use_adg, requeue_from=requeue_from)['id']
         else:
@@ -538,6 +544,8 @@ class JobStore:
                 destination = folder / "ohlcv" / relative
                 ensure_private_directory(destination.parent)
                 before = original.stat()
+                if file_signature(before) != checked_files.get(original):
+                    raise VastError("Market data changed after integrity preflight; prepare the job again", 409)
                 with original.open("rb") as src, destination.open("xb") as dest:
                     shutil.copyfileobj(src, dest, 1024 * 1024)
                 destination.chmod(0o600)
@@ -552,6 +560,7 @@ class JobStore:
                         "bytes_completed": copied_bytes, "bytes_total": total_bytes,
                     })
                     last_progress_update = time.monotonic()
+            certify_manifest(manifest)
             write_json(folder / "manifest.json", manifest)
             def compression_progress(value: dict) -> None:
                 """Persist bounded archive progress for automatic Queue polling."""
@@ -568,14 +577,16 @@ class JobStore:
                                    "stage": "complete", "files_completed": len(shards), "files_total": len(shards),
                                    "bytes_completed": total_bytes, "bytes_total": total_bytes,
                                })
-        except Exception:
-            self.update(identifier, status="failed", error="Input preparation failed; no instance rented")
+        except Exception as exc:
+            self.update(identifier, status="failed", error=str(exc) if isinstance(exc, VastError)
+                        else "Input preparation failed; no instance rented")
             raise
 
     def clone_prepared(self, source_id: str, name: str, source_sha256: str, results_root: Path,
                        iterations: int, workers: int, use_adg: bool) -> dict | None:
         """Reference an unchanged failed snapshot without walking its market-data files."""
         from pb8_config import load_pb8_config
+        from vast_ohlcv_integrity import require_integrity_preflight
 
         source_id = job_id(source_id)
         source = self.read(source_id)
@@ -603,11 +614,12 @@ class JobStore:
             optimize = prepared.get("optimize") if isinstance(prepared, dict) else None
             if not isinstance(optimize, dict) or optimize.get("iters") != iterations or optimize.get("n_cpus") != workers:
                 return None
+            require_integrity_preflight(self.read(source_id, "input/manifest.json"))
             expected_bytes = int(intent["bundle_bytes"])
             expected_digest = str(intent["bundle_sha256"])
             if expected_bytes <= 0 or not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
                 return None
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError, VastError):
             return None
 
         identifier = self.create_preparation(name, iterations, workers, use_adg, requeue_from=source_id)["id"]
@@ -755,6 +767,9 @@ class JobStore:
                 raise VastError("Prepare a fresh job before starting", 409)
             active = [row for row in self.list() if row['id'] != identifier
                       and row['rental_state'] not in ('none', 'deletion_verified')]
+            if state.get('kind') != 'worker':
+                from vast_ohlcv_integrity import require_integrity_preflight
+                require_integrity_preflight(self.read(identifier, 'input/manifest.json'))
             from vast_queue import CloudQueue
             from vast_pool import MAX_RENTALS, pool_limit
             queue_state = CloudQueue(self).read()

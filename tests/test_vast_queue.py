@@ -673,6 +673,8 @@ def test_missing_local_metadata_blocks_rental_before_worker_creation(tmp_path, m
     manifest = {'files': [{'path': 'ohlcv/bybit/1m/BTC_USDT:USDT/2024-01-01.npy'}]}
     if expired_bundle:
         manifest['public_market_cache_mtimes'] = {'bybit': time.time() - 86401}
+    from vast_ohlcv_integrity import certify_manifest
+    certify_manifest(manifest)
     write_json(input_dir / 'manifest.json', manifest)
     market_root = tmp_path / 'data/coindata'
     mapping = market_root / 'bybit/mapping.json'

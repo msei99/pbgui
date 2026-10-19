@@ -60,7 +60,8 @@ def test_list_skips_job_directory_removed_during_scan(tmp_path, monkeypatch):
     assert [row['id'] for row in store.list()] == [surviving]
 
 
-def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch):
+@pytest.mark.parametrize('verified', [False, True])
+def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch, verified):
     """An unchanged provider-failed job references its immutable snapshot immediately."""
     store = JobStore(tmp_path / "vast")
     source = store.create_preparation("same", 20_000, 4, False)
@@ -79,6 +80,11 @@ def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch)
             "sha256": digest(shard),
         }],
     })
+    if verified:
+        from vast_ohlcv_integrity import certify_manifest
+        manifest = store.read(source['id'], 'input/manifest.json')
+        certify_manifest(manifest)
+        write_json(input_directory / 'manifest.json', manifest)
     archive = directory / "input.tar.gz"
     archive.write_bytes(b"immutable prepared archive")
     archive.chmod(0o600)
@@ -100,6 +106,10 @@ def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch)
     row = store.clone_prepared(source["id"], "same", "same-hash", tmp_path / "new-results",
                                20_000, 4, False)
 
+    if not verified:
+        assert row is None  # Legacy unvalidated archives must rebuild through preflight.
+        assert len(store.list()) == 1
+        return
     assert row is not None and row["status"] == "ready"
     assert row["requeue_from"] == source["id"]
     assert row["input_progress"] == {

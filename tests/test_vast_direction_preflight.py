@@ -28,7 +28,10 @@ def prepared(store, config, *, kind='job'):
     directory = store.directory(row['id'])
     folder = ensure_private_directory(directory / 'input')
     write_json(folder / 'optimize.json', config)
-    write_json(folder / 'manifest.json', {'config_sha256': digest(folder / 'optimize.json'), 'files': []})
+    from vast_ohlcv_integrity import certify_manifest
+    manifest = {'config_sha256': digest(folder / 'optimize.json'), 'files': []}
+    certify_manifest(manifest)
+    write_json(folder / 'manifest.json', manifest)
     archive = directory / 'input.tar.gz'
     archive.write_bytes(b'synthetic input archive')
     archive.chmod(0o600)

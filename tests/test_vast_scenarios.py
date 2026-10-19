@@ -19,7 +19,15 @@ def native_warmup(monkeypatch):
                         {'minutes': [31 * 1440] * len(payload['configs'])})
 
 
-def test_requeue_rebuilds_history_instead_of_reusing_old_bundle(config, tmp_path, monkeypatch):
+@pytest.fixture
+def synthetic_candle_integrity(monkeypatch):
+    """Isolate scenario packaging's byte fixtures; real candle checks have dedicated tests."""
+    from vast_ohlcv_integrity import file_signature
+    monkeypatch.setattr('vast_ohlcv_integrity.preflight_shards',
+                        lambda config, shards, *roots: {path: file_signature(path.stat()) for path, _ in shards})
+
+
+def test_requeue_rebuilds_history_instead_of_reusing_old_bundle(config, tmp_path, monkeypatch, synthetic_candle_integrity):
     """Requeue invokes the real exporter; repeated clicks reuse only its new job."""
     import api.vast as api
     from vast_queue import CloudQueue
@@ -200,7 +208,7 @@ def test_disabled_scenarios_do_not_expand_export(config, tmp_path):
     assert {p.parts[0] for _, p in select_shards(config, tmp_path / 'raw', tmp_path / 'mapping')} == {'binance'}
 
 
-def test_frozen_job_stages_every_exported_exchange(config, tmp_path, monkeypatch):
+def test_frozen_job_stages_every_exported_exchange(config, tmp_path, monkeypatch, synthetic_candle_integrity):
     """Persist added scenario exchanges for market metadata and inception staging."""
     import pb8_config
     monkeypatch.setattr(pb8_config, 'save_prepared_pb8_config', lambda value, path: path.write_text(json.dumps(value)))

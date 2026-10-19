@@ -606,19 +606,30 @@ def validate_daily_npz(
     allowed_source_gap_minutes: Iterable[int] | None = None,
     current_day: bool = False,
 ) -> DayValidation:
-    """Validate and hash one PBGui daily structured NPZ without modifying it."""
+    """Validate and hash one daily NPZ or legacy NPY without modifying it."""
     file_path = Path(path)
     day_s, day_obj = _validate_day(day)
     if file_path.is_symlink() or not file_path.is_file() or file_path.stem != day_s:
         return _invalid("missing or unsafe daily file")
     try:
-        with np.load(file_path, allow_pickle=False) as data:
-            if "candles" not in data:
-                return _invalid("missing candles array")
-            source = np.array(data["candles"], copy=True)
+        data = np.load(file_path, allow_pickle=False)
+        if isinstance(data, np.lib.npyio.NpzFile):
+            with data:
+                if "candles" not in data:
+                    return _invalid("missing candles array")
+                source = np.array(data["candles"], copy=True)
+        else:
+            source = np.array(data, copy=True)
+            if source.dtype.names is None and source.ndim == 2 and source.shape[1] == 6:
+                legacy = np.empty(len(source), dtype=_CANONICAL_DTYPE)
+                for index, field in enumerate(_CANONICAL_DTYPE.names):
+                    legacy[field] = source[:, index]
+                source = legacy
     except (OSError, ValueError, EOFError) as exc:
         return _invalid(f"unreadable NPZ: {type(exc).__name__}")
 
+    if source.ndim != 1:
+        return _invalid("candles array is not one-dimensional")
     if source.dtype.names is None:
         return _invalid("candles array is not structured", candles=len(source))
     missing_fields = [name for name in _CANONICAL_DTYPE.names or () if name not in source.dtype.names]
@@ -949,6 +960,63 @@ def _cached_scan_status(
     before_sig = (int(before.st_ino), int(before.st_size), int(before.st_mtime_ns))
     after_sig = (int(after.st_ino), int(after.st_size), int(after.st_mtime_ns))
     return status if before_sig == after_sig else None
+
+
+def validate_daily_files_cached(
+    *,
+    exchange: str,
+    coin: str,
+    paths: list[Path],
+    db_path: Path,
+    inception_ts: int | None = None,
+) -> list[tuple[Path, DayValidation, os.stat_result | None]]:
+    """Check only requested days, reusing the same file-signature catalog as scans.
+
+    Missing/stale rows are validated and cached, not a reason to scan the entire
+    exchange. Do not guess inception from the first file in a truncated export:
+    only verified first-candle metadata or a previously validated inception
+    day may omit its leading minutes.
+    """
+    ex = _validate_exchange(exchange)
+    coin_s = _validate_coin(coin)
+    if not paths:
+        return []
+    days = [_validate_day(path.stem)[0] for path in paths]
+    today = datetime.now(timezone.utc).date()
+    results = []
+    with catalog_operation_lock(db_path):
+        with _connect(db_path) as conn:
+            rows = {str(row["day"]): row for row in conn.execute(
+                "SELECT * FROM daily_checksums WHERE exchange=? AND timeframe=? AND coin=? AND day BETWEEN ? AND ?",
+                (ex, TIMEFRAME, coin_s, min(days), max(days)),
+            )}
+            for path in paths:
+                day_s, day_obj = _validate_day(path.stem)
+                row = rows.get(day_s)
+                inception = ((inception_ts is not None
+                              and datetime.fromtimestamp(inception_ts / 1000, timezone.utc).date() == day_obj)
+                             or (row is not None and row["status"] == "inception_partial"))
+                source_gaps = known_source_gap_minutes(ex, coin_s, day_s)
+                status = _cached_scan_status(
+                    row, path, allow_inception_prefix=inception,
+                    allowed_source_gap_minutes=source_gaps, current_day=day_obj >= today,
+                )
+                if status is not None:
+                    validation = DayValidation(**{key: row[key] for key in DayValidation.__dataclass_fields__})
+                    stable_stat = path.stat()
+                    if (stable_stat.st_mtime_ns, stable_stat.st_size) != (row["file_mtime_ns"], row["file_size"]):
+                        status = None
+                if status is None:
+                    validation, stable_stat = _validate_stable_daily_file(
+                        path, day_obj, allow_inception_prefix=inception,
+                        allowed_source_gap_minutes=source_gaps, current_day=day_obj >= today,
+                    )
+                    _upsert_validation(
+                        conn, exchange=ex, coin=coin_s, day=day_s, validation=validation,
+                        file_path=path if stable_stat is not None else None, file_stat=stable_stat,
+                    )
+                results.append((path, validation, stable_stat))
+    return results
 
 
 def scan_exchange(

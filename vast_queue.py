@@ -141,10 +141,12 @@ def preflight_local_metadata(store: JobStore, jobs: list[dict], resolve_missing:
     """Validate all exported markets, resolving missing inception data locally when requested."""
     from vast_inception import ensure_local_inception, load_local_inception, required_markets
     from vast_market_cache import _load_local_markets
+    from vast_ohlcv_integrity import require_integrity_preflight
 
     requirements = []
     for row in jobs:
         manifest = store.read(row['id'], 'input/manifest.json')
+        require_integrity_preflight(manifest)
         required = required_markets(manifest, PROJECT / 'data/coindata')
         if set(required) != set(row.get('exchanges') or []):
             raise VastError('Prepared cloud exchange list changed; prepare the job again', 409)
