@@ -75,7 +75,8 @@ FastAPI UI improvements:
 - full-width table layout with balanced column distribution, so the page uses the available width without oversized gaps between values
 - active desktop table view expands to use the remaining window height instead of leaving empty space below the table
 - sortable table headers for matched, unmatched, and HIP-3 views
-- sorting and selecting rows update only table content, so open filter controls keep their DOM and focus
+- sorting updates only table content; selecting a row changes its highlight and detail card without rebuilding table rows, so open tag filters keep their focus and draft
+- repeated clicks keep one row selected; closing the details with `X` or Escape clears all row highlights without rebuilding the tables or filter controls
 - unavailable CMC market cap, 24-hour volume, and `vol/mcap` values are shown as `N/A` and sort after known values
 - hover tooltips for tags, notices, and long values
 - row selection with a centered floating detail panel that auto-fits its content on open when the browser window allows it, can be dragged and resized from every side and corner, shows all tags without truncation, offers a direct `Open CMC` link when a mapping exists, and uses an `X` close button instead of only showing the notice below the table

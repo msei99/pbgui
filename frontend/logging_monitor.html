@@ -286,6 +286,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
       <button class="sb-btn" id="btn-settings" onclick="showView('settings')">&#9881;&#65039; Settings</button>
     </div>
     </div>
+    <div id="sidebar-inner">
+      <p id="logging-view-status" role="status" hidden></p>
+    </div>
   </div>
 
   <!-- Main area: log viewer OR settings panel -->
@@ -529,7 +532,35 @@ async function purgeCurrentFile() {
 /* ── Settings panel ──────────────────────────────────────── */
 var rotationSettingsLoaded = false;
 var rotationSettingsLoading = false;
+function loggingViewFromUrl() {
+  var view = new URL(window.location.href).searchParams.get('view');
+  return view === null || view === 'logs' ? 'logs' : (view === 'settings' ? 'settings' : null);
+}
+
+function updateLoggingViewUrl(view) {
+  var url = new URL(window.location.href);
+  var current = url.searchParams.get('view');
+  if (current === view || (current === null && view === 'logs')) return;
+  url.searchParams.set('view', view);
+  window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+}
+
+function restoreLoggingView() {
+  var view = loggingViewFromUrl();
+  showView(view || 'logs');
+  if (view === null) {
+    var status = document.getElementById('logging-view-status');
+    status.textContent = 'Unknown logging view. Showing Log Viewer.';
+    status.hidden = false;
+  }
+}
+
 function showView(view) {
+  view = view === 'settings' ? 'settings' : 'logs';
+  updateLoggingViewUrl(view);
+  var status = document.getElementById('logging-view-status');
+  status.hidden = true;
+  status.textContent = '';
   var panel = document.getElementById('settings-panel');
   var logView = document.getElementById('log-view');
   var btnLogs = document.getElementById('btn-logs');
@@ -708,6 +739,7 @@ viewer = new LogViewerPanel({
 });
 viewer.open();
 loadRotationData();
+restoreLoggingView();
 </script>
 
 <!-- ── Help overlay JS ── -->

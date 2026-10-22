@@ -2929,7 +2929,8 @@
 
       <section class="content-panel" id="settings-panel" hidden>
         <article class="settings-shell">
-          <div class="settings-layout">
+          <div class="note settings-inline-note" id="settings-sync-error" role="status" hidden></div>
+          <div class="settings-layout" inert>
             <article class="panel-card" id="settings-primary-card" data-settings-subsection="normal">
               <div class="settings-grid">
                 <label class="settings-field">
@@ -3663,6 +3664,17 @@
         tiingoSaveGeneration: 0,
         tiingoRevealGeneration: 0
       };
+      var settingsEditRevision = 0;
+      var settingsSaveRevision = 0;
+      var settingsReadController = null;
+      var settingsReadPromise = null;
+      var settingsReadExchange = '';
+      var settingsSyncTimer = null;
+      var settingsAuthLost = false;
+      var settingsPageLeft = false;
+      var settingsFormLoading = true;
+      var settingsResetExchange = '';
+      var settingsLoadDeferred = false;
       var integrityState = {
         settings: null,
         status: null,
@@ -4859,6 +4871,42 @@
         return response.json();
       }
 
+      async function fetchSettingsJson(path, options) {
+        var opts = Object.assign({ cache: 'no-store' }, options || {});
+        opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+        var read = !opts.method || opts.method === 'GET';
+        var controller = new AbortController();
+        var outerSignal = opts.signal;
+        var abort = function () { controller.abort(); };
+        if (outerSignal) {
+          if (outerSignal.aborted) controller.abort();
+          else outerSignal.addEventListener('abort', abort, { once: true });
+        }
+        opts.signal = controller.signal;
+        var timeout = read ? setTimeout(abort, 5000) : null;
+        try {
+          var response = await fetch(apiUrl(path), opts);
+          var payload = null;
+          try { payload = await response.json(); } catch (error) {
+            if (controller.signal.aborted) throw error;
+          }
+          if (response.status === 401 || response.status === 403) {
+            settingsAuthLost = true;
+            settingsSyncMessage('Authentication lost. Sign in again.');
+            stopSettingsSync();
+            clearTiingoRevealedToken();
+          }
+          if (!response.ok || !payload || payload.success === false) {
+            var message = payload && (typeof payload.detail === 'string' ? payload.detail : payload.error);
+            throw new Error(typeof message === 'string' ? message.slice(0, 300) : 'HTTP ' + response.status);
+          }
+          return payload;
+        } finally {
+          if (timeout !== null) clearTimeout(timeout);
+          if (outerSignal) outerSignal.removeEventListener('abort', abort);
+        }
+      }
+
       async function fetchApiKeysJson(path, options) {
         var requestOptions = options || {};
         requestOptions.cache = requestOptions.cache || 'no-store';
@@ -5505,7 +5553,8 @@
       function updateSaveSettingsButton() {
         var button = document.getElementById('btn-save-settings-sidebar');
         if (!button) return;
-        button.disabled = settingsState.saveBusy || !settingsState.isDirty;
+        button.disabled = settingsFormLoading || settingsState.saveBusy || !settingsState.isDirty
+          || settingsState.exchange !== uiState.contextExchange;
         button.classList.toggle('save-needed', settingsState.isDirty);
       }
 
@@ -5515,13 +5564,26 @@
         updateSaveSettingsButton();
       }
 
+      function settingsRequestsEqual(left, right) {
+        var leftValues = Object.assign({}, left);
+        var rightValues = Object.assign({}, right);
+        // Auto-enable derives these lists from availability, not user edits.
+        // Keep the full request and baseline intact for persistence and drafts.
+        if (leftValues.auto_enable_new_coins && rightValues.auto_enable_new_coins) {
+          delete leftValues.enabled_coins;
+          delete rightValues.enabled_coins;
+        }
+        return JSON.stringify(leftValues) === JSON.stringify(rightValues);
+      }
+
       function syncSettingsDirtyState() {
+        settingsEditRevision += 1;
         if (!settingsState.baselineRequest) {
           settingsState.isDirty = false;
           updateSaveSettingsButton();
           return;
         }
-        settingsState.isDirty = JSON.stringify(collectSettingsRequest()) !== settingsState.baselineRequest;
+        settingsState.isDirty = !settingsRequestsEqual(collectSettingsRequest(), JSON.parse(settingsState.baselineRequest));
         updateSaveSettingsButton();
       }
 
@@ -7018,20 +7080,19 @@
         var allCoins = getAllCoins();
         var autoEnableNewCoins = Boolean(settingsState.autoEnableNewCoins);
         var allCoinsSet = new Set(allCoins);
-        if (autoEnableNewCoins) {
-          settingsState.selectedCoins = new Set(allCoins);
-        } else {
-          settingsState.selectedCoins = new Set(Array.from(settingsState.selectedCoins).filter(function (coin) {
-            return allCoinsSet.has(coin);
-          }));
+        if (autoEnableNewCoins && allCoins.length) {
+          allCoins.forEach(function (coin) { settingsState.selectedCoins.add(coin); });
         }
-        var visibleCoins = getVisibleCoins(allCoins).sort(function (left, right) {
+        var displayCoins = Array.from(new Set(allCoins.concat(Array.from(settingsState.selectedCoins))));
+        var visibleCoins = getVisibleCoins(displayCoins).sort(function (left, right) {
           var leftRank = settingsState.selectedCoins.has(left) ? 0 : 1;
           var rightRank = settingsState.selectedCoins.has(right) ? 0 : 1;
           if (leftRank !== rightRank) return leftRank - rightRank;
           return left.localeCompare(right);
         });
 
+        var scrollTop = list.scrollTop;
+        var focusedCoin = document.activeElement && document.activeElement.getAttribute('data-settings-coin-row');
         list.innerHTML = '';
         if (!visibleCoins.length) {
           list.innerHTML = '<div class="coin-picker-empty">No coins match the current filter.</div>';
@@ -7040,10 +7101,20 @@
             var checked = settingsState.selectedCoins.has(coin);
             return ''
               + '<button class="coin-picker-row coin-picker-button settings-coin-row' + (checked ? ' selected' : '') + (autoEnableNewCoins ? ' disabled' : '') + '" type="button" data-settings-coin-row="' + esc(coin) + '" aria-pressed="' + (checked ? 'true' : 'false') + '"' + (autoEnableNewCoins ? ' disabled' : '') + '>'
-              +   '<span class="coin-picker-coin">' + esc(coin) + '</span>'
+              +   '<span class="coin-picker-coin">' + esc(coin) + (!allCoinsSet.has(coin) && settingsState.payload.coin_data_available !== false ? ' (unavailable)' : '') + '</span>'
               + '</button>';
           }).join('');
         }
+
+        if (focusedCoin) {
+          Array.from(list.querySelectorAll('[data-settings-coin-row]')).some(function (row) {
+            if (row.getAttribute('data-settings-coin-row') !== focusedCoin) return false;
+            row.focus({ preventScroll: true });
+            return true;
+          });
+        }
+        list.scrollTop = scrollTop;
+        renderSettingsAvailability();
 
         updateSettingsCoinSelectionSummary(visibleCoins);
       }
@@ -7068,6 +7139,20 @@
           settingsState.selectedCoins.size + ' selected / ' + allCoins.length + ' total';
         document.getElementById('settings-filtered-count').textContent =
           (Array.isArray(visibleCoins) ? visibleCoins.length : getVisibleCoins(allCoins).length) + ' visible';
+      }
+
+      function renderSettingsAvailability() {
+        var payload = settingsState.payload || {};
+        var box = document.getElementById('settings-missing-coins');
+        if (!box) return;
+        var available = new Set(getAllCoins());
+        var missing = Array.from(new Set((payload.missing_saved_coins || []).concat(Array.from(settingsState.selectedCoins).filter(function (coin) {
+          return !available.has(coin);
+        }))));
+        box.textContent = payload.coin_data_available === false
+          ? 'Coin Data is not available; saved selection is retained.'
+          : (missing.length ? 'Unavailable selected coins: ' + missing.join(', ') : '');
+        box.hidden = !box.textContent;
       }
 
       function getSettingsCoinRows() {
@@ -7098,7 +7183,7 @@
 
       function syncSettingsSelectionFromDom(markDirty) {
         if (settingsState.autoEnableNewCoins) return;
-        var visibleCoins = new Set(getVisibleCoins(getAllCoins()));
+        var visibleCoins = new Set(getSettingsCoinRows().map(function (row) { return String(row.getAttribute('data-settings-coin-row') || ''); }));
         var nextSelected = new Set(Array.from(settingsState.selectedCoins).filter(function (coin) {
           return !visibleCoins.has(coin);
         }));
@@ -7116,6 +7201,9 @@
         settingsState.dragStart = null;
         settingsState.dragSelecting = false;
         settingsState.dragMode = null;
+        var pending = settingsState.pendingDynamicPayload;
+        settingsState.pendingDynamicPayload = null;
+        if (pending && pending.exchange === uiState.contextExchange) applySettingsDynamicPayload(pending);
       }
 
       function getBest1mSelectedCoins() {
@@ -7310,7 +7398,7 @@
         } catch (error) {
           void error;
         }
-        loadSettings(meta.key, { keepFeedback: false });
+        loadSettings(meta.key, { keepFeedback: false, resetForm: true });
         updateStatusPanel();
         updateSidebarLegacyShortcuts();
         syncInventorySubsectionVisibility();
@@ -7633,14 +7721,17 @@
       async function loadBest1mInfo(exchange) {
         var requestId = uiState.best1mRequestId + 1;
         uiState.best1mRequestId = requestId;
+        var keepPrevious = best1mState.exchange === exchange;
         clearBest1mFeedback();
-        document.getElementById('best1m-hint').textContent = '';
-        document.getElementById('best1m-coin-count').textContent = 'Loading…';
-        document.getElementById('best1m-selected-count').textContent = 'Loading…';
-        document.getElementById('best1m-filtered-count').textContent = '';
-        document.getElementById('best1m-coin-picker').innerHTML = '<div class="coin-picker-empty">Loading available coins...</div>';
-        best1mState.distributedHosts = [];
-        renderBest1mDistributedHosts();
+        if (!keepPrevious) {
+          document.getElementById('best1m-hint').textContent = '';
+          document.getElementById('best1m-coin-count').textContent = 'Loading…';
+          document.getElementById('best1m-selected-count').textContent = 'Loading…';
+          document.getElementById('best1m-filtered-count').textContent = '';
+          document.getElementById('best1m-coin-picker').innerHTML = '<div class="coin-picker-empty">Loading available coins...</div>';
+          best1mState.distributedHosts = [];
+          renderBest1mDistributedHosts();
+        }
         document.getElementById('btn-best1m-queue').disabled = true;
 
         try {
@@ -7653,8 +7744,11 @@
         } catch (error) {
           if (requestId !== uiState.best1mRequestId) return;
           setBest1mFeedback(error && error.message ? error.message : 'Failed to load Best 1m info.', 'error');
-          document.getElementById('best1m-description').textContent = 'Could not load build options.';
-          document.getElementById('best1m-coin-count').textContent = 'Unavailable';
+          if (!keepPrevious) {
+            document.getElementById('best1m-description').textContent = 'Could not load build options.';
+            document.getElementById('best1m-coin-count').textContent = 'Unavailable';
+            document.getElementById('best1m-coin-picker').innerHTML = '<div class="coin-picker-empty">Build options unavailable.</div>';
+          }
         }
       }
 
@@ -8917,30 +9011,153 @@
       }
 
       var settingsLoadRequestId = 0;
-      async function loadSettings(exchange, options) {
-        var requestId = ++settingsLoadRequestId;
-        var opts = options || {};
-        var exchangeKey = String(exchange || 'hyperliquid');
-        try {
-          var payload = await fetchJson('/settings/' + encodeURIComponent(exchangeKey));
-          if (requestId !== settingsLoadRequestId || exchangeKey !== uiState.contextExchange) return;
-          settingsState.exchange = payload.exchange || exchangeKey;
-          settingsState.payload = payload;
-          settingsState.autoEnableNewCoins = Boolean(payload.auto_enable_new_coins);
-          settingsState.selectedCoins = new Set(Array.isArray(payload.enabled_coins) ? payload.enabled_coins : []);
-          settingsState.coinFilter = '';
-          document.getElementById('settings-coin-filter').value = '';
-          renderSettingsPayload();
-          setSettingsBaseline();
-          void opts;
-        } catch (error) {
-          if (requestId !== settingsLoadRequestId || exchangeKey !== uiState.contextExchange) return;
-          showToast(error && error.message ? error.message : 'Failed to load settings.', 'error');
+      function settingsSyncVisible() {
+        var panel = document.getElementById('settings-panel');
+        return !settingsPageLeft && !settingsAuthLost && !document.hidden && panel && !panel.hidden;
+      }
+
+      function stopSettingsSync() {
+        if (settingsSyncTimer !== null) clearTimeout(settingsSyncTimer);
+        settingsSyncTimer = null;
+        settingsLoadRequestId += 1;
+        if (settingsReadController) settingsReadController.abort();
+        settingsReadController = null;
+        settingsReadPromise = null;
+        settingsReadExchange = '';
+        settingsState.pendingDynamicPayload = null;
+      }
+
+      function scheduleSettingsSync() {
+        if (settingsSyncTimer !== null) clearTimeout(settingsSyncTimer);
+        settingsSyncTimer = null;
+        if (settingsSyncVisible()) {
+          settingsSyncTimer = setTimeout(function () {
+            settingsSyncTimer = null;
+            loadSettings(uiState.contextExchange, { background: true });
+          }, 15000);
         }
       }
 
+      function resumeSettingsSync() {
+        if (!settingsSyncVisible()) { stopSettingsSync(); return; }
+        loadSettings(uiState.contextExchange, { background: true });
+      }
+
+      function settingsSyncMessage(message) {
+        var box = document.getElementById('settings-sync-error');
+        if (!box) return;
+        box.textContent = message || '';
+        box.hidden = !message;
+      }
+
+      function setSettingsLoading(loading) {
+        settingsFormLoading = loading;
+        var layout = document.querySelector('#settings-panel .settings-layout');
+        if (layout) {
+          layout.inert = loading;
+          layout.setAttribute('aria-busy', loading ? 'true' : 'false');
+        }
+        updateSaveSettingsButton();
+      }
+
+      function applySettingsDynamicPayload(payload) {
+        if (settingsState.dragStart) { settingsState.pendingDynamicPayload = payload; return; }
+        var previous = settingsState.payload || {};
+        var previousSettings = previous.settings || {};
+        var settings = payload.settings || {};
+        var changed = JSON.stringify([previous.coin_options, previous.missing_saved_coins, previous.coin_data_available]) !==
+          JSON.stringify([payload.coin_options, payload.missing_saved_coins, payload.coin_data_available]);
+        ['coin_options', 'missing_saved_coins', 'coin_data_available'].forEach(function (key) { previous[key] = payload[key]; });
+        // Do not replace form settings or its baseline during background reads.
+        ['tiingo_configured', 'tiingo_profile_id', 'tiingo_usage'].forEach(function (key) { previousSettings[key] = settings[key]; });
+        previous.settings = previousSettings;
+        settingsState.payload = previous;
+        if (changed) renderCoinOptions();
+        if (settingsState.exchange === 'hyperliquid') {
+          var profileId = String(settings.tiingo_profile_id || '');
+          var configured = Boolean(settings.tiingo_configured);
+          if (settingsState.tiingoProfileId !== profileId || settingsState.tiingoConfigured !== configured) {
+            var input = document.getElementById('settings-tiingo-token');
+            if (input && input.dataset.revealed === 'true') clearTiingoRevealedToken();
+          }
+          settingsState.tiingoProfileId = profileId;
+          settingsState.tiingoConfigured = configured;
+          var status = document.getElementById('settings-tiingo-credential-status');
+          if (status) status.textContent = configured ? 'An active Tiingo vault profile is available.' : 'No active Tiingo vault profile.';
+          renderTiingoUsage(settings.tiingo_usage || {}, configured);
+        }
+      }
+
+      function restoreSettingsCoinFilter(exchange) {
+        try { settingsState.coinFilter = window.localStorage.getItem('market_data_coin_filter_' + exchange) || ''; }
+        catch (error) { settingsState.coinFilter = ''; }
+        document.getElementById('settings-coin-filter').value = settingsState.coinFilter;
+      }
+
+      async function loadSettings(exchange, options) {
+        var exchangeKey = String(exchange || 'hyperliquid');
+        if (settingsAuthLost || exchangeKey !== uiState.contextExchange) return;
+        var opts = options || {};
+        if (opts.resetForm || !settingsState.payload || settingsState.payload.exchange !== exchangeKey) {
+          settingsResetExchange = exchangeKey;
+          setSettingsLoading(true);
+        }
+        if (settingsPageLeft || document.hidden || settingsState.saveBusy) {
+          settingsLoadDeferred = true;
+          return;
+        }
+        if (settingsReadPromise && settingsReadExchange === exchangeKey) return settingsReadPromise;
+        if (settingsReadController) settingsReadController.abort();
+        var requestId = ++settingsLoadRequestId;
+        settingsLoadDeferred = false;
+        setSettingsLoading(settingsResetExchange === exchangeKey);
+        if (settingsFormLoading) settingsSyncMessage('Loading settings…');
+        var editRevision = settingsEditRevision;
+        var saveRevision = settingsSaveRevision;
+        var controller = new AbortController();
+        settingsReadController = controller;
+        settingsReadExchange = exchangeKey;
+        settingsReadPromise = (async function () {
+          try {
+          var payload = await fetchSettingsJson('/settings/' + encodeURIComponent(exchangeKey), { signal: controller.signal });
+          if (requestId !== settingsLoadRequestId || exchangeKey !== uiState.contextExchange || saveRevision !== settingsSaveRevision) return;
+          if (payload.success === false) throw new Error(payload.error || 'Failed to load settings.');
+          var sameExchange = settingsState.payload && settingsState.payload.exchange === exchangeKey;
+          if (settingsResetExchange !== exchangeKey && (sameExchange || editRevision !== settingsEditRevision)) {
+            applySettingsDynamicPayload(payload);
+            setSettingsLoading(false);
+            settingsSyncMessage('');
+            return;
+          }
+          settingsState.exchange = payload.exchange || exchangeKey;
+          settingsState.payload = payload;
+          settingsState.autoEnableNewCoins = Boolean(payload.auto_enable_new_coins);
+          settingsState.selectedCoins = new Set((payload.enabled_coins || []).concat(payload.missing_saved_coins || []));
+          restoreSettingsCoinFilter(exchangeKey);
+          renderSettingsPayload();
+          setSettingsBaseline();
+          if (settingsResetExchange === exchangeKey) settingsResetExchange = '';
+          setSettingsLoading(false);
+          settingsSyncMessage('');
+          void opts;
+        } catch (error) {
+          if (requestId !== settingsLoadRequestId || exchangeKey !== uiState.contextExchange) return;
+          var message = error && error.name === 'AbortError' ? 'Settings read timed out. Retrying automatically.' : (error && error.message ? error.message : 'Failed to load settings.');
+          settingsSyncMessage(message);
+        } finally {
+          if (requestId === settingsLoadRequestId) {
+            settingsReadController = null;
+            settingsReadPromise = null;
+            settingsReadExchange = '';
+            scheduleSettingsSync();
+          }
+        }
+        }());
+        return settingsReadPromise;
+      }
+
       function collectSettingsRequest() {
-        var enabledCoins = settingsState.autoEnableNewCoins
+        var enabledCoins = settingsState.autoEnableNewCoins && getAllCoins().length && settingsState.payload.coin_data_available !== false
           ? getAllCoins().slice().sort()
           : Array.from(settingsState.selectedCoins).sort();
         var request = {
@@ -8970,26 +9187,33 @@
       }
 
       async function saveSettings() {
-        if (settingsState.saveBusy) return;
+        if (settingsState.saveBusy || settingsFormLoading || settingsAuthLost || settingsPageLeft
+            || settingsState.exchange !== uiState.contextExchange
+            || !settingsState.payload || settingsState.payload.exchange !== uiState.contextExchange) return;
         settingsState.saveBusy = true;
+        settingsSaveRevision += 1;
+        stopSettingsSync();
         updateSaveSettingsButton();
         var savedExchange = settingsState.exchange;
         try {
           var savedRequest = collectSettingsRequest();
-          var result = await fetchJson('/settings/' + encodeURIComponent(savedExchange), {
+          var savedRevision = settingsSaveRevision;
+          var savedEditRevision = settingsEditRevision;
+          var result = await fetchSettingsJson('/settings/' + encodeURIComponent(savedExchange), {
             method: 'POST',
             body: JSON.stringify(savedRequest)
           });
           if (!result.success) {
             throw new Error(result.error || 'Save failed.');
           }
-          if (settingsState.exchange === savedExchange) {
-            settingsState.payload = result.settings;
-            if (JSON.stringify(collectSettingsRequest()) === JSON.stringify(savedRequest)) {
-              settingsState.selectedCoins = new Set(Array.isArray(result.settings.enabled_coins) ? result.settings.enabled_coins : []);
+          if (settingsState.exchange === savedExchange && uiState.contextExchange === savedExchange && savedRevision === settingsSaveRevision && !settingsPageLeft && !settingsAuthLost) {
+            if (savedEditRevision === settingsEditRevision && settingsRequestsEqual(collectSettingsRequest(), savedRequest)) {
+              settingsState.payload = result.settings;
+              settingsState.selectedCoins = new Set((result.settings.enabled_coins || []).concat(result.settings.missing_saved_coins || []));
               renderSettingsPayload();
               setSettingsBaseline();
             } else {
+              applySettingsDynamicPayload(result.settings);
               settingsState.baselineRequest = JSON.stringify(savedRequest);
               syncSettingsDirtyState();
             }
@@ -9000,6 +9224,8 @@
         } finally {
           settingsState.saveBusy = false;
           updateSaveSettingsButton();
+          if (settingsLoadDeferred && settingsSyncVisible()) loadSettings(uiState.contextExchange);
+          else scheduleSettingsSync();
         }
       }
 
@@ -9128,6 +9354,8 @@
         }
         syncSidebarShortcutState();
         syncActivityLogViewer(panelId);
+        if (panelId === 'settings-panel') resumeSettingsSync();
+        else stopSettingsSync();
       }
 
       async function fetchStatus(exchange) {
@@ -9683,6 +9911,7 @@
         });
         document.getElementById('settings-coin-filter').addEventListener('input', function (event) {
           settingsState.coinFilter = String(event.target.value || '');
+          try { window.localStorage.setItem('market_data_coin_filter_' + settingsState.exchange, settingsState.coinFilter); } catch (error) { void error; }
           renderCoinOptions();
         });
         document.getElementById('settings-auto-enable-new-coins').addEventListener('change', function (event) {
@@ -9789,6 +10018,13 @@
       }
 
       window.addEventListener('pagehide', clearTiingoRevealedToken);
+      window.addEventListener('pagehide', function () { settingsPageLeft = true; stopSettingsSync(); });
+      window.addEventListener('pageshow', function () { settingsPageLeft = false; resumeSettingsSync(); });
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) { stopSettingsSync(); clearTiingoRevealedToken(); }
+        else resumeSettingsSync();
+      });
+      window.addEventListener('focus', resumeSettingsSync);
 
       window.PBGuiAI.registerPageContext({
         id: 'market-data',

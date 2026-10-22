@@ -2,21 +2,36 @@
 from __future__ import annotations
 
 import copy
+from collections import OrderedDict
 import hashlib
 import json
 import math
 from pathlib import Path
 import re
 import time
+import threading
+import sys
 import uuid
 
 from file_lock import advisory_file_lock
 from secure_files import atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow
+from pb8_loop_storage import LoopArchive, LoopStorageError, MAX_MANIFEST_BYTES, HOT_FIELDS, manifest
 
 SERVICE = 'PB8Loop'
 TERMINAL = {'completed', 'unconfirmed', 'stopped', 'failed'}
 ACTIVE = {'running', 'finishing'}
 MAX_JSON_BYTES = 32 * 1024 * 1024
+READ_CACHE_BYTES = 128 * 1024 * 1024
+READ_CACHE_TTL = 30
+
+
+def _independent_json_copy(value):
+    """Copy JSON trees without aliasing repeated mutable config references."""
+    if isinstance(value, dict):
+        return {key: _independent_json_copy(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_independent_json_copy(item) for item in value]
+    return value
 
 
 def round_limit(settings):
@@ -28,7 +43,7 @@ def round_limit(settings):
     return value
 
 
-def optimizer_execution_evidence(job, settings):
+def optimizer_execution_evidence(job, settings, record=None):
     """Explain intentional quota cancellation without disguising real interruptions."""
     result = {key: copy.deepcopy(job.get(key)) for key in
               ('operation', 'status', 'reason', 'error', 'config', 'executed_config', 'runner',
@@ -44,6 +59,14 @@ def optimizer_execution_evidence(job, settings):
                   completion_reason='proxy_limit_reached' if quota_complete else None,
                   completed_evolution_proxy=count,
                   proxy_overshoot=max(0, count - target) if type(count) is int and type(target) is int else None)
+    from pb8_loop_gpu_replacement import replaced_predecessor
+    replacement = replaced_predecessor(record or {}, job)
+    if replacement:
+        result.update(status=job.get('status'), completion_reason='gpu_replaced',
+                      infrastructure_interruption=True, replacement_operation=replacement['id'],
+                      successor_operation=replacement.get('successor'),
+                      attempt_charged=True,
+                      infrastructure_reason='Authorized GPU replacement; preserved input retries in the same logical round')
     return result
 
 
@@ -560,6 +583,59 @@ class LoopStore:
     """Serialize owner-scoped loop state and append idempotent reusable evidence."""
     def __init__(self, root):
         self.root = Path(root)
+        self._metadata_cache = OrderedDict()
+        self._metadata_cache_lock = threading.RLock()
+        self._read_cache = OrderedDict()
+        self._read_cache_size = 0
+        self._read_cache_lock = threading.RLock()
+
+    def clear_read_cache(self):
+        """Release retained snapshots when the API owner shuts down."""
+        with self._read_cache_lock:
+            self._read_cache.clear()
+            self._read_cache_size = 0
+
+    def _read_stamp(self, path):
+        """Invalidate snapshots on manifest/archive replacement, edits or corruption."""
+        archive_dir = path.parent / 'run_archives'
+        archive = archive_dir / (path.stem + '.sqlite3')
+        if path.is_symlink() or archive_dir.is_symlink() or archive.is_symlink():
+            raise LoopStorageError('Loop state/archive must not be a symlink')
+        stamps = []
+        for item in (path, archive):
+            try:
+                stat = item.stat()
+                stamps.append((stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+            except FileNotFoundError:
+                stamps.append(None)
+        return tuple(stamps)
+
+    def _remember_read(self, path, stamp, record):
+        """Own independent snapshots, bounded by actual Python object size and idle TTL."""
+        snapshot = _independent_json_copy(record)
+        size, seen, pending = 0, set(), [snapshot]
+        while pending:
+            value = pending.pop()
+            if id(value) in seen:
+                continue
+            seen.add(id(value))
+            size += sys.getsizeof(value)
+            if size > READ_CACHE_BYTES // 2:
+                return
+            if isinstance(value, dict):
+                pending.extend(value.keys())
+                pending.extend(value.values())
+            elif isinstance(value, (list, tuple)):
+                pending.extend(value)
+        with self._read_cache_lock:
+            old = self._read_cache.pop(path, None)
+            if old:
+                self._read_cache_size -= old[2]
+            while self._read_cache and (len(self._read_cache) >= 16 or self._read_cache_size + size > READ_CACHE_BYTES):
+                _, removed = self._read_cache.popitem(last=False)
+                self._read_cache_size -= removed[2]
+            self._read_cache[path] = (stamp, snapshot, size, time.monotonic() + READ_CACHE_TTL)
+            self._read_cache_size += size
 
     def owner_dir(self, owner):
         path = self.root / identifier(owner)
@@ -733,14 +809,8 @@ class LoopStore:
         return self.owner_dir(owner) / (identifier(loop_id) + '.json')
 
     def read(self, owner, loop_id):
-        path = self.path(owner, loop_id)
-        if not path.is_file() or path.is_symlink():
-            raise FileNotFoundError('Loop not found')
-        if path.stat().st_size > MAX_JSON_BYTES:
-            raise ValueError('Loop state is too large')
-        result = json.loads(read_regular_file_nofollow(path, self.root))
-        if result.get('owner') != owner or result.get('id') != loop_id:
-            raise ValueError('Loop ownership mismatch')
+        """Return an independent current state, without decoding unchanged archives again."""
+        result = self._read_snapshot(owner, loop_id)
         # Report scheduling is mandatory, including restored Template runs.
         result['observer_enabled'] = True
         if result.get('final_holdout_policy') in {'final_only', 'disabled'}:
@@ -749,14 +819,135 @@ class LoopStore:
             result['holdout_retryable'] = False
         return result
 
-    def write(self, record):
-        """Write a complete state under the same cross-process transaction lock."""
-        path = self.path(record['owner'], record['id'])
-        content = json.dumps(record, indent=4, allow_nan=False)
-        if len(content.encode()) > MAX_JSON_BYTES:
+    def _read_snapshot(self, owner, loop_id):
+        """Cache only verified reads; external file changes always force verification again."""
+        path = self.path(owner, loop_id)
+        if not path.is_file() or path.is_symlink():
+            raise FileNotFoundError('Loop not found')
+        if path.stat().st_size > MAX_JSON_BYTES:
             raise ValueError('Loop state is too large')
+        stamp = self._read_stamp(path)
+        with self._read_cache_lock:
+            for key, cached in list(self._read_cache.items()):
+                if cached[3] <= time.monotonic() or key == path and cached[0] != stamp:
+                    self._read_cache.pop(key)
+                    self._read_cache_size -= cached[2]
+            cached = self._read_cache.get(path)
+            if cached:
+                self._read_cache.move_to_end(path)
+                return copy.deepcopy(cached[1])
+        result = json.loads(read_regular_file_nofollow(path, self.root))
+        if result.get('owner') != owner or result.get('id') != loop_id:
+            raise ValueError('Loop ownership mismatch')
+        if '_loop_storage' in result:
+            header = result
+            if header['_loop_storage'].get('version') != 1:
+                raise LoopStorageError('Unsupported Loop archive format')
+            result = LoopArchive(self.owner_dir(owner), loop_id).load(header['_loop_storage']['root'])
+            if result.get('owner') != owner or result.get('id') != loop_id:
+                raise LoopStorageError('Loop archive ownership mismatch')
+            result.update({key: header[key] for key in HOT_FIELDS if key in header})
+            if header.get('_storage_failure'):
+                result.update(reason=header['_storage_failure']['message'], last_error=header['_storage_failure']['message'],
+                              ai_pause={'reason': 'storage', 'message': header['_storage_failure']['message'],
+                                        'details': {}, 'at': header['_storage_failure']['at'], 'phase': result['phase']})
+        if self._read_stamp(path) == stamp:
+            self._remember_read(path, stamp, result)
+        return result
+
+    def write(self, record):
+        """Archive immutable chunks, then atomically publish one bounded active root."""
+        path = self.path(record['owner'], record['id'])
         with advisory_file_lock(path):
-            atomic_write_private_text(path, content + '\n')
+            try:
+                legacy = None
+                if path.exists():
+                    previous = read_regular_file_nofollow(path, self.root)
+                    if '_loop_storage' not in json.loads(previous):
+                        legacy = previous
+                root = LoopArchive(path.parent, record['id']).save(record, legacy)
+                content = json.dumps(manifest(record, root), indent=4, allow_nan=False) + '\n'
+                if len(content.encode()) > MAX_MANIFEST_BYTES:
+                    raise LoopStorageError('Active Loop manifest exceeds its fixed size bound')
+                atomic_write_private_text(path, content)
+                self._remember_read(path, self._read_stamp(path), record)
+            except (OSError, ValueError, TypeError) as exc:
+                if isinstance(exc, LoopStorageError):
+                    raise
+                raise LoopStorageError(f'Loop persistence failed: {type(exc).__name__}') from exc
+
+    def archive_page(self, owner, loop_id, field, offset=0, limit=50):
+        """Load a bounded archive page without decoding the complete historical run."""
+        if field not in {'history', 'jobs', 'observer_jobs', 'training_candidates', 'ai_decisions'}:
+            raise ValueError('Unsupported Loop archive collection')
+        path = self.path(owner, loop_id)
+        header = json.loads(read_regular_file_nofollow(path, self.root))
+        if header.get('owner') != owner or header.get('id') != loop_id:
+            raise ValueError('Loop ownership mismatch')
+        if '_loop_storage' not in header:
+            raise ValueError('Legacy Loop is migrated on its next normal write')
+        return LoopArchive(path.parent, loop_id).page(header['_loop_storage']['root'], field, offset, limit)
+
+    def pause_storage(self, owner, loop_id, error):
+        """Pause through the tiny manifest while preserving a completed AI decision root."""
+        path = self.path(owner, loop_id)
+        with advisory_file_lock(path):
+            header = json.loads(read_regular_file_nofollow(path, self.root))
+            if header.get('owner') != owner or header.get('id') != loop_id:
+                raise ValueError('Loop ownership mismatch')
+            if '_loop_storage' not in header:
+                raise LoopStorageError('Legacy Loop storage needs recovery before migration')
+            if header['status'] not in ACTIVE | {'replacing_gpu'}:
+                return
+            header.update(status='paused', control_generation=header['control_generation'] + 1,
+                          updated_at=time.time(), _storage_failure={'message': str(error)[:1000], 'at': time.time()})
+            atomic_write_private_text(path, json.dumps(header, indent=4, allow_nan=False) + '\n')
+
+    def list_metadata(self):
+        """Read manifests and reuse bounded legacy summaries until their files change."""
+        result = []
+        if not self.root.exists():
+            return result
+        for directory in self.root.iterdir():
+            if not directory.is_dir() or directory.is_symlink() or not re.fullmatch(r'[a-f0-9]{32}', directory.name):
+                continue
+            for path in directory.glob('*.json'):
+                if not re.fullmatch(r'[a-f0-9]{32}', path.stem):
+                    continue
+                try:
+                    if path.is_symlink():
+                        raise ValueError('Loop state must not be a symlink')
+                    stat = path.stat()
+                    stamp = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+                    with self._metadata_cache_lock:
+                        cached = self._metadata_cache.get(path)
+                        if cached and cached[0] == stamp:
+                            self._metadata_cache.move_to_end(path)
+                            result.append(dict(cached[1]))
+                            continue
+                    if stat.st_size > MAX_JSON_BYTES:
+                        raise ValueError('Loop state is too large')
+                    header = json.loads(read_regular_file_nofollow(path, self.root))
+                    if header.get('owner') != directory.name or header.get('id') != path.stem:
+                        raise ValueError('Loop ownership mismatch')
+                    if '_loop_storage' in header:
+                        result.append({**header, '_metadata_only': True})
+                    else:
+                        summary = manifest(self.read(directory.name, path.stem), None)
+                        summary.pop('_loop_storage')
+                        summary['_metadata_only'] = True
+                        result.append(summary)
+                        # Retain only small navigation/status fields, never histories.
+                        # File identity and nanosecond change times invalidate edits.
+                        with self._metadata_cache_lock:
+                            self._metadata_cache[path] = (stamp, dict(summary))
+                            self._metadata_cache.move_to_end(path)
+                            while len(self._metadata_cache) > 128:
+                                self._metadata_cache.popitem(last=False)
+                except (OSError, ValueError) as exc:
+                    from logging_helpers import human_log
+                    human_log(SERVICE, f'Cannot read Loop metadata {path.name}: {type(exc).__name__}', level='WARNING')
+        return sorted(result, key=lambda row: row['created_at'], reverse=True)
 
     def update(self, owner, loop_id, function):
         """Read, mutate and replace a record in one transaction."""

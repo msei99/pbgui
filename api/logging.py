@@ -25,11 +25,10 @@ from ini_settings import apply_metadata
 from logging_helpers import (
     human_log as _log,
     purge_log_to_rotated,
-    get_rotate_defaults,
+    get_rotation_settings_bulk,
     set_rotate_defaults,
     get_rotate_settings,
     set_rotate_settings,
-    get_managed_scope_settings,
     set_managed_scope_settings,
     MAX_ROTATE_BACKUP_COUNT,
     MAX_ROTATE_MAX_BYTES,
@@ -102,9 +101,7 @@ def list_log_files(session: SessionToken = Depends(require_auth)) -> dict:
 @router.get("/rotation")
 def get_rotation(session: SessionToken = Depends(require_auth)) -> dict:
     """Get rotation settings: default and per-log-file overrides."""
-    default_max_bytes, default_backup_count = get_rotate_defaults()
-
-    per_service: dict[str, dict] = {}
+    logfiles = []
     if logging_helpers.LOG_ROOT.exists():
         for p in sorted(logging_helpers.LOG_ROOT.glob("*.log")):
             if logging_helpers.resolve_managed_log_scope(p):
@@ -112,15 +109,21 @@ def get_rotation(session: SessionToken = Depends(require_auth)) -> dict:
             service = p.stem
             if service in _RETIRED_LOG_STEMS:
                 continue
-            max_bytes, backup_count = get_rotate_settings(logfile=str(p))
-            per_service[service] = {
-                "max_mb": max(1, max_bytes // (1024 * 1024)),
-                "backup_count": backup_count,
-            }
+            logfiles.append(p)
+
+    defaults, file_settings, managed_settings = get_rotation_settings_bulk(logfiles)
+    default_max_bytes, default_backup_count = defaults
+    per_service = {
+        service: {
+            "max_mb": max(1, max_bytes // (1024 * 1024)),
+            "backup_count": backup_count,
+        }
+        for service, (max_bytes, backup_count) in file_settings.items()
+    }
 
     managed_scopes = {}
     for scope_id, definition in logging_helpers.MANAGED_LOG_SCOPES.items():
-        max_bytes, backup_count = get_managed_scope_settings(scope_id)
+        max_bytes, backup_count = managed_settings[scope_id]
         managed_scopes[scope_id] = {
             "label": definition["label"],
             "description": definition["description"],

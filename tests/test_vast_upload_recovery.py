@@ -49,7 +49,33 @@ def connection(monkeypatch, upload):
         """Successful upload must lead to optimizer status, not another transfer."""
         raise UploadFinished()
     monkeypatch.setattr(runner, 'WorkerConnection', lambda *a, **kw: SimpleNamespace(
-        bootstrap=lambda client: None, upload=upload, operation=operation))
+        bootstrap=lambda client: None, upload=upload, operation=operation,
+        verify_upload_input=lambda *args, **kwargs: None))
+
+
+@pytest.mark.parametrize('lease_stop', [False, True])
+def test_stop_at_upload_completion_is_collected_before_optimizer_start(recovery, monkeypatch, lease_stop):
+    """Fresh job/lease control wins even when Stop arrives as upload returns."""
+    store, identifier, _, _ = recovery
+    lease_id = 'b' * 32 if lease_stop else None
+    if lease_id:
+        store.publish(dict(store.read(identifier), id=lease_id), intent=store.read(identifier, 'intent.json'))
+        intent = store.read(lease_id, 'intent.json')
+        intent.update(id=lease_id, label='pbgui-vast-' + lease_id)
+        write_json(store.directory(lease_id) / 'intent.json', intent)
+    calls = []
+    def upload(timeout):
+        """Only mutate an isolated temporary control file at the transport boundary."""
+        store.control(lease_id or identifier, 'stop')
+    def collect(_connection, _store, selected, _intent, **kwargs):
+        """No status/start request is allowed after the newer control."""
+        calls.append((selected, kwargs.get('lease_id')))
+        return True
+    connection(monkeypatch, upload)
+    monkeypatch.setattr(runner, 'stop_and_collect', collect)
+    runner.run_loop(store, identifier, lease_id=lease_id)
+    assert calls == [(identifier, lease_id)]
+    assert store.read(identifier, 'control.json')['stop']
 
 
 def test_retries_for_minutes_then_succeeds_despite_old_setup_timer(recovery, monkeypatch):

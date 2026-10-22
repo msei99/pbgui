@@ -216,7 +216,7 @@ def _runtime_source_signature(pb8_dir: Path, interpreter: str, update_signature:
 
 
 def _cached_call(cache_name: str, loader, *, key: tuple | None = None,
-                 ttl: float | None = None) -> dict | list:
+                 ttl: float | None = None, fingerprint: tuple | None = None) -> dict | list:
     """Load once per key without holding the cache lock during helper I/O."""
     flight_key = (cache_name, key)
     def read(fingerprint):
@@ -231,8 +231,10 @@ def _cached_call(cache_name: str, loader, *, key: tuple | None = None,
     while True:
         if _migration_helper_shutdown.is_set():
             raise PB8ConfigurationError("PB8 migration helper is shutting down")
-        fingerprint = _runtime_fingerprint()
-        cached = read(fingerprint)
+        # A caller's snapshot is valid only for the first lookup. Waiters and
+        # owners must recheck the runtime before using or loading another value.
+        cached = read(fingerprint if fingerprint is not None else _runtime_fingerprint())
+        fingerprint = None
         if cached is not None:
             return cached
         with _metadata_condition:
@@ -570,8 +572,8 @@ def get_pb8_result_metrics() -> list[str]:
     return _cached_call("_result_metrics_cache", load)
 
 
-def get_pb8_optimize_metadata() -> dict:
-    """Combine immutable optimizer metadata with a bounded host capability probe."""
+def get_pb8_optimize_metadata(*, include_backend_contract: bool = True) -> dict:
+    """Read coherent optimizer metadata, optionally including host capabilities."""
     for attempt in range(2):
         fingerprint = _runtime_fingerprint()
         def load_static():
@@ -579,14 +581,16 @@ def get_pb8_optimize_metadata() -> dict:
             if not isinstance(metadata.get("template"), dict) or not isinstance(metadata.get("strategies"), list):
                 raise PB8ConfigurationError("PB8 config helper returned invalid optimize metadata")
             return metadata
-        metadata = _cached_call("_optimize_metadata_cache", load_static)
+        metadata = _cached_call("_optimize_metadata_cache", load_static, fingerprint=fingerprint)
         def load_contract():
             contract = _call_helper("optimizer_backend_contract")
             if contract.get("contract_version") != 1 or not isinstance(contract.get("items"), dict):
                 raise PB8ConfigurationError("PB8 config helper returned invalid backend contract")
             return contract
-        metadata["backend_contract"] = _cached_call(
-            "_gpu_metadata_cache", load_contract, ttl=_GPU_CACHE_TTL_SECONDS)
+        if include_backend_contract:
+            metadata["backend_contract"] = _cached_call(
+                "_gpu_metadata_cache", load_contract, ttl=_GPU_CACHE_TTL_SECONDS,
+                fingerprint=fingerprint)
         if _runtime_fingerprint() == fingerprint:
             return metadata
     raise PB8RuntimeBusyError("PB8 runtime changed repeatedly. Retry the metadata request.")

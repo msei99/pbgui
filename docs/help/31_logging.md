@@ -2,6 +2,14 @@
 
 Switching between Log Viewer and Settings preserves edited rotation values. Failed rotation saves show an error next to the affected settings.
 
+Open **System → Logging → Settings**. Browser reload restores the selected
+**Settings** or **Log Viewer** panel from the URL's `view` parameter. A restored
+Settings panel loads current rotation values from the server; unsaved form values
+are not stored across reloads. A direct `?view=settings` link opens Settings.
+Without `view`, Log Viewer is the default. An unknown value shows a short status
+message and normalizes the URL to `view=logs`. Choosing either sidebar panel
+clears that notice, including when Log Viewer is already selected.
+
 If rotation settings cannot be loaded, Settings shows the server error (or HTTP status for a non-JSON response). Existing input values are preserved; the failure is not shown as an empty log list. Switch back to Settings to retry loading.
 
 The Logging page provides a real-time log viewer for all PBGui services.  

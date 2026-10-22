@@ -1161,7 +1161,9 @@
     if (action === 'publish_github_issue') return 'Publish GitHub issue';
     if (action === 'save_ai_loop_config') return 'Save AI Loop definition';
     if (action === 'run_ai_loop') return 'Run AI Loop';
+    if (action === 'replace_ai_loop_gpu') return 'Replace GPU and continue loop';
     if (action === 'save_vast_preferences') return 'Change Vast.ai rental preferences';
+    if (action === 'vast_host_block') return 'Change Vast.ai host exclusion';
     if (action === 'reviewed_config_change') return 'Review config change';
     if (action === 'save') return 'Save PB8 optimizer config';
     if (action === 'save_and_queue') return 'Save PB8 config and add to queue';
@@ -1176,8 +1178,9 @@
   }
 
   function proposalDetail(preview) {
+    if (preview.action === 'vast_host_block') return 'Machine ' + String(preview.machine_id) + ' · Job ' + String(preview.job_id) + ' · ' + String(preview.effect || '');
     if (preview.action === 'publish_github_issue') return String(preview.target || '') + ' · ' + String(preview.login || '') + (preview.encrypted_attachment ? ' · encrypted diagnostic attachment' : '') + (preview.reconcile_only ? ' · check previous publication only' : ' · public');
-    if (['save_ai_loop_config', 'run_ai_loop', 'save_vast_preferences'].includes(preview.action)) return String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
+    if (['save_ai_loop_config', 'run_ai_loop', 'save_vast_preferences', 'replace_ai_loop_gpu'].includes(preview.action)) return String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
     if (preview.action === 'reviewed_config_change') return String(preview.version || '') + ' · ' + String(preview.kind || '') + ' · ' + String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
     if (preview.action === 'jev_analysis') return String(preview.version || '') + ' ' + String(preview.run_name || '') + ' - ' + String(preview.candidate_count || 0) + ' candidates assessed - ' + (preview.max_candidates == null ? 'Jev decides how many to mark' : 'mark at most ' + String(preview.max_candidates)) + ' - USD ' + String(preview.max_cost_usd || '') + ' maximum';
     if (preview.action === 'python_analysis') return String(preview.code_bytes || 0) + ' bytes of code - ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
@@ -1408,7 +1411,7 @@
     state.resolvingProposalIds.add(proposalId);
     card.hidden = true;
     if (approve && preview.action !== 'publish_github_issue') {
-      var approvalDetail = ['save_ai_loop_config', 'run_ai_loop', 'save_vast_preferences'].includes(preview.action)
+      var approvalDetail = ['save_ai_loop_config', 'run_ai_loop', 'save_vast_preferences', 'replace_ai_loop_gpu', 'vast_host_block'].includes(preview.action)
         ? String(preview.effect || '')
         : preview.action === 'reviewed_config_change'
         ? String(preview.effect || '') + '. This approval applies only to the displayed changes; the chat remains analysis-only.'
@@ -1455,16 +1458,40 @@
         window.dispatchEvent(new CustomEvent('pbgui:ai-action-completed', { detail: result }));
       }
       var continuationStatus = String((result.continuation || {}).status || '');
-      if (continuationStatus === 'queued' || continuationStatus === 'running') {
+      if (result.action === 'vast_host_block' && result.status !== 'executed') {
+        if (continuationStatus === 'queued' || continuationStatus === 'running') await loadConversation(conversationId);
+        setStatus(result.error?.message || 'Host action outcome is unconfirmed. Read its status; do not repeat approval.', true);
+      } else if (continuationStatus === 'queued' || continuationStatus === 'running') {
         setStatus('Approved action completed. Continuing requested workflow...', false);
         await loadConversation(conversationId);
       } else if (continuationStatus === 'not_started') {
         setStatus('Approved action completed, but the AI continuation could not start.', true);
       } else {
-        setStatus(result.status === 'executed' ? 'Approved action completed.' : 'Proposal ' + String(result.status || 'resolved') + '.', false);
+        setStatus(result.status === 'executed' ? 'Approved action completed.' : (result.error?.message || 'Proposal ' + String(result.status || 'resolved') + '.'), result.status === 'failed');
       }
     } catch (error) {
       state.resolvingProposalIds.delete(proposalId);
+      if (approve && preview.action === 'vast_host_block') {
+        // Transport failure is not permission to repeat a write. Read the exact
+        // owned proposal instead; pending alone never proves completion.
+        try {
+          var verified = await api('/proposals/' + encodeURIComponent(proposalId) + '/host-status?conversation_id=' + encodeURIComponent(conversationId));
+          if (conversationId === state.current) {
+            if (verified.status === 'executed') {
+              window.dispatchEvent(new CustomEvent('pbgui:ai-action-completed', {detail: verified}));
+              var currentHost = verified.current_host_state;
+              setStatus('Host action completed for Machine ' + verified.machine_id + '. ' + (currentHost && typeof currentHost.blocked === 'boolean'
+                ? 'Current exclusion: ' + (currentHost.blocked ? 'blocked.' : 'not blocked.')
+                : 'Current exclusion could not be verified.'), !currentHost || typeof currentHost.blocked !== 'boolean');
+            } else {
+              setStatus(verified.error?.message || 'Host action outcome is unconfirmed. Ask the assistant to read its status; do not repeat approval.', true);
+            }
+          }
+        } catch (verificationError) {
+          if (conversationId === state.current) setStatus('Host action outcome is unconfirmed. Status read failed; do not repeat approval.', true);
+        }
+        return;
+      }
       if (conversationId === state.current) {
         card.hidden = false;
         buttons.forEach(function (button) { button.disabled = false; });

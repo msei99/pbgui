@@ -385,6 +385,8 @@ var PBGUI_SERIAL = "%%SERIAL%%";
 var IS_V8 = /\/api\/strategy-explorer-v8(?:\/|$)/.test(String(API_BASE || ''));
 var STRATEGY_LABEL = IS_V8 ? 'PB8' : 'PB7';
 var state = { config: null, snapshot: null, markets: null, simulations: {}, activeSimulationMode: 'local_simulation', longSegment: 'entry_grid', shortSegment: 'entry_grid', source: 'default', exchangeParamOverrides: {}, stateParamOverrides: {}, autoExchangeParams: true, hslSignalModes: ['pside', 'unified'], compareBaselineAvailable: false };
+var explorerRequests = {};
+var strategyRefreshRecoveryPending = false;
 var sessionRequestGeneration = 0;
 var snapshotRequestGeneration = 0;
 var marketRequestGeneration = 0;
@@ -715,12 +717,42 @@ function paramTooltip(name) {
   if (name === 'n_positions') return 'Maximum number of concurrently active positions for this side.';
   return STRATEGY_LABEL + ' bot parameter: ' + name;
 }
+function disposeExplorerRequests() {
+  sessionRequestGeneration += 1;
+  snapshotRequestGeneration += 1;
+  marketRequestGeneration += 1;
+  Object.keys(explorerRequests).forEach(function(key) { explorerRequests[key].controller.abort(); });
+}
 function apiFetch(path, opts) {
   opts = opts || {};
   opts.credentials = 'same-origin';
   opts.headers = Object.assign({}, opts.headers || {});
   if (opts.body && !opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
-  return fetch(API_BASE + path, opts).then(function(res) {
+  var endpoint = path.split('?')[0];
+  var timeoutMs = IS_V8 ? ({'/session': 225000, '/snapshot': 145000, '/markets': 85000}[endpoint] || 0) : 0;
+  var request = null;
+  var timer = null;
+  var upstreamSignal = opts.signal;
+  var forwardAbort = null;
+  function cleanup() {
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+    if (upstreamSignal && forwardAbort) upstreamSignal.removeEventListener('abort', forwardAbort);
+    if (request && explorerRequests[endpoint] === request) delete explorerRequests[endpoint];
+  }
+  if (timeoutMs) {
+    if (explorerRequests[endpoint]) explorerRequests[endpoint].controller.abort();
+    request = {controller: new AbortController()};
+    explorerRequests[endpoint] = request;
+    opts.signal = request.controller.signal;
+    opts.signal.addEventListener('abort', cleanup, {once: true});
+    timer = setTimeout(function() { request.controller.abort(); }, timeoutMs);
+    if (upstreamSignal) {
+      forwardAbort = function() { request.controller.abort(); };
+      upstreamSignal.addEventListener('abort', forwardAbort, {once: true});
+      if (upstreamSignal.aborted) forwardAbort();
+    }
+  }
+  return Promise.resolve().then(function() { return fetch(API_BASE + path, opts); }).then(function(res) {
     if (!res.ok) return res.text().then(function(text) {
       try {
         var detail = JSON.parse(text).detail;
@@ -729,7 +761,7 @@ function apiFetch(path, opts) {
       throw new Error(text || ('HTTP ' + res.status));
     });
     return res.json();
-  });
+  }).finally(cleanup);
 }
 function containsSensitiveRefreshKey(value) {
   if (!value || typeof value !== 'object') return false;
@@ -794,6 +826,7 @@ function refreshCacheMovieData(data) {
   };
 }
 function persistStrategyRefreshState() {
+  if (strategyRefreshRecoveryPending) return;
   var config = refreshCacheConfig(state.config);
   if (!config) return;
   var payload = {
@@ -827,6 +860,29 @@ function readStrategyRefreshState() {
     return null;
   }
 }
+function createStrategyRefreshRestore(cached) {
+  if (!IS_V8 || !cached || !cached.config) return null;
+  var restored = Object.assign({}, cached, {controls: Object.assign({}, cached.controls || {})});
+  // Establish the saved values before the first asynchronous wait, so an edit
+  // back to a template default is still distinguishable from untouched controls.
+  restoreStrategyRefreshControls(restored);
+  var displayed = refreshCacheControls();
+  return {
+    capture: function() {
+      var current = refreshCacheControls();
+      Object.keys(current).forEach(function(key) {
+        if (current[key] !== displayed[key]) restored.controls[key] = current[key];
+      });
+      displayed = current;
+      return restored;
+    },
+    applied: function() {
+      // Record programmatic changes separately so responses cannot mistake them
+      // for edits made while the next request is pending.
+      displayed = refreshCacheControls();
+    }
+  };
+}
 function cachedSnapshotOptions(cached) {
   var controls = cached && cached.controls ? cached.controls : {};
   return {
@@ -845,6 +901,14 @@ function restoreStrategyRefreshControls(cached) {
   var exchange = document.getElementById('exchange-select');
   if (exchange && optionExists(exchange, controls.exchange)) exchange.value = controls.exchange;
   updateCoinSelect(controls.coin || '');
+  // With no market response, show the saved selection as context only. The
+  // unavailable status remains visible; no current snapshot/catalog is implied.
+  if (!state.markets && strategyRefreshRecoveryPending) {
+    [['exchange-select', controls.exchange], ['coin-select', controls.coin]].forEach(function(item) {
+      var node = document.getElementById(item[0]);
+      if (node && item[1]) node.replaceChildren(new Option(String(item[1]), String(item[1]), true, true));
+    });
+  }
   setValue('start-date-input', controls.start_date);
   setValue('start-time-input', controls.start_time);
   setValue('balance-input', controls.balance);
@@ -1120,18 +1184,21 @@ function syncOptionsFromConfig(snapshot) {
   document.getElementById('reference-price-input').value = market.reference_price || 100;
   document.getElementById('balance-input').value = deepGet(cfg, ['backtest', 'starting_balance'], 1000) || 1000;
 }
-function populateMarkets() {
+function populateMarkets(isCurrent, restore) {
   var generation = ++marketRequestGeneration;
   return apiFetch('/markets', { method: 'POST', body: JSON.stringify({ config: state.config || {}, options: selectedOptions() }) }).then(function(data) {
-    if (generation !== marketRequestGeneration) return null;
+    if (generation !== marketRequestGeneration || (isCurrent && !isCurrent())) return null;
+    var restored = restore ? restore.capture() : null;
     state.markets = data;
     var exchangeEl = document.getElementById('exchange-select');
     var exchanges = data.exchanges || [];
     exchangeEl.innerHTML = exchanges.map(function(ex) { return '<option value="' + esc(ex) + '">' + esc(ex) + '</option>'; }).join('');
     updateCoinSelect();
+    if (restored) restoreStrategyRefreshControls(restored);
+    if (restore) restore.applied();
     return data;
   }).catch(function(err) {
-    if (generation !== marketRequestGeneration) return null;
+    if (generation !== marketRequestGeneration || (isCurrent && !isCurrent())) return null;
     setMessages([{ level: 'warning', text: 'Failed to load market selectors: ' + err.message }]);
     return null;
   });
@@ -2032,7 +2099,7 @@ function renderSnapshot(snapshot) {
   ohlcvChip.className = 'chip ' + (loadedRows ? 'ok' : 'warn');
   var engineStatus = deepGet(snapshot, ['market', 'engine_status'], '-');
   document.getElementById('engine-chip').textContent = engineStatus;
-  document.getElementById('engine-chip').className = 'chip ' + (String(engineStatus).indexOf('failed') >= 0 ? 'err' : 'ok');
+  document.getElementById('engine-chip').className = 'chip ' + ((IS_V8 && snapshot.ok === false) || String(engineStatus).indexOf('failed') >= 0 ? 'err' : 'ok');
   document.getElementById('reference-price-input').value = deepGet(snapshot, ['market', 'reference_price'], 100) || 100;
   document.getElementById('market-chip').textContent = 'Market: ' + deepGet(snapshot, ['market', 'exchange'], '-') + ' / ' + deepGet(snapshot, ['market', 'coin'], '-') + ' @ ' + fmt(deepGet(snapshot, ['market', 'reference_price'], 0), 8);
   renderStats('long', snapshot); renderStats('short', snapshot);
@@ -2051,6 +2118,10 @@ function recalculate(options) {
   return apiFetch('/snapshot', { method: 'POST', body: JSON.stringify({ config: state.config, options: selectedOptions() }) }).then(function(snapshot) {
     if (generation !== snapshotRequestGeneration) return null;
     renderSnapshot(snapshot); setMessages(snapshot.messages || []);
+    if (IS_V8) {
+      strategyRefreshRecoveryPending = false;
+      persistStrategyRefreshState();
+    }
   }).catch(function(err) {
     if (generation !== snapshotRequestGeneration) return null;
     setMessages([{ level: 'error', text: 'Failed to calculate Strategy Explorer snapshot: ' + err.message }]);
@@ -3097,19 +3168,30 @@ function selectStage(stage) {
   }
   persistStrategyRefreshState();
 }
-function applySessionBootstrap(data, snapshot, cached, warning, generation, snapshotGeneration) {
+function applySessionBootstrap(data, snapshot, cached, warning, generation, snapshotGeneration, restore) {
   if (generation !== sessionRequestGeneration || snapshotGeneration !== snapshotRequestGeneration) return Promise.resolve(null);
+  if (restore) cached = restore.capture();
   configureVersionUi(data.page || {});
   if (Array.isArray(deepGet(data, ['page', 'hsl_signal_modes'], null))) state.hslSignalModes = data.page.hsl_signal_modes;
   state.source = deepGet(snapshot, ['source'], warning ? 'refresh-cache' : 'default');
   renderSnapshot(snapshot || {});
   syncOptionsFromConfig(snapshot || {});
-  return populateMarkets().then(function() {
+  if (restore) {
+    restoreStrategyRefreshControls(cached);
+    restore.applied();
+  }
+  return populateMarkets(function() {
+    return generation === sessionRequestGeneration && snapshotGeneration === snapshotRequestGeneration;
+  }, restore).then(function() {
     if (generation !== sessionRequestGeneration || snapshotGeneration !== snapshotRequestGeneration) return null;
+    if (restore) cached = restore.capture();
     inferInitialSelectors(snapshot || {});
-    if (cached) restoreStrategyRefreshControls(cached);
+    // Selector initialization invalidates old snapshot work itself. A queued
+    // movie rebuild belongs to the initialized context, not the earlier request.
+    var bootstrapSnapshotGeneration = snapshotRequestGeneration;
     applyInitialResultPath(data.result_path || RESULT_PATH || '');
     applyBacktestHandoff(data.handoff || {}, data.result_path || RESULT_PATH || '');
+    if (cached) restoreStrategyRefreshControls(cached);
     document.getElementById('movie-status').textContent = deepGet(data, ['movie', 'message'], 'Build replay frames from the selected candle window.');
     setMovieExportAvailable(true);
     var controls = cached && cached.controls ? cached.controls : {};
@@ -3123,9 +3205,13 @@ function applySessionBootstrap(data, snapshot, cached, warning, generation, snap
     var messages = data.messages || deepGet(snapshot, ['messages'], []);
     if (warning) messages = [{ level: 'warning', text: warning }].concat(messages || []);
     setMessages(messages || []);
+    strategyRefreshRecoveryPending = false;
     persistStrategyRefreshState();
     if (stage === 'movie' && controls.movie_generated && !(cached && cached.movie_data)) {
-      setTimeout(function() { buildMovieFrames(); }, 0);
+      var bootstrapMovieGeneration = movieRequestGeneration;
+      setTimeout(function() {
+        if (generation === sessionRequestGeneration && bootstrapSnapshotGeneration === snapshotRequestGeneration && bootstrapMovieGeneration === movieRequestGeneration) buildMovieFrames();
+      }, 0);
     }
     return data;
   });
@@ -3134,9 +3220,12 @@ function loadSession() {
   var generation = ++sessionRequestGeneration;
   var snapshotGeneration = ++snapshotRequestGeneration;
   var cached = readStrategyRefreshState();
+  strategyRefreshRecoveryPending = !!(IS_V8 && cached && cached.config);
+  var restore = createStrategyRefreshRestore(cached);
   var qs = '?draft_id=' + encodeURIComponent(DRAFT_ID || '');
   if (!IS_V8) qs += '&result_path=' + encodeURIComponent(RESULT_PATH || '');
   return apiFetch('/session' + qs).then(function(data) {
+    if (generation !== sessionRequestGeneration || snapshotGeneration !== snapshotRequestGeneration) return null;
     if (!cached || !cached.config) {
       return applySessionBootstrap(data, data.snapshot || {}, null, '', generation, snapshotGeneration);
     }
@@ -3144,9 +3233,11 @@ function loadSession() {
       method: 'POST',
       body: JSON.stringify({ config: cached.config, options: cachedSnapshotOptions(cached) })
     }).then(function(snapshot) {
+      if (generation !== sessionRequestGeneration || snapshotGeneration !== snapshotRequestGeneration) return null;
       snapshot.source = 'refresh-cache';
-      return applySessionBootstrap(data, snapshot, cached, '', generation, snapshotGeneration);
-    }).catch(function() {
+      return applySessionBootstrap(data, snapshot, cached, '', generation, snapshotGeneration, restore);
+    }).catch(function(err) {
+      if (IS_V8) throw err;
       return applySessionBootstrap(data, data.snapshot || {}, null, '', generation, snapshotGeneration);
     });
   }, function(err) {
@@ -3157,6 +3248,7 @@ function loadSession() {
       method: 'POST',
       body: JSON.stringify({ config: cached.config, options: cachedSnapshotOptions(cached) })
     }).then(function(snapshot) {
+      if (generation !== sessionRequestGeneration || snapshotGeneration !== snapshotRequestGeneration) return null;
       DRAFT_ID = '';
       snapshot.source = 'refresh-cache';
       return applySessionBootstrap(
@@ -3165,11 +3257,16 @@ function loadSession() {
         cached,
         'The server-side handoff draft expired. PBGui restored the non-sensitive Strategy Explorer and Movie state from this browser tab; stored-result Compare provenance is no longer available.',
         generation,
-        snapshotGeneration
+        snapshotGeneration,
+        restore
       );
     });
   }).catch(function(err) {
     if (generation === sessionRequestGeneration && snapshotGeneration === snapshotRequestGeneration) {
+      if (IS_V8 && cached && cached.config && !state.snapshot) {
+        state.config = JSON.parse(JSON.stringify(cached.config));
+        restoreStrategyRefreshControls(restore ? restore.capture() : cached);
+      }
       if (!state.snapshot) {
         document.getElementById('source-chip').textContent = 'Session unavailable';
         document.getElementById('source-chip').className = 'chip err';
@@ -3228,6 +3325,7 @@ document.addEventListener('keydown', function(event) {
   if (stepMovieFrame(event.key === 'ArrowLeft' ? -1 : 1)) event.preventDefault();
 });
 window.addEventListener('beforeunload', persistStrategyRefreshState);
+window.addEventListener('pagehide', disposeExplorerRequests);
 document.getElementById('movie-export-preset').addEventListener('change', function() { invalidateMovieRequest(); applyMovieExportPreset(); });
 ['movie-export-codec', 'movie-export-width', 'movie-export-height', 'movie-export-scale', 'movie-export-crf', 'movie-export-ffmpeg-preset'].forEach(function(id) {
   var el = document.getElementById(id);

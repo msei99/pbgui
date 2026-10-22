@@ -125,18 +125,8 @@ def _attempt(connection, args, deadline, total, offset, report, *, statistics=No
             report(processed, max(0, processed - offset) / max(.001, time.monotonic() - started))
             return code, diagnostic.decode(errors='replace').lower()
     finally:
-        # The child owns a separate process group, including its SSH subprocess.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-        process.stdout.close()
-        process.stderr.close()
+        from vast_transfer import reap_process_group
+        reap_process_group(process)
 
 
 def upload(connection, archive: Path, *, timeout: int):
@@ -145,12 +135,19 @@ def upload(connection, archive: Path, *, timeout: int):
     if not archive.is_relative_to(connection.directory.resolve()) or not archive.is_file():
         raise VastError('Invalid rsync input archive', 422)
     ssh = ssh_arguments(connection)
-    total, checksum = archive.stat().st_size, digest(archive)
+    deadline = time.monotonic() + timeout
+    from vast_transfer import checked_digest
+    def check():
+        """Bound the initial archive hash as well as the actual rsync transfer."""
+        if _cancelled(connection):
+            raise VastError('Rsync upload cancelled; partial archive retained', 422)
+        if time.monotonic() >= deadline:
+            raise VastError('Rsync upload deadline reached; partial archive retained')
+    total, checksum = archive.stat().st_size, checked_digest(archive, check)
     root = '/work/pbgui/jobs/' + job_id(connection.identifier)
     if connection.remote_root != root:
         raise VastError('Invalid rsync destination', 422)
     destination = root + '/rsync-' + checksum + '.tar.gz'
-    deadline = time.monotonic() + timeout
 
     def remaining():
         """Bound retries and verification by the rental's remaining upload time."""

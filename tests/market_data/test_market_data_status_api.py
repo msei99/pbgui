@@ -121,6 +121,9 @@ def test_save_market_data_settings_queues_refresh_flag(monkeypatch, tmp_path) ->
     saved_ini: list[tuple[str, str, str]] = []
 
     monkeypatch.setattr(market_data_api, "PBGDIR", tmp_path)
+    monkeypatch.setattr("market_data.get_market_data_config_path", lambda: tmp_path / "config.json")
+    monkeypatch.setattr(market_data_api, "_settings_coin_snapshot", lambda _: market_data_api.MarketDataCoinSnapshot(["BTC"], True))
+    monkeypatch.setattr(market_data_api, "get_effective_enabled_coins", lambda *args, **kwargs: (["BTC"], [], True))
     monkeypatch.setattr(market_data_api, "set_enabled_coins", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(market_data_api, "set_auto_enable_new_coins", lambda *_args, **_kwargs: None)
     def capture_update(mutator) -> None:
@@ -136,7 +139,7 @@ def test_save_market_data_settings_queues_refresh_flag(monkeypatch, tmp_path) ->
     monkeypatch.setattr(
         market_data_api,
         "_build_market_data_settings_payload",
-        lambda exchange: {"exchange": exchange},
+        lambda exchange, **kwargs: {"exchange": exchange, "settings": {}},
     )
 
     result = market_data_api._save_market_data_settings(
@@ -154,7 +157,7 @@ def test_save_market_data_settings_queues_refresh_flag(monkeypatch, tmp_path) ->
         },
     )
 
-    assert result == {"exchange": "okx"}
+    assert result["exchange"] == "okx"
     assert (tmp_path / "data" / "logs" / "okx_latest_1m_run_now.flag").exists()
     assert ("okx_data", "latest_1m_interval_seconds", "3600") in saved_ini
 
@@ -162,7 +165,7 @@ def test_save_market_data_settings_queues_refresh_flag(monkeypatch, tmp_path) ->
 def test_best_1m_available_coins_do_not_require_enabled_settings(monkeypatch) -> None:
     """Manual Best 1m builds list available coins, not auto-refresh enabled coins."""
 
-    monkeypatch.setattr(market_data_api, "get_market_data_coin_options", lambda exchange: ["BTC", "ETH"])
+    monkeypatch.setattr(market_data_api, "_coin_options_for_exchange", lambda exchange: ["BTC", "ETH"])
     monkeypatch.setattr(
         market_data_api,
         "get_effective_enabled_coins",

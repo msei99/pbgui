@@ -41,6 +41,10 @@ proxy work cleanly. backend_status=cancelled is the expected implementation: Pas
 native proxy-count termination, so the controller stops it after completed_evolution_proxy reaches
 the quota and collects results. Do not classify these as failed or interrupted attempts.
 Use supplied counters and proxy_overshoot rather than inferring completion from backend_status.
+completion_reason=gpu_replaced denotes an explicitly authorized infrastructure interruption,
+not a strategy/search failure or successful optimizer completion. Keep its actual backend_status,
+errors, retained results and attempt charge visible. successor_operation, when present, identifies
+the physical retry with the same frozen input and logical round; never invent retry results.
 Put optimizer changes inside variant.config.optimize. variant.overrides contains only referenced
 symbol/coin override bundles, keyed like initial_overrides, never dotted optimizer paths such as optimize.iters.
 Do not infer the cause of missing results or cancellation without supplied diagnostic evidence.
@@ -390,7 +394,8 @@ class LoopAI:
 
     async def decide(self, record, stage, evidence):
         """Retry transient failures within a durable three-attempt decision boundary."""
-        current = self.store.read(record['owner'], record['id'])
+        from pb8_loop_controller import owned_thread
+        current = await owned_thread(self.store.read, record['owner'], record['id'])
         if current['control_generation'] != record['control_generation'] or current['status'] not in {'running', 'finishing'}:
             raise ValueError('Loop was paused or stopped')
         if current.get('pending_ai'):
@@ -439,7 +444,7 @@ class LoopAI:
                     # Keep every sent call's reservation: a timed-out provider may
                     # still have consumed tokens. Only the next attempt is scheduled.
                     row['pending_ai'] = None
-            saved = self.store.update(record['owner'], record['id'], schedule)
+            saved = await owned_thread(self.store.update, record['owner'], record['id'], schedule)
             retry = saved['ai_retry']
             if retry['exhausted']:
                 raise LoopAIRequestFailed(retry['error']) from exc
@@ -458,6 +463,7 @@ class LoopAI:
 
     async def jev(self, record, candidates):
         """Reuse typed JEV transport for one exact optimizer-run candidate comparison."""
+        from pb8_loop_controller import owned_thread
         from ai_openrouter import JEV_MODEL, check_jev_budget, prepare_user_jev_payload, _send_structured_jev_request
         chat = self.service()
         if len(candidates) < 2 or not chat.credentials.openrouter_configured(record['owner']):
@@ -487,5 +493,5 @@ class LoopAI:
             if current['jev_usd_reserved'] + estimate > current['settings']['jev_budget_usd']:
                 raise ValueError('JEV budget reached')
             current['jev_usd_reserved'] += estimate
-        self.store.update(record['owner'], record['id'], reserve)
+        await owned_thread(self.store.update, record['owner'], record['id'], reserve)
         return await _send_structured_jev_request(session, key, request)

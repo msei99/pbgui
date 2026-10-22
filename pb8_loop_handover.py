@@ -33,6 +33,9 @@ def source_worker(loops, queue, owner, source_id, *, now=None):
     """Validate the single owned live worker without mutating loops or rentals."""
     now = time.time() if now is None else now
     source = loops.read(identifier(owner), identifier(source_id))
+    from pb8_loop_gpu_replacement import open_replacement
+    if open_replacement(source):
+        raise VastError('This Loop has an open GPU replacement; finish or stop it before a Loop handover', 409)
     if source['settings']['execution'] != 'vast' or source['status'] not in {'running', 'finishing', 'paused'}:
         raise VastError('Replacement requires an active or paused Vast Loop', 409)
     workers = [w for w in queue.workers() if w.get('loop_id') == source_id and w.get('loop_owner') == owner]

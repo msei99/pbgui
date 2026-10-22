@@ -9,6 +9,7 @@
 .pai-loop-template .ms-dropdown{max-width:100%;overflow-x:hidden}
 .pai-template-count,.pai-template-date-status{font-size:var(--fs-xs);color:var(--text-dim)}
 .pai-template-date-status{overflow-wrap:anywhere}
+.pai-template-date-status:empty{margin:0}
 .pai-template-error{color:var(--red);font-size:var(--fs-sm);overflow-wrap:anywhere}
 .pai-template-actions{display:flex;flex-wrap:wrap;gap:var(--sp-sm);justify-content:flex-end}
 .pai-template-actions button:disabled{opacity:.5;cursor:default}

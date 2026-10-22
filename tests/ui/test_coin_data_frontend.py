@@ -30,8 +30,12 @@ def test_sort_and_row_selection_preserve_filter_dom() -> None:
     selection = _function("bindRowSelection", "renderPage")
     assert "renderTableRows(tableName);" in sort
     assert "renderPage();" not in sort
-    assert "renderTableRows(uiState.selectedTable);" in selection
+    assert "renderTableRows(" not in selection
     assert "renderPage();" not in selection
+    close = _function("closeSelectedDetails", "setActiveView")
+    assert "renderPage();" not in close
+    assert "clearRowSelection();" in close
+    assert "renderSelectedRow();" in close
 
 
 def test_table_interactions_keep_open_tag_filter_focused() -> None:

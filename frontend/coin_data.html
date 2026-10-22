@@ -1745,6 +1745,7 @@
     var autoJobs = {}, autoStatus = '', autoDismissed = false;
     var autoResults = [], autoStatusLevel = false;
     var renderedTagOptions = '', renderedQuoteOptions = '';
+    var rowSelectionBodies = new WeakSet();
     var sortState = {
       main: { key: 'market_cap', dir: 'desc' },
       unmatched: { key: 'coin', dir: 'asc' },
@@ -2780,7 +2781,7 @@
       card.style.height = targetHeight + 'px';
     }
 
-    function renderSelectedRow() {
+    function renderSelectedRow(fitImmediately) {
       var card = document.getElementById('selected-card');
       var grid = document.getElementById('selected-grid');
       var cmcLink = document.getElementById('selected-cmc-link');
@@ -2834,7 +2835,8 @@
         grid.innerHTML += '<div class="notice-box"><strong>Notice</strong><br>' + escapeHtml(row.notice) + '</div>';
       }
 
-      requestAnimationFrame(fitSelectedCardToContent);
+      if (fitImmediately) fitSelectedCardToContent();
+      else requestAnimationFrame(fitSelectedCardToContent);
     }
 
     function renderSortPill() {
@@ -2867,19 +2869,34 @@
       if (tableName === 'main') renderMainRows();
       else if (tableName === 'unmatched') renderUnmatchedRows();
       else if (tableName === 'hip3') renderHip3Rows();
-      bindRowSelection();
     }
 
     function bindRowSelection() {
-      Array.prototype.forEach.call(document.querySelectorAll('tr.data-row'), function (row) {
-        row.addEventListener('click', function () {
-          uiState.selectedTable = row.getAttribute('data-table') || 'main';
-          uiState.selectedKey = row.getAttribute('data-key') || '';
-          renderTableRows(uiState.selectedTable);
-          renderSelectedRow();
-          saveUiState();
+      ['main', 'unmatched', 'hip3'].forEach(function (tableName) {
+        var body = document.getElementById(tableName + '-body');
+        if (!body || rowSelectionBodies.has(body)) return;
+        rowSelectionBodies.add(body);
+        body.addEventListener('click', function (event) {
+          var row = event.target.closest ? event.target.closest('tr.data-row') : null;
+          if (!row || !body.contains(row)) return;
+          selectCoinRow(row, tableName);
         });
       });
+    }
+
+    function clearRowSelection() {
+      Array.prototype.forEach.call(document.querySelectorAll(
+        '#main-body tr.selected, #unmatched-body tr.selected, #hip3-body tr.selected'
+      ), function (row) { row.classList.remove('selected'); });
+    }
+
+    function selectCoinRow(row, tableName) {
+      clearRowSelection();
+      uiState.selectedTable = row.getAttribute('data-table') || tableName;
+      uiState.selectedKey = row.getAttribute('data-key') || '';
+      row.classList.add('selected');
+      renderSelectedRow(true);
+      saveUiState();
     }
 
     function renderPage() {
@@ -2921,7 +2938,8 @@
       uiState.selectedKey = '';
       uiState.selectedTable = uiState.activeView;
       resetSelectedCardLayout();
-      renderPage();
+      clearRowSelection();
+      renderSelectedRow();
       saveUiState();
     }
 
@@ -3137,6 +3155,10 @@
         setActiveView('hip3');
       });
       document.getElementById('btn-reset-filters').addEventListener('click', resetFilters);
+      document.getElementById('btn-close-details').addEventListener('mousedown', function (event) {
+        // Closing details must not blur a filter and discard its in-progress draft.
+        event.preventDefault();
+      });
       document.getElementById('btn-close-details').addEventListener('click', closeSelectedDetails);
       document.getElementById('filter-exchange').addEventListener('change', function (event) {
         filters.exchange = event.target.value;

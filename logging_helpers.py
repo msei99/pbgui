@@ -391,6 +391,34 @@ def get_rotate_defaults() -> tuple[int, int]:
         return DEFAULT_ROTATE_MAX_BYTES, DEFAULT_ROTATE_BACKUP_COUNT
 
 
+def get_rotation_settings_bulk(logfiles: list[Path]) -> tuple[
+    tuple[int, int], dict[str, tuple[int, int]], dict[str, tuple[int, int]]
+]:
+    """Resolve prefiltered unmanaged files and all managed scopes from one read.
+
+    The parser remains local to this call and is evaluated after releasing the
+    lock. File overrides retain the single getter's optional-error fallback;
+    lock and managed-scope errors retain the page endpoint's failure contract.
+    """
+    with advisory_file_lock(PBGUI_INI):
+        cfg = _read_rotate_ini()
+    defaults = _rotation_settings_from_snapshot(cfg)
+    per_file = {}
+    for logfile in logfiles:
+        stem = Path(logfile).stem
+        try:
+            per_file[stem] = _rotation_settings_from_snapshot(cfg, key_src=stem)
+        except Exception:
+            # Match get_rotate_settings: a damaged optional file override
+            # falls back to the defaults resolved from this same snapshot.
+            per_file[stem] = defaults
+    managed_scopes = {
+        scope_id: _rotation_settings_from_snapshot(cfg, scope_id=scope_id)
+        for scope_id in MANAGED_LOG_SCOPES
+    }
+    return defaults, per_file, managed_scopes
+
+
 def set_rotate_defaults(max_bytes: int, backup_count: int):
     """Persist default rotation settings in pbgui.ini under [logging]."""
     max_bytes, backup_count = _bounded_rotate_settings(max_bytes, backup_count)

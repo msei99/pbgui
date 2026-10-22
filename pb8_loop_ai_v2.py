@@ -41,9 +41,16 @@ def validate_snapshot_budget(record, snapshot, metadata):
 PROTOCOL = '''
 Evidence protocol v2 overrides older tool-free or multipart transfer instructions.
 The only permitted tool is loop_evidence(path, offset), a read-only exact evidence reader.
+completion_reason=gpu_replaced is an authorized infrastructure interruption, not failed
+strategy evaluation or successful optimizer completion. Actual backend_status, errors,
+results and attempt charges remain binding. A successor reference proves no results by itself.
 The initial request contains every current mandatory goal/safety value and bounded compact findings.
 Historical full records are NOT included automatically; use /history/index and referenced paths if needed.
 /required reads the complete mandatory initial package; follow next_offset until complete.
+An optional_evidence_budget_reserved tool result is a normal read limit, not a failed
+experiment. Do not repeat optional requests. If required_reads is nonempty, recover those
+/required pages first. Otherwise finish the complete JSON decision from evidence already
+supplied/read, with explicit uncertainty where needed. Never invent unread measurements.
 passivbot_manual lists the original manuals from the installed PB8 checkout with
 content hashes and evidence paths. Read relevant optimizing, metrics and bot manual
 sections through loop_evidence before choosing evaluation criteria, scoring, limits
@@ -216,7 +223,7 @@ async def run_decision(ai, record, stage, evidence):
                         'training_exclusions': record.get('training_exclusions', record.get('holdouts', [])),
                         'instructions': instructions_for_run(record)['text'] + PROTOCOL,
                         'passivbot_manual': manual_summary(manual)})
-    ai.store.update(record['owner'], record['id'], lambda row: row.update(ai_model_profile=copy.deepcopy(profile)))
+    await owned_thread(ai.store.update, record['owner'], record['id'], lambda row: row.update(ai_model_profile=copy.deepcopy(profile)))
     fallback_fresh = False
     evidence_store = EvidenceStore(ai.store)
     snapshot = None
@@ -261,7 +268,7 @@ async def run_decision(ai, record, stage, evidence):
                 fallback_fresh = True
             content['evidence']['existing_results'] = selected
             content['historical_sources'] = preview
-            ai.store.update(record['owner'], record['id'], lambda row: row.update(bootstrap_evidence_preview=preview))
+            await owned_thread(ai.store.update, record['owner'], record['id'], lambda row: row.update(bootstrap_evidence_preview=preview))
         required = required_content(content)
         snapshot = await owned_thread(evidence_store.create, record, required, content, history)
         def bind(row):
@@ -270,7 +277,7 @@ async def run_decision(ai, record, stage, evidence):
                 raise LoopAIPause('evidence_recovery', 'Loop changed before evidence binding')
             row.update(ai_snapshot_id=snapshot['id'], ai_snapshot_stage=stage, ai_snapshot_round=record['round'],
                        knowledge_summary={key: package[key] for key in ('eligible', 'included', 'omitted', 'excluded')})
-        ai.store.update(record['owner'], record['id'], bind)
+        await owned_thread(ai.store.update, record['owner'], record['id'], bind)
     session = EvidenceSession(evidence_store, snapshot, profile.get('page_tokens', 5000))
     fallback_fresh = fallback_fresh or bool(snapshot['data'].get('historical_sources', {}).get('fallback_fresh'))
     instructions = instructions_for_run(record)['text'] + PROTOCOL
@@ -279,13 +286,13 @@ async def run_decision(ai, record, stage, evidence):
                   profile, output, codex=settings['provider'] == 'chatgpt', required_pages=len(session.required_pages), initial=True)
     if fallback_fresh:
         raise BootstrapWithoutAdvice(snapshot['data']['historical_sources'])
-    ledger = DecisionLedger(ai.store, record, stage, snapshot['sha256'], metadata)
-    session.total_calls = ledger.state().get('tool_calls', 0)
+    ledger = await owned_thread(DecisionLedger, ai.store, record, stage, snapshot['sha256'], metadata)
+    session.total_calls = (await owned_thread(ledger.state)).get('tool_calls', 0)
     session.charge = ledger.reserve_tool
     active = {'session': session, 'ledger': ledger, 'profile': profile, 'instructions': instructions, 'metadata': metadata,
               'validate': lambda text: validate_decision(record, stage, snapshot['data']['evidence'], text)}
     token = _ACTIVE.set(active)
-    boundary = asyncio.timeout(ledger.remaining())
+    boundary = asyncio.timeout(await owned_thread(ledger.remaining, ))
     try:
         async with boundary:
             text, usage = await ai._request(record, metadata, snapshot['required'], output)
@@ -302,9 +309,10 @@ async def run_decision(ai, record, stage, evidence):
                                        'evidence_digest': request_evidence_digest, 'repair_error': record.get('repair_error'), 'decision': decision}
             row['ai_model_profile'] = copy.deepcopy(active['profile'])
             row['ai_evidence_status'] = {'snapshot': snapshot['id'], 'tool_calls': session.total_calls,
-                                         'dialogs': session.dialog + 1, 'required_pages': len(session.required_pages)}
-        ai.store.update(record['owner'], record['id'], complete)
-        latest = ai.store.read(record['owner'], record['id'])
+                                         'dialogs': session.dialog + 1, 'required_pages': len(session.required_pages),
+                                         'optional_read_budget_notices': session.total_budget_notices}
+        await owned_thread(ai.store.update, record['owner'], record['id'], complete)
+        latest = await owned_thread(ai.store.read, record['owner'], record['id'])
         protected = {latest.get('ai_snapshot_id')}
         for key in ('pending_ai', 'interrupted_ai'):
             protected.add((latest.get(key) or {}).get('snapshot_id'))
@@ -487,7 +495,7 @@ async def codex_dialog(ai, record, content, output_tokens, active):
                         count += previous_usage['used_tokens']
                         if count + output_tokens >= int(active['profile']['context'] * .75):
                             break
-                    call_id = ledger.reserve(count, output_tokens, sha({'thread':thread, 'input':message,
+                    call_id = await owned_thread(ledger.reserve, count, output_tokens, sha({'thread':thread, 'input':message,
                         'instructions':active['instructions'], 'model':settings['model'],
                         'effort':settings.get('effort',''), 'service_tier':settings.get('service_tier',''),
                         'tool':TOOL_SCHEMA}))
@@ -498,20 +506,20 @@ async def codex_dialog(ai, record, content, output_tokens, active):
                     except TimeoutError as exc:
                         from pb8_loop_ai import LoopAITransientError
                         diagnostics['outcome'] = 'setup_timeout'
-                        ledger.timeout(call_id)
+                        await owned_thread(ledger.timeout, call_id)
                         raise LoopAITransientError(f"ChatGPT operation timed out (phase: {diagnostics['phase']})") from exc
                     except asyncio.CancelledError:
                         diagnostics['outcome'] = 'interrupted'
                         raise
                     except BaseException:
                         diagnostics['outcome'] = 'error'
-                        ledger.timeout(call_id)
+                        await owned_thread(ledger.timeout, call_id)
                         raise
                     finally:
                         diagnostics['ended_at'] = time.time()
-                        ai.store.update(record['owner'], record['id'], lambda row: row.update(
+                        await owned_thread(ai.store.update, record['owner'], record['id'], lambda row: row.update(
                             last_ai_request={'id': call_id, 'stage': active['session'].snapshot['phase'], **diagnostics}))
-                    ledger.settle(call_id, {})
+                    await owned_thread(ledger.settle, call_id, {})
                     observed = runtime.context_usage.get(thread) or {}
                     if type(observed.get('limit_tokens')) is int:
                         from pb8_loop_evidence import MIN_CONTEXT

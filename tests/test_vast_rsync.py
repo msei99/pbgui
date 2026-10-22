@@ -60,6 +60,23 @@ def transfer(tmp_path, monkeypatch):
     return connection, source, remote, reports, controls, throttle
 
 
+def test_archive_hash_obeys_upload_deadline_before_ssh(transfer, monkeypatch):
+    """Hashing cannot obtain a fresh upload allowance before the first remote command."""
+    connection, source, _, _, _, _ = transfer
+    clock, commands = [1000.0], []
+    monkeypatch.setattr(vast_rsync.time, 'monotonic', lambda: clock[0])
+    def expired_hash(path, check):
+        """Model a local archive hash consuming the entire remaining rental time."""
+        clock[0] += 11
+        check()
+        pytest.fail('An expired archive hash reached the transport')
+    monkeypatch.setattr('vast_transfer.checked_digest', expired_hash)
+    connection.command = lambda *args, **kwargs: commands.append(args)
+    with pytest.raises(VastError, match='deadline'):
+        vast_rsync.upload(connection, source, timeout=10)
+    assert commands == []
+
+
 def test_rsync_resumes_cancelled_transfer(transfer):
     """Cancellation reaps the sender; the next call reuses its retained partial file."""
     connection, source, remote, reports, controls, throttle = transfer

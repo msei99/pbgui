@@ -2918,10 +2918,25 @@ class AIChatService:
             "actions",
             "controls",
             "focused_field",
+            "current_cloud_job",
         }
         if set(context) - allowed:
             raise AIChatError("Invalid page context")
         result: dict[str, Any] = {"schema_version": 1}
+        anchor = context.get('current_cloud_job')
+        if anchor is not None:
+            if (not isinstance(anchor, dict) or set(anchor) - {'job_id', 'lease_id', 'machine_id', 'blocked', 'host_block_revision'}
+                    or not isinstance(anchor.get('job_id'), str) or not re.fullmatch(r'[0-9a-f]{32}', anchor['job_id'])):
+                raise AIChatError('Invalid current cloud job')
+            for key in ('lease_id',):
+                if key in anchor and (not isinstance(anchor[key], str) or not re.fullmatch(r'[0-9a-f]{32}', anchor[key])):
+                    raise AIChatError('Invalid current cloud job')
+            for key, minimum in (('machine_id', 1), ('host_block_revision', 0)):
+                if key in anchor and (type(anchor[key]) is not int or not minimum <= anchor[key] <= 2**53 - 1):
+                    raise AIChatError('Invalid current cloud job')
+            if 'blocked' in anchor and anchor['blocked'] is not None and type(anchor['blocked']) is not bool:
+                raise AIChatError('Invalid current cloud job')
+            result['current_cloud_job'] = dict(anchor)
         for key in ("page_key", "title", "guide_topic", "section"):
             value = str(context.get(key) or "").strip()
             if len(value) > 128 or any(ord(char) < 32 for char in value):
@@ -3009,6 +3024,9 @@ class AIChatService:
                 "context",
                 "operations",
                 "options",
+                "visible_text",
+                "tooltip",
+                "requires_proposal",
             }:
                 raise AIChatError("Invalid page context")
             control_id = str(item.get("id") or "").strip()
@@ -3028,7 +3046,7 @@ class AIChatService:
                 or len(control_context) > 160
                 or any(ord(char) < 32 for char in control_name + label + control_context)
                 or not isinstance(operations, list)
-                or not operations
+                or (not operations and item.get('requires_proposal') is not True)
                 or len(operations) > 2
                 or any(operation not in {"activate", "set_value"} for operation in operations)
                 or not isinstance(options, list)
@@ -3053,6 +3071,16 @@ class AIChatService:
                 "label": label,
                 "operations": list(dict.fromkeys(operations)),
             }
+            for key in ('visible_text', 'tooltip'):
+                value = str(item.get(key) or '').strip()
+                if len(value) > 160 or any(ord(char) < 32 for char in value):
+                    raise AIChatError('Invalid page context')
+                if value:
+                    safe_control[key] = AIChatService._redact_page_evidence(value)[:160]
+            if 'requires_proposal' in item:
+                if type(item['requires_proposal']) is not bool or (item['requires_proposal'] and operations):
+                    raise AIChatError('Invalid page context')
+                safe_control['requires_proposal'] = item['requires_proposal']
             if control_context:
                 safe_control["context"] = control_context
             if safe_options:
@@ -4737,7 +4765,7 @@ class AIChatService:
                 separators=(",", ":"),
             )
             return {"contentItems": [{"type": "inputText", "text": text}], "success": False}
-        cached = runtime.active_tool_cache.get(signature)
+        cached = None if tool in {'get_vast_preferences', 'get_vast_host_action_status', 'propose_vast_host_block'} else runtime.active_tool_cache.get(signature)
         if cached is not None:
             runtime.active_tool_no_progress_calls += 1
             if (

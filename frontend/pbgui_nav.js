@@ -283,6 +283,16 @@
       label: label,
       operations: operations
     };
+    var visibleText = aiContextText(element.textContent || '', 160).replace(/\s+/g, ' ');
+    var tooltip = aiContextText(element.getAttribute('title') || '', 160);
+    if (!aiControlSensitive(element, visibleText + ' ' + tooltip)) {
+      if (visibleText) descriptor.visible_text = visibleText;
+      if (tooltip) descriptor.tooltip = tooltip;
+    }
+    if (element.hasAttribute('data-host-block-toggle')) {
+      descriptor.operations = [];
+      descriptor.requires_proposal = true;
+    }
     var controlContext = aiControlContext(element);
     if (controlContext) descriptor.context = controlContext;
     descriptor.name = controlContext ? controlContext + ' :: ' + label : label;
@@ -330,6 +340,7 @@
   function resolveAIControl(controlId, operation) {
     collectAIControls();
     var entry = _aiControlElements[String(controlId || '')];
+    if (entry && entry.element.hasAttribute('data-host-block-toggle')) throw new Error('Use propose_vast_host_block for an explicit block or unblock');
     if (!entry || entry.descriptor.operations.indexOf(operation) < 0) throw new Error('PBGui control is no longer available');
     return entry.element;
   }
@@ -346,6 +357,7 @@
         && (descriptor.name.toLowerCase() === requested || descriptor.label.toLowerCase() === requested);
     });
     if (matches.length !== 1) throw new Error(matches.length ? 'PBGui control name is ambiguous' : 'PBGui control is not available');
+    if (matches[0].element.hasAttribute('data-host-block-toggle')) throw new Error('Use propose_vast_host_block for an explicit block or unblock');
     return matches[0].element;
   }
 
@@ -434,6 +446,15 @@
         var value = _aiContextProviders[id]();
         if (!value || typeof value !== 'object') return;
         if (value.section && !context.section) context.section = aiContextText(value.section, 128);
+        if (value.current_cloud_job && !context.current_cloud_job
+            && /^[0-9a-f]{32}$/.test(String(value.current_cloud_job.job_id || ''))) {
+          context.current_cloud_job = {job_id: value.current_cloud_job.job_id};
+          var target = value.current_cloud_job;
+          if (/^[0-9a-f]{32}$/.test(String(target.lease_id || ''))) context.current_cloud_job.lease_id = target.lease_id;
+          if (Number.isSafeInteger(target.machine_id) && target.machine_id > 0) context.current_cloud_job.machine_id = target.machine_id;
+          if (typeof target.blocked === 'boolean' || target.blocked === null) context.current_cloud_job.blocked = target.blocked;
+          if (Number.isSafeInteger(target.host_block_revision) && target.host_block_revision >= 0) context.current_cloud_job.host_block_revision = target.host_block_revision;
+        }
         if (Array.isArray(value.entities)) {
           value.entities.slice(0, 8).forEach(function (entity) {
             var projected = aiContextEntity(entity);
@@ -1751,7 +1772,7 @@
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
-    'help':               '/app/help.html?v=1775',
+    'help':               '/app/help.html?v=1776',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
@@ -2088,7 +2109,7 @@
           return;
         }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=77');
+        script.src = _appPath('/app/js/ai_drawer.js?v=80');
         script.onload = function () { _aiDrawerLoading = false; if (show && window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); window.dispatchEvent(new Event('pbgui:ai-ready')); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);

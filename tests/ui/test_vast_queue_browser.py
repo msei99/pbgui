@@ -9,6 +9,99 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_vast_controls_from_real_menu_preserve_shell_and_guide():
+    """Follow the real PBv8 menu into the full Optimize template with isolated API responses."""
+    import mimetypes
+    from urllib.parse import urlsplit
+    playwright = pytest.importorskip('playwright.sync_api')
+    calls, errors = [], []
+    job = dict(id='a'*32, config_name='isolated-test', status='running', has_log=True,
+               workers=4, iterations=100, rental_state='none', created_at=1)
+    template = (ROOT / 'frontend/v7_optimize.html').read_text()
+    for key, value in {
+        'API_BASE':'/api/optimize-v8', 'BASE_PREFIX':'', 'LIMITS_META':'{}',
+        'VERSION':'test', 'SERIAL':'test', 'OPTIMIZE_VERSION':'v8',
+        'BACKTEST_VERSION':'v8', 'OPTIMIZE_NAV_TITLE':'PBv8 OPTIMIZE',
+        'OPTIMIZE_NAV_CURRENT':'v8_optimize', 'NAV_HASH':'test',
+    }.items():
+        template = template.replace('%%' + key + '%%', value)
+
+    def route_request(route):
+        """Serve actual local assets; provider requests and production state are inaccessible."""
+        request = route.request
+        path = urlsplit(request.url).path
+        calls.append((request.method, request.url))
+        if path == '/':
+            route.fulfill(content_type='text/html', body='''<nav id="topnav"></nav><script>
+              window.PBGUI_NAV_CONFIG={current:'welcome',authenticated:true,apiBase:'/api/optimize-v8'};
+              </script><script src="/app/pbgui_nav.js"></script>''')
+        elif path == '/api/optimize-v8/main_page':
+            route.fulfill(content_type='text/html', body=template)
+        elif path.startswith('/app/'):
+            asset = (ROOT / 'frontend' / path.removeprefix('/app/')).resolve()
+            assert asset.is_relative_to(ROOT / 'frontend')
+            if asset.is_file():
+                route.fulfill(body=asset.read_bytes(), content_type=mimetypes.guess_type(asset.name)[0] or 'application/octet-stream')
+            else:
+                route.fulfill(status=404, body='Missing test asset')
+        elif path == '/api/vast/fragment':
+            route.fulfill(body=(ROOT/'frontend/vast.html').read_text(), content_type='text/html')
+        elif path == '/api/vast/jobs':
+            route.fulfill(json=dict(jobs=[job], workers=[], worker=None, queue={}, supervision_available=True))
+        elif path == '/api/help/index':
+            route.fulfill(json=[dict(file='48_vast_gpu', title='Vast.ai GPU')])
+        elif path == '/api/help/content':
+            route.fulfill(json=dict(content='# Vast.ai GPU\n\nIsolated guide response.'))
+        elif path == '/api/vast/settings':
+            route.fulfill(json=dict(configured=True))
+        else:
+            route.fulfill(json={})
+
+    with playwright.sync_playwright() as runner:
+        browser = runner.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport=dict(width=1280, height=900))
+            page.set_default_timeout(8000)
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.route('**/*', route_request)
+            page.route_web_socket('**/*', lambda socket: socket.on_message(lambda message: None))
+            page.goto('http://vast.test/')
+            page.locator('.nav-group-btn[data-group="pbv8"]').click()
+            page.locator('.nav-item[data-page="v8_optimize"]').click()
+            page.wait_for_url('**/api/optimize-v8/main_page')
+            page.locator('.sb-section[data-panel="queue"]').click()
+            page.locator('#queue-tbody [title="Open log"]').click()
+            assert page.locator('#stop-job').is_enabled()
+            assert page.locator('#recover-job').is_disabled()
+            page.locator('#stop-job').click()
+            assert page.locator('#pbgui-dialog-title').inner_text() == 'Stop optimizer?'
+            page.locator('#pbgui-dialog-cancel').click()
+            page.wait_for_function("!document.getElementById('stop-job').disabled")
+            assert any('/app/js/vast.js?v=175' in url for _, url in calls)
+            location_before = page.url
+            page.locator('#pbgui-guide-btn').click()
+            page.wait_for_function("document.getElementById('pbgui-shared-help-ovl')?.getAttribute('aria-hidden')==='false'")
+            assert page.url == location_before
+            page.locator('#pbgui-shared-help-close').click()
+            page.locator('#log-panel-close').click()
+            for width in (160, 420):
+                page.locator('#sidebar-resize').focus()
+                page.keyboard.press('Home' if width == 160 else 'End')
+                assert abs(page.locator('#sidebar').bounding_box()['width'] - width) < 1
+                assert page.locator('#sidebar-inner').evaluate('node=>node.scrollWidth<=node.clientWidth')
+            page.reload()
+            page.wait_for_function("window.state?.panel==='queue' && window.PBGuiVast?.queueItems().length===1")
+            assert page.url.endswith('#queue')
+            assert abs(page.locator('#sidebar').bounding_box()['width'] - 420) < 1
+            for width in (740, 780, 1280):
+                page.set_viewport_size(dict(width=width, height=900))
+                assert page.locator('#sidebar-inner').evaluate('node=>node.scrollWidth<=node.clientWidth')
+            assert not errors
+            assert not any(method == 'POST' and ('/stop' in url or '/queue/start' in url) for method, url in calls)
+        finally:
+            browser.close()
+
+
 def test_cloud_setup_editor_selection_and_queue(tmp_path):
     """Keep GPU preferences in Settings and queueing free of rental calls."""
     playwright = pytest.importorskip('playwright.sync_api')
@@ -430,8 +523,15 @@ def test_optimizer_settings_main_area():
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
     markup = re.sub(r'<script\b[^>]*>.*?</script>', '', source, flags=re.S)
     functions = []
-    for name in ('setPanel', 'openQueueSettingsModal', 'saveQueueSettingsFromModal', 'openLogPanel', 'closeLogPanel'):
-        start = source.index(('async ' if name.startswith('save') else '') + 'function ' + name + '(')
+    for name in (
+        'setPanel', 'openQueueSettingsModal', 'saveQueueSettingsFromModal',
+        'persistQueueSettings', 'loadSettings', 'validateQueueSettings',
+        'queueSettingsFields', 'syncQueueSettingsModalFields', 'openLogPanel', 'closeLogPanel',
+    ):
+        marker = 'async function ' + name + '('
+        if marker not in source:
+            marker = 'function ' + name + '('
+        start = source.index(marker)
         end = source.index('\n}\n', start) + 2
         functions.append(source[start:end])
     with playwright.sync_playwright() as engine:
@@ -443,9 +543,16 @@ def test_optimizer_settings_main_area():
             page.add_style_tag(content=(ROOT/'frontend/css/sidebar.css').read_text())
             page.evaluate('''() => {
                 window.el = id => document.getElementById(id);
-                window.state = {panel:'queue',navigationSeq:0,settings:{cpu_max:16}};
+                window.state = {
+                    panel:'queue', navigationSeq:0, settings:{},
+                    settingsLoadSeq:0, settingsPushSeq:0, settingsSaveSeq:0, settingsLifecycle:0,
+                    settingsRequest:null, settingsLoaded:false, settingsError:'',
+                    settingsSaving:false, settingsDisposed:false, settingsDirtyFields:{},
+                    settingsEditVersions:{}, settingsPushVersions:{}, settingsWrittenFields:{}
+                };
                 window.PANEL_META = {configs:{},queue:{},settings:{},results:{},paretos:{}};
-                window.syncQueueSettingsModalFields = () => { el('settings-cpu-value').value = '8'; };
+                window.updateMetaCounts = () => {};
+                window.handlePb8RuntimeUnavailable = () => false;
                 window.refreshLiveResultsDuringRun = async () => {};
                 window.restoreSelectedOptimizeResultWhenReady = async () => {};
                 window.handleError = error => { throw error; };
@@ -456,10 +563,28 @@ def test_optimizer_settings_main_area():
                 window.renderOptimizeLogDashboard = () => {};
                 window.optimizeEditorAdapter = {queueLogFile: filename => filename + '.log'};
                 window.ensureLogViewer = () => { window.state.logViewer = {open(){},close(){},setHost(){},setFile(file){window.selectedLogFile=file;}}; return window.state.logViewer; };
-                window.apiFetch = async (path, options) => { window.savedSettings = JSON.parse(options.body); };
+                window.persistedSettings = {
+                    cpu:8, cpu_max:16, host_cpu_count:16, autostart:false,
+                    cpu_override:false, use_pbgui_market_data:false
+                };
+                window.settingsCalls = [];
+                window.apiFetch = async (path, options = {}) => {
+                    if (path !== '/settings') throw new Error('Unexpected API path: ' + path);
+                    const method = options.method || 'GET';
+                    window.settingsCalls.push(method);
+                    if (method === 'POST') {
+                        window.savedSettings = JSON.parse(options.body);
+                        Object.assign(window.persistedSettings, window.savedSettings);
+                        return {ok:true};
+                    }
+                    if (method !== 'GET') throw new Error('Unexpected API method: ' + method);
+                    return Object.assign({}, window.persistedSettings);
+                };
             }''')
             page.add_script_tag(content='\n'.join(functions))
             page.evaluate("openQueueSettingsModal()")
+            page.wait_for_function("state.settingsLoaded && !state.settingsRequest && !el('btn-settings-save').disabled")
+            assert page.evaluate('settingsCalls') == ['GET']
             assert page.locator('#main-content #panel-settings').is_visible()
             assert page.locator('#panel-queue').is_hidden()
             assert page.locator('#panel-settings #vast-queue-host').count() == 0
@@ -469,11 +594,19 @@ def test_optimizer_settings_main_area():
             assert page.locator('#modal-backdrop').evaluate("node => getComputedStyle(node).pointerEvents") == 'none'
             assert page.locator('#sidebar').is_visible()
             assert page.locator('#settings-cpu-value').input_value() == '8'
+            assert page.locator('#settings-cpu-max').inner_text() == '16'
             main = page.locator('#main-content').bounding_box()
             settings = page.locator('#panel-settings').bounding_box()
             assert settings['width'] >= main['width'] * .9
             page.evaluate('saveQueueSettingsFromModal()')
+            page.wait_for_function("!state.settingsSaving && !state.settingsRequest && state.settingsLoadSeq === 2 && !el('btn-settings-save').disabled")
+            assert page.evaluate('settingsCalls') == ['GET', 'POST', 'GET']
             assert page.evaluate('savedSettings.cpu') == 8
+            assert page.evaluate('savedSettings') == {
+                'cpu': 8, 'autostart': False, 'cpu_override': False,
+                'use_pbgui_market_data': False,
+            }
+            assert page.evaluate('state.settings') == page.evaluate('persistedSettings')
             assert page.locator('#panel-settings').is_visible()
             page.evaluate("setPanel('queue')")
             assert page.locator('#panel-settings').is_hidden()
@@ -737,7 +870,7 @@ def test_vast_result_snapshots_trigger_refresh_without_local_runs():
     """Each newly published snapshot refreshes results once, including completion."""
     playwright = pytest.importorskip('playwright.sync_api')
     source = (ROOT / 'frontend/js/vast.js').read_text()
-    function = source[source.index('  async function refreshJobs(preferred)'):source.index('  async function pollJobs()')]
+    function = source[source.index('  async function refreshJobs(preferred'):source.index('  async function pollJobs()')]
     with playwright.sync_playwright() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
@@ -746,11 +879,12 @@ def test_vast_result_snapshots_trigger_refresh_without_local_runs():
             page.add_script_tag(content='''
                 const el = id => document.getElementById(id);
                 let jobGeneration=0, jobTimer=null, timers=[], disposed=false, jobRows=[], workers=[], worker=null, queueState={}, supervision=false, selectedJobId=null;
+                let unreadableJobs=[], calibrationWorkerAvailable=false;
                 const setTimeout=(callback, delay)=>{const timer={callback,delay,cleared:false}; timers.push(timer); return timer;};
                 const clearTimeout=timer=>{if(timer) timer.cleared=true;};
-                const stoppingJobs = new Map();
+                const stoppingJobs = new Map(), uncertainStops = new Map();
                 const pollJobs=()=>{};
-                let data={jobs:[{id:'test'}]};
+                let data={jobs:[{id:'test'}],queue:{}};
                 const request=async () => structuredClone(data);
                 const renderJob=()=>{},renderQueueOverview=()=>{},refreshActiveGpuProfile=()=>{};
                 const completedCalibration=()=>false;
@@ -776,7 +910,7 @@ def test_pool_summary_and_explicit_start_consent():
     playwright = pytest.importorskip('playwright.sync_api')
     source = (ROOT / 'frontend/js/vast.js').read_text()
     activity = source[source.index('  function uploadProgressMetrics(job)'):source.index('  function renderJob()')]
-    overview = source[source.index('  function openCloudResults(job)'):source.index('  async function refreshJobs(preferred)')]
+    overview = source[source.index('  function openCloudResults(job)'):source.index('  async function refreshJobs(preferred')]
     start = source[source.index('  async function startCloudQueue(job)'):source.index("  el('rent-offer').addEventListener")]
     with playwright.sync_playwright() as runner:
         browser = runner.chromium.launch(headless=True)

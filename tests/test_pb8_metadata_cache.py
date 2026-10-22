@@ -69,6 +69,213 @@ def test_static_metadata_remains_warm_after_31_seconds(isolated, name):
                          "optimizer_backend_contract"]
 
 
+@pytest.mark.parametrize("include_backend_contract", [False, True])
+def test_optimize_warm_reads_use_two_fingerprints(isolated, include_backend_contract):
+    """Both paths reuse the entry snapshot and still verify the final runtime."""
+    fingerprints, calls = [], []
+    isolated.setattr(client, "_runtime_fingerprint", lambda:
+                     fingerprints.append(True) or ("runtime",))
+    def load(operation):
+        """Return isolated static data or host capabilities."""
+        calls.append(operation)
+        if operation == "optimize_metadata_static":
+            return {"template": {"bot": []}, "strategies": ["grid"]}
+        return {"contract_version": 1, "items": {"gpu": {"available": True}}}
+    isolated.setattr(client, "_call_helper", load)
+    original = client.get_pb8_optimize_metadata(include_backend_contract=include_backend_contract)
+    expected = json.loads(json.dumps(original))
+    original["template"]["bot"].append("mutation")
+    if include_backend_contract:
+        original["backend_contract"]["items"].clear()
+    fingerprints.clear()
+    calls.clear()
+    assert client.get_pb8_optimize_metadata(
+        include_backend_contract=include_backend_contract) == expected
+    assert len(fingerprints) == 2
+    assert calls == []
+
+
+def test_static_optimize_skips_expired_gpu_probe(isolated):
+    """Static consumers never touch capabilities, even after the full path expires."""
+    clock, calls = [0.0], []
+    isolated.setattr(client.time, "monotonic", lambda: clock[0])
+    def load(operation):
+        """Record probes independently from the immutable contract."""
+        calls.append(operation)
+        if operation == "optimize_metadata_static":
+            return {"template": {}, "strategies": []}
+        return {"contract_version": 1, "items": {}}
+    isolated.setattr(client, "_call_helper", load)
+    full = client.get_pb8_optimize_metadata()
+    clock[0] = client._GPU_CACHE_TTL_SECONDS + 1
+    calls.clear()
+    static = client.get_pb8_optimize_metadata(include_backend_contract=False)
+    assert static == {key: value for key, value in full.items() if key != "backend_contract"}
+    assert calls == []
+    assert client.get_pb8_optimize_metadata() == full
+    assert calls == ["optimizer_backend_contract"]
+
+
+def test_fingerprint_hint_is_consumed_before_singleflight_wait(isolated):
+    """A waiter rechecks generation on its second lookup instead of reusing a hint."""
+    checks = []
+    isolated.setattr(client, "_runtime_fingerprint", lambda:
+                     checks.append(True) or ("new",))
+    class Flight:
+        """Complete another owner's work while this caller waits."""
+        def wait(self, timeout):
+            """Publish only a new-generation cache and release its flight."""
+            assert timeout == 0.1
+            assert checks == []
+            client._template_cache = (float("inf"), ("new",), {"generation": "new"})
+            client._metadata_flights.clear()
+    client._metadata_flights[("_template_cache", None)] = Flight()
+    assert client._cached_call("_template_cache", lambda: pytest.fail("unexpected load"),
+                               fingerprint=("old",)) == {"generation": "new"}
+    assert len(checks) == 1
+
+
+def test_empty_fingerprint_hint_is_valid(isolated):
+    """Only None means absent; a supplied tuple is used without a fresh probe."""
+    client._template_cache = (float("inf"), (), {"ok": True})
+    isolated.setattr(client, "_runtime_fingerprint", lambda: pytest.fail("unused hint"))
+    assert client._cached_call("_template_cache", lambda: pytest.fail("warm cache"),
+                               fingerprint=()) == {"ok": True}
+
+
+def test_cache_miss_rechecks_fingerprint_before_loading(isolated):
+    """A stale hint cannot label newly loaded data with an obsolete generation."""
+    checks = []
+    isolated.setattr(client, "_runtime_fingerprint", lambda:
+                     checks.append(True) or ("new",))
+    assert client._cached_call("_template_cache", lambda: {"generation": "new"},
+                               fingerprint=("old",)) == {"generation": "new"}
+    assert len(checks) == 2
+    assert client._template_cache[1] == ("new",)
+
+
+@pytest.mark.parametrize("include_backend_contract", [False, True])
+@pytest.mark.parametrize("repeat", [False, True])
+def test_optimize_runtime_change_after_static_read(isolated, include_backend_contract, repeat):
+    """An outer retry catches swaps between component reads or before static return."""
+    generation, calls, changes = [0], [], []
+    isolated.setattr(client, "_runtime_fingerprint", lambda: tuple(generation))
+    def load(operation):
+        """Include a generation marker to detect mixed component results."""
+        calls.append((operation, generation[0]))
+        if operation == "optimize_metadata_static":
+            return {"template": {"generation": generation[0]}, "strategies": []}
+        return {"contract_version": 1, "items": {"generation": generation[0]}}
+    isolated.setattr(client, "_call_helper", load)
+    original = client._cached_call
+    def read(cache_name, loader, **kwargs):
+        """Swap immediately after the static component passes its own checks."""
+        result = original(cache_name, loader, **kwargs)
+        if cache_name == "_optimize_metadata_cache" and (repeat or not changes):
+            generation[0] += 1
+            changes.append(True)
+        return result
+    isolated.setattr(client, "_cached_call", read)
+    if repeat:
+        with pytest.raises(client.PB8RuntimeBusyError, match="changed repeatedly"):
+            client.get_pb8_optimize_metadata(include_backend_contract=include_backend_contract)
+    else:
+        result = client.get_pb8_optimize_metadata(include_backend_contract=include_backend_contract)
+        assert result["template"] == {"generation": 1}
+        if include_backend_contract:
+            assert result["backend_contract"]["items"] == {"generation": 1}
+    assert [value for op, value in calls if op == "optimize_metadata_static"] == [0, 1]
+
+
+@pytest.mark.parametrize("include_backend_contract", [False, True])
+@pytest.mark.parametrize("repeat", [False, True])
+def test_optimize_runtime_change_during_static_load(isolated, include_backend_contract, repeat):
+    """A hint never bypasses load-time swap detection on either optimizer path."""
+    generation, loads = [0], []
+    isolated.setattr(client, "_runtime_fingerprint", lambda: tuple(generation))
+    def load(operation):
+        """Change runtime inside the helper call, before cache publication."""
+        if operation == "optimizer_backend_contract":
+            return {"contract_version": 1, "items": {}}
+        value = generation[0]
+        loads.append(value)
+        if repeat or len(loads) == 1:
+            generation[0] += 1
+        return {"template": {"generation": value}, "strategies": []}
+    isolated.setattr(client, "_call_helper", load)
+    if repeat:
+        with pytest.raises(client.PB8RuntimeBusyError, match="changed repeatedly"):
+            client.get_pb8_optimize_metadata(include_backend_contract=include_backend_contract)
+        assert client._optimize_metadata_cache is None
+    else:
+        assert client.get_pb8_optimize_metadata(
+            include_backend_contract=include_backend_contract)["template"] == {"generation": 1}
+
+
+@pytest.mark.parametrize("failure", ["timeout", "eof", "invalid_json"])
+def test_helper_failures_reap_resources_and_release_flight(isolated, failure):
+    """Failure paths retain the timeout and terminate/kill/wait/join cleanup order."""
+    import io
+    import queue
+    import subprocess
+
+    events = []
+    class Process:
+        """Process double that needs escalation after terminate."""
+        stdin = io.StringIO()
+        stdout = io.StringIO()
+        def poll(self):
+            """Remain alive until cleanup explicitly waits."""
+            return None
+        def terminate(self):
+            """Record the graceful stop."""
+            events.append("terminate")
+        def wait(self, timeout):
+            """Force the first wait to time out and require reaping after kill."""
+            assert timeout == 2
+            events.append("wait")
+            if events.count("wait") == 1:
+                raise subprocess.TimeoutExpired("isolated-helper", timeout)
+        def kill(self):
+            """Record escalation."""
+            events.append("kill")
+    class Reader:
+        """Reader double recording a bounded join."""
+        def is_alive(self):
+            """Require cleanup to join the reader."""
+            return True
+        def join(self, timeout):
+            """Record deterministic reader cleanup."""
+            assert timeout == 2
+            events.append("join")
+    class Responses:
+        """Return the selected transport failure without waiting in real time."""
+        def get(self, timeout):
+            """Preserve the production response timeout."""
+            assert timeout == 120
+            if failure == "timeout":
+                raise queue.Empty
+            return None if failure == "eof" else "{invalid"
+    proc = Process()
+    isolated.setattr(client, "_runtime", lambda: {"pb8dir": str(client.PBGDIR)})
+    isolated.setattr(client, "_ensure_migration_helper_locked", lambda *_args: None)
+    isolated.setattr(client, "_migration_helper_process", proc)
+    isolated.setattr(client, "_migration_helper_reader_thread", Reader())
+    isolated.setattr(client, "_migration_helper_fingerprint", ("runtime",))
+    isolated.setattr(client, "_migration_helper_responses", Responses())
+    with pytest.raises(client.PB8ConfigurationError):
+        client.get_pb8_optimize_metadata(include_backend_contract=False)
+    assert events == ["terminate", "wait", "kill", "wait", "join"]
+    assert proc.stdin.closed and proc.stdout.closed
+    assert client._optimize_metadata_cache is None
+    assert not client._metadata_flights
+    for name in ("_migration_helper_process", "_migration_helper_reader_thread",
+                 "_migration_helper_fingerprint", "_migration_helper_responses"):
+        assert getattr(client, name) is None
+    client.shutdown_pb8_migration_helper()
+    assert events == ["terminate", "wait", "kill", "wait", "join"]
+
+
 def test_single_flight_and_warm_reads_during_blocked_helper(isolated):
     """Identical misses load once and a warm unrelated cache bypasses helper I/O."""
     entered, release = threading.Event(), threading.Event()

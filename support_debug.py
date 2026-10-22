@@ -268,6 +268,28 @@ def collect(root, owner, routes, *, loop_id=None, runtime_roots=None):
             raise FileNotFoundError('Loop not found for this user')
         collector.state(target, 'selected_loop', owned=True, priority=True)
     selected = collector.records.get('selected_loop', {})
+    if loop_id and selected.get('_loop_storage'):
+        # New Loop manifests intentionally contain no historical arrays.
+        # Keep support exports useful without copying the SQLite archive or
+        # hydrating an arbitrarily long run; normal redaction still applies.
+        try:
+            from pb8_loop_storage import LoopArchive
+            header = json.loads(collector.read(target, priority=True) or '{}')
+            if header.get('owner') != owner or header.get('id') != loop_id:
+                raise ValueError('Loop ownership mismatch')
+            archive = LoopArchive(target.parent, loop_id)
+            reference = header['_loop_storage']['root']
+            details = archive.fields(reference, {'settings', 'reason', 'last_error', 'failure', 'ai_pause',
+                                                'ai_evidence_status', 'validation_count', 'rubric', 'best'})
+            jobs = archive.page(reference, 'jobs', 0, 2)
+            tail = archive.page(reference, 'jobs', max(0, jobs['total'] - 98), 98)
+            indexed = {job.get('operation', str(index)): job for index, job in enumerate(jobs['items'] + tail['items'])}
+            history = archive.page(reference, 'history', 0, 1)
+            history = archive.page(reference, 'history', max(0, history['total'] - 2), 2)
+            selected = scrub({**header, **details, 'jobs': list(indexed.values()), 'history': history['items']})
+            collector.records['selected_loop'] = selected
+        except (OSError, ValueError, KeyError) as exc:
+            collector.omitted.append({'source': 'selected_loop/archive', 'reason': type(exc).__name__})
     for job in selected.get('jobs', []):
         if not isinstance(job, dict) or job.get('round') != selected.get('round') and job.get('kind') != 'baseline':
             continue

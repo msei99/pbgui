@@ -14,6 +14,7 @@ import traceback
 import psutil
 
 from logging_helpers import human_log as _log
+from file_lock import advisory_file_lock
 from vast_credentials import VastCredentialStore
 from vast_jobs import SUPPORTED_RENTAL_IMAGES, SUPPORTED_RENTAL_IMAGE_REVISIONS, PROJECT, JobStore, digest, job_id, write_json
 from vast_provider import VastRateLimit, VastClient, VastError, positive_id
@@ -152,22 +153,24 @@ def uncreated_rental_message(state: dict) -> str | None:
 
 def finalize_verified_rental(store: JobStore, identifier: str, *, now: float) -> None:
     """Finish local tracking after verified absence even if the job controller died."""
-    state = store.read(identifier)
-    if state['rental_state'] != 'deletion_verified':
-        return
-    if state.get('kind') == 'worker':
+    with advisory_file_lock(store.directory(identifier) / '.state-lock'):
+        state = store.read(identifier)
+        if state['rental_state'] != 'deletion_verified':
+            return
+        worker = state.get('kind') == 'worker'
+        if not worker and state['status'] not in {'completed', 'failed', 'cancelled'}:
+            collected = state.get('final_collected')
+            stopped = store.read(identifier, 'control.json')['stop']
+            creation_message = uncreated_rental_message(state)
+            message = ('Raw results saved locally; result import needs retry' if collected else
+                       creation_message if creation_message else
+                       'Vast.ai instance disappeared; the last local snapshot remains available'
+                       if state.get('rental_end_reason') == 'provider_instance_missing' else
+                       'Rental ended; the last local snapshot remains available')
+            store.update(identifier, status='cancelled' if stopped and not collected else 'failed', error=message)
+    if worker:
         from vast_queue import CloudQueue, worker_step
         worker_step(CloudQueue(store), identifier, now=now)
-    elif state['status'] not in {'completed', 'failed', 'cancelled'}:
-        collected = state.get('final_collected')
-        stopped = store.read(identifier, 'control.json')['stop']
-        creation_message = uncreated_rental_message(state)
-        message = ('Raw results saved locally; result import needs retry' if collected else
-                   creation_message if creation_message else
-                   'Vast.ai instance disappeared; the last local snapshot remains available'
-                   if state.get('rental_end_reason') == 'provider_instance_missing' else
-                   'Rental ended; the last local snapshot remains available')
-        store.update(identifier, status='cancelled' if stopped and not collected else 'failed', error=message)
 
 def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dict, registry_token: str,
                *, now: float | None = None) -> bool:
@@ -183,6 +186,89 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
         return True
     observed = bool(state.get('provider_seen_at')) or state.get('rental_state') == 'active'
     if not marker.exists() and not ending and not state.get('instance_id') and not observed:
+        if intent.get('gpu_replacement'):
+            from pb8_loop_store import LoopStore
+            from pb8_loop_gpu_replacement import validate_rental_authorization
+            from vast_queue import CloudQueue
+            loops = LoopStore(PROJECT / 'data/loop_optimizer')
+            queue = CloudQueue(store)
+            def authorize():
+                """Retain a visible reason while the same unsent reservation waits for permission."""
+                current = loops.read(state['loop_owner'], state['loop_id'])
+                try:
+                    validate_rental_authorization(queue, current, intent['gpu_replacement'])
+                except VastError as exc:
+                    store.update(identifier, authorization_wait_reason=str(exc))
+                    raise
+                return current
+            # Dataset verification must allow user controls and storage pauses
+            # to commit. It proves inputs, never authorizes a later paid effect.
+            record = authorize()
+            from pb8_loop_backend import LoopBackend
+            operation_id = intent['gpu_replacement']['operation_id']
+            operation = record['gpu_replacements'][operation_id]
+            successor = next(job for job in record['jobs'] if job['operation'] == operation['successor'])
+            try:
+                LoopBackend(PROJECT, loops).verify_replacement_input(record, successor)
+            except (ValueError, VastError) as exc:
+                store.update(identifier, authorization_wait_reason=str(exc))
+                return False
+            with advisory_file_lock(loops.path(state['loop_owner'], state['loop_id'])):
+                # Revalidate controls and the exact verified input after the
+                # unlocked scan, then serialize the durable Create claim with
+                # capacity/preference/host-block changes. No provider wait may
+                # retain either transaction lock.
+                with advisory_file_lock(queue.root / '.queue-lock'):
+                    current = authorize()
+                    current_operation = current['gpu_replacements'][operation_id]
+                    current_successor = next(job for job in current['jobs']
+                        if job['operation'] == current_operation['successor'])
+                    if (current['fingerprint'] != record['fingerprint']
+                            or current['initial_config'] != record['initial_config']
+                            or current_operation['input_digest'] != operation['input_digest']
+                            or current_successor != successor):
+                        reason = 'Preserved GPU replacement input changed during verification; review is required'
+                        store.update(identifier, authorization_wait_reason=reason)
+                        raise VastError(reason, 409)
+                    fresh_control = store.read(identifier, 'control.json')
+                    if fresh_control.get('stop') or fresh_control.get('cleanup'):
+                        return False
+                    fresh_state = store.read(identifier)
+                    if (marker.exists() or fresh_state.get('instance_id')
+                            or fresh_state.get('rental_state') != 'creation_pending'):
+                        return False  # Reconcile an already claimed effect on the next tick.
+                    store.update(identifier, authorization_wait_reason=None)
+                    # Slow frozen-input verification must not consume the
+                    # provider's propagation grace before Create is even sent.
+                    now = time.time()
+                    write_json(marker, {"attempted_at": now})
+            # The request is now durably claimed. Controls can commit while its
+            # response is pending; the marker keeps ambiguous effects on the
+            # existing reconciliation/cleanup path instead of renting twice.
+            try:
+                response = client.request('PUT', f"/asks/{intent['offer']['id']}/", rental_payload(intent, registry_token))
+            except VastRateLimit as exc:
+                if not exc.request_sent:
+                    marker.unlink()
+                else:
+                    store.update(identifier, creation_error=str(exc))
+                raise
+            except VastError as exc:
+                store.update(identifier, creation_error=str(exc))
+                raise
+            store.update(identifier, instance_id=positive_id(response.get('new_contract')))
+            # The normal fresh provider observation below owns confirmation.
+            state = store.read(identifier)
+        else:
+            return _create_and_observe(store, identifier, client, intent, registry_token, now)
+    return _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state)
+
+
+def _create_and_observe(store, identifier, client, intent, registry_token, now):
+    """Preserve the ordinary rental Create and ambiguity handling."""
+    marker = store.directory(identifier) / 'attempt.json'
+    ending, observed = False, False
+    if not marker.exists():
         write_json(marker, {"attempted_at": now})
         # This marker must be durable before the sole paid Create request.
         try:
@@ -199,6 +285,13 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
         instance_id = positive_id(response.get("new_contract"))
         store.update(identifier, instance_id=instance_id)
         state = store.read(identifier)
+    else:
+        state = store.read(identifier)
+    return _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state)
+
+
+def _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state):
+    """Only fresh provider absence can release a rental authorization."""
     try:
         # Each absence confirmation must come from a fresh, successful provider list.
         row = owned_instance(client, intent, fresh=True, expected_id=state.get('instance_id'))
@@ -261,6 +354,8 @@ def guard_loop(store: JobStore, identifier: str) -> None:
         try:
             intent = effective_intent(store, identifier, original)
             secrets = VastCredentialStore(store.root).secrets()
+            if original.get('gpu_replacement') and secrets['generation'] != original['credential_generation']:
+                raise VastError('Replacement rental credentials changed; review the provider account before continuing', 409)
             client = VastClient(secrets["api_key"])
             state = store.read(identifier)
             if state.get('rental_state') == 'active' and time.time() < intent['deadline'] - 300:
@@ -306,32 +401,184 @@ def recover_cancelled_empty_results(store: JobStore) -> int:
         identifier = state.get('id')
         if not isinstance(identifier, str):
             continue
-        final = store.directory(identifier) / 'final-results'
-        try:
-            finished = json.loads((final / 'finished.json').read_text())
-            binaries = list((final / 'optimize_results').glob('*/all_results.bin'))
-            empty_result = (len(binaries) == 1 and binaries[0].is_file()
-                            and not binaries[0].is_symlink() and binaries[0].stat().st_size == 0)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            continue
-        if not (finished.get('cancelled') is True
-                and empty_result):
-            continue
-        store.update(identifier, status='cancelled', error=None,
-                     exit_code=finished.get('exit_code'), completion_reason='requested',
-                     elapsed_seconds=finished.get('wall_seconds'),
-                     finished_at=finished.get('finished_at'))
-        recovered += 1
-        _log(SERVICE, f'{identifier}: recovered requested stop with no exact results', level='INFO')
+        with advisory_file_lock(store.directory(identifier) / '.finalize-lock'):
+            state = store.read(identifier)
+            if not (state.get('status') == 'failed'
+                    and state.get('final_collected') is True
+                    and state.get('stop_reason') == 'requested'
+                    and state.get('error') == 'Raw results saved locally; result import needs retry'):
+                continue
+            final = store.directory(identifier) / 'final-results'
+            try:
+                finished = json.loads((final / 'finished.json').read_text())
+                binaries = list((final / 'optimize_results').glob('*/all_results.bin'))
+                empty_result = (len(binaries) == 1 and binaries[0].is_file()
+                                and not binaries[0].is_symlink() and binaries[0].stat().st_size == 0)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if not (finished.get('cancelled') is True
+                    and empty_result):
+                continue
+            store.update(identifier, status='cancelled', error=None,
+                         exit_code=finished.get('exit_code'), completion_reason='requested',
+                         elapsed_seconds=finished.get('wall_seconds'),
+                         finished_at=finished.get('finished_at'))
+            recovered += 1
+            _log(SERVICE, f'{identifier}: recovered requested stop with no exact results', level='INFO')
     return recovered
 
 
-def finalize_collected_results(store: JobStore, identifier: str) -> dict:
+def _finalization_complete(store: JobStore, identifier: str, state: dict, finished: dict) -> bool:
+    """Recognize a fully published outcome, never just a result path or terminal state."""
+    if not isinstance(finished, dict) or state.get('error') == 'Raw results saved locally; result import needs retry':
+        return False
+    if state.get('kind') == 'calibration':
+        return (state.get('status') == 'completed' and bool(state.get('calibration_profile_candidate'))
+                and state.get('error') is None and all(state.get(key) == finished.get(source) for key, source in (
+                    ('exit_code', 'exit_code'), ('elapsed_seconds', 'wall_seconds'), ('finished_at', 'finished_at'))))
+    reason = state.get('stop_reason')
+    historical = reason == 'convergence' or (reason is None and bool(state.get('convergence', {}).get('stop_requested')))
+    automatic = 'convergence' if historical else reason if reason == 'rental_deadline' else None
+    automatic_stop = automatic and finished.get('cancelled') and finished.get('exit_code') in (0, -2, 130)
+    status = 'completed' if automatic_stop else ('cancelled' if finished.get('cancelled') else
+                                               'completed' if finished.get('exit_code') == 0 else 'failed')
+    completion = automatic if automatic_stop else reason if reason != 'convergence' else None
+    if any(state.get(key) != value for key, value in {
+        'status': status, 'exit_code': finished.get('exit_code'), 'completion_reason': completion,
+        'elapsed_seconds': finished.get('wall_seconds'), 'finished_at': finished.get('finished_at'),
+    }.items()):
+        return False
+    if status != 'failed' and state.get('error') is not None:
+        return False
+    if status == 'failed' and not str(state.get('error', '')).startswith(
+            f"PB8 optimizer exited with code {finished.get('exit_code')}"):
+        return False
+    binaries = list((store.directory(identifier) / 'final-results/optimize_results').glob('*/all_results.bin'))
+    if (status == 'cancelled' and len(binaries) == 1 and binaries[0].is_file()
+            and not binaries[0].is_symlink() and binaries[0].stat().st_size == 0):
+        return True
+    if status == 'failed' and not any(path.is_file() and not path.is_symlink() and path.stat().st_size > 0 for path in binaries):
+        return True
+    if not state.get('result_path') or state.get('result_partial') is not False:
+        return False
+    evaluations = state.get('evaluations')
+    if type(evaluations) is not int or evaluations <= 0 or state.get('exact_completed') != evaluations:
+        return False
+    if state.get('convergence_config', {}).get('convergence_enabled'):
+        assessment = state.get('convergence', {}).get('final')
+        if (not isinstance(assessment, dict) or not isinstance(assessment.get('phase'), str)
+                or type(assessment.get('threshold_reached')) is not bool
+                or not ((type(assessment.get('checked_exact')) is int and assessment['checked_exact'] == evaluations)
+                        or ('checked_exact' not in assessment and assessment.get('phase') == 'waiting'
+                            and isinstance(assessment.get('reason'), str)))):
+            return False
+    try:
+        sources = list((store.directory(identifier) / 'final-results/optimize_results').glob('*'))
+        root = Path(store.read(identifier, 'intent.json')['results_root'])
+        if len(sources) != 1 or not root.is_absolute() or root.is_symlink() or root.name != 'optimize_results':
+            return False
+        target = root / (sources[0].name + '_vast_' + identifier[:12])
+        if str(target) != state['result_path'] or target.is_symlink():
+            return False
+        provenance_path = target / '.pbgui_vast.json'
+        if provenance_path.is_symlink() or provenance_path.stat().st_size > 65536:
+            return False
+        provenance = json.loads(provenance_path.read_text())
+        binary = target / 'all_results.bin'
+        return (provenance.get('job_id') == identifier and provenance.get('partial') is False
+                and provenance.get('evaluations') == evaluations and binary.is_file()
+                and not binary.is_symlink() and binary.stat().st_size > 0)
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
+def _persist_finalization_error(store: JobStore, identifier: str, *, preserve_execution=False) -> None:
+    """Persist technical retry state under Finalize, preserving an intervening complete outcome."""
+    try:
+        state = store.read(identifier)
+        finished_path = store.directory(identifier) / 'final-results/finished.json'
+        try:
+            finished = json.loads(finished_path.read_text()) if finished_path.exists() else {}
+        except (OSError, ValueError, TypeError):
+            finished = {}
+        try:
+            complete = _finalization_complete(store, identifier, state, finished)
+        except Exception as exc:
+            _log(SERVICE, 'Could not verify final result completion: ' + type(exc).__name__, level='WARNING')
+            complete = False
+        if complete:
+            return
+        if ((preserve_execution or state.get('stop_finalization_pending') is True)
+                and state.get('final_collected') is True
+                and state.get('kind') != 'calibration' and isinstance(finished, dict)
+                and type(finished.get('exit_code')) is int
+                and type(finished.get('cancelled', False)) is bool):
+            store.update(identifier, **_optimizer_execution_outcome(store, identifier, state, finished),
+                         collection_incomplete=True, stop_finalization_pending=True,
+                         collection_error='Final collection could not finish; available verified snapshots and logs are retained')
+            return
+        store.update(identifier, status='failed', error='Raw results saved locally; result import needs retry')
+    except Exception as exc:
+        _log(SERVICE, 'Could not persist result import retry state: ' + type(exc).__name__, level='ERROR')
+
+
+def finalize_collected_results(store: JobStore, identifier: str, *, check=None, preserve_execution=False) -> dict:
+    """Serialize import, assessment and final status across API, runner and stop callers."""
+    with advisory_file_lock(store.directory(identifier) / '.finalize-lock'):
+        try:
+            return _finalize_collected_results_locked(store, identifier, check=check)
+        except Exception as exc:
+            _log(SERVICE, 'Final result publication failed: ' + type(exc).__name__, level='ERROR')
+            _persist_finalization_error(store, identifier, preserve_execution=preserve_execution)
+            raise
+
+
+def _optimizer_execution_outcome(store, identifier, state, finished):
+    """Derive execution evidence independently of local result publication success."""
+    reason = state.get('stop_reason')
+    historical = reason == 'convergence' or (
+        reason is None and bool(state.get('convergence', {}).get('stop_requested')))
+    automatic = 'convergence' if historical else reason if reason == 'rental_deadline' else None
+    automatic_stop = automatic is not None and finished.get('cancelled') and finished.get('exit_code') in (0, -2, 130)
+    status = 'completed' if automatic_stop else ('cancelled' if finished.get('cancelled') else
+                                               'completed' if finished.get('exit_code') == 0 else 'failed')
+    error = None
+    if status == 'failed':
+        error = f"PB8 optimizer exited with code {finished.get('exit_code')}; see collected optimizer.log"
+        log_path = store.directory(identifier) / 'final-results/optimizer.log'
+        excerpt = b''
+        try:
+            if log_path.is_file() and not log_path.is_symlink():
+                with log_path.open('rb') as handle:
+                    excerpt = handle.read(65536)
+        except OSError as exc:
+            # The verified exit code is authoritative; optional diagnostics
+            # must not prevent either finalization or its error persistence.
+            _log(SERVICE, 'Optimizer diagnostic unavailable: ' + type(exc).__name__, level='WARNING')
+            error = f"PB8 optimizer exited with code {finished.get('exit_code')}; optimizer.log could not be read"
+        if b'suite mode does not support asymmetric live.approved_coins' in excerpt:
+            error = (f"PB8 optimizer exited with code {finished.get('exit_code')}: Suite requires identical "
+                     'live.approved_coins.long and .short lists')
+        elif b'constraint agreement fell below safety threshold' in excerpt:
+            error = (f"PB8 optimizer exited with code {finished.get('exit_code')}: "
+                     'GPU proxy/exact constraint agreement failed the Passivbot safety check')
+            if b'backtest_completion_ratio_min:' in excerpt and b'bound=1.0' in excerpt:
+                error += '; strict completion limit 1.0 disagreed between GPU proxy and exact CPU results'
+    return dict(status=status, error=error, exit_code=finished.get('exit_code'),
+                completion_reason=automatic if automatic_stop else reason if reason != 'convergence' else None,
+                elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
+
+
+def _finalize_collected_results_locked(store: JobStore, identifier: str, *, check=None) -> dict:
     """Publish final results and assess their front without rewriting the stop cause."""
     from vast_convergence import observe
     final = store.directory(identifier) / 'final-results'
     finished = json.loads((final / 'finished.json').read_text())
     state = store.read(identifier)
+    if _finalization_complete(store, identifier, state, finished):
+        if state.get('collection_incomplete') or state.get('collection_error') or state.get('stop_finalization_pending'):
+            return store.update(identifier, collection_incomplete=False, collection_error=None, stop_finalization_pending=False)
+        return state
     if state.get('kind') == 'calibration':
         try:
             from vast_calibration import finalize_calibration_result
@@ -349,45 +596,95 @@ def finalize_collected_results(store: JobStore, identifier: str) -> dict:
             elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'),
             calibration_profile_candidate=candidate,
         )
-    reason = state.get('stop_reason')
-    historical_convergence = reason == 'convergence' or (
-        reason is None and bool(state.get('convergence', {}).get('stop_requested')))
-    automatic_reason = 'convergence' if historical_convergence else reason if reason == 'rental_deadline' else None
-    automatic_stop = automatic_reason is not None and finished.get('cancelled') and finished.get('exit_code') in (0, -2, 130)
-    status = 'cancelled' if finished.get('cancelled') else 'completed' if finished.get('exit_code') == 0 else 'failed'
-    if automatic_stop:
-        status = 'completed'
+    outcome = _optimizer_execution_outcome(store, identifier, state, finished)
+    status = outcome['status']
     binaries = list((final / 'optimize_results').glob('*/all_results.bin'))
-    execution_error = None
     if status == 'failed':
-        error = f"PB8 optimizer exited with code {finished.get('exit_code')}; see collected optimizer.log"
-        log_path = final / 'optimizer.log'
-        if log_path.is_file() and not log_path.is_symlink():
-            with log_path.open('rb') as handle:
-                excerpt = handle.read(65536)
-            if b'suite mode does not support asymmetric live.approved_coins' in excerpt:
-                error = (f"PB8 optimizer exited with code {finished.get('exit_code')}: Suite requires identical "
-                         'live.approved_coins.long and .short lists')
-            elif b'constraint agreement fell below safety threshold' in excerpt:
-                error = (f"PB8 optimizer exited with code {finished.get('exit_code')}: "
-                         'GPU proxy/exact constraint agreement failed the Passivbot safety check')
-                if b'backtest_completion_ratio_min:' in excerpt and b'bound=1.0' in excerpt:
-                    error += '; strict completion limit 1.0 disagreed between GPU proxy and exact CPU results'
-        execution_error = error
         if not any(path.is_file() and not path.is_symlink() and path.stat().st_size > 0 for path in binaries):
-            return store.update(identifier, status='failed', error=error,
-                                exit_code=finished.get('exit_code'), completion_reason=reason,
-                                elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
+            return store.update(identifier, **outcome, collection_incomplete=False, collection_error=None, stop_finalization_pending=False)
     if status == 'cancelled' and len(binaries) == 1 and binaries[0].is_file() and binaries[0].stat().st_size == 0:
-        return store.update(identifier, status='cancelled', error=None,
-                            exit_code=finished.get('exit_code'), completion_reason=reason,
-                            elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
-    imported = import_results(store, identifier)
+        return store.update(identifier, **outcome, collection_incomplete=False, collection_error=None, stop_finalization_pending=False)
+    imported = import_results(store, identifier, **({'check': check} if check is not None else {}))
     store.update(identifier, **imported, exact_completed=imported.get('evaluations', state.get('exact_completed', 0)))
     observe(store, identifier, final=True)
-    return store.update(identifier, status=status, error=execution_error, exit_code=finished.get('exit_code'),
-                        completion_reason=automatic_reason if automatic_stop else reason if reason != 'convergence' else None,
-                        elapsed_seconds=finished.get('wall_seconds'), finished_at=finished.get('finished_at'))
+    return store.update(identifier, **outcome, collection_incomplete=False, collection_error=None, stop_finalization_pending=False)
+
+
+def stop_and_collect(connection, store, identifier, intent, *, lease_id=None):
+    """Bound Stop RPC, process wait and final collection across supervisor restarts."""
+    with advisory_file_lock(store.directory(identifier) / '.state-lock'):
+        state = store.read(identifier)
+        if state.get('stop_results_published'):
+            return True
+        send_stop = not state.get('stop_rpc_at')
+        if send_stop:
+            state = store.update(identifier, stop_rpc_at=time.time(),
+                                 status=state['status'] if state['status'] in {'completed', 'failed', 'cancelled'} else 'collecting',
+                                 stop_reason=state.get('stop_reason') if state['status'] in {'completed', 'failed', 'cancelled'} else state.get('stop_reason') or 'requested')
+    if send_stop:
+        try:
+            connection.operation('stop', timeout=max(.01, min(30, intent['deadline'] - time.time() - 15)))
+        except Exception as exc:
+            _log(SERVICE, 'Stop RPC incomplete; retaining bounded collection: ' + type(exc).__name__, level='WARNING')
+    wait_until = min(state['stop_rpc_at'] + 60, intent['deadline'] - 15)
+    progress = {}
+    if time.time() < wait_until and not state.get('final_collection_at'):
+        try:
+            progress = connection.operation('status', timeout=max(.01, min(30, wait_until - time.time())))
+        except Exception as exc:
+            _log(SERVICE, 'Stop status unavailable: ' + type(exc).__name__, level='WARNING')
+        if not progress.get('finished') and time.time() < wait_until:
+            return False
+    if not state.get('final_collection_at'):
+        state = store.update(identifier, final_collection_at=time.time())
+    deadline = min(state['final_collection_at'] + 180, intent['deadline'] - 15)
+    def remaining():
+        """Download and local publication share the persisted collection allowance."""
+        value = deadline - time.time()
+        if value <= 0:
+            raise VastError('Final collection deadline reached; retaining the last verified snapshot')
+        return value
+    finalized = False
+    collection_failed = False
+    try:
+        # A recovered supervisor publishes the already verified archive instead
+        # of downloading it again with a new or depleted allowance.
+        final = state.get('final_collected') or bool(progress.get('finished'))
+        if not state.get('stop_snapshot_collected') and not state.get('final_collected'):
+            connection.collect(final, timeout=remaining())
+            store.update(identifier, stop_snapshot_collected=True)
+        if final:
+            finalize_collected_results(store, identifier, check=remaining, preserve_execution=True)
+            finalized = True
+        else:
+            sources = store.directory(identifier) / 'partial-results/optimize_results'
+            if sources.is_dir():
+                imported = import_results(store, identifier, partial=True, check=remaining)
+                store.update(identifier, **imported)
+        store.update(identifier, collection_incomplete=not final, collection_error=None)
+        store.update(identifier, stop_results_published=True)
+    except Exception as exc:
+        _log(SERVICE, 'Final collection incomplete: ' + type(exc).__name__, level='WARNING')
+        collection_failed = True
+    if not finalized:
+        # Match every finalizer's Finalize-before-State order, then re-read
+        # collection and completion so a concurrent successful recovery wins.
+        with advisory_file_lock(store.directory(identifier) / '.finalize-lock'):
+            with advisory_file_lock(store.directory(identifier) / '.state-lock'):
+                current = store.read(identifier)
+                collected = bool(current.get('final_collected'))
+                if not collected:
+                    changes = {} if current['status'] in {'failed', 'completed', 'cancelled'} else {'status': 'cancelled'}
+                    if collection_failed:
+                        changes.update(collection_incomplete=True,
+                            collection_error='Final collection could not finish; available verified snapshots and logs are retained')
+                    if changes:
+                        store.update(identifier, **changes)
+            if collected:
+                _persist_finalization_error(store, identifier, preserve_execution=True)
+    if not lease_id:
+        store.control(identifier, 'cleanup')
+    return True
 
 
 def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> None:
@@ -412,8 +709,9 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
         if state.get("final_collected"):
             try:
                 finalize_collected_results(store, identifier)
-            except Exception:
-                store.update(identifier, status="failed", error="Raw results saved locally; result import needs retry")
+            except Exception as exc:
+                # The finalizer owns error persistence under its transaction lock.
+                _log(SERVICE, 'Final result import requires retry: ' + type(exc).__name__, level='WARNING')
             if not lease_id:
                 store.control(identifier, "cleanup")
             return
@@ -508,13 +806,21 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                     store.control(identifier, "cleanup")
                 return
             if not state.get("uploaded"):
-                if digest(directory / "input.tar.gz") != job_intent["bundle_sha256"]:
-                    raise VastError("Local input bundle changed after authorization", 422)
+                connection.verify_upload_input(job_intent['bundle_sha256'], timeout=max(1, int(intent['deadline'] - time.time() - UPLOAD_FINISH_RESERVE_SECONDS)))
                 attempts = int(state.get("upload_attempts", 0))
                 store.update(identifier, upload_attempts=attempts + 1, upload_retry_at=None)
                 connection.upload(timeout=max(1, int(intent["deadline"] - time.time() - UPLOAD_FINISH_RESERVE_SECONDS)))
                 store.update(identifier, uploaded=True, error=None, upload_recovery_since=None,
                              upload_retry_at=None, upload_retry_failures=0, upload_retry_bytes=0)
+            control = store.read(identifier, 'control.json')
+            if lease_id and store.read(lease_id, 'control.json')['stop']:
+                store.control(identifier, 'stop')
+                control['stop'] = True
+            if control['stop']:
+                if stop_and_collect(connection, store, identifier, intent, lease_id=lease_id):
+                    return
+                time.sleep(1)
+                continue
             progress = connection.operation("status")
             if state.get('kind') == 'calibration' and isinstance(progress.get('calibration'), dict):
                 state = store.update(identifier, calibration_result=progress['calibration'])

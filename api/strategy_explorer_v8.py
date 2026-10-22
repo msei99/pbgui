@@ -418,7 +418,7 @@ def _request_parts(
 def _unavailable_snapshot(
     config: dict[str, Any], capabilities: dict[str, Any], detail: str, options: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Return a renderable config snapshot when native market data is unavailable."""
+    """Keep config editable after a native failure without guessing candle availability."""
     options = options if isinstance(options, dict) else {}
     backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
     live = config.get("live") if isinstance(config.get("live"), dict) else {}
@@ -473,10 +473,10 @@ def _unavailable_snapshot(
             "coin": str(options.get("coin") or (coins[0] if coins else "")),
             "reference_price": 100.0,
             "engine_status": "PB8 snapshot unavailable",
-            "ohlcv_status": "No valid local PB8 candles for the selected config window",
+            "ohlcv_status": "Candle availability unknown: native snapshot failed",
             "metadata": {
                 "ohlcv": {
-                    "rows": 0,
+                    "rows": None,
                     "selected_start": str(options.get("start_date") or backtest.get("start_date") or ""),
                 }
             },
@@ -491,7 +491,7 @@ def _unavailable_snapshot(
         "messages": [
             {
                 "level": "error",
-                "text": f"PB8 snapshot unavailable: {str(detail or 'no valid local market data')}",
+                "text": f"PB8 snapshot unavailable: {str(detail or 'native snapshot calculation failed')}",
             }
         ],
     }

@@ -3,6 +3,42 @@ from pathlib import Path
 import subprocess
 
 
+def test_observer_summary_typed_progress_and_legacy_fallback():
+    """Exercise production summary helpers with deliberately asymmetric reports."""
+    root = Path(__file__).resolve().parents[1]
+    source = (root / 'frontend/js/pb8_loop_optimizer.js').read_text()
+    helpers = source[source.index('  function observerProgress('):source.index('  function overviewValue(')]
+    script = r"""
+const assert=require('node:assert/strict');
+function numeric(value){return String(value);}
+""" + helpers + r"""
+const run={observer_enabled:true,observer_jobs:[],observer_selections:[{round:0,status:'waiting',completed:2,expected:99}]};
+for(const kind of ['observer_holdout','observer_full_range'])for(let i=0;i<5;i++)run.observer_jobs.push({
+ round:0,kind,candidate_id:'c'+i,operation:kind+i,status:i<(kind==='observer_holdout'?2:4)?'complete':'running',
+ report_done:true,simulation_complete:i<1,metrics:{gain:7,drawdown:.1}});
+assert.match(observerSummary(run,0,'observer_holdout'),/Holdouts · 2\/5 recorded terminal · 1 complete/);
+assert.match(observerSummary(run,0,'observer_full_range'),/Full Time Range · 4\/5 recorded terminal · 1 complete/);
+assert.ok(!observerSummary(run,0,'observer_full_range').includes('99'));
+delete run.observer_selections;
+assert.equal(selectedObserver(run,0,'observer_full_range'),undefined); // no arbitrary first job
+run.observer_jobs.find(j=>j.operation==='observer_full_range0').selected_for_full_range=true;
+assert.equal(observerSummary(run,0,'observer_full_range'),'7 × / 10 %');
+run.history=[{round:0,winner_operation:null,winner_candidate_id:null}];
+assert.equal(selectedObserver(run,0,'observer_full_range'),undefined);
+run.history=[{round:0,winner_operation:'train',winner_candidate_id:'c0',observations:[{operation:'train',candidate_id:'c0'}]}];
+run.jobs=[{operation:'train',round:0,kind:'validation',status:'complete'}];
+assert.equal(observerSummary(run,0,'observer_full_range'),'7 × / 10 %');
+run.observer_summaries=[{round:0,kind:'observer_holdout',status:'disabled'},
+ {round:0,kind:'observer_full_range',status:'selected',operation:'observer_full_range0',source_round:0}];
+assert.equal(observerSummary(run,0,'observer_holdout'),'Holdout disabled');
+assert.equal(observerSummary(run,0,'observer_full_range'),'7 × / 10 %');
+run.observer_summaries[1]={round:0,kind:'observer_full_range',status:'unavailable',terminal:5,expected:5,successful:3,report_failed:2};
+assert.match(observerSummary(run,0,'observer_full_range'),/No complete Full Time Range · 5\/5 terminal · 3 complete · 2 report errors/);
+"""
+    result = subprocess.run(['node', '-e', script], cwd=root, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_loop_comparison_ignores_stale_owner_and_result_responses():
     """Late replies cannot overwrite a newer panel, run or comparison request."""
     root=Path(__file__).resolve().parents[1]

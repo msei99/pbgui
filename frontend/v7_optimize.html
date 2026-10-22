@@ -22,11 +22,12 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/optimize_editor_adapter.js?v=16"></script>
 <script src="/app/js/floating_window.js?v=1"></script>
-<link rel="stylesheet" href="/app/css/ai_loop_templates.css?v=5">
+<link rel="stylesheet" href="/app/css/ai_loop_templates.css?v=6">
 <script src="/app/js/ai_loop_windows.js?v=1"></script>
-<script src="/app/js/ai_loop_templates.js?v=14"></script>
+<script src="/app/js/ai_loop_templates.js?v=15"></script>
 <script src="/app/js/pb8_loop_instructions.js?v=2"></script>
-<script src="/app/js/pb8_loop_optimizer.js?v=62"></script>
+<script src="/app/js/loop_gpu_replacement.js?v=1"></script>
+<script src="/app/js/pb8_loop_optimizer.js?v=64"></script>
 <link rel="stylesheet" href="/app/css/pb8_loop_optimizer.css?v=15">
 <style>
 :root {
@@ -2444,34 +2445,35 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
   </div>
   <div class="modal-body">
     <h4>Local execution</h4>
+    <p id="settings-load-status" class="muted-line" role="status" aria-live="polite">Loading queue settings…</p>
     <div class="settings-stack">
       <div class="modal-field">
         <label for="settings-cpu-value"><span data-tip="CPU value autostart will enforce before launching a queued optimize config (writes optimize.n_cpus right before start).">Autostart CPU</span></label>
         <div class="settings-stepper">
           <span class="muted-line">CPU</span>
-          <button class="btn" type="button" id="btn-settings-cpu-down">−</button>
-          <input id="settings-cpu-value" class="panel-input" type="number" min="1" step="1" inputmode="numeric">
-          <button class="btn" type="button" id="btn-settings-cpu-up">+</button>
-          <span class="muted-line">max <span id="settings-cpu-max">1</span></span>
+          <button class="btn" type="button" id="btn-settings-cpu-down" disabled>−</button>
+          <input id="settings-cpu-value" disabled class="panel-input" type="number" min="1" step="1" inputmode="numeric">
+          <button class="btn" type="button" id="btn-settings-cpu-up" disabled>+</button>
+          <span class="muted-line">max <span id="settings-cpu-max">—</span></span>
         </div>
         <div class="muted-line" id="settings-cpu-effective">Autostart uses: -</div>
       </div>
       <label class="toggle" for="settings-cpu-override">
-        <input id="settings-cpu-override" type="checkbox">
+        <input id="settings-cpu-override" disabled type="checkbox">
         <span data-tip="If enabled, autostart rewrites optimize.n_cpus right before launch. If disabled, PBGui uses the n_cpus already stored in each config.">Override config CPU</span>
       </label>
       <label class="toggle" for="settings-use-pbgui-market-data">
-        <input id="settings-use-pbgui-market-data" type="checkbox">
+        <input id="settings-use-pbgui-market-data" disabled type="checkbox">
         <span data-tip="If enabled, PBGui rewrites backtest.ohlcv_source_dir to the PBGui market data path right before launching a queued optimize config.">Use PBGui Market Data</span>
       </label>
       <label class="toggle" for="settings-autostart">
-        <input id="settings-autostart" type="checkbox">
+        <input id="settings-autostart" disabled type="checkbox">
         <span data-tip="When enabled, PBGui starts the next queued optimize job automatically once no other optimize is running.">Autostart</span>
       </label>
     </div>
     <div class="modal-actions">
       <button class="btn ghost" id="btn-settings-cancel">Cancel</button>
-      <button class="btn primary" id="btn-settings-save">Save</button>
+      <button class="btn primary" id="btn-settings-save" disabled>Save</button>
     </div>
   </div>
 </section>
@@ -2857,9 +2859,17 @@ var state = {
     strategy_defaults: {},
     optimize_defaults: {}
   },
-  settingsModalDirty: false,
-  settingsModalCpuDirty: false,
-  settingsModalCpuOverrideDirty: false,
+  settingsDirtyFields: {},
+  settingsEditVersions: {},
+  settingsPushVersions: {},
+  settingsWrittenFields: {},
+  settingsLoaded: false,
+  settingsError: '',
+  settingsRequest: null,
+  settingsSaveSeq: 0,
+  settingsSaving: false,
+  settingsLifecycle: 0,
+  settingsDisposed: false,
   queueDragFilename: '',
   queueDragFilenames: [],
   queueDropFilename: '',
@@ -11581,7 +11591,7 @@ function setPanel(panel, vastView) {
   if (panel === 'vast' && !optimizeEditorAdapter.isV8) panel = 'settings';
   if (state.panel === 'vast' && panel !== 'vast' && window.PBGuiVast) window.PBGuiVast.hideSettings();
   if (panel === 'vast' && ['offers','rental','hosts','performance','account'].includes(vastView)) state.vastView = vastView;
-  if (panel === 'settings' && state.panel !== 'settings') syncQueueSettingsModalFields();
+  if (panel === 'settings') loadSettings();
   el('settings-modal').classList.toggle('open', panel === 'settings');
   if (state.panel !== panel) state.navigationSeq += 1;
   state.panel = panel;
@@ -13939,28 +13949,83 @@ function closeLogPanel() {
   }
 }
 
-async function loadSettings() {
-  var requestSeq = ++state.settingsLoadSeq;
-  var pushSeq = state.settingsPushSeq;
-  var navigationSeq = state.navigationSeq;
-  var settings;
-  try {
-    settings = await apiFetch('/settings');
-  } catch (error) {
-    if (handlePb8RuntimeUnavailable(error)) return;
-    throw error;
+function queueSettingsFields() {
+  return {cpu: 'settings-cpu-value', autostart: 'settings-autostart',
+    cpu_override: 'settings-cpu-override', use_pbgui_market_data: 'settings-use-pbgui-market-data'};
+}
+
+function validateQueueSettings(settings) {
+  if (!settings || typeof settings !== 'object' ||
+      !Number.isSafeInteger(settings.cpu) || settings.cpu < 1 ||
+      !Number.isSafeInteger(settings.cpu_max) || settings.cpu_max < 1 ||
+      !Number.isSafeInteger(settings.host_cpu_count) || settings.host_cpu_count < 1 ||
+      ['autostart', 'cpu_override', 'use_pbgui_market_data'].some(function(key) {
+        return typeof settings[key] !== 'boolean';
+      })) throw new Error('Invalid queue settings response.');
+}
+
+function cancelQueueSettingsLoad() {
+  state.settingsLoadSeq += 1;
+  var request = state.settingsRequest;
+  state.settingsRequest = null;
+  if (request) {
+    window.clearTimeout(request.timer);
+    request.controller.abort();
+    request.cancel();
   }
-  if (requestSeq !== state.settingsLoadSeq || navigationSeq !== state.navigationSeq) return;
-  var mutableQueueSettings = ['autostart', 'cpu', 'cpu_override', 'use_pbgui_market_data'];
-  var queueSettingsWerePushed = pushSeq !== state.settingsPushSeq;
-  var settingsOpen = el('settings-modal').classList.contains('open');
-  var settingsDirty = settingsOpen && (state.settingsModalDirty || state.settingsModalCpuDirty || state.settingsModalCpuOverrideDirty);
-  Object.keys(settings || {}).forEach(function(key) {
-    if ((queueSettingsWerePushed || settingsDirty) && mutableQueueSettings.indexOf(key) >= 0) return;
-    state.settings[key] = settings[key];
+}
+
+function loadSettings() {
+  if (state.settingsDisposed || state.settingsSaving) return Promise.resolve();
+  if (state.settingsRequest) return state.settingsRequest.promise;
+  var request = {seq: ++state.settingsLoadSeq, lifecycle: state.settingsLifecycle,
+    saveSeq: state.settingsSaveSeq, controller: new AbortController()};
+  var pushed = Object.assign({}, state.settingsPushVersions);
+  state.settingsRequest = request;
+  state.settingsError = '';
+  var deadline = new Promise(function(resolve, reject) {
+    request.cancel = function() { var error = new Error('Settings request cancelled.'); error.name = 'AbortError'; reject(error); };
+    request.timer = window.setTimeout(function() {
+      request.controller.abort();
+      reject(new Error('Queue settings timed out after 30 seconds. Reopen Queue Settings to retry.'));
+    }, 30000);
   });
-  if (settingsOpen && !settingsDirty) syncQueueSettingsModalFields();
-  updateMetaCounts();
+  function isCurrent() {
+    return state.settingsRequest === request && request.seq === state.settingsLoadSeq &&
+      request.lifecycle === state.settingsLifecycle && request.saveSeq === state.settingsSaveSeq && !state.settingsDisposed;
+  }
+  request.promise = (async function() {
+    try {
+      var settings = await Promise.race([apiFetch('/settings', {signal: request.controller.signal}), deadline]);
+      if (!isCurrent()) return;
+      validateQueueSettings(settings);
+      Object.keys(settings).forEach(function(key) {
+        if (Object.prototype.hasOwnProperty.call(queueSettingsFields(), key) &&
+            !state.settingsWrittenFields[key] && pushed[key] !== state.settingsPushVersions[key]) return;
+        state.settings[key] = settings[key];
+      });
+      // Only a validated GET establishes the persisted settings/CPU-limit basis.
+      state.settingsLoaded = true;
+      updateMetaCounts();
+    } catch (error) {
+      if (!isCurrent() || error.name === 'AbortError') return;
+      state.settingsError = error.message || 'Unable to load queue settings.';
+      // The persistent field status owns this error; do not toast once per caller.
+      console.error(error);
+      handlePb8RuntimeUnavailable(error);
+    } finally {
+      window.clearTimeout(request.timer);
+      if (isCurrent()) {
+        state.settingsRequest = null;
+        syncQueueSettingsModalFields();
+        // A conflicting push can describe a write after this GET's snapshot.
+        // Coalesce those events into one subsequent read, never retry errors.
+        if (request.invalidated && !state.settingsError) await loadSettings();
+      }
+    }
+  })();
+  syncQueueSettingsModalFields();
+  return request.promise;
 }
 
 async function loadConfigs() {
@@ -14417,76 +14482,102 @@ async function editSelectedConfig() {
 }
 
 async function updateAutostart(enabled) {
-  await apiFetch('/settings', {
-    method: 'POST',
-    body: JSON.stringify({ autostart: !!enabled })
-  });
-  state.settings.autostart = !!enabled;
-  updateMetaCounts();
-  toast('Queue settings updated.', 'ok');
+  return persistQueueSettings({autostart: !!enabled});
+}
+
+function markQueueSettingsEdited(key) {
+  state.settingsDirtyFields[key] = true;
+  state.settingsEditVersions[key] = (state.settingsEditVersions[key] || 0) + 1;
+  syncQueueSettingsModalFields();
 }
 
 function syncQueueSettingsModalFields() {
-  var cpuMax = normalizeOptimizePositiveInteger(state.settings.cpu_max || state.settings.host_cpu_count) || 1;
-  var cpu = normalizeOptimizePositiveInteger(state.settings.cpu) || 1;
-  el('settings-cpu-value').value = String(Math.max(1, Math.min(cpu, cpuMax)));
-  el('settings-cpu-max').textContent = String(cpuMax);
-  el('settings-autostart').checked = normalizeAutostart(state.settings.autostart);
-  el('settings-cpu-override').checked = !!state.settings.cpu_override;
-  el('settings-use-pbgui-market-data').checked = !!state.settings.use_pbgui_market_data;
-
-  var override = !!el('settings-cpu-override').checked;
-  el('settings-cpu-value').disabled = false;
-  el('btn-settings-cpu-down').disabled = false;
-  el('btn-settings-cpu-up').disabled = false;
-  el('settings-cpu-effective').textContent = override
-    ? ('Autostart uses: ' + (normalizeOptimizePositiveInteger(el('settings-cpu-value').value) || 1) + ' CPU')
-    : ('Autostart uses: config value (saved override: '
-      + (normalizeOptimizePositiveInteger(el('settings-cpu-value').value) || 1) + ' CPU)');
+  var ready = state.settingsLoaded && !state.settingsError && !state.settingsDisposed;
+  var cpuMax = ready ? state.settings.cpu_max : null;
+  Object.keys(queueSettingsFields()).forEach(function(key) {
+    var input = el(queueSettingsFields()[key]);
+    input.disabled = !ready;
+    if (!state.settingsDirtyFields[key]) {
+      if (key === 'cpu') input.value = state.settingsLoaded ? String(state.settings.cpu) : '';
+      else input.checked = state.settingsLoaded ? !!state.settings[key] : false;
+    }
+  });
+  el('settings-cpu-max').textContent = state.settingsLoaded ? String(state.settings.cpu_max) : '—';
+  el('btn-settings-cpu-down').disabled = !ready;
+  el('btn-settings-cpu-up').disabled = !ready;
+  var cpu = Number(el('settings-cpu-value').value);
+  var invalidCpu = ready && (!Number.isSafeInteger(cpu) || cpu < 1 || cpu > cpuMax);
+  var status = el('settings-load-status');
+  status.textContent = state.settingsError || (state.settingsRequest ? 'Loading queue settings…' :
+    (!state.settingsLoaded ? 'Queue settings have not loaded.' :
+      (invalidCpu ? 'Enter a whole CPU value from 1 to ' + cpuMax + '.' : '')));
+  status.hidden = !status.textContent;
+  el('btn-settings-save').disabled = !ready || !!state.settingsRequest || state.settingsSaving || invalidCpu;
+  el('settings-cpu-effective').textContent = !state.settingsLoaded ? 'Autostart uses: —' :
+    (el('settings-cpu-override').checked ? ('Autostart uses: ' + el('settings-cpu-value').value + ' CPU') :
+      ('Autostart uses: config value (saved override: ' + el('settings-cpu-value').value + ' CPU)'));
 }
 
 function openQueueSettingsModal() {
-  state.settingsModalDirty = false;
-  state.settingsModalCpuDirty = false;
-  state.settingsModalCpuOverrideDirty = false;
-  syncQueueSettingsModalFields();
   setPanel('settings');
 }
 
 function adjustQueueSettingsCpu(delta) {
-  if (el('settings-cpu-value').disabled) return;
   var input = el('settings-cpu-value');
-  var cpuMax = normalizeOptimizePositiveInteger(state.settings.cpu_max || state.settings.host_cpu_count) || 1;
-  var next = (parseInt(input.value, 10) || 1) + delta;
-  if (next < 1) next = 1;
-  if (next > cpuMax) next = cpuMax;
-  input.value = String(next);
-  // Keep state in sync so modal doesn't jump back on refresh/focus.
-  state.settings.cpu = next;
-  state.settingsModalDirty = true;
-  state.settingsModalCpuDirty = true;
+  if (input.disabled) return;
+  var next = Number(input.value) + delta;
+  input.value = String(Math.max(1, Math.min(next, state.settings.cpu_max)));
+  markQueueSettingsEdited('cpu');
+}
+
+async function persistQueueSettings(payload) {
+  if (!state.settingsLoaded || state.settingsError || state.settingsRequest || state.settingsDisposed || state.settingsSaving) return;
+  if (Object.prototype.hasOwnProperty.call(payload, 'cpu') &&
+      (!Number.isSafeInteger(payload.cpu) || payload.cpu < 1 || payload.cpu > state.settings.cpu_max)) {
+    syncQueueSettingsModalFields();
+    return;
+  }
+  state.settingsSaving = true;
+  var saveSeq = ++state.settingsSaveSeq;
+  var lifecycle = state.settingsLifecycle;
+  var edits = Object.assign({}, state.settingsEditVersions);
+  var saved = false;
   syncQueueSettingsModalFields();
+  try {
+    await apiFetch('/settings', {method: 'POST', body: JSON.stringify(payload)});
+    if (state.settingsDisposed || lifecycle !== state.settingsLifecycle || saveSeq !== state.settingsSaveSeq) return;
+    Object.keys(payload).forEach(function(key) {
+      state.settingsWrittenFields[key] = true;
+      state.settings[key] = payload[key];
+      if (edits[key] === state.settingsEditVersions[key]) delete state.settingsDirtyFields[key];
+    });
+    saved = true;
+    updateMetaCounts();
+    toast('Queue settings updated.', 'ok');
+  } catch (error) {
+    if (state.settingsDisposed || lifecycle !== state.settingsLifecycle || saveSeq !== state.settingsSaveSeq) return;
+    // A lost write response needs a fresh persisted basis before another Save.
+    state.settingsError = 'Unable to save queue settings. Reopen Queue Settings to revalidate.';
+    throw error;
+  } finally {
+    if (lifecycle === state.settingsLifecycle && saveSeq === state.settingsSaveSeq) {
+      state.settingsSaving = false;
+      // Queue pushes have no server revision and can have been read before the
+      // write committed. Revalidate after the acknowledgement, preserving drafts.
+      if (saved) await loadSettings();
+      else syncQueueSettingsModalFields();
+    }
+  }
 }
 
 async function saveQueueSettingsFromModal() {
+  // Also guard direct/programmatic calls independently of the disabled button.
+  if (!state.settingsLoaded || state.settingsError || state.settingsRequest || state.settingsDisposed || state.settingsSaving) return;
   var cpuOverride = !!el('settings-cpu-override').checked;
-  var cpu = normalizeOptimizePositiveInteger(el('settings-cpu-value').value) || 1;
-  var cpuMax = normalizeOptimizePositiveInteger(state.settings.cpu_max || state.settings.host_cpu_count) || 1;
-  cpu = Math.max(1, Math.min(cpu, cpuMax));
+  var cpu = Number(el('settings-cpu-value').value);
   var autostart = !!el('settings-autostart').checked;
   var usePbguiMarketData = !!el('settings-use-pbgui-market-data').checked;
-  await apiFetch('/settings', {
-    method: 'POST',
-    body: JSON.stringify({ cpu: cpu, autostart: autostart, cpu_override: cpuOverride, use_pbgui_market_data: usePbguiMarketData })
-  });
-  state.settings.cpu = cpu;
-  state.settings.autostart = autostart;
-  state.settings.cpu_override = cpuOverride;
-  state.settings.use_pbgui_market_data = usePbguiMarketData;
-  state.settingsModalDirty = false;
-  state.settingsModalCpuDirty = false;
-  state.settingsModalCpuOverrideDirty = false;
-  toast('Queue settings updated.', 'ok');
+  await persistQueueSettings({ cpu: cpu, autostart: autostart, cpu_override: cpuOverride, use_pbgui_market_data: usePbguiMarketData });
 }
 
 async function queueAction(path, method, ambiguousIntent) {
@@ -14567,11 +14658,18 @@ function scheduleOptimizeLiveResults() {
 function attachEventHandlers() {
   scheduleOptimizeLiveResults();
   window.addEventListener('pagehide', function() {
+    state.settingsDisposed = true;
+    state.settingsLifecycle += 1;
+    state.settingsSaveSeq += 1;
+    state.settingsSaving = false;
+    cancelQueueSettingsLoad();
     if (state.livePanelRefreshTimer) window.clearInterval(state.livePanelRefreshTimer);
     state.livePanelRefreshTimer = null;
   });
   window.addEventListener('pageshow', function(event) {
+    state.settingsDisposed = false;
     scheduleOptimizeLiveResults();
+    if (event && event.persisted) loadSettings();
     if (state.initialLoadPending) return;
     if (event && event.persisted) {
       refreshOptimizePageOnReturn();
@@ -14706,39 +14804,10 @@ function attachEventHandlers() {
   el('btn-settings-cpu-up').addEventListener('click', function() {
     adjustQueueSettingsCpu(1);
   });
-  el('settings-cpu-value').addEventListener('input', function() {
-    if (el('settings-cpu-value').disabled) return;
-    var cpuMax = normalizeOptimizePositiveInteger(state.settings.cpu_max || state.settings.host_cpu_count) || 1;
-    var cpu = normalizeOptimizePositiveInteger(el('settings-cpu-value').value) || 1;
-    cpu = Math.max(1, Math.min(cpu, cpuMax));
-    state.settings.cpu = cpu;
-    state.settingsModalDirty = true;
-    state.settingsModalCpuDirty = true;
-    syncQueueSettingsModalFields();
-  });
-  el('settings-cpu-value').addEventListener('blur', function() {
-    if (el('settings-cpu-value').disabled) return;
-    var cpuMax = normalizeOptimizePositiveInteger(state.settings.cpu_max || state.settings.host_cpu_count) || 1;
-    var cpu = normalizeOptimizePositiveInteger(el('settings-cpu-value').value) || 1;
-    cpu = Math.max(1, Math.min(cpu, cpuMax));
-    el('settings-cpu-value').value = String(cpu);
-    state.settings.cpu = cpu;
-    state.settingsModalDirty = true;
-    state.settingsModalCpuDirty = true;
-    syncQueueSettingsModalFields();
-  });
-  el('settings-cpu-override').addEventListener('change', function() {
-    state.settings.cpu_override = !!el('settings-cpu-override').checked;
-    state.settingsModalDirty = true;
-    state.settingsModalCpuOverrideDirty = true;
-    syncQueueSettingsModalFields();
-  });
-  el('settings-use-pbgui-market-data').addEventListener('change', function() {
-    state.settings.use_pbgui_market_data = !!el('settings-use-pbgui-market-data').checked;
-    state.settingsModalDirty = true;
-  });
-  el('settings-autostart').addEventListener('change', function() {
-    state.settingsModalDirty = true;
+  Object.keys(queueSettingsFields()).forEach(function(key) {
+    el(queueSettingsFields()[key]).addEventListener(key === 'cpu' ? 'input' : 'change', function() {
+      if (!this.disabled) markQueueSettingsEdited(key);
+    });
   });
   el('btn-close-plot').addEventListener('click', closeAllModals);
   el('btn-editor-format').addEventListener('click', function() {
@@ -14998,23 +15067,32 @@ function applyOptimizeQueueUpdate(msg) {
   var hadActiveOptimizeRuns = state.hadActiveOptimizeRuns;
   state.queuePushSeq += 1;
   state.queue = msg.items || [];
+  var revalidateSettings = false;
   if (msg.settings) {
     state.settingsPushSeq += 1;
-    state.settings.autostart = normalizeAutostart(msg.settings.autostart);
-    var settingsOpen = el('settings-modal').classList.contains('open');
-    if (Object.prototype.hasOwnProperty.call(msg.settings, 'cpu') && (!settingsOpen || !state.settingsModalCpuDirty)) {
-      state.settings.cpu = normalizeOptimizePositiveInteger(msg.settings.cpu) || state.settings.cpu;
-    }
-    if (Object.prototype.hasOwnProperty.call(msg.settings, 'cpu_override') && (!settingsOpen || !state.settingsModalCpuOverrideDirty)) {
-      var raw = msg.settings.cpu_override;
-      state.settings.cpu_override = raw === true || String(raw).toLowerCase() === 'true';
-    }
-    if (Object.prototype.hasOwnProperty.call(msg.settings, 'use_pbgui_market_data') && (!settingsOpen || !state.settingsModalDirty)) {
-      var rawPbguiData = msg.settings.use_pbgui_market_data;
-      state.settings.use_pbgui_market_data = rawPbguiData === true || String(rawPbguiData).toLowerCase() === 'true';
-    }
+    Object.keys(queueSettingsFields()).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(msg.settings, key)) return;
+      var value = key === 'cpu' ? normalizeOptimizePositiveInteger(msg.settings[key]) : normalizeAutostart(msg.settings[key]);
+      // Queue snapshots can precede an acknowledged local write. For fields
+      // written here, conflicting unversioned pushes invalidate, never replace,
+      // the persisted basis. The shared GET also observes other clients' writes.
+      if (state.settingsWrittenFields[key]) {
+        if (value !== state.settings[key]) revalidateSettings = true;
+        return;
+      }
+      state.settingsPushVersions[key] = (state.settingsPushVersions[key] || 0) + 1;
+      if (key === 'cpu') {
+        state.settings.cpu = normalizeOptimizePositiveInteger(msg.settings.cpu) || state.settings.cpu;
+      } else {
+        state.settings[key] = normalizeAutostart(msg.settings[key]);
+      }
+    });
   }
-  if (el('settings-modal').classList.contains('open') && !state.settingsModalDirty) syncQueueSettingsModalFields();
+  if (revalidateSettings) {
+    if (state.settingsRequest) state.settingsRequest.invalidated = true;
+    else loadSettings();
+  }
+  syncQueueSettingsModalFields();
   renderQueueMaybeDeferred();
   state.hadActiveOptimizeRuns = hasActiveOptimizeRuns();
   refreshLiveResultsDuringRun(state.hadActiveOptimizeRuns || hadActiveOptimizeRuns).catch(handleError);
@@ -15713,6 +15791,6 @@ window.PBGUI_NAV_CONFIG = {
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=3"></script>
 <script src="/app/js/optimizer_log_layout.js?v=5"></script>
-<script src="/app/js/vast.js?v=168"></script>
+<script src="/app/js/vast.js?v=175"></script>
 </body>
 </html>

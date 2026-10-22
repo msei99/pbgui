@@ -349,6 +349,7 @@ class OpenCodeDialog:
 
     async def run(self, instructions, content, output_tokens):
         """Bound HTTP rounds, context, cost and retries independently of tool quota."""
+        from pb8_loop_controller import owned_thread
         protocol = self.metadata['protocol']
         failure = ('evidence_recovery', 'The bounded provider dialog exhausted its correction or call allowance')
         for dialog in range(2):
@@ -366,12 +367,12 @@ class OpenCodeDialog:
                 payload = None
                 attempt = 0
                 while attempt < 3 and sent < 67:
-                    call_id = self.ledger.reserve(input_tokens, output_tokens, sha(body))
+                    call_id = await owned_thread(self.ledger.reserve, input_tokens, output_tokens, sha(body))
                     sent += 1
                     try:
-                        payload = await self.send(body, self.profile, self.ledger.remaining())
+                        payload = await self.send(body, self.profile, await owned_thread(self.ledger.remaining, ))
                     except StreamingUnavailable:
-                        self.ledger.timeout(call_id)
+                        await owned_thread(self.ledger.timeout, call_id)
                         if self.profile.get('streaming') is not True:
                             raise LoopAIPause('evidence_recovery', 'Provider rejected the fallback transport')
                         self.profile['streaming'] = False
@@ -380,7 +381,7 @@ class OpenCodeDialog:
                         input_tokens = check_context(body, self.profile, output_tokens, initial=_round == 0)
                         continue
                     except NativeToolsUnavailable:
-                        self.ledger.timeout(call_id)
+                        await owned_thread(self.ledger.timeout, call_id)
                         if self.profile.get('tool_mode') == 'json':
                             raise LoopAIPause('evidence_recovery', 'Provider rejected the fallback reader transport')
                         self.profile['tool_mode'] = 'json'
@@ -390,13 +391,13 @@ class OpenCodeDialog:
                         input_tokens = check_context(body, self.profile, output_tokens, initial=True)
                         continue
                     except (TimeoutError, ConnectionError, IncompleteResponse) as exc:
-                        self.ledger.timeout(call_id)
+                        await owned_thread(self.ledger.timeout, call_id)
                         attempt += 1
                         if attempt == 3:
                             raise LoopAIPause('evidence_recovery', 'Provider did not complete a response after bounded transport retries',
                                               error_type=type(exc).__name__) from exc
                         continue
-                    self.ledger.settle(call_id, payload.get('usage'))
+                    await owned_thread(self.ledger.settle, call_id, payload.get('usage'))
                     validate_native_reply(protocol, payload, self.settings['model'], output_tokens)
                     if self.profile.get('streaming') is False:
                         body.pop('stream', None)

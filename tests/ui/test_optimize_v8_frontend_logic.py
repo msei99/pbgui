@@ -1888,6 +1888,8 @@ def test_pb8_metadata_failure_shows_persistent_update_warning() -> None:
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
+        const window = {{setTimeout, clearTimeout}};
+        function syncQueueSettingsModalFields() {{}}
         const detail = {{textContent: ''}};
         const classes = new Set();
         const document = {{
@@ -1993,55 +1995,23 @@ def test_pb8_queue_settings_keep_the_complete_shared_controls() -> None:
     for control in ("settings-cpu-value", "settings-cpu-override", "settings-use-pbgui-market-data"):
         assert f'id="{control}"' in page
         assert control not in adapter.split("configureUi: function", 1)[1]
-    assert "JSON.stringify({ cpu: cpu, autostart: autostart, cpu_override: cpuOverride, use_pbgui_market_data: usePbguiMarketData })" in page
+    assert "await persistQueueSettings({ cpu: cpu, autostart: autostart, cpu_override: cpuOverride, use_pbgui_market_data: usePbguiMarketData })" in page
 
 
 def test_queue_cpu_can_be_edited_before_override_is_enabled() -> None:
-    """The saved autostart CPU remains editable while the override is inactive."""
-    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
-    functions = "\n\n".join(
-        _page_function(page, name)
-        for name in ("syncQueueSettingsModalFields", "adjustQueueSettingsCpu")
-    )
-    script = textwrap.dedent(
-        f"""
-        const assert = require('node:assert/strict');
-        const nodes = {{
-          'settings-cpu-value': {{value: '', disabled: true}},
-          'settings-cpu-max': {{textContent: ''}},
-          'settings-autostart': {{checked: false}},
-          'settings-cpu-override': {{checked: false}},
-          'settings-use-pbgui-market-data': {{checked: false}},
-          'btn-settings-cpu-down': {{disabled: true}},
-          'btn-settings-cpu-up': {{disabled: true}},
-          'settings-cpu-effective': {{textContent: ''}}
-        }};
-        const state = {{
-          settings: {{cpu: 8, cpu_max: 16, host_cpu_count: 16, cpu_override: false}},
-          settingsModalDirty: false,
-          settingsModalCpuDirty: false
-        }};
-        function el(id) {{ return nodes[id]; }}
-        function normalizeOptimizePositiveInteger(value) {{
-          const parsed = Number(value);
-          return Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : null;
-        }}
-        function normalizeAutostart(value) {{ return !!value; }}
+    """A validated CPU remains editable without changing its persisted baseline."""
+    from test_optimizer_polling_frontend import _settings_harness
 
-        {functions}
-
-        syncQueueSettingsModalFields();
-        assert.equal(nodes['settings-cpu-value'].disabled, false);
-        assert.equal(nodes['btn-settings-cpu-down'].disabled, false);
-        assert.equal(nodes['btn-settings-cpu-up'].disabled, false);
-        assert.match(nodes['settings-cpu-effective'].textContent, /saved override: 8 CPU/);
-        adjustQueueSettingsCpu(1);
-        assert.equal(nodes['settings-cpu-value'].value, '9');
-        assert.equal(state.settings.cpu, 9);
-        assert.equal(state.settingsModalCpuDirty, true);
-        """
-    )
-    _run_node(script)
+    _run_node(_settings_harness() + r'''
+(async()=>{
+  const pending=loadSettings(); requests[0].resolve(saved()); await pending;
+  assert.equal(nodes['settings-cpu-value'].disabled,false);
+  assert.match(nodes['settings-cpu-effective'].textContent,/saved override: 8 CPU/);
+  adjustQueueSettingsCpu(1);
+  assert.equal(nodes['settings-cpu-value'].value,'9');
+  assert.equal(state.settings.cpu,8); assert.equal(state.settingsDirtyFields.cpu,true);
+})().catch(fail);
+''')
 
 
 def test_saving_a_queue_opened_config_refreshes_that_queue_snapshot() -> None:
@@ -2746,10 +2716,11 @@ def test_seed_runtime_unknown_overrides_and_pymoo_auto_execute_page_logic() -> N
 def test_request_generations_reject_stale_http_without_discarding_results_after_navigation() -> None:
     """Late HTTP responses stay isolated while panel navigation cannot discard a valid Results load."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
-    functions = "\n".join(_page_function(page, name) for name in ("loadSettings", "loadQueue", "loadResults"))
+    functions = "\n".join(_page_function(page, name) for name in ("queueSettingsFields", "validateQueueSettings", "loadSettings", "loadQueue", "loadResults"))
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
+        const window = {{setTimeout, clearTimeout}};
         const deferred = [];
         function apiFetch(path) {{ return new Promise((resolve) => deferred.push({{path, resolve}})); }}
         function el() {{ return {{classList: {{contains: () => false}}}}; }}
@@ -2762,21 +2733,24 @@ def test_request_generations_reject_stale_http_without_discarding_results_after_
         const optimizeEditorAdapter = {{resultsPath: '/results'}};
         const state = {{
           settings: {{strategy_bounds: {{custom: true}}, runtime_options: {{future: true}}}},
+          settingsPushVersions: {{}}, settingsDirtyFields: {{}}, settingsWrittenFields: {{}},
           queue: [{{filename: 'ws'}}], results: [], settingsLoadSeq: 0, settingsPushSeq: 0,
           queueLoadSeq: 0, queuePushSeq: 0, resultsLoadSeq: 0, resultsLoading: false, navigationSeq: 0
         }};
         {functions}
         (async () => {{
           const settingsLoad = loadSettings();
-           deferred[0].resolve({{cpu: 8}});
+           state.navigationSeq += 1;
+           deferred[0].resolve({{cpu: 8, cpu_max:16, host_cpu_count:16, autostart:false, cpu_override:false, use_pbgui_market_data:false}});
            await settingsLoad;
            assert.equal(state.settings.cpu, 8);
            assert.deepEqual(state.settings.strategy_bounds, {{custom: true}});
            const pushedSettings = loadSettings();
            state.settingsPushSeq += 1;
+           state.settingsPushVersions.cpu = 1;
            state.settings.cpu = 6;
            deferred[1].resolve({{
-             cpu: 2,
+             cpu: 2, autostart:false, cpu_override:false, use_pbgui_market_data:false,
              cpu_max: 16,
              host_cpu_count: 16,
              optimize_defaults: {{n_cpus: 16}}

@@ -6,7 +6,7 @@ import pytest
 
 from api.loop_optimizer_v8 import _observer_reports, projection
 from pb8_loop_controller import owned_thread
-from pb8_loop_observer import ObserverJobs, holdout_selection
+from pb8_loop_observer import ObserverJobs, holdout_selection, observer_display_selections, observer_summaries
 from tests.test_pb8_loop_observer import Backend, OWNER, record, reference
 
 
@@ -28,6 +28,223 @@ def candidates(store, row):
         jobs.append(job); observations.append(item)
     return store.update(OWNER, row['id'], lambda current: current.update(
         jobs=jobs, baseline=None, history=[{'round': 0, 'observations': observations}]))
+
+
+def test_independent_progress_counts_targets_and_report_ingestion(record):
+    """Count missing work, failures and unread reports independently of selection."""
+    store, row = record
+    row = candidates(store, row)
+    for index in (3, 4):
+        job = copy.deepcopy(row['jobs'][0])
+        job.update(operation=str(index + 1) * 32)
+        job['candidate']['id'] = 'candidate_' + str(index)
+        row['jobs'].append(job)
+        row['history'][0]['observations'].append({'operation': job['operation'], 'assessment': {'simulation_complete': True}})
+    row['history'][0].update(winner_operation=row['jobs'][0]['operation'], winner_candidate_id='candidate_0')
+    row = store.update(OWNER, row['id'], lambda current: current.update(row))
+    row = ObserverJobs(store, Backend(), owned_thread).plan(row)
+    # Work only with this in-memory fixture; never launch workers.
+    jobs = {(job['kind'], job['candidate_id']): job for job in row['observer_jobs']}
+    for index in range(4):
+        jobs['observer_full_range', 'candidate_' + str(index)].update(
+            status='complete', report_done=True, simulation_complete=True, metrics={'gain': 7, 'drawdown': .1})
+    jobs['observer_holdout', 'candidate_0'].update(status='failed', report_done=True)
+    jobs['observer_holdout', 'candidate_1'].update(status='skipped', report_done=True)
+    original = copy.deepcopy(row)
+    summaries = {item['kind']: item for item in observer_summaries(row) if item['round'] == 0}
+    assert (summaries['observer_holdout']['terminal'], summaries['observer_holdout']['successful']) == (2, 0)
+    assert (summaries['observer_full_range']['terminal'], summaries['observer_full_range']['successful']) == (4, 4)
+    assert summaries['observer_holdout']['expected'] == summaries['observer_full_range']['expected'] == 5
+    assert summaries['observer_full_range']['status'] == 'selected'
+    assert holdout_selection(row, 0)['status'] == 'waiting'
+    selected = [job for job in _observer_reports(row) if job['kind'] == 'observer_full_range' and job['selected_for_full_range']]
+    assert len(selected) == 1 and selected[0]['metrics']['gain'] == 7
+    assert row == original
+    # Missing jobs remain expected. Repeated targets do not inflate the denominator.
+    row['observer_jobs'].remove(jobs['observer_full_range', 'candidate_4'])
+    row['history'][0]['observations'].append(copy.deepcopy(row['history'][0]['observations'][0]))
+    assert next(item for item in observer_summaries(row) if item['kind'] == 'observer_full_range')['expected'] == 5
+    source = jobs['observer_full_range', 'candidate_0']
+    source.update(report_done=False)
+    summary = next(item for item in observer_summaries(row) if item['kind'] == 'observer_full_range')
+    assert summary['successful'] == 3 and summary['report_pending'] == 1 and summary['status'] == 'waiting'
+    source.update(report_done=True, simulation_complete=False, report_errors=3)
+    summary = next(item for item in observer_summaries(row) if item['kind'] == 'observer_full_range')
+    assert summary['report_pending'] == 0 and summary['report_failed'] == 1
+
+
+@pytest.mark.parametrize('field,value,enabled', [
+    ('observer_holdouts', [], False), ('observer_holdouts', [{}], True),
+    ('training_exclusions', [], False), ('training_exclusions', [{}], True),
+    ('holdouts', [], False), ('holdouts', [{}], True)])
+def test_summary_activation_matches_targets(record, field, value, enabled):
+    """Use the scheduler's precedence even when holdout_available would disagree."""
+    store, row = record
+    row = candidates(store, row)
+    for key in ('observer_holdouts', 'training_exclusions', 'holdouts'):
+        row.pop(key, None)
+    row[field] = value
+    summary = next(item for item in observer_summaries(row) if item['kind'] == 'observer_holdout')
+    assert (summary['status'] != 'disabled') == enabled
+    assert any(kind == 'observer_holdout' for _, _, kind in ObserverJobs.targets(row)) == enabled
+    if not enabled:
+        assert summary['expected'] == summary['terminal'] == 0
+
+
+@pytest.mark.parametrize('operation_mode', ['stored', 'job_only', 'legacy', 'foreign', 'conflicting_job'])
+def test_baseline_display_origin_and_aliases(record, operation_mode):
+    """Map verified baseline winners across rounds without persisting display aliases."""
+    store, row = record
+    row = reference(store, row, rounds=3)
+    operation = 'b' * 32
+    if operation_mode != 'legacy':
+        baseline_job = copy.deepcopy(row['jobs'][0])
+        baseline_job.update(kind='baseline', round=-1, operation=operation)
+        baseline_job['candidate']['id'] = 'baseline'
+        row['jobs'].append(baseline_job)
+        if operation_mode != 'job_only':
+            row['baseline']['operation'] = operation
+        if operation_mode == 'conflicting_job':
+            baseline_job['operation'] = 'x' * 32
+    else:
+        operation = 'baseline'
+    for history in row['history']:
+        history.update(winner_operation='foreign' if operation_mode == 'foreign' else operation,
+                       winner_candidate_id='baseline')
+    row = store.update(OWNER, row['id'], lambda current: current.update(row))
+    row = ObserverJobs(store, Backend(), owned_thread).plan(row)
+    for job in row['observer_jobs']:
+        if job['kind'] == 'observer_full_range' and job['round'] == -1:
+            job.update(status='complete', report_done=True, simulation_complete=True,
+                       metrics={'gain': 1.5, 'drawdown': .2})
+    original = copy.deepcopy(row)
+    selections = observer_display_selections(row)
+    reports = _observer_reports(row)
+    for number in (0, 1, 2):
+        selection = next(item for item in selections if item['round'] == number)
+        chosen = [item for item in reports if item['round'] == number and item['selected_for_full_range']]
+        if operation_mode in {'foreign', 'conflicting_job'}:
+            assert selection['status'] == 'unavailable' and not chosen
+            continue
+        assert selection['candidate_id'] == 'starting_config' and selection['source_round'] == -1
+        full = next(item for item in chosen if item['kind'] == 'observer_full_range')
+        assert full['ai_selected'] and full['source_round'] == -1
+        assert full['delta_start'] == full['delta_previous'] == {'gain': 0.0, 'drawdown': 0.0}
+        summary = next(item for item in observer_summaries(row) if item['round'] == number and item['kind'] == 'observer_full_range')
+        assert summary['status'] == 'selected'
+        assert summary['expected'] == 1 and summary['terminal'] == 0  # aliases aren't jobs
+    assert row == original
+
+
+@pytest.mark.parametrize('problem', ['empty', 'foreign', 'wrong_candidate', 'future', 'missing_operation'])
+def test_modern_invalid_selection_has_no_display_fallback(record, problem):
+    """No unrelated complete report may stand in for an invalid modern winner."""
+    store, row = record
+    _, row = retained_incumbent(store, row)
+    history = row['history'][1]
+    if problem == 'empty':
+        history.update(winner_operation=None, winner_candidate_id=None)
+    elif problem == 'foreign':
+        history['winner_operation'] = 'unknown'
+    elif problem == 'wrong_candidate':
+        history['winner_candidate_id'] = 'candidate_1'
+    elif problem == 'future':
+        row['jobs'][0]['round'] = 2
+    else:
+        history.pop('winner_operation')
+    assert next(item for item in observer_display_selections(row) if item['round'] == 1)['status'] == 'unavailable'
+    assert not any(item['selected_for_full_range'] for item in _observer_reports(row) if item['round'] == 1)
+
+
+def test_retained_full_range_does_not_wait_for_holdout_origin(record):
+    """A pending, disabled or unread Holdout never hides complete incumbent evidence."""
+    store, row = record
+    _, row = retained_incumbent(store, row)
+    for job in row['observer_jobs']:
+        if job['kind'] == 'observer_holdout':
+            job.update(report_done=False, simulation_complete=False)
+    row['observer_holdouts'] = []
+    reports = _observer_reports(row)
+    for number in (1, 2):
+        job = next(item for item in reports if item['round'] == number and item['kind'] == 'observer_full_range' and item['selected_for_full_range'])
+        assert job['source_round'] == 0 and job['delta_previous'] == {'gain': 0.0, 'drawdown': 0.0}
+    assert holdout_selection(row, 1)['status'] != 'selected'
+
+
+@pytest.mark.parametrize('status', ['failed', 'error', 'cancelled', 'stopped', 'skipped'])
+def test_terminal_reports_are_not_successful_simulations(record, status):
+    """Terminal failures and skips never contribute to the complete report count."""
+    store, row = record
+    row = candidates(store, row)
+    row = ObserverJobs(store, Backend(), owned_thread).plan(row)
+    for job in row['observer_jobs']:
+        job.update(status=status, report_done=True, simulation_complete=False)
+    for summary in observer_summaries(row):
+        assert summary['terminal'] == summary['expected'] == 3
+        assert summary['successful'] == summary['report_pending'] == 0
+        assert summary['status'] == 'unavailable'
+
+
+def test_unread_retained_origin_has_no_deltas_and_reports_its_own_pending_state(record):
+    """Current-round completion cannot hide pending or failed origin ingestion."""
+    store, row = record
+    _, row = retained_incumbent(store, row)
+    origin = next(job for job in row['observer_jobs'] if job['round'] == 0 and job['kind'] == 'observer_full_range')
+    origin['report_done'] = False
+    summary = next(item for item in observer_summaries(row) if item['round'] == 1 and item['kind'] == 'observer_full_range')
+    assert summary['status'] == 'waiting' and summary['selected_report_status'] == 'report pending'
+    projected = next(item for item in _observer_reports(row) if item['round'] == 1 and item['kind'] == 'observer_full_range' and item['selected_for_full_range'])
+    assert projected['delta_start'] == projected['delta_previous'] == {}
+    origin.update(report_done=True, simulation_complete=False, report_errors=3)
+    summary = next(item for item in observer_summaries(row) if item['round'] == 1 and item['kind'] == 'observer_full_range')
+    assert summary['status'] == 'unavailable' and summary['selected_report_status'] == 'report error'
+
+
+@pytest.mark.parametrize('winner', ['candidate', 'baseline'])
+def test_archive_roundtrip_preserves_independent_reports_and_display_aliases(record, winner):
+    """Hydrated archive reads keep winner reports independent of pending Holdouts."""
+    store, row = record
+    observer, row = retained_incumbent(store, row)
+    source_round = 0
+    candidate_id = 'candidate_0'
+    if winner == 'baseline':
+        source_round, candidate_id = -1, 'starting_config'
+        baseline_job = copy.deepcopy(row['jobs'][0])
+        baseline_job.update(kind='baseline', round=-1, operation='b' * 32)
+        baseline_job['candidate']['id'] = 'baseline'
+        row['jobs'].append(baseline_job)
+        row['baseline'] = {'operation': baseline_job['operation'],
+                           'assessment': {'simulation_complete': True}}
+        for history in row['history']:
+            history.update(winner_operation=baseline_job['operation'], winner_candidate_id='baseline')
+        row = store.update(OWNER, row['id'], lambda current: current.update(row))
+        row = observer.plan(row)
+    for job in row['observer_jobs']:
+        if job['kind'] == 'observer_holdout':
+            job.update(status='complete', report_done=False, simulation_complete=False)
+        elif job['round'] == source_round and job['candidate_id'] == candidate_id:
+            job.update(status='complete', report_done=True, simulation_complete=True,
+                       metrics={'gain': 1.5, 'drawdown': .2})
+    native_jobs = copy.deepcopy(row['observer_jobs'])
+    summaries, reports = observer_summaries(row), _observer_reports(row)
+    # The fixture store lives entirely below pytest's temporary directory.
+    store.write(row)
+    restored = store.read(OWNER, row['id'])
+    assert restored['observer_jobs'] == native_jobs
+    assert observer_summaries(restored) == summaries
+    assert _observer_reports(restored) == reports
+    assert projection(restored)['observer_summaries'] == summaries
+    metadata = next(item for item in store.list_metadata() if item['id'] == row['id'])
+    assert metadata['_metadata_only'] and metadata['observer_pending']
+    assert observer.pending(restored)
+    for number in (1, 2):
+        summary = next(item for item in summaries if item['round'] == number and item['kind'] == 'observer_full_range')
+        assert summary['status'] == 'selected' and summary['source_round'] == source_round
+        selected = next(item for item in reports if item['round'] == number
+                        and item['kind'] == 'observer_full_range' and item['selected_for_full_range'])
+        assert selected['source_round'] == source_round
+        assert selected['delta_previous'] == {'gain': 0.0, 'drawdown': 0.0}
+    assert len(restored['observer_jobs']) == len(native_jobs)  # aliases were never persisted
 
 
 class RankedBackend(Backend):

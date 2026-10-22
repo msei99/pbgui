@@ -8,6 +8,381 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def poll_cloud(page):
+    """Trigger the production return-to-view GET, without a manual refresh control."""
+    with page.expect_request('**/api/vast/jobs'):
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+
+
+@pytest.mark.parametrize('entry', ['detail', 'queue'])
+def test_job_stop_confirmation_lock_and_cancel(cloud_page, entry):
+    """Both Stop entrances lock before confirmation, survive polling and release on Cancel."""
+    page, data, calls, overrides, held = cloud_page
+    page.set_default_timeout(5000)
+    identifier = data['jobs'][0]['id']
+    data['jobs'][0].update(status='running', final_collected=True, result_partial=True)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    page.evaluate('''window.confirmations=0;
+      PBGuiDialogs.confirm=()=>{confirmations++;return new Promise(resolve=>window.confirmStop=resolve)}; void 0;''')
+    trigger = page.locator('#stop-job' if entry == 'detail' else '[title="Stop"]')
+    trigger.click()
+    assert page.evaluate('confirmations') == 1
+    assert page.locator('#stop-job').is_disabled()
+    assert page.locator('#recover-job').is_disabled()
+    assert page.locator('[title="Stop"]').is_disabled()
+    poll_cloud(page)
+    page.locator('#stop-job').evaluate("node=>node.dispatchEvent(new MouseEvent('click'))")
+    page.locator('[title="Stop"]').evaluate("node=>node.dispatchEvent(new MouseEvent('click'))")
+    assert page.evaluate('confirmations') == 1
+    page.evaluate('confirmStop(false)')
+    page.wait_for_function("!document.getElementById('stop-job').disabled")
+    assert not any(method == 'POST' and url.endswith('/stop') for method, url in calls)
+    overrides['/api/vast/jobs/' + identifier + '/stop'] = 'hold'
+    trigger.click()
+    page.evaluate('confirmStop(true)')
+    page.wait_for_function("document.getElementById('stop-job').textContent === 'Stopping…'")
+    poll_cloud(page)
+    page.locator('#recover-job').evaluate("node=>node.dispatchEvent(new MouseEvent('click'))")
+    assert sum(method == 'POST' and url.endswith('/stop') for method, url in calls) == 1
+    assert not any(method == 'POST' and url.endswith('/recover') for method, url in calls)
+    held.pop().fulfill(status=503, json={'detail': 'Isolated stop error'})
+    page.wait_for_function("!document.getElementById('stop-job').disabled")
+    assert page.locator('#queue-message').inner_text() == 'Isolated stop error'
+    assert page.locator('#recover-job').is_enabled()
+
+
+@pytest.mark.parametrize('change', ['ineligible', 'selection', 'roundtrip', 'pagehide'])
+def test_stop_rechecks_confirmation_context(cloud_page, change):
+    """A late confirmation cannot stop an ineligible job or revive an abandoned context."""
+    page, data, calls, _, _ = cloud_page
+    data['jobs'][0]['status'] = 'running'
+    data['jobs'].append(dict(data['jobs'][0], id='b'*32, config_name='other-test'))
+    page.reload()
+    page.locator('[title="Open log"]').first.click()
+    page.evaluate('PBGuiDialogs.confirm=()=>new Promise(resolve=>window.confirmStop=resolve); void 0')
+    page.locator('#stop-job').click()
+    if change == 'ineligible':
+        data['jobs'][0]['status'] = 'completed'
+        poll_cloud(page)
+        page.wait_for_function("PBGuiVast.queueItems()[0].cloudJob.status==='completed'")
+    elif change in {'selection', 'roundtrip'}:
+        page.locator('[title="Open log"]').nth(1).click()
+        if change == 'roundtrip':
+            page.locator('[title="Open log"]').first.click()
+    else:
+        page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}))")
+    page.evaluate('confirmStop(true)')
+    page.wait_for_timeout(50)
+    assert not any(method == 'POST' and url.endswith('/stop') for method, url in calls)
+
+
+@pytest.mark.parametrize('status,path,partial,error,eligible', [
+    ('failed', None, False, 'Raw results saved locally; result import needs retry', True),
+    ('failed', '/test/final', False, 'Raw results saved locally; result import needs retry', True),
+    ('completed', '/test/final', False, None, False),
+    ('failed', '/test/final', False, 'PB8 optimizer exited with code 1; see collected optimizer.log', False),
+    ('collecting', '/test/partial', True, None, True),
+])
+def test_recover_eligibility_and_inflight_lock(cloud_page, status, path, partial, error, eligible):
+    """Only unfinished publication or the exact technical retry state permits final import."""
+    page, data, calls, overrides, held = cloud_page
+    data['jobs'][0].update(status=status, final_collected=True, result_path=path, result_partial=partial, error=error)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    assert page.locator('#recover-job').is_enabled() is eligible
+    endpoint = '/api/vast/jobs/' + data['jobs'][0]['id'] + '/recover'
+    overrides[endpoint] = 'hold'
+    if not eligible:
+        page.locator('#recover-job').evaluate("node=>node.dispatchEvent(new MouseEvent('click'))")
+        assert not any(method == 'POST' and url.endswith('/recover') for method, url in calls)
+        return
+    page.locator('#recover-job').click()
+    assert page.locator('#recover-job').inner_text() == 'Importing results…'
+    poll_cloud(page)
+    page.locator('#recover-job').evaluate("node=>{node.dispatchEvent(new MouseEvent('click'));node.dispatchEvent(new MouseEvent('click'))}")
+    assert sum(method == 'POST' and url.endswith('/recover') for method, url in calls) == 1
+    data['jobs'][0].update(status='completed', result_path='/test/final', result_partial=False, error=None)
+    held.pop().fulfill(json={})
+    page.wait_for_function("document.getElementById('recover-job').textContent==='Retry result import'")
+    assert page.locator('#recover-job').is_disabled()
+    assert page.locator('#phase').inner_text() == 'completed'
+
+
+@pytest.mark.parametrize('status', ['completed', 'cancelled', 'failed'])
+def test_verified_stop_publication_error_recovers_without_relabeling_execution(cloud_page, status):
+    """A technical Stop publication error stays visible and retryable beside the real outcome."""
+    page, data, calls, overrides, held = cloud_page
+    error = 'PB8 optimizer exited with code 1; see collected optimizer.log' if status == 'failed' else None
+    job = data['jobs'][0]
+    job.update(status=status, final_collected=True, result_path='/test/final', result_partial=False,
+        error=error, collection_incomplete=True, collection_error='Isolated publication timeout')
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    assert page.locator('#recover-job').is_enabled()
+    assert page.locator('#phase').inner_text() == status
+    assert 'Isolated publication timeout' in page.locator('#log-panel').inner_text()
+    if error:
+        assert error in page.locator('#log-panel').inner_text()
+    endpoint = '/api/vast/jobs/' + job['id'] + '/recover'
+    overrides[endpoint] = 'hold'
+    page.locator('#recover-job').click()
+    assert page.locator('#recover-job').is_disabled()
+    job.update(collection_incomplete=False, collection_error=None)
+    held.pop().fulfill(json={})
+    page.wait_for_function("document.getElementById('recover-job').textContent==='Retry result import'")
+    assert page.locator('#recover-job').is_disabled()
+    assert page.locator('#phase').inner_text() == status
+    assert sum(method == 'POST' and url.endswith('/recover') for method, url in calls) == 1
+
+
+@pytest.mark.parametrize('response_status', [200, 500])
+def test_independent_job_actions_preserve_new_selection(cloud_page, response_status):
+    """A held request cannot disable a different job or restore the initiating job's dashboard."""
+    page, data, calls, overrides, held = cloud_page
+    data['jobs'][0].update(status='failed', final_collected=True)
+    data['jobs'].append(dict(data['jobs'][0], id='b'*32, config_name='other-test', status='running', final_collected=False))
+    page.reload()
+    page.locator('[title="Open log"]').first.click()
+    overrides['/api/vast/jobs/' + 'a'*32 + '/recover'] = 'hold'
+    page.locator('#recover-job').click()
+    page.locator('[title="Open log"]').nth(1).click()
+    assert page.locator('#stop-job').is_enabled()
+    overrides['/api/vast/jobs/' + 'b'*32 + '/stop'] = 'hold'
+    page.locator('#stop-job').click()
+    page.wait_for_function("document.getElementById('stop-job').textContent==='Stopping…'")
+    page.wait_for_timeout(50)
+    recover = next(route for route in held if route.request.url.endswith('/recover'))
+    recover.fulfill(status=response_status, json={'detail':'Old job error'} if response_status == 500 else {})
+    page.wait_for_timeout(50)
+    assert page.evaluate('state.cloudLogId') == 'b'*32
+    assert page.locator('#phase').inner_text() == 'Stopping…'
+    assert page.locator('#queue-message').inner_text() != 'Old job error'
+    next(route for route in held if route.request.url.endswith('/stop')).fulfill(json={})
+    page.wait_for_function("document.getElementById('stop-job').textContent==='Stop requested'")
+    assert page.evaluate('state.cloudLogId') == 'b'*32
+
+
+@pytest.mark.parametrize('action', ['stop', 'recover'])
+def test_action_timeout_differs_from_lifecycle_abort(cloud_page, action):
+    """A 30s browser timeout retains a possible stop and never retries a mutation automatically."""
+    page, data, calls, overrides, held = cloud_page
+    data['jobs'][0].update(status='running', final_collected=True, result_partial=True)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    page.clock.install()
+    overrides['/api/vast/jobs/' + 'a'*32 + '/' + action] = 'hold'
+    page.locator('#' + action + '-job').click()
+    page.wait_for_timeout(50)
+    page.clock.fast_forward(30001)
+    page.wait_for_function("document.getElementById('queue-message').textContent.includes('server-side work may continue')")
+    assert sum(method == 'POST' and url.endswith('/' + action) for method, url in calls) == 1
+    if action == 'stop':
+        assert page.locator('#stop-job').is_disabled()
+        assert 'Stopping' in page.locator('#stop-job').inner_text()
+    else:
+        assert page.locator('#recover-job').is_enabled()
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}))")
+    page.wait_for_timeout(50)
+    assert page.evaluate('state.cloudLogId') == 'a'*32
+
+
+@pytest.mark.parametrize('interruption', ['timeout', 'bfcache'])
+@pytest.mark.parametrize('result_status', [200, 503])
+def test_unconfirmed_stop_allows_only_explicit_retry_after_fresh_get(cloud_page, interruption, result_status):
+    """An interrupted Stop remains uncertain until a new negative GET permits a manual retry."""
+    page, data, calls, overrides, held = cloud_page
+    data['jobs'][0].update(status='running', final_collected=False, stop_requested=False)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    page.clock.install()
+    path = '/api/vast/jobs/' + 'a'*32 + '/stop'
+    overrides[path] = 'hold'
+    overrides['/api/vast/jobs'] = 'hold'
+    page.locator('#stop-job').click()
+    page.wait_for_timeout(50)
+    if interruption == 'timeout':
+        page.clock.fast_forward(30001)
+        page.wait_for_function("document.getElementById('queue-message').textContent.includes('server-side work may continue')")
+    else:
+        page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}))")
+    assert page.locator('#stop-job').is_disabled()
+    # A GET begun before the timeout must not authorize retry. Start another
+    # return-to-view poll and explicitly answer this newest request.
+    poll_cloud(page)
+    page.wait_for_timeout(30)
+    snapshot = [route for route in held if route.request.url.endswith('/jobs')][-1]
+    held.remove(snapshot)
+    snapshot.fulfill(json=data)
+    page.wait_for_function("document.getElementById('stop-job').textContent==='Retry stop & collect'")
+    assert page.locator('#stop-job').is_enabled()
+    assert page.locator('[title="Stop"]').is_enabled()
+    assert page.locator('#phase').inner_text() == 'Stop status unconfirmed'
+    assert sum(method == 'POST' and url.endswith('/stop') for method, url in calls) == 1
+    page.evaluate('PBGuiDialogs.confirm=async()=>false; void 0')
+    page.locator('#stop-job').click()
+    page.wait_for_function("!document.getElementById('stop-job').disabled")
+    assert page.locator('#stop-job').inner_text() == 'Retry stop & collect'
+    assert sum(method == 'POST' and url.endswith('/stop') for method, url in calls) == 1
+    page.evaluate('PBGuiDialogs.confirm=async()=>true; void 0')
+    page.locator('#stop-job').click()
+    page.wait_for_timeout(30)
+    assert page.locator('#stop-job').is_disabled()
+    page.locator('[title="Stop"]').evaluate("node=>node.dispatchEvent(new MouseEvent('click'))")
+    assert sum(method == 'POST' and url.endswith('/stop') for method, url in calls) == 2
+    data['jobs'][0]['stop_requested'] = result_status == 200
+    overrides['/api/vast/jobs'] = (200, json.dumps(data), {'Content-Type':'application/json'})
+    posts = [route for route in held if route.request.url.endswith('/stop')]
+    posts[-1].fulfill(status=result_status, json={} if result_status == 200 else {'detail':'Isolated retry rejected'})
+    held.remove(posts[-1])
+    if result_status == 200:
+        page.wait_for_function("document.getElementById('stop-job').textContent==='Stop requested'")
+        assert page.locator('#stop-job').is_disabled()
+    else:
+        page.wait_for_function("document.getElementById('queue-message').textContent==='Isolated retry rejected'")
+        assert page.locator('#stop-job').is_disabled()
+        poll_cloud(page)
+        page.wait_for_function("document.getElementById('stop-job').textContent==='Retry stop & collect'")
+        assert page.locator('#stop-job').is_enabled()
+    assert sum(method == 'POST' and url.endswith('/stop') for method, url in calls) == 2
+    assert page.evaluate('state.cloudLogId') == 'a'*32
+    for route in held[:]:
+        route.fulfill(json=data if route.request.method == 'GET' else {})
+        held.remove(route)
+
+
+def test_stop_retry_ignores_snapshot_started_before_timeout(cloud_page):
+    """A late negative response cannot masquerade as a post-abort state observation."""
+    page, data, _, overrides, held = cloud_page
+    data['jobs'][0].update(status='running', final_collected=False, stop_requested=False)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    page.clock.install()
+    overrides['/api/vast/jobs/' + 'a'*32 + '/stop'] = 'hold'
+    page.locator('#stop-job').click()
+    page.clock.fast_forward(1000)
+    overrides['/api/vast/jobs'] = 'hold'
+    poll_cloud(page)
+    page.clock.fast_forward(29001)
+    page.wait_for_function("document.getElementById('queue-message').textContent.includes('server-side work may continue')")
+    snapshot = next(route for route in held if route.request.url.endswith('/jobs'))
+    held.remove(snapshot)
+    snapshot.fulfill(json=data)
+    page.wait_for_timeout(30)
+    assert page.locator('#stop-job').is_disabled()
+    assert page.locator('#stop-job').inner_text() == 'Stopping…'
+    overrides['/api/vast/jobs'] = (200, json.dumps(data), {'Content-Type':'application/json'})
+    poll_cloud(page)
+    page.wait_for_function("document.getElementById('stop-job').textContent==='Retry stop & collect'")
+    for route in held:
+        route.fulfill(json={})
+
+
+@pytest.mark.parametrize('observed', ['requested', 'collecting', 'terminal', 'missing_flag'])
+def test_stop_timeout_reconciles_late_acceptance_without_duplicate_post(cloud_page, observed):
+    """Late acceptance/collection and incomplete snapshots never offer an inappropriate retry."""
+    page, data, calls, overrides, held = cloud_page
+    data['jobs'][0].update(status='running', final_collected=False, stop_requested=False)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    page.clock.install()
+    overrides['/api/vast/jobs/' + 'a'*32 + '/stop'] = 'hold'
+    page.locator('#stop-job').click()
+    page.clock.fast_forward(30001)
+    page.wait_for_function("document.getElementById('queue-message').textContent.includes('server-side work may continue')")
+    poll_cloud(page)
+    page.wait_for_function("document.getElementById('stop-job').textContent==='Retry stop & collect'")
+    if observed == 'requested':
+        data['jobs'][0]['stop_requested'] = True
+        expected = 'Stop requested'
+    elif observed == 'collecting':
+        data['jobs'][0]['status'] = 'collecting'
+        expected = 'Collecting results…'
+    elif observed == 'terminal':
+        data['jobs'][0]['status'] = 'cancelled'
+        expected = 'Stop & collect'
+    else:
+        data['jobs'][0].pop('stop_requested')
+        expected = 'Stop status unconfirmed'
+    poll_cloud(page)
+    page.wait_for_function("document.getElementById('stop-job').disabled")
+    assert page.locator('#stop-job').inner_text() == expected
+    assert sum(method == 'POST' and url.endswith('/stop') for method, url in calls) == 1
+    for route in held:
+        route.fulfill(json={})
+
+
+@pytest.mark.parametrize('old_status', [200, 401])
+@pytest.mark.parametrize('action', ['stop', 'recover'])
+def test_lifecycle_old_finally_cannot_unlock_new_action(cloud_page, old_status, action):
+    """BFCache return obtains new action ownership; old callbacks cannot clear it."""
+    page, data, calls, overrides, held = cloud_page
+    data['jobs'][0].update(final_collected=True)
+    if action == 'stop':
+        data['jobs'][0].update(status='running', stop_requested=False)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    path = '/api/vast/jobs/' + 'a'*32 + '/' + action
+    overrides[path] = 'hold'
+    page.evaluate('''action=>{window.nativeFetch=window.fetch;
+      window.delayedResult=new Promise(resolve=>window.finishOld=resolve);
+      window.fetch=(url,options)=>String(url).endsWith('/'+action) ? delayedResult : nativeFetch(url,options);}''', action)
+    page.locator('#' + action + '-job').click()
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})); window.fetch=nativeFetch; window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}))")
+    page.wait_for_function("action=>!document.getElementById(action+'-job').disabled", arg=action)
+    page.locator('#' + action + '-job').click()
+    page.evaluate("status=>finishOld(new Response('{}',{status,headers:{'Content-Type':'application/json'}}))", old_status)
+    page.wait_for_timeout(50)
+    assert page.locator('#' + action + '-job').is_disabled()
+    assert page.locator('#' + action + '-job').inner_text() == ('Stopping…' if action == 'stop' else 'Importing results…')
+    assert page.evaluate('state.cloudLogId') == 'a'*32
+    held.pop().fulfill(json={})
+    if action == 'stop':
+        page.wait_for_function("document.getElementById('stop-job').textContent==='Stop requested'")
+    else:
+        page.wait_for_function("!document.getElementById('recover-job').disabled")
+
+
+def test_removed_displayed_job_explains_fallback(cloud_page):
+    """An automatic update replaces a disappeared log destination with a current valid job."""
+    page, data, _, _, _ = cloud_page
+    data['jobs'].append(dict(data['jobs'][0], id='b'*32, config_name='retained-test', status='completed'))
+    page.reload()
+    page.locator('[title="Open log"]').first.click()
+    data['jobs'].pop(0)
+    poll_cloud(page)
+    page.wait_for_function("state.cloudLogId==='b'.repeat(32)")
+    assert 'no longer available' in page.locator('#queue-message').inner_text()
+    assert page.locator('#phase').inner_text() == 'completed'
+
+
+def test_job_action_encodes_identifier_without_relaxing_api_validation(cloud_page):
+    """Encode an adversarial synthetic ID as one path segment; server validation is unchanged."""
+    page, data, calls, _, _ = cloud_page
+    data['jobs'][0].update(id='synthetic/invalid?name', final_collected=True)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    page.locator('#recover-job').click()
+    page.wait_for_timeout(50)
+    assert any(method == 'POST' and '/jobs/synthetic%2Finvalid%3Fname/recover' in url for method, url in calls)
+
+
+@pytest.mark.parametrize('action', ['stop', 'recover'])
+def test_job_action_auth_expiry_disposes_pending_context(cloud_page, action):
+    """PBGui authentication loss aborts the lifecycle without reporting a browser timeout."""
+    page, data, calls, overrides, _ = cloud_page
+    data['jobs'][0].update(status='running', final_collected=True, result_partial=True)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    overrides['/api/vast/jobs/' + 'a'*32 + '/' + action] = (
+        401, json.dumps({'detail':'Expired session'}), {'Content-Type':'application/json'})
+    page.locator('#' + action + '-job').click()
+    page.wait_for_function("document.getElementById('queue-message').textContent.startsWith('PBGui session expired')")
+    assert page.evaluate('state.cloudLogId') is None
+    assert 'timed out' not in page.locator('#queue-message').inner_text()
+    assert sum(method == 'POST' and url.endswith('/' + action) for method, url in calls) == 1
+
+
 def test_save_and_queue_navigates_before_slow_jobs_refresh(cloud_page):
     """A confirmed preparation job is visible without awaiting a held queue poll."""
     page, data, calls, overrides, held = cloud_page
@@ -216,6 +591,124 @@ def test_block_rental_host_and_unblock_in_settings(cloud_page):
     page.wait_for_function("document.getElementById('blocked-hosts-list').textContent === 'No blocked hosts.'")
 
 
+def test_host_toggle_semantic_context_and_generic_actions_are_safe(cloud_page):
+    """Real host controls expose state while every generic/local activation refuses them."""
+    page, data, calls, overrides, _ = cloud_page
+    page.add_init_script('''
+      window.cloudContexts={};
+      window.PBGuiAI={registerPageContext: item => {cloudContexts[item.id]=item.getContext;}};
+    ''')
+    identifier = 'b' * 32
+    data['jobs'][0]['lease_id'] = identifier
+    data['jobs'][0]['rental'].update(id=identifier, offer=dict(machine_id=7))
+    data['worker'].update(id=identifier, kind='worker', host_machine_id=7)
+    data['queue'].update(blocked_machine_ids=[], host_block_revision=0)
+    page.reload()
+    page.wait_for_function('window.cloudContexts["vast-open-log"] && PBGuiVast.queueItems().length === 1')
+    nav_source = (ROOT/'frontend/pbgui_nav.js').read_text().replace(
+        'window.PBGuiAI.collectContext = collectAIContext;',
+        'window.testLocalAction=executeLocalPageAction;window.testResolveControl=resolveAIControl;window.testResolveName=resolveAIControlByName;window.PBGuiAI.collectContext = collectAIContext;')
+    page.add_script_tag(content=nav_source)
+    page.evaluate('''() => {
+      PBGuiAI.registerPageContext({id:'cloud',getContext:cloudContexts['vast-open-log']});
+      PBGuiAI.registerPageContext({id:'budget',getContext:()=>({entities:Array.from({length:8},(_,i)=>({kind:'optimizer_config',name:'config'+i,version:'v8'}))})});
+    }''')
+    page.locator('[title="Open log"]').click()
+    context = page.evaluate('PBGuiAI.collectContext()')
+    assert context['current_cloud_job'] == dict(job_id='a'*32, lease_id=identifier, machine_id=7, blocked=False, host_block_revision=0)
+    assert len(context['entities']) == 8
+    control = next(item for item in context['controls'] if item.get('visible_text') == 'Block host')
+    assert control['tooltip'] == 'Block host' and control['operations'] == [] and control['requires_proposal']
+    assert page.evaluate("PBGuiAI.tryLocalCommand('klick block host').handled") is False
+    for action, kind, name in [('activate', 'ui_control', control['id']), ('activate_by_label', 'ui_control_label', control['name'])]:
+        result = page.evaluate('''args => {
+          try {
+            (args.kind==='ui_control' ? testResolveControl : testResolveName)(args.name,'activate').click();
+            return false;
+          } catch (_) {return true;}
+        }''', dict(action=action, kind=kind, name=name))
+        assert result
+        assert page.evaluate('''args => {
+          try {testLocalAction(args.action,{kind:args.kind,name:args.name});return false;}
+          catch (_) {return true;}
+        }''', dict(action=action, kind=kind, name=name))
+    assert not any(method == 'POST' and '/host-block' in url for method, url in calls)
+    # A human click still persists a single explicit decision.
+    data['queue'].update(blocked_machine_ids=[7], host_block_revision=1)
+    overrides['/api/vast/jobs/' + identifier + '/host-block'] = (200, json.dumps(dict(machine_id=7, blocked=True, blocked_machine_ids=[7], host_block_revision=1)), {'Content-Type':'application/json'})
+    page.locator('#optlog-rental').get_by_role('button', name='Block host', exact=True).click()
+    page.locator('#optlog-rental').get_by_role('button', name='Unblock host', exact=True).wait_for()
+    changed = page.evaluate('PBGuiAI.collectContext()')
+    assert changed['current_cloud_job']['blocked'] is True
+    assert control['id'] not in [item['id'] for item in changed['controls']]
+    saturated = page.evaluate('''() => {
+      const shell=document.createElement('div');shell.id='test-control-budget';
+      for(let i=0;i<2100;i++) {const b=document.createElement('button');b.title='A'.repeat(150)+i;b.textContent='Visible '+i;shell.append(b);}
+      document.body.append(shell);
+      for(let i=0;i<16;i++) PBGuiAI.registerPageAction({id:'test_'+i,entity_kind:'test',run(){}});
+      const context=PBGuiAI.collectContext();shell.remove();return context;
+    }''')
+    assert saturated['current_cloud_job']['job_id'] == 'a'*32
+    assert len(saturated['entities']) == 8 and len(saturated['actions']) == 16
+    assert len(saturated['controls']) < 2048
+    assert next(item for item in saturated['controls'] if item.get('visible_text') == 'Visible 0')['label'].startswith('A')
+    page.evaluate('state.cloudLogId="' + identifier + '"')
+    assert page.evaluate('PBGuiAI.collectContext().current_cloud_job.job_id') == identifier
+    page.evaluate('PBGuiVast.closeLog()')
+    assert 'current_cloud_job' not in page.evaluate('PBGuiAI.collectContext()')
+    page.evaluate('state.cloudLogId="' + identifier + '"')
+    overrides['/api/vast/jobs'] = (401, json.dumps({'detail':'Authentication required'}), {'Content-Type':'application/json'})
+    page.evaluate("window.dispatchEvent(new CustomEvent('pbgui:ai-action-completed',{detail:{action:'vast_host_block'}}))")
+    page.wait_for_function('!state.cloudLogId')
+    assert 'current_cloud_job' not in page.evaluate('PBGuiAI.collectContext()')
+
+
+def test_assistant_host_change_updates_open_log_and_preserves_draft(cloud_page):
+    """An assistant result triggers an automatic local poll without resetting edits or log."""
+    page, data, _, _, _ = cloud_page
+    data['jobs'][0]['rental'].update(id='b'*32, offer=dict(machine_id=7))
+    page.reload()
+    page.wait_for_function('PBGuiVast.queueItems().length === 1')
+    page.locator('[data-vast-view=hosts]').click()
+    page.locator('#block-machine-id').fill('12345')
+    page.locator('[title="Open log"]').click()
+    data['queue'].update(blocked_machine_ids=[7], host_block_revision=1)
+    page.evaluate("window.dispatchEvent(new CustomEvent('pbgui:ai-action-completed',{detail:{action:'vast_host_block'}}))")
+    page.locator('#optlog-rental').get_by_role('button', name='Unblock host', exact=True).wait_for()
+    assert page.locator('#block-machine-id').input_value() == '12345'
+    assert page.evaluate("state.cloudLogId === '"+'a'*32+"'")
+
+
+def test_failed_host_write_is_visible_and_does_not_toggle_ui(cloud_page):
+    """An API failure leaves the old Boolean and reports the error without retrying."""
+    page, data, calls, overrides, _ = cloud_page
+    identifier = 'b' * 32
+    data['jobs'][0]['rental'].update(id=identifier, offer=dict(machine_id=7))
+    page.reload()
+    page.wait_for_function('PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    overrides['/api/vast/jobs/' + identifier + '/host-block'] = (409, json.dumps({'detail':'Host target changed'}), {'Content-Type':'application/json'})
+    page.locator('#optlog-rental').get_by_role('button', name='Block host', exact=True).click()
+    page.wait_for_function("document.getElementById('message').textContent === 'Host target changed'")
+    assert page.locator('#optlog-rental').get_by_role('button', name='Block host', exact=True).is_enabled()
+    assert len([url for method, url in calls if method == 'POST' and url.endswith('/host-block')]) == 1
+
+
+def test_host_write_stays_successful_when_followup_display_fails(cloud_page):
+    """A confirmed policy commit is retained and the later display failure is distinct."""
+    page, data, _, overrides, _ = cloud_page
+    identifier = 'b' * 32
+    data['jobs'][0]['rental'].update(id=identifier, offer=dict(machine_id=7))
+    page.reload()
+    page.wait_for_function('PBGuiVast.queueItems().length === 1')
+    page.locator('[title="Open log"]').click()
+    overrides['/api/vast/jobs/' + identifier + '/host-block'] = (200, json.dumps(dict(machine_id=7, blocked=True, blocked_machine_ids=[7], host_block_revision=1)), {'Content-Type':'application/json'})
+    overrides['/api/vast/jobs'] = (503, json.dumps({'detail':'Display test unavailable'}), {'Content-Type':'application/json'})
+    page.locator('#optlog-rental').get_by_role('button', name='Block host', exact=True).click()
+    page.wait_for_function("document.getElementById('message').textContent.startsWith('Host policy saved. Display update unavailable:')")
+    assert page.locator('#optlog-rental').get_by_role('button', name='Unblock host', exact=True).is_enabled()
+
+
 def test_block_offer_removes_same_machine_offers(cloud_page):
     """One block excludes every displayed offer from that machine."""
     page, data, calls, overrides, _ = cloud_page
@@ -252,6 +745,60 @@ def test_pending_offer_response_cannot_restore_blocked_host(cloud_page):
                                            cuda_max_good=13, location='Test')]})
     page.wait_for_timeout(100)
     assert page.locator('#offers-body tr[data-offer]').count() == 0
+
+
+@pytest.mark.parametrize('trigger', ['assistant', 'return'])
+@pytest.mark.parametrize('selected', [1, 3])
+def test_persisted_host_change_prunes_offers_and_preserves_valid_selection(cloud_page, trigger, selected):
+    """Assistant/background policy changes remove all host offers without resetting valid edits."""
+    page, data, _, overrides, _ = cloud_page
+    offers = [dict(id=i, machine_id=machine, gpu_name='RTX 5090', price_hour_usd=.2,
+                   duration_seconds=86400, cuda_max_good=13, location='Test')
+              for i, machine in [(1, 7), (2, 7), (3, 8)]]
+    overrides['/api/vast/offers'] = (200, json.dumps(dict(offers=offers)), {'Content-Type': 'application/json'})
+    page.locator('#find-offers').click()
+    page.locator(f'#offers-body tr[data-offer="{selected}"]').click()
+    page.locator('#gpu-model').fill('test draft')
+    page.evaluate("window.retainedOfferRow = document.querySelector('#offers-body tr[data-offer=\"3\"]')")
+    data['queue'].update(blocked_machine_ids=[7], host_block_revision=1)
+    if trigger == 'assistant':
+        page.evaluate("window.dispatchEvent(new CustomEvent('pbgui:ai-action-completed',{detail:{action:'vast_host_block'}}))")
+    else:
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_function("document.querySelectorAll('#offers-body tr[data-offer]').length === 1")
+    assert page.evaluate("retainedOfferRow === document.querySelector('#offers-body tr[data-offer=\"3\"]')")
+    assert page.locator('#gpu-model').input_value() == 'test draft'
+    if selected == 3:
+        assert page.locator('#offers-body tr[data-offer="3"]').get_attribute('aria-selected') == 'true'
+        assert 'RTX 5090' in page.locator('#selection').inner_text()
+    else:
+        assert 'selected machine is excluded' in page.locator('#selection').inner_text()
+        assert page.locator('#rent-offer').is_disabled()
+    # A newly returned offer ID from the excluded machine is filtered as well.
+    page.locator('#find-offers').click()
+    page.wait_for_function("!document.getElementById('find-offers').disabled")
+    assert page.locator('#offers-body tr[data-offer]').count() == 1
+
+
+@pytest.mark.parametrize('blocked', [True, False])
+def test_assistant_block_invalidates_inflight_offer_response(cloud_page, blocked):
+    """Invalidate previews only for changed policy; legacy defaults are equivalent."""
+    page, data, _, overrides, held = cloud_page
+    overrides['/api/vast/offers'] = 'hold'
+    page.locator('#find-offers').click()
+    page.wait_for_timeout(100)
+    assert held
+    data['queue'].update(blocked_machine_ids=[7] if blocked else [], host_block_revision=1 if blocked else 0)
+    page.evaluate("window.dispatchEvent(new CustomEvent('pbgui:ai-action-completed',{detail:{action:'vast_host_block'}}))")
+    if blocked:
+        page.wait_for_function("document.getElementById('blocked-hosts-list').textContent.includes('Machine 7')")
+    else:
+        page.wait_for_timeout(100)
+    held.pop().fulfill(json={'offers':[dict(id=99, machine_id=7, gpu_name='RTX 5090', price_hour_usd=.2,
+                                         duration_seconds=86400, cuda_max_good=13, location='Test')]})
+    page.wait_for_timeout(100)
+    assert page.locator('#offers-body tr[data-offer]').count() == (0 if blocked else 1)
+    assert page.locator('#find-offers').is_enabled()
 
 
 def test_rental_edits_survive_poll_and_submit_entered_values(cloud_page):
@@ -421,9 +968,14 @@ def cloud_page():
         browser = p.chromium.launch()
         context = browser.new_context()
         page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
         page.route('**/*', route_request)
         page.goto('http://vast.test/')
-        page.wait_for_function("window.PBGuiVast && PBGuiVast.queueItems().length === 1")
+        try:
+            page.wait_for_function("window.PBGuiVast && PBGuiVast.queueItems().length === 1")
+        except Exception as exc:
+            raise AssertionError('Cloud component initialization failed: ' + repr(errors)) from exc
         yield page, data, calls, overrides, held
         context.close()
         browser.close()

@@ -19,6 +19,8 @@ def isolated_log_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     log_root = tmp_path / "logs"
     log_root.mkdir()
     monkeypatch.setattr(logging_helpers, "LOG_ROOT", log_root)
+    monkeypatch.setattr(logging_helpers, "PBGUI_INI", tmp_path / "pbgui.ini")
+    monkeypatch.setattr(logging_helpers, "PBGDIR", tmp_path)
     return log_root
 
 
@@ -162,18 +164,23 @@ def test_rotation_settings_resolve_by_physical_logfile(isolated_log_root, monkey
     """Grouped PBGui settings should be requested by physical logfile stem."""
     logfile = isolated_log_root / "PBGui.log"
     logfile.touch()
+    logging_helpers.PBGUI_INI.write_text(
+        "[logging]\nrotate_pbgui_max_bytes=2097152\nrotate_pbgui_backup_count=4\n"
+    )
+    monkeypatch.setitem(logging_helpers.LOG_GROUPS, "PBGui", "OtherGroup")
     requested = []
+    original = logging_api.get_rotation_settings_bulk
 
-    def fake_settings(**kwargs):
-        requested.append(kwargs)
-        return 2 * 1024 * 1024, 4
+    def tracked_bulk(logfiles):
+        """Record the bulk boundary while resolving the real physical INI key."""
+        requested.append(logfiles)
+        return original(logfiles)
 
-    monkeypatch.setattr(logging_api, "get_rotate_defaults", lambda: (1024 * 1024, 1))
-    monkeypatch.setattr(logging_api, "get_rotate_settings", fake_settings)
+    monkeypatch.setattr(logging_api, "get_rotation_settings_bulk", tracked_bulk)
 
     result = logging_api.get_rotation(SimpleNamespace())
 
-    assert requested == [{"logfile": str(logfile)}]
+    assert requested == [[logfile]]
     assert result["per_service"]["PBGui"] == {"max_mb": 2, "backup_count": 4}
     assert set(result["managed_scopes"]) == set(logging_helpers.MANAGED_LOG_SCOPES)
 

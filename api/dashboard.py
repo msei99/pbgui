@@ -2517,14 +2517,40 @@ def get_pnl_data(
 
     bars = []
     cum = 0.0
+    invalid_days = 0
+    cumulative_overflow = False
     for r in rows:
         date_str = r[0]
-        income = round(float(r[1]), 2)
-        cum += income
+        try:
+            if isinstance(r[1], bool):
+                raise ValueError("Boolean PNL aggregate")
+            income = round(float(r[1]), 2)
+            if not math.isfinite(income):
+                raise ValueError("Non-finite PNL aggregate")
+        except (TypeError, ValueError, OverflowError):
+            income = None
+            invalid_days += 1
+
+        cumulative_income = None
+        if income is not None and cum is not None:
+            next_cum = cum + income
+            if math.isfinite(next_cum):
+                cum = next_cum
+                cumulative_income = round(cum, 2)
+            else:
+                # Once the sum overflows its remaining values are unavailable.
+                cum = None
+                cumulative_overflow = True
         bars.append({
             "date":   date_str,
             "income": income,
-            "cum":    round(cum, 2),
+            "cum":    cumulative_income,
+        })
+
+    if invalid_days or cumulative_overflow:
+        _log(SERVICE, "PNL data contains unavailable values", level="WARNING", meta={
+            "invalid_days": invalid_days,
+            "cumulative_overflow": cumulative_overflow,
         })
 
     return {

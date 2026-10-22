@@ -96,7 +96,7 @@ def test_welcome_setup_returns_apply_metadata_for_changed_fields(monkeypatch) ->
     assert result["message"] == "Setup saved. Service restart required."
 
 
-def test_settings_payloads_add_apply_metadata_without_removing_existing_fields(monkeypatch) -> None:
+def test_settings_payloads_add_apply_metadata_without_removing_existing_fields(monkeypatch, tmp_path) -> None:
     """GET payloads retain established keys and add the apply contract."""
     class FakeCoinData:
         fetch_limit = 5000
@@ -111,8 +111,8 @@ def test_settings_payloads_add_apply_metadata_without_removing_existing_fields(m
     assert "api_key" not in coin
     assert coin["apply"]["message"] == "Applies next cycle"
 
-    monkeypatch.setattr(logging_api, "get_rotate_defaults", lambda: (1024 * 1024, 1))
-    monkeypatch.setattr(logging_api.logging_helpers, "LOG_ROOT", Path("/missing-phase6-log-root"))
+    monkeypatch.setattr(logging_api.logging_helpers, "PBGUI_INI", tmp_path / "pbgui.ini")
+    monkeypatch.setattr(logging_api.logging_helpers, "LOG_ROOT", tmp_path / "missing-logs")
     rotation = logging_api.get_rotation(SimpleNamespace())
     assert {"default", "per_service", "managed_scopes"} <= set(rotation)
     assert rotation["apply"]["timing"] == "next_log_write"
@@ -352,7 +352,7 @@ def test_market_data_payload_contract_is_additive(monkeypatch) -> None:
     """Market Data GET and save payloads expose timing without replacing fields."""
     monkeypatch.setattr(market_data_api, "_get_exchange_settings_meta", lambda exchange: ("okx", {"label": "OKX", "ini_section": "okx_data", "defaults": {"interval_seconds": 1, "coin_pause_seconds": 1, "api_timeout_seconds": 1, "min_lookback_days": 1, "max_lookback_days": 1}}))
     monkeypatch.setattr(market_data_api, "load_market_data_config", lambda: object())
-    monkeypatch.setattr(market_data_api, "_coin_options_for_exchange", lambda exchange: ["BTC"])
+    monkeypatch.setattr(market_data_api, "_settings_coin_snapshot", lambda exchange: market_data_api.MarketDataCoinSnapshot(["BTC"], True))
     monkeypatch.setattr(market_data_api, "get_effective_enabled_coins", lambda *args, **kwargs: (["BTC"], [], True))
     monkeypatch.setattr(market_data_api, "load_ini", lambda *args: "")
 

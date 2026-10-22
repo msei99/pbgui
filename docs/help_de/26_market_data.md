@@ -1,5 +1,13 @@
 # Market Data
 
+Öffne **Information → Market Data → Settings → Coin Refresh**. Die Auswahl **Exchange** bestimmt das lokale Coin-Data-Mapping für die Coin-Auswahl und die Verfügbarkeitsprüfung des nativen **Build Best 1m**. Das Öffnen der Einstellungen fragt Hyperliquid nicht ab und erzeugt keinen Coin-Data-/CMC-Client. Downloads behalten ihre operative Livevalidierung; eine lokale Option garantiert nicht, dass die Börse einen späteren Download akzeptiert.
+
+Coin-Optionen folgen unmittelbar dem zuletzt lokal veröffentlichten Mapping. Sichtbare Settings prüfen Optionen und Tiingo-Status/Verbrauch automatisch alle 15 Sekunden sowie bei der Rückkehr zur Seite. Ungespeicherte Formularwerte, ausgewählte Coins, Fokus und Coin-Filter bleiben dabei erhalten. Exchange, Settings-Unterbereich und Coin-Filter werden beim Browser-Neuladen wiederhergestellt; geheime Felder und ungespeicherte Formularentwürfe werden nicht im Browser gespeichert.
+
+Beim Exchange-Wechsel während eines Settings-Saves bleibt das Formular gesperrt, bis der Save beendet und der zuletzt gewählte Exchange geladen ist. Der laufende Save gehört weiterhin zum ursprünglichen Exchange. Bei aktivem Auto-Enable markieren neu verfügbare Coins das Formular nicht als bearbeitet; die Rücknahme einer tatsächlichen Feldänderung stellt den unveränderten Zustand wieder her.
+
+Ohne Mapping zeigen Settings die fehlende Coin-Data-Verfügbarkeit und behalten die gespeicherte Auswahl. Gewöhnliche Einstellungen bleiben speicherbar; Auto-Enable leitet aus fehlenden oder leeren Optionen keine leere Auswahl ab. Der übliche Coin-Data-Ablauf veröffentlicht ein Mapping. Ein ausgewählter Coin, der aus einem verfügbaren Mapping entfällt, bleibt als **(unavailable)** sichtbar, bis du die Auswahl änderst. Bei Lesefehlern bleibt der letzte gültige Anzeigestand mit Fehlermeldung erhalten; weitere Versuche erfolgen automatisch. Der Server meldet veraltete Daten nicht als erfolgreichen Lesezugriff. Best 1m legt bei unlesbarem Mapping keine Jobs an.
+
 Unter Status ist Refresh Now während einer laufenden, vorgemerkten oder gerade angeforderten Aktualisierung deaktiviert. Aktionsfehler werden auch bei nicht als JSON gelieferten Serverfehlern angezeigt. Delete by Date erlaubt nur eine Bestätigung/Löschung gleichzeitig; bei Löschfehlern schließt der Datumsdialog und der Fehler erscheint als Toast und in der Sidebar.
 
 Die Aktionen Delete, Retry und Requeue im Hyperliquid-Auftragsverlauf zeigen HTTP- und Verbindungsfehler sichtbar an.

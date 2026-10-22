@@ -39,8 +39,11 @@ def test_collect_counts_only_verified_downloads(tmp_path, monkeypatch, outcome, 
 
     connection.command = command
     extracted = tmp_path / 'extracted'
-    monkeypatch.setattr(vast_transfer, 'extract_results',
-                        lambda *_args: extracted)
+    def extract(*_args, check):
+        """Verify extraction receives the same remaining collection deadline."""
+        assert 0 < check() <= 30
+        return extracted
+    monkeypatch.setattr(vast_transfer, 'extract_results', extract)
     destination = tmp_path / 'partial.tar.gz'
     destination.write_bytes(b'old')
 

@@ -1,6 +1,10 @@
 """Static security and lifecycle contracts for the global AI drawer."""
 
 from pathlib import Path
+import json
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -9,10 +13,70 @@ DRAWER = (ROOT / "frontend" / "js" / "ai_drawer.js").read_text(encoding="utf-8")
 CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize('continuation', ['queued', 'running', 'not_started'])
+def test_host_failure_is_never_presented_as_success(continuation):
+    """Run the real approval handler; continuation scheduling is not action success."""
+    _run_host_resolution({'status':'failed', 'action':'vast_host_block',
+                          'error':{'message':'Host revision changed'}, 'continuation':{'status':continuation}}, False)
+
+
+@pytest.mark.parametrize('outcome', ['executed', 'executing', 'unavailable'])
+def test_lost_host_approval_uses_only_owned_status_get(outcome):
+    """The handler reads proof after response loss, without another approval POST."""
+    _run_host_resolution({'status':outcome, 'proposal_status':outcome, 'action':'vast_host_block',
+                          'machine_id':7, 'blocked':True, 'current_host_state':{'blocked':False}}, True)
+
+
+def _run_host_resolution(result, lost):
+    """Execute the production function in Node with bounded fake DOM/API dependencies."""
+    function = 'async function resolveProposal' + DRAWER.split('async function resolveProposal', 1)[1].split('\n  async function newConversation', 1)[0]
+    script = '''
+    const assert = require('node:assert/strict');
+    const result = RESULT, lost = LOST;
+    const requests = [], messages = [], events = [];
+    const state = {current:'chat', resolvingProposalIds:new Set()};
+    const card = {hidden:false, querySelectorAll:()=>[{disabled:false}]};
+    const confirmAction = async()=>true, proposalActionLabel=()=> 'Block host';
+    const setStatus = (text,error)=>messages.push({text,error});
+    const loadConversation = async()=>{}, reconcileProposals = async()=>{};
+    const window = {dispatchEvent:event=>events.push(event)};
+    const CustomEvent = function(name, data){return data;};
+    async function api(path, options) {
+      requests.push({path, method:options?.method || 'GET'});
+      if (lost && options?.method === 'POST') throw new Error('Response lost');
+      if (result.status === 'unavailable') throw new Error('Read unavailable');
+      return result;
+    }
+    FUNCTION
+    (async()=>{
+      await resolveProposal({proposal_id:'proposal',payload_digest:'digest',preview:{action:'vast_host_block'}},true,card);
+      assert.equal(requests.filter(x=>x.method==='POST').length,1);
+      if (lost) {
+        assert.equal(requests.length,2);
+        assert.equal(requests[1].method,'GET');
+        assert.equal(requests[1].path,'/proposals/proposal/host-status?conversation_id=chat');
+      }
+      const last = messages.at(-1);
+      if (lost && result.status==='executed') {
+        assert.equal(last.error,false);
+        assert.match(last.text,/Machine 7/);
+        assert.match(last.text,/not blocked/); // Historical block is not current policy.
+        assert.equal(events.length,1);
+      } else {
+        assert.equal(last.error,true);
+        assert.ok(!messages.some(x=>x.text.includes('Approved action completed')));
+        assert.equal(events.length,0);
+      }
+    })().catch(error=>{console.error(error);process.exitCode=1;});
+    '''.replace('RESULT', json.dumps(result)).replace('LOST', str(lost).lower()).replace('FUNCTION', function)
+    completed = subprocess.run(['node', '-e', script], cwd=ROOT, text=True, capture_output=True, check=False, timeout=10)
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=77" in NAV
+    assert "/app/js/ai_drawer.js?v=80" in NAV
     assert "/app/js/ai_usage.js?v=2" in NAV
     assert "/app/js/jev_transfer_preview.js?v=1" in NAV
     assert "jev_preview_id: jevPreviewId || null" in DRAWER

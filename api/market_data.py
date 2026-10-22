@@ -7,6 +7,8 @@ import shutil
 import shlex
 import traceback
 import uuid
+import threading
+import math
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -17,13 +19,18 @@ from urllib.parse import urlencode
 
 from hyperliquid_aws import HYPERLIQUID_AWS_REGION
 from hyperliquid_best_1m import (
+    _tiingo_usage_key_id,
     get_tiingo_runtime_usage,
+    read_tiingo_usage_snapshot,
     probe_tiingo_iex_1m,
     resolve_tradfi_symbol,
 )
 from credential_store import CredentialStore
 from api.page_templates import render_page_urls, script_json
 from market_data import (
+    CoinSnapshotReadError,
+    MarketDataCoinSnapshot,
+    get_local_market_data_coin_snapshot,
     _get_pb7_root_dir,
     _get_pb8_root_dir,
     get_effective_enabled_coins,
@@ -225,7 +232,16 @@ def _canonical_market_coin(exchange_name: str, coin_value: str) -> str:
 
 
 def _coin_options_for_exchange(exchange: str) -> list[str]:
-    return get_market_data_coin_options(_normalize_settings_exchange(exchange))
+    """Use the same local universe for the settings picker and Best 1m."""
+    return _settings_coin_snapshot(exchange).coin_options
+
+
+def _settings_coin_snapshot(exchange: str) -> MarketDataCoinSnapshot:
+    """Translate local read failures without hiding their HTTP status."""
+    try:
+        return get_local_market_data_coin_snapshot(_normalize_settings_exchange(exchange), root=PBGDIR)
+    except CoinSnapshotReadError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def _read_int_ini(section: str, key: str, default: int) -> int:
@@ -257,12 +273,16 @@ def _read_bool_ini(section: str, key: str, default: bool) -> bool:
     return value in ("true", "1", "yes", "on")
 
 
-def _build_market_data_settings_payload(exchange: str) -> dict[str, Any]:
+def _build_market_data_settings_payload(
+    exchange: str, *, snapshot: MarketDataCoinSnapshot | None = None,
+) -> dict[str, Any]:
+    """Assemble settings exclusively from local sources."""
     ex, meta = _get_exchange_settings_meta(exchange)
     defaults = dict(meta.get("defaults") or {})
 
     cfg = load_market_data_config()
-    coin_options = _coin_options_for_exchange(ex)
+    snapshot = snapshot if snapshot is not None else _settings_coin_snapshot(ex)
+    coin_options = snapshot.coin_options
     enabled_coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins(
         ex,
         cfg=cfg,
@@ -285,11 +305,8 @@ def _build_market_data_settings_payload(exchange: str) -> dict[str, Any]:
             creds_settings = {}
 
         region_default_settings = load_aws_profile_region(profile_for_settings) or HYPERLIQUID_AWS_REGION
-        tiingo_record, tiingo_api_key = _active_tiingo_credential(required=False)
-        try:
-            tiingo_usage = get_tiingo_runtime_usage(api_key=tiingo_api_key) if tiingo_api_key else {}
-        except Exception:
-            tiingo_usage = {}
+        tiingo_profile_id, tiingo_configured, usage_id = _settings_tiingo_identity()
+        tiingo_usage = read_tiingo_usage_snapshot(usage_id=usage_id) if tiingo_configured else {}
 
         settings.update(
             {
@@ -301,8 +318,8 @@ def _build_market_data_settings_payload(exchange: str) -> dict[str, Any]:
                 "l2book_scan_workers": _read_int_ini("market_data", "hl_l2book_scan_workers", 8),
                 "l2book_archive_enabled": _read_bool_ini("market_data", "l2book_archive_enabled", False),
                 "l2book_archive_dir": str(load_ini("market_data", "l2book_archive_dir") or "").strip(),
-                "tiingo_configured": bool(tiingo_api_key),
-                "tiingo_profile_id": str((tiingo_record or {}).get("id") or ""),
+                "tiingo_configured": tiingo_configured,
+                "tiingo_profile_id": tiingo_profile_id,
                 "tiingo_usage": tiingo_usage,
             }
         )
@@ -313,6 +330,7 @@ def _build_market_data_settings_payload(exchange: str) -> dict[str, Any]:
         "auto_enable_new_coins": auto_enable_new_coins,
         "enabled_coins": enabled_coins,
         "coin_options": coin_options,
+        "coin_data_available": snapshot.coin_data_available,
         "missing_saved_coins": missing_saved_coins,
         "settings": settings,
         "apply": apply_metadata("market_data"),
@@ -377,6 +395,7 @@ def _save_checksum_settings(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[str, Any]:
+    """Prepare all fallible reads and conversions before persisting any changes."""
     ex, meta = _get_exchange_settings_meta(exchange)
     body = request if isinstance(request, dict) else {}
     enabled_coins = body.get("enabled_coins", [])
@@ -392,11 +411,12 @@ def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[s
     elif not isinstance(auto_enable_new_coins, bool):
         raise ValueError("auto_enable_new_coins must be a boolean")
 
-    if auto_enable_new_coins and not enabled_coins:
-        enabled_coins = _coin_options_for_exchange(ex)
-
-    set_enabled_coins(ex, [str(coin) for coin in enabled_coins])
-    set_auto_enable_new_coins(ex, bool(auto_enable_new_coins))
+    snapshot = _settings_coin_snapshot(ex)
+    response = _build_market_data_settings_payload(ex, snapshot=snapshot)
+    preserve_coins = not snapshot.coin_data_available or (auto_enable_new_coins and not snapshot.coin_options) or "enabled_coins" not in body
+    if auto_enable_new_coins and snapshot.coin_options:
+        enabled_coins = snapshot.coin_options
+    enabled_coins = [str(coin) for coin in enabled_coins]
 
     ini_updates = {
         meta["ini_section"]: {
@@ -409,10 +429,15 @@ def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[s
     }
 
     if ex == "hyperliquid":
+        from market_data import _validate_aws_profile_name
+
         profile = str(settings.get("aws_profile") or "pbgui-hyperliquid").strip() or "pbgui-hyperliquid"
+        _validate_aws_profile_name(profile)
         aws_access_key_id = str(settings.get("aws_access_key_id") or "").strip()
         aws_secret_access_key = str(settings.get("aws_secret_access_key") or "").strip()
-        aws_region = str(settings.get("aws_region") or "").strip()
+        aws_region = str(settings.get("aws_region") or HYPERLIQUID_AWS_REGION).strip() or HYPERLIQUID_AWS_REGION
+        if bool(aws_access_key_id) != bool(aws_secret_access_key):
+            raise ValueError("Provide both AWS access key id and secret access key")
 
         ini_updates["market_data"] = {
             "hl_aws_profile": profile,
@@ -421,13 +446,42 @@ def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[s
             "l2book_archive_enabled": "true" if bool(settings.get("l2book_archive_enabled")) else "false",
             "l2book_archive_dir": str(settings.get("l2book_archive_dir") or "").strip(),
         }
-        save_aws_profile_credentials(
-            profile=profile,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-        )
+    for values in ini_updates.values():
+        for key, value in values.items():
+            if key.startswith("latest_1m_") or key in {"hl_l2book_scan_timeout_s", "hl_l2book_scan_workers"}:
+                if not math.isfinite(float(value)):
+                    raise ValueError("Numeric settings must be finite")
+    for key, converter in (("interval_seconds", int), ("coin_pause_seconds", float), ("api_timeout_seconds", float), ("min_lookback_days", int), ("max_lookback_days", int)):
+        response["settings"][key] = converter(ini_updates[meta["ini_section"]]["latest_1m_" + key])
+    if ex == "hyperliquid":
+        response["settings"].update({
+            "aws_profile": profile, "aws_access_key_id": aws_access_key_id,
+            "aws_secret_access_key": aws_secret_access_key, "aws_region": aws_region,
+            "l2book_scan_timeout_s": float(ini_updates["market_data"]["hl_l2book_scan_timeout_s"]),
+            "l2book_scan_workers": int(ini_updates["market_data"]["hl_l2book_scan_workers"]),
+            "l2book_archive_enabled": bool(settings.get("l2book_archive_enabled")),
+            "l2book_archive_dir": ini_updates["market_data"]["l2book_archive_dir"],
+        })
+    # Conversions, snapshot and response reads are complete. Reuse the prepared
+    # generation below; no post-write mapping/credential read can fail the save.
+    if ex == "hyperliquid":
+        if aws_access_key_id and aws_secret_access_key:
+            save_aws_profile_credentials(
+                profile=profile,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+            )
         save_aws_profile_region(profile=profile, region=aws_region)
 
+    from market_data import get_market_data_config_path
+
+    with advisory_file_lock(get_market_data_config_path()):
+        if not preserve_coins:
+            set_enabled_coins(ex, enabled_coins)
+        cfg = set_auto_enable_new_coins(ex, bool(auto_enable_new_coins))
+        response["enabled_coins"], response["missing_saved_coins"], response["auto_enable_new_coins"] = get_effective_enabled_coins(
+            ex, cfg=cfg, coin_options=snapshot.coin_options,
+        )
 
     def mutate_ini(parser) -> None:
         for section, values in ini_updates.items():
@@ -443,7 +497,7 @@ def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[s
     except Exception as exc:
         _log(SERVICE, f"Failed to queue {ex} latest 1m refresh after settings save: {exc}", level="WARNING")
 
-    return _build_market_data_settings_payload(ex)
+    return response
 
 
 def _build_tradfi_symbol_map_payload() -> dict[str, Any]:
@@ -465,6 +519,54 @@ def _build_tradfi_symbol_map_payload() -> dict[str, Any]:
         "quote_cache_info": build_tradfi_quote_cache_info(),
         "spec_cache_info": build_xyz_spec_cache_info(),
     }
+
+
+_SETTINGS_TIINGO_LOCK = threading.RLock()
+_SETTINGS_TIINGO_STORE: CredentialStore | None = None
+_SETTINGS_TIINGO_CACHE: tuple | None = None
+
+
+def _settings_tiingo_identity() -> tuple[str, bool, str]:
+    """Cache only public profile metadata and an internal usage ID, never a key.
+
+    API startup owns legacy bootstrap. The store owns short-lived locks, not
+    persistent file handles. Catalog identity covers rotation and selection.
+    """
+    global _SETTINGS_TIINGO_STORE, _SETTINGS_TIINGO_CACHE
+    root = PBGDIR / "data" / "credentials"
+    path = root / "catalog.json"
+    with _SETTINGS_TIINGO_LOCK:
+        for _attempt in range(2):
+            try:
+                stat = path.stat()
+                signature = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+            except FileNotFoundError:
+                _SETTINGS_TIINGO_CACHE = None
+                return "", False, ""
+            if _SETTINGS_TIINGO_CACHE is not None and _SETTINGS_TIINGO_CACHE[:2] == (path, signature):
+                return _SETTINGS_TIINGO_CACHE[2:]
+            if _SETTINGS_TIINGO_STORE is None or _SETTINGS_TIINGO_STORE.root != root:
+                _SETTINGS_TIINGO_STORE = CredentialStore(root)
+            store = _SETTINGS_TIINGO_STORE
+            records = sorted(
+                (record for record in store.list_tradfi(active_only=True) if str(record.get("provider") or "").lower() == "tiingo"),
+                key=lambda record: (str(record.get("updated_at") or ""), str(record.get("id") or "")),
+            )
+            identity = ("", False, "")
+            if records:
+                record = records[-1]
+                credentials = store.load_tradfi_credentials(record["id"], generation=int(record["generation"]))
+                key = str(credentials.get("api_key") or credentials.get("token") or credentials.get("key") or "").strip()
+                identity = (str(record["id"]), bool(key), _tiingo_usage_key_id(key) if key else "")
+                del credentials, key
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            if (stat.st_mtime_ns, stat.st_size, stat.st_ino) == signature:
+                _SETTINGS_TIINGO_CACHE = (path, signature, *identity)
+                return identity
+        raise ValueError("Tiingo profile changed while reading settings. Try again.")
 
 
 def _active_tiingo_credential(*, required: bool = True) -> tuple[dict[str, Any] | None, str]:
@@ -865,10 +967,13 @@ def queue_checksum_reference(session: SessionToken = Depends(require_auth)) -> d
 def get_market_data_settings(exchange: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     try:
         return _build_market_data_settings_payload(exchange)
+    except HTTPException:
+        raise
     except Exception as e:
+        _log(SERVICE, f"Loading Market Data settings failed ({type(e).__name__})", level="ERROR")
         return {
             "success": False,
-            "error": str(e),
+            "error": "Unable to load Market Data settings.",
             "exchange": _normalize_settings_exchange(exchange),
         }
 
@@ -884,8 +989,11 @@ def save_market_data_settings(exchange: str, request: dict[str, Any], session: S
             "settings": payload,
             "apply": payload["apply"],
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        _log(SERVICE, f"Saving Market Data settings failed ({type(e).__name__})", level="ERROR")
+        return {"success": False, "error": "Unable to save Market Data settings."}
 
 
 @router.get("/settings/hyperliquid/tradfi-map")
@@ -1397,7 +1505,7 @@ def _best_1m_exchange_meta(exchange: str) -> dict[str, str] | None:
 def _get_best_1m_available_coins(exchange: str) -> list[str]:
     """Return all available coins for manual Best 1m builds."""
 
-    return [str(coin).strip().upper() for coin in get_market_data_coin_options(exchange) if str(coin).strip()]
+    return [str(coin).strip().upper() for coin in _coin_options_for_exchange(exchange) if str(coin).strip()]
 
 
 def _normalize_best_1m_request_coin(coin: str, *, available_coins: list[str] | None = None) -> str:
@@ -3542,11 +3650,17 @@ def get_best_1m_info(exchange: str, session: SessionToken = Depends(require_auth
         return {"success": False, "error": "Unsupported exchange for Best 1m."}
 
     exchange_clean = _normalize_settings_exchange(exchange)
+    try:
+        coins = _get_best_1m_available_coins(exchange_clean)
+    except HTTPException as exc:
+        if exc.status_code != 503:
+            raise
+        return {"success": False, "error": exc.detail}
     return {
         "success": True,
         "exchange": exchange_clean,
         "label": meta["label"],
-        "coins": _get_best_1m_available_coins(exchange_clean),
+        "coins": coins,
         "description": meta["description"],
         "hint": meta["hint"],
         "refetch_label": meta["refetch_label"],
@@ -3575,7 +3689,12 @@ def queue_best_1m_job(
     if not meta:
         return {"success": False, "error": "Unsupported exchange for Best 1m."}
 
-    available_coins = _get_best_1m_available_coins(exchange_clean)
+    try:
+        available_coins = _get_best_1m_available_coins(exchange_clean)
+    except HTTPException as exc:
+        if exc.status_code != 503:
+            raise
+        return {"success": False, "error": exc.detail}
     raw_coins = request.get("coins", [])
     if not isinstance(raw_coins, list):
         raw_coins = []

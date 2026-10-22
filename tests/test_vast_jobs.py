@@ -18,6 +18,536 @@ from vast_transfer import extract_results, import_results, fetch_host_key_result
 from setup.vast_gpu_benchmark.cloud_worker import safe_path
 
 
+def final_result_fixture(store, identifier):
+    """Write tiny native results and manifest exclusively below a test store."""
+    final = ensure_private_directory(store.directory(identifier) / 'final-results')
+    result = ensure_private_directory(final / 'optimize_results/run')
+    (result / 'all_results.bin').write_bytes(msgpack.packb({'metrics': {}}))
+    write_json(final / 'finished.json', {'exit_code': 0, 'wall_seconds': 12, 'finished_at': 1234})
+    write_json(ensure_private_directory(store.directory(identifier) / 'input') / 'manifest.json', {})
+    store.update(identifier, final_collected=True)
+    return final
+
+
+@pytest.mark.parametrize('failure', ['observe', 'status', 'persistence', 'import'])
+def test_finalization_retry_after_publication_and_lock_release(job, monkeypatch, failure):
+    """Technical failures preserve raw/published results, release Finalize and retry reentrantly."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from file_lock import advisory_file_lock
+    import vast_job_runner as runner
+    import vast_convergence
+    store, identifier, _ = job
+    final = final_result_fixture(store, identifier)
+    update = store.update
+    importer = runner.import_results
+    observe = vast_convergence.observe
+    raised = False
+
+    def broken_update(identifier, **changes):
+        """Fail the final status write, and optionally its retry-state write."""
+        nonlocal raised
+        if changes.get('status') == 'completed' and not raised:
+            raised = True
+            raise RuntimeError('original failure')
+        if failure == 'persistence' and changes.get('error') == 'Raw results saved locally; result import needs retry':
+            raise ValueError('secondary failure')
+        return update(identifier, **changes)
+
+    def broken(*args, **kwargs):
+        """Inject a technical error without touching production data."""
+        raise RuntimeError('original failure')
+
+    monkeypatch.setattr(runner, '_log', lambda *args, **kwargs: None)
+    if failure in {'status', 'persistence'}:
+        monkeypatch.setattr(store, 'update', broken_update)
+    elif failure == 'observe':
+        monkeypatch.setattr(vast_convergence, 'observe', broken)
+    else:
+        monkeypatch.setattr(runner, 'import_results', broken)
+    with pytest.raises(RuntimeError, match='original failure'):
+        runner.finalize_collected_results(store, identifier)
+    state = store.read(identifier)
+    if failure != 'persistence':
+        assert state['status'] == 'failed'
+        assert state['error'] == 'Raw results saved locally; result import needs retry'
+    if failure != 'import':
+        assert Path(state['result_path']).is_dir() and state['result_partial'] is False
+    assert (final / 'optimize_results/run/all_results.bin').is_file()
+    assert (store.directory(identifier) / '.finalize-lock.lock').is_file()
+    monkeypatch.setattr(store, 'update', update)
+    monkeypatch.setattr(runner, 'import_results', importer)
+    monkeypatch.setattr(vast_convergence, 'observe', observe)
+
+    def retry():
+        """A different thread obtains the released lock, then enters it reentrantly."""
+        with advisory_file_lock(store.directory(identifier) / '.finalize-lock'):
+            return runner.finalize_collected_results(store, identifier)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        assert executor.submit(retry).result(timeout=5)['status'] == 'completed'
+
+
+@pytest.mark.parametrize('caller', ['api', 'runner', 'stop'])
+def test_finalization_waiter_reads_completed_state_before_expired_budget(job, monkeypatch, caller):
+    """API/API, API/Runner and API/Stop share one transaction through final status."""
+    import threading
+    from contextlib import contextmanager
+    from concurrent.futures import ThreadPoolExecutor
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    final_result_fixture(store, identifier)
+    entered, release, waiting = threading.Event(), threading.Event(), threading.Event()
+    original_import, original_lock = runner.import_results, runner.advisory_file_lock
+    count = []
+
+    def held_import(*args, **kwargs):
+        """Hold publication while a second owner is waiting for Finalize."""
+        count.append(1)
+        entered.set()
+        assert release.wait(5)
+        return original_import(*args, **kwargs)
+
+    @contextmanager
+    def tracked_lock(target):
+        """Observe the waiter before it blocks, without replacing the real lock."""
+        if Path(target).name == '.finalize-lock' and threading.current_thread().name.endswith('_1'):
+            waiting.set()
+        with original_lock(target):
+            yield
+
+    def expired():
+        """A completed outcome must bypass a now-expired cooperative deadline."""
+        pytest.fail('Completed finalization re-entered its expired import budget')
+
+    def waiter():
+        """Exercise the actual public callers while the first import is held."""
+        if caller == 'api':
+            return runner.finalize_collected_results(store, identifier, check=expired)
+        if caller == 'runner':
+            runner.run_loop(store, identifier)
+        else:
+            store.update(identifier, stop_rpc_at=1, final_collection_at=1)
+            runner.stop_and_collect(object(), store, identifier, intent)
+        return store.read(identifier)
+
+    monkeypatch.setattr(runner, 'import_results', held_import)
+    monkeypatch.setattr(runner, 'advisory_file_lock', tracked_lock)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(runner.finalize_collected_results, store, identifier)
+        try:
+            assert entered.wait(5)
+            second = executor.submit(waiter)
+            assert waiting.wait(5)
+        finally:
+            release.set()
+        assert first.result(timeout=5)['status'] == 'completed'
+        assert second.result(timeout=5)['status'] == 'completed'
+    assert count == [1]
+    assert store.read(identifier)['error'] is None
+
+
+def test_startup_repair_waits_for_concurrent_finalization(job, monkeypatch):
+    """Startup's stale empty-result candidate waits for API finalization and rechecks success."""
+    import threading
+    from contextlib import contextmanager
+    from concurrent.futures import ThreadPoolExecutor
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final = final_result_fixture(store, identifier)
+    binary = final / 'optimize_results/run/all_results.bin'
+    binary.write_bytes(b'')
+    write_json(final / 'finished.json', {'cancelled': True, 'exit_code': 130})
+    store.update(identifier, status='failed', stop_reason='requested', error='Raw results saved locally; result import needs retry')
+    acquired, release, waiting = threading.Event(), threading.Event(), threading.Event()
+    original_lock = runner.advisory_file_lock
+
+    @contextmanager
+    def tracked_lock(target):
+        """Observe startup waiting on the same production lock."""
+        if threading.current_thread().name.endswith('_1'):
+            waiting.set()
+        with original_lock(target):
+            yield
+
+    def api_finalization():
+        """Repair evidence while owning Finalize, before the startup writer can inspect it."""
+        with original_lock(store.directory(identifier) / '.finalize-lock'):
+            acquired.set()
+            assert release.wait(5)
+            binary.write_bytes(msgpack.packb({'metrics': {}}))
+            write_json(final / 'finished.json', {'exit_code': 0})
+            return runner.finalize_collected_results(store, identifier)
+
+    monkeypatch.setattr(runner, 'advisory_file_lock', tracked_lock)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        api = executor.submit(api_finalization)
+        try:
+            assert acquired.wait(5)
+            startup = executor.submit(runner.recover_cancelled_empty_results, store)
+            assert waiting.wait(5)
+        finally:
+            release.set()
+        assert api.result(timeout=5)['status'] == 'completed'
+        assert startup.result(timeout=5) == 0
+    assert store.read(identifier)['status'] == 'completed'
+
+
+def _process_finalizer(root, identifier, connection):
+    """Finalize in a separate process; exchange only bounded test synchronization messages."""
+    import vast_job_runner as runner
+    runner._log = lambda *args, **kwargs: None
+    original = runner.import_results
+
+    def held_import(*args, **kwargs):
+        """The parent releases publication after observing the competing waiter."""
+        connection.send('import')
+        assert connection.poll(8)
+        assert connection.recv() == 'release'
+        return original(*args, **kwargs)
+
+    runner.import_results = held_import
+    try:
+        connection.send(runner.finalize_collected_results(JobStore(root), identifier)['status'])
+    finally:
+        connection.close()
+
+
+def test_finalization_process_serialization(job, monkeypatch):
+    """The actual .finalize-lock.lock serializes processes and leaves no child or pipe behind."""
+    import multiprocessing
+    import threading
+    from contextlib import contextmanager
+    from concurrent.futures import ThreadPoolExecutor
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final_result_fixture(store, identifier)
+    ctx = multiprocessing.get_context('spawn')
+    parent, child = ctx.Pipe()
+    process = ctx.Process(target=_process_finalizer, args=(store.root, identifier, child))
+    waiting = threading.Event()
+    original_lock = runner.advisory_file_lock
+
+    @contextmanager
+    def tracked_lock(target):
+        """Observe the parent waiter while retaining the production file lock."""
+        if Path(target).name == '.finalize-lock':
+            waiting.set()
+        with original_lock(target):
+            yield
+
+    process.start()
+    child.close()
+    try:
+        assert parent.poll(8) and parent.recv() == 'import'
+        monkeypatch.setattr(runner, 'advisory_file_lock', tracked_lock)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(runner.finalize_collected_results, store, identifier)
+            try:
+                assert waiting.wait(5)
+                assert not future.done()
+            finally:
+                parent.send('release')
+            assert future.result(timeout=8)['status'] == 'completed'
+        assert parent.poll(8) and parent.recv() == 'completed'
+        process.join(8)
+        assert process.exitcode == 0
+    finally:
+        if process.is_alive():
+            process.terminate()
+        process.join(8)
+        parent.close()
+
+
+@pytest.mark.parametrize('field,value', [('result_partial', True), ('exact_completed', 999),
+    ('completion_reason', 'requested'), ('finished_at', -1), ('status', 'failed'),
+    ('error', 'Raw results saved locally; result import needs retry')])
+def test_incomplete_published_outcomes_are_refinalized(job, monkeypatch, field, value):
+    """A path or terminal status cannot bypass missing or contradictory completion evidence."""
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final_result_fixture(store, identifier)
+    runner.finalize_collected_results(store, identifier)
+    store.update(identifier, **{field: value})
+    imported, original = [], runner.import_results
+
+    def counted(*args, **kwargs):
+        """Count real idempotent import attempts."""
+        imported.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runner, 'import_results', counted)
+    assert runner.finalize_collected_results(store, identifier)['status'] == 'completed'
+    assert imported == [True]
+
+
+@pytest.mark.parametrize('checked', [999, None, True, 1.0])
+def test_final_waiting_convergence_rejects_invalid_count(job, monkeypatch, checked):
+    """Waiting cannot hide a contradictory or non-integer final evaluation counter."""
+    import vast_convergence
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final_result_fixture(store, identifier)
+    store.update(identifier, convergence_config=dict(vast_convergence.DEFAULTS, convergence_enabled=True))
+    first = runner.finalize_collected_results(store, identifier)
+    assert first['evaluations'] == 1
+    history = dict(first['convergence'])
+    history['final'] = dict(phase='waiting', reason='Waiting for feasible exact results',
+                            checked_exact=checked, threshold_reached=False)
+    store.update(identifier, convergence=history)
+    calls, observe = [], vast_convergence.observe
+
+    def counted(*args, **kwargs):
+        """Count actual final assessments rather than just import calls."""
+        calls.append(kwargs.get('final'))
+        return observe(*args, **kwargs)
+
+    monkeypatch.setattr(vast_convergence, 'observe', counted)
+    repeated = runner.finalize_collected_results(store, identifier)
+    assert calls == [True]
+    assert type(repeated['convergence']['final']['checked_exact']) is int
+    assert repeated['convergence']['final']['checked_exact'] == repeated['evaluations']
+
+
+@pytest.mark.parametrize('unavailable', [False, True])
+def test_valid_final_waiting_convergence_skips_expired_import(job, monkeypatch, unavailable):
+    """A matching count or genuinely unavailable assessment remains a complete outcome."""
+    import vast_convergence
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final = final_result_fixture(store, identifier)
+    if unavailable:
+        front = ensure_private_directory(final / 'optimize_results/run/pareto')
+        (front / 'broken.json').write_text('{')
+    store.update(identifier, convergence_config=dict(vast_convergence.DEFAULTS,
+                 convergence_enabled=True, convergence_min_exact=1))
+    first = runner.finalize_collected_results(store, identifier)
+    assessment = first['convergence']['final']
+    assert assessment['phase'] == 'waiting'
+    assert ('checked_exact' not in assessment) is unavailable
+
+    def forbidden(*args, **kwargs):
+        """Completed evidence is checked before another import or depleted deadline."""
+        pytest.fail('A valid completed waiting assessment was imported again')
+
+    monkeypatch.setattr(runner, 'import_results', forbidden)
+    repeated = runner.finalize_collected_results(store, identifier, check=forbidden)
+    assert repeated['convergence']['final'] == assessment
+
+
+@pytest.mark.parametrize('after_collection', [False, True])
+def test_stop_collection_error_preserves_concurrent_recover(job, monkeypatch, after_collection):
+    """A failure between collection and finalization cannot overwrite a completed API retry."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    monkeypatch.setattr(runner.time, 'time', lambda: 1100)
+    store.update(identifier, stop_rpc_at=1000, final_collection_at=1100)
+
+    class Connection:
+        """Publish final evidence while Stop holds an older state snapshot."""
+        def collect(self, final, **kwargs):
+            """Model collection completion followed by a technical controller failure."""
+            final_result_fixture(store, identifier)
+            if after_collection:
+                runner.finalize_collected_results(store, identifier)
+            raise RuntimeError('isolated collection error')
+
+    assert runner.stop_and_collect(Connection(), store, identifier, intent)
+    row = store.read(identifier)
+    # A verified Stop snapshot proves execution independently of publication.
+    # Concurrent successful recovery must also keep its technical success state.
+    assert row['status'] == 'completed' and row['error'] is None
+    assert bool(row.get('collection_incomplete')) is (not after_collection)
+    assert bool(row.get('collection_error')) is (not after_collection)
+    assert store.read(identifier, 'control.json')['cleanup']
+
+
+@pytest.mark.parametrize('log_failure', ['stat', 'open', 'read'])
+@pytest.mark.parametrize('case', ['no_results', 'results', 'publication_error'])
+def test_stop_execution_failure_survives_unreadable_diagnostic_log(job, monkeypatch, log_failure, case):
+    """Optional log I/O cannot hide exit code 1 or block local publication recovery."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    final = final_result_fixture(store, identifier)
+    write_json(final / 'finished.json', dict(exit_code=1, cancelled=False, finished_at=1099, wall_seconds=12))
+    if case == 'no_results':
+        (final / 'optimize_results/run/all_results.bin').unlink()
+    diagnostic = final / 'optimizer.log'
+    diagnostic.write_text('isolated optimizer diagnostic')
+    store.update(identifier, kind='optimizer', status='collecting', stop_reason='requested',
+                 stop_rpc_at=1000, final_collection_at=1100)
+    monkeypatch.setattr(runner.time, 'time', lambda: 1100)
+    warnings = []
+    monkeypatch.setattr(runner, '_log', lambda service, message, **kwargs: warnings.append(message))
+    original_open, original_is_file = Path.open, Path.is_file
+
+    class UnreadableLog:
+        """Fail a diagnostic read without opening a production file or retaining a handle."""
+        def __enter__(self):
+            """Provide the read context expected by the diagnostic enrichment."""
+            return self
+
+        def __exit__(self, *args):
+            """No real resource was acquired."""
+
+        def read(self, *args):
+            """Represent a bounded diagnostic read encountering a storage error."""
+            raise OSError('isolated diagnostic read failure')
+
+    def checked_open(path, *args, **kwargs):
+        """Restrict the injected error to the temporary optional optimizer log."""
+        if path == diagnostic and log_failure != 'stat':
+            if log_failure == 'open':
+                raise PermissionError('isolated diagnostic open failure')
+            return UnreadableLog()
+        return original_open(path, *args, **kwargs)
+
+    def checked_is_file(path):
+        """Exercise inaccessible metadata separately from open and read errors."""
+        if path == diagnostic and log_failure == 'stat':
+            raise PermissionError('isolated diagnostic metadata failure')
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, 'open', checked_open)
+    monkeypatch.setattr(Path, 'is_file', checked_is_file)
+    importer = runner.import_results
+
+    def publication_error(*args, **kwargs):
+        """Local publication may fail independently of the optional diagnostic."""
+        raise VastError('isolated publication failure')
+
+    if case == 'publication_error':
+        monkeypatch.setattr(runner, 'import_results', publication_error)
+    assert runner.stop_and_collect(object(), store, identifier, intent)
+    current = store.read(identifier)
+    assert current['status'] == 'failed' and current['exit_code'] == 1
+    assert current['error'].startswith('PB8 optimizer exited with code 1')
+    assert bool(current['collection_incomplete']) is (case == 'publication_error')
+    assert bool(current['collection_error']) is (case == 'publication_error')
+    assert bool(current.get('stop_finalization_pending')) is (case == 'publication_error')
+    assert any('diagnostic' in message.lower() for message in warnings)
+    if case == 'publication_error':
+        with pytest.raises(VastError, match='isolated publication failure'):
+            runner.finalize_collected_results(store, identifier)
+        assert store.read(identifier)['error'].startswith('PB8 optimizer exited with code 1')
+        monkeypatch.setattr(runner, 'import_results', importer)
+        for _ in range(2):
+            recovered = runner.finalize_collected_results(store, identifier)
+            assert recovered['status'] == 'failed' and recovered['exit_code'] == 1
+            assert recovered['error'].startswith('PB8 optimizer exited with code 1')
+            assert recovered['collection_incomplete'] is False and recovered['collection_error'] is None
+            assert recovered['stop_finalization_pending'] is False
+        assert len(list(Path(intent['results_root']).glob('run_vast_*'))) == 1
+
+
+@pytest.mark.parametrize('terminal', ['completed', 'failed', 'cancelled'])
+def test_stop_without_final_data_preserves_terminal_state(job, monkeypatch, terminal):
+    """The no-final-data fallback rechecks State and preserves all terminal statuses."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    store.update(identifier, stop_rpc_at=1000, final_collection_at=1100)
+    monkeypatch.setattr(runner.time, 'time', lambda: 1100)
+
+    class Connection:
+        """End the job after Stop's initial read, without final raw results."""
+        def collect(self, *args, **kwargs):
+            """Simulate a concurrent terminal writer before a failed download."""
+            store.update(identifier, status=terminal)
+            raise RuntimeError('isolated download failure')
+
+    assert runner.stop_and_collect(Connection(), store, identifier, intent, lease_id='b'*32)
+    assert store.read(identifier)['status'] == terminal
+    assert not store.read(identifier, 'control.json')['cleanup']
+
+
+def test_stop_marker_failure_keeps_successful_finalization(job, monkeypatch):
+    """A marker write error does not turn successful result publication into a failed job."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    final_result_fixture(store, identifier)
+    store.update(identifier, stop_rpc_at=1000, final_collection_at=1100)
+    monkeypatch.setattr(runner.time, 'time', lambda: 1100)
+    update = store.update
+
+    def marker_error(identifier, **changes):
+        """Inject only the final marker write failure."""
+        if changes.get('stop_results_published'):
+            raise OSError('isolated marker write failure')
+        return update(identifier, **changes)
+
+    monkeypatch.setattr(store, 'update', marker_error)
+    assert runner.stop_and_collect(object(), store, identifier, intent)
+    assert store.read(identifier)['status'] == 'completed'
+    assert store.read(identifier)['error'] is None
+
+
+def test_runner_catch_does_not_overwrite_successful_retry(job, monkeypatch):
+    """The runner's delayed exception handler logs, cleans up without a lease, and returns."""
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final_result_fixture(store, identifier)
+    original = runner.finalize_collected_results
+
+    def success_then_raise(*args, **kwargs):
+        """Model another API retry completing before the runner handles its exception."""
+        original(*args, **kwargs)
+        raise RuntimeError('earlier finalizer error')
+
+    monkeypatch.setattr(runner, 'finalize_collected_results', success_then_raise)
+    runner.run_loop(store, identifier)
+    assert store.read(identifier)['status'] == 'completed'
+    assert store.read(identifier, 'control.json')['cleanup']
+
+
+@pytest.mark.parametrize('changed', ['status', 'final_collected', 'stop_reason', 'error', 'finished', 'binary'])
+def test_startup_repair_rechecks_after_finalization_lock(job, monkeypatch, changed):
+    """A stale startup inventory never repairs evidence changed by a concurrent finalizer."""
+    from contextlib import contextmanager
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    final = final_result_fixture(store, identifier)
+    binary = final / 'optimize_results/run/all_results.bin'
+    binary.write_bytes(b'')
+    write_json(final / 'finished.json', {'cancelled': True, 'exit_code': 130})
+    store.update(identifier, status='failed', stop_reason='requested', error='Raw results saved locally; result import needs retry')
+    original = runner.advisory_file_lock
+
+    @contextmanager
+    def intervening_finalizer(target):
+        """Change evidence after the inventory snapshot but before lock ownership."""
+        if changed == 'finished':
+            write_json(final / 'finished.json', {'exit_code': 0})
+        elif changed == 'binary':
+            binary.write_bytes(b'not empty')
+        else:
+            values = dict(status='completed', final_collected=False, stop_reason='convergence', error='Optimizer error')
+            store.update(identifier, **{changed: values[changed]})
+        with original(target):
+            yield
+
+    monkeypatch.setattr(runner, 'advisory_file_lock', intervening_finalizer)
+    assert runner.recover_cancelled_empty_results(store) == 0
+
+
+def test_verified_worker_dispatch_releases_state_lock(job, monkeypatch):
+    """Worker dispatch may acquire Queue/State only after the rental helper releases State."""
+    import file_lock
+    import vast_queue
+    import vast_job_runner as runner
+    store, identifier, _ = job
+    store.update(identifier, kind='worker', rental_state='deletion_verified')
+    calls = []
+
+    def step(queue, identifier, **kwargs):
+        """Assert lock ownership at the actual dispatch boundary."""
+        calls.append(identifier)
+        assert not getattr(file_lock._HELD_LOCKS, 'entries', {})
+
+    monkeypatch.setattr(vast_queue, 'worker_step', step)
+    runner.finalize_verified_rental(store, identifier, now=1100)
+    assert calls == [identifier]
+
+
 @pytest.mark.parametrize('offline', [None, False, True])
 def test_cloud_export_always_enforces_offline_without_changing_source(offline):
     """Even an online local config cannot permit remote exchange downloads."""

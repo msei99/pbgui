@@ -249,6 +249,82 @@ async function resize() {
     }
 }
 
+
+async function pnl() {
+    const mode = process.argv[3];
+    const scenario = process.argv[4];
+    const cumulative = mode === 'Cumulative' || mode === 'line';
+    const invalid = [null, undefined, NaN, Infinity, -Infinity, '', '  ', true, false, 'bad', {}, [], 'Infinity', 'NaN'];
+    const cases = {
+        mixed: {raw: [5, ...invalid, ' 3.25 ', -2, '-1.5', 0, '0'],
+                expected: [5, ...invalid.map(() => null), 3.25, -2, -1.5, 0, 0]},
+        invalid: {raw: invalid, expected: invalid.map(() => null)},
+        empty: {raw: [], expected: []},
+        missing: {raw: [null, undefined, 8], expected: [null, null, 8]},
+    };
+    const {raw, expected} = cases[scenario];
+    const bars = raw.map((value, index) => {
+        const bar = {date: '2026-09-' + String(index + 1).padStart(2, '0'), income: value, cum: value};
+        if (scenario === 'missing') {
+            bar.income = 99; // Neither null nor missing cum may fall back to daily income.
+            if (index === 1) delete bar.cum;
+        }
+        return Object.freeze(bar);
+    });
+    Object.freeze(bars);
+    const data = Object.freeze({mode, bars, from_date: '2026-09-01', to_date: '2026-09-30'});
+    const before = structuredClone(data);
+    const wanted = scenario === 'missing' && !cumulative ? [99, 99, 99] : expected;
+    const document = new Element();
+    document.createElement = tag => new Element(tag);
+    document.getElementById = () => new Element();
+    const Plotly = {
+        react(chart, traces, layout) { chart.data = traces; chart.layout = layout; },
+        Plots: {resize() {}}
+    };
+    const window = {Plotly};
+    const ctx = vm.createContext({window, document, Plotly, setTimeout() {}, clearTimeout() {}});
+    vm.runInContext(source('dashboard_render.js'), ctx);
+    const container = new Element();
+    container.connected = true;
+    const opts = {noResize: true, savedZoom: {xrange: ['2026-09-01', '2026-09-20'], yrange: [-3, 10]}};
+    // Direct rendering also checks empty input; buildPnl presents an empty-state message.
+    const direct = new Element();
+    window.DashRender.renderPnl(direct, data, opts);
+    const check = chart => {
+        const trace = chart.data[0];
+        assert.deepEqual([...trace.x], bars.map(bar => bar.date));
+        assert.deepEqual([...trace.y], wanted);
+        assert.deepEqual([...trace.marker.color], wanted.map(value => value === null
+            ? 'rgba(0,0,0,0)' : value < 0 ? '#fc8181' : '#68d391'));
+        if (cumulative) {
+            assert.equal(trace.type, 'scatter');
+            assert.equal(trace.connectgaps, false);
+        } else {
+            assert.equal(trace.type, 'bar');
+            assert.deepEqual([...trace.text], wanted.map(value => value === null ? '' : value.toFixed(2)));
+            assert.deepEqual([...trace.textposition], wanted.map(value => value === 0 ? 'outside' : 'auto'));
+        }
+        assert.deepEqual([...chart.layout.xaxis.range], opts.savedZoom.xrange);
+        assert.deepEqual([...chart.layout.yaxis.range], opts.savedZoom.yrange);
+    };
+    check(direct);
+    window.DashRender.buildPnl(container, data, opts);
+    if (bars.length) {
+        const chart = container.querySelector('.dt-chart');
+        check(chart); // First build.
+        const header = container.querySelector('.dt-header');
+        window.DashRender.buildPnl(container, data, {noResize: true});
+        assert.equal(container.querySelector('.dt-chart'), chart);
+        assert.equal(container.querySelector('.dt-header'), header);
+        check(chart); // Existing-chart fast path retains zoom and header.
+    } else {
+        assert.equal(container.querySelector('.dt-chart'), null);
+        assert.equal(container.querySelector('.dt-nodata').textContent, 'No data for the selected period.');
+    }
+    assert.deepEqual(data, before, 'raw input remains unchanged, including missing properties and NaN');
+}
+
 async function charts() {
     const document = new Element();
     document.createElement = tag => new Element(tag);
@@ -866,7 +942,7 @@ async function candles() {
     assert.equal(candleRows.at(-1).close, 8, 'destroyed chart ignores pending snapshot');
 }
 
-({creation, templates, cancel, resize, charts, cards, ppl, emptyOrders, messages, assets, candles, page})[process.argv[2]]().catch(error => {
+({creation, templates, cancel, resize, charts, cards, pnl, ppl, emptyOrders, messages, assets, candles, page})[process.argv[2]]().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

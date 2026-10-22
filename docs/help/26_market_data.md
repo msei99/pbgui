@@ -91,6 +91,14 @@ Expanders are shown in this order:
 
 ## Market Data Page
 
+Open **Information → Market Data → Settings → Coin Refresh**. The **Exchange** selector chooses the local Coin Data mapping used by the settings picker and the native **Build Best 1m** availability check. Opening settings does not contact Hyperliquid or construct a Coin Data/CMC client. Downloads retain their operational live validation; a local option does not guarantee that an exchange will accept a download later.
+
+Coin options follow the latest locally published mapping immediately. Visible Settings rechecks options and Tiingo status/usage automatically every 15 seconds and when returning to the page. These updates preserve unsaved form values, selected coins, focus and the coin filter. Exchange, Settings subsection and coin filter are restored on browser reload; secret fields and unsaved form drafts are not stored in the browser.
+
+Switching exchanges during a settings save keeps the form unavailable until the save finishes and the last selected exchange has loaded. The pending save still belongs to its original exchange. With auto-enable active, newly available coins do not mark the form as edited; reverting a real field edit restores the clean state.
+
+Without a mapping, Settings shows that Coin Data is unavailable and retains the saved selection. Ordinary settings can still be saved; auto-enable does not infer an empty selection from missing or empty options. Run the usual Coin Data workflow to publish a mapping. A selected coin removed from an available mapping stays visible as **(unavailable)** until you change the selection. A read error is shown while the view keeps its last valid data and retries automatically; the server does not return stale data as a successful read. Best 1m cannot queue jobs if its mapping cannot be read.
+
 The `Market Data` page now runs directly on the FastAPI implementation, and the sidebar exposes the settings area through three dedicated subsections:
 
 The sidebar itself is now navigation-only: it contains the main page sections plus the contextual `Settings` actions, without separate overview or status summary info boxes.

@@ -3613,7 +3613,7 @@ def main_page(request: Request, session: SessionToken = Depends(require_auth)) -
         raise HTTPException(status_code=404, detail="v7_optimize.html not found")
     html = html_path.read_text(encoding="utf-8")
     try:
-        limits = get_pb8_optimize_metadata().get("limits") or {}
+        limits = get_pb8_optimize_metadata(include_backend_contract=False).get("limits") or {}
     except PB8ConfigurationError as exc:
         _log(SERVICE, f"Rendering PB8 Optimize without unavailable runtime metadata: {exc}", level="WARNING")
         limits = {}
@@ -3641,10 +3641,10 @@ def runtime_status(session: SessionToken = Depends(require_auth)) -> dict:
     return pb8_runtime_status()
 
 
-@router.get("/metadata")
-def get_metadata(session: SessionToken = Depends(require_auth)) -> dict:
+def _load_optimizer_metadata(*, include_backend_contract: bool = True) -> dict:
+    """Load metadata with consistent runtime diagnostics for optimizer routes."""
     try:
-        return get_pb8_optimize_metadata()
+        return get_pb8_optimize_metadata(include_backend_contract=include_backend_contract)
     except PB8ConfigurationError as exc:
         detail = str(exc)
         if "optimize bound " in detail and " does not map to bot." in detail:
@@ -3655,6 +3655,11 @@ def get_metadata(session: SessionToken = Depends(require_auth)) -> dict:
             _log(SERVICE, f"Loading PB8 optimize metadata failed: {exc}", level="WARNING")
             raise HTTPException(status_code=503, detail=detail) from exc
         raise _configuration_error("Loading PB8 optimize metadata", exc, 503) from exc
+
+
+@router.get("/metadata")
+def get_metadata(session: SessionToken = Depends(require_auth)) -> dict:
+    return _load_optimizer_metadata()
 
 
 @router.get("/scenario-templates")
@@ -3789,7 +3794,7 @@ def stop_ohlcv_preload(job_id: str, session: SessionToken = Depends(require_auth
 @router.get("/settings")
 def get_settings(session: SessionToken = Depends(require_auth)) -> dict:
     settings = load_ini_section(_QUEUE_SETTINGS_SECTION)
-    metadata = get_metadata(session)
+    metadata = _load_optimizer_metadata(include_backend_contract=False)
     return {
         "autostart": str(settings.get("autostart", "False")).lower() == "true",
         "cpu": _normalize_autostart_cpu(settings.get("cpu", "1")),
@@ -3828,13 +3833,13 @@ def update_settings(body: dict, session: SessionToken = Depends(require_auth)) -
 
 @router.get("/bot-params")
 def get_bot_params(session: SessionToken = Depends(require_auth)) -> dict:
-    metadata = get_metadata(session)
+    metadata = _load_optimizer_metadata(include_backend_contract=False)
     return {"params": [{"key": path.removeprefix("bot.long.")} for path in metadata.get("bot_parameter_paths") or [] if path.startswith("bot.long.")]}
 
 
 @router.get("/configs/new-config")
 def new_config(session: SessionToken = Depends(require_auth)) -> dict:
-    return {"config": get_metadata(session)["template"], "param_status": {}}
+    return {"config": _load_optimizer_metadata(include_backend_contract=False)["template"], "param_status": {}}
 
 
 @router.post("/configs/prepare")

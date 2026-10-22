@@ -10,6 +10,25 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def assert_quiet_success(page):
+    """Keep empty live regions rendered without spacing or redundant success copy."""
+    dialog = page.get_by_role('dialog', name='AI Loop Template', exact=True)
+    for text in ('Common market start including warmup → last complete UTC day.',
+                 'Window preview (inclusive UTC dates)',
+                 'Windows cover the selected period without gaps.'):
+        expect(dialog).not_to_contain_text(text)
+    statuses = dialog.locator('.pai-template-date-status')
+    expect(statuses).to_have_count(2)
+    for status in statuses.all():
+        expect(status).to_have_text('')
+        expect(status).to_have_attribute('role', 'status')
+        assert status.evaluate("""n => {
+            const s = getComputedStyle(n);
+            return s.display !== 'none' && s.marginTop === '0px' &&
+                s.marginBottom === '0px' && n.getBoundingClientRect().height === 0;
+        }""")
+
+
 @pytest.mark.parametrize('width', [700, 1400])
 def test_reviewed_holdout_dates_survive_edit_focus_reload_and_send(width):
     """No provider, downloads, saved configs, optimizer jobs or rentals are contacted."""
@@ -214,6 +233,7 @@ def test_automatic_lookup_finalizes_without_focus_cancellation(automatic_lookup_
     expect(send).to_be_enabled()
     expect(page.locator('.pai-template-error')).to_have_text('')
     holdout = preview.get_by_role('textbox', name='Holdout start (UTC)', exact=True)
+    assert_quiet_success(page)
     holdout.fill('2026-02-06')
     expect(send).to_be_enabled()
     page.evaluate("window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange'))")
@@ -225,6 +245,7 @@ def test_automatic_lookup_finalizes_without_focus_cancellation(automatic_lookup_
     assert len(state['jobs']) == 1
     page.locator('#pai-template-holdout').uncheck()
     expect(preview.locator('input[type="date"]')).to_have_count(6)
+    assert_quiet_success(page)
     # Editing windows cannot authorize dates from a different coin context.
     page.locator('#pai-template-coins .ms-x[data-val="HYPE"]').click()
     page.locator('#pai-template-coins .ms-input').fill('BTC')
@@ -232,6 +253,53 @@ def test_automatic_lookup_finalizes_without_focus_cancellation(automatic_lookup_
     _wait_for_date_poll(page, state)
     assert len(state['jobs']) == 2
     expect(send).to_be_disabled()
+
+
+@pytest.mark.parametrize('problem', ['overlap', 'reversed', 'outside', 'invalid'])
+def test_quiet_success_and_warning_recovery(automatic_lookup_page, problem):
+    """Recalculation and recovery preserve live status, roles and reviewed dates."""
+    page, state = automatic_lookup_page
+    _complete_date_poll(state)
+    send = page.get_by_role('button', name='Send to AI Chat', exact=True)
+    expect(send).to_be_enabled()
+    assert_quiet_success(page)
+    page.locator('#pai-template-timeframes').fill('4')
+    page.locator('#pai-template-timeframes').blur()
+    expect(page.locator('#pai-template-window-preview input[type="date"]')).to_have_count(10)
+    assert_quiet_success(page)
+    page.locator('#pai-template-timeframes').fill('3')
+    page.locator('#pai-template-timeframes').blur()
+    preview = page.locator('#pai-template-window-preview')
+    start = preview.get_by_role('textbox', name='Training 2 start (UTC)', exact=True)
+    original = start.input_value()
+    previous_end = preview.get_by_role('textbox', name='Training 1 end (UTC)', exact=True).input_value()
+    next_day = datetime.fromisoformat(original).replace(tzinfo=timezone.utc).timestamp() + 86400
+    gap_start = datetime.fromtimestamp(next_day, timezone.utc).date().isoformat()
+    start.fill(gap_start)
+    warning = page.locator('#pai-template-window-status')
+    expect(warning).to_have_text('1 unused calendar days between or outside windows.')
+    expect(warning).to_be_visible()
+    expect(send).to_be_enabled()
+    bad = {'overlap': previous_end, 'reversed': '2026-10-17',
+           'outside': '2023-12-31', 'invalid': ''}[problem]
+    start.fill(bad)
+    expect(send).to_be_disabled()
+    expect(page.locator('.pai-template-error')).not_to_have_text('')
+    expect(page.locator('.pai-template-date-status').first).not_to_have_text('')
+    start.fill(original)
+    expect(send).to_be_enabled()
+    assert_quiet_success(page)
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    expect(start).to_have_value(original)
+    assert_quiet_success(page)
+    page.get_by_role('dialog', name='AI Loop Template', exact=True).get_by_role('button', name='Close', exact=True).click()
+    page.locator('#btn-ai-loop-template').click()
+    expect(send).to_be_enabled()
+    assert_quiet_success(page)
+    page.reload()
+    expect(send).to_be_enabled()
+    expect(start).to_have_value(original)
+    assert_quiet_success(page)
 
 
 @pytest.mark.parametrize('failure', ['missing', 'invalid', 'short', 'request_timeout', 'lookup_timeout'])
@@ -278,6 +346,7 @@ def test_automatic_lookup_failure_and_retry(automatic_lookup_page, failure):
     expect(page.locator('#pai-template-start')).to_have_value('2024-01-01')
     expect(page.locator('#pai-template-window-preview input[type="date"]')).to_have_count(8)
     expect(page.get_by_role('button',name='Send to AI Chat',exact=True)).to_be_enabled()
+    assert_quiet_success(page)
 
 
 @pytest.mark.parametrize('action', ['manual', 'close', 'selection'])

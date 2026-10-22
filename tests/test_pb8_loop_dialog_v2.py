@@ -153,14 +153,14 @@ def test_complete_tool_dialog_preserves_ids_reasoning_and_usage(record, protocol
 
 
 def test_optional_reads_reserve_exact_mandatory_recovery(record):
-    """After optional reads the complete A package still fits its hard call allowance."""
+    """Optional budget notices preserve A recovery without aborting the decision."""
     session = frozen(record, {'stage':'evaluate','values':list(range(15000))})
     assert len(session.required_pages) > 1
-    for index in range(64):
-        try:
-            session.read({'path':'/data','offset':0}, 'optional-'+str(index))
-        except LoopAIPause:
-            break
+    session.calls = 60 - len(session.required_pages)
+    session.total_calls = session.calls
+    notice = session.read({'path':'/data','offset':0}, 'optional-limit')
+    assert notice['error'] == 'optional_evidence_budget_reserved'
+    assert notice['can_finalize'] and notice['required_reads'] == []
     assert session.calls + len(session.required_pages) <= 64
     session.compacted()
     for page in session.required_pages:

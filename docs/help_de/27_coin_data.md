@@ -75,7 +75,7 @@ FastAPI-UI-Verbesserungen:
 - Vollbreiten-Tabellen mit ausgewogener Spaltenverteilung, damit die verfuegbare Breite genutzt wird ohne uebergrosse Luecken zwischen den Werten
 - die aktive Desktop-Tabelle nutzt die verbleibende Fensterhoehe, statt unten Leerraum unter der Tabelle zu lassen
 - sortierbare Tabellen-Header fuer Matched-, Unmatched- und HIP-3-Ansicht
-- Sortieren und Auswaehlen von Zeilen aktualisiert nur den Tabelleninhalt, sodass offene Filter-Controls ihren DOM und Fokus behalten
+- Sortieren aktualisiert nur den Tabelleninhalt; die Zeilenauswahl ändert die Markierung und Detailkarte ohne neue Tabellenzeilen, sodass offene Tag-Filter Fokus und Eingabeentwurf behalten
 - nicht verfuegbare CMC-Werte fuer Market Cap, 24-Stunden-Volumen und `vol/mcap` werden als `N/A` angezeigt und nach bekannten Werten sortiert
 - Hover-Tooltips fuer Tags, Notices und lange Werte
 - Row-Selection mit zentrierter schwebender Detailkarte, die sich beim Oeffnen soweit moeglich automatisch an den Inhalt anpasst, sich an jeder Seite und Ecke in der Groesse aendern und verschieben laesst, alle Tags ohne Abschneiden zeigt, einen direkten `Open CMC`-Link bei vorhandener CoinMarketCap-Zuordnung bietet und per `X` statt nur ueber Notice-Text geschlossen wird
@@ -128,5 +128,7 @@ Coin Data liest und schreibt unter:
 - Den automatischen CMC-Update-Status und die Datenzeitstempel prüfen
 - Pruefen, ob Symbole neu gelistet sind oder Exchange-spezifische Namensvarianten verwenden
 - Bei nicht verfügbaren CMC-Updates einen aktiven lokalen Schlüssel im PBCoinData-Pool prüfen; Updates werden automatisch fortgesetzt
+
+Die Zeilenauswahl ändert nur die Markierung und die Detailkarte, ohne Tabellenzeilen neu aufzubauen. Offene Tag-Filter behalten Fokus und Eingabeentwurf. Auch nach wiederholtem Anklicken bleibt genau eine Zeile ausgewählt. `X` oder Escape schließt die Detailkarte und entfernt alle Zeilenmarkierungen, ohne Tabellen oder Filter-Steuerungen neu aufzubauen.
 
 Filter zurücksetzen setzt auch die HIP-3-DEX-Auswahl zurück. Escape schließt die Detailkarte der ausgewählten Coin. Die Statuszeile bleibt während der Hintergrundarbeit sichtbar und meldet Teilergebnisse oder Fehler.

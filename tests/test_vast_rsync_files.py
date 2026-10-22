@@ -176,7 +176,7 @@ def test_direct_sync_skips_legacy_cache_query_and_archive(tmp_path, monkeypatch)
     import vast_transfer
     connection = object.__new__(WorkerConnection)
     connection.identifier = 'a'*32
-    connection.store = SimpleNamespace()
+    connection.store = SimpleNamespace(read=lambda *_: {'stop': False, 'cleanup': False})
     monkeypatch.setattr(vast_transfer, 'execution_input', lambda *args: tmp_path)
     monkeypatch.setattr(vast_rsync, 'available', lambda *args: True)
     calls = []

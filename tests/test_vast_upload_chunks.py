@@ -15,7 +15,8 @@ def test_chunk_upload_resumes_and_repairs_corrupt_chunks(tmp_path):
     connection = object.__new__(WorkerConnection)
     connection.remote_root = str(remote)
     connection.identifier = 'a'*32
-    connection.store = SimpleNamespace(update=lambda identifier, **values: reports.append(values))
+    connection.store = SimpleNamespace(read=lambda *_: {'stop': False, 'cleanup': False},
+        update=lambda identifier, **values: reports.append(values))
     fail = [True]
     def command(cmd, *, stdin=None, stdout=None, progress=None, **kwargs):
         """Execute the fixed transport scripts inside the test's private directory."""
@@ -60,7 +61,8 @@ def test_upload_archive_is_stable_across_retries(tmp_path, monkeypatch):
     connection.directory = tmp_path
     connection.remote_root = '/unused'
     connection.identifier = 'a'*32
-    connection.store = SimpleNamespace(update=lambda *a, **kw: None)
+    connection.store = SimpleNamespace(read=lambda *_: {'stop': False, 'cleanup': False},
+        update=lambda *a, **kw: None)
     connection.command = lambda *a, **kw: b''
     connection.operation = lambda *a, **kw: {'missing': []}
     captured = []
@@ -80,7 +82,8 @@ def test_receiver_progress_is_separate_from_verified_bytes(tmp_path):
     connection.remote_root = str(tmp_path / 'remote')
     connection.identifier = 'a'*32
     reports = []
-    connection.store = SimpleNamespace(update=lambda *a, **kw: reports.append(kw['upload_progress']))
+    connection.store = SimpleNamespace(read=lambda *_: {'stop': False, 'cleanup': False},
+        update=lambda *a, **kw: reports.append(kw['upload_progress']))
     def command(cmd, *, stdin=None, stdout=None, **kwargs):
         """Run the real receiver and verifier against isolated local files."""
         result = subprocess.run(['bash', '-c', cmd], stdin=stdin, capture_output=True, check=True)
@@ -204,7 +207,8 @@ def test_parallel_chunks_are_bounded_deduplicated_and_joined(tmp_path):
     connection.remote_root = str(tmp_path / 'remote')
     connection.identifier = 'a' * 32
     reports = []
-    connection.store = SimpleNamespace(update=lambda *a, **kw: reports.append(kw['upload_progress']))
+    connection.store = SimpleNamespace(read=lambda *_: {'stop': False, 'cleanup': False},
+        update=lambda *a, **kw: reports.append(kw['upload_progress']))
     barrier = threading.Barrier(2)
     lock = threading.Lock()
     active = peak = 0
@@ -244,7 +248,8 @@ def test_parallel_failure_cancels_other_owner(tmp_path):
     archive = tmp_path / 'archive'; archive.write_bytes(b'aaaabbbbcccc')
     connection = object.__new__(WorkerConnection)
     connection.remote_root = '/unused'; connection.identifier = 'a' * 32
-    connection.store = SimpleNamespace(update=lambda *a, **kw: None)
+    connection.store = SimpleNamespace(read=lambda *_: {'stop': False, 'cleanup': False},
+        update=lambda *a, **kw: None)
     barrier = threading.Barrier(2)
     stopped = threading.Event()
     def command(cmd, *, stdin=None, cancel_event=None, **kwargs):

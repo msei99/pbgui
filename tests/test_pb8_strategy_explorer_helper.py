@@ -171,6 +171,73 @@ def test_ema_bundle_adds_geometric_strategy_span_per_side() -> None:
     assert 100.0 in spans
 
 
+@pytest.mark.parametrize("strategy,expected", [
+    ({"long": {"ema_span_0": 2, "ema_span_1": 8},
+      "short": {"ema_span_0": 3, "ema_span_1": 12}}, {2, 3, 4, 6, 8, 12}),
+    ({"long": {"entry": {"ema_span_0": 2, "ema_span_1": 8}},
+      "short": {"entry": {"ema_span_0": 5, "ema_span_1": 20}}}, {2, 4, 5, 8, 10, 20}),
+    ({"long": {"entry": {"ema_span_0": 10, "ema_span_1": 20}},
+      "short": {"entry": {"ema_span_0": 790, "ema_span_1": 1080}}},
+     {10, math.sqrt(200), 20, 790, math.sqrt(790 * 1080), 1080}),
+    ({"long": {"ema_span_0": 2, "ema_span_1": 8, "entry": {"ema_span_0": 5, "ema_span_1": 20}},
+      "short": {"ema_span_0": 3, "ema_span_1": 12, "entry": {"ema_span_0": 7, "ema_span_1": 28}}},
+     {2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 20, 28}),
+    ({"long": {"ema_span_0": 4, "ema_span_1": 4},
+      "short": {"entry": {"ema_span_0": 4, "ema_span_1": 4}}}, {4}),
+    ({"long": {"ema_span_0": 2, "entry": {"ema_span_1": 8}},
+      "short": {"ema_span_1": 50}}, {2, 8, 50}),
+    ({"long": {"ema_span_0": 3}, "short": {"ema_span_1": 12}}, {3, 12}),
+    ({"long": {"entry": None}, "short": {"entry": [2, 8]}}, set()),
+])
+@pytest.mark.parametrize("end_index", [None, 0, 1, 2, 99])
+def test_ema_bundle_keeps_pairs_separate_and_uses_selected_candles(strategy, expected, end_index):
+    """Exact close bands use complete sibling pairs and the selected immutable candle window."""
+    rows = np.asarray([[[101., 99., 100., 10.]], [[113., 110., 112., 11.]],
+                       [[93., 90., 91., 12.]], [[301., 299., 300., 13.]]])
+    original_rows, original_strategy = rows.copy(), copy.deepcopy(strategy)
+    result = helper._ema_bundle({"hlcvs": rows}, {}, strategy, end_index=end_index)
+    actual = result["m1"]["close"]
+    assert [span for span, _value in actual] == sorted(expected)
+    closes = [100., 112., 91., 300.][:None if end_index is None else end_index + 1]
+    for span, value in actual:
+        alpha = 2.0 / (span + 1.0)
+        expected_value = closes[0] * (1 - alpha) ** (len(closes) - 1)
+        expected_value += sum(alpha * item * (1 - alpha) ** (len(closes) - index - 1)
+                              for index, item in enumerate(closes[1:], 1))
+        assert value == pytest.approx(expected_value)
+    np.testing.assert_array_equal(rows, original_rows)
+    assert strategy == original_strategy
+
+
+@pytest.mark.parametrize("layout", ["flat", "entry"])
+@pytest.mark.parametrize("pair", [
+    {"ema_span_0": 2}, {"ema_span_1": 8},
+    {"ema_span_0": 0, "ema_span_1": 8}, {"ema_span_0": -2, "ema_span_1": 8},
+    {"ema_span_0": float("nan"), "ema_span_1": 8},
+    {"ema_span_0": 2, "ema_span_1": float("inf")},
+    {"ema_span_0": None, "ema_span_1": 8}, {"ema_span_0": "invalid", "ema_span_1": 8},
+    {"ema_span_0": 1e308, "ema_span_1": 1e308},
+    {"ema_span_0": 1e-300, "ema_span_1": 1e-300},
+])
+def test_ema_bundle_invalid_pairs_add_no_geometric_span(layout, pair):
+    """Invalid or incomplete pairs retain individual detection without adding nonfinite/zero bands."""
+    strategy = {"long": pair if layout == "flat" else {"entry": pair}}
+    individual = helper._ema_spans({}, strategy)["m1"]["close"]
+    result = helper._ema_bundle({"hlcvs": np.asarray([[[101., 99., 100., 10.]]])}, {}, strategy)
+    assert [span for span, _value in result["m1"]["close"]] == sorted(individual)
+
+
+def test_ema_bundle_preserves_volume_hourly_and_unrelated_group_contexts():
+    """Geometric close bands must not be inferred from volume, hourly or arbitrary groups."""
+    strategy = {"long": {"volume": {"ema_span_0": 2, "ema_span_1": 8},
+                         "h1": {"ema_span_0": 3, "ema_span_1": 12},
+                         "other": {"ema_span_0": 5, "ema_span_1": 20}}}
+    result = helper._ema_bundle({"hlcvs": np.asarray([[[101., 99., 100., 10.]]])}, {}, strategy)
+    assert result["m1"]["volume"] == [[2., 10.], [8., 10.]]
+    assert result["h1"]["close"] == [[3., 100.], [12., 100.]]
+    assert result["m1"]["close"] == [[5., 100.], [20., 100.]]
+
+
 def test_orchestrator_bot_params_remove_python_aliases_and_flatten_hsl_tiers() -> None:
     """The strict Rust JSON boundary must not receive duplicate Python runtime aliases."""
     result = helper._orchestrator_bot_params(
@@ -192,8 +259,9 @@ def test_orchestrator_bot_params_remove_python_aliases_and_flatten_hsl_tiers() -
     assert result["hsl_tier_ratio_orange"] == pytest.approx(0.75)
 
 
+@pytest.mark.parametrize("layout", ["flat", "entry", "both"])
 def test_snapshot_preserves_full_config_and_asymmetric_side_approval(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, layout: str,
 ) -> None:
     """A single-market native calculation must not replace the complete Explorer config."""
     canonical = {
@@ -237,21 +305,42 @@ def test_snapshot_preserves_full_config_and_asymmetric_side_approval(
         lambda *_args: (copy.deepcopy(restricted), "binance", "BTC", 3),
     )
     monkeypatch.setattr(helper, "_native_data", lambda *_args, **_kwargs: data)
+    strategy = {"long": {"ema_span_0": 2, "ema_span_1": 8},
+                "short": {"ema_span_0": 3, "ema_span_1": 12}}
+    required_spans = {2, 3, 4, 6, 8, 12}
+    if layout == "entry":
+        strategy = {side: {"entry": params} for side, params in strategy.items()}
+    elif layout == "both":
+        strategy["long"]["entry"] = {"ema_span_0": 5, "ema_span_1": 20}
+        strategy["short"]["entry"] = {"ema_span_0": 7, "ema_span_1": 28}
+        required_spans |= {5, 7, 10, 14, 20, 28}
+    native_inputs, released = [], []
+
+    def native(payload):
+        """Capture each real snapshot-to-native boundary with independently checked EMA values."""
+        native_inputs.append(json.loads(payload))
+        emas = dict(native_inputs[-1]["symbols"][0]["emas"]["m1"]["close"])
+        assert set(emas) == required_spans
+        for span, value in emas.items():
+            alpha = 2.0 / (span + 1.0)
+            assert value == pytest.approx(100 * (1-alpha)**2 + 101 * alpha * (1-alpha) + 102 * alpha)
+        return json.dumps({"orders": []})
+
     modules = _modules()
     modules.update(
         {
             "backtest": SimpleNamespace(
                 prep_backtest_args=lambda *_args: (
                     [{"long": {}, "short": {}}],
-                    [{"long": {}, "short": {}}],
+                    [strategy],
                     [{"c_mult": 1.0}],
                     {"strategy_kind": "future_strategy"},
                 )
             ),
-            "pbr": SimpleNamespace(compute_ideal_orders_json=lambda _payload: json.dumps({"orders": []})),
+            "pbr": SimpleNamespace(compute_ideal_orders_json=native),
             "flatten_shared": lambda side: copy.deepcopy(side),
             "grouped_value": lambda side, key, default: (side.get("risk") or {}).get(key, default),
-            "release": lambda _value: None,
+            "release": released.append,
         }
     )
 
@@ -261,6 +350,12 @@ def test_snapshot_preserves_full_config_and_asymmetric_side_approval(
     )
 
     assert result["config"] == canonical
+    assert len(native_inputs) == 3
+    assert native_inputs[0]["symbols"][0]["long"]["position"]["size"] == 0
+    assert native_inputs[0]["symbols"][0]["short"]["position"]["size"] == 0
+    assert native_inputs[1]["symbols"][0]["long"]["position"]["size"] > 0
+    assert native_inputs[2]["symbols"][0]["short"]["position"]["size"] < 0
+    assert released == [data["source_hlcvs"]]
     assert result["config"]["backtest"]["suite_enabled"] is True
     assert set(result["config"]["coin_overrides"]) == {"BTC", "ETH"}
     assert result["sides"]["long"]["active"] is True
@@ -650,3 +745,40 @@ def test_market_identifier_rejects_unsafe_segments(bad: str) -> None:
     """Filesystem-facing exchange and coin segments must reject traversal forms."""
     with pytest.raises(ValueError):
         helper._identifier(bad, "coin")
+
+
+def test_missing_ema_from_native_boundary_keeps_error_and_releases_candles(monkeypatch):
+    """An injected native EMA rejection is possible after nonempty candles/EMA input; it is not a data diagnosis."""
+    modules = _modules()
+    config = modules['template_config']()
+    source = object()
+    data = {
+        'hlcvs': np.asarray([[[101.0, 99.0, 100.0, 1.0]], [[102.0, 100.0, 101.0, 2.0]]]),
+        'timestamps': np.asarray([0, 60_000]), 'trade_idx': 0,
+        'mss': {'BTC': {}}, 'source_hlcvs': source,
+    }
+    released, captured = [], []
+    monkeypatch.setattr(helper, '_canonicalize', lambda *_args: copy.deepcopy(config))
+    monkeypatch.setattr(helper, '_restrict_config', lambda *_args: (copy.deepcopy(config), 'binance', 'BTC', 2))
+    monkeypatch.setattr(helper, '_native_data', lambda *_args, **_kwargs: data)
+    error = ValueError('orchestrator compute_ideal_orders failed: MissingEma { symbol_idx: 0 }')
+
+    def native(payload):
+        """Inject the reported error at the actual native call boundary, not an EMA implementation."""
+        captured.append(json.loads(payload))
+        raise error
+
+    sides = {'long': {'ema_span_0': 3, 'ema_span_1': 12}, 'short': {'ema_span_0': 3, 'ema_span_1': 12}}
+    modules.update({
+        'backtest': SimpleNamespace(prep_backtest_args=lambda *_args: (
+            [{'long': {}, 'short': {}}], [sides], [{'c_mult': 1.0}], {'strategy_kind': 'future_strategy'}
+        )),
+        'pbr': SimpleNamespace(compute_ideal_orders_json=native),
+        'release': released.append,
+    })
+    with pytest.raises(ValueError, match='MissingEma') as caught:
+        helper._snapshot({'config': config, 'options': {}}, modules)
+    assert caught.value is error
+    assert len(data['timestamps']) == 2
+    assert captured[0]['symbols'][0]['emas']['m1']['close']
+    assert released == [source]

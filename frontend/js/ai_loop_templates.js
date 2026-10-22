@@ -66,8 +66,8 @@
     field('holdout', 'Use holdout', null, 'on', 'checkbox').required = false;
     fields.holdout.checked = true;
     fields.holdout.addEventListener('change', function () { fields.holdout.value = fields.holdout.checked ? 'on' : 'off'; });
-    field('start', 'Available period start (UTC)', null, '', 'date');
-    field('end', 'Available period end (UTC)', null, '', 'date');
+    field('start', 'Available period start (inclusive UTC)', null, '', 'date');
+    field('end', 'Available period end (inclusive UTC)', null, '', 'date');
     field('objective', 'Optimization goal', [['ai', 'AI choice'], ['gain', 'Maximum gain'], ['balanced', 'Gain (25% DD)'], ['adg', 'Average daily growth (ADG)'], ['custom', 'Custom']], 'ai');
     field('drawdown', 'Maximum drawdown (%)', null, 50, 'number', .01, 100);
     field('custom', 'Custom objective', null, '').required = false;
@@ -100,7 +100,6 @@
       return !!dateBasis && dateBasis.context === marketContext() &&
         dateBasis.start_date === fields.start.value && dateBasis.end_date === fields.end.value;
     }
-    var previewTitle = node('h4', 'Window preview (inclusive UTC dates)'); panel.appendChild(previewTitle);
     var previewStatus = node('p'); previewStatus.id = 'pai-template-window-status'; previewStatus.className = 'pai-template-date-status'; previewStatus.setAttribute('role', 'status'); panel.appendChild(previewStatus);
     var previewHost = node('div'); previewHost.id = 'pai-template-window-preview'; panel.appendChild(previewHost);
     function signature() { return JSON.stringify([fields.windows.value,fields.source.value,fields.start.value,fields.end.value,fields.timeframes.value,fields.holdout.checked]); }
@@ -199,11 +198,11 @@
       if(!windowError){
         var used=windowPlan.windows.reduce(function(total,w){return total+(Date.parse(w.end_date)-Date.parse(w.start_date))/86400000+1;},0);
         var available=(Date.parse(windowPlan.end_date)-Date.parse(windowPlan.start_date))/86400000+1;
-        previewStatus.textContent=available>used?(available-used)+' unused calendar days between or outside windows.':'Windows cover the selected period without gaps.';
+        previewStatus.textContent=available>used?(available-used)+' unused calendar days between or outside windows.':'';
       }
       var automatic = fields.windows.value === 'auto';
       var waiting = automatic && (!dateReady || !hasDateBasis()) && !dateError;
-      if (automatic && dateReady) dateStatus.textContent = windowError || 'Common market start including warmup → last complete UTC day.';
+      if (automatic && dateReady) dateStatus.textContent = windowError || '';
       if (waiting) previewStatus.textContent = dateStatus.textContent || 'Waiting for available training dates…';
       if (automatic && dateError) previewStatus.textContent = dateError;
       error.textContent = sendError || marketError || (automatic && dateError) || (!verified ? 'Some selected coins are unavailable; review the selection.' : waiting ? '' : windowError);
@@ -373,7 +372,7 @@
         clearTimeout(dateDeadlineTimer); dateDeadlineTimer = null; dateDeadline = 0;
         renderPreview();
         dateJob = null; dateBusy = false; dateReady = true;
-        dateStatus.textContent = 'Common market start including warmup → last complete UTC day.';
+        dateStatus.textContent = '';
         persist(); updateValidation(); return;
       }
       if (!['queued','running','stopping'].includes(job.status)) { failDates(new Error(job.error || 'Date lookup did not complete.'), current); return; }

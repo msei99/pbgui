@@ -634,6 +634,20 @@ async def review_config_change(
         raise _provider_error("review_config_change", exc) from exc
 
 
+@router.get("/proposals/{proposal_id}/host-status")
+async def host_proposal_status(
+    proposal_id: str,
+    conversation_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Verify one owned host approval after transport loss without replaying it."""
+    try:
+        return _json(await get_ai_capability_service().read_host_action_status(
+            _owner(session), conversation_id, {'proposal_id': proposal_id}))
+    except Exception as exc:
+        raise _provider_error('host_proposal_status', exc) from exc
+
+
 @router.post("/proposals/{proposal_id}/approve")
 async def approve_proposal(
     proposal_id: str,
@@ -648,13 +662,17 @@ async def approve_proposal(
         )
         if result.get("action") == "reviewed_config_change":
             return _json(result)  # No agent continuation and no restored action permissions.
-        if result.get("status") == "executed":
+        if result.get("status") == "executed" or (result.get('action') == 'vast_host_block' and result.get('status') == 'failed'):
             chat_service = get_ai_chat_service()
             continuation_result = {
                 key: result.get(key)
                 for key in ("proposal_id", "status", "action", "name", "queued_count", "template", "jev_result", "issue_url", "review_id", "publication_status")
                 if result.get(key) is not None
             }
+            if result.get('action') == 'vast_host_block':
+                continuation_result.update({key: result[key] for key in
+                    ('job_id', 'lease_id', 'machine_id', 'execution_status', 'blocked',
+                     'host_block_revision', 'proposal_status', 'current_host_state', 'verification_error', 'error', 'target_verified', 'finalization_pending') if key in result})
             if result.get("action") == "python_analysis":
                 try:
                     continuation_result.update(
@@ -672,7 +690,9 @@ async def approve_proposal(
             else:
                 continuation_guidance = "Use the completed action result to continue the user's request."
             continuation_message = (
-                "An approved PBGui action completed successfully. "
+                ("An approved PBGui host action failed or could not be confirmed. Explain its error and current verification; do not repeat a mutation. "
+                 if result.get('action') == 'vast_host_block' and result.get('status') == 'failed'
+                 else "An approved PBGui action completed successfully. ")
                 + continuation_guidance
                 + " If no requested step remains, briefly confirm completion. Approved action result:\n"
                 + json.dumps(continuation_result, allow_nan=False, separators=(",", ":"))

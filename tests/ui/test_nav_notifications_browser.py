@@ -322,7 +322,7 @@ def test_notification_on_help_through_real_menu(nav):
     page.locator('.nav-group-btn[data-group="information"]').click()
     page.locator('.nav-item[data-page="help"]').click()
     nav.expect(page).to_have_url(re.compile(
-        re.escape("http://notify.test" + nav.prefix + "/app/help.html?v=1775") + r"(?:&.*)?$"
+        re.escape("http://notify.test" + nav.prefix + "/app/help.html?v=1776") + r"(?:&.*)?$"
     ))
     nav.expect(page.locator("#help-content")).to_contain_text("Isolated guide content")
     destination = page.url

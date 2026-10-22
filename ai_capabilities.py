@@ -360,7 +360,7 @@ class AICapabilityService:
             "search_passivbot_docs", "search_passivbot_source", "read_passivbot_source",
             "list_research_results", "read_research_result", "propose_research_jev_analysis",
             "propose_web_research", "propose_reviewed_config_change",
-            "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "get_candle_inventory", "list_bot_logs", "read_bot_log",
+            "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "get_vast_host_action_status", "get_candle_inventory", "list_bot_logs", "read_bot_log",
         }:
             self.require_action_context(owner, conversation_id)
         args = arguments if isinstance(arguments, dict) else {}
@@ -379,7 +379,10 @@ class AICapabilityService:
             "get_ai_loop_runs": self.loop_tools.read_runs,
             "read_ai_loop_log": self.loop_tools.read_log,
             "propose_ai_loop_run": self.loop_tools.propose_run,
+            "propose_ai_loop_gpu_replacement": self.loop_tools.propose_gpu_replacement,
             "get_vast_preferences": self.loop_tools.read_vast,
+            "get_vast_host_action_status": self.read_host_action_status,
+            "propose_vast_host_block": self.loop_tools.propose_host_block,
             "propose_ai_loop_config": self.loop_tools.propose_loop,
             "propose_vast_preferences": self.loop_tools.propose_vast,
             "list_optimizer_configs": self._list_optimizer_configs,
@@ -442,7 +445,7 @@ class AICapabilityService:
             raise AICapabilityError("PBGui capability capacity is busy") from exc
         try:
             try:
-                if tool.startswith("propose_") or tool in {"read_pbgui_support_evidence", "get_github_support_status", "get_python_analysis_result", "list_research_results", "read_research_result", "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "list_bot_logs", "read_bot_log"}:
+                if tool.startswith("propose_") or tool in {"read_pbgui_support_evidence", "get_github_support_status", "get_python_analysis_result", "list_research_results", "read_research_result", "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "get_vast_host_action_status", "list_bot_logs", "read_bot_log"}:
                     result = await handler(owner, conversation_id, args)
                 elif tool in {"list_config_drafts", "get_config_draft", "create_config_draft", "update_config_draft"}:
                     result = await self._to_thread_uncancellable(handler, owner, args)
@@ -526,6 +529,8 @@ class AICapabilityService:
             if proposal.conversation_id != conversation_id:
                 raise AICapabilityError("Proposal belongs to another conversation")
             if proposal.status == "executed" and proposal.result is not None:
+                if proposal.action == 'vast_host_block':
+                    return await self._to_thread_uncancellable(self._fresh_host_result, proposal.result)
                 return copy.deepcopy(proposal.result)
             if proposal.status == "executing" and proposal.execution_task is not None:
                 task = proposal.execution_task
@@ -544,7 +549,7 @@ class AICapabilityService:
                     )
                     if durable.get("status") != "awaiting_approval":
                         raise AICapabilityError("Proposal is no longer pending")
-                    if proposal.action not in {"publish_github_issue", "python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"}:
+                    if proposal.action not in {"publish_github_issue", "python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop", "replace_ai_loop_gpu"}:
                         self._write_private_json(
                             self.journal_root / f"{proposal.id}.json",
                             self._journal_payload(proposal, phase="prepared"),
@@ -598,7 +603,7 @@ class AICapabilityService:
                     proposal.owner == owner
                     and proposal.conversation_id == conversation_id
                     and proposal.status == "awaiting_approval"
-                    and not (preserve_configurations and proposal.action in {"save_ai_loop_config", "save_vast_preferences", "run_ai_loop"})
+                    and not (preserve_configurations and proposal.action in {"save_ai_loop_config", "save_vast_preferences", "run_ai_loop", "replace_ai_loop_gpu"})
                 ):
                     proposal.status = "rejected"
                     self._persist_proposal(proposal)
@@ -606,6 +611,14 @@ class AICapabilityService:
 
     async def _run_proposal_execution(self, proposal: ActionProposal) -> dict[str, Any]:
         """Run an approved action independently from request cancellation."""
+        if proposal.action == 'vast_host_block':
+            # Its queue receipt is authoritative even when later journal/history writes fail.
+            # Do not let the generic exception handler overwrite a committed success.
+            try:
+                async with self.approval_semaphore:
+                    return await self._to_thread_uncancellable(self._execute_proposal, proposal)
+            finally:
+                proposal.execution_task = None
         try:
             async with self.approval_semaphore:
                 if proposal.action == "reviewed_config_change":
@@ -618,6 +631,8 @@ class AICapabilityService:
                     result = await self._execute_jev_analysis(proposal)
                 elif proposal.action == "run_ai_loop":
                     result = await self.loop_tools.execute_run(proposal)
+                elif proposal.action == 'replace_ai_loop_gpu':
+                    result = await self.loop_tools.execute_gpu_replacement(proposal)
                 else:
                     result = await asyncio.to_thread(self._execute_proposal, proposal)
         except asyncio.CancelledError:
@@ -640,7 +655,7 @@ class AICapabilityService:
             _log(SERVICE, f"AI proposal execution failed: {type(exc).__name__}", level="ERROR")
             raise AICapabilityError("Approved PBGui action failed") from exc
         async with proposal.lock:
-            proposal.status = "executed"
+            proposal.status = result['status'] if proposal.action == 'vast_host_block' else "executed"
             proposal.result = result
             proposal.execution_task = None
             self._persist_proposal(proposal)
@@ -3714,8 +3729,141 @@ class AICapabilityService:
             "message": "PBGui requires explicit user approval before this action is executed.",
         }
 
+    @staticmethod
+    def _fresh_host_result(result: dict[str, Any]) -> dict[str, Any]:
+        """Keep a historical receipt separate from current persisted policy."""
+        from vast_host_actions import read_hosts
+        from vast_queue import CloudQueue
+        result = copy.deepcopy(result)
+        try:
+            state = read_hosts(CloudQueue())
+            if type(result.get('machine_id')) is int:
+                state.update(machine_id=result['machine_id'], blocked=result['machine_id'] in state['blocked_machine_ids'])
+            result['current_host_state'] = state
+            result.pop('verification_error', None)
+        except Exception as exc:
+            _log(SERVICE, f'Host state verification unavailable: {type(exc).__name__}', level='WARNING')
+            result.pop('current_host_state', None)
+            result['verification_error'] = 'Current exclusions could not be read'
+        return result
+
+    async def read_host_action_status(self, owner: str, conversation_id: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Read one owned host action and fresh policy without approval or recovery."""
+        return await self._to_thread_uncancellable(self._read_host_action_status, owner, conversation_id, args)
+
+    def _read_host_action_status(self, owner: str, conversation_id: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Use only durable evidence; never create owner directories or replay journals."""
+        from types import SimpleNamespace
+        from vast_host_actions import receipt
+        from vast_provider import VastError
+        from vast_queue import CloudQueue
+        owner = self._opaque_id(owner, 'owner')
+        conversation_id = self._opaque_id(conversation_id, 'conversation')
+        identifier = self._opaque_id(args.get('proposal_id'), 'proposal')
+        with advisory_file_lock(self.lock_target):
+            saved = self._read_private_json(self.proposal_root / owner / f'{identifier}.json', self.proposal_root)
+            if (saved.get('owner') != owner or saved.get('conversation_id') != conversation_id
+                    or saved.get('id') != identifier or saved.get('action') != 'vast_host_block'):
+                raise AICapabilityError('Host proposal is unavailable in this conversation')
+            digest = self._digest({'action': saved['action'], 'name': saved.get('name'), 'payload': saved.get('config')})
+            if not hmac.compare_digest(digest, str(saved.get('payload_digest') or '')):
+                raise AICapabilityError('Host proposal payload changed')
+            try:
+                result = receipt(CloudQueue(), SimpleNamespace(id=identifier, payload_digest=digest, config=saved.get('config')))
+            except (VastError, OSError) as exc:
+                _log(SERVICE, f'Host proof read unavailable: {type(exc).__name__}', level='WARNING')
+                result = {'status': 'unconfirmed', 'execution_status': 'unconfirmed', 'error': {
+                    'code': 'invalid_host_state' if isinstance(exc, VastError) else 'persistence_unconfirmed',
+                    'message': 'Host execution proof could not be read. Do not repeat approval.'}}
+            if result is None:
+                result = saved.get('result') if isinstance(saved.get('result'), dict) else {
+                    'status': saved.get('status'), 'execution_status': 'unconfirmed' if saved.get('status') in
+                    {'executing', 'approved_recovery', 'executed'} else 'not_executed'}
+            allowed = {'status', 'execution_status', 'machine_id', 'job_id', 'lease_id', 'blocked',
+                       'host_block_revision', 'error', 'target_verified', 'finalization_pending'}
+            result = {key: copy.deepcopy(value) for key, value in result.items() if key in allowed}
+            result.update(proposal_id=identifier, action='vast_host_block', proposal_status=saved.get('status'))
+            return self._fresh_host_result(result)
+
+    def _execute_host_proposal(self, proposal: ActionProposal) -> dict[str, Any]:
+        """Require durable execution permission; recover only an atomic queue proof."""
+        from vast_host_actions import receipt
+        from vast_queue import CloudQueue
+        from vast_provider import VastError
+        journal = self._load_journal(proposal.id) or self._journal_payload(proposal, phase='prepared')
+        queue = CloudQueue()
+        with advisory_file_lock(self.lock_target):
+            try:
+                durable = self._read_private_json(self._owner_path(self.proposal_root, proposal.owner, proposal.id), self.proposal_root)
+                if (durable.get('config') != proposal.config or durable.get('owner') != proposal.owner
+                        or durable.get('conversation_id') != proposal.conversation_id
+                        or durable.get('action') != proposal.action or durable.get('name') != proposal.name
+                        or durable.get('payload_digest') != proposal.payload_digest
+                        or self._digest({'action': proposal.action, 'name': proposal.name, 'payload': proposal.config}) != proposal.payload_digest):
+                    raise AICapabilityError('Host proposal identity or payload changed')
+                result = receipt(queue, proposal)
+                if result is None:
+                    if durable.get('status') not in {'executing', 'approved_recovery'}:
+                        result = {'status': durable.get('status') or 'failed', 'proposal_status': durable.get('status') or 'failed',
+                                  'proposal_id': proposal.id, 'action': proposal.action, 'execution_status': 'not_executed',
+                                  'error': {'code': 'terminal_proposal', 'message': 'Host proposal is not approved for execution'}}
+                    else:
+                        result = self.loop_tools.execute(proposal)
+            except Exception as exc:
+                _log(SERVICE, f'Host action could not be confirmed: {type(exc).__name__}', level='WARNING')
+                # write_json can commit and then fail before returning. Never call execute again.
+                try:
+                    result = receipt(queue, proposal)
+                except Exception as proof_error:
+                    _log(SERVICE, f'Host execution proof unavailable: {type(proof_error).__name__}', level='WARNING')
+                    result = None
+                if result is None:
+                    code = ('target_or_revision_conflict' if isinstance(exc, VastError) and exc.status == 409
+                            else 'invalid_host_state' if isinstance(exc, VastError)
+                            else 'persistence_unconfirmed' if isinstance(exc, OSError) else 'invalid_proposal')
+                    result = {'status': 'failed', 'proposal_status': 'failed', 'proposal_id': proposal.id,
+                              'action': proposal.action, 'execution_status': 'unconfirmed' if isinstance(exc, OSError) else 'not_executed',
+                              'error': {'code': code, 'message': 'Host action not confirmed. Read proposal status and local exclusions; do not repeat the mutation.'}}
+            # Separate historical execution from fresh policy; this read never mutates.
+            if result.get('status') != 'executed':
+                target = proposal.config or {}
+                for key in ('job_id', 'lease_id'):
+                    value = target.get(key)
+                    if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{32}', value):
+                        result[key] = value
+                if type(target.get('machine_id')) is int and target['machine_id'] > 0:
+                    result['machine_id'] = target['machine_id']
+                result.update(blocked=None, host_block_revision=None, target_verified=False)
+            result = self._fresh_host_result(result)
+            # Finalization retries only metadata, never the queue mutation. A receipt
+            # remains historical success even if this storage layer stays unavailable.
+            proposal.status = result['status']
+            proposal.result = result
+            for attempt in range(2):
+                try:
+                    path = self._owner_path(self.proposal_root, proposal.owner, proposal.id)
+                    try:
+                        durable = self._read_private_json(path, self.proposal_root)
+                    except (AICapabilityError, FileNotFoundError):
+                        durable = {}
+                        _log(SERVICE, 'Host proposal status cannot be read; recovery mutation denied', level='WARNING')
+                    if durable.get('status') in {'executing', 'approved_recovery'}:
+                        self._persist_proposal(proposal, acquire_lock=False)
+                    self._persist_history(proposal)
+                    self._complete_journal(journal, result)
+                    break
+                except Exception as exc:
+                    _log(SERVICE, f'Host result finalization pending: {type(exc).__name__}', level='WARNING')
+                    if attempt == 1:
+                        result['finalization_pending'] = True
+                        if result['status'] != 'executed':
+                            result.update(status='unconfirmed', proposal_status='unconfirmed', execution_status='unconfirmed')
+            return result
+
     def _execute_proposal(self, proposal: ActionProposal) -> dict[str, Any]:
         """Revalidate config state and execute one already approved PB8 action."""
+        if proposal.action == 'vast_host_block':
+            return self._execute_host_proposal(proposal)
         from ai_loop_tools import ACTIONS as LOOP_ACTIONS
         if proposal.action in LOOP_ACTIONS:
             journal = self._load_journal(proposal.id) or self._journal_payload(proposal, phase="prepared")
@@ -4143,6 +4291,7 @@ class AICapabilityService:
                 status = str(payload.get("status") or "")
                 revived = (
                     status == "expired"
+                    and payload.get('action') != 'vast_host_block'
                     and time.time() - float(payload.get("created_at") or 0) <= _PROPOSAL_TTL_SECONDS
                 )
                 if revived:
@@ -4150,9 +4299,15 @@ class AICapabilityService:
                 if status == "executing":
                     status = (
                         "interrupted"
-                        if payload.get("action") in {"publish_github_issue", "python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"}
+                        if payload.get("action") in {"publish_github_issue", "python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop", "replace_ai_loop_gpu"}
                         else "approved_recovery"
                     )
+                if status == 'interrupted' and payload.get('action') == 'replace_ai_loop_gpu':
+                    retained = self.loop_tools.retained_gpu_replacement(payload)
+                    if retained:
+                        status = 'executed'
+                        payload.update(status=status, result=retained)
+                        self._write_private_json(path, payload)
                 self.proposals[proposal_id] = ActionProposal(
                     id=proposal_id,
                     owner=owner,
@@ -4327,7 +4482,9 @@ class AICapabilityService:
                     status="executing",
                 )
                 result = self._execute_proposal(proposal)
-                proposal.status = "executed"
+                if proposal.action == 'vast_host_block':
+                    continue  # Host finalization is proof-aware and already persisted.
+                proposal.status = result['status'] if proposal.action == 'vast_host_block' else "executed"
                 proposal.result = result
                 self._persist_proposal(proposal)
                 self._persist_history(proposal)
@@ -4345,11 +4502,17 @@ class AICapabilityService:
                         continue
                     try:
                         payload = self._read_private_json(path, self.proposal_root)
-                        if payload.get("action") not in {"publish_github_issue", "python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop"} or payload.get("status") not in {
+                        if payload.get("action") not in {"publish_github_issue", "python_analysis", "jev_analysis", "reviewed_config_change", "run_ai_loop", "replace_ai_loop_gpu"} or payload.get("status") not in {
                             "executing",
                             "approved_recovery",
                         }:
                             continue
+                        if payload.get('action') == 'replace_ai_loop_gpu':
+                            result = self.loop_tools.retained_gpu_replacement(payload)
+                            if result:
+                                payload.update(status='executed', result=result, updated_at=time.time())
+                                self._write_private_json(path, payload)
+                                continue
                         payload["status"] = "interrupted"
                         payload["result"] = None
                         payload["updated_at"] = time.time()

@@ -101,4 +101,4 @@ def test_dashboard_chart_regressions():
     from pathlib import Path
 
     script = Path(__file__).with_name("dashboard_issue_378.cjs")
-    subprocess.run(["node", str(script)], check=True, capture_output=True, text=True)
+    subprocess.run(["node", str(script)], check=True, capture_output=True, text=True, timeout=30)

@@ -149,6 +149,10 @@
   const controllers = new Set();
   const requeuingJobs = new Set();
   const stoppingJobs = new Map();
+  const uncertainStops = new Map();
+  const jobActions = new Map();
+  let actionLifecycle = 0;
+  let actionView = null, actionViewGeneration = 0;
   const deletingJobs = new Set();
   const workerActions = new Map();
   let workerAction = null;
@@ -156,6 +160,34 @@
     if (!job || ['completed','cancelled','failed'].includes(job.status)) return null;
     if (job.status === 'collecting') return 'Collecting results…';
     return stoppingJobs.get(job.id) || (job.stop_requested ? 'Stop requested' : null);
+  }
+  function canRecoverJob(job) {
+    return !!job?.final_collected && ((!job.result_path || job.result_partial) ||
+      (job.collection_incomplete && !!job.collection_error) ||
+      (job.status === 'failed' && job.error === 'Raw results saved locally; result import needs retry'));
+  }
+  function canStopJob(job) {
+    return !!job && (!stopPhase(job) || stopRetryAvailable(job)) && ['provisioning', 'uploading', 'running', 'collecting'].includes(job.status);
+  }
+  function stopRetryAvailable(job) {
+    return !!job && uncertainStops.get(job.id)?.retryable === true && job.stop_requested === false
+      && ['provisioning', 'uploading', 'running'].includes(job.status);
+  }
+  function markStopUncertain(identifier, token) {
+    const job = jobRows.find(row => row.id === identifier);
+    if (!job || ['completed','failed','cancelled'].includes(job.status)) {
+      uncertainStops.delete(identifier); stoppingJobs.delete(identifier);
+      return;
+    }
+    uncertainStops.set(identifier, {owner:token, afterGeneration:jobGeneration, retryable:false});
+    if (!stoppingJobs.has(identifier)) stoppingJobs.set(identifier, 'Stop status unconfirmed');
+  }
+  function invalidateJobActions() {
+    for (const [identifier, token] of jobActions) {
+      if (token.action === 'stop' && token.submitted) markStopUncertain(identifier, token);
+    }
+    actionLifecycle++;
+    jobActions.clear();
   }
   function currentObservedOptimizer(item) {
     const observed = item?.observed_optimizer;
@@ -182,14 +214,16 @@
     if (disposed) throw new Error('Cloud controls are disconnected. Sign in and reload this page.');
     const controller = new AbortController();
     controllers.add(controller);
-    const timer = setTimeout(() => controller.abort(), (["/jobs/prepare", "/queue/start"].includes(path) || path.endsWith('/requeue')) ? 600000 : 30000);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, (["/jobs/prepare", "/queue/start"].includes(path) || path.endsWith('/requeue')) ? 600000 : 30000);
     try {
       const response = await fetch(apiBase + path, {
         credentials: 'same-origin', cache: 'no-store', ...options,
         headers: {'Content-Type': 'application/json'}, signal: controller.signal
       });
+      if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
       if ([401, 403].includes(response.status) && response.headers.get('X-PBGui-Error-Source') !== 'vast') {
-        clearSecrets(); disposed = true; bfcacheSuspended = false; clearTimeout(jobTimer); jobGeneration++; closeLog();
+        clearSecrets(); disposed = true; bfcacheSuspended = false; invalidateJobActions(); clearTimeout(jobTimer); jobGeneration++; closeLog();
         controllers.forEach(item => { if (item !== controller) item.abort(); });
         generation++; accountGeneration++; offerGeneration++;
         el('balance').textContent = 'Authentication required';
@@ -203,8 +237,16 @@
         if (controller.signal.aborted) throw error;
         throw new Error(response.ok ? 'Invalid response from PBGui. Reload or retry.' : 'Request failed (HTTP ' + response.status + '). Retry when the service is available.');
       }
+      if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
       if (!response.ok) throw new Error(data && typeof data.detail === 'string' ? data.detail : 'Request failed (HTTP ' + response.status + '). Check the entered values.');
       return data;
+    } catch (error) {
+      if (timedOut) {
+        const timeout = new Error('Browser request timed out; server-side work may continue. Status updates automatically.');
+        timeout.name = 'TimeoutError';
+        throw timeout;
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
       controllers.delete(controller);
@@ -265,7 +307,8 @@
   }
 
   function renderOffers(rows) {
-    rows = rows.filter(offer => Number.isSafeInteger(offer.machine_id) && offer.machine_id > 0);
+    rows = rows.filter(offer => Number.isSafeInteger(offer.machine_id) && offer.machine_id > 0
+      && !(queueState.blocked_machine_ids || []).includes(offer.machine_id));
     offerRows = rows;
     selectedOffer = null;
     calibrationInfo = null; calibrationGeneration++;
@@ -341,6 +384,35 @@
       row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); } });
       body.appendChild(row); body.appendChild(detailsRow);
     });
+  }
+
+  function reconcileExcludedOffers() {
+    // A new persisted decision invalidates offers already in flight. Prune in
+    // place so an eligible selection, calibration and edited filters survive.
+    offerGeneration++;
+    el('find-offers').disabled = hostBlockBusy;
+    const excluded = new Set(queueState.blocked_machine_ids || []);
+    const removed = offerRows.filter(offer => excluded.has(offer.machine_id));
+    const body = el('offers-body');
+    removed.forEach(offer => {
+      const row = Array.from(body.querySelectorAll('tr[data-offer]')).find(item => item.dataset.offer === String(offer.id));
+      if (!row) return;
+      const details = row.nextElementSibling;
+      if (details?.classList.contains('offer-details')) details.remove();
+      row.remove();
+    });
+    offerRows = offerRows.filter(offer => !excluded.has(offer.machine_id));
+    if (selectedOffer && excluded.has(selectedOffer.machine_id)) {
+      selectedOffer = null;
+      calibrationInfo = null; calibrationGeneration++;
+      el('selection').textContent = 'The selected machine is excluded from future rentals. Select another eligible offer.';
+    }
+    if (removed.length && !offerRows.length) {
+      const row = document.createElement('tr'), cell = document.createElement('td');
+      cell.colSpan = 11; cell.textContent = 'No eligible offers remain after host exclusions.';
+      row.appendChild(cell); body.appendChild(row);
+    }
+    renderJob();
   }
 
   function calibrationOffer(offer) {
@@ -1035,13 +1107,16 @@
     });
   }
 
-  async function refreshHostHistory() {
+  async function refreshHostHistory(propagateFailure = false) {
     const current = ++hostGeneration;
     try {
       const data = await request('/hosts');
       if (disposed || current !== hostGeneration) return;
       acceptHostProfiles(data); renderHostBlocks();
-    } catch (error) { if (!disposed && current === hostGeneration) message(error.message, true); }
+    } catch (error) {
+      if (!disposed && current === hostGeneration) message(error.message, true);
+      if (propagateFailure) throw error;
+    }
   }
 
   async function changeHostPreference(machineId, changes, rentalId) {
@@ -1074,13 +1149,14 @@
     const blocked = (queueState.blocked_machine_ids || []).includes(machineId);
     const button = document.createElement('button'); button.type = 'button'; button.className = 'btn';
     button.dataset.hostBlock = '';
+    button.dataset.hostBlockToggle = '';
     button.textContent = blocked ? 'Unblock host' : 'Block host';
     button.disabled = hostBlockBusy;
-    button.title = 'Exclude this machine from future rentals. The current rental continues.';
+    button.title = blocked ? 'Unblock host' : 'Block host';
     button.addEventListener('keydown', event => event.stopPropagation());
     button.addEventListener('click', event => {
       event.stopPropagation();
-      changeHostBlock(machineId, !blocked, rentalId);
+      void changeHostBlock(machineId, !blocked, rentalId).catch(error => { if (!disposed) message(error.message, true); });
     });
     return button;
   }
@@ -1117,14 +1193,19 @@
       if (disposed) return;
       jobGeneration++; offerGeneration++;
       queueState.blocked_machine_ids = data.blocked_machine_ids;
+      queueState.host_block_revision = data.host_block_revision;
       if (worker && worker.id === rentalId && data.machine_id) worker.host_machine_id = data.machine_id;
-      const ids = data.blocked_machine_ids;
-      renderOffers(offerRows.filter(offer => !ids.length || (offer.machine_id && !ids.includes(offer.machine_id))));
+      reconcileExcludedOffers();
       message(blocked ? 'Host blocked for future rentals. Any current rental continues.' : 'Host unblocked for future rentals.');
-      await refreshJobs();
-      await refreshHostHistory();
-    } catch (error) { if (!disposed) message(error.message, true); }
-    finally {
+      try {
+        await refreshJobs(undefined, true);
+        await refreshHostHistory(true);
+      } catch (error) {
+        if (!disposed) message('Host policy saved. Display update unavailable: ' + error.message, true);
+      }
+      return {machine_id:data.machine_id, blocked:data.blocked, blocked_machine_ids:data.blocked_machine_ids,
+        host_block_revision:data.host_block_revision};
+    } finally {
       hostBlockBusy = false;
       if (!disposed) {
         el('find-offers').disabled = false;
@@ -1150,7 +1231,7 @@
       if (disposed || current !== offerGeneration) return;
       hostGeneration++; acceptHostProfiles(data);
       renderOffers(data.offers); el('offer-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
-      message(data.offers.length + ' offers found (up to 100 shown).', false);
+      message(offerRows.length + ' offers found (up to 100 shown).', false);
     } catch (error) { if (!disposed && current === offerGeneration) message(error.message, true); }
     finally { if (!disposed && current === offerGeneration) el('find-offers').disabled = false; }
   }
@@ -1395,7 +1476,7 @@
   }
 
   function jobLastError(job, rental) {
-    const ownError = job?.error || job?.log_error || job?.cleanup_error || '';
+    const ownError = [job?.error || job?.log_error || job?.cleanup_error, job?.collection_error].filter(Boolean).join(' · ');
     if (rental?.creation_error && !rental.instance_id && !rental.provider_seen_at) {
       return 'Rental was not created: ' + rental.creation_error
         + '. Vast confirms no instance exists; refresh offers and select another host.';
@@ -1405,6 +1486,7 @@
   }
 
   function renderJob() {
+    if (actionView !== selectedJobId) { actionView = selectedJobId; actionViewGeneration++; }
     renderHostBlocks();
     const job = selectedJob();
     const activeRentalCount = workers.filter(item => !['none', 'deletion_verified'].includes(item.rental_state)).length;
@@ -1461,9 +1543,10 @@
     });
     el('pause-worker').disabled ||= !!queueState.paused;
     el('resume-worker').disabled ||= !queueState.paused;
-    el('stop-job').textContent = stopPhase(job) || 'Stop & collect';
-    el('stop-job').disabled = !!stopPhase(job) || !job || !['provisioning', 'uploading', 'running', 'collecting'].includes(job.status);
-    el('recover-job').disabled = !job || !job.final_collected || (!!job.result_path && !job.result_partial);
+    el('stop-job').textContent = stopRetryAvailable(job) ? 'Retry stop & collect' : stopPhase(job) || 'Stop & collect';
+    el('stop-job').disabled = !canStopJob(job) || jobActions.has(job?.id);
+    el('recover-job').disabled = !canRecoverJob(job) || jobActions.has(job?.id);
+    el('recover-job').textContent = jobActions.get(job?.id)?.action === 'recover' ? 'Importing results…' : 'Retry result import';
     el('job-results').hidden = !job || !job.result_path;
   }
 
@@ -1624,11 +1707,24 @@
           const start = document.createElement('button'); start.type = 'button'; start.className = 'act-btn'; start.textContent = pending === 'start' ? 'Starting…' : 'Start queue'; start.disabled = !!pending || (activeGpuWorkerId === item.id && activeGpuDirty); start.title = activeGpuWorkerId === item.id && activeGpuDirty ? 'Save GPU profile changes first' : 'Start queued jobs on this rental'; start.addEventListener('click', () => runWorkerAction(item, 'start')); actions.appendChild(start);
         }
         const autoReplace = !!(queueState.pool_enabled && (queueState.gpu_preferences?.auto_rent || savedPreferences?.auto_rent));
+        if (item.loop_id && !ending) {
+          const replace = document.createElement('button'); replace.type = 'button'; replace.className = 'act-btn';
+          replace.textContent = 'Replace GPU and continue loop'; replace.disabled = !!pending;
+          replace.addEventListener('click', async () => {
+            if (disposed || workerActions.has(item.id)) return;
+            workerActions.set(item.id, 'loop-replace'); renderQueueOverview();
+            try {
+              await window.PBGuiLoopGPUReplacement.run({base:window.API_BASE + '/loops', loop_id:item.loop_id, worker_id:item.id, isCurrent:() => !disposed});
+              if (!disposed) await refreshJobs();
+            } catch (error) { if (!disposed) message(error.message, true); }
+            finally { workerActions.delete(item.id); if (!disposed) renderQueueOverview(); }
+          }); actions.appendChild(replace);
+        }
         const end = document.createElement('button'); end.type = 'button'; end.className = 'act-btn';
-        end.textContent = pending ? (pending === 'replace' ? 'Replacing…' : 'Ending…') : ending ? 'Retry cleanup' : (autoReplace ? 'Replace GPU' : 'End rental');
+        end.textContent = pending ? (pending === 'replace' || pending === 'loop-replace' ? 'Replacing…' : 'Ending…') : ending ? 'Retry cleanup' : (autoReplace && !item.loop_id ? 'Replace GPU' : 'End rental');
         end.title = autoReplace ? 'End this rental. After provider cleanup is verified, Auto rent & start restores the pool capacity. Unstarted input is returned to the queue.' : 'End only this GPU rental.';
         if (ending) end.title = 'Retry the existing termination request; deletion is not yet confirmed.';
-        end.disabled = !!pending; end.addEventListener('click', () => runWorkerAction(item, ending ? (item.replacement_requested ? 'replace' : 'end') : autoReplace ? 'replace' : 'end')); actions.appendChild(end);
+        end.disabled = !!pending; end.addEventListener('click', () => runWorkerAction(item, ending ? (item.replacement_requested ? 'replace' : 'end') : autoReplace && !item.loop_id ? 'replace' : 'end')); actions.appendChild(end);
         card.appendChild(actions); cards.appendChild(card);
       });
       banner.hidden = !active.length && !queueState.pool_enabled;
@@ -1640,6 +1736,11 @@
 
   async function runWorkerAction(item, action) {
     if (disposed || workerActions.has(item.id)) return;
+    if (action === 'end' && item.loop_id) {
+      const accepted = await window.PBGuiDialogs.confirm({title:'End rental?',
+        message:'Stop and collect optimizer work attached to AI Loop ' + item.loop_id + ', then end this rental? The Loop can fail when no valid optimizer results remain. Use Replace GPU and continue loop to preserve this round and wait for another machine.', confirmText:'End rental'});
+      if (!accepted || disposed || workerActions.has(item.id)) return;
+    }
     if (action === 'start' && activeGpuWorkerId === item.id && activeGpuDirty) {
       message('Save the GPU profile changes before starting queued jobs.', true); return;
     }
@@ -1658,13 +1759,13 @@
     }
     workerActions.set(item.id, action); renderQueueOverview();
     try {
-      await request('/queue/workers/' + encodeURIComponent(item.id) + '/' + action, {method:'POST'});
+      await request('/queue/workers/' + encodeURIComponent(item.id) + '/' + action, {method:'POST', body:JSON.stringify({loop_ids:item.loop_id ? [item.loop_id] : []})});
       if (!disposed) { message(''); await refreshJobs(); }
     } catch (error) { if (!disposed) message(error.message, true); }
     finally { workerActions.delete(item.id); if (!disposed) renderQueueOverview(); }
   }
 
-  async function refreshJobs(preferred) {
+  async function refreshJobs(preferred, propagateFailure = false) {
     clearTimeout(jobTimer);
     jobTimer = null;
     const current = ++jobGeneration;
@@ -1695,16 +1796,34 @@
       const newOptRun = data.jobs.some(job => !['worker', 'calibration'].includes(job.kind)
         && Number(job.exact_completed) > 0 && !previouslyEvaluated.has(job.id));
       const previousRentalIds = new Set(workers.filter(item => Number(item.instance_id) > 0).map(item => item.id));
+      const previousHostPolicy = JSON.stringify([queueState.host_block_revision ?? 0, queueState.blocked_machine_ids || []]);
       jobRows = data.jobs; workers = data.workers || (data.worker && !['none','deletion_verified'].includes(data.worker.rental_state) ? [data.worker] : []); worker = workers[0] || data.worker; queueState = data.queue; supervision = data.supervision_available; calibrationWorkerAvailable = data.calibration_worker_available === true;
+      if (previousHostPolicy !== JSON.stringify([queueState.host_block_revision ?? 0, queueState.blocked_machine_ids || []])) reconcileExcludedOffers();
       const newRental = workers.some(item => Number(item.instance_id) > 0 && !previousRentalIds.has(item.id));
       const globalMessage = el('message');
       if (globalMessage?.textContent?.startsWith('Preparing the canonical calibration input')
           && jobRows.some(job => job.kind === 'calibration' && job.status !== 'preparing')) message('');
       for (const id of stoppingJobs.keys()) {
         const row = jobRows.find(item => item.id === id);
-        if (!row || ['completed','failed','cancelled'].includes(row.status)) stoppingJobs.delete(id);
+        if (!row || ['completed','failed','cancelled'].includes(row.status)) {
+          stoppingJobs.delete(id); uncertainStops.delete(id);
+          continue;
+        }
+        const uncertainty = uncertainStops.get(id);
+        if (!uncertainty) continue;
+        if (row.stop_requested === true || row.status === 'collecting') {
+          uncertainStops.delete(id);
+          stoppingJobs.set(id, 'Stop requested');
+        } else if (current > uncertainty.afterGeneration && row.stop_requested === false
+            && ['provisioning','uploading','running'].includes(row.status)) {
+          // A negative snapshot permits explicit retry, never proves the old
+          // server operation was cancelled or authorizes an automatic POST.
+          uncertainty.retryable = true;
+          stoppingJobs.set(id, 'Stop status unconfirmed');
+        }
       }
       selectedJobId = jobRows.some(job => job.id === selected) ? selected : (jobRows[0]?.id || null);
+      if (selected && selectedJobId !== selected) message('The selected cloud job is no longer available. Showing the nearest available queue item.');
       ['supervision-status', 'settings-supervision-status'].forEach(id => {
         const notice = el(id); if (!notice) return;
         notice.hidden = !!supervision;
@@ -1716,6 +1835,13 @@
       else {
         const observedWorker = workers.find(item => window.state && item.id === window.state.cloudLogId && currentObservedOptimizer(item));
         if (observedWorker) renderObservedOptimizer(observedWorker);
+        else if (window.state?.cloudLogId) {
+          message('The displayed cloud job is no longer available. Showing the nearest available queue context.');
+          const fallback = selectedJob();
+          if (fallback) openCloudLog(fallback);
+          else if (typeof closeLogPanel === 'function') closeLogPanel();
+          else closeLog();
+        }
       }
       renderQueueOverview();
       void refreshActiveGpuProfile();
@@ -1729,6 +1855,7 @@
         const pollError = el('queue-message');
         if (pollError) pollError.dataset.jobPollError = error.message;
       }
+      if (propagateFailure) throw error;
     } finally {
       if (!disposed && !document.hidden && current === jobGeneration) jobTimer = setTimeout(pollJobs, jobPollDelay());
     }
@@ -2564,7 +2691,7 @@
         node.disabled = startingQueue || !!workerAction || !supervision || (!savedPreferences && !(worker && !['none','deletion_verified'].includes(worker.rental_state))) || deletingJobs.has(job.id);
       }
       if (['Requeue', 'Delete queue item'].includes(title)) node.disabled = requeuingJobs.has(job.id) || deletingJobs.has(job.id);
-      if (title === 'Stop') node.disabled = !!stopPhase(job);
+      if (title === 'Stop') node.disabled = !canStopJob(job) || jobActions.has(job.id);
       node.addEventListener('click', event => { event.stopPropagation(); action(); });
       actions.appendChild(node);
     };
@@ -2579,9 +2706,9 @@
       button('↺', 'Requeue', () => requeueCloudJob(job));
     }
     if (!['queued','complete','error','cancelled'].includes(item.status)) button('⬛', 'Stop', () => {
-      selectedJobId = job.id; renderJob(); el('stop-job').click();
+      selectedJobId = job.id; renderJob(); void runJobAction('stop', job.id);
     });
-    if (job.has_log || job.has_provider_log || job.error || job.creation_error || job.cleanup_error || (worker && !['none','deletion_verified'].includes(worker.rental_state)) || ['provisioning','running','failed','error','completed'].includes(job.status)) button('📋', 'Open log', () => openCloudLog(job));
+    if (job.has_log || job.has_provider_log || job.error || job.collection_error || job.creation_error || job.cleanup_error || (worker && !['none','deletion_verified'].includes(worker.rental_state)) || ['provisioning','running','failed','error','completed'].includes(job.status)) button('📋', 'Open log', () => openCloudLog(job));
     if (typeof openConfigEditor === 'function') button('✏️', 'Edit config', () => {
       openConfigEditor(job.config_name).catch(handleError);
     });
@@ -3025,41 +3152,70 @@
   });
   el('settings-end-rental')?.addEventListener('click', () => el('end-worker')?.click());
   el('start-job').addEventListener('click', () => startCloudQueue(selectedJob()));
-  ['stop', 'recover'].forEach(action => el(action + '-job').addEventListener('click', async () => {
-    const job = selectedJob(); if (!job) return;
-    if (action === 'stop' && stopPhase(job)) return;
-    if (action === 'stop') {
-      if (!window.PBGuiDialogs?.confirm) { message('Stop confirmation unavailable. Reload this page.', true); return; }
-      const accepted = await window.PBGuiDialogs.confirm({
-        title:'Stop optimizer?',
-        message:'Stop "' + job.config_name + '" and collect its current results? The optimizer cannot continue after this action.',
-        confirmText:'Stop & collect'
-      });
-      if (!accepted || disposed || selectedJobId !== job.id || stopPhase(job)) return;
-    }
-    const repaint = () => { if (!disposed) { renderJob(); renderCloudDashboard(job); renderQueueOverview(); } };
-    if (action === 'stop') { stoppingJobs.set(job.id, 'Stopping…'); repaint(); }
-    el(action + '-job').disabled = true;
+  async function runJobAction(action, identifier) {
+    let job = jobRows.find(row => row.id === identifier);
+    const eligible = () => action === 'stop' ? canStopJob(job) : canRecoverJob(job);
+    if (disposed || jobActions.has(identifier) || !eligible()) return;
+    const token = {action, lifecycle:actionLifecycle, view:actionViewGeneration,
+      uncertain:uncertainStops.has(identifier), submitted:false};
+    jobActions.set(identifier, token);
+    const owns = () => !disposed && token.lifecycle === actionLifecycle && jobActions.get(identifier) === token;
+    const visible = () => owns() && token.view === actionViewGeneration && selectedJobId === identifier;
+    const repaint = () => {
+      renderJob();
+      const displayed = jobRows.find(row => row.id === window.state?.cloudLogId);
+      if (displayed) renderCloudDashboard(displayed);
+      renderQueueOverview();
+    };
+    repaint();
     try {
-      await request('/jobs/' + job.id + '/' + action, {method:'POST'});
-      if (action === 'stop') { stoppingJobs.set(job.id, 'Stop requested'); repaint(); }
-      await refreshJobs(job.id);
+      if (action === 'stop') {
+        if (!window.PBGuiDialogs?.confirm) throw new Error('Stop confirmation unavailable. Reload this page.');
+        const accepted = await window.PBGuiDialogs.confirm({
+          title:'Stop optimizer?',
+          message:'Stop "' + job.config_name + '" and collect its current results? The optimizer cannot continue after this action.',
+          confirmText:'Stop & collect'
+        });
+        job = jobRows.find(row => row.id === identifier);
+        if (!accepted || !visible() || !eligible()) return;
+        uncertainStops.delete(identifier);
+        stoppingJobs.set(identifier, 'Stopping…'); repaint();
+      }
+      token.submitted = true;
+      await request('/jobs/' + encodeURIComponent(identifier) + '/' + action, {method:'POST'});
+      if (!owns()) return;
+      if (action === 'stop') {
+        uncertainStops.delete(identifier);
+        stoppingJobs.set(identifier, 'Stop requested');
+      }
+      // Do not reselect the initiating job after the user has opened another one.
+      await refreshJobs();
     }
     catch (error) {
-      if (action === 'stop') stoppingJobs.delete(job.id);
-      repaint();
-      if (!disposed) message(error.message, true);
+      if (!owns()) return;
+      if (action === 'stop' && token.submitted) {
+        if (error.name === 'TimeoutError' || token.uncertain) markStopUncertain(identifier, token);
+        else stoppingJobs.delete(identifier);
+      }
+      if (visible()) message(error.message, true);
     }
-    finally { if (!disposed) renderJob(); }
+    finally {
+      if (owns()) { jobActions.delete(identifier); repaint(); }
+    }
+  }
+  ['stop', 'recover'].forEach(action => el(action + '-job').addEventListener('click', () => {
+    void runJobAction(action, selectedJob()?.id);
   }));
   ['pause', 'resume', 'end', 'recover'].forEach(action => el(action + '-worker').addEventListener('click', async () => {
     if (disposed || renting || workerAction || startingQueue) return;
     const activeCount = workers.filter(item => !['none', 'deletion_verified'].includes(item.rental_state)).length;
-    if (action === 'end' && activeCount > 1) {
+    const attachedLoops = Array.from(new Set(workers.filter(item => !['none','deletion_verified'].includes(item.rental_state) && item.loop_id).map(item => item.loop_id)));
+    if (action === 'end' && (activeCount > 1 || attachedLoops.length)) {
       if (!window.PBGuiDialogs?.confirm) { message('Rental confirmation unavailable. Reload this page.', true); return; }
       const accepted = await window.PBGuiDialogs.confirm({
         title:'End all GPU rentals?',
-        message:'Stop and collect jobs on all ' + activeCount + ' active GPU rentals, then delete those rentals?',
+        message:'Stop and collect jobs on all ' + activeCount + ' active GPU rentals, then delete those rentals?'
+          + (attachedLoops.length ? ' Attached AI Loops: ' + attachedLoops.join(', ') + '. Their optimizer work is cancelled and the Loops can fail. Choose Replace GPU and continue loop on one rental to preserve its current round.' : ''),
         confirmText:'End all rentals'
       });
       if (!accepted || disposed) return;
@@ -3071,7 +3227,7 @@
     message(el(action + '-worker').textContent);
     try {
       const autoRentEdit = preferenceEdits.auto_rent;
-      const updated = await request('/queue/' + action, {method:'POST'});
+      const updated = await request('/queue/' + action, {method:'POST', body:JSON.stringify({loop_ids:action === 'end' ? attachedLoops : []})});
       if (action === 'end' && updated.gpu_preferences) {
         applyPreferences(updated.gpu_preferences, ['auto_rent'], {auto_rent:autoRentEdit});
       }
@@ -3092,7 +3248,7 @@
   el('block-machine-form').addEventListener('submit', event => {
     event.preventDefault();
     const machine = Number(el('block-machine-id').value);
-    if (Number.isSafeInteger(machine) && machine > 0) changeHostBlock(machine, true);
+    if (Number.isSafeInteger(machine) && machine > 0) void changeHostBlock(machine, true).catch(error => { if (!disposed) message(error.message, true); });
   });
   el('mark-machine-form').addEventListener('submit', event => {
     event.preventDefault();
@@ -3110,11 +3266,17 @@
       void pollJobs();
     }
   });
+  window.addEventListener('hashchange', () => {
+    if (!disposed && !document.hidden && location.hash === '#queue') void pollJobs();
+  });
   window.addEventListener('pagehide', event => {
     bfcacheSuspended = event.persisted && !disposed;
     disposed = true;
+    invalidateJobActions();
     if (event.persisted) performanceView?.hide(); else performanceView?.dispose();
-    validationGeneration++; clearTimeout(validationTimer); closeLog(); clearTimeout(jobTimer);
+    validationGeneration++; clearTimeout(validationTimer); clearTimeout(jobTimer);
+    if (!event.persisted) closeLog();
+    else if (window.state) window.state.logContextGeneration = (window.state.logContextGeneration || 0) + 1;
     jobGeneration++; generation++; accountGeneration++; offerGeneration++;
     clearSecrets(); controllers.forEach(controller => controller.abort());
   });
@@ -3125,6 +3287,27 @@
     void pollJobs();
   });
   const initial = generation;
+  window.PBGuiAI?.registerPageContext({id:'vast-open-log', getContext: () => {
+    const id = window.state?.cloudLogId;
+    if (disposed || typeof id !== 'string') return {};
+    const job = jobRows.find(row => row.id === id) || workers.find(row => row.id === id);
+    const target = {job_id:id};
+    const lease = job?.lease_id || job?.rental?.id || (job?.kind === 'worker' ? id : null);
+    const machine = job?.rental?.offer?.machine_id || job?.host_machine_id;
+    if (typeof lease === 'string' && /^[0-9a-f]{32}$/.test(lease)) target.lease_id = lease;
+    if (Number.isSafeInteger(machine) && machine > 0) {
+      target.machine_id = machine;
+      target.blocked = Array.isArray(queueState.blocked_machine_ids)
+        && queueState.blocked_machine_ids.every(value => Number.isSafeInteger(value) && value > 0)
+        ? queueState.blocked_machine_ids.includes(machine) : null;
+    }
+    const revision = queueState.host_block_revision ?? 0;
+    if (Number.isSafeInteger(revision) && revision >= 0) target.host_block_revision = revision;
+    return {current_cloud_job:target};
+  }});
+  window.addEventListener('pbgui:ai-action-completed', event => {
+    if (!disposed && event.detail?.action === 'vast_host_block') void pollJobs();
+  });
   refreshHostHistory();
   request('/settings').then(data => { if (!disposed && initial === generation) renderSettings(data); }).catch(error => { if (!disposed) message(error.message, true); });
 })();

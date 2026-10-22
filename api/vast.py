@@ -886,24 +886,56 @@ class MachineBlockRequest(HostBlockRequest):
 
 
 @router.post('/blocked-hosts')
-def set_host_block(body: MachineBlockRequest, session: SessionToken = Depends(require_auth)) -> dict:
+def set_host_block(body: MachineBlockRequest, response: Response = None, session: SessionToken = Depends(require_auth)) -> dict:
     """Change only local selection policy; never stop or alter a rental."""
     try:
-        return {'blocked_machine_ids': CloudQueue().set_host_block(body.machine_id, body.blocked)}
+        if response is not None:
+            response.headers['Cache-Control'] = 'no-store'
+        queue = CloudQueue()
+        with advisory_file_lock(queue.root / '.queue-lock'):
+            ids = queue.set_host_block(body.machine_id, body.blocked)
+            return {'machine_id': body.machine_id, 'blocked': body.machine_id in ids,
+                    'blocked_machine_ids': ids, 'host_block_revision': queue.read()['host_block_revision']}
     except VastError as exc:
         raise _error(exc) from None
+    except OSError as exc:
+        _log(SERVICE, 'Host policy persistence unconfirmed: ' + type(exc).__name__, level='ERROR')
+        raise HTTPException(status_code=500, detail='Host policy outcome unconfirmed; read current exclusions before another action') from None
 
 
 @router.post('/jobs/{identifier}/host-block')
-def set_rental_host_block(identifier: str, body: HostBlockRequest,
+def set_rental_host_block(identifier: str, body: HostBlockRequest, response: Response = None,
                           session: SessionToken = Depends(require_auth)) -> dict:
     """Resolve legacy rentals by ownership before excluding their machine."""
     try:
         queue = CloudQueue()
         machine = _rental_machine(queue, identifier)
-        return {'machine_id': machine, 'blocked_machine_ids': queue.set_host_block(machine, body.blocked)}
+        if response is not None:
+            response.headers['Cache-Control'] = 'no-store'
+        with advisory_file_lock(queue.root / '.queue-lock'):
+            ids = queue.set_host_block(machine, body.blocked)
+            return {'machine_id': machine, 'blocked': machine in ids, 'blocked_machine_ids': ids,
+                    'host_block_revision': queue.read()['host_block_revision']}
     except VastError as exc:
         raise _error(exc) from None
+    except OSError as exc:
+        _log(SERVICE, 'Host policy persistence unconfirmed: ' + type(exc).__name__, level='ERROR')
+        raise HTTPException(status_code=500, detail='Host policy outcome unconfirmed; read current exclusions before another action') from None
+
+
+@router.get('/blocked-hosts')
+def get_host_blocks(response: Response, job_id: str | None = None,
+                    session: SessionToken = Depends(require_auth)) -> dict:
+    """Verify persisted local exclusions and an optional locally known job target."""
+    from vast_host_actions import read_hosts
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        return read_hosts(CloudQueue(), job_id)
+    except VastError as exc:
+        raise _error(exc) from None
+    except OSError as exc:
+        _log(SERVICE, 'Host policy read unavailable: ' + type(exc).__name__, level='ERROR')
+        raise HTTPException(status_code=500, detail='Current host exclusions could not be read; no action confirmed') from None
 
 
 def _rental_machine(queue, identifier: str) -> int:
@@ -1061,6 +1093,7 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
         stored, errors = queue.store.list_with_errors()
         unreadable = {item['id']: item for item in errors}
         queue_state = queue.read()
+        queue_state.pop('host_block_receipts', None)
         by_id = {item['id']: item for item in stored}
         selected_worker = queue_state.get('worker_id')
         worker = by_id.get(selected_worker)
@@ -1530,20 +1563,50 @@ def adjust_budget(body: BudgetRequest, session: SessionToken = Depends(require_a
 
 
 
+class EndRentalAck(BaseModel):
+    """Acknowledge the attached Loops affected by ordinary rental termination."""
+    model_config = ConfigDict(extra='forbid')
+    loop_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
 @router.post('/queue/workers/{identifier}/{action}', status_code=202)
-def worker_action(identifier: str, action: str, session: SessionToken = Depends(require_auth)) -> dict:
+def worker_action(identifier: str, action: str, body: EndRentalAck | None = None,
+                  session: SessionToken = Depends(require_auth)) -> dict:
     """Control one durable rental while leaving the rest of the GPU pool running."""
     try:
-        return CloudQueue().worker_action(identifier, action)
+        queue = CloudQueue()
+        if action == 'end':
+            with advisory_file_lock(queue.root / '.queue-lock'):
+                _require_loop_end_ack([queue.store.read(identifier)], body)
+                return queue.worker_action(identifier, action)
+        return queue.worker_action(identifier, action)
     except VastError as exc:
         raise _error(exc) from None
 
 
+def _require_loop_end_ack(workers, body):
+    """Reject a stale confirmation when the selected rental's attached Loop changed."""
+    from pb8_loop_store import identifier
+    expected = {identifier(worker['loop_id']) for worker in workers if worker.get('loop_id')}
+    received = {identifier(value) for value in body.loop_ids} if body else set()
+    if expected != received:
+        raise VastError('End rental stops attached optimizer work and can fail its AI Loop. Review the current attached Loops, or choose Replace GPU and continue loop.', 409)
+
+
 @router.post("/queue/{action}")
-def queue_action(action: str, session: SessionToken = Depends(require_auth)) -> dict:
+def queue_action(action: str, body: EndRentalAck | None = None, session: SessionToken = Depends(require_auth)) -> dict:
     """Pause, continue or end the existing shared worker, never rent implicitly."""
     try:
-        return CloudQueue().action(action)
+        queue = CloudQueue()
+        if action == 'end':
+            with advisory_file_lock(queue.root / '.queue-lock'):
+                _require_loop_end_ack(queue.workers(), body)
+                result = queue.action(action)
+                result.pop('host_block_receipts', None)
+                return result
+        result = queue.action(action)
+        result.pop('host_block_receipts', None)
+        return result
     except VastError as exc:
         raise _error(exc) from None
 

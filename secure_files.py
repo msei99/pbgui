@@ -48,6 +48,43 @@ def read_regular_file_nofollow(path: Path, approved_root: Path) -> bytes:
             os.close(descriptor)
 
 
+def read_regular_file_prefix_nofollow(path: Path, approved_root: Path, limit: int = 4096) -> bytes:
+    """Read a bounded header through no-follow descriptors, never an entire large body."""
+    if type(limit) is not int or not 0 < limit <= 64 * 1024:
+        raise ValueError('Choose a prefix limit from 1 to 65536 bytes')
+    path = Path(os.path.abspath(Path(path).expanduser()))
+    approved_root = Path(os.path.abspath(Path(approved_root).expanduser()))
+    try:
+        relative = path.relative_to(approved_root)
+    except ValueError as exc:
+        raise RuntimeError('Prefix source escaped approved root') from exc
+    if not relative.parts:
+        raise RuntimeError('Prefix source must be a file below its approved root')
+    nofollow = getattr(os, 'O_NOFOLLOW', 0)
+    descriptors = []
+    try:
+        directory_fd = os.open(approved_root, os.O_RDONLY | os.O_DIRECTORY | nofollow)
+        descriptors.append(directory_fd)
+        for part in relative.parts[:-1]:
+            directory_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | nofollow, dir_fd=directory_fd)
+            descriptors.append(directory_fd)
+        file_fd = os.open(relative.parts[-1], os.O_RDONLY | nofollow, dir_fd=directory_fd)
+        descriptors.append(file_fd)
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            raise RuntimeError('Prefix source is not a regular file')
+        chunks, remaining = [], limit
+        while remaining:
+            chunk = os.read(file_fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b''.join(chunks)
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
 def _reject_symlink(path: Path) -> None:
     """Reject symlinks at security-sensitive filesystem boundaries."""
     if path.is_symlink():

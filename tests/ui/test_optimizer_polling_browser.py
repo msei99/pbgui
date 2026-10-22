@@ -70,7 +70,9 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
             elif path.endswith('/configs'):
                 route.fulfill(json={'configs': []})
             elif path.endswith('/settings'):
-                route.fulfill(json={'autostart': False, 'cpu': 1})
+                route.fulfill(json={'autostart': False, 'cpu': 1, 'cpu_max': 16,
+                                    'host_cpu_count': 16, 'cpu_override': False,
+                                    'use_pbgui_market_data': False})
             elif path == '/api/help/index':
                 route.fulfill(json=[{'file': '36_pbv7_optimize.md' if version == 'v7' else '43_pbv8_optimize.md', 'title': 'Optimize'}])
             elif path == '/api/help/content':
@@ -100,8 +102,8 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
                   node=>node.scrollWidth<=node.clientWidth)''')
         page.locator('[data-panel="queue"]').click()
         page.evaluate('''() => {
-          state.selectedQueue.add('job'); state.settings.cpu=7;
-          state.settingsModalCpuDirty=true;
+          state.selectedQueue.add('job');
+          el('settings-cpu-value').value='7';markQueueSettingsEdited('cpu');
           window.testQueueRenders=0;
           const original=renderQueueMaybeDeferred;
           renderQueueMaybeDeferred=function(){window.testQueueRenders++;return original();};
@@ -110,6 +112,7 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
         page.evaluate('(msg)=>{testSocket.onmessage({data:JSON.stringify(msg)});testSocket.onmessage({data:JSON.stringify(msg)});}', message)
         assert page.evaluate('testQueueRenders') == 1
         assert page.evaluate("state.selectedQueue.has('job')")
+        assert page.locator('#settings-cpu-value').input_value() == '7'
         page.evaluate("testVisibility='hidden';document.dispatchEvent(new Event('visibilitychange'));")
         alert_count = requests.count('/api/vps/alerts')
         page.evaluate('testAlertsTick()')
@@ -121,6 +124,7 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
         page.wait_for_function('state.pendingQueueUpdate===null && testQueueRenders===2')
         page.wait_for_function('!state.returnRefreshInFlight')
         assert page.evaluate("state.selectedQueue.has('job')")
+        assert page.locator('#settings-cpu-value').input_value() == '7'
         assert page.url.endswith(route_path + '#queue')
         destination = page.url
         page.locator('#pbgui-guide-btn').click()

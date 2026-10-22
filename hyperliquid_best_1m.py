@@ -390,6 +390,37 @@ def _tiingo_state_for_key(api_key: str) -> dict[str, Any]:
         return _tiingo_state_for_key_unlocked(api_key)
 
 
+def read_tiingo_usage_snapshot(*, usage_id: str) -> dict[str, int]:
+    """Read current persisted counters without creating locks or writing rollover state."""
+    path = _tiingo_usage_state_path()
+    state: dict[str, Any] = {}
+    if path.exists():
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        entries = raw.get("entries", {}) if isinstance(raw, dict) else {}
+        state = entries.get(usage_id, {}) if isinstance(entries, dict) else {}
+        if not isinstance(state, dict):
+            raise ValueError("Invalid Tiingo usage state")
+    now = datetime.now(timezone.utc)
+    hour_requests = max(0, int(state.get("hour_requests") or 0)) if state.get("hour_key") == now.strftime("%Y%m%d%H") else 0
+    day_requests = max(0, int(state.get("day_requests") or 0)) if state.get("day_key") == now.strftime("%Y%m%d") else 0
+    month_bytes = max(0, int(state.get("month_bytes") or 0)) if state.get("month_key") == now.strftime("%Y%m") else 0
+    wait_remaining_s = max(0, int(state.get("server_429_wait_until_ts") or 0) - int(now.timestamp()))
+    return {
+        "hour_requests": hour_requests,
+        "hour_remaining": max(0, TIINGO_MAX_REQ_PER_HOUR - hour_requests),
+        "day_requests": day_requests,
+        "day_remaining": max(0, TIINGO_MAX_REQ_PER_DAY - day_requests),
+        "month_bytes": month_bytes,
+        "month_bytes_remaining": max(0, TIINGO_MAX_BANDWIDTH_PER_MONTH_BYTES - month_bytes),
+        "hour_limit": TIINGO_MAX_REQ_PER_HOUR,
+        "day_limit": TIINGO_MAX_REQ_PER_DAY,
+        "month_bytes_limit": TIINGO_MAX_BANDWIDTH_PER_MONTH_BYTES,
+        "server_429_wait_remaining_s": wait_remaining_s,
+        "server_429_last_wait_s": max(0, int(state.get("server_429_last_wait_s") or 0)) if wait_remaining_s else 0,
+        "server_429_last_seen_ts": max(0, int(state.get("server_429_last_seen_ts") or 0)),
+    }
+
+
 def get_tiingo_runtime_usage(*, api_key: str) -> dict[str, int]:
     state = _tiingo_state_for_key(api_key)
     hour_requests = int(state.get("hour_requests") or 0)

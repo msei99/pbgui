@@ -1,5 +1,14 @@
 # Logging
 
+Öffnen Sie **System → Logging → Settings**. Nach einem Browserreload wird die
+ausgewählte Ansicht **Settings** oder **Log Viewer** über den URL-Parameter `view`
+wiederhergestellt. Settings lädt dabei aktuelle Rotationswerte vom Server;
+ungespeicherte Formularwerte werden nicht über einen Reload hinweg gespeichert.
+Ein Direktlink mit `?view=settings` öffnet Settings. Ohne `view` ist Log Viewer
+die Standardansicht. Ein unbekannter Wert zeigt einen kurzen Statushinweis und
+wird in der URL auf `view=logs` korrigiert. Die Auswahl einer der beiden
+Sidebar-Ansichten entfernt diesen Hinweis, auch wenn Log Viewer bereits aktiv ist.
+
 Wenn die Rotationseinstellungen nicht geladen werden koennen, zeigt Settings den Serverfehler beziehungsweise bei einer Antwort ohne JSON den HTTP-Status. Vorhandene Eingabewerte bleiben erhalten; der Fehler erscheint nicht als leere Logliste. Erneutes Wechseln zu Settings startet einen weiteren Ladeversuch.
 
 Der Wechsel zwischen Log Viewer und Settings erhält bearbeitete Rotationswerte. Fehlgeschlagene Speicherungen zeigen einen Fehler neben den betroffenen Einstellungen.

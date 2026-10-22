@@ -198,18 +198,51 @@ class LoopBackend:
         n_cpus = max(1, int(record['initial_config']['optimize'].get('n_cpus') or 1))
         return max(0, min(record['settings']['parallel'], (psutil.cpu_count() or 1) // n_cpus - busy))
 
-    def authorized(self, record, observer=False):
+    def authorized(self, record, observer=False, replacement=None):
         current = self.store.read(record['owner'], record['id'])
+        if replacement:
+            from pb8_loop_gpu_replacement import open_replacement
+            operation = open_replacement(current)
+            if (operation and current['status'] == 'replacing_gpu' and operation['id'] == replacement
+                    and operation['generation'] == current['control_generation'] == record['control_generation']
+                    and time.time() < min(current['deadline'], operation['limits']['deadline']) - 60):
+                return current
+            raise ValueError('GPU replacement preparation authorization changed')
         allowed = {'running', 'finishing', 'completed', 'unconfirmed', 'failed', 'stopping', 'stopped'} if observer else {'running', 'finishing'}
         if current['status'] not in allowed or (not observer and time.time() >= current['deadline'] - 60):
             raise ValueError('Loop is paused, stopped or its time allowance is exhausted')
         return current
 
+    def verify_replacement_input(self, record, job):
+        """Prove the preserved input and dataset before preparing, renting or dispatching."""
+        from pb8_loop_store import digest
+        from vast_provider import VastError
+        operation = (record.get('gpu_replacements') or {}).get(job.get('gpu_replacement_successor'))
+        if (not operation or operation.get('successor') != job['operation']
+                or operation['input_digest'] != digest([job['config'], job['overrides'],
+                    job.get('optimizer_start'), job.get('optimizer_archive')])):
+            raise VastError('Preserved GPU replacement input changed; review is required', 409)
+        fingerprint = self.fingerprint(record['initial_config'])
+        frozen = record['fingerprint']
+        matches = (fingerprint.get('pb8') == frozen.get('pb8')
+                   and fingerprint.get('data_status') == frozen.get('data_status'))
+        matches = matches and (fingerprint.get('data') == frozen.get('data')
+            if frozen.get('data_signature_version') == 2 else
+            fingerprint.get('metadata_data', fingerprint.get('data')) == frozen.get('data'))
+        if not matches:
+            raise VastError('PB8 version or frozen training data changed; GPU replacement is waiting for review', 409)
+
     def prepare(self, record, job):
         """Create an idempotent owned job, then leave launching to the controller."""
         from api import optimize_v8 as opt, backtest_v8 as bt
         config, overrides, name = copy.deepcopy(job['config']), job['overrides'], job['name']
-        self.authorized(record, observer=bool(job.get('observer_only')))
+        self.authorized(record, observer=bool(job.get('observer_only')), replacement=job.get('gpu_replacement_successor'))
+        if job.get('gpu_replacement_successor'):
+            from pb8_loop_gpu_replacement import open_replacement
+            operation = open_replacement(record)
+            if not operation or operation.get('successor') != job['operation']:
+                raise ValueError('Only the reserved GPU replacement successor may be prepared')
+            self.verify_replacement_input(record, job)
         validate_hsl_policy(record, config, overrides)
         if job['kind'] in {'optimizer', 'baseline', 'validation'}:
             from ai_loop_search_limits import exposure_ceiling, validate_exposure_ceiling
@@ -299,6 +332,11 @@ class LoopBackend:
         if state['status'] != 'queued':
             return state
         if job['backend']['execution'] == 'vast':
+            if job.get('gpu_replacement_successor'):
+                self.verify_replacement_input(record, job)
+                # This attempt has one reserved lease. Never fall back to the
+                # normal rental path with the original full budget and duration.
+                return self.poll(record, job)
             self._rent(record)
             return self.poll(record, job)
         from api import optimize_v8 as opt, backtest_v8 as bt
@@ -633,6 +671,36 @@ class LoopBackend:
                         and handover.get('owner') == record['owner']):
                     continue
                 queue.store.control(worker['id'], 'cleanup')
+
+    def replacement_cleanup_pending(self, record):
+        """Do not declare stop complete before every reserved replacement lease is absent."""
+        if not record.get('gpu_replacements'):
+            return False
+        from vast_jobs import JobStore
+        cloud = JobStore()
+        identifiers = {worker for operation in record['gpu_replacements'].values()
+                       for worker in (*operation['chain'], operation.get('worker_id')) if worker}
+        for worker_id in identifiers:
+            try:
+                worker = cloud.read(worker_id)
+            except Exception as exc:
+                from vast_provider import VastError
+                if isinstance(exc, VastError) and exc.status == 404:
+                    continue  # Reserved identity has not been published; guard cannot Create it.
+                raise
+            if worker.get('loop_id') != record['id'] or worker.get('loop_owner') != record['owner']:
+                raise ValueError('Replacement rental ownership changed during stop')
+            if worker['rental_state'] != 'deletion_verified':
+                if (worker['rental_state'] == 'none'
+                        and not (cloud.directory(worker_id) / 'attempt.json').exists()):
+                    # A durable Create marker always precedes the provider request;
+                    # newer Stop prevents an unstarted guard from publishing one.
+                    cloud.control(worker_id, 'cleanup')
+                    cloud.update(worker_id, rental_state='deletion_verified', status='completed', creation_not_sent=True)
+                    continue
+                cloud.control(worker_id, 'cleanup')
+                return True
+        return False
 
     def handover_step(self, record):
         """Resume durable rental transfer without starting a new rental."""

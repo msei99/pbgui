@@ -104,7 +104,8 @@ def test_host_block_api_and_preview(queue, monkeypatch):
                                  {'id': 3, 'machine_id': None}, {'id': 4}]))
     with TestClient(app) as http:
         assert http.post('/api/vast/blocked-hosts', json={'machine_id': True, 'blocked': True}).status_code == 422
-        assert http.post('/api/vast/blocked-hosts', json={'machine_id': 7, 'blocked': True}).json() == {'blocked_machine_ids': [7]}
+        assert http.post('/api/vast/blocked-hosts', json={'machine_id': 7, 'blocked': True}).json() == {
+            'machine_id': 7, 'blocked': True, 'blocked_machine_ids': [7], 'host_block_revision': 1}
         assert http.get('/api/vast/offers?include_incompatible=true').json()['offers'] == [{'id': 2, 'machine_id': 8, 'host_history': {}}]
         assert http.post('/api/vast/blocked-hosts', json={'machine_id': 7, 'blocked': False}).status_code == 200
         assert [row['id'] for row in http.get('/api/vast/offers').json()['offers']] == [1, 2]
@@ -149,7 +150,7 @@ def test_block_rental_resolves_machine_without_remote_mutation(queue, monkeypatc
 
     monkeypatch.setattr(vast, 'VastClient', lambda key: SimpleNamespace(instances=instances))
     result = vast.set_rental_host_block(identifier, vast.HostBlockRequest(blocked=True), session=None)
-    assert result == {'machine_id': 7, 'blocked_machine_ids': [7]}
+    assert result == {'machine_id': 7, 'blocked': True, 'blocked_machine_ids': [7], 'host_block_revision': 1}
     assert calls == ([True] if legacy else [])
     assert queue.store.read(identifier, 'control.json') == {'stop': False, 'cleanup': False}
     assert vast._rental_details(queue.store, identifier)['offer']['machine_id'] == 7

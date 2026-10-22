@@ -528,13 +528,21 @@ def _ema_bundle(
     spans = _ema_spans(bot_params, strategy_params)
     for side in SIDES:
         side_params = strategy_params.get(side) if isinstance(strategy_params.get(side), dict) else {}
-        try:
-            ema_span_0 = float(side_params.get("ema_span_0"))
-            ema_span_1 = float(side_params.get("ema_span_1"))
-        except (TypeError, ValueError):
-            continue
-        if all(math.isfinite(value) and value > 0.0 for value in (ema_span_0, ema_span_1)):
-            spans["m1"]["close"].add(math.sqrt(ema_span_0 * ema_span_1))
+        # Native strategies use either side-level spans or sibling entry spans.
+        # Keep the contexts separate; unrelated EMA groups are not close bands.
+        entry_params = side_params.get("entry")
+        for mapping in (side_params, entry_params):
+            if not isinstance(mapping, dict):
+                continue
+            try:
+                ema_span_0 = float(mapping.get("ema_span_0"))
+                ema_span_1 = float(mapping.get("ema_span_1"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if all(math.isfinite(value) and value > 0.0 for value in (ema_span_0, ema_span_1)):
+                geometric_span = math.sqrt(ema_span_0 * ema_span_1)
+                if math.isfinite(geometric_span) and geometric_span > 0.0:
+                    spans["m1"]["close"].add(geometric_span)
 
     def series(source: Any) -> dict[str, list[float]]:
         values = source.tolist() if hasattr(source, "tolist") else list(source)

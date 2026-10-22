@@ -116,12 +116,25 @@ Best placed as a compact summary cell at the very top of the dashboard.
 
 A **bar chart** of realised PnL per calendar day.
 Green bars = profitable day, red bars = loss day.
-A thin cumulative line overlays the bars to show overall trend.
+Cumulative mode instead shows a line for the running sum of available valid daily values.
+Missing or invalid values appear as gaps without value labels, rather than as zero. The sum resumes with later valid days; it does not imply complete history. If the cumulative sum overflows, its remaining values stay unavailable while valid daily values remain visible.
+True zero daily values display `0.00` at the baseline; they remain distinct from gaps.
 
 Configuration:
-- **Mode** — `bar` (default) or `line`
+- **Mode** — `bar` (daily values, default) or `line` (cumulative sum)
 - **Period** — preset ranges (`ALL_TIME`, `1_MONTH`, `3_MONTHS`, …) or a custom From / To date
 - **Users** — filter by account
+
+#### Safe manual verification (#427)
+
+1. Use an isolated test installation or fixture server with no production/provider forwarding. Have the fixture operator prepare at least four synthetic dashboards (**Alpha**, **PNL gaps**, **Beta**, **Gamma**) so the sidebar search is available. **PNL gaps** needs one PNL widget, test user `alice`, and period `CUSTOM:2026-09-01:2026-09-04`. Its synthetic `/api/dashboard/pnl_data` response must supply daily values `[5, null, "3", 0]` and cumulative values `[5, null, "8", 8]` on those four dates. Do not alter account history to create these cases.
+2. Open **Information → Dashboards → PNL gaps**. In **Daily PNL**, select **Mode → bar**. Expect visible `5.00` and `3.00` labels on September 1 and 3, no value label on September 2, and a visible `0.00` at September 4's baseline. The chart must remain usable without an error.
+3. Select **Mode → line**. Expect two separate line segments/paths with a gap on September 2; the later values on September 3 and 4 are both `8`. Return to **bar**: the zero label must reappear and the gap must stay unlabelled.
+4. Click the pencil button titled **Edit current dashboard**. Repeat steps 2–3 in the editor preview. Expect the same labels and gaps. Click **Cancel edit** to leave without saving; do not use **Save dashboard**.
+5. If the isolated fixture can emit events, zoom the chart around these dates, keep **bar** selected and enter `PNL` in the dashboard sidebar search. Have the fixture operator change only the first daily/cumulative value to `6` (later cumulative values to `9`) and emit a synthetic `income_updated` event for `alice`. Expect the first label to update to `6.00` automatically, the September 4 label to remain `0.00`, and the gap, zoom, mode, selected dashboard and search to remain intact. This step needs fixture support; do not generate a real trade.
+6. Reload the browser while **PNL gaps** is selected. Expect the same dashboard and sidebar search with the current fixture values, including the zero label and the gap. No in-app refresh action is needed.
+
+These are pending user acceptance steps, not a claim of a live GUI check. Non-finite JavaScript values, malformed aggregates and cumulative overflow are covered by isolated automated tests; never corrupt a real database to reproduce them.
 
 ### 📈 ADG — Average Daily Gain
 

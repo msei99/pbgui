@@ -758,13 +758,21 @@ class JobStore:
             from vast_queue import CloudQueue
             from vast_pool import MAX_RENTALS, pool_limit
             queue_state = CloudQueue(self).read()
+            intent = self.read(identifier, "intent.json")
+            replacement_limits = None
+            if intent.get('gpu_replacement'):
+                from pb8_loop_store import LoopStore
+                from pb8_loop_gpu_replacement import validate_rental_authorization
+                loop = LoopStore(PROJECT / 'data/loop_optimizer').read(state['loop_owner'], state['loop_id'])
+                _, replacement_limits = validate_rental_authorization(CloudQueue(self), loop, intent['gpu_replacement'], offer=offer)
             limit = (MAX_RENTALS if state.get('kind') == 'worker' and state.get('awaiting_queue_start')
                      else pool_limit(queue_state) if queue_state.get('pool_enabled') and state.get('kind') == 'worker'
                      else 1)
+            if replacement_limits is not None:
+                limit = min(MAX_RENTALS, replacement_limits['max_rentals'])
             if len(active) >= limit:
                 raise VastError("Finish the existing rental and cleanup first", 409)
             from vast_image import require_public_image
-            intent = self.read(identifier, "intent.json")
             image = intent.get("image")
             authorized_revision = SUPPORTED_RENTAL_IMAGE_REVISIONS.get(image) if isinstance(image, str) else None
             if not authorized_revision or intent.get("pb8_revision") != authorized_revision:
@@ -790,6 +798,10 @@ class JobStore:
             intent.update(offer=offer, budget_usd=budget, transfer_reserve_usd=max(reserve, budget - duration / 3600 * rate),
                           deadline=now + duration, accepted_at=now, label="pbgui-vast-" + identifier,
                           credential_generation=secrets["generation"])
+            if intent.get('gpu_replacement'):
+                intent['deadline'] = min(intent['deadline'], intent['gpu_replacement']['deadline'])
+                if intent['deadline'] - now < 900:
+                    raise VastError('Remaining replacement time is below the minimum rental duration', 409)
             write_json(directory / "intent.json", intent)
             self.update(identifier, status="provisioning", rental_state="creation_pending", deadline=intent["deadline"],
                         budget_usd=budget, price_hour_usd=rate, offer_id=offer["id"], gpu_name=offer.get("gpu_name"),

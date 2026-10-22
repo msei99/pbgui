@@ -14,7 +14,7 @@ import httpx
 import msgpack
 import psutil
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from starlette.requests import Request
 
 import optimize_autostart
@@ -125,7 +125,7 @@ def test_main_page_renders_when_pb8_runtime_metadata_is_unavailable(monkeypatch)
     monkeypatch.setattr(
         optimize_v8,
         "get_pb8_optimize_metadata",
-        lambda: (_ for _ in ()).throw(PB8ConfigurationError("PB8 update incomplete")),
+        lambda **_kwargs: (_ for _ in ()).throw(PB8ConfigurationError("PB8 update incomplete")),
     )
     warnings = []
     monkeypatch.setattr(optimize_v8, "_log", lambda service, message, **kwargs: warnings.append((service, message, kwargs)))
@@ -151,7 +151,7 @@ def test_metadata_reports_incompatible_pb8_rust_extension(monkeypatch) -> None:
     monkeypatch.setattr(
         optimize_v8,
         "get_pb8_optimize_metadata",
-        lambda: (_ for _ in ()).throw(PB8ConfigurationError(raw_error)),
+        lambda **_kwargs: (_ for _ in ()).throw(PB8ConfigurationError(raw_error)),
     )
     warnings = []
     monkeypatch.setattr(optimize_v8, "_log", lambda service, message, **kwargs: warnings.append(message))
@@ -165,6 +165,107 @@ def test_metadata_reports_incompatible_pb8_rust_extension(monkeypatch) -> None:
         "Run Update PB8 to rebuild the PB8 runtime."
     )
     assert warnings == [f"Loading PB8 optimize metadata failed: {raw_error}"]
+
+
+@pytest.mark.parametrize("optional", [
+    {},
+    {"backends": None, "optimize_defaults": None, "pymoo": None, "strategies": None},
+    {"backends": [], "optimize_defaults": {}, "pymoo": {}, "strategies": []},
+    {"backends": ["gpu", "pymoo"], "optimize_defaults": {"backend": "gpu", "bounds": {"long": {}}},
+     "pymoo": {"algorithms": ["auto", "nsga3"], "ref_dir_methods": ["das_dennis"]},
+     "strategies": ["ema_anchor"]},
+    {"optimize_defaults": {"backend": None}, "pymoo": {"algorithms": [], "ref_dir_methods": None}},
+])
+def test_static_metadata_routes_preserve_full_response_contract(monkeypatch, optional) -> None:
+    """Small responses equal the previous full-metadata projections for all defaults."""
+    metadata = {
+        "template": {"bot": {"long": {"entry": 0}}, "optimize": {"backend": "pymoo"}},
+        "bot_parameter_paths": ["bot.short.skip", "bot.long.entry", "bot.long.nested.value"],
+        "limits": {"metrics": ["adg"]},
+        "backend_contract": {"contract_version": 1, "items": {"gpu": {"available": False}}},
+        **optional,
+    }
+    calls = []
+    def load(*, include_backend_contract=True):
+        """Simulate the same cached runtime metadata with optional enrichment."""
+        calls.append(include_backend_contract)
+        return copy.deepcopy({key: value for key, value in metadata.items()
+                              if include_backend_contract or key != "backend_contract"})
+    monkeypatch.setattr(optimize_v8, "get_pb8_optimize_metadata", load)
+    monkeypatch.setattr(optimize_v8, "load_ini_section", lambda _section: {
+        "autostart": "TRUE", "cpu": "3", "cpu_override": "False", "use_pbgui_market_data": "True"})
+    monkeypatch.setattr(optimize_v8.multiprocessing, "cpu_count", lambda: 8)
+    monkeypatch.setattr(optimize_v8, "get_pb8_exchange_metadata", lambda: {"optimize": ["binance", "weex"]})
+    app = FastAPI()
+    app.include_router(optimize_v8.router, prefix="/api/optimize-v8")
+    app.dependency_overrides[optimize_v8.require_auth] = lambda: None
+    async def fetch():
+        """Exercise actual authenticated routes in an isolated ASGI app."""
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+            return [await http.get("/api/optimize-v8" + path)
+                    for path in ("/settings", "/bot-params", "/configs/new-config", "/metadata")]
+    settings, params, config, full = asyncio.run(fetch())
+    assert all(response.status_code == 200 for response in (settings, params, config, full))
+    assert settings.json() == {
+        "autostart": True, "cpu": 3, "cpu_override": False, "use_pbgui_market_data": True,
+        "cpu_max": 8, "host_cpu_count": 8,
+        "optimize_backend_options": metadata.get("backends") or [],
+        "optimize_backend_default": (metadata.get("optimize_defaults") or {}).get("backend", "pymoo"),
+        "pymoo_algorithm_options": (metadata.get("pymoo") or {}).get("algorithms") or [],
+        "pymoo_ref_dir_method_options": (metadata.get("pymoo") or {}).get("ref_dir_methods") or [],
+        "optimize_defaults": metadata.get("optimize_defaults") or {},
+        "strategies": metadata.get("strategies") or [],
+        "hsl_signal_modes": ["coin", "pside", "unified"], "exchange_options": ["binance", "weex"],
+    }
+    assert params.json() == {"params": [{"key": "entry"}, {"key": "nested.value"}]}
+    assert config.json() == {"config": metadata["template"], "param_status": {}}
+    assert full.json() == metadata
+    assert calls == [False, False, False, True]
+    for path in ("/settings", "/bot-params", "/configs/new-config", "/metadata"):
+        route = next(route for route in optimize_v8.router.routes if route.path == path and "GET" in route.methods)
+        assert not any(param.name == "include_backend_contract" for param in route.dependant.query_params)
+        assert any(dependency.call is optimize_v8.require_auth for dependency in route.dependant.dependencies)
+
+
+@pytest.mark.parametrize("endpoint", ["get_settings", "get_bot_params", "new_config", "get_metadata"])
+@pytest.mark.parametrize("rust_error", [False, True])
+def test_metadata_consumers_keep_logged_503_errors(monkeypatch, endpoint, rust_error) -> None:
+    """Every metadata route keeps the same runtime and Rust incompatibility diagnostics."""
+    raw = ("optimize bound long_entry does not map to bot.long.entry" if rust_error
+           else "PB8 update incomplete")
+    calls, messages = [], []
+    def load(*, include_backend_contract=True):
+        """Fail before returning any runtime metadata."""
+        calls.append(include_backend_contract)
+        raise PB8ConfigurationError(raw)
+    monkeypatch.setattr(optimize_v8, "get_pb8_optimize_metadata", load)
+    monkeypatch.setattr(optimize_v8, "load_ini_section", lambda _section: {})
+    monkeypatch.setattr(optimize_v8, "_log", lambda *args, **kwargs: messages.append((args, kwargs)))
+    with pytest.raises(HTTPException) as error:
+        getattr(optimize_v8, endpoint)(session=None)
+    assert error.value.status_code == 503
+    assert error.value.detail == (
+        "PB8 optimizer metadata is incompatible with the installed Rust extension. "
+        "Run Update PB8 to rebuild the PB8 runtime." if rust_error else raw)
+    assert calls == [endpoint == "get_metadata"]
+    assert messages
+
+
+def test_main_page_uses_static_limits_without_backend_contract(monkeypatch) -> None:
+    """Page rendering reads the same limits without a GPU capability request."""
+    calls = []
+    limits = {"metrics": ["adg"], "statistics": ["mean"]}
+    def load(*, include_backend_contract=True):
+        """Record the page's internal metadata mode."""
+        calls.append(include_backend_contract)
+        return {"limits": limits}
+    monkeypatch.setattr(optimize_v8, "get_pb8_optimize_metadata", load)
+    request = Request({"type": "http", "scheme": "http", "server": ("testserver", 80),
+                       "path": "/api/optimize-v8/main_page", "query_string": b"", "headers": []})
+    response = optimize_v8.main_page(request, session=None)
+    assert response.status_code == 200
+    assert json.dumps(limits).encode() in response.body
+    assert calls == [False]
 
 
 @pytest.fixture
@@ -1211,8 +1312,10 @@ def test_nested_suite_3d_plot_uses_temporary_normalized_candidates(optimize_v8_r
 
     def fake_plot(stage):
         captured["stage"] = Path(stage)
-        staged = json.loads(next((Path(stage) / "pareto").glob("*.json")).read_text(encoding="utf-8"))
-        captured["staged"] = staged
+        captured["staged"] = {
+            path.name: json.loads(path.read_text(encoding="utf-8"))
+            for path in (Path(stage) / "pareto").glob("*.json")
+        }
         return {"ok": True, "message": "PB7 staged", "html": "<div></div>", "output": "ok"}
 
     monkeypatch.setattr(optimize_v7, "_build_pareto_3d_plot_payload", fake_plot)
@@ -1222,8 +1325,19 @@ def test_nested_suite_3d_plot_uses_temporary_normalized_candidates(optimize_v8_r
     )
 
     assert response["ok"] is True
-    assert captured["staged"]["result"]["objectives"] == {"quality": 0.5, "risk": 0.4, "stability": 2.0}
-    assert captured["staged"]["optimize"]["scoring"][1] == {"metric": "risk", "goal": "min"}
+    assert set(captured["staged"]) == {"candidate-0.json", "candidate-1.json"}
+    expected_objectives = {
+        "candidate-0.json": {"quality": 0.5, "risk": 0.4, "stability": 2.0},
+        "candidate-1.json": {"quality": 1.5, "risk": 1.4, "stability": 3.0},
+    }
+    for name, objectives in expected_objectives.items():
+        staged = captured["staged"][name]
+        assert staged["result"]["objectives"] == objectives
+        assert staged["optimize"]["scoring"] == [
+            {"metric": "quality", "goal": "max"},
+            {"metric": "risk", "goal": "min"},
+            {"metric": "stability", "goal": "max"},
+        ]
     assert not captured["stage"].exists()
     assert all(path.read_bytes() == content for path, content in original.items())
 
@@ -2340,7 +2454,7 @@ def test_queue_settings_match_pb7_and_apply_only_to_launch_copy(monkeypatch) -> 
             "use_pbgui_market_data": "True",
         },
     )
-    monkeypatch.setattr(optimize_v8, "get_metadata", lambda _session: {"backends": [], "optimize_defaults": {}})
+    monkeypatch.setattr(optimize_v8, "_load_optimizer_metadata", lambda **_kwargs: {"backends": [], "optimize_defaults": {}})
     monkeypatch.setattr(optimize_v8, "get_pb8_exchange_metadata", lambda: {"optimize": ["binance", "weex"]})
     monkeypatch.setattr(optimize_v8, "save_ini_section", lambda section, values: saved.update(section=section, values=values))
 

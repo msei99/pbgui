@@ -48,6 +48,106 @@ def test_two_jobs_share_worker_and_deadline(queue):
     assert worker_step(queue, worker, now=201) == second
 
 
+@pytest.mark.parametrize('change', ['completed', 'failed', 'cancelled', 'ready', 'lease', 'collected'])
+def test_rental_end_rechecks_inventory_under_state_lock(queue, monkeypatch, change):
+    """Rental-end writes use current lease/status/result evidence, never the list snapshot."""
+    queue, worker = queue
+    store, identifier = queue.store, 'b'*32
+    store.update(worker, rental_state='deletion_verified')
+    store.update(identifier, status='collecting', lease_id=worker)
+    original = store.list_with_errors
+
+    def changed_after_snapshot():
+        """Commit a concurrent state change after listing and before the conditional writer."""
+        rows = original()
+        if change == 'lease':
+            store.update(identifier, lease_id='d'*32)
+        elif change == 'collected':
+            store.update(identifier, final_collected=True)
+        else:
+            store.update(identifier, status=change)
+        return rows
+
+    monkeypatch.setattr(store, 'list_with_errors', changed_after_snapshot)
+    assert worker_step(queue, worker, now=100) is None
+    row = store.read(identifier)
+    if change == 'collected':
+        assert row['status'] == 'failed'
+        assert row['error'] == 'Raw results saved locally; result import needs retry'
+    elif change == 'lease':
+        assert row['status'] == 'collecting' and row['lease_id'] == 'd'*32
+    else:
+        assert row['status'] == change
+
+
+@pytest.mark.parametrize('order', ['recover_first', 'rental_first'])
+def test_rental_end_and_recover_both_orders(queue, tmp_path, monkeypatch, order):
+    """Real threads exercise both rental-end/publication orderings without a lock inversion."""
+    import threading
+    import msgpack
+    from contextlib import contextmanager
+    from concurrent.futures import ThreadPoolExecutor
+    import vast_job_runner as runner
+    import vast_queue
+    queue, worker = queue
+    store, identifier = queue.store, 'b'*32
+    store.update(worker, rental_state='deletion_verified')
+    store.update(identifier, status='collecting', lease_id=worker, final_collected=True)
+    final = ensure_private_directory(store.directory(identifier) / 'final-results')
+    result = ensure_private_directory(final / 'optimize_results/run')
+    (result / 'all_results.bin').write_bytes(msgpack.packb({'metrics': {}}))
+    write_json(final / 'finished.json', {'exit_code': 0})
+    write_json(store.directory(identifier) / 'input/manifest.json', {})
+    intent = store.read(identifier, 'intent.json')
+    intent.update(results_root=str(tmp_path / 'optimize_results'), source_config_sha256='synthetic')
+    write_json(store.directory(identifier) / 'intent.json', intent)
+    importing, release_import, state_attempt, release_state, rental_written = [threading.Event() for _ in range(5)]
+    original_import, original_lock, update = runner.import_results, vast_queue.advisory_file_lock, store.update
+
+    def held_import(*args, **kwargs):
+        """Keep Finalize owned while the queue obtains its inventory."""
+        importing.set()
+        assert release_import.wait(5)
+        return original_import(*args, **kwargs)
+
+    @contextmanager
+    def tracked_lock(target):
+        """Delay only the queue's State acquisition, without holding State or acquiring Finalize."""
+        if Path(target) == store.directory(identifier) / '.state-lock':
+            state_attempt.set()
+            if order == 'recover_first':
+                assert release_state.wait(5)
+        with original_lock(target):
+            yield
+
+    def tracked_update(identifier, **changes):
+        """Signal after the rental writer's conditional State transaction."""
+        row = update(identifier, **changes)
+        if changes.get('error') == 'Raw results saved locally; result import needs retry':
+            rental_written.set()
+        return row
+
+    monkeypatch.setattr(runner, 'import_results', held_import)
+    monkeypatch.setattr(vast_queue, 'advisory_file_lock', tracked_lock)
+    monkeypatch.setattr(store, 'update', tracked_update)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        api = executor.submit(runner.finalize_collected_results, store, identifier)
+        try:
+            assert importing.wait(5)
+            rental = executor.submit(worker_step, queue, worker, now=100)
+            assert state_attempt.wait(5)
+            if order == 'rental_first':
+                assert rental_written.wait(5)
+            release_import.set()
+            assert api.result(timeout=5)['status'] == 'completed'
+        finally:
+            release_import.set()
+            release_state.set()
+        assert rental.result(timeout=5) is None
+    assert store.read(identifier)['status'] == 'completed'
+    assert store.read(identifier)['error'] is None
+
+
 def test_reserved_rental_profile_can_change_only_before_first_job(queue):
     """The shared manual rental stores one editable profile until queue start."""
     from vast_jobs import VastError

@@ -354,6 +354,17 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
         page.locator('#pai-template-coins .ms-option[data-val="ETH"]').click()
         expect(page.locator('#pai-template-start')).to_have_value('2024-01-01')
         expect(page.locator('#pai-template-end')).to_have_value('2026-10-15')
+        # The real menu path also renders the compact success state without gaps.
+        for text in ('Common market start including warmup → last complete UTC day.',
+                     'Window preview (inclusive UTC dates)',
+                     'Windows cover the selected period without gaps.'):
+            expect(dialog).not_to_contain_text(text)
+        for status in dialog.locator('.pai-template-date-status').all():
+            expect(status).to_have_text('')
+            expect(status).to_have_attribute('role', 'status')
+            assert status.evaluate("""n => getComputedStyle(n).display !== 'none' &&
+                getComputedStyle(n).marginTop === '0px' && getComputedStyle(n).marginBottom === '0px' &&
+                n.getBoundingClientRect().height === 0""")
         # Migrate the old empty manual-mode state shown in the reported screenshot.
         page.evaluate("""sessionStorage.setItem('pbgui.ai.loop-template', JSON.stringify({values:{windows:'custom',start:'',end:''},exchanges:['binance'],coins:['ETH']}))""")
         page.reload()

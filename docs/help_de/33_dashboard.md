@@ -116,12 +116,25 @@ Am besten als kompakte Übersichtszelle ganz oben im Dashboard platzieren.
 
 Ein **Balkendiagramm** des realisierten PnL pro Kalendertag.
 Grüne Balken = profitabler Tag, rote Balken = Verlusttag.
-Eine dünne kumulative Linie überlagert die Balken.
+Cumulative zeigt stattdessen eine Linie mit der laufenden Summe verfügbarer gültiger Tageswerte.
+Fehlende oder ungültige Werte erscheinen als Lücken ohne Wertbeschriftung, nicht als Null. Die Summe wird mit späteren gültigen Tagen fortgesetzt; sie garantiert keine vollständige Historie. Bei einem Summenüberlauf bleiben die weiteren kumulativen Werte nicht verfügbar, während gültige Tageswerte sichtbar bleiben.
+Echte tägliche Nullwerte zeigen `0.00` an der Nulllinie und bleiben dadurch von Lücken unterscheidbar.
 
 Konfiguration:
-- **Mode** — `bar` (Standard) oder `line`
+- **Mode** — `bar` (Tageswerte, Standard) oder `line` (kumulative Summe)
 - **Period** — Vorgaben (`ALL_TIME`, `1_MONTH`, `3_MONTHS`, …) oder eigener Von-/Bis-Zeitraum
 - **Users** — nach Konto filtern
+
+#### Sichere manuelle Prüfung (#427)
+
+1. Eine isolierte Testinstallation oder einen Fixture-Server ohne Weiterleitung zu Produktivsystemen oder Providern verwenden. Der Fixture-Betreiber bereitet mindestens vier synthetische Dashboards (**Alpha**, **PNL gaps**, **Beta**, **Gamma**) vor, damit die Seitenleistensuche verfügbar ist. **PNL gaps** benötigt ein PNL-Widget, Testbenutzer `alice` und Zeitraum `CUSTOM:2026-09-01:2026-09-04`. Die synthetische Antwort von `/api/dashboard/pnl_data` liefert für diese vier Tage Tageswerte `[5, null, "3", 0]` und kumulative Werte `[5, null, "8", 8]`. Keine Kontohistorie verändern, um Fehlerfälle zu erzeugen.
+2. **Information → Dashboards → PNL gaps** öffnen. Unter **Daily PNL** den Wert **Mode → bar** wählen. Erwartet: sichtbare Beschriftungen `5.00` und `3.00` am 1. und 3. September, keine Wertbeschriftung am 2. September und sichtbares `0.00` an der Nulllinie des 4. September. Das Diagramm bleibt ohne Fehler bedienbar.
+3. **Mode → line** wählen. Erwartet: zwei getrennte Linienabschnitte/Pfade mit einer Lücke am 2. September; die späteren Werte am 3. und 4. September sind jeweils `8`. Zurück zu **bar** wechseln: Die Nullbeschriftung erscheint wieder, die Lücke bleibt unbeschriftet.
+4. Den Stiftbutton mit Titel **Edit current dashboard** anklicken. Schritte 2–3 in der Editorvorschau wiederholen. Erwartet: dieselben Beschriftungen und Lücken. Mit **Cancel edit** ohne Speichern verlassen; **Save dashboard** nicht verwenden.
+5. Falls die isolierte Fixture Ereignisse senden kann, das Diagramm um diese Tage zoomen, **bar** ausgewählt lassen und `PNL` in die Dashboard-Suche der Seitenleiste eingeben. Der Fixture-Betreiber ändert ausschließlich den ersten Tages-/Summenwert auf `6` (spätere Summen auf `9`) und sendet ein synthetisches `income_updated` für `alice`. Erwartet: Die erste Beschriftung wird automatisch `6.00`; am 4. September bleibt `0.00` sichtbar. Lücke, Zoom, Modus, Dashboardauswahl und Suche bleiben erhalten. Dieser Schritt benötigt Fixture-Unterstützung; keinen echten Trade erzeugen.
+6. Den Browser bei ausgewähltem **PNL gaps** neu laden. Erwartet: dasselbe Dashboard und dieselbe Seitenleistensuche mit aktuellen Fixture-Werten, einschließlich Nullbeschriftung und Lücke. Eine Aktualisierungsaktion innerhalb der Anwendung ist nicht nötig.
+
+Diese Schritte stehen als Nutzerabnahme aus und behaupten keine durchgeführte Live-GUI-Prüfung. Nichtendliche JavaScript-Werte, fehlerhafte Aggregate und Summenüberlauf sind durch isolierte automatische Tests abgedeckt; dafür niemals eine echte Datenbank beschädigen.
 
 ### 📈 ADG — Durchschnittlicher Tagesgewinn
 

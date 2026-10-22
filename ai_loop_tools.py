@@ -9,10 +9,13 @@ import stat
 from file_lock import advisory_file_lock
 from secure_files import ensure_private_directory
 
+SERVICE = 'AIChat'
 LOOP_ACTION = 'save_ai_loop_config'
 VAST_ACTION = 'save_vast_preferences'
 RUN_ACTION = 'run_ai_loop'
-ACTIONS = {LOOP_ACTION, VAST_ACTION, RUN_ACTION}
+GPU_ACTION = 'replace_ai_loop_gpu'
+HOST_ACTION = 'vast_host_block'
+ACTIONS = {LOOP_ACTION, VAST_ACTION, RUN_ACTION, GPU_ACTION, HOST_ACTION}
 
 
 def _log_chunk(path, root, before):
@@ -80,7 +83,7 @@ class AILoopTools:
 
     async def read_vast(self, owner, conversation_id, args):
         """Expose current GPU requirements, rental limits and their editable schema."""
-        result = await self.caps._to_thread_uncancellable(self.checked, self._read_vast)
+        result = await self.caps._to_thread_uncancellable(self._host_checked, self._read_vast, args.get('job_id'))
         result['pending_proposals'] = await self._pending(owner, conversation_id)
         return result
 
@@ -90,12 +93,28 @@ class AILoopTools:
         return [{'proposal_id': row['proposal_id'], 'action': row['preview']['action'], 'status': row['status']}
                 for row in rows if (row.get('preview') or {}).get('action') in ACTIONS]
 
-    def _read_vast(self):
+    @staticmethod
+    def _host_checked(operation, *args):
+        """Expose safe host-specific failures as structured tool evidence."""
+        from vast_provider import VastError
+        from logging_helpers import human_log
+        try:
+            return operation(*args)
+        except (VastError, OSError, ValueError) as exc:
+            human_log(SERVICE, 'Host policy operation rejected: ' + type(exc).__name__, level='WARNING')
+            code = ('target_or_revision_conflict' if isinstance(exc, VastError) and exc.status == 409
+                    else 'invalid_host_state' if isinstance(exc, VastError) else 'persistence_unconfirmed')
+            return {'status': 'failed', 'error': {'code': code,
+                    'message': str(exc) if isinstance(exc, VastError) else 'Local host policy could not be read; no action confirmed'}}
+
+    def _read_vast(self, job_id=None):
         """Return bounded settings without credentials, host details or queue jobs."""
         from api.vast import RentalPreferences
         queue, rental = self._rental()
+        from vast_host_actions import read_hosts
+        hosts = read_hosts(queue, job_id)
         from vast_credentials import VastCredentialStore
-        return {'settings': rental.model_dump(), 'settings_digest': self.caps._digest(rental.model_dump()),
+        return {'host_exclusions': hosts, 'settings': rental.model_dump(), 'settings_digest': self.caps._digest(rental.model_dump()),
                 'schema': RentalPreferences.model_json_schema(),
                 'connected': bool(VastCredentialStore(queue.root).metadata().get('configured')),
                 'scope': 'Shared Vast.ai GPU & Offers / Rental & Automation settings for all cloud jobs',
@@ -142,8 +161,45 @@ class AILoopTools:
             loop_id = self.caps._opaque_id(args['loop_id'], 'loop')
             rows = [await self.caps._to_thread_uncancellable(runtime._controller.store.read, owner, loop_id)]
         rows = sorted(rows, key=lambda row: row.get('created_at', 0), reverse=True)[:100]
-        return {'runs': [self._run_summary(row, detailed=bool(args.get('loop_id'))) for row in rows],
+        summaries = await self.caps._to_thread_uncancellable(self.checked, self._summaries, rows, owner, bool(args.get('loop_id')))
+        return {'runs': summaries,
                 'pending_proposals': await self._pending(owner, conversation_id)}
+
+    def _summaries(self, rows, owner, detailed):
+        """Resolve owned native cloud IDs off the event loop, using retained metadata."""
+        from vast_jobs import JobStore, job_id
+        from vast_provider import VastError
+        summaries = [self._run_summary(row, detailed=detailed) for row in rows]
+        if detailed:
+            for row, summary in zip(rows, summaries):
+                jobs = [job for job in row.get('jobs', []) if not job.get('observer_only') and job.get('kind') != 'holdout']
+                for job, projected in zip(jobs, summary['jobs']):
+                    backend = job.get('backend') or {}
+                    if backend.get('execution') != 'vast':
+                        continue
+                    try:
+                        identifier = job_id(backend.get('id'))
+                        native = JobStore().read(identifier)
+                        if native.get('loop_id') == row['id'] and native.get('loop_owner') == owner:
+                            projected['cloud_job_id'] = identifier
+                    except VastError:
+                        from logging_helpers import human_log
+                        human_log(SERVICE, 'Native cloud job identity unavailable', level='WARNING')
+        return summaries
+
+    async def propose_host_block(self, owner, conversation_id, args):
+        """Review an explicit block or unblock for an exact locally resolved job."""
+        from vast_host_actions import prepare
+        if set(args) != {'job_id', 'blocked'}:
+            raise ValueError('Specify exactly job_id and blocked')
+        from vast_queue import CloudQueue
+        payload = await self.caps._to_thread_uncancellable(self._host_checked, prepare, CloudQueue(), args['job_id'], args['blocked'])
+        if payload.get('status') == 'failed':
+            return payload
+        preview = {'action': HOST_ACTION, 'name': 'Machine ' + str(payload['machine_id']),
+                   **payload, 'effect': ('Block' if payload['blocked'] else 'Unblock')
+                   + ' this machine for future rentals. Existing rentals and optimizer processes continue.'}
+        return await self.caps._create_custom_proposal(owner, conversation_id, HOST_ACTION, preview['name'], payload, preview)
 
     @staticmethod
     def _run_summary(row, detailed=False):
@@ -160,6 +216,12 @@ class AILoopTools:
                 'phase': row.get('phase'), 'reason': safe(row.get('reason')),
                 'last_error': safe(row.get('last_error')), 'repair_error': safe(row.get('repair_error'))}
         result['rental_handover'] = copy.deepcopy(row.get('rental_handover'))
+        from pb8_loop_gpu_replacement import open_replacement
+        operation = open_replacement(row)
+        result['gpu_replacement'] = {key: operation.get(key) for key in
+            ('id', 'step', 'old_worker_id', 'worker_id', 'reason', 'error')} if operation else None
+        result['rental_worker_ids'] = sorted({job['runner']['lease_id'] for job in row.get('jobs', [])
+            if (job.get('runner') or {}).get('lease_id') and job.get('status') not in {'complete', 'completed', 'failed', 'error', 'cancelled', 'stopped'}})
         failure = row.get('failure') or {}
         result['termination_details'] = {key: safe(failure[key]) for key in
             ('at', 'phase', 'round', 'stage', 'error_type', 'reason', 'detail', 'provider', 'model', 'effort', 'attempts') if key in failure}
@@ -234,6 +296,68 @@ class AILoopTools:
         payload, preview = await self.caps._to_thread_uncancellable(self.checked, self._prepare_run, owner, args, selection, request)
         return await self.caps._create_custom_proposal(owner, conversation_id, RUN_ACTION,
                                                       payload['name'], payload, preview)
+
+    async def propose_gpu_replacement(self, owner, conversation_id, args):
+        """Review an infrastructure operation without changing objectives or creating a Loop."""
+        import uuid
+        from pb8_loop_gpu_replacement import review
+        from vast_provider import VastError
+        from ai_capabilities import AICapabilityError
+        if set(args) != {'loop_id', 'worker_id'}:
+            raise AICapabilityError('Choose exactly loop_id and worker_id for GPU replacement')
+        loop_id = self.caps._opaque_id(args['loop_id'], 'loop')
+        worker_id = self.caps._opaque_id(args['worker_id'], 'worker')
+        row = await self.caps._to_thread_uncancellable(self._runtime()._controller.store.read, owner, loop_id)
+        try:
+            preview = await self.caps._to_thread_uncancellable(review, self._rental()[0], row, worker_id)
+        except VastError as exc:
+            from logging_helpers import human_log
+            human_log('PB8Loop', 'AI GPU replacement review rejected', level='WARNING')
+            raise AICapabilityError(str(exc)) from exc
+        payload = {'loop_id': loop_id, 'worker_id': worker_id, 'expected_generation': row['control_generation'],
+                   'snapshot_digest': preview['snapshot_digest'], 'operation_id': uuid.uuid4().hex, 'authorization': True}
+        preview.update(action=GPU_ACTION, name=row['settings'].get('loop_name') or row['settings']['config_name'])
+        preview['effect'] += (' Remaining budget: $' + format(preview['remaining_budget_usd'], '.4f')
+            + '; original deadline (UTC epoch): ' + str(preview['deadline'])
+            + '; used/reserved attempts: ' + str(preview['attempts_used']) + '/' + str(preview['max_runs'])
+            + '; excluded machines in this Loop chain only: ' + ', '.join(map(str, preview['excluded_machine_ids'])))
+        return await self.caps._create_custom_proposal(owner, conversation_id, GPU_ACTION, preview['name'], payload, preview)
+
+    async def execute_gpu_replacement(self, proposal):
+        """The proposal's persistent identity makes execution/approval replay idempotent."""
+        from vast_provider import VastError
+        from ai_capabilities import AICapabilityError
+        runtime = self._runtime()
+        data = dict(proposal.config)
+        loop_id = data.pop('loop_id')
+        try:
+            await runtime._replace_loop_gpu_owned(proposal.owner, loop_id, runtime.LoopGPUReplacement(**data))
+        except VastError as exc:
+            from logging_helpers import human_log
+            human_log('PB8Loop', 'Approved GPU replacement rejected', level='WARNING')
+            raise AICapabilityError(str(exc)) from exc
+        return {'action': GPU_ACTION, 'status': 'executed', 'loop_id': loop_id,
+                'operation_id': data['operation_id'], 'message': 'GPU replacement intent retained; inspect the same Loop for progress and remaining-limit waits.'}
+
+    def retained_gpu_replacement(self, payload):
+        """Recover approval acknowledgement from committed intent without repeating an action."""
+        from ai_capabilities import AICapabilityError
+        data = payload.get('config') or {}
+        owner = self.caps._opaque_id(payload.get('owner'), 'owner')
+        loop_id = self.caps._opaque_id(data.get('loop_id'), 'loop')
+        operation_id = self.caps._opaque_id(data.get('operation_id'), 'operation')
+        expected = self.caps._digest({'action': GPU_ACTION, 'name': payload.get('name'), 'payload': data})
+        if data.get('authorization') is not True or expected != payload.get('payload_digest'):
+            raise AICapabilityError('Approved GPU replacement payload changed')
+        row = self._runtime()._controller.store.read(owner, loop_id)
+        operation = (row.get('gpu_replacements') or {}).get(operation_id)
+        if not operation:
+            return None
+        if (operation['old_worker_id'] != data.get('worker_id')
+                or operation['review_digest'] != data.get('snapshot_digest')):
+            raise AICapabilityError('Retained replacement does not match its approved payload')
+        return {'action': GPU_ACTION, 'status': 'executed', 'loop_id': loop_id,
+                'operation_id': operation_id, 'message': 'Approved GPU replacement intent recovered; progress remains owned by the same Loop.'}
 
     def _prepare_run(self, owner, args, selection, request):
         """Validate the owned revision and freeze shared AI selection and cost settings."""
@@ -529,6 +653,10 @@ class AILoopTools:
     def execute(self, proposal):
         """Apply an approved snapshot with existing locks and stale-write protection."""
         payload = proposal.config
+        if proposal.action == HOST_ACTION:
+            from vast_host_actions import execute
+            from vast_queue import CloudQueue
+            return execute(CloudQueue(), proposal)
         if proposal.action == LOOP_ACTION:
             runtime = self._runtime()
             store = runtime._controller.store
@@ -564,6 +692,12 @@ def tool_specs():
     def schema(properties, required):
         return {'type': 'object', 'properties': properties, 'required': required, 'additionalProperties': False}
     return [
+        {'name': 'get_vast_host_action_status', 'description': 'Read one exact host proposal_id owned by this conversation, including durable proposal_status, historical execution evidence and separate freshly read current_host_state. Use after a lost approval response; never retry approval or submit a new mutation to discover the outcome. Pending proposals are not execution proof. This tool never executes or recovers actions.',
+         'schema': schema({'proposal_id': {'type': 'string'}}, ['proposal_id']), 'effect': 'read'},
+        {'name': 'propose_vast_host_block', 'description': 'Only on an explicit user request, propose blocking (blocked=true) or unblocking (blocked=false) the machine of exactly job_id. Read get_vast_preferences(job_id) first. Use current_cloud_job.job_id from the actually open cloud log or an ownership-verified cloud_job_id from get_ai_loop_runs. Never infer a target from a selected offer or worker. Requires existing proposal approval. Idempotent explicit intent, never a browser toggle. Prevents future rentals only; existing rentals and optimizer processes continue. After approval verify fresh host_exclusions; a historical receipt is not current state. After transport loss call get_vast_host_action_status(proposal_id) and read exclusions; never submit a replacement mutation.',
+         'schema': schema({'job_id': {'type': 'string'}, 'blocked': {'type': 'boolean'}}, ['job_id', 'blocked']), 'effect': 'draft'},
+        {'name': 'propose_ai_loop_gpu_replacement', 'description': 'Propose Replace GPU and continue loop for one owned Loop and its current GPU worker_id. Preserves the same Loop, objectives, frozen input and logical round. Review displays in-flight work loss, charged attempts, remaining budget/deadline and machine exclusion limited to this replacement chain. Does not change global Auto rent or reset limits. Requires explicit user approval. This is separate from propose_ai_loop_run replace, which replaces an entire Loop on the same rental.',
+         'schema': schema({'loop_id': {'type': 'string'}, 'worker_id': {'type': 'string'}}, ['loop_id', 'worker_id']), 'effect': 'draft'},
         {'name': 'get_ai_loop_runs', 'description': 'Read owned AI Loop run state, failure reasons and termination details from the backend. Supply loop_id for job operation IDs, errors and results. Use read_ai_loop_log for actual job log evidence; never ask the user to open/copy termination details.',
          'schema': schema({'loop_id': {'type': 'string'}}, []), 'effect': 'read'},
         {'name': 'read_ai_loop_log', 'description': 'Read actual retained optimizer/backtest log text for an owned AI Loop job. Get operation from get_ai_loop_runs(loop_id). Starts with the last 32 KiB; pass returned next_before to read earlier chunks. Includes cloud collected logs or current mirrored logs. Read-only; no browser clicks required.',
@@ -572,8 +706,8 @@ def tool_specs():
          'schema': schema({'operation': {'type': 'string', 'enum': ['queue', 'queue_and_start', 'start', 'replace']}, 'name': {'type': 'string'}, 'revision': {'type': 'integer', 'minimum': 1}, 'loop_id': {'type': 'string'}}, ['operation']), 'effect': 'draft'},
         {'name': 'get_ai_loop_configs', 'description': 'Read owned PB8 AI Loop definitions and editable settings schema; supply name to inspect a definition before editing. Source strategy, exchanges, training windows and holdout come from a saved PB8 optimizer config. max_rounds is a required explicit hard upper bound on completed rounds; set it from the user request. max_runs separately limits optimizer attempts.',
          'schema': schema({'name': {'type':'string'}}, []), 'effect': 'read'},
-        {'name': 'get_vast_preferences', 'description': 'Read non-secret shared Vast.ai GPU requirements, rental limits, schema and settings_digest. For two RTX 3060 rentals use gpu_name RTX 3060 and max_rentals 2, independently of AI Loop parallel variants. Preserve existing budget/duration unless requested; clarify missing material cost requirements.',
-         'schema': schema({}, []), 'effect': 'read'},
+        {'name': 'get_vast_preferences', 'description': 'Read non-secret shared Vast.ai GPU requirements, rental limits, schema and settings_digest, plus separate fresh persisted host_exclusions with blocked_machine_ids and host_block_revision. Supply job_id from current_cloud_job or an ownership-verified cloud_job_id to resolve its local lease, machine_id and blocked state without provider access. Exclusions are not editable rental preferences and do not affect settings_digest. For two RTX 3060 rentals use gpu_name RTX 3060 and max_rentals 2, independently of AI Loop parallel variants. Preserve existing budget/duration unless requested; clarify missing material cost requirements.',
+         'schema': schema({'job_id': {'type': 'string'}}, []), 'effect': 'read'},
         {'name': 'propose_ai_loop_config', 'description': 'Create a fresh uniquely named AI Loop definition from the current user request. The selected optimizer config supplies initial data/config only, never old Loop goals or instructions. Supply complete intended editor settings including max_rounds; settings are never merged with an old definition. The server copies the current original user message verbatim into goals.text and clears presets/targets so all objectives are interpreted from that request alone. Leave goals.text empty or verbatim; never expand it with extra constraints. Old definitions require explicit reuse_existing=true plus exact revision for a reconciliation proposal that replaces all settings/goals. Only the existing optimizer bundle is reused. Default Loop instructions are frozen; old custom instruction versions are not inherited. Does not queue/start. For cloud validate rental preferences first.',
          'schema': schema({'name':{'type':'string'}, 'config_name':{'type':'string'}, 'revision':{'type':'integer','minimum':1}, 'reuse_existing':{'type':'boolean','default':False}, 'settings':{'type':'object','additionalProperties':True}}, ['name','config_name','settings']), 'effect':'draft'},
         {'name': 'propose_vast_preferences', 'description': 'Propose changes to shared Vast.ai GPU & Offers / Rental & Automation settings. Read get_vast_preferences first and pass its settings_digest. No settings change until user approval. Settings affect all cloud jobs. auto_rent=true can trigger paid rentals immediately on approval; never infer this from a request merely to prepare settings. GPU count is max_rentals, not Loop parallel.',

@@ -127,12 +127,33 @@ const apiPost=async()=>{if(failure==='network')throw new Error('offline');return
 
 def test_logging_view_preserves_loaded_settings():
     """Returning to Settings leaves the existing form and its unsaved values alone."""
-    execute(function('logging_monitor.html','showView')+r'''
+    execute(function('logging_monitor.html','updateLoggingViewUrl')+function('logging_monitor.html','showView')+r'''
 const assert=require('node:assert/strict');let settingsVisible=false,rotationSettingsLoaded=true,rotationSettingsLoading=false;
+const window={location:new URL('http://logging.test/mounted/api/logging/main_page?other=kept#anchor'),history:{state:{kept:true},replaceState(state,unused,url){assert.deepEqual(state,{kept:true});window.location=new URL(url,window.location);}}};
 const document={getElementById:()=>({style:{},classList:{add(){},remove(){}}})};
 function loadRotationSettings(){throw new Error('Must not reload the edited form');}
 showView('viewer');showView('settings');assert.equal(settingsVisible,true);
+assert.equal(window.location.pathname,'/mounted/api/logging/main_page');assert.equal(window.location.search,'?other=kept&view=settings');assert.equal(window.location.hash,'#anchor');
 ''')
+
+
+@pytest.mark.parametrize('query,expected,replacements', [
+    ('', 'logs', 0), ('?view=logs', 'logs', 0),
+    ('?view=settings', 'settings', 0), ('?view=unknown', 'logs', 1),
+])
+def test_logging_view_url_restoration(query, expected, replacements):
+    """Restore only allowed panels without unnecessary initial history replacements."""
+    helpers = ''.join(function('logging_monitor.html', name) for name in (
+        'loggingViewFromUrl', 'updateLoggingViewUrl', 'restoreLoggingView', 'showView'))
+    execute(helpers + f'const query={json.dumps(query)},expected={json.dumps(expected)};' + r'''
+const assert=require('node:assert/strict');let settingsVisible=false,rotationSettingsLoaded=false,rotationSettingsLoading=false,loads=0,replaced=0;
+const state={keep:42};const window={location:new URL('http://logging.test/prefix/api/logging/main_page'+query+'#kept'),history:{state,replaceState(s,unused,url){assert.equal(s,state);replaced++;window.location=new URL(url,window.location);}}};
+const status={hidden:true};const document={getElementById:id=>id==='logging-view-status'?status:({style:{},classList:{add(){},remove(){}}})};
+function loadRotationSettings(){loads++;rotationSettingsLoading=true;}
+restoreLoggingView();assert.equal(settingsVisible,expected==='settings');assert.equal(loads,expected==='settings'?1:0);
+assert.equal(window.location.pathname,'/prefix/api/logging/main_page');assert.equal(window.location.hash,'#kept');
+assert.equal(status.hidden,query!=='?view=unknown');
+''' + f'assert.equal(replaced,{replacements});')
 
 
 def test_coin_data_error_is_handled():

@@ -383,7 +383,7 @@ def test_pb8_refresh_cache_rejects_secrets_and_restores_expired_drafts() -> None
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
-    load_session = _extract_function(source, "loadSession")
+    load_session = "\n".join(_extract_function(source, name) for name in ("createStrategyRefreshRestore", "loadSession"))
     recovery_script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
@@ -395,6 +395,8 @@ def test_pb8_refresh_cache_rejects_secrets_and_restores_expired_drafts() -> None
         const cached = {{config: {{backtest: {{}}, bot: {{}}, live: {{}}}}, controls: {{stage: 'movie'}}}};
         const calls = [];
         let applied = null;
+        function refreshCacheControls() {{ return cached.controls; }}
+        function restoreStrategyRefreshControls() {{}}
         function readStrategyRefreshState() {{ return cached; }}
         function cachedSnapshotOptions() {{ return {{start_date: '2026-01-01'}}; }}
         function apiFetch(path) {{
@@ -428,7 +430,8 @@ def test_pb8_refresh_cache_rejects_secrets_and_restores_expired_drafts() -> None
     assert "DRAFT_ID = '';" in source
     assert "snapshot.source = 'refresh-cache';" in source
     assert "cached.movie_data" in source
-    assert "setTimeout(function() { buildMovieFrames(); }, 0);" in source
+    assert "bootstrapSnapshotGeneration === snapshotRequestGeneration" in source
+    assert "bootstrapMovieGeneration === movieRequestGeneration" in source
     assert "window.addEventListener('beforeunload', persistStrategyRefreshState);" in source
     bootstrap = _extract_function(source, "applySessionBootstrap")
     assert bootstrap.index("selectStage(stage);") < bootstrap.index("applyMovieFrameResult(cached.movie_data);")
@@ -453,3 +456,318 @@ def test_all_inline_scripts_parse_as_javascript() -> None:
             check=False,
         )
         assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def _run_js(script):
+    """Execute production functions in Node via the offline Python test wrapper."""
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False, timeout=15)
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_endpoint_timeouts_controller_timer_cleanup_and_pb7_behavior():
+    """V8 endpoint replacement, timeout, exit and completion clean resources; PB7 keeps its fetch contract."""
+    source = PAGE_PATH.read_text()
+    functions = "\n".join(_extract_function(source, name) for name in ("apiFetch", "disposeExplorerRequests"))
+    _run_js("""
+      const assert = require('node:assert/strict');
+      let IS_V8 = true;
+      const API_BASE = '/prefix/api/strategy-explorer-v8';
+      const explorerRequests = {};
+      let sessionRequestGeneration = 0, snapshotRequestGeneration = 0, marketRequestGeneration = 0;
+      const timers = new Map(); let timerId = 0;
+      function setTimeout(callback, ms) { timers.set(++timerId, {callback, ms}); return timerId; }
+      function clearTimeout(id) { timers.delete(id); }
+      const requests = [];
+      function fetch(url, opts) {
+        return new Promise((resolve, reject) => {
+          requests.push({url, opts, resolve, reject});
+          if (opts.signal) {
+            const abort = () => reject(new Error('aborted'));
+            opts.signal.addEventListener('abort', abort, {once:true});
+            if (opts.signal.aborted) abort();
+          }
+        });
+      }
+    """ + functions + """
+      (async () => {
+        for (const [endpoint, ms] of [['/session?draft_id=', 225000], ['/snapshot', 145000], ['/markets', 85000]]) {
+          const pending = apiFetch(endpoint);
+          assert.equal([...timers.values()][0].ms, ms);
+          await Promise.resolve();
+          assert.ok(requests.at(-1).url.startsWith('/prefix/'));
+          requests.at(-1).resolve({ok:true, json: () => Promise.resolve({ok:true})});
+          await pending;
+          assert.equal(timers.size, 0);
+          assert.deepEqual(Object.keys(explorerRequests), []);
+        }
+        const old = apiFetch('/session').catch(e => e.message);
+        await Promise.resolve();
+        const newer = apiFetch('/session').catch(e => e.message);
+        await Promise.resolve();
+        assert.equal(await old, 'aborted');
+        assert.equal(timers.size, 1);
+        assert.equal(Object.keys(explorerRequests).length, 1);
+        [...timers.values()][0].callback();
+        assert.equal(await newer, 'aborted');
+        assert.equal(timers.size, 0);
+        const exit = apiFetch('/snapshot').catch(e => e.message);
+        await Promise.resolve();
+        disposeExplorerRequests();
+        assert.equal(await exit, 'aborted');
+        assert.equal(timers.size, 0);
+        assert.equal(sessionRequestGeneration, 1);
+        const failure = apiFetch('/markets').catch(e => e.message);
+        await Promise.resolve();
+        requests.at(-1).resolve({ok:false, status:503, text:()=>Promise.resolve('{"detail":"synthetic busy"}')});
+        assert.equal(await failure, 'synthetic busy');
+        assert.equal(timers.size, 0);
+        const upstream = new AbortController();
+        const external = apiFetch('/snapshot', {signal:upstream.signal}).catch(e => e.message);
+        upstream.abort();
+        assert.equal(await external, 'aborted');
+        assert.equal(timers.size, 0);
+        IS_V8 = false;
+        const pb7 = apiFetch('/session'); await Promise.resolve();
+        assert.equal(timers.size, 0);
+        assert.equal(requests.at(-1).opts.signal, undefined);
+        requests.at(-1).resolve({ok:true, json:()=>Promise.resolve({pb7:true})});
+        assert.deepEqual(await pb7, {pb7:true});
+      })().catch(e => { console.error(e); process.exitCode = 1; });
+    """)
+
+
+def test_restore_failure_never_persists_defaults_and_stale_session_starts_no_followup():
+    """503 recovery retains the actual storage value and edits, suppressing obsolete follow-up work."""
+    source = PAGE_PATH.read_text()
+    functions = "\n".join(_extract_function(source, name) for name in ("createStrategyRefreshRestore", "loadSession", "persistStrategyRefreshState"))
+    _run_js("""
+      const assert = require('node:assert/strict');
+      let IS_V8 = true;
+      let sessionRequestGeneration = 0, snapshotRequestGeneration = 0;
+      let strategyRefreshRecoveryPending = false;
+      let DRAFT_ID = ''; const RESULT_PATH = '';
+      const cached = {config:{backtest:{starting_balance:4321}, bot:{long:{marker:7}}, live:{}}, controls:{stage:'movie', coin:'BTC', context_days:2}};
+      const original = JSON.stringify(cached);
+      let stored = original, writes = 0, bootstraps = 0, messages = [], restored = null;
+      const STRATEGY_REFRESH_CACHE_KEY = 'test-cache', STRATEGY_REFRESH_CACHE_MAX_BYTES = 100000;
+      const window = {sessionStorage:{setItem:(_key, value)=>{stored=value; writes++;}}};
+      let state = {config:null, snapshot:null};
+      const nodes = {};
+      const document = {getElementById:id => nodes[id] || (nodes[id]={})};
+      function refreshCacheConfig(config) { return config; }
+      function refreshCacheControls() { return {stage:'analysis'}; }
+      function refreshCacheMovieData() { return null; }
+      let lastMovieData = null;
+      function readStrategyRefreshState() { return cached; }
+      function cachedSnapshotOptions() { return {}; }
+      function restoreStrategyRefreshControls(value) { restored = value; }
+      function syncRawFromState() {}
+      function setMessages(value) { messages = value; }
+      function applySessionBootstrap(data) { bootstraps++; persistStrategyRefreshState(); return data; }
+      let calls = [], snapshotFails = true, sessionError = null, deferred = null;
+      function apiFetch(path) {
+        calls.push(path);
+        if (path.startsWith('/session')) {
+          if (deferred) return deferred;
+          if (sessionError) return Promise.reject(new Error(sessionError));
+          return Promise.resolve({snapshot:{config:{default:true}}});
+        }
+        return snapshotFails ? Promise.reject(new Error('HTTP 503 synthetic busy')) : Promise.resolve({config:cached.config});
+      }
+    """ + functions + """
+      (async () => {
+        await loadSession();
+        assert.equal(bootstraps, 0);
+        assert.deepEqual(state.config, cached.config);
+        assert.equal(state.snapshot, null);
+        assert.deepEqual(restored, cached);
+        assert.match(messages[0].text, /503/);
+        persistStrategyRefreshState(); // stage changes and beforeunload must also be safe
+        assert.equal(writes, 0);
+        assert.equal(stored, original);
+        assert.equal(nodes['source-chip'].textContent, 'Session unavailable');
+        DRAFT_ID = 'expired'; sessionError = 'draft not found';
+        await loadSession();
+        assert.equal(DRAFT_ID, 'expired');
+        assert.equal(writes, 0);
+        snapshotFails = false;
+        await loadSession();
+        assert.equal(DRAFT_ID, '');
+        assert.equal(bootstraps, 1);
+        // An obsolete successful session cannot start the cached snapshot POST.
+        let resolve; deferred = new Promise(r => resolve = r); calls = [];
+        const stale = loadSession();
+        sessionRequestGeneration++;
+        resolve({snapshot:{config:{default:true}}});
+        await stale;
+        assert.equal(calls.length, 1);
+        // PB7 retains the existing fallback path.
+        deferred = null; sessionError = null; snapshotFails = true; IS_V8 = false;
+        await loadSession();
+        assert.equal(bootstraps, 2);
+      })().catch(e => { console.error(e); process.exitCode = 1; });
+    """)
+
+
+def test_stale_recovery_and_bootstrap_cannot_mutate_context_or_start_markets():
+    """A replaced recovery cannot clear a draft, render defaults or start market/movie requests."""
+    source = PAGE_PATH.read_text()
+    functions = "\n".join(_extract_function(source, name) for name in ("createStrategyRefreshRestore", "loadSession", "applySessionBootstrap"))
+    _run_js("""
+      const assert = require('node:assert/strict');
+      let sessionRequestGeneration = 0, snapshotRequestGeneration = 0;
+      let strategyRefreshRecoveryPending = false;
+      let IS_V8 = true, DRAFT_ID = 'expired'; const RESULT_PATH = '';
+      const cached = {config:{bot:{}}, controls:{stage:'movie'}};
+      const state = {snapshot:null};
+      function refreshCacheControls() { return cached.controls; }
+      function restoreStrategyRefreshControls() {}
+      function readStrategyRefreshState() { return cached; }
+      function cachedSnapshotOptions() { return {}; }
+      const calls = []; let resolveSnapshot;
+      function apiFetch(path) {
+        calls.push(path);
+        return path.startsWith('/session') ? Promise.reject(new Error('draft not found')) : new Promise(r => resolveSnapshot = r);
+      }
+      function setMessages() { throw new Error('stale error'); }
+      function configureVersionUi() { throw new Error('stale bootstrap rendered'); }
+    """ + functions + """
+      (async () => {
+        const pending = loadSession();
+        await Promise.resolve(); await Promise.resolve();
+        assert.equal(calls.length, 2);
+        snapshotRequestGeneration++;
+        resolveSnapshot({config:cached.config});
+        await pending;
+        assert.equal(DRAFT_ID, 'expired');
+        assert.equal(state.snapshot, null);
+        assert.equal(await applySessionBootstrap({}, {}, cached, '', 0, 0), null);
+      })().catch(e => { console.error(e); process.exitCode = 1; });
+    """)
+
+
+def test_restore_merges_edits_and_ignores_programmatic_control_changes():
+    """Only edits made during waits replace cached values, with no mutation of saved data."""
+    function = _extract_function(PAGE_PATH.read_text(), 'createStrategyRefreshRestore')
+    _run_js("""
+      const assert = require('node:assert/strict');
+      let IS_V8 = true;
+      const cached = {config:{backtest:{starting_balance:4321}}, controls:{stage:'raw', movie_frames:'37', balance:'4321', movie_visible:'60'}};
+      const original = JSON.stringify(cached);
+      let displayed = {stage:'raw', movie_frames:'200', balance:'1000', movie_visible:'60'};
+      function refreshCacheControls() { return Object.assign({}, displayed); }
+      function restoreStrategyRefreshControls(value) { displayed = Object.assign({}, displayed, value.controls); }
+    """ + function + """
+      const restore = createStrategyRefreshRestore(cached);
+      displayed.movie_frames = '99'; displayed.stage = 'movie';
+      assert.equal(restore.capture().controls.movie_frames, '99');
+      assert.equal(restore.capture().controls.stage, 'movie');
+      // A response synchronizes defaults before the next market request.
+      displayed.movie_frames = '200'; displayed.balance = '1000';
+      restore.applied();
+      // A later edit must merge with the earlier edit rather than the defaults.
+      displayed.movie_visible = '75';
+      const result = restore.capture();
+      assert.equal(result.controls.movie_frames, '99');
+      assert.equal(result.controls.movie_visible, '75');
+      assert.equal(result.controls.balance, '4321');
+      assert.equal(result.controls.stage, 'movie');
+      assert.equal(JSON.stringify(cached), original);
+      // Explicit edits to the template's initial value also replace saved values.
+      const another = createStrategyRefreshRestore(cached);
+      assert.equal(displayed.movie_frames, '37');
+      displayed.movie_frames = '200';
+      assert.equal(another.capture().controls.movie_frames, '200');
+      IS_V8 = false;
+      assert.equal(createStrategyRefreshRestore(cached), null);
+      IS_V8 = true;
+      assert.equal(createStrategyRefreshRestore(null), null);
+    """)
+
+
+def test_movie_followup_uses_initialized_generation_and_rejects_later_edits():
+    """Real Frames/Generate handlers invalidate a queued rebuild without aborting the newer request."""
+    source = PAGE_PATH.read_text()
+    functions = "\n".join(_extract_function(source, name) for name in (
+        "applySessionBootstrap", "invalidateMovieRequest", "buildMovieFrames"
+    ))
+    handlers = "\n".join(line for line in source.splitlines() if line.startswith((
+        "document.getElementById('movie-frames-input').addEventListener(",
+        "document.getElementById('btn-build-movie').addEventListener(",
+    )))
+    assert handlers.count("addEventListener") == 2
+    _run_js("""
+      const assert = require('node:assert/strict');
+      let sessionRequestGeneration = 1, snapshotRequestGeneration = 1, movieRequestGeneration = 0;
+      let strategyRefreshRecoveryPending = true;
+      let movieAbortController = null, movieProgressId = '', lastMovieData = null;
+      const RESULT_PATH = '';
+      const state = {};
+      const nodes = {};
+      const document = {getElementById: id => nodes[id] || (nodes[id] = {
+        value:'', textContent:'Generate Movie', handlers:{},
+        addEventListener(type, callback) { this.handlers[type] = callback; }
+      })};
+      const window = {crypto:{randomUUID:()=> 'synthetic-progress'}};
+      const pending = [], requests = [];
+      function setTimeout(fn) { pending.push(fn); }
+      function configureVersionUi() {}
+      function deepGet(_object, _path, fallback) { return fallback; }
+      function renderSnapshot() {}
+      function syncOptionsFromConfig() {}
+      function populateMarkets() { return Promise.resolve(); }
+      function inferInitialSelectors() { snapshotRequestGeneration++; movieRequestGeneration++; }
+      function restoreStrategyRefreshControls() {}
+      function applyInitialResultPath() {}
+      function applyBacktestHandoff() {}
+      function setMovieExportAvailable() {}
+      function selectStage() {}
+      function setMessages() {}
+      function persistStrategyRefreshState() {}
+      function setMovieProgress() {}
+      function clearMovieExportDownload() {}
+      function startMovieProgressPolling() {}
+      function stopMovieProgressPolling() {}
+      function requestMovieFrames(progressId, signal, generation) {
+        requests.push({progressId, signal, generation});
+        return new Promise(() => {}); // synthetic pending request: no I/O/timers
+      }
+      const cached = {controls:{stage:'movie', movie_generated:true}};
+    """ + functions + "\n" + handlers + """
+      (async () => {
+        await applySessionBootstrap({}, {}, cached, '', 1, 1);
+        assert.equal(pending.length, 1);
+        pending.shift()();
+        assert.equal(requests.length, 1); // own selector setup must permit rebuilding
+
+        await applySessionBootstrap({}, {}, cached, '', 1, snapshotRequestGeneration);
+        const snapshotBeforeFramesEdit = snapshotRequestGeneration;
+        const movieBeforeFramesEdit = movieRequestGeneration;
+        nodes['movie-frames-input'].value = '99';
+        nodes['movie-frames-input'].handlers.input();
+        assert.equal(movieRequestGeneration, movieBeforeFramesEdit + 1);
+        assert.equal(snapshotRequestGeneration, snapshotBeforeFramesEdit);
+        pending.shift()();
+        assert.equal(requests.length, 1); // a real Frames edit invalidates the timer
+
+        await applySessionBootstrap({}, {}, cached, '', 1, snapshotRequestGeneration);
+        const snapshotBeforeManualStart = snapshotRequestGeneration;
+        nodes['btn-build-movie'].handlers.click();
+        assert.equal(snapshotRequestGeneration, snapshotBeforeManualStart);
+        assert.equal(requests.length, 2);
+        const manualRequest = requests.at(-1);
+        pending.shift()();
+        assert.equal(requests.length, 2); // no second request from the old timer
+        assert.equal(manualRequest.signal.aborted, false);
+        assert.equal(manualRequest.generation, movieRequestGeneration);
+
+        await applySessionBootstrap({}, {}, cached, '', 1, snapshotRequestGeneration);
+        snapshotRequestGeneration++;
+        pending.shift()();
+        assert.equal(requests.length, 2);
+        await applySessionBootstrap({}, {}, cached, '', 1, snapshotRequestGeneration);
+        sessionRequestGeneration++;
+        pending.shift()();
+        assert.equal(requests.length, 2);
+      })().catch(e => {console.error(e);process.exitCode=1;});
+    """)

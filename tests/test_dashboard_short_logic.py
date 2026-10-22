@@ -102,6 +102,19 @@ def dashboard_render_version() -> str:
     return match.group(1)
 
 
+@pytest.mark.parametrize("filename", [
+    "dashboard_editor.html", "dashboard_adg.html", "dashboard_balance.html",
+    "dashboard_income.html", "dashboard_orders.html", "dashboard_pnl.html",
+    "dashboard_positions.html", "dashboard_ppl.html", "dashboard_top.html",
+])
+def test_dashboard_renderer_cache_versions_match(filename: str, dashboard_render_version: str) -> None:
+    """Every shared renderer consumer must request its current implementation."""
+    source = (ROOT / "frontend" / filename).read_text(encoding="utf-8")
+    versions = re.findall(r"var DR_VERSION\s*=\s*'([^']+)'", source)
+    assert versions == [dashboard_render_version]
+    assert "'/app/dashboard_render.js?v=' + DR_VERSION" in source
+
+
 def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket(dashboard_render_version: str) -> None:
     """A reconnect callback already dequeued before rerender must not revive its old fragment."""
     html = (ROOT / "frontend" / "dashboard_top.html").read_text(encoding="utf-8")

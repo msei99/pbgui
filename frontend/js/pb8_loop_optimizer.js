@@ -403,9 +403,40 @@
     if(job.previous_selection)name+=' · Previous selection';
     return name;
   }
+  function observerProgress(run,round,kind) {
+    var summary=(run.observer_summaries||[]).find(function(item){return item.round===round&&item.kind===kind;});
+    if(summary)return summary;
+    // Old APIs expose recorded jobs only. Never borrow Holdout counters for Full Time Range.
+    var jobs=(run.observer_jobs||[]).filter(function(item){return item.round===round&&item.kind===kind&&item.source_round==null;});
+    jobs=jobs.filter(function(item,index){return jobs.findIndex(function(other){return other.candidate_id===item.candidate_id;})===index;});
+    var terminal=jobs.filter(function(item){return ['complete','completed','failed','error','cancelled','stopped','skipped'].includes(item.status);}).length;
+    var successful=jobs.filter(function(item){return ['complete','completed'].includes(item.status)&&item.simulation_complete&&item.report_done!==false;}).length;
+    var pending=jobs.filter(function(item){return ['complete','completed'].includes(item.status)&&item.report_done===false;}).length;
+    return {expected:jobs.length,terminal:terminal,successful:successful,report_pending:pending,
+      report_failed:jobs.filter(function(item){return ['complete','completed'].includes(item.status)&&item.report_done&&!item.simulation_complete;}).length,
+      recorded:true,status:terminal<jobs.length||pending?'waiting':'unavailable'};
+  }
   function selectedObserver(run,round,kind) {
-    var jobs=(run.observer_jobs||[]).filter(function(item){return item.round===round&&item.kind===kind;}),selection=(run.observer_selections||[]).find(function(item){return item.round===round;});
-    if(!selection)return jobs[0];
+    var all=run.observer_jobs||[],summary=(run.observer_summaries||[]).find(function(item){return item.round===round&&item.kind===kind;});
+    if(summary)return summary.status==='selected'?all.find(function(item){return item.kind===kind&&item.operation===summary.operation&&(item.round===round||item.round===summary.source_round);}):undefined;
+    var history=(run.history||[]).find(function(item){return item.round===round;}),cycle=(run.cycles||[]).find(function(item){return item.round===round;});
+    var metadata=history||(cycle&&cycle.ai_evaluated?cycle:null);
+    if(metadata&&('winner_operation' in metadata||'winner_candidate_id' in metadata)){
+      if(!metadata.winner_operation||!metadata.winner_candidate_id)return undefined;
+      var training=(run.jobs||[]).find(function(item){return item.operation===metadata.winner_operation&&item.round<=round&&['complete','completed'].includes(item.status);});
+      if(!training)return undefined;
+      var source=training.round,id=metadata.winner_candidate_id;
+      if(id==='baseline'){
+        if(training.kind!=='baseline'||source!==-1)return undefined;
+        id='starting_config';
+      }else{
+        var evidence=(run.history||[]).concat(run.cycles||[]).find(function(item){return item.round===source&&(item.observations||[]).some(function(observation){return observation.operation===metadata.winner_operation&&observation.candidate_id===id;});});
+        if(training.kind!=='validation'||source<0||!evidence)return undefined;
+      }
+      return all.find(function(item){return item.kind===kind&&item.candidate_id===id&&(item.source_round==null?item.round:item.source_round)===source&&(item.round===round||item.round===source);});
+    }
+    var jobs=all.filter(function(item){return item.round===round&&item.kind===kind;}),selection=(run.observer_selections||[]).find(function(item){return item.round===round;});
+    if(!selection)return jobs.find(function(item){return item.selected_for_full_range;});
     if(selection.status!=='selected')return undefined;
     return jobs.find(function(item){return kind==='observer_holdout'?item.operation===selection.operation:item.candidate_id===selection.candidate_id;});
   }
@@ -417,10 +448,14 @@
     return numeric(value);
   }
   function observerSummary(run,round,kind) {
-    var job=selectedObserver(run,round,kind),selection=(run.observer_selections||[]).find(function(item){return item.round===round;});
-    if(!job){if(selection&&selection.status==='waiting')return 'Holdouts '+selection.completed+'/'+selection.expected+' finished';if(selection&&selection.status==='unavailable')return 'No valid Holdout';return run.observer_enabled?'Pending':'Not recorded';}
-    if(!job.simulation_complete)return job.display_status||job.status;
-    return observerValue((job.metrics||{}).gain,'gain')+' / '+observerValue((job.metrics||{}).drawdown,'drawdown');
+    var job=selectedObserver(run,round,kind),summary=observerProgress(run,round,kind),name=kind==='observer_holdout'?'Holdouts':'Full Time Range';
+    if(summary.status==='disabled')return 'Holdout disabled';
+    if(job&&['complete','completed'].includes(job.status)&&job.simulation_complete&&job.report_done!==false)return observerValue((job.metrics||{}).gain,'gain')+' / '+observerValue((job.metrics||{}).drawdown,'drawdown');
+    var counts=summary.terminal+'/'+summary.expected+(summary.recorded?' recorded':'')+' terminal · '+summary.successful+' complete';
+    if(summary.report_pending)counts+=' · '+summary.report_pending+' reports pending';
+    if(summary.report_failed)counts+=' · '+summary.report_failed+' report errors';
+    if(summary.selected_report_status)counts+=' · selected '+summary.selected_report_status;
+    return (summary.status==='waiting'?name:'No complete '+(kind==='observer_holdout'?'Holdout':name))+' · '+counts;
   }
   function overviewValue(value,metric,delta) {
     if(value==null)return '—';
@@ -463,7 +498,7 @@
   function overviewObserver(cell,run,round,kind,specificJob) {
     var job=specificJob||selectedObserver(run,round,kind);
     cell.replaceChildren();cell.classList.add('loop-metric-cell');
-    if(!job||!job.simulation_complete){cell.textContent=specificJob?(specificJob.display_status||specificJob.status):observerSummary(run,round,kind);return;}
+    if(!job||!['complete','completed'].includes(job.status)||!job.simulation_complete||job.report_done===false){cell.textContent=specificJob?(specificJob.display_status||specificJob.status):observerSummary(run,round,kind);return;}
     if(job.comparison_label)cell.title=job.comparison_label+(job.selected_for_full_range?' · Selected candidate':'');
     ['gain','drawdown'].forEach(function(metric){var item=element('div',undefined,'loop-metric-line');item.appendChild(element('span',(metric==='gain'?'Gain ':'DD ')+overviewValue((job.metrics||{})[metric],metric,false)));overviewChange(item,(job.delta_previous||{})[metric],metric==='gain'?'max':'min',metric,round===0?'vs unchanged start':'vs Loop '+round);cell.appendChild(item);});
   }
@@ -471,7 +506,7 @@
     var compareActions=element('div',undefined,'panel-toolbar');parent.appendChild(compareActions);
     ['observer_holdout','observer_full_range'].forEach(function(kind){var control=button(compareActions,kind==='observer_holdout'?'Compare all Holdouts':'Compare all Full Time Ranges',function(){openEvaluationComparison(run,kind);});control.disabled=!hasEvaluationResults(run,kind);});
     parent.appendChild(element('p','Automatic backtests for your evaluation. These results are excluded from AI, JEV, goal scores, stopping decisions and learned knowledge.','muted-line'));
-    parent.appendChild(element('p','Holdout tests every successful comparison candidate. Full Time Range follows the AI-selected exact comparison winner. Historical runs may retain an earlier Holdout selection.','muted-line'));
+    parent.appendChild(element('p','Both report kinds evaluate eligible comparison candidates. The displayed result follows the CPU training winner, including the unchanged start. Historical runs may retain an earlier Holdout selection.','muted-line'));
     var jobs=(run.observer_jobs||[]).filter(function(job){return round==null||job.round===round;}).sort(function(a,b){return a.round-b.round||a.kind.localeCompare(b.kind);});
     if(!jobs.length){parent.appendChild(element('p',run.observer_enabled?'User evaluations are queued after the start comparison and each round’s exact comparison.':'No automatic user evaluations were recorded for this older run.','muted-line'));return;}
     var table=reportTable(parent,['Round / period','Status','Legacy score','Duration','Gain','Drawdown','Recovery','ADG','Sharpe','Sortino','Fills'],jobs.map(function(job){var metrics=job.metrics||{};return [job.round<0?'Unchanged start · '+observerName(job):'Loop '+(job.round+1)+' · '+observerName(job),job.display_status||job.status,numeric(job.holdout_score),duration(job.run_started_at&&job.ended_at?job.ended_at-job.run_started_at:null)].concat(['gain','drawdown','recovery_days','adg','sharpe','sortino','trades'].map(function(metric){return observerValue(metrics[metric],metric);}));}));
@@ -683,15 +718,18 @@
     var data=rentalSnapshots.get(run.id),rental=data&&data.rental;
     var summary=byId('rental-summary'),status=byId('rental-status'),extend=byId('rental-extend');
     summary.textContent='Rental · '+run.name;
+    var replace=byId('rental-replace');
+    if(replace){replace.disabled=rentalBusy||!rental||!!run.gpu_replacement||!['running','paused'].includes(run.status)||run.phase!=='optimize';}
     status.textContent=data&&data.error?data.error:!data?'Loading rental…':!rental?'No active rental is bound to this loop.':
       'Remaining '+duration(Math.max(0,rental.deadline-Date.now()/1000))+' · Rental ends '+dateText(rental.deadline)+
       ' · Loop ends '+dateText(rental.loop_deadline)+' · Budget $'+Number(rental.budget_usd).toFixed(2)+
       ' · $'+Number(rental.price_hour_usd).toFixed(4)+'/hour'+
       (rental.pending?' · Awaiting worker confirmation…':'')+(rental.error?' · '+rental.error:'');
-    extend.disabled=rentalBusy||!rental||!rental.can_extend||rental.pending;
+    if(run.gpu_replacement)status.textContent='GPU replacement · '+run.gpu_replacement.step+' · '+run.gpu_replacement.reason;
+    extend.disabled=rentalBusy||!rental||!rental.can_extend||rental.pending||!!run.gpu_replacement;
     if(rental){extend.textContent=rental.loop_deadline+Number(byId('rental-minutes').value)*60<=rental.deadline?'Extend loop':'Extend rental & loop';extend.title='Use existing rental time first; extend the rental only when needed. Latest budget-limited rental end: '+dateText(rental.maximum_deadline);}
     var budget=byId('rental-budget'),save=byId('rental-budget-save'),cost=byId('rental-cost');
-    save.disabled=rentalBusy||!rental||!rental.can_edit_budget||rental.pending;
+    save.disabled=rentalBusy||!rental||!rental.can_edit_budget||rental.pending||!!run.gpu_replacement;
     if(!rental){cost.textContent='';return;}
     var key=run.id+':'+rental.worker_id;
     if(rentalBudgetKey!==key||budget.value===budget.defaultValue||Number(budget.value)===rental.budget_usd){budget.value=String(rental.budget_usd);budget.defaultValue=budget.value;}
@@ -793,7 +831,7 @@
   }
   function overviewActivity(cell,run) {
     if(run.ended)return;
-    var label=({queued:'Waiting to start',paused:'Paused',stopping:'Stopping owned jobs'})[run.status];
+    var label=({queued:'Waiting to start',paused:'Paused',stopping:'Stopping owned jobs',replacing_gpu:'Replacing GPU · '+(run.gpu_replacement&&run.gpu_replacement.reason||run.reason||'Waiting for replacement capacity')})[run.status];
     if(!label)label=({interpret:'AI planning goals',bootstrap:'AI planning first experiment',baseline:'CPU checking baseline',optimize:run.settings.execution==='cpu'?'CPU optimizing':'GPU optimizing',select:'AI selecting candidates',validate:'CPU validating candidates',evaluate:'AI evaluating results',holdout:'CPU checking final holdout',observer_confirmation:'Completing final checks'})[run.phase];
     if(!label)return;
     var checks=(run.jobs||[]).filter(function(job){return job.round===run.round&&job.kind==='validation';});
@@ -869,7 +907,7 @@
     var currentRuns=rows.filter(function(row){return selectedRuns.has(row.id) && (state.panel==='loops-results'?row.ended:!row.ended);});var run=currentRuns[0];['queue','results'].forEach(function(panel){byId(panel+'-edit').disabled=currentRuns.length!==1||!run;});
     ['queue','results'].forEach(function(panel){['observer_holdout','observer_full_range'].forEach(function(kind){byId(panel+'-compare-'+kind).disabled=currentRuns.length!==1||!hasEvaluationResults(run,kind);});});
     ['queue','results'].forEach(function(panel){var targets=rows.filter(function(row){return selectedRuns.has(row.id) && (panel==='results'?row.ended:!row.ended);});var node=byId(panel+'-delete');node.disabled=!targets.length||targets.some(function(row){return !row.deletable;});node.title=targets.some(function(row){return !row.deletable;})?'Stop the loop and wait for collection to finish before deleting it.':'';});
-    ['start','pause','resume','stop'].forEach(function(action){var eligible=rows.filter(function(row){return selectedRuns.has(row.id) && (action==='start'?row.status==='queued':action==='pause'?['running','finishing'].includes(row.status):action==='resume'?row.status==='paused':!row.ended && row.status!=='stopping');});byId('queue-'+action).disabled=!eligible.length;});
+    ['start','pause','resume','stop'].forEach(function(action){var eligible=rows.filter(function(row){return selectedRuns.has(row.id) && (action==='start'?row.status==='queued':action==='pause'?['running','finishing','replacing_gpu'].includes(row.status):action==='resume'?row.status==='paused':!row.ended && row.status!=='stopping');});byId('queue-'+action).disabled=!eligible.length;});
     document.querySelectorAll('[data-create-ai-loop]').forEach(function(button){button.disabled=!nativeSource(button.dataset.createAiLoop);});
     document.querySelectorAll('.ctx-actions [data-busy]').forEach(function(button){button.disabled=true;});byId('form').hidden=!editorVisible;byId('config-list').hidden=editorVisible;root.querySelector('.panel-toolbar').hidden=editorVisible;
   }
@@ -897,7 +935,7 @@
   async function action(id, name) {
     try {
       var body={action:name},row=rows.find(function(item){return item.id===id;});
-      if(name==='start'||name==='resume'||name==='preview'){
+      if((name==='start'||name==='resume'||name==='preview')&&!(name==='resume'&&row.gpu_replacement)){
         if(name==='preview')body.action=row.status==='paused'?'resume':'start';
         body.selection=await PBGuiAI.ensureSelection();
         body.ai_settings=Object.assign({},recoveryDrafts.get(id)||{});
@@ -954,7 +992,7 @@
       var nav=element('button','AI Loops '+({config:'Config',queue:'Queue',results:'Results'}[kind]),'sb-section');nav.dataset.panel=panel;nav.addEventListener('click',function(){selectPanel(panel);watch();});var count=element('span','0','sb-count');count.id='loop-nav-count-'+kind;count.style.marginLeft='auto';nav.appendChild(count);document.getElementById('sidebar-inner').insertBefore(nav,document.querySelector('#sidebar-inner .sb-sep'));
       var context=element('div',undefined,'ctx-actions');context.id='ctx-'+panel;context.hidden=true;document.getElementById('sidebar-inner').appendChild(context);
       var toolbar=element('div',undefined,'panel-toolbar');view.appendChild(toolbar);var filter=element('input',undefined,'panel-input');filter.type='text';filter.style.maxWidth='260px';filter.placeholder='Search loop name...';filter.setAttribute('aria-label','Search AI Loops '+kind);filter.value=workflow[kind==='config'?'config_filter':panel+'_filter']||'';toolbar.appendChild(filter);filter.addEventListener('input',function(){workflow[kind==='config'?'config_filter':panel+'_filter']=filter.value;persistWorkflow();renderWorkflow();});
-      if(kind!=='config'){var status=element('select',undefined,'panel-input');status.style.width='auto';choices(status,[{id:'',label:'All statuses'}].concat((kind==='queue'?['queued','running','paused','finishing','stopping']:['completed','failed','unconfirmed','stopped']).map(function(value){return {id:value,label:value};})),workflow[panel+'_status']);status.setAttribute('aria-label','Status filter');toolbar.appendChild(status);status.addEventListener('change',function(){workflow[panel+'_status']=status.value;persistWorkflow();renderWorkflow();});var message=element('p','','loop-error');message.id=panel+'-message';view.appendChild(message);var table=element('div');table.id=panel+'-table';view.appendChild(table);}
+      if(kind!=='config'){var status=element('select',undefined,'panel-input');status.style.width='auto';choices(status,[{id:'',label:'All statuses'}].concat((kind==='queue'?['queued','running','paused','finishing','replacing_gpu','stopping']:['completed','failed','unconfirmed','stopped']).map(function(value){return {id:value,label:value};})),workflow[panel+'_status']);status.setAttribute('aria-label','Status filter');toolbar.appendChild(status);status.addEventListener('change',function(){workflow[panel+'_status']=status.value;persistWorkflow();renderWorkflow();});var message=element('p','','loop-error');message.id=panel+'-message';view.appendChild(message);var table=element('div');table.id=panel+'-table';view.appendChild(table);}
     });
     var rentalPanel=element('div',undefined,'panel-toolbar');rentalPanel.id='loop-rental';rentalPanel.hidden=true;
     rentalPanel.setAttribute('role','region');rentalPanel.setAttribute('aria-label','Loop rental');
@@ -968,6 +1006,14 @@
     var rentalMinutes=element('input',undefined,'panel-input');rentalMinutes.id='loop-rental-minutes';rentalMinutes.type='number';rentalMinutes.min='1';rentalMinutes.max='1440';rentalMinutes.step='1';rentalMinutes.value=String(workflow.rental_minutes||60);rentalMinutes.style.width='90px';rentalMinutes.addEventListener('input',function(){workflow.rental_minutes=rentalMinutes.value;persistWorkflow();renderRental();});rentalPanel.appendChild(rentalMinutes);
     rentalPanel.appendChild(element('span','minutes'));
     var rentalExtend=button(rentalPanel,'Extend rental & loop',extendRental);rentalExtend.id='loop-rental-extend';
+    var rentalReplace=button(rentalPanel,'Replace GPU and continue loop',async function(){
+      var run=rentalRun(),data=run&&rentalSnapshots.get(run.id),rental=data&&data.rental;
+      if(!run||!rental||rentalBusy)return;
+      rentalBusy=true;renderRental();
+      try{await window.PBGuiLoopGPUReplacement.run({base:base,loop_id:run.id,worker_id:rental.worker_id,isCurrent:function(){var current=rentalRun();return !!root&&current&&current.id===run.id;}});await poll();}
+      catch(exc){error(exc);}
+      finally{rentalBusy=false;renderRental();}
+    });rentalReplace.id='loop-rental-replace';
     rentalPanel.appendChild(element('span','Extending time uses the existing budget.','muted-line'));
     document.getElementById('panel-loops-queue').insertBefore(rentalPanel,document.getElementById('loops-queue-table'));
     PANEL_META['loops-knowledge']={title:'AI Loops Knowledge',subtitle:''};
@@ -984,7 +1030,7 @@
     side('config','delete-config','Delete Selected',deleteDefinitions).classList.add('danger');
     ['queue','results'].forEach(function(kind){side(kind,kind+'-edit','Edit Selected',function(){return editRun(rows.find(function(row){return selectedRuns.has(row.id) && (kind==='results'?row.ended:!row.ended);}));});side(kind,kind+'-delete','Delete Selected',function(){return deleteRuns(kind);}).classList.add('danger');});
     ['queue','results'].forEach(function(panel){['observer_holdout','observer_full_range'].forEach(function(kind){side(panel,panel+'-compare-'+kind,kind==='observer_holdout'?'Compare all Holdouts':'Compare all Full Time Ranges',function(){var run=rows.find(function(row){return selectedRuns.has(row.id)&&(panel==='results'?row.ended:!row.ended);});openEvaluationComparison(run,kind);});});});
-    ['start','pause','resume','stop'].forEach(function(name){side('queue','queue-'+name,name[0].toUpperCase()+name.slice(1)+' Selected',async function(){for(var row of rows.filter(function(row){return selectedRuns.has(row.id);})) {if(name==='start'&&row.status!=='queued'||name==='pause'&&!['running','finishing'].includes(row.status)||name==='resume'&&row.status!=='paused'||name==='stop'&&(row.ended||row.status==='stopping'))continue;await action(row.id,name);}});});
+    ['start','pause','resume','stop'].forEach(function(name){side('queue','queue-'+name,name[0].toUpperCase()+name.slice(1)+' Selected',async function(){for(var row of rows.filter(function(row){return selectedRuns.has(row.id);})) {if(name==='start'&&row.status!=='queued'||name==='pause'&&!['running','finishing','replacing_gpu'].includes(row.status)||name==='resume'&&row.status!=='paused'||name==='stop'&&(row.ended||row.status==='stopping'))continue;await action(row.id,name);}});});
     ['configs','queue','results'].forEach(function(panel){var node=button(document.getElementById('ctx-'+panel),'Create AI Loop',function(){var source=nativeSource(panel);if(source)createFromSource(source).catch(error);});node.className='sb-btn info';node.dataset.createAiLoop=panel;node.disabled=true;});
     root.appendChild(element('div')).id='loop-config-list';
     var form = element('form', undefined, 'loop-form editor-shell'); root.appendChild(form);form.id='loop-form';form.hidden=true;

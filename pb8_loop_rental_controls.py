@@ -30,8 +30,10 @@ def rental_snapshot(queue, record):
     worker = workers[0]
     intent = effective_intent(queue.store, worker['id'], queue.store.read(worker['id'], 'intent.json'))
     control = queue.store.read(worker['id'], 'control.json')
+    from pb8_loop_gpu_replacement import open_replacement
     controllable = (worker.get('rental_state') == 'active'
                     and not control.get('stop') and not control.get('cleanup')
+                    and not open_replacement(record)
                     and record['status'] in {'running', 'paused'})
     elapsed = max(0, min(time.time(), intent['deadline']) - intent['accepted_at'])
     return dict(worker_id=worker['id'], instance_id=worker.get('instance_id'),

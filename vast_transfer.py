@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import threading
+from functools import wraps
 import gzip
 import hashlib
 import ipaddress
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import signal
 import shlex
 import shutil
 import subprocess
@@ -33,6 +35,52 @@ from vast_exchanges import SUPPORTED_EXCHANGES
 
 SERVICE = "VastRunner"
 WORKER = "/usr/local/bin/python /work/pbgui/worker.py "
+
+
+def checked_digest(path, check=lambda: None):
+    """Hash local files in bounded blocks with cooperative cancellation."""
+    value = hashlib.sha256()
+    with path.open('rb') as stream:
+        while block := stream.read(1024 * 1024):
+            check()
+            value.update(block)
+    check()
+    return value.hexdigest()
+
+
+def upload_boundary(function):
+    """Own cancellation for every transfer path and restore it before Stop/collect."""
+    @wraps(function)
+    def bounded(connection, *args, **kwargs):
+        previous = getattr(connection, '_upload_deadline', None)
+        timeout = kwargs.get('timeout', args[0] if args else 30)
+        deadline = time.monotonic() + timeout
+        connection._upload_deadline = min(previous, deadline) if previous else deadline
+        try:
+            connection.check_upload()
+            return function(connection, *args, **kwargs)
+        finally:
+            connection._upload_deadline = previous
+    return bounded
+
+
+def reap_process_group(process):
+    """Terminate the owned process group, escalate and reap its direct child."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+    process.stdout.close()
+    process.stderr.close()
 
 
 def host_key_from_output(value: str) -> str:
@@ -148,7 +196,8 @@ class WorkerConnection:
         received = 0
         process = None
         try:
-            process = subprocess.Popen(args, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            WorkerConnection.check_upload(self)
+            process = subprocess.Popen(args, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
             deadline = time.monotonic() + max(1, timeout)
             last_progress = 0.0
             last_received = time.monotonic()
@@ -159,6 +208,7 @@ class WorkerConnection:
                 # EOF on one pipe does not mean SSH has exited. Keep draining
                 # both streams and checking cancellation until it really exits.
                 while selector.get_map() or process.poll() is None:
+                    WorkerConnection.check_upload(self)
                     if cancel_event is not None and cancel_event.is_set():
                         raise VastError("SSH upload cancelled after another chunk failed", 422)
                     if progress is not None and time.monotonic() - last_progress >= 2:
@@ -208,12 +258,23 @@ class WorkerConnection:
             raise VastError("SSH operation interrupted; reconnecting") from None
         finally:
             if process is not None:
-                if process.poll() is None:
-                    process.kill()
-                process.wait()
-                process.stdout.close()
-                process.stderr.close()
+                reap_process_group(process)
         return bytes(captured)
+
+    def check_upload(self):
+        """Check job and lease Stop during transfers, packaging and hashes at least each second."""
+        deadline = getattr(self, '_upload_deadline', None)
+        if deadline is None:
+            return
+        now = time.monotonic()
+        if now >= deadline:
+            raise VastError('Input upload deadline reached; verified partial files retained', 422)
+        if now >= getattr(self, '_next_upload_control_check', 0):
+            self._next_upload_control_check = now + 1
+            for owner in {self.identifier, getattr(self, 'lease_id', self.identifier)}:
+                control = self.store.read(owner, 'control.json')
+                if control.get('stop') or control.get('cleanup'):
+                    raise VastError('Input upload cancelled; verified partial files retained', 422)
 
     def operation(self, action: str, timeout: int = 30) -> dict:
         """Decode a bounded response from an allowlisted worker command."""
@@ -268,11 +329,13 @@ class WorkerConnection:
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             raise VastError('Invalid convergence snapshot from worker') from None
 
+    @upload_boundary
     def upload(self, timeout: int) -> None:
         """Transfer only data missing from the shared content-addressed worker cache."""
         upload_deadline = time.monotonic() + timeout
         def remaining():
             """Keep packaging, transfer and install inside the caller's deadline."""
+            self.check_upload()
             seconds = int(upload_deadline-time.monotonic())
             if seconds <= 0:
                 raise VastError('Upload deadline reached; verified chunks retained')
@@ -298,12 +361,23 @@ class WorkerConnection:
             with os.fdopen(fd, 'wb') as target:
                 with gzip.GzipFile(filename='', fileobj=target, mode='wb', mtime=0) as compressed:
                     with tarfile.open(fileobj=compressed, mode='w') as archive:
-                        for name in ('manifest.json', 'optimize.json'):
-                            archive.add(config_root / name, arcname='input/' + name, recursive=False)
+                        connection = self
+                        class CheckedReader:
+                            """Bound every tar member, including large config/manifest metadata."""
+                            def __init__(self, stream):
+                                self.stream = stream
+                            def read(self, size):
+                                connection.check_upload()
+                                return self.stream.read(size)
+                        members = [(config_root / name, name) for name in ('manifest.json', 'optimize.json')]
                         for item in manifest['files']:
                             if item['sha256'] in missing:
-                                source = safe_path(self.store.prepared_input_directory(self.identifier), item['path'])
-                                archive.add(source, arcname='input/' + item['path'], recursive=False)
+                                members.append((safe_path(self.store.prepared_input_directory(self.identifier), item['path']), item['path']))
+                        for source, name in members:
+                            self.check_upload()
+                            info = archive.gettarinfo(source, arcname='input/' + name)
+                            with source.open('rb') as stream:
+                                archive.addfile(info, CheckedReader(stream))
             temporary.chmod(0o600)
             os.replace(temporary, delta)
         finally:
@@ -319,6 +393,12 @@ class WorkerConnection:
         self.store.update(self.identifier, upload_progress={'stage': 'installing',
                           'bytes': delta.stat().st_size, 'total': delta.stat().st_size})
         self.operation('install', timeout=remaining())
+
+    @upload_boundary
+    def verify_upload_input(self, expected, *, timeout):
+        """Validate the immutable archive without blocking Stop on a full-file hash."""
+        if checked_digest(self.directory / 'input.tar.gz', self.check_upload) != expected:
+            raise VastError('Local input bundle changed after authorization', 422)
 
     def missing_cache_files(self, files: list[dict], remaining, *, progress=None) -> set[str]:
         """Check bounded manifest pages using the existing worker protocol."""
@@ -344,6 +424,7 @@ class WorkerConnection:
                 progress(offset + len(page), len(files))
         return missing
 
+    @upload_boundary
     def upload_archive(self, archive: Path, *, timeout: int, chunk_bytes: int = 2 * 1024**2) -> None:
         """Resume verified content-addressed chunks after interrupted SSH transfers."""
         import hashlib
@@ -352,10 +433,12 @@ class WorkerConnection:
         chunks = []
         with archive.open('rb') as source:
             while data := source.read(chunk_bytes):
+                self.check_upload()
                 chunks.append([hashlib.sha256(data).hexdigest(), len(data)])
         root = self.remote_root + '/upload-chunks'
         def remaining():
             """Bound the whole upload, including all short SSH connections."""
+            self.check_upload()
             seconds = int(timeout - (time.monotonic() - started))
             if seconds <= 0:
                 raise VastError('SSH upload timed out; verified chunks will be reused')
@@ -471,7 +554,8 @@ class WorkerConnection:
                     if item is not None:
                         futures.add(pool.submit(send_chunk, item))
                 while futures:
-                    done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                    self.check_upload()
+                    done, futures = wait(futures, timeout=.25, return_when=FIRST_COMPLETED)
                     for future in done:
                         future.result()
                     for _ in done:
@@ -491,7 +575,7 @@ class WorkerConnection:
                   ' for key,size in chunks:\n'
                   '  p=root/key; assert not p.is_symlink(); data=p.read_bytes(); '
                   'assert len(data)==size and hashlib.sha256(data).hexdigest()==key; out.write(data); h.update(data)\n'
-                  'assert h.hexdigest()==' + repr(digest(archive)) + '\n'
+                  'assert h.hexdigest()==' + repr(checked_digest(archive, self.check_upload)) + '\n'
                   'os.replace(tmp,target)')
         self.command('python3 -c ' + shlex.quote(script), timeout=remaining())
 
@@ -558,8 +642,15 @@ class WorkerConnection:
 
     def collect(self, final: bool, timeout: int) -> Path:
         """Download and verify a bounded snapshot before replacing the last copy."""
+        deadline = time.monotonic() + timeout
+        def remaining():
+            """Metadata, download, verification and extraction share one deadline."""
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise VastError('Result collection deadline reached; last verified snapshot retained')
+            return seconds
         action = "final" if final else "partial"
-        metadata = self.operation(action, timeout=timeout)
+        metadata = self.operation(action, timeout=remaining())
         size = metadata.get("bytes")
         if type(size) is not int or not 0 < size <= 2 * 1024**3 or not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("sha256"))):
             raise VastError("Invalid result snapshot metadata")
@@ -572,14 +663,14 @@ class WorkerConnection:
             with temporary.open("wb") as stream:
                 temporary.chmod(0o600)
                 self.command(f"head -c {size + 1} {self.remote_root}/{action}.tar.gz", stdout=stream,
-                             timeout=timeout, max_output=size + 1)
-            if temporary.stat().st_size != size or digest(temporary) != metadata["sha256"]:
+                             timeout=remaining(), max_output=size + 1)
+            if temporary.stat().st_size != size or checked_digest(temporary, remaining) != metadata["sha256"]:
                 raise VastError("Result archive checksum mismatch")
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)
         self.store.update(self.identifier, downloaded_bytes=int(state.get("downloaded_bytes", 0)) + size)
-        extracted = extract_results(destination, self.directory, action)
+        extracted = extract_results(destination, self.directory, action, check=remaining)
         log = extracted / "optimizer.log"
         if log.is_file():
             log_root = ensure_private_directory(PROJECT / "data/logs/optimizes_v8")
@@ -591,7 +682,7 @@ class WorkerConnection:
         return extracted
 
 
-def extract_results(archive_path: Path, directory: Path, name: str) -> Path:
+def extract_results(archive_path: Path, directory: Path, name: str, *, check=lambda: None) -> Path:
     """Extract only regular expected result files and validate their manifest."""
     destination = directory / (name + "-results")
     with tempfile.TemporaryDirectory(dir=directory) as temporary:
@@ -600,6 +691,7 @@ def extract_results(archive_path: Path, directory: Path, name: str) -> Path:
         total = 0
         with tarfile.open(archive_path, "r:gz") as archive:
             for item in archive:
+                check()
                 path = safe_path(stage, item.name)
                 if not item.isfile() or item.name in names:
                     raise VastError("Invalid result archive entry")
@@ -614,13 +706,15 @@ def extract_results(archive_path: Path, directory: Path, name: str) -> Path:
                 names.add(item.name)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with archive.extractfile(item) as source, path.open("xb") as target:
-                    shutil.copyfileobj(source, target, 1024 * 1024)
+                    while block := source.read(1024 * 1024):
+                        check()
+                        target.write(block)
                 path.chmod(0o600)
         manifest = json.loads((stage / "manifest.json").read_text())
         expected = {"manifest.json"}
         for entry in manifest["files"]:
             path = safe_path(stage, entry["path"])
-            if entry["path"] in expected or path.stat().st_size != entry["bytes"] or digest(path) != entry["sha256"]:
+            if entry["path"] in expected or path.stat().st_size != entry["bytes"] or checked_digest(path, check) != entry["sha256"]:
                 raise VastError("Result file checksum mismatch")
             expected.add(entry["path"])
         if expected != names:
@@ -699,9 +793,19 @@ def execution_input(store: JobStore, identifier: str) -> Path:
     return target
 
 
-def import_results(store: JobStore, identifier: str, *, partial: bool = False) -> dict:
+def import_results(store: JobStore, identifier: str, *, partial: bool = False, check=lambda: None) -> dict:
     """Import verified native results idempotently, never unpickle a checkpoint."""
     import msgpack
+    check()
+    def copy_checked(source, target):
+        """Keep local publication within the same cooperative collection deadline."""
+        with Path(source).open('rb') as incoming, Path(target).open('wb') as outgoing:
+            while block := incoming.read(1024 * 1024):
+                check()
+                outgoing.write(block)
+        shutil.copystat(source, target)
+        check()
+        return target
     directory = store.directory(identifier)
     intent = store.read(identifier, "intent.json")
     sources = list((directory / ("partial-results" if partial else "final-results") / "optimize_results").glob("*"))
@@ -714,6 +818,7 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False) -
         with binary.open("rb") as stream:
             unpacker = msgpack.Unpacker(stream, raw=False, strict_map_key=False, max_buffer_size=64 * 1024 * 1024)
             for record in unpacker:
+                check()
                 if not isinstance(record, dict):
                     raise VastError("Invalid native result record")
                 count += 1
@@ -732,6 +837,7 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False) -
     root.mkdir(parents=True, exist_ok=True)
     target = root / (source.name + "_vast_" + identifier[:12])
     with advisory_file_lock(root / ".vast-import"):
+        check()
         if target.is_symlink():
             raise VastError("Invalid existing result destination")
         if target.exists():
@@ -751,9 +857,8 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False) -
                     with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
                         temporary = Path(stream.name)
                         try:
-                            with source_file.open("rb") as incoming:
-                                shutil.copyfileobj(incoming, stream)
                             stream.close()
+                            copy_checked(source_file, temporary)
                             os.replace(temporary, destination)
                         finally:
                             temporary.unlink(missing_ok=True)
@@ -762,12 +867,12 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False) -
                         old.unlink()
                 provenance.update(partial=partial, evaluations=count)
                 write_json(target / ".pbgui_vast.json", provenance)
-            elif digest(target / "all_results.bin") != digest(binary):
+            elif checked_digest(target / "all_results.bin", check) != checked_digest(binary, check):
                 raise VastError("Existing result belongs to another import")
         else:
             with tempfile.TemporaryDirectory(prefix=".vast-import-", dir=root) as temporary:
                 stage = Path(temporary) / "result"
-                shutil.copytree(source, stage, ignore=shutil.ignore_patterns("checkpoint.pkl"))
+                shutil.copytree(source, stage, ignore=shutil.ignore_patterns("checkpoint.pkl"), copy_function=copy_checked)
                 manifest = store.read(identifier, "input/manifest.json")
                 if manifest.get('validation_plan'):
                     from scenario_windows import build_validation_plan, VALIDATION_PLAN_FILENAME
@@ -780,6 +885,8 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False) -
                            "source_config_sha256": intent["source_config_sha256"], "pb8_revision": intent["pb8_revision"],
                            "partial": partial, "evaluations": count})
                 for path in [stage, *stage.rglob("*")]:
+                    check()
                     path.chmod(0o700 if path.is_dir() else 0o600)
+                check()
                 os.replace(stage, target)
     return {"result_path": str(target), "result_partial": partial, "evaluations": count, "pareto_count": len(list((target / "pareto").glob("*.json")))}

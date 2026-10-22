@@ -3,14 +3,17 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from collections import OrderedDict
 import math
+import re
+import threading
 import time
 from pathlib import Path
 import traceback
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator, ValidationError
 
 from api.auth import SessionToken, require_auth
@@ -25,6 +28,53 @@ from pb8_loop_store import TERMINAL, LoopDeletionConflict, config_defaults, conf
 from pb8_loop_evidence import LoopAIPause
 
 SERVICE = 'PB8Loop'
+_list_cache = OrderedDict()
+_list_cache_lock = threading.RLock()
+_LIST_CACHE_BYTES = 8 * 1024 * 1024
+_LIST_CACHE_TTL = 30
+
+
+def _clear_list_cache():
+    """Release owner-scoped serialized rows when the API shuts down."""
+    with _list_cache_lock:
+        _list_cache.clear()
+
+
+def _list_response(owner):
+    """Reuse unchanged projections; serialize all misses in one worker, never the API loop."""
+    store = _controller.store
+    directory = store.owner_dir(owner)
+    rows = []
+    with _list_cache_lock:
+        now = time.monotonic()
+        for key, entry in list(_list_cache.items()):
+            if entry[3] <= now:
+                _list_cache.pop(key)
+        for path in directory.glob('*.json'):
+            if not re.fullmatch(r'[a-f0-9]{32}', path.stem):
+                continue
+            try:
+                stamp = store._read_stamp(path)
+                key = (path.absolute(), projection)
+                cached = _list_cache.get(key)
+                if cached is not None and cached[0] == stamp:
+                    _list_cache.move_to_end(key)
+                    _list_cache[key] = (*cached[:3], now + _LIST_CACHE_TTL)
+                    rows.append((cached[1], cached[2]))
+                    continue
+                row = store.read(owner, path.stem)
+                content = JSONResponse(projection(row)).body
+                rows.append((row['created_at'], content))
+                _list_cache.pop(key, None)
+                if len(content) <= _LIST_CACHE_BYTES // 2 and store._read_stamp(path) == stamp:
+                    while _list_cache and (len(_list_cache) >= 128 or sum(len(item[2]) for item in _list_cache.values()) + len(content) > _LIST_CACHE_BYTES):
+                        _list_cache.popitem(last=False)
+                    _list_cache[key] = (stamp, row['created_at'], content, now + _LIST_CACHE_TTL)
+            except (OSError, ValueError) as exc:
+                _log(SERVICE, f'Cannot read loop state {path.name}: {type(exc).__name__}', level='WARNING')
+        rows.sort(key=lambda item: item[0], reverse=True)
+    return Response(content=b'{"loops":[' + b','.join(item[1] for item in rows) + b']}',
+                    media_type='application/json', headers={'Cache-Control': 'no-store'})
 router = APIRouter()
 _controller = LoopController(Path(PBGDIR))
 PRESETS = {'gain', 'drawdown', 'uptrend', 'consistency', 'trades', 'robustness'}
@@ -154,6 +204,8 @@ def startup():
 async def shutdown():
     """Join controller tasks without killing detached PB8 jobs."""
     await _controller.close()
+    _controller.store.clear_read_cache()
+    _clear_list_cache()
 
 
 def _owner(session):
@@ -268,9 +320,9 @@ def _cycle_reports(row):
 
 def _observer_reports(row):
     """Expose user-only metrics/deltas without mixing them into decision history."""
-    from pb8_loop_observer import comparison_deltas, observer_selections
+    from pb8_loop_observer import comparison_deltas, complete_observer_report, observer_display_selections
     jobs = list(row.get('observer_jobs', []))
-    selections = {item['round']: item for item in observer_selections(row)}
+    selections = {item['round']: item for item in observer_display_selections(row)}
     for number, selection in selections.items():
         source_round = selection.get('source_round', number)
         if selection.get('status') != 'selected' or source_round == number:
@@ -282,16 +334,23 @@ def _observer_reports(row):
                     and job.get('candidate_id') == selection['candidate_id']
                     and job['kind'] in {'observer_holdout', 'observer_full_range'}
                     and not any(item['round'] == number and item['kind'] == job['kind']
-                                and item.get('candidate_id') == job.get('candidate_id') for item in jobs)):
+                                and item.get('operation') == job.get('operation') for item in jobs)):
                 jobs.append(dict(job, round=number, source_round=source_round))
+    def is_selected(job, selection):
+        """Match both the candidate and immutable origin, including baseline aliases."""
+        return (selection.get('status') == 'selected'
+                and job.get('candidate_id') == selection.get('candidate_id')
+                and job.get('source_round', job['round']) == selection.get('source_round', job['round']))
+
     def reference(number, kind):
         """Compare against the displayed round winner, never the first candidate."""
         selection = selections.get(number) or {}
         candidates = [item for item in jobs if item['kind'] == kind and item['round'] == number]
         if selection.get('status') == 'selected':
-            return next((item for item in candidates if item.get('candidate_id') == selection['candidate_id']), None)
-        if not row.get('observer_enabled'):
-            return next(iter(candidates), None)
+            return next((item for item in candidates if is_selected(item, selection)
+                         and complete_observer_report(item)), None)
+        if not row.get('observer_enabled') and not selection.get('modern'):
+            return next((item for item in candidates if complete_observer_report(item)), None)
         return None
     reports = []
     for job in jobs:
@@ -310,15 +369,14 @@ def _observer_reports(row):
                        'comparison_label': 'Comparison backtest ' + str(index) if index else job.get('candidate_id'),
                        'evaluation_score':score if type(score) in (int,float) and math.isfinite(score) else None,
                        'evaluation_targets_met':(job.get('assessment') or {}).get('hard_targets_met') is True,
-                       'ai_selected': any(entry.get('winner_candidate_id') and entry.get('winner_candidate_id') == job.get('candidate_id')
-                                          for entry in row.get('history', []) if entry['round'] == job['round']),
+                       'ai_selected': bool(selection.get('modern') and is_selected(job, selection)),
                        'holdout_score':score if job['kind']=='observer_holdout' and type(score) in (int,float) and math.isfinite(score) else None,
-                       'selected_for_full_range': selection.get('status') == 'selected' and job.get('candidate_id') == selection.get('candidate_id'),
-                       'previous_selection': job['kind']=='observer_full_range' and job.get('selection_policy') != 'all_candidates_both_reports' and selection.get('status') == 'selected' and job.get('candidate_id') != selection.get('candidate_id'),
+                       'selected_for_full_range': is_selected(job, selection),
+                       'previous_selection': job['kind']=='observer_full_range' and job.get('selection_policy') != 'all_candidates_both_reports' and selection.get('status') == 'selected' and not is_selected(job, selection),
                        'windows':[{key:window.get(key, backtest.get(key)) for key in ('label','start_date','end_date','exchanges')}
                                   for window in windows or [backtest]],
-                       'delta_start':comparison_deltas(job, baseline) if job['round'] >= 0 else {},
-                       'delta_previous':comparison_deltas(job, previous) if job['round'] >= 0 else {},
+                       'delta_start':comparison_deltas(job, baseline) if job['round'] >= 0 and complete_observer_report(job) else {},
+                       'delta_previous':comparison_deltas(job, previous) if job['round'] >= 0 and complete_observer_report(job) else {},
                        'display_status':('incomplete' if job.get('simulation_complete') is False else 'report error')
                        if job.get('report_done') and job['status'] in {'complete','completed'} and not job.get('simulation_complete') else job['status']})
     return reports
@@ -327,11 +385,12 @@ def _observer_reports(row):
 def projection(row):
     """Keep polling lightweight and avoid exposing internal paths or config copies."""
     best = row.get('best')
-    from pb8_loop_observer import observer_selections
+    from pb8_loop_observer import observer_selections, observer_summaries
     return {key: row.get(key) for key in ('id', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at', 'reason',
             'last_error', 'failure', 'holdout_retryable', 'stop_reason', 'continuation', 'interpretation', 'rubric', 'history', 'bootstrap', 'ai_calls', 'ai_tokens_reserved',
             'ai_usd_reserved', 'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover',
-            'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview', 'ai_preview')} | {
+            'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview', 'ai_preview', 'control_generation')} | {
+        'gpu_replacement': _replacement_projection(row),
         'name': row['settings'].get('loop_name') or row['settings']['config_name'],
         'has_interrupted_ai': bool(row.get('interrupted_ai')),
         'definition_name': row['settings'].get('definition_name'),
@@ -340,6 +399,7 @@ def projection(row):
         'final_holdout_policy':row.get('final_holdout_policy'),
         'final_validation_status':row.get('final_validation_status'),
         'observer_selections':observer_selections(row),
+        'observer_summaries':observer_summaries(row),
         'comparison': {key: row['comparison'].get(key) for key in ('start_date','end_date','exchanges','suite_enabled')},
         'baseline': {key: row['baseline'][key] for key in ('assessment', 'metrics') if key in row['baseline']} if row.get('baseline') else None,
         'final_validation': [{key:item[key] for key in ('assessment', 'metrics', 'reports') if key in item} for item in row.get('final_validation', [])],
@@ -430,8 +490,7 @@ async def knowledge(session: SessionToken = Depends(require_auth), limit: int = 
 @router.get('')
 async def list_loops(session: SessionToken = Depends(require_auth)):
     try:
-        rows = await asyncio.to_thread(_controller.store.list, _owner(session))
-        return JSONResponse({'loops': [projection(row) for row in rows]}, headers={'Cache-Control': 'no-store'})
+        return await asyncio.to_thread(_list_response, _owner(session))
     except Exception as exc:
         raise _error(exc) from exc
 
@@ -737,6 +796,70 @@ class LoopRentalExtension(BaseModel):
     minutes: int = Field(strict=True, ge=1, le=1440)
 
 
+def _replacement_projection(row):
+    """Expose the current operation without its configs or internal reservations."""
+    from pb8_loop_gpu_replacement import open_replacement
+    operation = open_replacement(row)
+    return {key: operation.get(key) for key in ('id', 'step', 'old_worker_id', 'worker_id', 'predecessor',
+        'successor', 'reason', 'error', 'artifacts_incomplete', 'excluded_machine_ids')} if operation else None
+
+
+class LoopGPUReview(BaseModel):
+    """Select exactly one owned rental for review."""
+    model_config = ConfigDict(extra='forbid')
+    worker_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+
+
+class LoopGPUReplacement(LoopGPUReview):
+    """Execute the exact reviewed replacement, with a durable replay identity."""
+    expected_generation: int = Field(strict=True, ge=0)
+    snapshot_digest: str = Field(pattern=r'^[0-9a-f]{64}$')
+    operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    authorization: bool = Field(default=False, strict=True)
+
+
+@router.post('/{loop_id}/rental/replace-preview')
+async def loop_gpu_review(loop_id: str, body: LoopGPUReview, session: SessionToken = Depends(require_auth)):
+    """Prepare an authenticated, read-only review of one Loop infrastructure change."""
+    from pb8_loop_gpu_replacement import review
+    from vast_queue import CloudQueue
+    import uuid
+    try:
+        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
+        result = await asyncio.to_thread(review, CloudQueue(), row, body.worker_id)
+        result['operation_id'] = uuid.uuid4().hex
+        return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+    except VastError as exc:
+        _log(SERVICE, 'GPU replacement review rejected', level='WARNING')
+        raise HTTPException(exc.status, str(exc)) from exc
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+@router.post('/{loop_id}/rental/replace', status_code=202)
+async def replace_loop_gpu(loop_id: str, body: LoopGPUReplacement, session: SessionToken = Depends(require_auth)):
+    """Publish approved intent; owned controller ticks perform reconciliation."""
+    try:
+        return await _replace_loop_gpu_owned(_owner(session), loop_id, body)
+    except VastError as exc:
+        _log(SERVICE, 'GPU replacement request rejected', level='WARNING')
+        raise HTTPException(exc.status, str(exc)) from exc
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+async def _replace_loop_gpu_owned(owner, loop_id, body):
+    """Share native authorization with the durable AI proposal executor."""
+    from pb8_loop_gpu_replacement import GPUReplacement
+    from vast_queue import CloudQueue
+    if not body.authorization:
+        raise HTTPException(422, 'Explicit GPU replacement authorization is required')
+    service = GPUReplacement(_controller.store, CloudQueue(), _controller.backend)
+    row = await asyncio.to_thread(service.begin, owner, loop_id, body.worker_id,
+        body.expected_generation, body.snapshot_digest, body.operation_id)
+    return JSONResponse(projection(row), status_code=202, headers={'Cache-Control': 'no-store'})
+
+
 @router.get('/{loop_id}/rental')
 async def loop_rental(loop_id: str, session: SessionToken = Depends(require_auth)):
     """Read public rental controls only for the authenticated owner's run."""
@@ -832,6 +955,19 @@ async def get_loop(loop_id: str, session: SessionToken = Depends(require_auth)):
     try:
         row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
         return JSONResponse(projection(row), headers={'Cache-Control': 'no-store'})
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+@router.get('/{loop_id}/archive/{collection}')
+async def loop_archive_page(loop_id: str, collection: str, offset: int = Query(0, ge=0),
+                            limit: int = Query(50, ge=1, le=200),
+                            session: SessionToken = Depends(require_auth)):
+    """Page owned historical collections without expanding the complete Loop state."""
+    try:
+        result = await asyncio.to_thread(_controller.store.archive_page, _owner(session), loop_id,
+                                         collection, offset, limit)
+        return JSONResponse(result, headers={'Cache-Control': 'no-store'})
     except Exception as exc:
         raise _error(exc) from exc
 
@@ -1057,6 +1193,12 @@ async def _loop_action_owned(owner, loop_id, body):
             waiting = await asyncio.to_thread(_controller.store.read, owner, loop_id)
             if waiting['status'] != 'paused':
                 raise ValueError('Only a paused loop can be resumed')
+            from pb8_loop_gpu_replacement import open_replacement
+            if open_replacement(waiting):
+                if body.ai_settings or body.selection:
+                    raise ValueError('Resume GPU replacement with its unchanged Loop settings')
+                row = await asyncio.to_thread(_controller.action, owner, loop_id, 'resume')
+                return JSONResponse(projection(row), headers={'Cache-Control': 'no-store'})
             if waiting.get('interrupted_ai') and not body.acknowledge_interrupted:
                 raise LoopAIPause('evidence_recovery', 'Review the interrupted model request before authorizing another attempt')
             selection = body.selection or {}

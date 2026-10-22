@@ -16,6 +16,7 @@ from pb8_loop_ai import LoopAI, LoopAIRetryScheduled, LoopAIRequestFailed, valid
 from pb8_loop_evidence import LoopAIPause, BootstrapWithoutAdvice
 from pb8_loop_exploration import evaluated_stagnation, validate_exploration
 from pb8_loop_backend import LoopBackend
+from pb8_loop_storage import LoopStorageError
 from pb8_loop_observer import ObserverJobs
 
 SERVICE = 'PB8Loop'
@@ -40,9 +41,9 @@ def failure_details(record, error_type='LoopFailure'):
             'history': copy.deepcopy(retry.get('history') or [])}
 
 
-async def owned_thread(function, *args):
+async def owned_thread(function, *args, **kwargs):
     """Join a started filesystem/process operation before honoring task cancellation."""
-    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
@@ -85,7 +86,7 @@ class LoopController:
         config, overrides, fingerprint, holdouts, comparison = await owned_thread(self.backend.initial, *args)
         exclusions = copy.deepcopy(holdouts)
         validate_change({'settings': settings, 'initial_config': config, 'initial_overrides': overrides, 'holdouts': holdouts, 'training_exclusions': exclusions}, config, overrides)
-        record = self.store.create(owner, settings, config, overrides, fingerprint, holdouts, comparison, queued=queued, training_exclusions=exclusions)
+        record = await owned_thread(self.store.create, owner, settings, config, overrides, fingerprint, holdouts, comparison, queued=queued, training_exclusions=exclusions)
         return record
 
     def action(self, owner, loop_id, action):
@@ -107,14 +108,18 @@ class LoopController:
                     raise ValueError('Only a queued loop can be started')
                 record.update(status='running', started_at=time.time(), deadline=time.time() + record['settings']['hours'] * 3600)
             elif action == 'pause':
-                if record['status'] not in ACTIVE:
+                if record['status'] not in ACTIVE | {'replacing_gpu'}:
                     raise ValueError('Only an active loop can be paused')
                 record['status'] = 'paused'
             elif action == 'resume':
                 round_limit(record['settings'])
                 if record['status'] != 'paused':
                     raise ValueError('Only a paused loop can be resumed')
-                record['status'] = 'finishing' if record['phase'] == 'holdout' else 'running'
+                from pb8_loop_gpu_replacement import open_replacement
+                operation = open_replacement(record)
+                record['status'] = 'replacing_gpu' if operation else ('finishing' if record['phase'] == 'holdout' else 'running')
+                if operation:
+                    operation['generation'] = record['control_generation'] + 1
             elif action == 'stop':
                 record['status'] = 'stopping'
                 record['reason'] = 'Stopped by the user'
@@ -142,21 +147,21 @@ class LoopController:
     async def _run(self):
         while not self._closing:
             try:
-                records = await owned_thread(self.store.list)
-                if time.monotonic() >= self._evidence_retention_at:
-                    from pb8_loop_evidence import EvidenceStore
-                    self._evidence_retention_at = time.monotonic() + 3600
-                    for record in records:
-                        try:
-                            await owned_thread(EvidenceStore(self.store).cleanup, record)
-                        except (OSError, ValueError) as exc:
-                            _log(SERVICE, 'Evidence retention deferred; loop processing continues', level='WARNING',
-                                 meta={'error_type': type(exc).__name__})
+                records = await owned_thread(self.store.list_metadata)
                 for record in records:
                     key = record['id']
-                    if record['status'] in TERMINAL and record.get('cleanup_done') and not self.observers.pending(record):
+                    observer_pending = (record['observer_pending'] if record.get('_metadata_only')
+                                        else self.observers.pending(record))
+                    if record['status'] in TERMINAL and record.get('cleanup_done') and not observer_pending:
                         continue
                     task = self._steps.get(key)
+                    if (task is not None and not task.done() and record['status'] in {'paused', 'stopping'}
+                            and any(token[0] == key for token in self._active_decisions)):
+                        # User control cancels only the owned AI request. Native launch/
+                        # collection operations finish before the next cleanup tick.
+                        if not task.cancelling():
+                            task.cancel()
+                        continue
                     if task is None or task.done():
                         if task and not task.cancelled():
                             task.exception()
@@ -166,6 +171,15 @@ class LoopController:
                         if not self._steps[key].cancelled():
                             self._steps[key].exception()
                         self._steps.pop(key)
+                if time.monotonic() >= self._evidence_retention_at:
+                    from pb8_loop_evidence import EvidenceStore
+                    self._evidence_retention_at = time.monotonic() + 3600
+                    for record in records:
+                        try:
+                            await owned_thread(EvidenceStore(self.store).cleanup, record)
+                        except (OSError, ValueError) as exc:
+                            _log(SERVICE, 'Evidence retention deferred; loop processing continues', level='WARNING',
+                                 meta={'error_type': type(exc).__name__})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -184,9 +198,13 @@ class LoopController:
             except BlockingIOError:
                 return
             try:
-                record = self.store.read(owner, loop_id)
+                record = await owned_thread(self.store.read, owner, loop_id)
             except FileNotFoundError:
                 # A queued/finished run may have been deleted after the scan.
+                return
+            except LoopStorageError as exc:
+                await owned_thread(self.store.pause_storage, owner, loop_id, exc)
+                _log(SERVICE, f'Loop {loop_id} archive cannot be read: {exc}', level='ERROR')
                 return
             try:
                 await self._tick(record)
@@ -204,7 +222,7 @@ class LoopController:
                                    ai_pause={'reason': exc.reason, 'message': str(exc), 'details': exc.details,
                                              'at': time.time(), 'phase': current['phase']},
                                    control_generation=current['control_generation'] + 1)
-                self.store.update(owner, loop_id, pause)
+                await owned_thread(self.store.update, owner, loop_id, pause)
                 _log(SERVICE, f'Loop paused: {exc.reason}: {str(exc)}', level='WARNING')
             except LoopAIRetryScheduled:
                 # The cooldown is persisted; the normal scan resumes it when due.
@@ -212,6 +230,11 @@ class LoopController:
             except LoopRestartPending:
                 # Nothing was sent/reserved; the new controller resumes this phase.
                 pass
+            except LoopStorageError as exc:
+                # Storage cannot be repaired by another model call. Keep the
+                # already committed decision/evidence root intact for resume.
+                await owned_thread(self.store.pause_storage, owner, loop_id, exc)
+                _log(SERVICE, f'Loop {loop_id} paused after local storage failure: {exc}', level='ERROR')
             except Exception as exc:
                 def failed(current):
                     waiting_handover = (current['status'] == 'queued'
@@ -231,13 +254,13 @@ class LoopController:
                     else:
                         current.pop('last_ai_decision', None)
                         current['repair_error'] = str(exc)[:1000]
-                updated = self.store.update(owner, loop_id, failed)
+                updated = await owned_thread(self.store.update, owner, loop_id, failed)
                 _log(SERVICE, f"Loop {loop_id}, phase {record['phase']}, round {record['round'] + 1}: "
                      f'{type(exc).__name__}: {str(exc).strip() or type(exc).__name__}', level='ERROR',
                      meta={'failure': updated.get('failure'), 'traceback': traceback.format_exc()})
             # Separate failure boundary: user-only diagnostics never change the Loop's decisions/errors.
             try:
-                await self.observers.tick(self.store.read(owner, loop_id))
+                await self.observers.tick(await owned_thread(self.store.read, owner, loop_id))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -273,7 +296,7 @@ class LoopController:
             return previous['decision']
         if self.restart_pending():
             raise LoopRestartPending()
-        token = uuid.uuid4().hex
+        token = (record.get('id'), uuid.uuid4().hex)
         self._active_decisions.add(token)
         try:
             return await self.ai.decide(record, stage, evidence)
@@ -325,6 +348,12 @@ class LoopController:
                               error_type=type(exc).__name__) from exc
 
     async def _tick(self, record):
+        from pb8_loop_gpu_replacement import open_replacement, GPUReplacement
+        replacement = open_replacement(record)
+        if replacement and record['status'] not in {'stopping', *TERMINAL}:
+            from vast_queue import CloudQueue
+            await owned_thread(GPUReplacement(self.store, CloudQueue(), self.backend).step, record)
+            return
         if record['status'] in ACTIVE:
             try:
                 round_limit(record['settings'])
@@ -338,7 +367,7 @@ class LoopController:
         if handover.get('status') == 'collecting':
             if not await owned_thread(self.backend.handover_step, record):
                 return
-            record = self.store.read(record['owner'], record['id'])
+            record = await owned_thread(self.store.read, record['owner'], record['id'])
         if record['status'] == 'queued':
             return
         if record['status'] == 'stopping' or record['status'] in TERMINAL:
@@ -348,7 +377,7 @@ class LoopController:
                     def cancelled(current):
                         target = next(item for item in current['jobs'] if item['operation'] == job['operation'])
                         target.update(status='cancelled', ended_at=time.time())
-                    self.store.update(record['owner'], record['id'], cancelled)
+                    await owned_thread(self.store.update, record['owner'], record['id'], cancelled)
                 if job.get('backend') and job['status'] not in JOB_FINISHED:
                     await owned_thread(self.backend.stop, record, job)
                     state = await owned_thread(self.backend.poll, record, job)
@@ -358,9 +387,11 @@ class LoopController:
                         if state['status'] in JOB_FINISHED and not target.get('ended_at'):
                             target['ended_at'] = time.time()
                         target['started'] = target['started'] or state['started']
-                    self.store.update(record['owner'], record['id'], collected)
+                    await owned_thread(self.store.update, record['owner'], record['id'], collected)
                     collecting = collecting or state['status'] not in JOB_FINISHED
             await owned_thread(self.backend.cleanup, record)
+            if record.get('gpu_replacements'):
+                collecting = collecting or await owned_thread(self.backend.replacement_cleanup_pending, record)
             # Stop/poll can discover a start after the tick snapshot was read.
             # Settle reservations from the persisted evidence, never that stale snapshot.
             record = await owned_thread(self.store.read, record['owner'], record['id'])
@@ -375,7 +406,12 @@ class LoopController:
                         and current.get('final_validation_status') == 'running'):
                     current['final_validation_status'] = 'incomplete'
                 current['cleanup_done'] = not collecting
-            self.store.update(record['owner'], record['id'], cleaned)
+                if not collecting:
+                    from pb8_loop_gpu_replacement import open_replacement
+                    operation = open_replacement(current)
+                    if operation:
+                        operation.update(step='aborted', reason='Loop stopped; replacement rentals are collected', ended_at=time.time())
+            await owned_thread(self.store.update, record['owner'], record['id'], cleaned)
             return
         from ai_loop_windows import require_holdout_evidence_policy, filter_historical_candidates
         try:
@@ -386,7 +422,7 @@ class LoopController:
             await self.finish(record, record.get('stop_reason', 'Training complete'))
             return
         if time.time() >= record['deadline'] - 60:
-            self.store.update(record['owner'], record['id'], lambda row: row.update(status='stopping', reason='Total time allowance reached', control_generation=row['control_generation'] + 1))
+            await owned_thread(self.store.update, record['owner'], record['id'], lambda row: row.update(status='stopping', reason='Total time allowance reached', control_generation=row['control_generation'] + 1))
             return
         if record['status'] == 'paused':
             await self.sync_jobs(record, launch=False)
@@ -427,15 +463,15 @@ class LoopController:
             candidates = filter_historical_candidates(record, candidates)
             if candidates:
                 sources = sorted({item['source']['run'] for item in candidates})
-                self.commit(record, lambda row: row.update(
+                await owned_thread(self.commit, record, lambda row: row.update(
                     rubric=rubric, phase='bootstrap', jobs=[], interpretation=decision.get('reason', ''),
                     errors=0, last_error=None, repair_error=None,
                     bootstrap_candidates=candidates,
                     bootstrap={'status': 'evaluating', 'sources': sources, 'candidate_count': len(candidates),
                                'candidates': [{key: item[key] for key in ('id', 'source', 'metrics')} for item in candidates]}))
             else:
-                initial = self.job({**record, 'rubric': rubric}, 'optimizer', record['initial_config'], record['initial_overrides'], 'Initial optimizer run')
-                self.commit(record, lambda row: row.update(rubric=rubric, phase='optimize', jobs=[initial], interpretation=decision.get('reason', ''),
+                initial = await owned_thread(self.job, {**record, 'rubric': rubric}, 'optimizer', record['initial_config'], record['initial_overrides'], 'Initial optimizer run')
+                await owned_thread(self.commit, record, lambda row: row.update(rubric=rubric, phase='optimize', jobs=[initial], interpretation=decision.get('reason', ''),
                     errors=0, last_error=None, repair_error=None,
                     bootstrap={'status': 'no_results', 'candidate_count': 0, 'sources': [], 'changes': [],
                                'reason': 'No usable saved optimizer results were found for this starting config.'}))
@@ -443,8 +479,8 @@ class LoopController:
         if record.get('baseline_required') and record.get('baseline') is None and phase in {'bootstrap', 'optimize'}:
             candidate = {'id': 'baseline', 'config': record['initial_config'], 'overrides': record['initial_overrides'], 'optimizer_job': None}
             baseline_record = {**record, 'round': -1}
-            job = self.job(baseline_record, 'baseline', self.backend.validation_config(record, candidate), candidate['overrides'], 'Unchanged starting config on fixed comparison windows', candidate=candidate)
-            self.commit(record, lambda row: row.update(phase='baseline', after_baseline=phase, jobs=row['jobs'] + [job], validation_count=row['validation_count'] + 1))
+            job = await owned_thread(self.job, baseline_record, 'baseline', self.backend.validation_config(record, candidate), candidate['overrides'], 'Unchanged starting config on fixed comparison windows', candidate=candidate)
+            await owned_thread(self.commit, record, lambda row: row.update(phase='baseline', after_baseline=phase, jobs=row['jobs'] + [job], validation_count=row['validation_count'] + 1))
             return
         if phase == 'baseline':
             record = await self.sync_jobs(record)
@@ -454,13 +490,13 @@ class LoopController:
             if job['status'] not in JOB_FINISHED:
                 return
             if job['status'] not in {'complete', 'completed'}:
-                self.commit(record, lambda row: row.update(status='failed', reason='Starting baseline backtest failed', last_error=job.get('error')))
+                await owned_thread(self.commit, record, lambda row: row.update(status='failed', reason='Starting baseline backtest failed', last_error=job.get('error')))
                 return
             result = await owned_thread(self.backend.observations, record, job)
             result.update(operation=job['operation'], candidate={'id': 'baseline', 'optimizer_job': None,
                           'config': copy.deepcopy(record['initial_config']),
                           'overrides': copy.deepcopy(record['initial_overrides'])})
-            self.commit(record, lambda row: row.update(baseline=result, phase=row['after_baseline']))
+            await owned_thread(self.commit, record, lambda row: row.update(baseline=result, phase=row['after_baseline']))
             return
         if phase == 'bootstrap':
             settings = record['settings']
@@ -474,9 +510,9 @@ class LoopController:
             try:
                 decision = await self.decision(record, 'bootstrap', evidence)
             except BootstrapWithoutAdvice as fallback:
-                initial = self.job(record, 'optimizer', record['initial_config'], record['initial_overrides'],
+                initial = await owned_thread(self.job, record, 'optimizer', record['initial_config'], record['initial_overrides'],
                                    'Fresh optimization without historical advice')
-                self.commit(record, lambda row: row.update(phase='optimize', jobs=row['jobs'] + [initial],
+                await owned_thread(self.commit, record, lambda row: row.update(phase='optimize', jobs=row['jobs'] + [initial],
                     bootstrap={**row.get('bootstrap', {}), 'status': 'skipped', 'evidence_preview': fallback.preview},
                     repair_error=None, errors=0))
                 return
@@ -484,9 +520,9 @@ class LoopController:
                 if record.get('bootstrap_jev_attempted'):
                     answer = 'An earlier initial JEV request was interrupted; no duplicate was sent'
                 else:
-                    self.commit(record, lambda row: row.update(bootstrap_jev_attempted=True))
+                    await owned_thread(self.commit, record, lambda row: row.update(bootstrap_jev_attempted=True))
                     try:
-                        answer = await self.ai.jev(self.store.read(record['owner'], record['id']),
+                        answer = await self.ai.jev(await owned_thread(self.store.read, record['owner'], record['id']),
                                                    [{'id': row['id'], 'metrics': row['metrics']} for row in record['bootstrap_candidates']])
                     except Exception as exc:
                         from ai_openrouter import OpenRouterDecisionError
@@ -494,7 +530,7 @@ class LoopController:
                         _log(SERVICE, f'Optional initial JEV failed: {detail}', level='WARNING')
                         answer = 'JEV request failed: ' + detail + '; primary model continues'
                 answers = [answer or 'JEV unavailable; primary model continues']
-                self.commit(record, lambda row: row.update(bootstrap_jev_done=True, bootstrap_jev_answers=answers,
+                await owned_thread(self.commit, record, lambda row: row.update(bootstrap_jev_done=True, bootstrap_jev_answers=answers,
                                                            jev_answers=(row.get('jev_answers') or []) + answers))
                 return
             variants = decision.get('variants')
@@ -507,7 +543,7 @@ class LoopController:
                 config = variant.get('config')
                 overrides = variant.get('overrides', record['initial_overrides'])
                 validate_change(record, config, overrides)
-                job = self.job(record, 'optimizer', config, overrides, variant.get('reason', decision.get('reason', '')))
+                job = await owned_thread(self.job, record, 'optimizer', config, overrides, variant.get('reason', decision.get('reason', '')))
                 if digest([fresh_optimizer_config(config, 0), overrides]) == digest([
                         fresh_optimizer_config(record['initial_config'], 0), record['initial_overrides']]):
                     raise ValueError('Use the saved results to adjust the config before the first optimizer run')
@@ -526,7 +562,7 @@ class LoopController:
             def applied(row):
                 row.update(phase='optimize', jobs=row['jobs'] + jobs, bootstrap=summary, repair_error=None, last_error=None, errors=0)
                 row.pop('bootstrap_candidates', None)
-            self.commit(record, applied)
+            await owned_thread(self.commit, record, applied)
             return
         if phase in {'optimize', 'validate', 'holdout'}:
             record = await self.sync_jobs(record)
@@ -548,14 +584,17 @@ class LoopController:
                           and item['operation'] not in validated_sources]
                 results = {}
                 for job in jobs + missed:
+                    from pb8_loop_gpu_replacement import replaced_predecessor
+                    infrastructure = replaced_predecessor(record, job)
                     if (job['status'] in {'complete', 'completed'} or job.get('limit_reached')
-                            or (job['status'] == 'failed' and job.get('backend') and job.get('started'))):
+                            or (job['status'] == 'failed' and job.get('backend') and job.get('started'))
+                            or (infrastructure and job.get('backend') and job.get('started'))):
                         try:
                             found = await owned_thread(self.backend.candidates, record, job)
                             candidates.extend(found)
                             results[job['operation']] = {'results_consumed': True, 'result_count': len(found), 'result_error': None}
                         except ValueError as exc:
-                            if not job.get('limit_reached') and job['status'] != 'failed':
+                            if not infrastructure and not job.get('limit_reached') and job['status'] != 'failed':
                                 raise
                             _log(SERVICE, f'Stopped optimizer {job["operation"]} has no usable results: {exc}', level='WARNING')
                             results[job['operation']] = {'result_error': str(exc)[:1000]}
@@ -566,13 +605,16 @@ class LoopController:
                     if candidates:
                         row.update(phase='select', candidates=candidates, repair_error=None)
                     else:
-                        failures = [item['error'] for item in jobs if item.get('error')]
-                        failures.extend(item['result_error'] for item in results.values() if item.get('result_error'))
+                        from pb8_loop_gpu_replacement import replaced_predecessor
+                        failures = [item['error'] for item in jobs if item.get('error') and not replaced_predecessor(row, item)]
+                        failures.extend(values['result_error'] for item in jobs + missed
+                            if not replaced_predecessor(row, item)
+                            and (values := results.get(item['operation'], {})).get('result_error'))
                         if row.get('repair_error'):
                             failures.append(row['repair_error'])
                         row.update(phase='evaluate', observations=[],
                                    repair_error='; '.join(dict.fromkeys(failures))[:1000] or 'All optimizer attempts failed')
-                self.commit(record, collected)
+                await owned_thread(self.commit, record, collected)
                 return
             observations = []
             for job in jobs:
@@ -583,19 +625,19 @@ class LoopController:
                 before_data = bool(not observations and all([await owned_thread(self.backend.failed_before_data, record, job) for job in jobs])) if hasattr(self.backend, 'failed_before_data') else False
                 await owned_thread(self.store.settle_holdouts, record, not before_data)
                 if before_data:
-                    self.commit(record, lambda row: row.update(status='unconfirmed', final_validation_status='failed', holdout_used=False, holdout_retryable=True, reason='Final holdout configuration failed before data evaluation; unchanged candidate may be retried', last_error=jobs[0].get('error')))
+                    await owned_thread(self.commit, record, lambda row: row.update(status='unconfirmed', final_validation_status='failed', holdout_used=False, holdout_retryable=True, reason='Final holdout configuration failed before data evaluation; unchanged candidate may be retried', last_error=jobs[0].get('error')))
                     return
                 confirmed = bool(record['fingerprint'].get('data') and observations and all(item['assessment']['achieved'] for item in observations))
                 for window in record['holdouts']:
                     await self.remember(record, record['id'] + ':holdout:' + digest(window),
                                        {'holdout': window, 'status': 'independently_confirmed' if confirmed else 'unconfirmed',
                                         'coins': record['settings']['goals'].get('coins', []), 'observations': observations})
-                self.commit(record, lambda row: row.update(status='completed' if confirmed else 'unconfirmed',
+                await owned_thread(self.commit, record, lambda row: row.update(status='completed' if confirmed else 'unconfirmed',
                                                            final_validation_status='passed' if confirmed else 'failed',
                                                            reason='Final holdout passed' if confirmed else 'Final holdout failed or returned no exact observations',
                                                            final_validation=observations))
                 return
-            self.commit(record, lambda row: row.update(phase='evaluate', observations=observations))
+            await owned_thread(self.commit, record, lambda row: row.update(phase='evaluate', observations=observations))
             return
         if phase == 'select':
             candidates = record['candidates']
@@ -603,7 +645,7 @@ class LoopController:
             budget = validation_budget(record, len(candidates))
             evidence = {'candidates': copy.deepcopy(candidates),
                         'loop_id': record['id'], 'round_number': record['round'] + 1,
-                        'jobs': [optimizer_execution_evidence(job, record['settings']) for job in record['jobs']
+                        'jobs': [optimizer_execution_evidence(job, record['settings'], record) for job in record['jobs']
                                  if job['kind'] == 'optimizer' and job['round'] == record['round']],
                         'max_candidates': budget['max_candidates'], 'validation_budget': budget,
                         'jev': record.get('jev_answers') if record.get('jev_round') == record['round'] else []}
@@ -624,13 +666,13 @@ class LoopController:
                 for optimizer_job in {row['optimizer_job'] for row in candidates}:
                     group = [{'id': row['id'], 'metrics': row['metrics']} for row in candidates if row['optimizer_job'] == optimizer_job]
                     key = str(record['round']) + ':' + optimizer_job
-                    current = self.store.read(record['owner'], record['id'])
+                    current = await owned_thread(self.store.read, record['owner'], record['id'])
                     if key in current.get('jev_attempted', []):
                         jev_answers.append('An earlier JEV request was interrupted; no duplicate was sent')
                         continue
-                    self.commit(record, lambda row: row.update(jev_attempted=row.get('jev_attempted', []) + [key]))
+                    await owned_thread(self.commit, record, lambda row: row.update(jev_attempted=row.get('jev_attempted', []) + [key]))
                     try:
-                        answer = await self.ai.jev(self.store.read(record['owner'], record['id']), group)
+                        answer = await self.ai.jev(await owned_thread(self.store.read, record['owner'], record['id']), group)
                         if answer:
                             jev_answers.append(answer)
                     except Exception as exc:
@@ -639,7 +681,7 @@ class LoopController:
                         _log(SERVICE, f'Optional JEV failed: {detail}', level='WARNING')
                         jev_answers.append('JEV request failed: ' + detail + '; primary model continues')
             if jev_answers and not evidence['jev']:
-                record = self.commit(record, lambda row: row.update(jev_answers=jev_answers, jev_round=row['round']))
+                record = await owned_thread(self.commit, record, lambda row: row.update(jev_answers=jev_answers, jev_round=row['round']))
                 evidence['jev'] = jev_answers
                 decision = await self.decision(record, 'select', evidence)
                 chosen = decision.get('candidate_ids')
@@ -650,9 +692,9 @@ class LoopController:
                     raise ValueError('AI selected an unknown candidate after JEV evaluation')
                 if not isinstance(decision.get('reason'), str) or not decision['reason'].strip():
                     raise ValueError('Explain the revised candidate count and CPU budget allocation in reason')
-            jobs = [self.job(record, 'validation', self.backend.validation_config(record, row), row['overrides'],
+            jobs = [await owned_thread(self.job, record, 'validation', self.backend.validation_config(record, row), row['overrides'],
                              'Fixed comparison validation', candidate=row) for row in selected]
-            self.commit(record, lambda row: row.update(phase='validate', jobs=row['jobs'] + jobs,
+            await owned_thread(self.commit, record, lambda row: row.update(phase='validate', jobs=row['jobs'] + jobs,
                 validation_count=row['validation_count'] + len(jobs), jev_answers=jev_answers,
                 candidate_selection={'round': row['round'], 'candidate_ids': chosen,
                                      'reason': decision['reason'], 'budget': budget}))
@@ -667,7 +709,7 @@ class LoopController:
             if not eligible:
                 if observations:
                     await self.remember(record, record['id'] + ':rejected:' + str(record['round']), {'status': 'rejected_exact', 'goals': record['settings']['goals'], 'observations': observations, 'uncertainty': 'Incomplete or incomparable simulations cannot qualify a winner or authorize a next round.'})
-                self.commit(record, lambda row: row.update(rejected_observations=observations, status='failed',
+                await owned_thread(self.commit, record, lambda row: row.update(rejected_observations=observations, status='failed',
                     reason=('Next cycle blocked: ' + record['repair_error']) if record.get('repair_error') else
                            'Next cycle blocked: no successful comparable validation backtests for this cycle',
                     last_error=record.get('repair_error') or 'Exact comparison backtests are required before continuing'))
@@ -699,14 +741,15 @@ class LoopController:
                             'overrides': copy.deepcopy(record['initial_overrides'])}
             settings = record['settings']
             optimizers = [job for job in record['jobs'] if job['kind'] == 'optimizer']
-            remaining = settings['max_runs'] - sum(job['started'] or job['status'] not in JOB_FINISHED for job in optimizers)
+            from pb8_loop_gpu_replacement import attempts_used
+            remaining = settings['max_runs'] - attempts_used(record)
             evidence = {'observations': observations, 'best': current_best, 'remaining_runs': remaining,
                         'loop_id': record['id'], 'round_number': record['round'] + 1,
                         'completed_rounds': len(completed_rounds),
                         'completed_rounds_after_evaluation': len(completed_rounds | {record['round']}),
                         'max_rounds': max_rounds,
                         'remaining_rounds': max(0, max_rounds - len(completed_rounds | {record['round']})),
-                        'optimizer_attempts': sum(bool(job['started']) for job in optimizers),
+                        'optimizer_attempts': sum(bool(job['started'] or job.get('attempt_charged')) for job in optimizers),
                         'cpu_validation_completed': len(completed_checks),
                         'cpu_validation_pending': sum(job['kind'] == 'validation' and job['round'] == record['round']
                                                       and job['status'] not in JOB_FINISHED for job in record['jobs']),
@@ -715,7 +758,7 @@ class LoopController:
                         'free_slots': max(1, await owned_thread(self.backend.capacity, record)),
                         'baseline': record.get('baseline'), 'jev': record.get('jev_answers') or [], 'repair_error': record.get('repair_error'),
                         'candidate_selection': record.get('candidate_selection'),
-                        'jobs': [optimizer_execution_evidence(job, settings) for job in optimizers if job['round'] == record['round']]}
+                        'jobs': [optimizer_execution_evidence(job, settings, record) for job in optimizers if job['round'] == record['round']]}
             if adaptive:
                 common_metrics = None
                 for option in options.values():
@@ -807,15 +850,15 @@ class LoopController:
                                                         for item in eligible],
                                        'evaluated_at': time.time(),
                                        'changes': [{'operation': job['operation'], 'config_digest': digest(job['config']), 'executed_digest': job.get('executed_digest'), 'fields': config_changes(record['initial_config'], job['config'])} for job in optimizers if job['round'] == row['round']]})
-            record = self.commit(record, observed)
+            record = await owned_thread(self.commit, record, observed)
             if len({item['round'] for item in record['history'] if item.get('evaluated_at') is not None}) >= max_rounds:
-                self.commit(record, lambda row: row.update(stop_reason='Maximum completed rounds reached'))
+                await owned_thread(self.commit, record, lambda row: row.update(stop_reason='Maximum completed rounds reached'))
                 await self.finish(record, 'Maximum completed rounds reached')
                 return
             must_continue = len({item['round'] for item in record['history'] if item.get('evaluated_at') is not None}) < required_rounds
             if remaining <= 0 or (not must_continue and (decision.get('finish') or record['stagnation'] >= settings['patience'])):
                 stop = 'Optimizer allowance reached' if remaining <= 0 else 'No improvement patience reached' if record['stagnation'] >= settings['patience'] else 'AI concluded the search'
-                record = self.commit(record, lambda row: row.update(stop_reason=stop))
+                record = await owned_thread(self.commit, record, lambda row: row.update(stop_reason=stop))
                 await self.finish(record, str(decision.get('reason') or stop))
                 return
             variants = decision.get('variants')
@@ -831,20 +874,24 @@ class LoopController:
                 config = variant.get('config')
                 overrides = variant.get('overrides', record['initial_overrides'])
                 validate_change(record, config, overrides)
-                jobs.append(self.job(next_record, 'optimizer', config, overrides, variant.get('reason', '')))
-            self.commit(record, lambda row: row.update(round=next_record['round'], jobs=row['jobs'] + jobs,
+                jobs.append(await owned_thread(self.job, next_record, 'optimizer', config, overrides, variant.get('reason', '')))
+            await owned_thread(self.commit, record, lambda row: row.update(round=next_record['round'], jobs=row['jobs'] + jobs,
                                                        phase='optimize', repair_error=None, errors=0))
             return
         raise ValueError('Unknown persisted loop phase')
 
     async def sync_jobs(self, record, launch=True):
         """Reconcile persisted launch intent before allocating any additional job."""
+        from pb8_loop_gpu_replacement import open_replacement
+        if open_replacement(record):
+            from pb8_loop_gpu_replacement import GPUReplacement
+            return await owned_thread(GPUReplacement(self.store, None, self.backend).monitor_jobs, record)
         for job in record['jobs']:
             if record['phase'] == 'baseline' and job['kind'] != 'baseline':
                 continue
             if job['status'] in JOB_FINISHED:
                 continue
-            current = self.store.read(record['owner'], record['id'])
+            current = await owned_thread(self.store.read, record['owner'], record['id'])
             if current['status'] not in ACTIVE:
                 launch = False
             if job['backend'] is None:
@@ -854,7 +901,7 @@ class LoopController:
                     backend = await owned_thread(self.backend.prepare, current, job)
                 except Exception as exc:
                     from fastapi import HTTPException
-                    current = self.store.read(record['owner'], record['id'])
+                    current = await owned_thread(self.store.read, record['owner'], record['id'])
                     if current['status'] not in ACTIVE:
                         return current
                     if isinstance(exc, HTTPException) and exc.status_code == 409:
@@ -864,13 +911,13 @@ class LoopController:
                             target = next(item for item in row['jobs'] if item['operation'] == job['operation'])
                             target.update(status='failed', error=str(exc)[:1000], ended_at=time.time())
                             row['repair_error'] = str(exc)[:1000]
-                        record = self.store.update(record['owner'], record['id'], rejected)
+                        record = await owned_thread(self.store.update, record['owner'], record['id'], rejected)
                         continue
                     raise
                 def prepared(row):
                     target = next(item for item in row['jobs'] if item['operation'] == job['operation'])
                     target.update(backend=backend, status='queued')
-                record = self.store.update(record['owner'], record['id'], prepared)
+                record = await owned_thread(self.store.update, record['owner'], record['id'], prepared)
                 job = next(item for item in record['jobs'] if item['operation'] == job['operation'])
             state = await owned_thread(self.backend.poll, record, job)
             polled_proxy = state.get('proxy_evaluations')
@@ -890,7 +937,7 @@ class LoopController:
                     def limited(row):
                         target = next(item for item in row['jobs'] if item['operation'] == job['operation'])
                         target.update(limit_reached=hit, run_started_at=started_at)
-                    current = self.store.update(record['owner'], record['id'], limited)
+                    current = await owned_thread(self.store.update, record['owner'], record['id'], limited)
                     job = next(item for item in current['jobs'] if item['operation'] == job['operation'])
                 await owned_thread(self.backend.stop, current, job)
                 state = await owned_thread(self.backend.poll, current, job)
@@ -907,10 +954,10 @@ class LoopController:
                     capacity = await owned_thread(self.backend.capacity, local)
                 if capacity > 0:
                     try:
-                        state = await owned_thread(self.backend.start, self.store.read(record['owner'], record['id']), job)
+                        state = await owned_thread(self.backend.start, await owned_thread(self.store.read, record['owner'], record['id']), job)
                     except Exception as exc:
                         from fastapi import HTTPException
-                        current = self.store.read(record['owner'], record['id'])
+                        current = await owned_thread(self.store.read, record['owner'], record['id'])
                         if current['status'] not in ACTIVE:
                             return current
                         if isinstance(exc, HTTPException) and exc.status_code == 409:
@@ -918,7 +965,7 @@ class LoopController:
                         if isinstance(exc, (HTTPException, ValueError)):
                             await owned_thread(self.backend.stop, current, job)
                             state = {'status': 'failed', 'started': state['started']}
-                            self.store.update(record['owner'], record['id'], lambda row: row.update(repair_error=str(exc)[:1000]))
+                            await owned_thread(self.store.update, record['owner'], record['id'], lambda row: row.update(repair_error=str(exc)[:1000]))
                         else:
                             raise
             def synced(row):
@@ -947,12 +994,12 @@ class LoopController:
                     target['error'] = None
                 target['last_observed_at'] = time.time()
                 target['runner'] = {key: state.get('source', {}).get(key) for key in ('started_at', 'pb8_version', 'pb8_commit', 'lease_id', 'dispatch_at', 'deadline', 'rental_state', 'error')}
-            record = self.store.update(record['owner'], record['id'], synced)
+            record = await owned_thread(self.store.update, record['owner'], record['id'], synced)
         return record
 
     async def finish(self, record, reason):
         """Finish training without waiting for or consuming user-only backtests."""
-        self.commit(record, lambda row: row.update(
+        await owned_thread(self.commit, record, lambda row: row.update(
             status='completed' if row.get('best') else 'unconfirmed', reason=reason,
             final_validation_status='observer_only' if row.get('observer_holdouts') else 'not_requested'))
 

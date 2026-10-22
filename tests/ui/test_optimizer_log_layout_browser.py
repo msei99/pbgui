@@ -36,7 +36,8 @@ def log_page(request):
     data = dict(jobs=[job], workers=[rental], worker=rental, queue={}, supervision_available=True)
     queue = [dict(filename='job', name='Local job', status='running', exchange='binance')]
     errors, calls, held = [], [], []
-    control = {'hold_status': False, 'hold_charges': False, 'hold_jobs': False, 'jobs_before_hold': 0, 'jobs_status': 200, 'hold_fragment': False, 'status': {}}
+    control = {'hold_settings': False, 'settings_status': 200, 'settings_posts': [],
+               'settings': dict(cpu=8, cpu_max=16, host_cpu_count=16, autostart=False, cpu_override=False, use_pbgui_market_data=False), 'hold_status': False, 'hold_charges': False, 'hold_jobs': False, 'jobs_before_hold': 0, 'jobs_status': 200, 'hold_fragment': False, 'status': {}}
     playwright = pytest.importorskip('playwright.sync_api')
     with playwright.sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -88,8 +89,17 @@ def log_page(request):
                 route.fulfill(json={'configs': []})
             elif path.endswith('/results'):
                 route.fulfill(json={'results': []})
+            elif path == '/api/optimize-' + version + '/settings':
+                if route.request.method == 'POST':
+                    control['settings_posts'].append(route.request.post_data_json)
+                    control['settings'].update(route.request.post_data_json)
+                    route.fulfill(json={'ok': True})
+                elif control['hold_settings']:
+                    held.append(('settings', route))
+                else:
+                    route.fulfill(status=control['settings_status'], json=control['settings'])
             elif path.endswith('/settings'):
-                route.fulfill(json={'cpu': 1, 'autostart': False})
+                route.fulfill(json={})
             elif path == '/api/help/index':
                 route.fulfill(json=[{'file': '43_pbv8_optimize.md', 'title': 'Optimize'}])
             elif path == '/api/help/content':
@@ -116,6 +126,32 @@ def open_cloud(page):
     page.locator('tr[data-cloud-id] [title="Open log"]').click()
     page.wait_for_function('!document.getElementById("optlog-rental-group").hidden && document.getElementById("optlog-details").clientHeight>0')
     page.wait_for_timeout(60)
+
+
+@pytest.mark.parametrize('width', [700, 1280])
+def test_host_context_on_real_optimize_menu_reload_and_cloud_log(log_page, width):
+    """Real mounted menu entry and restored cloud logs retain the exact host anchor."""
+    page, data, _, errors, calls, _, _ = log_page
+    data['jobs'][0]['rental']['offer']['machine_id'] = 7
+    data['queue'].update(blocked_machine_ids=[], host_block_revision=0)
+    page.evaluate('window.testCloudPoll()')
+    page.set_viewport_size({'width':width, 'height':900})
+    open_cloud(page)
+    page.locator('#optlog-rental-group summary').click()
+    page.wait_for_function('PBGuiAI.collectContext().current_cloud_job?.machine_id === 7')
+    before = page.evaluate('PBGuiAI.collectContext().current_cloud_job')
+    assert before == dict(job_id='a'*32, lease_id='b'*32, machine_id=7, blocked=False, host_block_revision=0)
+    assert page.locator('#optlog-rental').get_by_role('button', name='Block host', exact=True).is_visible()
+    assert '/api/optimize-v8/main_page' in calls
+    assert page.url.startswith('http://optimizer.test/mounted/api/optimize-v8/main_page')
+    assert page.evaluate("['sidebar','optlog-rental'].every(id=>{const n=document.getElementById(id);return n.scrollWidth<=n.clientWidth;})")
+    page.reload()
+    page.wait_for_function('PBGuiAI.collectContext().current_cloud_job?.machine_id === 7')
+    assert page.evaluate('PBGuiAI.collectContext().current_cloud_job') == before
+    assert page.locator('#panel-queue').is_visible()
+    page.locator('#log-panel-close').click()
+    assert 'current_cloud_job' not in page.evaluate('PBGuiAI.collectContext()')
+    assert not errors
 
 
 def boxes(page):
@@ -619,4 +655,97 @@ def test_cache_return_cannot_revive_expired_cloud_session(log_page, status):
     page.wait_for_timeout(150)
     assert calls.count('/api/vast/jobs') == before
     assert page.locator('#log-panel').is_hidden()
+    assert not errors
+
+
+@pytest.mark.parametrize('log_page', ['v7', 'v8'], indirect=True)
+def test_queue_settings_menu_delayed_reload_and_drafts(log_page):
+    """Real menu, Queue Settings entry and reload reject placeholders without POSTs."""
+    page, _, _, errors, calls, held, control = log_page
+    page.locator('#btn-queue-settings').click()
+    page.wait_for_function('state.settingsLoaded && !state.settingsRequest')
+    assert page.locator('#settings-cpu-value').input_value() == '8'
+    assert page.locator('#settings-cpu-max').inner_text() == '16'
+    assert '/api/optimize-' + ('v8' if 'v8' in page.url else 'v7') + '/main_page' in calls
+    control['hold_settings'] = True
+    page.reload(wait_until='domcontentloaded')
+    page.wait_for_function('state.settingsRequest && state.panel === "settings"')
+    assert page.url.endswith('#settings')
+    assert page.locator('#settings-cpu-value').input_value() == ''
+    assert page.locator('#settings-cpu-max').inner_text() == '—'
+    assert page.locator('#settings-cpu-value').is_disabled()
+    assert page.locator('#btn-settings-save').is_disabled()
+    page.evaluate('saveQueueSettingsFromModal(); updateAutostart(true)')
+    page.locator('#btn-settings-cancel').click()
+    page.locator('#btn-queue-settings').click()
+    page.wait_for_function('state.settingsRequest !== null')
+    assert len([entry for entry in held if entry[0] == 'settings']) == 1
+    control['hold_settings'] = False
+    _, route = next(entry for entry in held if entry[0] == 'settings')
+    held[:] = [entry for entry in held if entry[0] != 'settings']
+    route.fulfill(json=control['settings'])
+    page.wait_for_function('state.settingsLoaded && !state.settingsRequest')
+    assert page.locator('#settings-cpu-value').input_value() == '8'
+    assert page.locator('#settings-cpu-max').inner_text() == '16'
+    page.locator('#settings-cpu-value').fill('9')
+    page.locator('#settings-autostart').check()
+    page.locator('#settings-cpu-override').check()
+    page.locator('#settings-use-pbgui-market-data').check()
+    page.locator('#btn-settings-cancel').click()
+    page.locator('#btn-queue-settings').click()
+    page.wait_for_function('!state.settingsRequest')
+    assert page.locator('#settings-cpu-value').input_value() == '9'
+    for field in ['settings-autostart', 'settings-cpu-override', 'settings-use-pbgui-market-data']:
+        assert page.locator('#' + field).is_checked()
+    assert control['settings_posts'] == []
+    assert not errors
+
+
+@pytest.mark.parametrize('log_page', ['v7', 'v8'], indirect=True)
+def test_queue_settings_failed_load_reopens_and_recovers(log_page):
+    """A failed GET visibly blocks edits/POSTs, then a normal entry revalidates."""
+    page, _, _, errors, _, _, control = log_page
+    control['settings_status'] = 503
+    page.locator('#btn-queue-settings').click()
+    page.wait_for_function('!!state.settingsError && !state.settingsRequest')
+    assert page.locator('#settings-load-status').inner_text()
+    assert page.locator('#settings-cpu-value').is_disabled()
+    assert page.locator('#btn-settings-save').is_disabled()
+    page.evaluate('saveQueueSettingsFromModal(); updateAutostart(true)')
+    assert control['settings_posts'] == []
+    control['settings_status'] = 200
+    page.locator('#btn-settings-cancel').click()
+    page.locator('#btn-queue-settings').click()
+    page.wait_for_function('!state.settingsError && !state.settingsRequest')
+    assert page.locator('#settings-cpu-value').input_value() == '8'
+    assert page.locator('#settings-cpu-max').inner_text() == '16'
+    assert not page.locator('#btn-settings-save').is_disabled()
+    assert control['settings_posts'] == []
+    assert not errors
+
+
+@pytest.mark.parametrize('log_page', ['v7', 'v8'], indirect=True)
+def test_queue_settings_bfcache_during_initial_get(log_page):
+    """Real lifecycle listeners replace the cancelled initial GET before init finishes."""
+    page, _, _, errors, _, held, control = log_page
+    page.locator('#btn-queue-settings').click()
+    page.wait_for_function('!state.settingsRequest')
+    control['hold_settings'] = True
+    page.reload(wait_until='domcontentloaded')
+    page.wait_for_function('state.initialLoadPending && !!state.settingsRequest')
+    page.evaluate("""() => {
+      window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:true}));
+      window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted:true}));
+    }""")
+    page.wait_for_function('!state.settingsDisposed && !!state.settingsRequest')
+    page.wait_for_timeout(50)
+    pending = [entry for entry in held if entry[0] == 'settings']
+    assert len(pending) == 2
+    control['hold_settings'] = False
+    pending[-1][1].fulfill(json=control['settings'])
+    page.wait_for_function('state.settingsLoaded && !state.settingsRequest')
+    assert page.locator('#settings-cpu-value').input_value() == '8'
+    assert page.locator('#settings-cpu-max').inner_text() == '16'
+    assert not page.locator('#btn-settings-save').is_disabled()
+    assert control['settings_posts'] == []
     assert not errors

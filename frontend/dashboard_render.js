@@ -1568,13 +1568,22 @@
         var isCum = mode === 'line' || mode === 'Cumulative';
 
         var dates  = bars.map(function (b) { return b.date; });
-        var values = bars.map(function (b) { return isCum && b.cum !== undefined ? b.cum : b.income; });
-        var colors = values.map(function (v) { return v < 0 ? '#fc8181' : '#68d391'; });
+        var values = bars.map(function (b) {
+            var value = isCum ? b.cum : b.income;
+            if (typeof value !== 'number' &&
+                !(typeof value === 'string' && value.trim() !== '')) return null;
+            var number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        });
+        var colors = values.map(function (v) {
+            return v === null ? 'rgba(0,0,0,0)' : (v < 0 ? '#fc8181' : '#68d391');
+        });
 
         var trace;
         if (isCum) {
             trace = {
                 x: dates, y: values, type: 'scatter', mode: 'lines+markers',
+                connectgaps: false,
                 line: { color: '#63b3ed', width: 1 },
                 marker: { color: colors, size: 6 },
                 hovertemplate: '<b>%{x}</b><br>Cumulative PnL: %{y:.2f}<extra></extra>'
@@ -1583,8 +1592,9 @@
             trace = {
                 x: dates, y: values, type: 'bar',
                 marker: { color: colors },
-                text: values.map(function (v) { return v.toFixed(2); }),
-                textposition: 'auto',
+                text: values.map(function (v) { return v === null ? '' : v.toFixed(2); }),
+                // Plotly's auto placement omits labels on zero-height bars.
+                textposition: values.map(function (v) { return v === 0 ? 'outside' : 'auto'; }),
                 hovertemplate: '<b>%{x}</b><br>Daily PnL: %{y:.2f}<extra></extra>'
             };
         }
@@ -4161,7 +4171,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20261017a',
+        VERSION:            '20261021a',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

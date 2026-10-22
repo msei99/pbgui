@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import copy
+import re
 from urllib.parse import urlparse, parse_qs, parse_qs
 
 import pytest
@@ -9,8 +10,249 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("viewport_width", [700, 1200, 1920])
-def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width, capability_only=False):
+@pytest.mark.parametrize('viewport_width,sidebar_width', [(1200, 160), (1200, 420), (720, 160)])
+def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_width):
+    """Real menu, explicit review, automatic state updates and preserved navigation with fixture-only rentals."""
+    playwright = pytest.importorskip('playwright.sync_api')
+    source = (ROOT / 'frontend/v7_optimize.html').read_text()
+    for key, value in {'API_BASE':'/api/optimize-v8','OPTIMIZE_VERSION':'v8','VERSION':'test',
+            'SERIAL':'1','NAV_HASH':'test','BASE_PREFIX':'','LIMITS_META':'{}',
+            'BACKTEST_VERSION':'v8','OPTIMIZE_NAV_TITLE':'PB8 Optimize','OPTIMIZE_NAV_CURRENT':'v8_optimize'}.items():
+        source = source.replace('%%'+key+'%%', value)
+    loop_id, worker_id = 'a' * 32, 'b' * 32
+    run = dict(id=loop_id, name='Isolated replacement', status='running', phase='optimize', round=0,
+        created_at=1000, settings={'config_name':'fixture','execution':'vast'}, jobs=[],
+        history=[], observer_enabled=False, ended=False, cycles=[], control_generation=0)
+    rental = dict(worker_id=worker_id, deadline=2000007200, loop_deadline=2000000000, budget_usd=2,
+        price_hour_usd=.08, maximum_deadline=2000010000, can_extend=True, can_edit_budget=True)
+    mutations, errors = [], []
+    workers = []
+    with playwright.sync_playwright() as driver:
+        browser = driver.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={'width':viewport_width,'height':900})
+            page.set_default_timeout(7000)
+            page.add_init_script("localStorage.setItem('pbgui.sidebar.width', '"+str(sidebar_width)+"')")
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            def respond(route):
+                """Every API response is local synthetic data; no production mutations are possible."""
+                path = urlparse(route.request.url).path
+                if path in {'/audit', '/api/optimize-v8/main_page'}:
+                    html = source.replace('navCurrent: "v8_optimize"', 'navCurrent: "dashboards"') if path == '/audit' else source
+                    route.fulfill(body=html, content_type='text/html')
+                elif path.startswith('/app/'):
+                    asset = ROOT / 'frontend' / path.removeprefix('/app/')
+                    route.fulfill(body=asset.read_bytes() if asset.is_file() else b'',
+                        content_type='text/css' if asset.suffix=='.css' else 'text/javascript')
+                elif path == '/api/optimize-v8/loops':
+                    route.fulfill(json={'loops':[run]})
+                elif path == '/api/optimize-v8/loops/configs':
+                    route.fulfill(json={'configs':[]})
+                elif path == '/api/optimize-v8/loops/options':
+                    route.fulfill(json={'configs':['fixture'],'profiles':[],'providers':{},'presets':[]})
+                elif path == '/api/optimize-v8/loops/'+loop_id+'/rental':
+                    route.fulfill(json={'rental':rental})
+                elif path.endswith('/rental/replace-preview'):
+                    route.fulfill(json={'snapshot':{'generation':0}, 'snapshot_digest':'c'*64,
+                        'operation_id':'d'*32, 'excluded_machine_ids':[101], 'attempts_used':1,
+                        'max_runs':4, 'remaining_budget_usd':1.5, 'deadline':2000000000})
+                elif path.endswith('/rental/replace'):
+                    mutations.append(route.request.post_data_json)
+                    run.update(status='replacing_gpu', control_generation=1,
+                        gpu_replacement={'step':'deletion','reason':'Waiting for confirmed provider deletion'})
+                    route.fulfill(status=202, json=run)
+                elif path == '/api/help/index':
+                    route.fulfill(json=[{'file':'43_pbv8_optimize','title':'PB8 Optimize'}])
+                elif path == '/api/help/content':
+                    route.fulfill(json={'content':'# PB8 Optimize\n\n## Replacing a GPU within the same AI Loop\nFixture guide.'})
+                elif path == '/api/vast/fragment':
+                    route.fulfill(body=(ROOT/'frontend/vast.html').read_text(), content_type='text/html')
+                elif path == '/api/vast/jobs':
+                    route.fulfill(json={'jobs':[],'workers':workers,'queue':{},'supervision_available':True})
+                else:
+                    route.fulfill(json={})
+            page.route('**/*', respond)
+            page.route_web_socket('**/*', lambda socket: socket.on_message(lambda _message: None))
+            page.goto('http://pbgui.test/audit')
+            page.locator('.nav-group-btn[data-group="pbv8"]').click()
+            page.locator('.nav-item[data-page="v8_optimize"]').click()
+            page.wait_for_url('**/api/optimize-v8/main_page')
+            page.locator('.sb-section[data-panel="loops-queue"]').click()
+            page.get_by_role('textbox', name='Search AI Loops queue').fill('Isolated')
+            main = '#loops-queue-table tr[data-key="'+loop_id+'"]'
+            page.locator(main+' td').nth(2).click()
+            playwright.expect(page.locator(main)).to_have_class('selected')
+            page.locator('#loop-rental-minutes').fill('17')
+            replace = page.locator('#loop-rental-replace')
+            playwright.expect(replace).to_be_enabled()
+            replace.click()
+            playwright.expect(page.locator('#pbgui-dialog-title')).to_have_text('Replace GPU and continue loop?')
+            message = page.locator('#pbgui-dialog-message').text_content()
+            assert all(text in message for text in ('1/4','in-flight work is lost','$1.5000','101','Deadline:'))
+            page.mouse.click(2,2)
+            playwright.expect(page.locator('#pbgui-dialog-ovl')).to_have_class('visible')
+            page.locator('#pbgui-dialog-cancel').click()
+            assert not mutations
+            replace.click()
+            page.locator('#pbgui-dialog-accept').click()
+            playwright.expect(page.locator('#loop-rental-status')).to_contain_text('Waiting for confirmed provider deletion')
+            playwright.expect(replace).to_be_disabled()
+            assert len(mutations) == 1 and mutations[0]['authorization'] is True
+            assert mutations[0]['worker_id'] == worker_id
+            playwright.expect(page.locator('#loop-rental-minutes')).to_have_value('17')
+            playwright.expect(page.locator(main)).to_have_class('selected')
+            if viewport_width > 760:
+                assert abs(page.locator('#sidebar').bounding_box()['width'] - sidebar_width) < 2
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            before = page.url
+            page.reload()
+            playwright.expect(page.locator('#loop-rental-status')).to_contain_text('Waiting for confirmed provider deletion')
+            assert page.url == before
+            playwright.expect(page.get_by_role('textbox', name='Search AI Loops queue')).to_have_value('Isolated')
+            playwright.expect(page.locator('#loop-rental-minutes')).to_have_value('17')
+            playwright.expect(page.locator(main)).to_have_class('selected')
+            page.locator('#pbgui-guide-btn').click()
+            page.wait_for_selector('#pbgui-shared-help-ovl.visible')
+            assert page.url == before
+            page.locator('#pbgui-shared-help-close').click()
+            run['gpu_replacement'].update(step='capacity', reason='Optimizer attempt allowance exhausted')
+            playwright.expect(page.locator('#loop-rental-status')).to_contain_text('Optimizer attempt allowance exhausted')
+            assert len(mutations) == 1 and not errors
+            workers.append(dict(id=worker_id, loop_id=loop_id, loop_owner='fixture', kind='worker',
+                status='running', rental_state='active', instance_id=11, deadline=2000007200,
+                budget_usd=2, price_hour_usd=.08, gpu_name='Fixture GPU', host_machine_id=101))
+            page.locator('.sb-section[data-panel="queue"]').click()
+            native_replace = page.get_by_role('button', name='Replace GPU and continue loop', exact=True)
+            playwright.expect(native_replace).to_be_visible()
+            native_replace.click()
+            playwright.expect(page.locator('#pbgui-dialog-title')).to_have_text('Replace GPU and continue loop?')
+            page.locator('#pbgui-dialog-cancel').click()
+            page.get_by_role('button', name='End rental', exact=True).click()
+            playwright.expect(page.locator('#pbgui-dialog-message')).to_contain_text('The Loop can fail')
+            page.locator('#pbgui-dialog-cancel').click()
+            assert len(mutations) == 1 and not errors
+        finally:
+            browser.close()
+
+
+def test_pb8_observer_progress_columns_and_automatic_updates():
+    """Real menu/shell with isolated asymmetric reports, reload and failure states."""
+    playwright = pytest.importorskip('playwright.sync_api')
+    source = (ROOT / 'frontend/v7_optimize.html').read_text()
+    observer_asset = re.search(r'<script\s+src="(/app/js/pb8_loop_optimizer\.js\?v=\d+)"', source)
+    assert observer_asset, 'The optimizer page must include the versioned observer script'
+    for key, value in {'API_BASE':'/api/optimize-v8','OPTIMIZE_VERSION':'v8','VERSION':'test',
+                       'SERIAL':'1','NAV_HASH':'test','BASE_PREFIX':'','LIMITS_META':'{}',
+                       'BACKTEST_VERSION':'v8','OPTIMIZE_NAV_TITLE':'PB8 Optimize',
+                       'OPTIMIZE_NAV_CURRENT':'v8_optimize'}.items():
+        source = source.replace('%%'+key+'%%', value)
+    run = {'id':'a'*32,'name':'Isolated report progress','status':'running','phase':'evaluate','round':0,
+           'created_at':1000,'settings':{'config_name':'fixture','execution':'cpu'},'jobs':[],
+           'history':[],'observer_enabled':True,'ended':False,'cycles':[{'round':0,'status':'validated',
+           'ai_evaluated':True,'winner_candidate_id':'fixture_4','winner_operation':'training',
+           'goals':[],'backtests':5,'completed_backtests':5}], 'observer_jobs':[], 'observer_summaries':[]}
+    for kind,terminal in [('observer_holdout',2),('observer_full_range',4)]:
+        run['observer_summaries'].append({'round':0,'kind':kind,'status':'waiting',
+            'expected':5,'terminal':terminal,'successful':0 if kind=='observer_holdout' else 4,
+            'report_pending':0,'report_failed':0,'candidate_id':'fixture_4','source_round':0})
+        for index in range(5):
+            run['observer_jobs'].append({'round':0,'kind':kind,'candidate_id':'fixture_'+str(index),
+                'operation':kind+str(index),'status':('failed' if index==0 else 'skipped') if kind=='observer_holdout' and index<terminal else 'complete' if index<terminal else 'running',
+                'report_done':index<terminal,'simulation_complete':kind=='observer_full_range' and index<terminal,
+                'metrics':{'gain':7,'drawdown':.1}})
+    requests, errors = [], []
+    with playwright.sync_playwright() as driver:
+        # Use Playwright's normal browser/action deadlines. The approved ten-second
+        # limit applies to new Node helper subprocesses, not to browser startup.
+        browser = driver.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={'width':1200,'height':900})
+            page.on('pageerror', lambda error: errors.append(str(error)))
+
+            def respond(route):
+                """Serve local assets and fixture JSON; block every real request."""
+                path = urlparse(route.request.url).path
+                requests.append(route.request.url)
+                if path in {'/audit','/api/optimize-v8/main_page'}:
+                    html = source.replace('navCurrent: "v8_optimize"', 'navCurrent: "dashboards"') if path == '/audit' else source
+                    route.fulfill(body=html,content_type='text/html')
+                elif path.startswith('/app/'):
+                    asset = ROOT / 'frontend' / path.removeprefix('/app/')
+                    route.fulfill(body=asset.read_bytes() if asset.is_file() else b'',content_type='text/css' if asset.suffix=='.css' else 'text/javascript')
+                elif path == '/api/optimize-v8/loops':
+                    route.fulfill(json={'loops':[run]})
+                elif path == '/api/optimize-v8/loops/configs':
+                    route.fulfill(json={'configs':[]})
+                elif path == '/api/optimize-v8/loops/options':
+                    route.fulfill(json={'configs':['fixture'],'profiles':[],'providers':{},'presets':[]})
+                elif path == '/api/help/index':
+                    route.fulfill(json=[{'file':'43_pbv8_optimize','title':'PB8 Optimize'}])
+                elif path == '/api/help/content':
+                    route.fulfill(json={'content':'# PB8 Optimize\n\nIsolated report guide.'})
+                else:
+                    route.fulfill(json={})
+
+            page.route('**/*', respond)
+            page.route_web_socket('**/*', lambda socket: socket.on_message(lambda _message: None))
+            page.goto('http://pbgui.test/audit')
+            page.locator('.nav-group-btn[data-group="pbv8"]').click()
+            page.locator('.nav-item[data-page="v8_optimize"]').click()
+            page.wait_for_url('**/api/optimize-v8/main_page')
+            page.locator('.sb-section[data-panel="loops-queue"]').click()
+            main = '#loops-queue-table tr[data-key="'+'a'*32+'"]'
+            cycle = '#loops-queue-table tr[data-key="'+'a'*32+':0"]'
+            page.locator(main+' .loop-disclosure').click()
+
+            def assert_cells(holdout, full):
+                """Wait on real polling rather than invoking renderer helpers."""
+                page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+                for selector in (main,cycle):
+                    try:
+                        page.wait_for_function("([selector,holdout,full])=>{const row=document.querySelector(selector);return row&&row.cells[9].textContent.includes(holdout)&&row.cells[10].textContent.includes(full);}",arg=[selector,holdout,full])
+                    except playwright.TimeoutError:
+                        cells = page.locator(selector+' td').all_text_contents()
+                        message = page.locator('#loops-queue-message').text_content()
+                        pytest.fail(f'Report cells did not reach {holdout!r} / {full!r}; '
+                                    f'row={cells!r}; queue_message={message!r}; page_errors={errors!r}')
+
+            assert_cells('Holdouts · 2/5 terminal · 0 complete','Full Time Range · 4/5 terminal · 4 complete')
+            url = page.url
+            page.reload()
+            assert_cells('Holdouts · 2/5 terminal','Full Time Range · 4/5 terminal')
+            assert page.url == url and page.locator(cycle).is_visible()
+            winner = run['observer_jobs'][-1]
+            winner.update(status='complete',report_done=True,simulation_complete=True)
+            run['observer_summaries'][1].update(status='selected',operation=winner['operation'],terminal=5,successful=5)
+            assert_cells('Holdouts · 2/5 terminal','Gain 7 ×')
+            run['observer_summaries'][0]['status']='disabled'
+            assert_cells('Holdout disabled','Gain 7 ×')
+            winner['simulation_complete']=False
+            run['observer_summaries'][1].update(status='unavailable',successful=3,report_failed=2)
+            assert_cells('Holdout disabled','No complete Full Time Range · 5/5 terminal · 3 complete · 2 report errors')
+            run.pop('observer_summaries')
+            run['cycles'][0].update(ai_evaluated=False,score=1)
+            run['observer_selections']=[{'round':0,'status':'waiting','completed':2,'expected':99}]
+            assert_cells('Holdouts · 2/5 recorded terminal','No complete Full Time Range · 5/5 recorded terminal')
+            run.pop('observer_selections')
+            assert_cells('Holdouts · 2/5 recorded terminal','No complete Full Time Range · 5/5 recorded terminal')
+            for width in (160,420):
+                page.evaluate('(width)=>document.getElementById("sidebar").style.width=width+"px"',width)
+                assert page.locator('#sidebar').evaluate('node=>node.scrollWidth<=node.clientWidth+1')
+            for width in (700,1920):
+                page.set_viewport_size({'width':width,'height':900})
+                assert page.locator('#sidebar').evaluate('node=>node.scrollWidth<=node.clientWidth+1')
+            assert 'http://pbgui.test' + observer_asset.group(1) in requests
+            destination = page.url
+            page.locator('#pbgui-guide-btn').click()
+            page.wait_for_selector('#pbgui-shared-help-ovl.visible')
+            assert page.url == destination
+            page.locator('#pbgui-shared-help-close').click()
+            assert not errors, errors
+        finally:
+            browser.close()
+
+
+def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capability_only=False):
     """Exercise real menu navigation, dynamic settings and preserved draft inputs."""
     playwright = pytest.importorskip('playwright.sync_api')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
@@ -543,6 +785,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width, capabilit
         loops[0]['observer_jobs']=[{
             'operation':digit*32,'name':'user_evaluation_'+digit,'kind':kind,'round':number,
             'status':'complete','display_status':'complete','simulation_complete':True,'report_done':True,
+            'selected_for_full_range':True,
             'log_available':True,'metrics':{'gain':2+number,'drawdown':.3,'recovery_days':.25,'adg':.01},
             'delta_start':{'gain':number+1,'drawdown':-.1},'delta_previous':{'gain':1,'drawdown':-.1},
             'created_at':1000,'run_started_at':1010,'ended_at':1050}
@@ -1078,6 +1321,16 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width, capabilit
         assert parse_qs(urlparse(page.url).query)['loop_instructions_run']==['e'*32]
         assert not errors,errors
         browser.close()
+
+
+def test_pb8_loop_navigation_setup_polling_and_restore_mobile():
+    """Run the complete observer/compare workflow independently at mobile width."""
+    test_pb8_loop_navigation_setup_polling_and_restore(700)
+
+
+def test_pb8_loop_navigation_setup_polling_and_restore_wide():
+    """Run the complete observer/compare workflow independently at wide width."""
+    test_pb8_loop_navigation_setup_polling_and_restore(1920)
 
 
 @pytest.mark.parametrize('viewport_width', [700, 1200])

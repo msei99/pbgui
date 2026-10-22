@@ -9,10 +9,12 @@ from pathlib import Path
 import time
 import uuid
 import threading
+import codecs
 
 from ai_token_budget import _proxy_encoding
 from file_lock import advisory_file_lock
-from secure_files import atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow
+from secure_files import (atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow,
+                          read_regular_file_prefix_nofollow)
 from logging_helpers import human_log as _log
 
 SERVICE = 'PB8LoopEvidence'
@@ -394,6 +396,46 @@ class EvidenceStore:
                 return {'error': 'evidence_integrity', 'path': path, 'available': False}
         return pointer({'required': snapshot['required'], 'data': snapshot['data']}, path)
 
+    def _snapshot_header(self, path, owner):
+        """Read only identity/age fields preceding the immutable evidence body."""
+        raw = read_regular_file_prefix_nofollow(path, self.store.root)
+        text = codecs.getincrementaldecoder('utf-8')().decode(raw, final=False)
+        decoder, header, position = json.JSONDecoder(), {}, 0
+        text = text.lstrip()
+        if not text.startswith('{'):
+            raise ValueError('Invalid snapshot header')
+        position = 1
+        needed = {'id', 'owner', 'loop', 'created_at'}
+        while not needed.issubset(header):
+            while position < len(text) and text[position].isspace():
+                position += 1
+            key, position = decoder.raw_decode(text, position)
+            if not isinstance(key, str) or key in header:
+                raise ValueError('Invalid snapshot header field')
+            while position < len(text) and text[position].isspace():
+                position += 1
+            if position >= len(text) or text[position] != ':':
+                raise ValueError('Invalid snapshot header separator')
+            position += 1
+            while position < len(text) and text[position].isspace():
+                position += 1
+            value, position = decoder.raw_decode(text, position)
+            if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+                raise ValueError('Snapshot header fields must be scalar')
+            header[key] = value
+            while position < len(text) and text[position].isspace():
+                position += 1
+            if position >= len(text) or text[position] != ',':
+                raise ValueError('Incomplete snapshot header')
+            position += 1
+        from pb8_loop_store import identifier
+        if (identifier(header['id']) != path.stem or identifier(header['owner']) != owner
+                or identifier(header['loop']) != header['loop']
+                or type(header['created_at']) not in (int, float)
+                or not math.isfinite(header['created_at']) or header['created_at'] < 0):
+            raise ValueError('Snapshot header identity mismatch')
+        return header
+
     def cleanup(self, record, protected=()):
         """Expire only snapshots; shared historical originals are never garbage-collected."""
         owner = self.store.owner_dir(record['owner'])
@@ -412,10 +454,10 @@ class EvidenceStore:
             paths = []
             for path in directory.glob('*.json'):
                 try:
-                    value = json.loads(read_regular_file_nofollow(path, self.store.root))
+                    value = self._snapshot_header(path, record['owner'])
                     if value.get('loop') == record['id']:
                         paths.append((value.get('created_at', 0), path, value))
-                except (ValueError, OSError) as exc:
+                except (ValueError, OSError, RuntimeError) as exc:
                     _log(SERVICE, 'Unreadable evidence snapshot retained during cleanup', level='WARNING',
                          meta={'error_type': type(exc).__name__})
                     continue
@@ -424,6 +466,16 @@ class EvidenceStore:
                     continue
                 expired = record['status'] in {'completed', 'stopped', 'failed', 'unconfirmed'} and time.time() - _at > 14 * 86400
                 if expired or (record['status'] not in {'completed', 'stopped', 'failed', 'unconfirmed'} and index >= 20):
+                    # Full validation is necessary only for an actual deletion.
+                    # Malformed/truncated bodies remain available for recovery.
+                    try:
+                        complete = json.loads(read_regular_file_nofollow(path, self.store.root))
+                        if any(complete.get(key) != value[key] for key in ('id', 'owner', 'loop', 'created_at')):
+                            raise ValueError('Snapshot changed during cleanup')
+                    except (ValueError, OSError, RuntimeError) as exc:
+                        _log(SERVICE, 'Unreadable evidence snapshot retained during cleanup', level='WARNING',
+                             meta={'error_type': type(exc).__name__})
+                        continue
                     path.unlink()
             size = sum(path.stat().st_size for folder in (directory, owner / 'evidence') if folder.exists()
                        for path in folder.glob('*.json') if not path.is_symlink())
@@ -457,6 +509,7 @@ class EvidenceSession:
         self.charge = None
         self.dialog = -1
         self.total_calls = 0
+        self.total_budget_notices = 0
         self.start_dialog()
         self.required_pages = self.pages(snapshot['required'], '/required')
 
@@ -538,6 +591,34 @@ class EvidenceSession:
             if previous != signature:
                 raise ValueError('A tool call ID was reused with different arguments')
             return result
+        # Denying an optional read is a normal tool result, not a failed
+        # decision. Do this before charging data reads: a parallel batch of
+        # denied requests must not consume the reserved mandatory capacity.
+        if (isinstance(arguments, dict) and set(arguments) == {'path', 'offset'}
+                and isinstance(arguments['path'], str) and len(arguments['path']) <= 8192
+                and type(arguments['offset']) is int and arguments['offset'] >= 0):
+            path = arguments['path']
+            recovery = len(self.required_pages) if self.covered is None else len(self.missing())
+            optional = not (path == '/required' or path.startswith('/required/'))
+            if optional and (self.calls + 1 + recovery + 4 > 64
+                             or self.total_calls + 1 + recovery + 4 > 128):
+                self.total_budget_notices += 1
+                if self.total_budget_notices > 128:
+                    raise LoopAIPause('evidence_recovery', 'Optional evidence budget notices were repeatedly ignored')
+                missing = self.missing()
+                result = {'snapshot': self.snapshot['id'], 'sha256': self.snapshot['sha256'],
+                          'error': 'optional_evidence_budget_reserved', 'available': False,
+                          'requested_path': path, 'can_finalize': not missing,
+                          'required_reads': [{'path': '/required', 'offset': offset} for offset in missing],
+                          'accepted_reads': self.calls, 'accepted_reads_total': self.total_calls,
+                          'reserved_recovery_reads': recovery,
+                          'instruction': ('Read the listed missing /required pages, then return the complete JSON decision. '
+                                          'Do not repeat optional requests.' if missing else
+                                          'Return the complete JSON decision using the evidence already supplied/read. '
+                                          'Do not repeat optional requests; report any remaining uncertainty. '
+                                          'If compaction occurs, recover every missing /required page first.')}
+                self.cache[cache_key] = (signature, result)
+                return result
         self.calls += 1
         self.total_calls += 1
         if self.charge is not None:
@@ -549,9 +630,6 @@ class EvidenceSession:
         path, offset = arguments['path'], arguments['offset']
         if type(offset) is not int or offset < 0 or not isinstance(path, str) or len(path) > 8192:
             raise ValueError('Invalid evidence offset or pointer')
-        recovery = len(self.required_pages) if self.covered is None else len(self.missing())
-        if not (path == '/required' or path.startswith('/required/')) and self.calls + recovery + 4 > 64:
-            raise LoopAIPause('evidence_recovery', 'Optional reads would consume mandatory recovery capacity')
         if signature in self.seen:
             self.stalled += 1
         else:
