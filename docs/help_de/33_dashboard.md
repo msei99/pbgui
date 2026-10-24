@@ -201,6 +201,8 @@ Spalten: User · Symbol · Side · Size · uPnL · Entry · Price · DCA · Next
 
 Der **Manage**-Button neben dem Positions-Titel öffnet einen verschiebbaren und skalierbaren Dialog für die aktuell sichtbaren Positionen.
 
+Mit **Escape**, **✕** oder **Close** wird er geschlossen und der Tastaturfokus kehrt zu **Manage** zurück. **Tab** und **Shift+Tab** bewegen den Fokus innerhalb des aktiven Dialogs, auch bei automatisch aktualisierten Positionsfeldern. Eine Config-Vorschau wird mit **Escape** zuerst geschlossen; der Fokus kehrt zu ihrem Vorschau-Button zurück. Ein offener Guide oder Bestätigungsdialog hat Vorrang vor dem Manage-Dialog, auch in der umgebenden Dashboard-Seite. Escape aus dem eingebetteten Dialog schließt nur dieses höhere Fenster; Tab setzt den Fokus auf dessen Schließen-Steuerung. Ein Klick auf den dunklen Hintergrund schließt Dialoge bewusst nicht, entsprechend der PBGui-Vorgabe zum expliziten Schließen.
+
 Aktionen pro Zeile:
 - **Market close amount** sendet eine direkte reduce-only Market-Order für die ausgewählte Menge dieser Position.
 - **Panic symbol** speichert einen Runtime-bezogenen symbolbezogenen Forced-Mode-Override und synchronisiert die Config.
@@ -228,6 +230,7 @@ Steuerung:
 - **Timeframe-Schaltflächen** (1m 5m 15m 30m 1h 2h 4h 6h 12h 1d 1w) — Kerzenauflösung ändern.
 - **Nach links scrollen** im Chart lädt ältere historische Kerzen.
 - Die Kerzenhistorie wird alle 30 Sekunden und beim Zurückkehren zur Seite automatisch mit der Börse abgeglichen. Verpasste Abschlusswerte werden korrigiert, ohne Zoom oder nachgeladene Historie zurückzusetzen.
+- Die Anfangsansicht reserviert Platz für die tatsächliche Breite der Beschriftungen Entry und Price, mit mindestens sechs Pixeln Abstand zur rechten Kante der neuesten Kerze. Mindestens acht freie Kerzenplätze bleiben das Ziel, soweit Chartbreite und Zoom dies erlauben. Schmale Charts zeigen anfangs gegebenenfalls weniger Historie, damit die neueste Kerze lesbar bleibt. Live-Updates und Snapshots folgen der neuesten Kerze mit gleicher Zoomspanne, soweit die minimale Kerzenbreite der Chartbibliothek dies bei Größenänderungen zulässt. Manuelles Verschieben und Zoomen bleibt bei Updates, nachgeladener Historie und Vollbildwechseln erhalten, auch wenn du Kerzen bewusst unter die Beschriftungen schiebst. Das automatische Folgen beginnt erst wieder, wenn die rechte Bereichsgrenze höchstens sechs Pixel von der aktuellen Latest-Position entfernt ist. Größenänderungen passen den Rand nur beim automatischen Folgen an. Ein Wechsel von **Timeframe** beginnt eine neue angepasste Anfangsansicht.
 
 ---
 

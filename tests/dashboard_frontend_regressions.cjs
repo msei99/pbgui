@@ -21,6 +21,7 @@ class Element {
         this.tagName = tag;
         this.style = {};
         this.listeners = {};
+        this.captureListeners = {};
         this.children = [];
         this.attrs = {};
         this.className = '';
@@ -34,15 +35,35 @@ class Element {
             toggle: (name, yes) => yes ? this.classList.add(name) : this.classList.remove(name)
         };
     }
-    addEventListener(type, fn) { (this.listeners[type] ||= new Set()).add(fn); }
-    removeEventListener(type, fn) { this.listeners[type]?.delete(fn); }
-    dispatch(type, event = {}) {
-        for (const fn of [...(this.listeners[type] || [])]) {
-            fn({...event, type, currentTarget: this, preventDefault() {}, stopPropagation() {}});
-        }
+    addEventListener(type, fn, options = false) {
+        const capture = options === true || !!options.capture;
+        ((capture ? this.captureListeners : this.listeners)[type] ||= new Set()).add(fn);
     }
-    count(type) { return this.listeners[type]?.size || 0; }
+    removeEventListener(type, fn, options = false) {
+        const capture = options === true || !!options.capture;
+        (capture ? this.captureListeners : this.listeners)[type]?.delete(fn);
+    }
+    dispatch(type, event = {}) {
+        const dispatched = {...event, type, currentTarget: this, target: event.target || this,
+            defaultPrevented: !!event.defaultPrevented,
+            preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+            stopImmediatePropagation() { this.immediateStopped = true; }};
+        for (const fn of [...(this.captureListeners[type] || []), ...(this.listeners[type] || [])]) {
+            if (dispatched.immediateStopped) break;
+            fn(dispatched);
+        }
+        return dispatched;
+    }
+    count(type) { return (this.listeners[type]?.size || 0) + (this.captureListeners[type]?.size || 0); }
     appendChild(child) { this.children.push(child); child.parentElement = this; return child; }
+    get parentNode() { return this.parentElement; }
+    removeChild(child) { this.children.splice(this.children.indexOf(child), 1); child.parentElement = null; return child; }
+    contains(child) { return child === this || this.children.some(el => el.contains(child)); }
+    get ownerDocument() { return this.document || this.parentElement?.ownerDocument; }
+    focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+    click() { this.dispatch('click'); }
+    get tabIndex() { return this._tabIndex ?? (['button', 'input', 'select', 'textarea', 'a'].includes(this.tagName) ? 0 : -1); }
+    set tabIndex(value) { this._tabIndex = value; }
     set innerHTML(value) {
         this.children.forEach(child => { child.parentElement = null; });
         this.children = [];
@@ -53,7 +74,11 @@ class Element {
     getAttribute(key) { return this.attrs[key]; }
     get isConnected() { return this.connected || !!this.parentElement?.isConnected; }
     matches(selector) {
-        return selector.startsWith('.') ? this.classList.contains(selector.slice(1)) : this.tagName === selector;
+        const match = selector.match(/^([\w-]+)?(?:\[([\w-]+)(?:="([^"]*)")?\])?$/);
+        if (selector.startsWith('#')) return this.id === selector.slice(1);
+        if (match) return (!match[1] || this.tagName === match[1]) &&
+            (!match[2] || (this.attrs[match[2]] !== undefined && (match[3] === undefined || this.attrs[match[2]] === match[3])));
+        return selector.startsWith('.') && this.classList.contains(selector.slice(1));
     }
     closest(selector) {
         return selector.split(',').some(s => this.matches(s.trim())) ? this : this.parentElement?.closest(selector) || null;
@@ -65,7 +90,9 @@ class Element {
         ]);
     }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
-    getBoundingClientRect() { return {height: parseFloat(this.style.height) || 300}; }
+    getBoundingClientRect() { return {height: parseFloat(this.style.height) || 300,
+        width: parseFloat(this.style.width) || 800, left: parseFloat(this.style.left) || 0, top: parseFloat(this.style.top) || 0}; }
+    getClientRects() { return this.isConnected && !this.hidden && this.style.display !== 'none' ? [this.getBoundingClientRect()] : []; }
 }
 
 function mainContext(html = source('dashboard_main.html')) {
@@ -869,14 +896,22 @@ async function page() {
 
 async function candles() {
     const document = new Element();
-    document.createElement = tag => new Element(tag);
+    document.createElement = tag => tag === 'canvas' ? {getContext: () => ({measureText: text => ({width: text.length * 6})})} : new Element(tag);
     document.getElementById = () => new Element();
-    const timers = new Map(), requests = [], candleRows = [], volumeRows = [];
-    let timerId = 0, removed = false, fitCount = 0;
-    const visible = {from: 300, to: 900};
-    let restored;
-    const scale = {fitContent() {fitCount++;}, getVisibleRange() {return visible;},
-        setVisibleRange(range) {restored = range;}};
+    document.createTextNode = text => Object.assign(new Element(), {textContent: text});
+    const timers = new Map(), frames = new Map(), requests = [], candleRows = [], volumeRows = [];
+    const rangeListeners = new Set(), callbacks = [];
+    let timerId = 0, removed = false, fitCount = 0, rangeWrites = 0, widthReads = 0;
+    let plotWidth = 1000, resizeCallback, disconnected = false;
+    let visible = {from: 0.25, to: 2.5};
+    let restored, chartOptions;
+    const emit = () => { const range = {...visible}; callbacks.push(() => rangeListeners.forEach(fn => fn(range))); };
+    const flush = () => { while (callbacks.length) callbacks.shift()(); };
+    const scale = {logicalToCoordinate(i) {return i * plotWidth / (visible.to - visible.from + 1);}, width() {widthReads++; return plotWidth;}, options() {return {minBarSpacing: 0.5};}, fitContent() {fitCount++; visible = {from: 0, to: candleRows.length - 1}; emit();},
+        getVisibleLogicalRange() {return {...visible};},
+        setVisibleLogicalRange(range) {rangeWrites++; restored = {...range}; visible = {...range}; emit();},
+        subscribeVisibleLogicalRangeChange(fn) {rangeListeners.add(fn);},
+        unsubscribeVisibleLogicalRangeChange(fn) {rangeListeners.delete(fn);}};
     const line = {applyOptions() {}};
     const price = {setData(rows) {candleRows.splice(0, candleRows.length, ...rows);},
         update(row) {const i = candleRows.findIndex(c => c.time === row.time);
@@ -887,11 +922,19 @@ async function candles() {
             if (i < 0) volumeRows.push(row); else volumeRows[i] = row;}};
     const chart = {addCandlestickSeries() {return price;}, addHistogramSeries() {return volume;},
         timeScale() {return scale;}, priceScale() {return {applyOptions() {}};},
+        options() {return {layout: {fontSize: 12, fontFamily: 'Arial'}};},
         applyOptions() {}, remove() {removed = true;}};
-    const window = {LightweightCharts: {createChart() {return chart;}, CrosshairMode: {Normal: 0},
+    const window = {LightweightCharts: {createChart(div, options) {chartOptions = options; return chart;}, CrosshairMode: {Normal: 0},
         LineStyle: {Solid: 0, Dotted: 1, Dashed: 2}}};
     const ctx = vm.createContext({window, document, AbortController, console, encodeURIComponent,
-        requestAnimationFrame() {}, cancelAnimationFrame() {},
+        ResizeObserver: class {
+            constructor(fn) {resizeCallback = fn;}
+            observe() {}
+            disconnect() {disconnected = true;}
+        },
+        requestAnimationFrame(fn) {frames.set(++timerId, fn); return timerId;},
+        cancelAnimationFrame(id) {frames.delete(id);},
+        setInterval() {return 1;}, clearInterval() {},
         setTimeout(fn, delay) {timers.set(++timerId, {fn, delay}); return timerId;},
         clearTimeout(id) {timers.delete(id);},
         fetch(url, options) {return new Promise(resolve => requests.push({url, options, resolve}));}
@@ -901,7 +944,14 @@ async function candles() {
     const row = (t, close, vol) => ({t, o: 5, h: 6, l: 4, c: close, v: vol});
     const ctrl = window.DashRender.renderOrders(container, {
         user: 'alice', symbol: 'NEARUSDC', candles: [row(300000, 5, 10), row(600000, 5, 20)]
-    }, {apiBase: '/pbgui/api', timeframe: '5m'});
+    }, {apiBase: '/pbgui/api', timeframe: '5m', onLoadMore(t, done) {loadCount++; done();}});
+    let loadCount = 0;
+    assert.equal(chartOptions.timeScale.lockVisibleTimeRangeOnResize, true);
+    visible = {from: 0.25, to: 2.5}; emit(); flush();
+    // Early input cancels both layout passes before any snapshot or frame runs.
+    container.dispatch('wheel');
+    assert.equal(frames.size, 0);
+    assert.equal([...timers.values()].filter(t => t.delay === 200).length, 0);
     const runReconcile = delay => {
         const match = [...timers].find(([, timer]) => timer.delay === delay);
         assert.ok(match, 'automatic candle reconciliation scheduled');
@@ -912,7 +962,9 @@ async function candles() {
     assert.ok(requests[0].url.includes('timeframe=5m'));
     ctrl.updateCandle([600000, 5, 7, 4, 6, 25]);
     ctrl.updateCandle([900000, 6, 8, 5, 7, 30]);
+    const beforePrepend = {...visible};
     ctrl.prependData([row(0, 4, 3)]);
+    assert.deepEqual(visible, {from: beforePrepend.from + 1, to: beforePrepend.to + 1});
     assert.equal(candleRows.at(-1).close, 7, 'history loading must retain appended live candle');
     assert.equal(volumeRows.at(-1).value, 30, 'history loading must retain live volume');
     requests[0].resolve({ok: true, json: async () => ({candles: [row(300000, 5.2, 12), row(600000, 5.1, 21)]})});
@@ -921,8 +973,18 @@ async function candles() {
     assert.equal(volumeRows.find(c => c.time === 300).value, 12);
     assert.equal(candleRows.find(c => c.time === 600).close, 6, 'in-flight snapshot cannot undo newer WS update');
     assert.equal(candleRows[0].time, 0, 'loaded older history retained');
-    assert.deepEqual(restored, visible, 'visible range retained');
+    flush();
+    assert.deepEqual(restored, {from: 1.25, to: 3.5}, 'fractional logical range retained with latest candle still visible');
+    assert.equal(loadCount, 0, 'deferred programmatic callbacks cannot trigger history loops');
     assert.equal(fitCount, 0, 'reconciliation must not fit/reset zoom');
+    // Repeated/overlapping history and an inserted missing candle use a time anchor.
+    ctrl.prependData([row(0, 99, 3), row(150000, 4, 3)]);
+    flush();
+    assert.deepEqual(visible, {from: 2.25, to: 4.5});
+    ctrl.prependData([row(0, 99, 3), row(150000, 4, 3)]);
+    flush();
+    assert.deepEqual(visible, {from: 2.25, to: 4.5}, 'overlap cannot shift range twice');
+    assert.equal(candleRows[0].close, 4, 'history must not overwrite existing candles');
     runReconcile(30000);
     const oldRequest = requests[1];
     ctrl.setData([row(1800000, 8, 50)], '30m');
@@ -930,19 +992,370 @@ async function candles() {
     oldRequest.resolve({ok: true, json: async () => ({candles: [row(300000, 99, 999)]})});
     await tick();
     assert.deepEqual(candleRows.map(c => c.time), [1800], 'old timeframe response discarded');
+    assert.equal(visible.to, 8, 'timeframe replacement starts with eight empty slots');
+    const span = visible.to - visible.from;
+    ctrl.updateCandle([3600000, 8, 9, 7, 8.5, 60]);
+    flush();
+    assert.equal(visible.to, 9, 'latest view follows live append');
+    assert.equal(visible.to - visible.from, span);
+    // Merely seeing the last candle does not mean following it.
+    visible = {from: 0.125, to: 4.75}; emit(); flush();
+    ctrl.updateCandle([5400000, 8, 9, 7, 8.5, 60]); flush();
+    assert.deepEqual(visible, {from: 0.125, to: 4.75});
+    visible = {from: candleRows.length - 1 + 8 + 0.25 - 80, to: candleRows.length - 1 + 8 + 0.25}; emit(); flush();
+    const followSpan = visible.to - visible.from;
     runReconcile(0);
     assert.ok(requests[2].url.includes('timeframe=30m'));
+    requests[2].resolve({ok: true, json: async () => ({candles: [row(7200000, 9, 70)]})});
+    await tick(); flush();
+    assert.equal(visible.to, candleRows.length - 1 + 8, 'return within six pixels resumes following snapshots');
+    assert.equal(visible.to - visible.from, followSpan);
+    runReconcile(30000);
     ctrl.destroy();
-    assert.equal(requests[2].options.signal.aborted, true);
+    assert.equal(requests[3].options.signal.aborted, true);
+    assert.equal(rangeListeners.size, 0);
+    assert.ok(disconnected);
+    assert.equal(container.count('wheel'), 0);
+    assert.equal(frames.size, 0);
     assert.equal(document.count('visibilitychange'), 0);
     assert.ok(removed);
     assert.equal([...timers].filter(([, t]) => [0, 30000].includes(t.delay)).length, 0);
-    requests[2].resolve({ok: true, json: async () => ({candles: [row(1800000, 99, 999)]})});
+    requests[3].resolve({ok: true, json: async () => ({candles: [row(1800000, 99, 999)]})});
     await tick();
-    assert.equal(candleRows.at(-1).close, 8, 'destroyed chart ignores pending snapshot');
+    assert.equal(candleRows.at(-1).close, 9, 'destroyed chart ignores pending snapshot');
+
+    // Real buildOrders wrapper owns fullscreen timers and cancels them before destroy.
+    removed = false;
+    const built = window.DashRender.buildOrders(container, {candles: [row(300000, 5, 10)]}, {});
+    for (const [id, fn] of [...frames]) {frames.delete(id); fn();}
+    runReconcile(200); flush();
+    assert.equal(visible.to, 8, 'initial fit explicitly restores margin');
+    const fitBeforeFullscreen = fitCount;
+    document.dispatch('fullscreenchange');
+    document.dispatch('webkitfullscreenchange');
+    assert.equal([...timers.values()].filter(t => t.delay === 150).length, 1);
+    visible = {from: -0.25, to: 3.5}; emit(); flush();
+    runReconcile(150);
+    for (const [id, fn] of [...frames]) {frames.delete(id); fn();}
+    flush();
+    assert.deepEqual(visible, {from: -0.25, to: 3.5}, 'intervening gesture survives delayed fullscreen resize');
+    assert.equal(fitCount, fitBeforeFullscreen);
+    document.dispatch('fullscreenchange');
+    built.destroy();
+    assert.equal([...timers.values()].filter(t => [150, 200].includes(t.delay)).length, 0);
+    assert.equal(document.count('fullscreenchange'), 0);
+    assert.equal(document.count('webkitfullscreenchange'), 0);
+    assert.equal(rangeListeners.size, 0);
+    assert.equal(frames.size, 0);
+    // Density, public-coordinate conversion, bounded refinement and resize ownership.
+    plotWidth = 1128;
+    const denseRows = Array.from({length: 500}, (_, i) => row(i * 14400000, 81926, 10));
+    const dense = window.DashRender.renderOrders(container, {candles: denseRows,
+        position: {entry: 84183, side: 'long'}}, {timeframe: '4h'});
+    const drainFrames = () => {
+        for (let n = 0; frames.size && n < 6; n++) {
+            for (const [id, fn] of [...frames]) {frames.delete(id); fn();}
+            flush();
+        }
+        assert.equal(frames.size, 0, 'layout work is bounded');
+    };
+    let initialWrites = rangeWrites;
+    drainFrames();
+    runReconcile(200); drainFrames();
+    assert.ok(rangeWrites - initialWrites <= 3, 'at most three initial corrections including delayed timer');
+    const wide = {...visible};
+    const clearance = () => (visible.to - 499) * plotWidth / (visible.to - visible.from + 1);
+    assert.ok(clearance() >= 64, 'dense history reserves label pixels rather than just eight slots');
+    const wideSpan = wide.to - wide.from;
+    plotWidth = 668; resizeCallback(); drainFrames();
+    assert.ok(Math.abs(visible.to - visible.from - wideSpan) < 1e-8, 'following resize retains feasible zoom span');
+    assert.ok(clearance() >= 64);
+    plotWidth = 188; resizeCallback(); drainFrames();
+    assert.ok(visible.to - visible.from <= plotWidth / 0.5 - 1, 'minimum spacing limits narrow fitted history');
+    assert.ok(visible.from > 0, 'narrow chart shows less history instead of covering the latest candle');
+    assert.ok(clearance() >= 64);
+    // A tight explicit zoom can follow with fewer than eight slots; its span is retained.
+    visible = {from: 498, to: 502}; emit(); flush();
+    dense.preserveViewport(); drainFrames();
+    assert.equal(visible.to - visible.from, 4);
+    assert.ok(visible.to - 499 < 8);
+    dense.updateCandle([500 * 14400000, 81900, 82000, 81800, 81926, 10]); flush();
+    assert.equal(visible.to, 503, 'tight zoom keeps following with a feasible margin below eight');
+    // Resize work queued before a gesture must not restore the previous following view.
+    const manual = {from: 30.25, to: 100.75};
+    plotWidth = 1128; resizeCallback();
+    container.dispatch('pointerdown');
+    visible = {...manual}; emit(); flush();
+    drainFrames();
+    assert.deepEqual(visible, manual);
+    dense.prependData([row(-14400000, 81926, 10)]); flush();
+    assert.deepEqual(visible, {from: 31.25, to: 101.75});
+    dense.preserveViewport();
+    assert.equal(frames.size, 1);
+    dense.destroy();
+    assert.equal(frames.size, 0, 'destroy cancels pending layout work');
+    const readsBeforeLateResize = widthReads;
+    plotWidth = 188; resizeCallback();
+    assert.equal(widthReads, readsBeforeLateResize, 'dequeued observer callback cannot access a destroyed chart');
+    assert.equal(rangeListeners.size, 0);
+    const pendingInitial = window.DashRender.renderOrders(container, {candles: [row(0, 1, 1)]}, {});
+    assert.equal(frames.size, 1);
+    pendingInitial.destroy();
+    assert.equal(frames.size, 0);
+    assert.equal([...timers.values()].filter(t => t.delay === 200).length, 0);
 }
 
-({creation, templates, cancel, resize, charts, cards, pnl, ppl, emptyOrders, messages, assets, candles, page})[process.argv[2]]().catch(error => {
+async function manageModal() {
+    const document = new Element();
+    document.body = new Element('body');
+    document.body.document = document;
+    document.body.connected = true;
+    document.head = new Element('head');
+    document.createElement = tag => new Element(tag);
+    document.getElementById = id => document.body.querySelector('#' + id) || document.head.querySelector('#' + id);
+    const window = {innerWidth: 1280, innerHeight: 900,
+        getComputedStyle: el => ({visibility: el.style.visibility || 'visible'})};
+    const timers = new Map();
+    const requests = [];
+    let timerId = 0;
+    const ctx = vm.createContext({window, document, console, encodeURIComponent,
+        setInterval(fn) { timers.set(++timerId, fn); return timerId; },
+        clearInterval(id) { timers.delete(id); }, setTimeout() { throw Error('Unexpected timer'); },
+        fetch(url, options) {
+            const body = JSON.parse(options.body);
+            assert.equal(url, '/api/dashboard/positions/manage');
+            assert.equal(body.dry_run, true, 'only isolated preview requests are permitted');
+            return new Promise(resolve => requests.push(() => resolve({ok: true,
+                json: async () => ({dry_run: true, config: {bot: {long: {}}}})})));
+        }
+    });
+    vm.runInContext(source('dashboard_render.js'), ctx);
+    const container = document.body.appendChild(new Element());
+    const position = {user: 'test-user', symbol: 'BTCUSDT', side: 'long', size: 1,
+        upnl: 2, entry: 100, price: 102, dca: 0, next_dca: 0, next_tp: 0, pos_value: 102};
+    const build = data => window.DashRender.buildPositions(container, data, {apiBase: '/api'});
+    build({positions: [{...position}]});
+    let trigger = container.querySelector('.dp-manage-btn');
+    const current = () => document.getElementById('dp-manage-modal');
+    const key = (key, extra = {}) => document.dispatch('keydown', {key, target: document.activeElement, ...extra});
+    const button = (overlay, label) => overlay.querySelectorAll('button').find(el => el.textContent === label);
+    const open = () => { trigger.focus(); trigger.dispatch('click'); return current(); };
+    const clean = () => {
+        assert.equal(current(), null);
+        for (const type of ['keydown', 'mousemove', 'mouseup']) assert.equal(document.count(type), 0, type + ' leaked');
+        assert.equal(container._dpCloseManage, undefined);
+    };
+    for (const action of ['Escape', 'Close', 'cross']) {
+        const overlay = open();
+        const modal = overlay.querySelector('.dp-modal');
+        assert.equal(modal.getAttribute('role'), 'dialog');
+        assert.equal(modal.getAttribute('aria-modal'), 'true');
+        assert.equal(document.getElementById(modal.getAttribute('aria-labelledby')).textContent, 'Manage positions');
+        assert.equal(document.activeElement, overlay.querySelector('.dp-modal-close'));
+        overlay.dispatch('click', {target: overlay});
+        assert.equal(current(), overlay, 'backdrop is deliberately inert');
+        key('Escape', {defaultPrevented: true});
+        assert.equal(current(), overlay);
+        if (action === 'Escape') key('Escape');
+        else if (action === 'Close') button(overlay, 'Close').dispatch('click');
+        else overlay.querySelector('.dp-modal-close').dispatch('click');
+        clean();
+        assert.equal(document.activeElement, trigger);
+    }
+    let overlay = open();
+    const first = overlay.querySelector('.dp-modal-close');
+    const last = button(overlay, 'Close');
+    key('Tab', {shiftKey: true});
+    assert.equal(document.activeElement, last);
+    key('Tab');
+    assert.equal(document.activeElement, first);
+    const focusable = overlay.querySelectorAll('button, input, select, textarea').filter(el =>
+        !el.disabled && el.getClientRects().length && el.style.visibility !== 'hidden');
+    for (let i = 1; i <= focusable.length; i++) {
+        key('Tab');
+        assert.equal(document.activeElement, focusable[i % focusable.length], 'Tab skips disabled controls');
+    }
+    const amount = overlay.querySelector('.dp-manage-amount');
+    amount.focus(); amount.value = '0.125'; amount.dispatch('input');
+    build({positions: [{...position, price: 103}]});
+    assert.equal(current(), overlay);
+    assert.equal(document.activeElement, amount);
+    assert.equal(amount.value, '0.125', 'live updates preserve an amount draft');
+    first.focus();
+    const staleSelect = overlay.querySelector('select');
+    build({positions: [{...position, symbol: 'ETHUSDT'}]});
+    assert.equal(staleSelect.isConnected, false);
+    key('Tab');
+    assert.equal(document.activeElement, overlay.querySelector('select'), 'Tab discovers replacement controls');
+    key('Tab');
+    assert.equal(document.activeElement, overlay.querySelector('.dp-manage-amount'));
+
+    // Exercise real shared confirmation key handling in both registration orders.
+    key('Escape'); clean();
+    const confirmCode = source('js/pbgui_dialogs.js').match(/    document.addEventListener\('keydown', function \(event\) \{[\s\S]*?\n    \}\);/)[0];
+    for (const order of ['before', 'after']) {
+        const upper = document.body.appendChild(new Element());
+        upper.id = 'pbgui-dialog-ovl';
+        upper.className = 'visible';
+        ctx.overlay = upper;
+        ctx.currentMode = 'confirm';
+        ctx.close = () => { upper.classList.remove('visible'); trigger.focus(); };
+        if (order === 'before') vm.runInContext(confirmCode, ctx);
+        overlay = open();
+        if (order === 'after') vm.runInContext(confirmCode, ctx);
+        key('Escape');
+        assert.equal(upper.classList.contains('visible'), false);
+        assert.equal(current(), overlay, 'one Escape closes only the confirmation');
+        document.listeners.keydown.clear();
+        document.body.removeChild(upper);
+        key('Escape'); clean();
+    }
+    for (const id of ['pbgui-shared-help-ovl', 'pbgui-confirm-ovl']) {
+        const upper = document.body.appendChild(new Element());
+        upper.id = id; upper.className = 'visible';
+        // Like Guide/navigation, this older handler need not preventDefault.
+        const dismiss = () => upper.classList.remove('visible');
+        document.addEventListener('keydown', dismiss);
+        overlay = open(); key('Escape');
+        assert.equal(current(), overlay);
+        document.removeEventListener('keydown', dismiss);
+        document.body.removeChild(upper);
+        key('Escape'); clean();
+    }
+    // The real Dashboard shell owns these overlays in the parent document.
+    const parentDocument = new Element();
+    parentDocument.body = new Element('body');
+    parentDocument.body.document = parentDocument;
+    parentDocument.body.connected = true;
+    parentDocument.getElementById = id => parentDocument.body.querySelector('#' + id);
+    const parentWindow = {document: parentDocument};
+    parentWindow.parent = parentWindow;
+    window.parent = parentWindow;
+    const parentOverlays = [
+        ['pbgui-dialog-ovl', 'pbgui-dialog-close'],
+        ['pbgui-confirm-ovl', 'pbgui-confirm-cancel'],
+        ['pbgui-alert-ovl', 'pbgui-alert-close'],
+        ['pbgui-about-ovl', 'pbgui-about-close'],
+        ['pbgui-shared-help-ovl', 'pbgui-shared-help-close']
+    ].map(([id, closeId]) => {
+        const upper = parentDocument.body.appendChild(new Element());
+        upper.id = id;
+        const close = upper.appendChild(new Element('button'));
+        close.id = closeId;
+        close.addEventListener('click', () => upper.classList.remove('visible'));
+        return {upper, close};
+    });
+    for (const {upper, close} of parentOverlays) {
+        overlay = open();
+        upper.classList.add('visible');
+        key('Escape', {defaultPrevented: true});
+        assert.ok(upper.classList.contains('visible'));
+        key('Tab');
+        assert.equal(parentDocument.activeElement, close, 'Tab yields focus to the ancestor overlay');
+        overlay.querySelector('.dp-modal-close').focus();
+        key('Escape');
+        assert.equal(upper.classList.contains('visible'), false);
+        assert.equal(current(), overlay, 'ancestor Escape never closes Manage');
+        key('Escape'); clean();
+    }
+    overlay = open();
+    parentOverlays[0].upper.classList.add('visible');
+    parentOverlays[4].upper.classList.add('visible');
+    key('Escape');
+    assert.equal(parentOverlays[0].upper.classList.contains('visible'), false);
+    assert.equal(parentOverlays[4].upper.classList.contains('visible'), true, 'only one ancestor layer closes');
+    key('Escape');
+    assert.equal(current(), overlay);
+    key('Escape'); clean();
+
+    // Do not cross a browser origin boundary or let it break local dismissal.
+    window.parent = {get document() { throw Object.assign(new Error('Cross-origin'), {name: 'SecurityError'}); }};
+    open(); key('Escape'); clean();
+    window.parent = parentWindow;
+    overlay = open();
+    const previewTrigger = button(overlay, 'Preview Panic');
+    previewTrigger.focus(); previewTrigger.dispatch('click');
+    requests.shift()(); await tick();
+    const preview = document.getElementById('dp-preview-modal');
+    assert.ok(preview);
+    preview.dispatch('click'); assert.ok(preview.isConnected);
+    parentOverlays[4].upper.classList.add('visible');
+    key('Escape');
+    assert.equal(parentOverlays[4].upper.classList.contains('visible'), false);
+    assert.equal(document.getElementById('dp-preview-modal'), preview, 'ancestor dismissal also preserves the preview');
+    assert.equal(current(), overlay);
+    key('Tab', {shiftKey: true});
+    assert.equal(document.activeElement, button(preview, 'Close'));
+    key('Escape');
+    assert.equal(document.getElementById('dp-preview-modal'), null);
+    assert.equal(current(), overlay);
+    assert.equal(document.activeElement, previewTrigger);
+    key('Escape'); clean();
+
+    for (const action of ['Close', 'cross', 'replaceManage']) {
+        overlay = open();
+        const previewButton = button(overlay, 'Preview Panic');
+        previewButton.focus(); previewButton.dispatch('click');
+        requests.shift()(); await tick();
+        const child = document.getElementById('dp-preview-modal');
+        assert.equal(child.querySelector('.dp-preview-modal').getAttribute('role'), 'dialog');
+        if (action === 'Close') button(child, 'Close').dispatch('click');
+        else if (action === 'cross') child.querySelector('.dp-modal-close').dispatch('click');
+        else trigger.dispatch('click');
+        assert.equal(document.getElementById('dp-preview-modal'), null);
+        assert.equal(document.count('keydown'), 1, 'preview listeners are disposed');
+        if (action !== 'replaceManage') assert.equal(document.activeElement, previewButton);
+        key('Escape'); clean();
+    }
+
+    overlay = open();
+    const oldClose = container._dpCloseManage;
+    trigger.dispatch('click');
+    assert.notEqual(current(), overlay);
+    oldClose();
+    assert.ok(current(), 'old cleanup cannot erase the replacement');
+    assert.equal(document.count('keydown'), 1);
+    assert.equal(document.count('mousemove'), 2);
+    assert.equal(document.count('mouseup'), 2);
+    key('Escape'); clean();
+
+    overlay = open();
+    const head = overlay.querySelector('.dp-modal-head');
+    head.dispatch('mousedown', {clientX: 100, clientY: 100});
+    document.dispatch('mousemove', {clientX: 130, clientY: 140});
+    document.dispatch('mouseup');
+    const modal = overlay.querySelector('.dp-modal');
+    const left = modal.style.left;
+    overlay.querySelector('.dp-resize-se').dispatch('mousedown', {clientX: 500, clientY: 500});
+    document.dispatch('mousemove', {clientX: 520, clientY: 520});
+    document.dispatch('mouseup');
+    const width = modal.style.width;
+    build({positions: [{...position}]});
+    assert.equal(modal.style.left, left);
+    assert.equal(modal.style.width, width);
+    build(null); // The slow rebuild path must dispose the body-owned dialog.
+    clean();
+    build({positions: [{...position}]}); // Empty-to-populated rebuild.
+    trigger = container.querySelector('.dp-manage-btn');
+    overlay = open();
+    container._dpUpdate([], 'live');
+    assert.equal(current(), overlay);
+    assert.match(overlay.querySelector('tbody').children[0].children[0].textContent, /No open positions/);
+    key('Escape'); clean();
+    container._dpUpdate([{...position}], 'live');
+    overlay = open();
+    button(overlay, 'Preview Panic').dispatch('click');
+    document.body.removeChild(container);
+    const other = document.body.appendChild(new Element('button')); other.focus();
+    [...timers.values()].forEach(fn => fn());
+    clean();
+    assert.equal(document.activeElement, other, 'widget removal never steals focus');
+    requests.shift()(); await tick();
+    assert.equal(document.getElementById('dp-preview-modal'), null, 'late previews cannot resurrect a removed widget');
+    assert.equal(timers.size, 0);
+}
+
+({creation, templates, cancel, resize, charts, cards, pnl, ppl, emptyOrders, messages, assets, candles, page, manageModal})[process.argv[2]]().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

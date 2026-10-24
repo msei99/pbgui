@@ -29,6 +29,10 @@ PBAPIServer settings are stored in `pbgui.ini` under `[api_server]`:
 
 You can change host and port on the **PBAPIServer Details** page (`System → Services → PBAPIServer → Settings` tab).
 
+### VPS Monitor threshold links
+
+Open **System → PBGUI Services → PBAPIServer → Settings → VPS Monitoring**. **Server Monitor** contains server error limits; **V7 Monitor** contains instance error limits. The global **VPSMonitor alerts** dialog links each triggered metric directly to its error field. The URL retains the panel, Settings tab and field on browser reload, including mounted installations. Settings requests time out after 15 seconds and are cancelled on page exit; late responses cannot replace newer state. Loading failures remain visible in Settings and block saving. Edits made before or after a failed request survive Retry. A browser page-cache return retains the existing form and navigation, resuming interrupted loading only in the active Settings tab. Requests are cancelled on every page exit; drafts are released on final exit. Navigation and status updates preserve unsaved edits. See the VPS Monitor guide for comparisons, units and historical alerts.
+
 ## Starting and stopping
 
 - **Start**: Use the Start button on the Services overview or details page. PBAPIServer spawns as a background process.

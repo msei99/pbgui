@@ -21,7 +21,7 @@ async def resolve(request):
     sys.path.insert(0, str(pb8_dir / 'src'))
     from procedures import get_first_timestamps_unified
 
-    with tempfile.TemporaryDirectory(prefix='pbgui-vast-inception-') as directory:
+    with tempfile.TemporaryDirectory(prefix='pbgui-vast-inception-', dir=request.get('temporary_root')) as directory:
         previous = Path.cwd()
         try:
             os.chdir(directory)

@@ -1,6 +1,7 @@
 """Offline rental lifecycle and untrusted result transfer regression tests."""
 import copy
 from vast_direction_fixtures import direction_config, complete_direction
+from vast_integrity_fixtures import freeze_test_proof
 import io
 import json
 import shutil
@@ -627,6 +628,7 @@ def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch)
         "optimize": {"iters": 20_000, "n_cpus": 4},
     })
 
+    freeze_test_proof(store, source['id'])
     row = store.clone_prepared(source["id"], "same", "same-hash", tmp_path / "new-results",
                                20_000, 4, False)
 
@@ -684,6 +686,7 @@ def test_create_calibration_reuses_frozen_input_without_mutating_source(tmp_path
             'sample_seconds': 300, 'allow_32768': False,
         })
     from vast_calibration import configurable_calibration_plan
+    freeze_test_proof(store, source['id'])
     plan = configurable_calibration_plan(5632, 512, 7168, .05, 300, 3600)
     row = store.create_calibration(source['id'], plan)
     target = store.directory(row['id'])

@@ -2202,6 +2202,7 @@ def main():
     capability = ProcessCapabilityHeartbeat(Path(run.pbgdir), "PBRun")
     capability.__enter__()
     stop_requested = threading.Event()
+    coindata_controller = None
 
     def request_stop(_signum, _frame):
         stop_requested.set()
@@ -2215,6 +2216,8 @@ def main():
             run.watch_v7()
         if run.pb8_ready:
             run.watch_v8()
+        from pbcoindata_controller import LegacyController
+        coindata_controller = LegacyController(run.pbgdir)
         maintenance_count = 0
         next_maintenance = 0.0
         while not stop_requested.is_set():
@@ -2236,6 +2239,7 @@ def main():
                     else:
                         v8_reconciled = run.has_v8_runtime_changed()
                 if now >= next_maintenance:
+                    coindata_controller.reconcile(run.coindata.cmc_pool_ready)
                     run.watch_memory()
                     next_maintenance = now + 5
                     for run_v7 in run.run_v7:
@@ -2252,6 +2256,8 @@ def main():
                 _log(SERVICE, f"Something went wrong, but continue {e}", level="ERROR")
                 _log(SERVICE, "PBRun.main loop traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
     finally:
+        if coindata_controller is not None:
+            coindata_controller.close()
         capability.__exit__(None, None, None)
         if run.pidfile.exists() and run.pidfile.read_text(encoding="utf-8").strip() == str(os.getpid()):
             run.pidfile.unlink(missing_ok=True)

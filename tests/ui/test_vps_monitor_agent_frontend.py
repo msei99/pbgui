@@ -14,6 +14,48 @@ EN_GUIDE = ROOT / "docs" / "help" / "29_vps_monitor.md"
 DE_GUIDE = ROOT / "docs" / "help_de" / "29_vps_monitor.md"
 
 
+def test_coindata_lifecycle_displays_actual_state_and_manual_actions() -> None:
+    """Render real service cards for idle, unknown, legacy and failed-stop states."""
+    source = HTML_PATH.read_text(encoding="utf-8")
+    renderer = _extract_function(source, "renderServices")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const container = {{innerHTML: ''}};
+        const document = {{getElementById: () => container}};
+        function esc(value) {{ return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }}
+        const escAttr = esc;
+        const svcCompactToggled = {{test: true}};
+        const compactMode = true;
+        function renderServiceRestartButton(host, service) {{ return '<button>Restart</button>'; }}
+        const state = {{connections: {{connections: {{test: {{status:'connected'}}}}}}, services: {{test: {{}}}}}};
+        {renderer}
+        const base = {{status:'idle', expected:false, pid:null, reason:'No running Dynamic Ignore consumers', pbcoindata_lifecycle:{{policy_version:1}}}};
+        state.services.test.PBCoinData = base;
+        renderServices();
+        assert.match(container.innerHTML, />idle</);
+        assert.doesNotMatch(container.innerHTML, /skipped/);
+        assert.match(container.innerHTML, /No running Dynamic Ignore consumers/);
+        assert.ok(container.innerHTML.includes('<button>Restart</button>'));
+        assert.doesNotMatch(container.innerHTML, /svc-host-body collapsed/);
+        state.services.test.PBCoinData = {{...base, status:'stopped', expected:null, reason:'Consumer status unknown', error:'State unavailable'}};
+        renderServices();
+        assert.match(container.innerHTML, />stopped</);
+        assert.match(container.innerHTML, /Consumer status unknown/);
+        assert.match(container.innerHTML, /State unavailable/);
+        state.services.test.PBCoinData = {{...base, status:'running', pid:99, manager:'legacy', stop_error:'Stop unconfirmed <unsafe>'}};
+        renderServices();
+        assert.ok(container.innerHTML.includes('running (PID: 99)'));
+        assert.match(container.innerHTML, /Stop unconfirmed &lt;unsafe&gt;/);
+        assert.doesNotMatch(container.innerHTML, /<unsafe>/);
+        assert.doesNotMatch(container.innerHTML, /skipped/);
+        assert.equal(svcCompactToggled.test, true);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
 def _extract_function(source: str, name: str) -> str:
     """Extract one named JavaScript function with balanced braces."""
     marker = f"function {name}("

@@ -163,6 +163,35 @@ def test_legacy_hip3_row_aliases(isolated, monkeypatch, real_coindata):
     assert md.get_local_market_data_coin_snapshot("hyperliquid").coin_options == ["xyz:TSLA"]
 
 
+@pytest.mark.parametrize("exchange,symbol", [("bybit", "BTCUSDT"), ("kucoin", "XBTUSDTM"),
+                                           ("okx", "BTC-USDT-SWAP"), ("bitget", "BTCUSDT")])
+def test_empty_coin_snapshot_prefers_native_symbol_outside_hyperliquid(isolated, monkeypatch, real_coindata, exchange, symbol):
+    """A CCXT display symbol must not replace the native fallback of standard exchanges."""
+    monkeypatch.setattr(md, "compute_coin_name", real_coindata.compute_coin_name)
+    write_mapping(isolated, exchange, [row("", symbol=symbol, ccxt_symbol="BTC/USDT:USDT")])
+    assert md.get_local_market_data_coin_snapshot(exchange).coin_options == ["BTC"]
+    if exchange != "kucoin":  # KuCoin has local snapshots, but no Market Data settings page.
+        assert api.get_market_data_settings(exchange, None)["coin_options"] == ["BTC"]
+
+
+@pytest.mark.parametrize("empty_coin", [False, True])
+def test_snapshot_includes_all_active_hip3_dexes(isolated, monkeypatch, real_coindata, empty_coin):
+    """The local picker uses complete tickers and explicit rows without live resolution."""
+    monkeypatch.setattr(md, "normalize_symbol", real_coindata.normalize_symbol)
+    monkeypatch.setattr(md, "CoinData", forbidden)
+    monkeypatch.setattr("hyperliquid_api.resolve_hyperliquid_coin_name", forbidden)
+    rows = [row("" if empty_coin else f"{dex.upper()}-FOOUSD", quote="USDC", is_hip3=True, dex=dex,
+                symbol=str(i), ccxt_symbol=f"{dex.upper()}-FOOUSD/USDC:USDC", open_interest=100)
+            for i, dex in enumerate(["xyz", "para", "mkts", "flx", "newdex"])]
+    write_mapping(isolated, "hyperliquid", rows)
+    expected = ["flx:FOOUSD", "mkts:FOOUSD", "newdex:FOOUSD", "para:FOOUSD", "xyz:FOOUSD"]
+    assert md.get_local_market_data_coin_snapshot("hyperliquid").coin_options == expected
+    assert api.get_market_data_settings("hyperliquid", None)["coin_options"] == expected
+    rows[1]["active"] = False
+    write_mapping(isolated, "hyperliquid", rows)
+    assert "para:FOOUSD" not in md.get_local_market_data_coin_snapshot("hyperliquid").coin_options
+
+
 def test_missing_empty_invalid_and_atomic_replacement(isolated):
     """Every on-disk generation is visible immediately, including delete/recreate."""
     root = isolated

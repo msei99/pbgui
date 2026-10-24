@@ -98,10 +98,10 @@ def _read_json(path: Path) -> dict | list | None:
 
 def _norm_coin(c: str) -> str:
     """Normalize spelling only; market aliases must come from the mapping."""
+    from PBCoinData import _normalize_hyperliquid_hip3_alias
+
     u = c.strip().upper()
-    if u.startswith("XYZ:") and len(u) > 4:
-        return "XYZ-" + u[4:]
-    return u
+    return _normalize_hyperliquid_hip3_alias(u) or u
 
 
 def _load_mapping(exchange: str) -> list[dict]:
@@ -229,7 +229,7 @@ def _apply_dynamic_ignore(config: dict, exchange: str, available_coins: set[str]
 
 def _calculate(config: dict, exchange: str) -> dict:
     """Run the balance calculation and return results."""
-    from PBCoinData import compute_coin_name
+    from PBCoinData import compute_coin_name, _normalize_hyperliquid_hip3_alias
 
     bot_params = _extract_bot_params(config)
     mapping = _load_mapping(exchange)
@@ -244,8 +244,6 @@ def _calculate(config: dict, exchange: str) -> dict:
         if str(record.get("quote") or "").upper() != preferred_quote:
             return False
         if exchange == "hyperliquid":
-            if bool(record.get("is_hip3", False)) and str(record.get("dex") or "").strip().lower() != "xyz":
-                return False
             try:
                 open_interest = float(record.get("open_interest")) if record.get("open_interest") is not None else None
             except (TypeError, ValueError):
@@ -261,7 +259,11 @@ def _calculate(config: dict, exchange: str) -> dict:
         if not isinstance(record, dict) or not eligible(record):
             continue
         quote = str(record.get("quote") or "").upper()
-        raw_coin = str(record.get("coin") or compute_coin_name(str(record.get("symbol") or ""), quote))
+        if exchange == "hyperliquid" and record.get("is_hip3"):
+            raw_coin = _normalize_hyperliquid_hip3_alias(
+                record.get("coin") or record.get("ccxt_symbol") or record.get("symbol"), record)
+        else:
+            raw_coin = str(record.get("coin") or compute_coin_name(str(record.get("symbol") or ""), quote))
         coin = _norm_coin(raw_coin)
         if not coin:
             continue
@@ -280,7 +282,12 @@ def _calculate(config: dict, exchange: str) -> dict:
         if not math.isfinite(min_order_price) or min_order_price <= 0:
             continue
 
-        for alias in (coin + quote, record.get("symbol"), record.get("base"), record.get("ccxt_symbol")):
+        hip3_colon = coin.replace("-", ":", 1) if exchange == "hyperliquid" and record.get("is_hip3") else None
+        hip3_aliases = []
+        if hip3_colon:
+            hip3_aliases = [base + suffix for base in (coin, hip3_colon)
+                            for suffix in ("", f"/{quote}:{quote}", f"_{quote}:{quote}")]
+        for alias in (coin + quote, *hip3_aliases, record.get("symbol"), record.get("base"), record.get("ccxt_symbol")):
             if isinstance(alias, str) and alias.strip():
                 alias_targets.setdefault(_norm_coin(alias), set()).add(coin)
 

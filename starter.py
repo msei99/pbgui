@@ -95,8 +95,7 @@ def _legacy_action(service: str, action: str) -> None:
             PBCluster().run()
         elif service == 'PBCoinData':
             print('Restart PBCoinData')
-            CoinData().stop()
-            CoinData().run()
+            CoinData().restart()
 
 
 def main():
@@ -106,9 +105,20 @@ def main():
     group.add_argument('-s', '--start', action='store_true', help='Start')
     group.add_argument('-k', '--stop', action='store_true', help='Stop')
     group.add_argument('-r', '--restart', action='store_true', help='Restart')
+    group.add_argument('--confirm-coindata-guard-transition', action='store_true',
+                       help='Attest completed legacy cleanup/clean boot, updated autostarts and restarted controllers; performs none of these actions')
+    parser.add_argument('--transition-basis', choices=['legacy-cleanup', 'clean-boot'])
     parser.add_argument('command', choices=STARTER_COMMANDS, nargs='+')
 
     args = parser.parse_args()
+    if args.confirm_coindata_guard_transition:
+        if args.command != ['PBCoinData'] or not args.transition_basis:
+            parser.error('Transition confirmation requires PBCoinData only and --transition-basis')
+        from pbcoindata_process import confirm_guard_transition
+        confirm_guard_transition(Path.cwd(), args.transition_basis)
+        return
+    if args.transition_basis:
+        parser.error('--transition-basis requires --confirm-coindata-guard-transition')
     action = 'start' if args.start else 'stop' if args.stop else 'restart'
     failed = False
 
@@ -116,12 +126,33 @@ def main():
         if service == 'PBRemote':
             print('Skip removed legacy PBRemote service')
             continue
-        handled, ok = _systemd_action(service, action)
-        if handled:
-            if not ok:
+        if service == 'PBCoinData':
+            from pbcoindata_process import actions, manual_action, restart_phase, restart_preflight, start, stop, systemd_action
+            try:
+                with actions(Path.cwd(), action):
+                    if action == 'restart':
+                        restart_preflight(Path.cwd())
+                    for requested in (('stop', 'start') if action == 'restart' else (action,)):
+                        with restart_phase(Path.cwd(), action, requested), manual_action(Path.cwd(), requested) as authorization:
+                            if authorization.route == 'systemd':
+                                def invoke(command):
+                                    """Retain the Starter's twenty-second command bound."""
+                                    handled, ok = _systemd_action(service, command)
+                                    return {} if handled and ok else None
+                                systemd_action(Path.cwd(), requested, authorization, invoke)
+                            elif requested == 'start':
+                                start(Path.cwd(), authorization=authorization)
+                            else:
+                                stop(Path.cwd(), authorization=authorization)
+            except Exception as exc:
                 failed = True
-            continue
-        _legacy_action(service, action)
+                print(f'PBCoinData {action} failed: {exc}', file=sys.stderr)
+        else:
+            handled, ok = _systemd_action(service, action)
+            if handled:
+                failed = failed or not ok
+            else:
+                _legacy_action(service, action)
 
     if failed:
         sys.exit(1)

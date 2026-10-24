@@ -30,6 +30,8 @@ from master.cluster_state import (
     read_local_identity,
 )
 import pbgui_purefunc
+from pbcoindata_lifecycle import IDLE, lifecycle_decision
+from service_lifecycle_lock import acquire_service_lifecycle_lock, ServiceLifecycleBusyError
 
 
 SERVICE = "PBMonitorAgent"
@@ -281,7 +283,7 @@ def _service_expected(service_name: str) -> bool | None:
     """Return whether this host should run one PBGui service."""
 
     if service_name == "PBCoinData":
-        return _local_credential_capability()["credential_active"]
+        return _pbcoindata_lifecycle()["expected"]
     cfg = _read_ini()
     pbname = _local_pbname(cfg)
     if service_name == "PBCluster":
@@ -301,6 +303,25 @@ def _auto_heal_enabled() -> bool:
     cfg = _read_ini()
     raw = str(cfg.get("vps_monitor", "auto_restart", fallback="true") or "true").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _coindata_recovery_metadata() -> dict[str, Any]:
+    """Publish one consistent, freshly verified recovery owner in every collector."""
+    from pbcoindata_controller import controller_metadata
+    from pbcoindata_process import inspect_pid
+    recovery = controller_metadata(PBGDIR)
+    if recovery["controller"] == "none":
+        recovery["controller"] = "monitor-agent"
+        if inspect_pid(PBGDIR, os.getpid(), script="monitor_agent.py")["status"] == "running" and _auto_heal_enabled():
+            recovery.update(recovery_ready=True, recovery_reason="Verified local monitor-agent fallback")
+    return recovery
+
+
+def _pbcoindata_lifecycle() -> dict[str, Any]:
+    """Evaluate current local consumers and local credential readiness together."""
+    decision = lifecycle_decision(PBGDIR, _local_credential_capability().get("credential_active"), config=_read_ini())
+    decision.update(_coindata_recovery_metadata())
+    return decision
 
 
 def _embedded_monitor_script(name: str) -> str:
@@ -495,7 +516,11 @@ def _run_host_meta() -> None:
     except OSError:
         cron_signature = None
     now = time.monotonic()
+    local_credentials = _local_credential_capability()
+    local_lifecycle = lifecycle_decision(PBGDIR, local_credentials.get("credential_active"), config=_read_ini())
+    local_lifecycle.update(_coindata_recovery_metadata())
     extra_env: dict[str, str] = {'PBGUI_SKIP_CREDENTIAL_METADATA': '1'}
+    extra_env['PBGUI_PBCOINDATA_LIFECYCLE'] = json.dumps(local_lifecycle)
     extra_env['PBGUI_CACHED_SOFTWARE_PROBES'] = json.dumps(_SOFTWARE_PROBE_CACHE)
     if (_LEGACY_CRON_CACHE is not None and cron_signature is not None
             and _LEGACY_CRON_CACHE[0] == cron_signature
@@ -523,7 +548,8 @@ def _run_host_meta() -> None:
             _LEGACY_CRON_CACHE = (cron_signature, time.monotonic(), cron_count)
     now = time.time()
     payload.pop("coinmarketcap" + "_api_key", None)
-    payload.update(_local_credential_capability())
+    payload.update(local_credentials)
+    payload["pbcoindata_lifecycle"] = local_lifecycle
     payload["schema_version"] = SCHEMA_VERSION
     payload["generated_at"] = now
     payload["source"] = "monitor-agent"
@@ -567,14 +593,15 @@ def _disabled_service_status(service_name: str) -> dict[str, Any]:
     }
 
 
-def _restart_allowed(service_name: str, now: float | None = None) -> tuple[bool, str]:
+def _restart_allowed(service_name: str, now: float | None = None, *, read_only: bool = False) -> tuple[bool, str]:
     """Return whether the monitor agent may restart a service now."""
 
     if service_name == "PBMonitorAgent":
         return False, "PBMonitorAgent is supervised by systemd"
     now = float(now or time.time())
     history = [ts for ts in _SERVICE_RESTART_HISTORY.get(service_name, []) if now - ts < 3600.0]
-    _SERVICE_RESTART_HISTORY[service_name] = history
+    if not read_only:
+        _SERVICE_RESTART_HISTORY[service_name] = history
     if history and now - history[-1] < SERVICE_RESTART_COOLDOWN_SECONDS:
         return False, "restart cooldown active"
     if len(history) >= SERVICE_RESTART_MAX_PER_HOUR:
@@ -607,7 +634,7 @@ def _restart_systemd_service(service_name: str, unit: str) -> tuple[bool, str]:
     return True, ""
 
 
-def _systemd_service_status(unit: str) -> dict[str, Any] | None:
+def _systemd_service_status(unit: str, *, timeout: float = 10) -> dict[str, Any] | None:
     """Return systemd status for one user service unit."""
 
     try:
@@ -621,7 +648,7 @@ def _systemd_service_status(unit: str) -> dict[str, Any] | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=10,
+            timeout=timeout,
             env=_systemd_user_env(),
         )
     except Exception:
@@ -657,6 +684,9 @@ def _systemd_service_status(unit: str) -> dict[str, Any] | None:
         "was_restarted": False,
         "manager": "systemd",
         "unit": unit,
+        "systemd_state": active,
+        "systemd_substate": sub,
+        "main_pid": int_prop("MainPID"),
     }
 
 
@@ -689,6 +719,8 @@ def _service_status(unit: str, pid_file: str, process_match: str) -> dict[str, A
     systemd_status = _systemd_service_status(unit)
     legacy_status = _pid_file_service_status(pid_file, process_match)
     if legacy_status.get("status") == "running":
+        if systemd_status is not None and legacy_status.get("pid") == systemd_status.get("pid"):
+            return systemd_status
         if systemd_status is not None:
             legacy_status = dict(legacy_status)
             legacy_status["manager"] = "legacy"
@@ -697,6 +729,144 @@ def _service_status(unit: str, pid_file: str, process_match: str) -> dict[str, A
     if systemd_status is not None:
         return systemd_status
     return legacy_status
+
+
+def _owned_coindata_process(pid: int) -> bool:
+    """Verify the unit's main PID runs this checkout's exact PBCoinData script."""
+    import psutil
+
+    try:
+        process = psutil.Process(pid)
+        argv = process.cmdline()
+        cwd = Path(process.cwd())
+        script = (PBGDIR / "PBCoinData.py").resolve()
+        if not argv or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(argv[0]).name):
+            return False
+        arguments = argv[1:]
+        if arguments[:1] == ["-u"]:
+            arguments = arguments[1:]
+        if not arguments or not isinstance(arguments[0], str):
+            return False
+        argument = Path(arguments[0])
+        return (argument if argument.is_absolute() else cwd / argument).resolve() == script
+    except Exception as exc:
+        _log(SERVICE, f"PBCoinData ownership unavailable: {type(exc).__name__}", level="WARNING")
+        return False
+
+
+def _reconcile_coindata() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Recheck demand and ownership under bounded lifecycle locks before acting."""
+    unit, pid_file, process_match = PBGUI_SERVICES["PBCoinData"]
+    decision = _pbcoindata_lifecycle()
+    status = _service_status(unit, pid_file, process_match)
+    if status.get("manager") != "systemd":
+        from pbcoindata_controller import agent_fallback, controller_metadata
+        import pbcoindata_process as processes
+        manager = processes.manager_state(PBGDIR)
+        if manager["manager"] == "legacy":
+            result = agent_fallback(PBGDIR, lambda: _local_credential_capability().get("credential_active"))
+            if result is not None:
+                decision, exact = result
+            else:
+                exact = processes.snapshot(PBGDIR)
+                decision.update(controller_metadata(PBGDIR))
+            status = {**exact, "manager": "legacy", "was_restarted": False}
+            status.pop("identity", None)
+            if status["status"] == "foreign":
+                status["status"] = "unknown"
+            decision["reason"] += "; " + decision.get("recovery_reason", "Recovery controller unconfirmed")
+        else:
+            decision.update(recovery_ready=False, recovery_reason=manager["reason"])
+            decision["reason"] += "; " + manager["reason"]
+        return decision, status
+    if not _auto_heal_enabled() or decision["expected"] is None:
+        return decision, status
+    leases = []
+    deadline = time.monotonic() + 5.0
+    try:
+        for service in ("all-services", "pbcoindata"):
+            leases.append(acquire_service_lifecycle_lock(
+                PBGDIR, service, "auto-reconcile", timeout=max(0.0, deadline - time.monotonic()),
+            ))
+        decision = _pbcoindata_lifecycle()
+        status = _service_status(unit, pid_file, process_match)
+        if not _auto_heal_enabled() or decision["expected"] is None:
+            return decision, status
+        if decision["role"] == "slave" and decision["demand"] == IDLE:
+            if (status.get("manager") == "systemd" and status.get("status") == "running"
+                    and type(status.get("pid")) is int and status["pid"] > 0
+                    and status.get("main_pid") == status.get("pid") and _owned_coindata_process(status["pid"])):
+                import pbcoindata_process as processes
+                exact = processes.inspect_pid(PBGDIR, status["pid"])
+                preflight = processes.unload_preflight(
+                    PBGDIR, decision, exact, manager="systemd",
+                    recovery={"recovery_ready": True, "controller": "systemd"},
+                    restart_check=lambda: _restart_allowed("PBCoinData", read_only=True))
+                if not preflight["allowed"]:
+                    decision["reason"] += "; " + preflight["reason"]
+                    status["lifecycle_error"] = preflight["reason"]
+                    return decision, status
+                stop_error = None
+                try:
+                    result = subprocess.run(
+                        ["systemctl", "--user", "stop", unit], stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True, timeout=40, env=_systemd_user_env(),
+                    )
+                    if result.returncode:
+                        stop_error = f"systemctl stop exited {result.returncode}"
+                except Exception as exc:
+                    stop_error = f"systemctl stop unconfirmed: {type(exc).__name__}"
+                # One bounded read, not a chain of ten-second status probes. A
+                # timed-out client may have left a systemd job in progress.
+                post_deadline = time.monotonic() + 5.0
+                legacy = _pid_file_service_status(pid_file, process_match)
+                remaining = post_deadline - time.monotonic()
+                actual = _systemd_service_status(unit, timeout=remaining) if remaining > 0 else None
+                status = actual or {"status": "unknown", "pid": None, "error": "Stop state unavailable", "was_restarted": False, "manager": "systemd", "unit": unit}
+                if legacy.get("status") == "running" and (actual is None or legacy.get("pid") != actual.get("pid")):
+                    status = dict(legacy, manager="legacy", unit=unit)
+                if stop_error:
+                    status["stop_error"] = stop_error
+                    _log(SERVICE, stop_error, level="WARNING")
+        elif (decision["expected"] is True and status.get("status") == "stopped"
+                and status.get("manager") == "systemd"
+                and status.get("systemd_state") in {"inactive", "failed"}):
+            if decision["role"] == "slave":
+                import pbcoindata_process as processes
+                try:
+                    processes.ownership_conflicts(PBGDIR, processes.snapshot(PBGDIR))
+                except (processes.ProcessStateError, OSError, ValueError) as exc:
+                    status["lifecycle_error"] = str(exc)
+                    decision["reason"] += "; " + str(exc)
+                    return decision, status
+            restarted, error = _restart_systemd_service("PBCoinData", unit)
+            status.update(was_restarted=restarted, restart_error=error or None)
+            if restarted:
+                status.update(status="restarting", error=None)
+        return decision, status
+    except ServiceLifecycleBusyError:
+        status["lifecycle_error"] = "Another service lifecycle action is running; observing only"
+        return decision, status
+    finally:
+        for lease in reversed(leases):
+            lease.release()
+
+
+def _coindata_status() -> dict[str, Any]:
+    """Report actual state separately from intentional idle demand."""
+    decision, status = _reconcile_coindata()
+    status = dict(status)
+    if decision["role"] == "slave" and decision["demand"] == IDLE:
+        if (status.get("manager") == "systemd" and status.get("systemd_state") == "inactive"
+                and not status.get("main_pid") and not status.get("stop_error")):
+            status.update(status="idle", error=None)
+        elif (status.get("manager") == "legacy" and status.get("status") == "stopped"
+              and decision.get("recovery_ready")):
+            status.update(status="idle", error=None)
+    elif decision["expected"] is False and status.get("status") == "stopped":
+        status.update(status="disabled", error=None)
+    status.update(expected=decision["expected"], reason=decision["reason"], pbcoindata_lifecycle=decision)
+    return status
 
 
 def _run_service_status() -> None:
@@ -710,6 +880,9 @@ def _run_service_status() -> None:
     }
     heal_enabled = _auto_heal_enabled()
     for service_name, (unit, pid_file, process_match) in PBGUI_SERVICES.items():
+        if service_name == "PBCoinData":
+            payload["services"][service_name] = _coindata_status()
+            continue
         expected = _service_expected(service_name)
         if expected is False:
             payload["services"][service_name] = _disabled_service_status(service_name)

@@ -17,7 +17,7 @@ from logging_helpers import human_log
 from file_lock import advisory_file_lock
 from market_data_sources import get_source_minutes_for_range
 from market_symbol_mapping import disambiguate_multiplier_market_coins
-from PBCoinData import CoinData, compute_coin_name, get_symbol_for_coin, normalize_symbol
+from PBCoinData import CoinData, compute_coin_name, get_symbol_for_coin, normalize_symbol, get_hyperliquid_hip3_alias
 import pbgui_purefunc
 from pbgui_purefunc import load_symbols_from_ini
 from secure_files import atomic_write_private_text, ensure_private_directory, secure_private_file
@@ -182,7 +182,7 @@ def _get_hyperliquid_ccxt_symbol_for_market_id(market_id: str) -> str:
         return ""
 
 
-def normalize_market_data_coin_dir(exchange: str, coin: str) -> str:
+def normalize_market_data_coin_dir(exchange: str, coin: str, *, mapping: list[dict] | None = None) -> str:
     ex = str(exchange or "").strip().lower()
     raw = str(coin or "").strip()
     if not raw:
@@ -190,17 +190,9 @@ def normalize_market_data_coin_dir(exchange: str, coin: str) -> str:
     if ex != "hyperliquid":
         return raw.upper()
 
-    raw_base = str(raw).split("/")[0].strip()
-    raw_base_l = raw_base.lower()
-    if raw_base_l.startswith("xyz:") or raw_base_l.startswith("xyz-"):
-        tail = raw_base[4:].strip()
-        tail_u = tail.upper()
-        for suffix in ("_USDC:USDC", "_USDT:USDT", "_USDC_USDC", "_USDT_USDT"):
-            if tail_u.endswith(suffix):
-                tail = tail[: -len(suffix)]
-                break
-        tail = str(tail).strip(" _:-")
-        return f"XYZ-{tail.upper()}_USDC:USDC" if tail else ""
+    hip3 = get_hyperliquid_hip3_alias(raw, mapping)
+    if hip3:
+        return f"{hip3}_USDC:USDC"
 
     sym = raw
     if str(raw).strip().isdigit():
@@ -312,16 +304,16 @@ def _normalize_market_data_exchange(exchange: str) -> str:
     return ex
 
 
-def _canonical_enabled_coin(exchange: str, coin: str) -> str:
+def _canonical_enabled_coin(exchange: str, coin: str, *, mapping: list[dict] | None = None) -> str:
     ex = _normalize_market_data_exchange(exchange)
     s = str(coin or "").strip()
     if not s:
         return ""
     if ex == "hyperliquid":
-        lower = s.lower()
-        if lower.startswith("xyz:") or lower.startswith("xyz-"):
-            tail = s[4:].strip().upper()
-            return f"xyz:{tail}" if tail else ""
+        hip3 = get_hyperliquid_hip3_alias(s, mapping)
+        if hip3:
+            dex, ticker = hip3.split("-", 1)
+            return f"{dex.lower()}:{ticker}"
     return s.upper()
 
 
@@ -453,8 +445,6 @@ def _local_mapping_coin_options(exchange: str, mapping: list[dict]) -> list[str]
         if exchange in {"okx", "bitget", "kucoin"} and quote != "USDT":
             continue
         if exchange == "hyperliquid":
-            if bool(row.get("is_hip3", False)) and str(row.get("dex") or "").strip().lower() != "xyz":
-                continue
             try:
                 open_interest = float(row["open_interest"])
             except (KeyError, TypeError, ValueError):
@@ -463,9 +453,13 @@ def _local_mapping_coin_options(exchange: str, mapping: list[dict]) -> list[str]
                 continue
         coin = str(row.get("coin") or "").strip()
         if not coin:
-            symbol = str(row.get("symbol") or row.get("ccxt_symbol") or "")
-            coin = normalize_symbol(symbol) if exchange == "hyperliquid" else compute_coin_name(symbol, quote)
-        coin = _canonical_enabled_coin(exchange, coin)
+            if exchange == "hyperliquid":
+                symbol = str(row.get("ccxt_symbol") or row.get("symbol") or "")
+                coin = normalize_symbol(symbol, mapping_record=row if row.get("is_hip3") else None)
+            else:
+                symbol = str(row.get("symbol") or row.get("ccxt_symbol") or "")
+                coin = compute_coin_name(symbol, quote)
+        coin = _canonical_enabled_coin(exchange, coin, mapping=[row])
         if coin:
             coins.add(coin)
     return sorted(coins)

@@ -1,0 +1,163 @@
+@simulation_data_scope
+async def prepare_hlcvs(
+    config: dict,
+    exchange: str,
+    *,
+    force_refetch_gaps: bool = False,
+    skip_v2_local: bool = False,
+):
+    if _has_explicit_ohlcv_source_dir(config):
+        skip_v2_local = True
+    if not skip_v2_local:
+        try:
+            local_v2 = await try_prepare_hlcvs_v2_local(
+                config, exchange, force_refetch_gaps=force_refetch_gaps
+            )
+        except Exception as e:
+            raise ValueError(f"{exchange} deterministic HLCV materialization failed: {e}") from e
+        if local_v2 is not None:
+            return local_v2
+        logging.info("[%s] local v2 HLCV preparation unavailable; using direct fetch path", exchange)
+
+    coins = effective_backtest_data_coins(config)
+    orig_coins = list(coins)
+    exchange = to_ccxt_exchange_id(exchange)
+    requested_start_date = require_config_value(config, "backtest.start_date")
+    requested_start_ts = int(date_to_ts(requested_start_date))
+    end_date = format_end_date(require_config_value(config, "backtest.end_date"))
+    end_ts = int(date_to_ts(end_date))
+
+    warmup_minutes = compute_backtest_warmup_minutes(config)
+    minute_ms = 60_000
+    warmup_ms = warmup_minutes * minute_ms
+    effective_start_ts = max(0, requested_start_ts - warmup_ms)
+    effective_start_ts = (effective_start_ts // minute_ms) * minute_ms
+    effective_start_date = ts_to_date(effective_start_ts)
+
+    if warmup_minutes > 0:
+        logging.info(
+            f"{exchange} applying warmup: {warmup_minutes} minutes -> fetch start {effective_start_date}, "
+            f"requested start {requested_start_date}"
+        )
+
+    om = HLCVManager(
+        exchange,
+        effective_start_date,
+        end_date,
+        gap_tolerance_ohlcvs_minutes=require_config_value(
+            config, "backtest.gap_tolerance_ohlcvs_minutes"
+        ),
+        cm_debug_level=int(config.get("backtest", {}).get("cm_debug_level", 0) or 0),
+        cm_progress_log_interval_seconds=float(
+            config.get("backtest", {}).get("cm_progress_log_interval_seconds", 10.0) or 10.0
+        ),
+        force_refetch_gaps=force_refetch_gaps,
+        ohlcv_source_dir=config.get("backtest", {}).get("ohlcv_source_dir"),
+    )
+
+    try:
+        mss, timestamps, prepared_hlcvs = await prepare_hlcvs_internal(
+            config,
+            coins,
+            exchange,
+            effective_start_ts,
+            requested_start_ts,
+            end_ts,
+            om,
+        )
+
+        om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
+        btc_df = await _try_direct_btc_candidate(om)
+        btc_source_exchange = exchange
+
+        if btc_df.empty and exchange != "binanceusdm":
+            logging.warning(
+                "BTC/USD fetch returned empty on %s, retrying with binanceusdm",
+                exchange,
+            )
+            btc_fallback_om = HLCVManager(
+                "binanceusdm",
+                effective_start_date,
+                end_date,
+                gap_tolerance_ohlcvs_minutes=require_config_value(
+                    config, "backtest.gap_tolerance_ohlcvs_minutes"
+                ),
+            )
+            if is_offline():
+                btc_fallback_om.ohlcv_source_dir = config.get("backtest", {}).get("ohlcv_source_dir")
+            try:
+                btc_fallback_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
+                btc_df = await _try_direct_btc_candidate(btc_fallback_om)
+                if not btc_df.empty:
+                    btc_source_exchange = "binanceusdm"
+            finally:
+                await btc_fallback_om.aclose()
+                if btc_fallback_om.cc:
+                    await btc_fallback_om.cc.close()
+
+        if btc_df.empty:
+            require_online(
+                f"BTC benchmark {ts_to_date(int(timestamps[0]))}..{ts_to_date(int(timestamps[-1]))} "
+                f"on {exchange} and binanceusdm; cache=caches/ohlcvs or backtest.ohlcv_source_dir"
+            )
+            raise ValueError(
+                f"Failed to fetch BTC/USD prices from {exchange} (and binanceusdm fallback)"
+            )
+
+        logging.info("using BTC/USD benchmark source: %s", btc_source_exchange)
+
+        btc_df = (
+            btc_df.set_index("timestamp")
+            .reindex(timestamps, method="ffill")
+            .ffill()
+            .bfill()
+            .reset_index()
+        )
+        btc_usd_prices = btc_df["close"].values
+
+        warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
+        candidate_report = mss.pop("__candidate_report__", [])
+        mss["__meta__"] = {
+            "requested_start_ts": int(requested_start_ts),
+            "requested_start_date": ts_to_date(requested_start_ts),
+            "effective_start_ts": int(timestamps[0]),
+            "effective_start_date": ts_to_date(int(timestamps[0])),
+            "warmup_minutes_requested": int(warmup_minutes),
+            "warmup_minutes_provided": int(warmup_provided),
+            "btc_source_exchange": btc_source_exchange,
+            "candidate_report": candidate_report,
+        }
+
+        if isinstance(prepared_hlcvs, dict):
+            coins_sorted = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
+            synthetic_gaps_tradable = (
+                bool(config.get("backtest", {}).get("ohlcv_source_dir"))
+                and to_standard_exchange_name(exchange) == "hyperliquid"
+                and any(coin.startswith("xyz:") for coin in coins_sorted)
+            )
+            handle = materialize_frames(
+                output_root=Path("caches") / "ohlcvs" / "materialized",
+                exchange=to_standard_exchange_name(exchange),
+                coins=coins_sorted,
+                timestamps=timestamps,
+                aligned_values_by_coin=prepared_hlcvs,
+                btc_usd_prices=btc_usd_prices,
+                mss={coin: mss[coin] for coin in coins_sorted},
+                run_id=f"{to_standard_exchange_name(exchange)}_{uuid4().hex[:12]}",
+                synthetic_gaps_tradable=synthetic_gaps_tradable,
+            )
+            enriched_mss = handle.mss
+            enriched_mss["__meta__"] = mss["__meta__"]
+            return (
+                enriched_mss,
+                handle.open_timestamps(),
+                handle.open_hlcvs(),
+                handle.open_btc_usd_prices(),
+            )
+
+        return mss, timestamps, prepared_hlcvs, btc_usd_prices
+    finally:
+        await om.aclose()
+        if om.cc:
+            await om.cc.close()
+

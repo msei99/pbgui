@@ -201,6 +201,8 @@ Columns: User · Symbol · Side · Size · uPnL · Entry · Price · DCA · Next
 
 The **Manage** button next to the Positions title opens a draggable, resizable dialog for the currently visible positions.
 
+Press **Escape**, click **✕**, or use **Close** to close it and return keyboard focus to **Manage**. **Tab** and **Shift+Tab** move within the active dialog, including controls updated automatically with positions. A config preview closes first with **Escape** and returns focus to its preview button; an open Guide or confirmation takes priority over the Manage dialog, including in the surrounding Dashboard page. Escape from the embedded dialog closes only that higher window; Tab moves focus to its close control. Clicking the dark backdrop deliberately does not close dialogs, following PBGui's explicit-close policy.
+
 Per-row actions:
 - **Market close amount** sends a direct reduce-only market order for the selected row amount.
 - **Panic symbol** saves a runtime-aware per-symbol forced-mode override and syncs the config.
@@ -228,6 +230,7 @@ Controls:
 - **Timeframe buttons** (1m 5m 15m 30m 1h 2h 4h 6h 12h 1d 1w) — change candle resolution.
 - **Scroll left** on the chart to load older historical candles.
 - Candle history is automatically reconciled with the exchange every 30 seconds and when returning to the page. Missed final candle updates are corrected without resetting zoom or loaded history.
+- The default view reserves space for the actual Entry and Price badge widths, with at least six pixels between the latest candle edge and the badges. It targets at least eight empty candle slots where the chart width and zoom allow it. Narrow charts may initially show less history to keep the latest candle readable. Live updates and snapshots follow the newest candle while retaining your zoom span, subject to the chart library's minimum candle spacing when resizing. Manual pan/zoom is preserved across updates, history loading and fullscreen changes, even if you deliberately move candles underneath the labels. Following resumes only when the right edge returns within six pixels of the current latest-view position. Resizing adjusts the margin only while following. Changing **Timeframe** starts a new fitted view.
 
 ---
 

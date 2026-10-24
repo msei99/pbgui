@@ -95,6 +95,34 @@ def integrity_job_lock(db_path: Path | None = None):
     return advisory_file_lock(path.with_suffix(path.suffix + ".jobs"))
 
 
+def cached_file_probe(db_path: Path, path: Path, revision: str, signature: tuple,
+                      sha256: str, probe: Callable[[], dict]) -> dict:
+    """Cache additive read-only file facts without changing daily repair statuses.
+
+    The caller hashes a stable file before lookup and verifies its signature
+    again after this call. Config/window/listing decisions are never cached here.
+    """
+    from contextlib import closing
+
+    key = str(path.resolve())
+    stamp = json.dumps(list(signature))
+    with catalog_operation_lock(db_path), closing(_connect(db_path)) as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS file_probes (
+            path TEXT NOT NULL, revision TEXT NOT NULL, signature TEXT NOT NULL,
+            sha256 TEXT NOT NULL, result TEXT NOT NULL,
+            PRIMARY KEY(path, revision))''')
+        row = conn.execute('SELECT result FROM file_probes WHERE path=? AND revision=? '
+                           'AND signature=? AND sha256=?', (key, revision, stamp, sha256)).fetchone()
+        if row is not None:
+            return json.loads(row['result'])
+    # Expensive decoding runs outside the cross-process catalog lock.
+    result = probe()
+    with catalog_operation_lock(db_path), closing(_connect(db_path)) as conn, conn:
+        conn.execute('INSERT OR REPLACE INTO file_probes VALUES (?, ?, ?, ?, ?)',
+                     (key, revision, stamp, sha256, json.dumps(result, allow_nan=False)))
+    return result
+
+
 def reference_operation_lock(path: Path | None = None):
     """Return the shared lock for reference installation and comparison."""
     database = Path(path) if path is not None else reference_database_path()

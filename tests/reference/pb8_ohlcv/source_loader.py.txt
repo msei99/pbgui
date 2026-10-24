@@ -1,0 +1,323 @@
+
+    def _try_load_ohlcvs_from_source_dir(
+        self, coin: str, symbol: str, start_ts: int, end_ts: int
+    ) -> Optional[pd.DataFrame]:
+        if not self.ohlcv_source_dir:
+            return None
+        source_root = Path(self.ohlcv_source_dir)
+        if not source_root.exists():
+            return None
+
+        exchange_dir = to_standard_exchange_name(self.exchange)
+        exchange_root = source_root / exchange_dir / "1m"
+
+        start_day = ts_to_date(start_ts)
+        end_day = ts_to_date(end_ts)
+        days = get_days_in_between(start_day, end_day)
+
+        frames = []
+        candidates: list[str] = []
+
+        # Mirror CandlestickManager's symbol sanitization for Windows compatibility
+        windows_compat = os.name == "nt" or os.getenv("WINDOWS_COMPATIBILITY") == "1"
+
+        for name in (coin, symbol):
+            if not name:
+                continue
+            # Original name
+            candidates.append(name)
+            # Variant with "/" replaced by "_"
+            if "/" in name:
+                candidates.append(name.replace("/", "_"))
+            # In Windows compatibility mode, also mirror CandlestickManager's ":" -> "_"
+            if windows_compat and ("/" in name or ":" in name):
+                candidates.append(name.replace("/", "_").replace(":", "_"))
+
+        # De-duplicate while preserving order
+        seen = set()
+        candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+        for day in days:
+            loaded = False
+            for name in candidates:
+                base_dir = exchange_root / name
+                if not base_dir.exists():
+                    continue
+                for ext in (".npz", ".npy"):
+                    filepath = base_dir / f"{day}{ext}"
+                    if not filepath.exists():
+                        continue
+                    try:
+                        df = load_ohlcv_data(str(filepath))
+                    except Exception as exc:
+                        logging.warning(
+                            "[%s] source dir load failed for %s %s: %s",
+                            self.exchange,
+                            coin,
+                            filepath,
+                            exc,
+                        )
+                        continue
+                    if not df.empty:
+                        frames.append(df)
+                        loaded = True
+                        break
+                if loaded:
+                    break
+
+        if not frames:
+            return None
+
+        df = pd.concat(frames, ignore_index=True)
+        df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
+        df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] <= end_ts)]
+        if df.empty:
+            return None
+
+        ts = df["timestamp"].astype(np.int64, copy=False).values
+        if ts.size > 1:
+            intervals = np.diff(ts)
+            if not np.all(intervals == 60_000):
+                is_tradfi_stock_perp = coin.startswith("xyz:") and self.tradfi_for_stock_perps
+                gap_tolerance_ms = int(self.gap_tolerance_ohlcvs_minutes * 60_000)
+                if is_tradfi_stock_perp:
+                    gap_tolerance_ms = max(gap_tolerance_ms, 4 * 24 * 60 * 60_000)
+
+                greatest_gap_ms = int(intervals.max(initial=60_000))
+                if greatest_gap_ms > gap_tolerance_ms:
+                    logging.warning(
+                        "[%s] source dir non-contiguous data for %s; greatest gap %.1f minutes. Falling back.",
+                        self.exchange,
+                        coin,
+                        greatest_gap_ms / 60_000.0,
+                    )
+                    return None
+
+        return df.reset_index(drop=True)
+
+    async def get_ohlcvs(
+        self, coin: str, start_date=None, end_date=None, *, source_dir_only: bool = False
+    ) -> pd.DataFrame:
+        empty_df = pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume", "valid"]
+        )
+        if start_date is not None or end_date is not None:
+            self.update_date_range(start_date, end_date)
+        if not self.markets:
+            await self.load_markets()
+        if not self.has_coin(coin):
+            logging.debug("[%s] get_ohlcvs: coin %s not found in markets", self.exchange, coin)
+            return empty_df
+        symbol = self.get_symbol(coin)
+        start_ts = int(self.start_ts)
+        end_ts = int(self.end_ts)
+        if start_ts > end_ts:
+            logging.debug(
+                "[%s] get_ohlcvs: invalid range start_ts=%s > end_ts=%s",
+                self.exchange,
+                start_ts,
+                end_ts,
+            )
+            return empty_df
+
+        if self.ohlcv_source_dir:
+            df = self._try_load_ohlcvs_from_source_dir(coin, symbol, start_ts, end_ts)
+            if df is not None and not df.empty:
+                requested_start_ts = start_ts
+                if is_offline():
+                    first_row_ts = int(df.timestamp.iloc[0])
+                    if first_row_ts > start_ts:
+                        inception = await get_first_timestamps_unified([coin], exchange=self.exchange)
+                        first_listing_ts = int(inception[coin])
+                        if abs(first_row_ts - first_listing_ts) > 60_000:
+                            raise OfflineDataError(
+                                f"Unverified source directory prefix: {self.exchange}/{coin} "
+                                f"{start_ts}..{first_row_ts}; {self.ohlcv_source_dir}"
+                            )
+                        # Start at the confirmed listing; do not synthesize pre-listing prices.
+                        start_ts = first_row_ts
+                    if int(df.timestamp.iloc[-1]) < end_ts:
+                        raise OfflineDataError(
+                            f"Incomplete source directory candles: {self.exchange}/{coin} "
+                            f"{start_ts}..{end_ts}; {self.ohlcv_source_dir}"
+                        )
+                self.load_cc()
+                assert self.cm is not None
+
+                src = np.zeros(
+                    len(df),
+                    dtype=[
+                        ("ts", "i8"),
+                        ("o", "f8"),
+                        ("h", "f8"),
+                        ("l", "f8"),
+                        ("c", "f8"),
+                        ("bv", "f8"),
+                    ],
+                )
+                src["ts"] = df["timestamp"].astype(np.int64, copy=False).values
+                src["o"] = df["open"].astype(float, copy=False).values
+                src["h"] = df["high"].astype(float, copy=False).values
+                src["l"] = df["low"].astype(float, copy=False).values
+                src["c"] = df["close"].astype(float, copy=False).values
+                src["bv"] = df["volume"].astype(float, copy=False).values
+
+                filled = self.cm.standardize_gaps(
+                    src, start_ts=start_ts, end_ts=end_ts, strict=False, assume_sorted=True
+                )
+                if filled.size == 0:
+                    return empty_df
+                real_ts = src["ts"].astype(np.int64, copy=False)
+                filled_ts = filled["ts"].astype(np.int64, copy=False)
+
+                df = pd.DataFrame(
+                    {
+                        "timestamp": filled_ts,
+                        "open": filled["o"].astype(float),
+                        "high": filled["h"].astype(float),
+                        "low": filled["l"].astype(float),
+                        "close": filled["c"].astype(float),
+                        "volume": filled["bv"].astype(float),
+                        "valid": np.isin(filled_ts, real_ts),
+                    }
+                )
+                logging.info(
+                    "[%s] get_ohlcvs: using source dir for %s",
+                    self.exchange,
+                    coin,
+                )
+                record_range(self.exchange, symbol, requested_start_ts, end_ts, SimpleNamespace(
+                    timestamps=filled_ts, values=df[["high", "low", "close", "volume"]].to_numpy(),
+                    valid=df["valid"].to_numpy(),
+                ))
+                return df.reset_index(drop=True)
+            if source_dir_only:
+                if is_offline():
+                    raise OfflineDataError(f"Offline source candles missing: {self.exchange}/{coin} {start_ts}..{end_ts}; {self.ohlcv_source_dir}")
+                logging.info(
+                    "[%s] get_ohlcvs: source_dir_only had no data for %s",
+                    self.exchange,
+                    coin,
+                )
+                return empty_df
+            logging.debug(
+                "[%s] get_ohlcvs: source dir had no data for %s; falling back to candlestick manager",
+                self.exchange,
+                coin,
+            )
+
+        self.load_cc()
+        assert self.cm is not None
+
+        require_online(f"candles {self.exchange}/{coin} {start_ts}..{end_ts}; caches/ohlcvs")
+        # Fetch strict (real) candles first to detect large gaps.
+        real = await self.cm.get_candles(
+            symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            max_age_ms=0,
+            strict=True,
+            timeframe="1m",
+            force_refetch_gaps=self.force_refetch_gaps,
+        )
+        if real.size == 0:
+            logging.warning(
+                "[%s] get_ohlcvs: cm.get_candles returned empty for %s range %s to %s",
+                self.exchange,
+                symbol,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            return empty_df
+
+        ts = real["ts"].astype(np.int64, copy=False)
+        if ts.size > 1:
+            is_tradfi_stock_perp = coin.startswith("xyz:") and self.tradfi_for_stock_perps
+            gap_tolerance_ms = int(self.gap_tolerance_ohlcvs_minutes * 60_000)
+            if is_tradfi_stock_perp:
+                # Allow expected stock-market closures (weekends/holidays) for TradFi-backed data.
+                # Keep configured tolerance when it's already stricter.
+                gap_tolerance_ms = max(gap_tolerance_ms, 4 * 24 * 60 * 60_000)
+
+            intervals = np.diff(ts)
+            greatest_gap_ms = int(intervals.max(initial=60_000))
+            if greatest_gap_ms > gap_tolerance_ms:
+                # Helpful diagnostics: locate the exact gap boundaries
+                gap_start_ts = None
+                gap_end_ts = None
+                try:
+                    imax = int(np.argmax(intervals))
+                    if 0 <= imax < ts.size - 1:
+                        gap_start_ts = int(ts[imax])
+                        gap_end_ts = int(ts[imax + 1])
+                except Exception:
+                    gap_start_ts = None
+                    gap_end_ts = None
+
+                # Give CandlestickManager one chance to self-heal (legacy merge / refetch gaps)
+                # before returning empty.
+                if not self.force_refetch_gaps:
+                    real = await self.cm.get_candles(
+                        symbol,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        max_age_ms=0,
+                        strict=True,
+                        timeframe="1m",
+                        force_refetch_gaps=True,
+                    )
+                    if real.size == 0:
+                        return empty_df
+                    ts = real["ts"].astype(np.int64, copy=False)
+                    if ts.size > 1:
+                        intervals = np.diff(ts)
+                        greatest_gap_ms = int(intervals.max(initial=60_000))
+                    else:
+                        # Single or zero timestamp implies no measurable gaps;
+                        # don't reuse stale greatest_gap_ms from the initial fetch.
+                        greatest_gap_ms = 0
+                if greatest_gap_ms > gap_tolerance_ms:
+                    if self.verbose:
+                        logging.warning(
+                            "[%s] gaps detected in %s OHLCV data; greatest gap: %.1f minutes. Returning empty.",
+                            self.exchange,
+                            coin,
+                            greatest_gap_ms / 60_000.0,
+                        )
+                        if gap_start_ts is not None and gap_end_ts is not None:
+                            gap_start_iso = datetime.fromtimestamp(
+                                int(gap_start_ts) / 1000, tz=timezone.utc
+                            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                            gap_end_iso = datetime.fromtimestamp(
+                                int(gap_end_ts) / 1000, tz=timezone.utc
+                            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                            logging.warning(
+                                "[%s] largest_gap_window %s -> %s (%.1f minutes)",
+                                self.exchange,
+                                gap_start_iso,
+                                gap_end_iso,
+                                (gap_end_ts - gap_start_ts) / 60_000.0,
+                            )
+                    return empty_df
+
+        # Fill to the full requested window (bfill/ffill inside CM).
+        # Data from get_candles is already sorted, so skip redundant sort
+        filled = self.cm.standardize_gaps(
+            real, start_ts=start_ts, end_ts=end_ts, strict=False, assume_sorted=True
+        )
+        if filled.size == 0:
+            return empty_df
+        real_ts = real["ts"].astype(np.int64, copy=False)
+        filled_ts = filled["ts"].astype(np.int64, copy=False)
+        df = pd.DataFrame(
+            {
+                "timestamp": filled_ts,
+                "open": filled["o"].astype(float),
+                "high": filled["h"].astype(float),
+                "low": filled["l"].astype(float),
+                "close": filled["c"].astype(float),
+                "volume": filled["bv"].astype(float),
+                "valid": np.isin(filled_ts, real_ts),
+            }
+        )
+        return df.reset_index(drop=True)
+

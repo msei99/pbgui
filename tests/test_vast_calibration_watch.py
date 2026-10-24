@@ -11,6 +11,7 @@ import vast_calibration_watch as watching
 from vast_jobs import JobStore, write_json
 from secure_files import ensure_private_directory
 from vast_direction_fixtures import direction_config
+from vast_integrity_fixtures import freeze_test_proof
 from vast_provider import VastError
 from vast_queue import CloudQueue
 
@@ -24,6 +25,7 @@ def armed(tmp_path, monkeypatch):
                        calibration_plan={'protocol': 3}, calibration_workload_version='v2')
     folder = ensure_private_directory(queue.store.directory(preparation['id']) / 'input')
     write_json(folder / 'optimize.json', direction_config())
+    freeze_test_proof(queue.store, preparation['id'])
     preferences = {
         'gpu_name': 'RTX 3090', 'max_price': .2, 'min_vram': 24, 'min_ram': 16,
         'min_cpu': 16, 'min_tflops': 0, 'min_power_watts': 350,

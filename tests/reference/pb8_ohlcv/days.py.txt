@@ -1,0 +1,14 @@
+
+
+def get_days_in_between(start_day: str, end_day: str) -> List[str]:
+    date_format = "%Y-%m-%d"
+    start_date = datetime.datetime.strptime(format_end_date(start_day), date_format)
+    end_date = datetime.datetime.strptime(format_end_date(end_day), date_format)
+    days = []
+    current_date = start_date
+    while current_date <= end_date:
+        days.append(current_date.strftime(date_format))
+        current_date += datetime.timedelta(days=1)
+    return days
+
+

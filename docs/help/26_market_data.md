@@ -202,6 +202,10 @@ Each automatic or manual schedule run appears in the same embedded Copy Job Moni
 
 Controls the automatic 1m candle refresh loop for Hyperliquid symbols.
 
+The local settings coin list includes active HIP-3 markets from every mapped DEX, including PARA and MKTS, without querying live metadata. Colon and hyphen aliases share one settings identity and data directory, while preserving the full ticker (for example `para:FOOUSD` and `PARA-FOOUSD`). Candle requests resolve only the requested DEX; XYZ TradFi routing remains separate. Existing XYZ data directories are unchanged; no directories are moved.
+
+If an older mapping row has no coin name, Hyperliquid can use its CCXT symbol and HIP-3 context. Other exchanges retain their native market-symbol fallback, so an additional CCXT display symbol does not turn `BTC` into a malformed pair name.
+
 - **Enabled coins** — multiselect from all known Hyperliquid symbols
 - **Clear filter + Select visible / Clear all** — quickly enable or disable all coins
 - **Cycle interval (s)** — how often all enabled coins are refreshed (default: 1800s)

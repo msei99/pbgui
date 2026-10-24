@@ -2572,14 +2572,16 @@ function renderServices() {
       for (const [svcName, check] of Object.entries(hostSvc)) {
         const st = check.status || 'unknown';
         const expected = check.expected !== false && st !== 'disabled';
-        const label = expected ? st : 'skipped';
+        const lifecycle = svcName === 'PBCoinData' && check.pbcoindata_lifecycle;
+        const label = expected || lifecycle ? st : 'skipped';
         let dotColor;
-        if (!expected) dotColor = 'var(--text-dim)';
+        if (check.stop_error) dotColor = 'var(--red)';
+        else if (!expected && !lifecycle) dotColor = 'var(--text-dim)';
         else if (st === 'running') dotColor = 'var(--green)';
         else if (st === 'stopped') dotColor = 'var(--red)';
         else if (st === 'restarting') dotColor = 'var(--orange)';
         else dotColor = 'var(--text-dim)';
-        html += `<span class="svc-inline-item" title="${esc(svcName)}: ${esc(label)}${check.pid ? ' (PID:'+check.pid+')' : ''}${check.reason ? ' - ' + esc(check.reason) : ''}">`;
+        html += `<span class="svc-inline-item" title="${esc(svcName)}: ${esc(label)}${check.pid ? ' (PID:'+check.pid+')' : ''}${check.reason ? ' - ' + esc(check.reason) : ''}${check.stop_error ? ' - ' + esc(check.stop_error) : ''}">`;
         html += `<span class="svc-inline-dot" style="background:${dotColor}"></span>`;
         html += `<span class="svc-inline-name">${esc(svcName)}</span>`;
         html += `</span>`;
@@ -2598,9 +2600,11 @@ function renderServices() {
       for (const [svcName, check] of Object.entries(hostSvc)) {
         const st = check.status || 'unknown';
         const expected = check.expected !== false && st !== 'disabled';
-        const label = expected ? st : 'skipped';
+        const lifecycle = svcName === 'PBCoinData' && check.pbcoindata_lifecycle;
+        const label = expected || lifecycle ? st : 'skipped';
         let icon, color;
-        if (!expected) { icon = '-'; color = 'var(--text-dim)'; }
+        if (check.stop_error) { icon = '❌'; color = 'var(--red)'; }
+        else if (st === 'idle' || (!expected && !lifecycle)) { icon = '-'; color = 'var(--text-dim)'; }
         else if (st === 'running') { icon = '✅'; color = 'var(--green)'; }
         else if (st === 'stopped') { icon = '❌'; color = 'var(--red)'; }
         else if (st === 'restarting') { icon = '🔄'; color = 'var(--orange)'; }
@@ -2608,9 +2612,10 @@ function renderServices() {
         html += `<div class="svc-card">`;
         html += `<div class="svc-name">${icon} ${esc(svcName)}</div>`;
         html += `<div class="svc-status" style="color:${color}">${esc(label)}${check.pid ? ' (PID: ' + check.pid + ')' : ''}</div>`;
-        if (!expected && check.reason) html += `<div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">${esc(check.reason)}</div>`;
-        if (check.error) html += `<div style="font-size:10px;color:var(--red);margin-bottom:4px">${esc(check.error)}</div>`;
-        if (expected) html += renderServiceRestartButton(host, svcName);
+        if ((!expected || lifecycle) && check.reason) html += `<div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">${esc(check.reason)}</div>`;
+        const errors = [check.error, check.stop_error, check.restart_error, check.lifecycle_error].filter(Boolean).join(' · ');
+        if (errors) html += `<div style="font-size:10px;color:var(--red);margin-bottom:4px">${esc(errors)}</div>`;
+        if (expected || lifecycle) html += renderServiceRestartButton(host, svcName);
         html += `</div>`;
       }
       html += `</div>`;

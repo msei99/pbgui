@@ -587,6 +587,32 @@ def test_multiplier_market_disambiguation_keeps_single_market_alias_short():
 class TestNormalizeSymbol:
     """Test symbol normalization across exchanges."""
 
+    @pytest.mark.parametrize("dex", ["xyz", "para", "mkts", "flx", "newdex"])
+    @pytest.mark.parametrize("ticker", ["FOOUSD", "FOOUSDC", "FOOEUR", "FOODAI"])
+    @pytest.mark.parametrize("style", ["{dex}-{ticker}", "{dex}:{ticker}", "{dex}-{ticker}/USDC:USDC", "{dex}-{ticker}_USDC:USDC"])
+    def test_hip3_full_ticker_with_mapping_context(self, dex, ticker, style):
+        """Explicit HIP-3 context preserves quote-like ticker endings in every form."""
+        symbol = style.format(dex=dex, ticker=ticker)
+        row = {"is_hip3": True, "dex": dex, "coin": f"{dex.upper()}-{ticker}"}
+        assert normalize_symbol(symbol, mapping_record=row) == f"{dex.upper()}-{ticker}"
+
+    @pytest.mark.parametrize("dex", ["xyz", "para", "mkts", "flx"])
+    def test_known_hip3_alias_without_context(self, dex):
+        """Known prefixes require no file or network access."""
+        assert normalize_symbol(f"{dex}:FOOUSD/USDC:USDC") == f"{dex.upper()}-FOOUSD"
+
+    @pytest.mark.parametrize("row", [
+        {"is_hip3": True, "dex": "xyz", "coin": "PARA-FOOUSD"},
+        {"is_hip3": True, "dex": "newdex", "coin": "NEWDEX-OTHER"},
+        {"is_hip3": True, "dex": "", "coin": "NEWDEX-FOOUSD"},
+        {"is_hip3": True, "dex": "../newdex", "coin": "NEWDEX-FOOUSD"},
+        {"is_hip3": True, "dex": "newdex", "coin": "NEWDEX-FOOUSD", "ccxt_symbol": "PARA-FOOUSD/USDC:USDC"},
+    ])
+    def test_conflicting_hip3_context_is_rejected(self, row):
+        """Unconfirmed or contradictory context cannot establish an alias."""
+        assert PBCoinData_mod._normalize_hyperliquid_hip3_alias("NEWDEX:FOOUSD", row) == ""
+        assert PBCoinData_mod._normalize_hyperliquid_hip3_alias("NEWDEX:FOOUSD") == ""
+
     @pytest.mark.parametrize("symbol,expected", [
         # Basic USDT stripping
         ("BTCUSDT", "BTC"),
@@ -996,7 +1022,7 @@ class TestConfig:
         assert watcher.is_running is False
         assert watcher._thread is None
 
-    def test_config_event_wakes_before_fixed_schedule_without_interrupting_cycle(self, monkeypatch):
+    def test_config_event_wakes_before_fixed_schedule_without_interrupting_cycle(self, monkeypatch, tmp_workdir):
         """A change wakes scheduling only after the active cycle completes once."""
         calls = []
 
@@ -1193,6 +1219,80 @@ class TestExchangeMappingCache:
 
 class TestMappingQueryFunctions:
     """Test mapping-based query/filter helpers (Phase 1)."""
+
+    @pytest.mark.parametrize("dex,ticker", [("xyz", "TSLA"), ("para", "FOOUSD"), ("mkts", "FOOUSDC"),
+                                           ("flx", "FOOEUR"), ("newdex", "FOODAI")])
+    @pytest.mark.parametrize("style", ["{dex}-{ticker}", "{dex}:{ticker}", "{dex}:{ticker}/USDC:USDC",
+                                      "{dex}-{ticker}_USDC:USDC"])
+    def test_hip3_editor_status_preserves_mapping_identity(self, coindata, tmp_workdir, monkeypatch, dex, ticker, style):
+        """Picker entries and subsequent status checks share the real active mapping identity."""
+        import api.editor_market_data as editor
+        import PBCoinData
+
+        canonical = f"{dex.upper()}-{ticker}"
+        coindata.save_exchange_mapping("hyperliquid", [{
+            "coin": canonical, "symbol": "110001", "ccxt_symbol": f"{canonical}/USDC:USDC",
+            "quote": "USDC", "active": True, "swap": True, "linear": True,
+            "is_hip3": True, "dex": dex, "open_interest": 100,
+        }])
+        monkeypatch.setattr(PBCoinData, "CoinData", lambda: coindata)
+        monkeypatch.setattr(PBCoinData, "normalize_symbol", normalize_symbol)
+        monkeypatch.setattr(PBCoinData, "build_symbol_mappings", build_symbol_mappings)
+        alias = style.format(dex=dex, ticker=ticker)
+        assert editor.symbols("hyperliquid") == [canonical]
+        assert editor.classify_coins(["hyperliquid"], [alias])[alias] == {
+            "input": alias, "normalized": canonical, "status": "valid",
+        }
+
+    def test_hip3_editor_status_rejects_unconfirmed_aliases_and_keeps_standard_coins(self, coindata, tmp_workdir, monkeypatch):
+        """DEX collisions and missing/conflicting context cannot authorize a different ticker."""
+        import api.editor_market_data as editor
+        import PBCoinData
+
+        def hip3(prefix, ticker, **extra):
+            """Build one synthetic active row with a numeric exchange market ID."""
+            return {"coin": f"{prefix.upper()}-{ticker}", "symbol": "110001", "quote": "USDC",
+                    "active": True, "swap": True, "linear": True, "is_hip3": True,
+                    "dex": prefix, "open_interest": 100, **extra}
+
+        coindata.save_exchange_mapping("hyperliquid", [
+            hip3("xyz", "SAME"), hip3("para", "SAME"), hip3("newdex", "SAME"),
+            hip3("newdex", "FOO"), hip3("wrongdex", "WRONG", dex="xyz"),
+            hip3("badctx", "WRONG", ccxt_symbol="XYZ-WRONG/USDC:USDC"),
+            hip3("newdex", "OFF", active=False),
+            {"coin": "BTC", "symbol": "BTCUSDC", "quote": "USDC", "active": True, "swap": True, "linear": True},
+            {"coin": "PEPE", "symbol": "kPEPEUSDC", "quote": "USDC", "active": True, "swap": True, "linear": True},
+        ])
+        monkeypatch.setattr(PBCoinData, "CoinData", lambda: coindata)
+        monkeypatch.setattr(PBCoinData, "normalize_symbol", normalize_symbol)
+        monkeypatch.setattr(PBCoinData, "build_symbol_mappings", build_symbol_mappings)
+        inputs = ["xyz:SAME", "para:SAME", "newdex:SAME", "newdex:FOODAI", "NEWDEX-FOODAI",
+                  "unknown:SAME", "wrongdex:WRONG", "badctx:WRONG", "newdex:OFF", "BTCUSDC", "kPEPE"]
+        statuses = editor.classify_coins(["hyperliquid"], inputs)
+        for dex in ("xyz", "para", "newdex"):
+            assert statuses[f"{dex}:SAME"]["normalized"] == f"{dex.upper()}-SAME"
+            assert statuses[f"{dex}:SAME"]["status"] == "valid"
+        for alias in inputs[3:9]:
+            assert statuses[alias]["status"] == "invalid"
+        assert statuses["NEWDEX-FOODAI"]["normalized"] == "NEWDEX-FOODAI"
+        assert statuses["BTCUSDC"]["normalized"] == "BTC"
+        assert statuses["BTCUSDC"]["status"] == "valid"
+        assert statuses["kPEPE"]["normalized"] == "PEPE"
+        assert statuses["kPEPE"]["status"] == "valid"
+
+    def test_hip3_editor_symbols_use_real_active_filter(self, coindata, tmp_workdir, monkeypatch):
+        """The actual editor provider includes all active DEXes and excludes invalid markets."""
+        import api.editor_market_data as editor
+        import PBCoinData
+
+        rows = [{"coin": f"{dex.upper()}-FOOUSD", "symbol": str(i), "quote": "USDC", "swap": True,
+                 "linear": True, "active": True, "open_interest": 100, "is_hip3": True, "dex": dex}
+                for i, dex in enumerate(["xyz", "para", "mkts", "flx", "newdex"])]
+        bad = [{**rows[1], "coin": f"PARA-BAD{i}", **change} for i, change in enumerate([
+            {"active": False}, {"swap": False}, {"linear": False}, {"open_interest": 0}, {"open_interest": -1}])]
+        coindata.save_exchange_mapping("hyperliquid", rows + bad)
+        monkeypatch.setattr(PBCoinData, "CoinData", lambda: coindata)
+        assert editor.symbols("hyperliquid") == sorted(row["coin"] for row in rows)
 
     @staticmethod
     def _sample_mapping():
@@ -1681,23 +1781,27 @@ class TestBuildMapping:
         assert "cash" in dexes
 
     @pytest.mark.parametrize("market_id", ["xyz:TSLA", "110001"])
+    @pytest.mark.parametrize("dex,ticker", [("xyz", "TSLA"), ("para", "FOOUSD"), ("mkts", "FOOUSDC"), ("flx", "FOOEUR"), ("newdex", "FOODAI")])
     def test_build_mapping_hip3_coin_uses_hyperliquid_base_for_string_and_numeric_ids(
-        self, coindata, tmp_workdir, market_id
+        self, coindata, tmp_workdir, market_id, dex, ticker
     ):
         """Known Hyperliquid HIP-3 context derives the coin independently of its market ID."""
-        ccxt_symbol = "XYZ-TSLA/USDC:USDC"
+        if ":" in market_id:
+            market_id = f"{dex}:{ticker}"
+        base = f"{dex.upper()}-{ticker}"
+        ccxt_symbol = f"{base}/USDC:USDC"
         coindata.save_ccxt_markets("hyperliquid", {
             ccxt_symbol: {
                 "id": market_id,
                 "symbol": ccxt_symbol,
-                "base": "XYZ-TSLA",
+                "base": base,
                 "quote": "USDC",
                 "swap": True,
                 "spot": False,
                 "active": True,
                 "linear": True,
                 "contractSize": 1.0,
-                "info": {"hip3": True, "dex": "xyz", "onlyIsolated": True},
+                "info": {"hip3": True, "dex": dex, "onlyIsolated": True},
                 "limits": {
                     "amount": {"min": 0.01},
                     "cost": {"min": 10},
@@ -1714,7 +1818,7 @@ class TestBuildMapping:
         mapping = coindata.load_mapping("hyperliquid", use_cache=False)
         assert len(mapping) == 1
         assert mapping[0]["symbol"] == market_id
-        assert mapping[0]["coin"] == "XYZ-TSLA"
+        assert mapping[0]["coin"] == base
         assert mapping[0]["is_hip3"] is True
 
     def test_build_mapping_hip3_cmc_defaults(self, coindata, tmp_workdir, sample_hyperliquid_ccxt_markets):
@@ -2196,6 +2300,24 @@ class TestPIDManagement:
         coindata.pidfile = Path("data/pid/nonexistent.pid")
         coindata.load_pid()
         assert coindata.my_pid is None
+
+    @pytest.mark.parametrize("state", ["foreign", "unknown"])
+    def test_running_check_preserves_unconfirmed_ownership(self, coindata, monkeypatch, state):
+        """Boolean compatibility must not turn foreign or denied identity into stopped."""
+        import pbcoindata_process
+        monkeypatch.setattr(pbcoindata_process, "snapshot", lambda root: {"status": state, "pid": 23, "error": "unconfirmed"})
+        with pytest.raises(pbcoindata_process.ProcessStateError):
+            coindata.is_running()
+
+    def test_pid_sidecar_is_private_and_exact(self, coindata):
+        """Numeric compatibility publication also stores only PID and kernel start time."""
+        from process_identity import identity_path
+        coindata.save_pid()
+        path = identity_path(coindata.pidfile)
+        identity = json.loads(path.read_text())
+        assert set(identity) == {"pid", "create_time"}
+        assert identity["pid"] == os.getpid() and identity["create_time"] > 0
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
 # ============================================================================
@@ -4472,6 +4594,177 @@ class TestUpdatePrices:
 class TestUpdateMappings:
     """Test the update_mappings() orchestration method."""
 
+    @pytest.mark.parametrize("heal", [True, False])
+    @pytest.mark.parametrize("selected", [{"bybit"}, {"bybit", "okx"}, {"hyperliquid"}, set()])
+    def test_selection_limits_both_loops_and_all_exchange_work(self, coindata, monkeypatch, sample_ccxt_markets, heal, selected):
+        """Self-heal and regular cycles restrict markets, copy trading, mapping and prices alike."""
+        calls = {step: [] for step in ("markets", "copy", "mapping", "prices")}
+        monkeypatch.setattr(coindata, "_source_is_newer_than_mapping", lambda exchange: (heal, "test"))
+
+        def markets(exchange):
+            """Provide a local market snapshot without exchange clients."""
+            calls["markets"].append(exchange)
+            coindata.save_ccxt_markets(exchange, sample_ccxt_markets)
+            return True
+
+        monkeypatch.setattr(coindata, "fetch_ccxt_markets", markets)
+        monkeypatch.setattr(coindata, "fetch_copy_trading_symbols", lambda exchange, markets=None: calls["copy"].append(exchange) or [])
+        monkeypatch.setattr(coindata, "build_mapping", lambda exchange: calls["mapping"].append(exchange) or True)
+        monkeypatch.setattr(coindata, "update_prices", lambda exchange: calls["prices"].append(exchange) or True)
+        tradfi = MagicMock()
+        monkeypatch.setattr(coindata, "_run_tradfi_sync", tradfi)
+        coindata.update_mappings(exchanges=selected)
+        for values in calls.values():
+            assert set(values) == selected and len(values) == len(selected)
+        assert tradfi.call_count == int("hyperliquid" in selected)
+
+    def test_new_exchange_catches_up_without_moving_global_interval(self, coindata, monkeypatch, tmp_workdir):
+        """Stale newly selected exchanges run next cycle, leaving the existing schedule intact."""
+        now = datetime.now().timestamp()
+        monkeypatch.setattr(coindata, "_source_is_newer_than_mapping", lambda exchange: (False, ""))
+        calls = []
+        monkeypatch.setattr(coindata, "refresh_exchange_mapping", lambda exchange: calls.append(exchange) or {"exchange": exchange, "ok": True})
+        monkeypatch.setattr(coindata, "_run_tradfi_sync", lambda: pytest.fail("No Hyperliquid consumer"))
+        coindata.update_mappings(exchanges={"bybit"})
+        original_ts = coindata.update_mappings_ts
+        for exchange, age in (("okx", 48 * 3600), ("bitget", 10)):
+            mapping = coindata._ensure_exchange_dir(exchange) / "mapping.json"
+            mapping.write_text("{}")
+            os.utime(mapping, (now - age, now - age))
+        coindata.update_mappings(exchanges={"bybit", "okx", "bitget"})
+        assert calls == ["bybit", "okx"]
+        assert coindata.update_mappings_ts == original_ts
+        coindata.update_mappings(exchanges={"bybit", "okx", "bitget"})
+        assert calls == ["bybit", "okx"]
+
+    @pytest.mark.parametrize("failure", ["not-ok", "timeout"])
+    @pytest.mark.parametrize("partial_write", [False, True])
+    def test_failed_catch_up_retries_with_backoff_until_success(self, coindata, monkeypatch, failure, partial_write):
+        """Catch-up failures retain bounded retries despite unchanged or partly rewritten inputs."""
+        now = datetime.now().timestamp()
+        clock = [now]
+        monkeypatch.setattr(PBCoinData_mod, "datetime", SimpleNamespace(now=lambda: datetime.fromtimestamp(clock[0])))
+        monkeypatch.setattr(PBCoinData_mod, "_log", lambda *args, **kwargs: None)
+        monkeypatch.setattr(coindata, "_run_tradfi_sync", lambda: pytest.fail("No Hyperliquid consumer"))
+        for exchange, age in (("bybit", 0), ("okx", 48 * 3600)):
+            mapping = coindata._ensure_exchange_dir(exchange) / "mapping.json"
+            mapping.write_text("[]")
+            os.utime(mapping, (now - age, now - age))
+        assert coindata._source_is_newer_than_mapping("okx") == (False, "")
+        coindata.update_mappings_ts = now
+        coindata._mapping_refresh_ts = {"bybit": now}
+        calls = []
+
+        def refresh(exchange):
+            """Fail twice without contacting exchanges, optionally publishing a partial file."""
+            assert exchange == "okx"
+            calls.append(clock[0])
+            if partial_write or len(calls) == 3:
+                path = coindata._get_exchange_dir(exchange) / "mapping.json"
+                path.write_text("[]")
+                os.utime(path, (clock[0], clock[0]))
+            if len(calls) < 3 and failure == "timeout":
+                raise TimeoutError("Synthetic exchange timeout")
+            return {"exchange": exchange, "ok": len(calls) >= 3}
+
+        monkeypatch.setattr(coindata, "refresh_exchange_mapping", refresh)
+        coindata.update_mappings(exchanges={"bybit", "okx"})
+        assert calls == [now]
+        assert "okx" not in coindata._mapping_refresh_ts
+        assert coindata._mapping_self_heal_state["okx"] == {"fails": 1, "next_retry_ts": now + 3600}
+        clock[0] = now + 3599
+        coindata.update_mappings(exchanges={"bybit", "okx"})
+        assert calls == [now]
+        clock[0] = now + 3600
+        coindata.update_mappings(exchanges={"bybit"})
+        assert calls == [now] and "okx" in coindata._mapping_self_heal_state
+        coindata.update_mappings(exchanges={"bybit", "okx"})
+        assert calls == [now, now + 3600]
+        assert "okx" not in coindata._mapping_refresh_ts
+        assert coindata._mapping_self_heal_state["okx"] == {"fails": 2, "next_retry_ts": now + 10800}
+        clock[0] = now + 10799
+        coindata.update_mappings(exchanges={"bybit", "okx"})
+        assert len(calls) == 2
+        clock[0] = now + 10800
+        coindata.update_mappings(exchanges={"bybit", "okx"})
+        assert calls == [now, now + 3600, now + 10800]
+        assert coindata._mapping_refresh_ts["okx"] == clock[0]
+        assert "okx" not in coindata._mapping_self_heal_state
+        coindata.update_mappings(exchanges={"bybit", "okx"})
+        assert len(calls) == 3
+        assert coindata.update_mappings_ts == now
+
+    def test_retry_state_survives_deselection_and_is_bounded(self, coindata, monkeypatch):
+        """A failed exchange keeps its backoff when leaving and rejoining the consumer set."""
+        now = datetime.now().timestamp()
+        coindata.update_mappings_ts = now
+        coindata._mapping_self_heal_state = {"okx": {"fails": 2, "next_retry_ts": now + 3600},
+                                             "unsupported": {"fails": 9}}
+        monkeypatch.setattr(coindata, "_source_is_newer_than_mapping", lambda exchange: (True, "test"))
+        refresh = MagicMock(return_value={"ok": True})
+        monkeypatch.setattr(coindata, "refresh_exchange_mapping", refresh)
+        coindata.update_mappings(exchanges=set())
+        coindata.update_mappings(exchanges={"okx"})
+        refresh.assert_not_called()
+        assert set(coindata._mapping_self_heal_state) == {"okx"}
+
+    def test_global_cycle_preserves_pending_catch_up_backoff(self, coindata, monkeypatch):
+        """A due global cycle may refresh other exchanges but cannot bypass a failed catch-up's wait."""
+        now = datetime.now().timestamp()
+        clock = [now]
+        monkeypatch.setattr(PBCoinData_mod, "datetime", SimpleNamespace(now=lambda: datetime.fromtimestamp(clock[0])))
+        monkeypatch.setattr(PBCoinData_mod, "_log", lambda *args, **kwargs: None)
+        for exchange, age in (("bybit", 0), ("okx", 48 * 3600)):
+            mapping = coindata._ensure_exchange_dir(exchange) / "mapping.json"
+            mapping.write_text("[]")
+            os.utime(mapping, (now - age, now - age))
+        coindata.update_mappings_ts = now - 23.5 * 3600
+        coindata._mapping_refresh_ts = {"bybit": now}
+        calls = []
+
+        def refresh(exchange):
+            """Return a single catch-up failure, followed by successful local responses."""
+            calls.append(exchange)
+            return {"exchange": exchange, "ok": len(calls) > 1}
+
+        monkeypatch.setattr(coindata, "refresh_exchange_mapping", refresh)
+        coindata.update_mappings(exchanges={"bybit", "okx"})
+        assert calls == ["okx"]
+        clock[0] = now + 1801
+        coindata.update_mappings(exchanges={"bybit", "okx"})
+        assert calls == ["okx", "bybit"]
+        assert coindata.update_mappings_ts == now + 1801
+        assert "okx" not in coindata._mapping_refresh_ts
+        assert coindata._mapping_self_heal_state["okx"]["next_retry_ts"] == now + 3600
+        clock[0] = now + 3600
+        coindata.update_mappings(exchanges={"bybit", "okx"})
+        assert calls == ["okx", "bybit", "okx"]
+        assert coindata.update_mappings_ts == now + 1801
+        assert "okx" not in coindata._mapping_self_heal_state
+
+    @pytest.mark.parametrize("role", ["master", "", "unexpected", "slave"])
+    @pytest.mark.parametrize("complete", [True, False])
+    def test_only_explicit_slave_daemon_limits_exchanges(self, coindata, tmp_workdir, monkeypatch, role, complete):
+        """Master/unknown roles and incomplete scans retain all-exchange automatic work."""
+        import pbcoindata_lifecycle as lifecycle
+        (tmp_workdir / "pbgui.ini").write_text(f"[main]\nrole={role}\n")
+        scan = MagicMock(return_value=lifecycle.ConsumerSnapshot("ACTIVE", complete, frozenset({"bybit"})))
+        monkeypatch.setattr(lifecycle, "consumer_snapshot", scan)
+        selected = PBCoinData_mod._daemon_mapping_exchanges()
+        assert selected == (frozenset({"bybit"}) if role == "slave" and complete else None)
+        assert scan.call_count == int(role == "slave")
+
+    def test_slave_direct_updates_retain_full_access(self, coindata, tmp_workdir, monkeypatch):
+        """A UI-style all-exchange call and direct single refresh ignore daemon selection."""
+        (tmp_workdir / "pbgui.ini").write_text("[main]\nrole=slave\n")
+        monkeypatch.setattr(PBCoinData_mod, "_daemon_mapping_exchanges", lambda: {"bybit"})
+        monkeypatch.setattr(coindata, "_source_is_newer_than_mapping", lambda exchange: (False, ""))
+        refresh = MagicMock(side_effect=lambda exchange: {"exchange": exchange, "ok": True})
+        monkeypatch.setattr(coindata, "refresh_exchange_mapping", refresh)
+        monkeypatch.setattr(coindata, "_run_tradfi_sync", lambda: None)
+        coindata.update_mappings()
+        assert [call.args[0] for call in refresh.call_args_list] == PBCoinData_mod.V7.list()
+
     def test_update_mappings_calls_all_steps(self, coindata, tmp_workdir, sample_ccxt_markets):
         """update_mappings calls fetch_ccxt_markets, fetch_copy_trading_symbols, build_mapping."""
         fetch_ccxt_called = []
@@ -4508,18 +4801,12 @@ class TestUpdateMappings:
             if exchange not in v7_exchanges:
                 assert exchange not in fetch_ccxt_called, f"Non-V7 exchange {exchange} should not be processed"
 
-    def test_update_mappings_respects_interval(self, coindata, tmp_workdir):
+    def test_update_mappings_respects_interval(self, coindata, tmp_workdir, monkeypatch):
         """update_mappings only runs when interval has elapsed."""
         call_count = 0
 
-        # Disable self-heal path for this test so we only assert interval behavior.
-        from Exchange import V7
-        future_ts = datetime.now().timestamp() + 3600
-        for exchange in V7.list():
-            coindata._mapping_self_heal_state[exchange] = {
-                "fails": 1,
-                "next_retry_ts": future_ts,
-            }
+        # Model current mapping inputs so this test isolates interval scheduling.
+        monkeypatch.setattr(coindata, "_source_is_newer_than_mapping", lambda exchange: (False, ""))
 
         def mock_fetch_ccxt(exchange_id):
             nonlocal call_count

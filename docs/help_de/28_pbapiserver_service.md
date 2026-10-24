@@ -29,6 +29,10 @@ PBAPIServer-Einstellungen werden in `pbgui.ini` unter `[api_server]` gespeichert
 
 Host und Port können auf der **PBAPIServer-Detailseite** geändert werden (`System → Services → PBAPIServer → Settings`-Tab).
 
+### Links zu VPS-Monitor-Grenzwerten
+
+Öffne **System → PBGUI Services → PBAPIServer → Settings → VPS Monitoring**. **Server Monitor** enthält Server-Fehlergrenzwerte; **V7 Monitor** enthält Instanz-Fehlergrenzwerte. Der globale Dialog **VPSMonitor alerts** verlinkt jede ausgelöste Metrik direkt mit ihrem Fehlerfeld. Die URL erhält Panel, Settings-Tab und Feld beim Browser-Neuladen, auch unter einem Anwendungsprefix. Settings-Anfragen laufen nach 15 Sekunden ab und werden beim Verlassen der Seite abgebrochen; verspätete Antworten können neueren Zustand nicht ersetzen. Ladefehler bleiben in Settings sichtbar und sperren Speichern. Eingaben vor oder nach einer fehlgeschlagenen Anfrage überstehen Retry. Die Rückkehr aus dem Browser-Seitencache erhält Formular und Navigation und setzt unterbrochenes Laden nur im aktiven Settings-Tab fort. Anfragen werden bei jedem Verlassen abgebrochen; Entwürfe werden beim endgültigen Verlassen freigegeben. Navigation und Statusaktualisierungen erhalten ungespeicherte Eingaben. Vergleiche, Einheiten und historische Alarme sind im VPS-Monitor-Guide beschrieben.
+
 ## Starten und Stoppen
 
 - **Start**: Über den Start-Button auf der Services-Übersicht oder der Detailseite. PBAPIServer startet als Hintergrundprozess.

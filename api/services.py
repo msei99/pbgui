@@ -44,7 +44,8 @@ from ini_settings import APPLY_GROUPS, apply_metadata, apply_metadata_for
 from logging_helpers import human_log as _log
 from operation_store import DurableOperationStore
 from api_pid_handoff import ApiPidOwnershipError
-from process_identity import ExactProcessSignalError, process_identity
+from process_identity import ExactProcessSignalError, ProcessIdentity, process_identity
+from pbcoindata_process import ProcessStateError
 from service_lifecycle_lock import ServiceLifecycleBusyError, acquire_service_lifecycle_lock
 
 SERVICE = "Services"
@@ -363,6 +364,17 @@ def _service_status(
     daemons: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return service status using systemd when available, otherwise legacy PID checks."""
+    if name == "pbcoindata":
+        from pbcoindata_process import manager_state, snapshot
+        finding = manager_state(Path(PBGDIR))
+        if finding["manager"] == "systemd":
+            from pbcoindata_process import systemd_observation
+            status = systemd_observation(Path(PBGDIR))
+            return {k: v for k, v in status.items() if not k.startswith("_")} | _systemd_enable_status(name)
+        state = snapshot(Path(PBGDIR))
+        return {"running": state["status"] == "running", "manager": finding["manager"],
+                "reason": finding["reason"], "actual_status": state["status"],
+                "error": state.get("error", ""), **_systemd_enable_status(name)}
     blocker = _optional_service_blocker(name)
     systemd_status = _systemd_service_status(name)
     if systemd_status is not None and systemd_status.get("running"):
@@ -417,6 +429,12 @@ def _service_identities(
                 pass
         return ()
 
+    if name == "pbcoindata":
+        from pbcoindata_process import snapshot
+        state = snapshot(Path(PBGDIR))
+        identity = state.get("identity")
+        return ((identity.pid, identity.create_time),) if state["status"] == "running" and identity else ()
+
     identities = {
         (int(item.get("pid") or 0), float(item.get("create_time") or 0.0))
         for item in _collect_pbgui_daemon_processes()
@@ -440,12 +458,21 @@ def _wait_for_service_transition(
     enabled: bool | None = None,
 ) -> dict[str, Any]:
     """Wait for a bounded service status and process-identity transition."""
+    if name == "pbcoindata":
+        from pbcoindata_process import wait_systemd_transition
+        if _service_status(name).get("manager") == "systemd":
+            old = ProcessIdentity(*previous_identities[0]) if previous_identities else None
+            state = wait_systemd_transition(Path(PBGDIR), running=running, previous_identity=old)
+            return {k: v for k, v in state.items() if not k.startswith("_")}
     deadline = time.monotonic() + _SERVICE_TRANSITION_TIMEOUT_S
     last_status: dict[str, Any] = {}
     while True:
         last_status = _service_status(name)
         identities = _service_identities(name, last_status)
-        state_matches = bool(last_status.get("running")) is running
+        state_matches = (bool(last_status.get("running")) is running
+                         and last_status.get("actual_status", "stopped") not in {"unknown", "foreign"})
+        if name == "pbcoindata":
+            state_matches = state_matches and last_status.get("actual_status") == ("running" if running else "stopped")
         identity_matches = bool(identities) if running else not identities
         if identity_matches and running and previous_identities:
             identity_matches = not set(previous_identities).intersection(identities)
@@ -468,6 +495,7 @@ def _service_action(name: str, action: str) -> dict[str, Any]:
         raise ValueError(f"Unsupported service action: {action}")
     global_lease = None
     lifecycle_lease = None
+    coindata_deadline = time.monotonic() + _SERVICE_LIFECYCLE_LOCK_TIMEOUT_S if name == "pbcoindata" else None
     try:
         global_lease = acquire_service_lifecycle_lock(
             Path(PBGDIR),
@@ -479,7 +507,8 @@ def _service_action(name: str, action: str) -> dict[str, Any]:
             Path(PBGDIR),
             name,
             action,
-            timeout=_SERVICE_LIFECYCLE_LOCK_TIMEOUT_S,
+            timeout=(max(0.0, coindata_deadline - time.monotonic())
+                     if coindata_deadline is not None else _SERVICE_LIFECYCLE_LOCK_TIMEOUT_S),
         )
     except ServiceLifecycleBusyError as exc:
         if lifecycle_lease is not None:
@@ -502,7 +531,37 @@ def _service_action(name: str, action: str) -> dict[str, Any]:
                 result["error"] = blocker
                 return result
 
+        if name == "pbcoindata" and action in {"start", "stop", "restart", "enable", "disable"}:
+            from pbcoindata_process import manual_action, restart_phase, restart_preflight, start, stop, systemd_action
+            # The route comes from the current action's authorization, never
+            # from coercing an UNKNOWN manager to legacy or systemd.
+            if action == "restart":
+                restart_preflight(Path(PBGDIR))
+            steps = ("stop", "start") if action == "restart" else ("start" if action == "enable" else "stop" if action == "disable" else action,)
+            for requested in steps:
+                with restart_phase(Path(PBGDIR), action, requested), manual_action(Path(PBGDIR), requested) as authorization:
+                    if authorization.route == "systemd":
+                        confirmed = systemd_action(Path(PBGDIR), action if action in {"enable", "disable"} else requested,
+                                                   authorization, lambda command: _systemd_service_action(name, command))
+                    elif action in {"enable", "disable"}:
+                        raise ProcessStateError("Confirmed systemd ownership is required for autostart changes")
+                    elif requested == "stop":
+                        stop(Path(PBGDIR), authorization=authorization)
+                    else:
+                        start(Path(PBGDIR), authorization=authorization)
+            if authorization.route == "systemd":
+                return {key: value for key, value in confirmed.items() if not key.startswith("_")}
+            return _service_status(name)
+
+        manager_finding = None
+        if name == "pbcoindata":
+            from pbcoindata_process import manager_state
+            manager_finding = manager_state(Path(PBGDIR))
+            if manager_finding["manager"] == "unknown":
+                raise ProcessStateError(manager_finding["reason"])
         before = _service_status(name)
+        if manager_finding is not None:
+            before = {**before, "manager": manager_finding["manager"]}
         previous_identities = _service_identities(name, before)
         if action == "start" and before.get("running"):
             return before
@@ -510,6 +569,8 @@ def _service_action(name: str, action: str) -> dict[str, Any]:
             return before
         use_systemd = action in {"enable", "disable"} or before.get("manager") != "legacy"
         systemd_status = _systemd_service_action(name, action) if use_systemd else None
+        if manager_finding is not None and use_systemd and systemd_status is None:
+            raise ProcessStateError("Confirmed systemd ownership cannot fall back to legacy")
         if systemd_status is not None:
             if systemd_status.get("error"):
                 return systemd_status
@@ -540,7 +601,8 @@ def _service_action(name: str, action: str) -> dict[str, Any]:
                 previous_identities=previous_identities if action == "restart" else (),
             )
         return _service_status(name)
-    except ExactProcessSignalError as exc:
+    except (ExactProcessSignalError, ProcessStateError) as exc:
+        _log(SERVICE, f"Service {name} {action} refused: {str(exc)[:240]}", level="WARNING")
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     finally:
         lifecycle_lease.release()
@@ -768,16 +830,27 @@ def _pbdata_required() -> bool:
     return bool(fetch_users or trades_users)
 
 
-def _pbcoindata_required() -> bool:
-    """Return strict local CMC readiness for PBCoinData expected state."""
+def _pbcoindata_required() -> bool | None:
+    """Return the shared local lifecycle expectation, preserving unknown state."""
+    return _pbcoindata_lifecycle()["expected"]
+
+
+def _pbcoindata_lifecycle() -> dict[str, Any]:
+    """Use the same role, consumers and credential policy as the local agent."""
+    from pbcoindata_lifecycle import lifecycle_decision
 
     try:
-        return bool(_cmc_pool_payload().get("ready"))
-    except Exception:
-        return False
+        readiness = _cmc_pool_payload().get("ready")
+    except Exception as exc:
+        _log(SERVICE, f"CMC readiness unavailable: {type(exc).__name__}", level="WARNING")
+        readiness = None
+    from pbcoindata_controller import controller_metadata
+    decision = lifecycle_decision(Path(PBGDIR), readiness)
+    decision.update(controller_metadata(Path(PBGDIR)))
+    return decision
 
 
-def _migration_required_services(pbgdir: Path | None = None) -> set[str]:
+def _migration_required_services(pbgdir: Path | None = None, *, coindata_lifecycle: dict | None = None) -> set[str]:
     """Return local services that should be enabled by migration on this host."""
     root = Path(pbgdir or PBGDIR)
     required = {"api-server", "vps-monitor"}
@@ -788,7 +861,8 @@ def _migration_required_services(pbgdir: Path | None = None) -> set[str]:
         required.add("pbrun")
     if _pbdata_required():
         required.add("pbdata")
-    if _pbcoindata_required():
+    coindata_expected = _pbcoindata_required() if coindata_lifecycle is None else coindata_lifecycle["expected"]
+    if coindata_expected is True:
         required.add("pbcoindata")
     return required
 
@@ -820,7 +894,8 @@ def _migration_status_payload() -> dict[str, Any]:
     crontab = _read_legacy_crontab()
     processes = _collect_pbgui_daemon_processes()
     units = _migration_systemd_units()
-    required_units = _migration_required_services(pbgdir)
+    coindata_lifecycle = _pbcoindata_lifecycle()
+    required_units = _migration_required_services(pbgdir, coindata_lifecycle=coindata_lifecycle)
     missing_default_units = [row for row in units if row["service"] in required_units and not row["exists"]]
     not_ready_default_units = [
         row for row in units
@@ -845,6 +920,7 @@ def _migration_status_payload() -> dict[str, Any]:
         "systemd_unit_dir": str(Path.home() / ".config" / "systemd" / "user"),
         "systemd_units": units,
         "required_services": sorted(required_units),
+        "pbcoindata_lifecycle": coindata_lifecycle,
         "missing_default_units": missing_default_units,
         "not_ready_default_units": not_ready_default_units,
         "legacy_crontab": {k: v for k, v in crontab.items() if k != "lines"},
@@ -868,6 +944,9 @@ def _migration_enable_services(status: dict[str, Any]) -> list[str]:
 
 def _migration_setup_command(status: dict[str, Any]) -> tuple[list[str], list[str], Path, str, Path, str]:
     """Build the exact setup_systemd.sh command used by migration."""
+    lifecycle = status.get("pbcoindata_lifecycle")
+    if isinstance(lifecycle, dict) and lifecycle.get("expected") is None:
+        raise HTTPException(status_code=409, detail="PBCoinData lifecycle is unknown; migration cannot safely change its service state.")
     user = _current_username()
     pbgdir = Path(PBGDIR)
     python_bin = _detect_pbgui_python()
@@ -935,10 +1014,17 @@ def _stop_legacy_services(logs: list[str]) -> None:
         try:
             obj = _get_service(service)
             if obj.is_running():
-                obj.stop()
+                if service == "pbcoindata":
+                    from pbcoindata_process import manual_action, stop
+                    with manual_action(Path(PBGDIR), "stop", legacy_target=True) as authorization:
+                        stop(Path(PBGDIR), authorization=authorization)
+                else:
+                    obj.stop()
                 logs.append(f"Stopped legacy {service} process.")
         except Exception as exc:
             logs.append(f"Warning: could not stop legacy {service}: {exc}")
+            if service == "pbcoindata":
+                raise RuntimeError("PBCoinData legacy stop is unconfirmed; migration cannot start a replacement") from exc
 
 
 def _schedule_api_systemd_handoff(logs: list[str], *, start_vps_monitor: bool = False) -> str:

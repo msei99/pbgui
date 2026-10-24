@@ -4134,3 +4134,152 @@ def test_vps_refresh_reports_whether_it_synced_inventory() -> None:
     with service._refresh_lock:
         assert service.refresh() is False
     assert calls == ["inventory"]
+
+
+def _instance_threshold_fixture():
+    """Return synthetic readings and limits without accessing runtime data."""
+    config = SimpleNamespace(mem_error_v7=500, swap_error_v7=100, cpu_error_v7=80,
+                             error_error_v7=10, traceback_error_v7=5,
+                             cpu_error_server=95, mem_error_server=128,
+                             swap_error_server=128, disk_error_server=128)
+    instance = {'u': 'isolated-bot', 'm': [0] * 10, 'c': 99, 'cpu_60s': 0,
+                'cpu_60s_window': 60, 'et': 0, 'tt': 0}
+    return config, instance
+
+
+@pytest.mark.parametrize(('key', 'detail'), [
+    ('memory', 'Memory 600MB > 500MB'), ('swap', 'Swap 120MB > 100MB'),
+    ('cpu', 'CPU 60s avg 90% > 80%'), ('errors', 'Errors today 11 > 10'),
+    ('tracebacks', 'Tracebacks today 6 > 5'),
+])
+def test_instance_alert_identifies_trigger_and_limit(key, detail):
+    """Each strict instance threshold reports its own reading, limit and units."""
+    config, instance = _instance_threshold_fixture()
+    if key == 'memory':
+        instance['m'][0] = 600 * 1024 * 1024
+    elif key == 'swap':
+        instance['m'][9] = 120 * 1024 * 1024
+    else:
+        field, value = {'cpu': ('cpu_60s', 90), 'errors': ('et', 11), 'tracebacks': ('tt', 6)}[key]
+        instance[field] = value
+    alerts = collect_live_alerts({}, {}, {'isolated-host': [instance]}, {}, config)
+    assert len(alerts) == 1
+    assert alerts[0]['triggered_thresholds'] == [key]
+    assert alerts[0]['summary'].endswith(': ' + key)
+    assert detail in alerts[0]['details']
+    assert 'Current: Memory' in alerts[0]['details']
+
+
+@pytest.mark.parametrize(('average', 'window', 'stale', 'expected'), [
+    (90, 60, False, True), (80, 60, False, False), (20, 60, False, False),
+    (90, 59, False, False), (90, 60, True, False),
+])
+def test_instance_alert_cpu_confirmation_and_equal_limits(average, window, stale, expected):
+    """CPU uses fresh confirmed averages; equality on all metrics never triggers."""
+    config, instance = _instance_threshold_fixture()
+    instance.update(cpu_60s=average, cpu_60s_window=window, et=10, tt=5)
+    instance['m'][0] = 500 * 1024 * 1024
+    instance['m'][9] = 100 * 1024 * 1024
+    alerts = collect_live_alerts({}, {}, {'isolated-host': [instance]}, {}, config,
+                                 {'isolated-host': {'stale': stale}})
+    assert bool(alerts) is expected
+    if expected:
+        assert alerts[0]['triggered_thresholds'] == ['cpu']
+
+
+def test_instance_threshold_changes_preserve_acknowledgement_and_persistence(tmp_path):
+    """Updated active payloads retain Ack and survive an on-disk AlertRecord round trip."""
+    config, instance = _instance_threshold_fixture()
+    instance['m'][0] = 600 * 1024 * 1024
+    instance['m'][9] = 120 * 1024 * 1024
+    instance.update(cpu_60s=90, et=11, tt=6)
+    monitor = object.__new__(VPSMonitor)
+    monitor._alerts = {}
+    monitor.pool = SimpleNamespace(get_status_summary=lambda: {'connections': {}})
+    monitor.store = SimpleNamespace(system={}, instances={'isolated-host': [instance]}, services={},
+                                    streams={}, changed=threading.Event())
+    monitor._monitor_config = config
+    monitor._load_alert_routes = lambda: None
+    monitor._prune_alert_history = lambda now=None: False
+    monitor._update_cpu_threshold_state = lambda config: None
+    monitor._alert_gui_routes = {monitor_mod.ALERT_KIND_INSTANCE: True}
+    saved = tmp_path / 'alerts.json'
+    monitor._alert_state_path = saved
+    monitor._legacy_alert_state_path = tmp_path / 'legacy-alerts.json'
+    monitor._hl_expiry_last_warned = {}
+    emitted = []
+
+    async def emit(alert):
+        """Record notifications without contacting any external service."""
+        emitted.append(alert.id)
+
+    monitor._emit_problem_event = emit
+    asyncio.run(monitor._sync_live_alerts())
+    alert = next(iter(monitor._alerts.values()))
+    assert alert.triggered_thresholds == ['memory', 'swap', 'cpu', 'errors', 'tracebacks']
+    assert all(key in alert.summary for key in alert.triggered_thresholds)
+    assert monitor.acknowledge_alert(alert.id) is True
+    config.mem_error_v7 = 550
+    config.swap_error_v7 = 150
+    asyncio.run(monitor._sync_live_alerts())
+    assert len(monitor._alerts) == 1
+    assert alert.triggered_thresholds == ['memory', 'cpu', 'errors', 'tracebacks']
+    assert '600MB > 550MB' in alert.details
+    assert alert.acknowledged is True
+    assert emitted == [alert.id]
+    restored = monitor_mod.AlertRecord.from_dict(json.loads(saved.read_text())['alerts'][alert.id])
+    assert restored.to_dict() == alert.to_dict()
+    reloaded = object.__new__(VPSMonitor)
+    reloaded._alert_state_path = saved
+    reloaded._legacy_alert_state_path = tmp_path / 'legacy-alerts.json'
+    reloaded._load_alert_state()
+    reloaded._load_alert_routes = lambda: None
+    reloaded._prune_alert_history = lambda now=None: False
+    history = reloaded.list_alert_history()
+    assert len(history) == 1
+    assert history[0]['triggered_thresholds'] == alert.triggered_thresholds
+    assert history[0]['details'] == alert.details
+    assert history[0]['acknowledged'] is True
+
+
+@pytest.mark.parametrize(('metric', 'reading', 'limit', 'unit'), [
+    ('memory', 500 * 1024 * 1024 + 1, 500.0, 'MB'),
+    ('memory', 600 * 1024 * 1024, 500.000001, 'MB'),
+    ('swap', 100 * 1024 * 1024 + 1, 100.0, 'MB'),
+    ('cpu', 80.00000000000001, 80.0, '%'),
+    ('errors', 11, 10.000001, ''),
+    ('tracebacks', 6, 5.000001, ''),
+])
+def test_instance_alert_comparison_retains_reading_and_limit_precision(metric, reading, limit, unit):
+    """Displayed comparisons must preserve distinct readings and exact configured float limits."""
+    config, instance = _instance_threshold_fixture()
+    if metric == 'memory':
+        instance['m'][0] = reading
+        config.mem_error_v7 = limit
+        expected_reading = reading / 1024 / 1024
+    elif metric == 'swap':
+        instance['m'][9] = reading
+        config.swap_error_v7 = limit
+        expected_reading = reading / 1024 / 1024
+    else:
+        instance_field, config_field = {
+            'cpu': ('cpu_60s', 'cpu_error_v7'),
+            'errors': ('et', 'error_error_v7'),
+            'tracebacks': ('tt', 'traceback_error_v7'),
+        }[metric]
+        instance[instance_field] = reading
+        setattr(config, config_field, limit)
+        expected_reading = reading
+    alert, = collect_live_alerts({}, {}, {'isolated-host': [instance]}, {}, config)
+    assert alert['triggered_thresholds'] == [metric]
+    comparison = alert['details'].splitlines()[0]
+    left, right = comparison.split(' > ')
+    displayed_reading = left.rsplit(' ', 1)[1]
+    displayed_limit = right
+    if unit:
+        assert displayed_reading.endswith(unit) and displayed_limit.endswith(unit)
+        displayed_reading = displayed_reading[:-len(unit)]
+        displayed_limit = displayed_limit[:-len(unit)]
+    assert float(displayed_reading) == expected_reading
+    assert float(displayed_limit) == limit
+    assert float(displayed_reading) > float(displayed_limit)

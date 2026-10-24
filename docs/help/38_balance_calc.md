@@ -39,6 +39,8 @@ PB8 initial sizing follows the active strategy schema: trailing strategies use `
 
 ## Exchange selection
 
+For Hyperliquid, active HIP-3 markets from all mapped DEXes are eligible, including PARA and MKTS. Both `PARA-TOTAL2` and `para:TOTAL2` identify the same mapped instrument. Calculation still requires a linear USDC swap, positive open interest when reported, and usable minimum-order data; ignored coins remain excluded. Calculating never places orders.
+
 - Backtest and Run handoffs preselect their detected exchange.
 - Direct navigation defaults to the current dropdown selection.
 - You can change the exchange at any time using the **Exchange** dropdown.

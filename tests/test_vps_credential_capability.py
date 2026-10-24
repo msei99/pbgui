@@ -236,16 +236,13 @@ def test_v7_local_master_capability_uses_local_pool(
     assert detail["dynamic_ignore_allowed"] is expected_active
 
 
-def test_monitor_agent_pbcoindata_expectation_never_reads_ini_or_host_meta(
-    monkeypatch: pytest.MonkeyPatch,
+def test_monitor_agent_pbcoindata_expectation_uses_role_but_not_host_meta(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """PBCoinData expected state comes directly from the local pool snapshot."""
+    """Master expectation uses local pool readiness, never cached host metadata."""
 
-    monkeypatch.setattr(
-        monitor_agent,
-        "_read_ini",
-        lambda: pytest.fail("PBCoinData capability must not read INI"),
-    )
+    (tmp_path / "pbgui.ini").write_text("[main]\nrole=master\n", encoding="utf-8")
+    monkeypatch.setattr(monitor_agent, "PBGDIR", tmp_path)
     monkeypatch.setattr(
         monitor_agent,
         "_read_json",
@@ -267,6 +264,13 @@ def test_monitor_host_meta_overrides_collector_capability_with_local_pool(
     """Agent host metadata publishes current local capability and no collector secret."""
 
     monkeypatch.setattr(monitor_agent, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(monitor_agent, "PBGDIR", tmp_path)
+    recovery = {
+        "controller": "monitor-agent",
+        "recovery_ready": True,
+        "recovery_reason": "Verified local monitor-agent fallback",
+    }
+    monkeypatch.setattr(monitor_agent, "_coindata_recovery_metadata", lambda: recovery)
     monkeypatch.setattr(monitor_agent, "_embedded_monitor_script", lambda _name: "collector")
     monkeypatch.setattr(
         monitor_agent,
@@ -302,7 +306,29 @@ def test_monitor_host_meta_overrides_collector_capability_with_local_pool(
     assert payload["cmc_provider_limit"] == 100.0
     assert payload["cmc_provider_usage_age_seconds"] == 4.5
     assert payload["cmc_authority_reachable"] is True
+    for key, value in recovery.items():
+        assert payload["pbcoindata_lifecycle"][key] == value
+        assert monitor_agent._pbcoindata_lifecycle()[key] == value
     assert "must-not-survive" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("state,enabled,ready", [
+    ("running", True, True), ("unknown", True, False), ("running", False, False),
+])
+def test_monitor_recovery_metadata_requires_exact_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, enabled: bool, ready: bool,
+) -> None:
+    """Fallback recovery needs a verified local agent and enabled automatic healing."""
+    import pbcoindata_controller
+    import pbcoindata_process
+
+    monkeypatch.setattr(monitor_agent, "PBGDIR", tmp_path)
+    monkeypatch.setattr(pbcoindata_controller, "controller_metadata", lambda _root: {
+        "controller": "none", "recovery_ready": False, "recovery_reason": "No controller lease",
+    })
+    monkeypatch.setattr(pbcoindata_process, "inspect_pid", lambda *_args, **_kwargs: {"status": state})
+    monkeypatch.setattr(monitor_agent, "_auto_heal_enabled", lambda: enabled)
+    assert monitor_agent._coindata_recovery_metadata()["recovery_ready"] is ready
 
 
 def test_monitor_requires_every_desired_active_generation_exactly(

@@ -503,6 +503,11 @@ class JobStore:
         from pb8_config import save_prepared_pb8_config
         from setup.vast_gpu_benchmark.prepare import select_shards
         from sweep_cycles import build_sweep_plan
+        from vast_history import integrity_requirements, freeze_relative_dates
+        from vast_scenarios import scenario_plan
+        from vast_inception import required_markets, ensure_local_inception
+        from vast_market_cache import _load_local_markets
+        from vast_ohlcv_integrity import validate_export, signature, seal_manifest
 
         config = native_job_config(source, iterations, workers, use_adg)
         try:
@@ -525,26 +530,46 @@ class JobStore:
             "bytes_completed": 0, "bytes_total": total_bytes,
         })
         try:
+            freeze_relative_dates(config)
+            try:
+                requirements = integrity_requirements(config, scenario_plan(config)[0])
+            except ValueError as exc:
+                raise VastError('OHLCV integrity requirements cannot be checked: ' + str(exc), 422) from exc
+            market_manifest = {'files': [{'path': str(Path('ohlcv') / relative)} for _, relative in shards]}
+            markets = required_markets(market_manifest, mapping_root)
+            snapshots = _load_local_markets(sorted(markets))
+            for exchange, coins in markets.items():
+                for coin, symbol in coins.items():
+                    if symbol not in snapshots[exchange]['markets']:
+                        raise VastError(f'Local market metadata is missing {exchange}/{coin}; wait for the Market Data update', 422)
+            inception = ensure_local_inception(markets)
+            checked = validate_export(shards, requirements, markets, inception, market_root / 'checksums.sqlite')
             folder = ensure_private_directory(directory / "input")
             save_prepared_pb8_config(config, folder / "optimize.json")
             from scenario_windows import build_validation_plan
             sweep = build_sweep_plan(source)
             validation_plan = build_validation_plan(source)
             manifest = {"schema_version": 1, "pb8_revision": REVISION, "config_sha256": digest(folder / "optimize.json"),
-                        "source_config_sha256": source_sha256, "sweep_plan": sweep, "validation_plan": validation_plan, "files": []}
+                        "source_config_sha256": source_sha256, "sweep_plan": sweep, "validation_plan": validation_plan,
+                        "ohlcv_requirements": requirements,
+                        "metadata_snapshot": {'markets': snapshots, 'inception': inception}, "files": []}
             copied_bytes = 0
             last_progress_update = time.monotonic()
             for index, (original, relative) in enumerate(shards, start=1):
                 destination = folder / "ohlcv" / relative
                 ensure_private_directory(destination.parent)
                 before = original.stat()
+                if list(signature(original)) != checked[str(relative)]['signature']:
+                    raise VastError('Market data changed after integrity validation; prepare the job again', 409)
                 with original.open("rb") as src, destination.open("xb") as dest:
                     shutil.copyfileobj(src, dest, 1024 * 1024)
                 destination.chmod(0o600)
                 after = original.stat()
-                if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+                copied_sha256 = digest(destination)
+                if (list(signature(original)) != checked[str(relative)]['signature']
+                        or copied_sha256 != checked[str(relative)]['sha256']):
                     raise VastError("Market data changed during preparation; prepare the job again", 409)
-                manifest["files"].append({"path": str(Path("ohlcv") / relative), "bytes": after.st_size, "sha256": digest(destination)})
+                manifest["files"].append({"path": str(Path("ohlcv") / relative), "bytes": after.st_size, "sha256": copied_sha256})
                 copied_bytes += after.st_size
                 if index == len(shards) or time.monotonic() - last_progress_update >= 0.25:
                     self.update(identifier, input_progress={
@@ -552,6 +577,7 @@ class JobStore:
                         "bytes_completed": copied_bytes, "bytes_total": total_bytes,
                     })
                     last_progress_update = time.monotonic()
+            manifest['ohlcv_integrity'] = seal_manifest(manifest)
             write_json(folder / "manifest.json", manifest)
             def compression_progress(value: dict) -> None:
                 """Persist bounded archive progress for automatic Queue polling."""
@@ -562,14 +588,16 @@ class JobStore:
             (directory / "input.tar.gz").chmod(0o600)
             write_json(directory / "intent.json", {"id": identifier, "image": IMAGE, "pb8_revision": REVISION,
                        "results_root": str(results_root.resolve()), "bundle_sha256": digest(directory / "input.tar.gz"),
-                       "bundle_bytes": (directory / "input.tar.gz").stat().st_size, "source_config_sha256": source_sha256})
+                       "bundle_bytes": (directory / "input.tar.gz").stat().st_size,
+                       "manifest_sha256": digest(folder / 'manifest.json'), "source_config_sha256": source_sha256})
             return self.update(identifier, status="ready", input_bytes=(directory / "input.tar.gz").stat().st_size,
                                use_adg=use_adg, sweep_enabled=sweep is not None, input_progress={
                                    "stage": "complete", "files_completed": len(shards), "files_total": len(shards),
                                    "bytes_completed": total_bytes, "bytes_total": total_bytes,
                                })
-        except Exception:
-            self.update(identifier, status="failed", error="Input preparation failed; no instance rented")
+        except Exception as exc:
+            self.update(identifier, status="failed", error=str(exc) if isinstance(exc, VastError) else "Input preparation failed; no instance rented")
+            _log(SERVICE, 'Cloud input preparation failed: ' + type(exc).__name__, level='ERROR')
             raise
 
     def clone_prepared(self, source_id: str, name: str, source_sha256: str, results_root: Path,
@@ -595,6 +623,8 @@ class JobStore:
                 or any(not path.is_file() or path.is_symlink() for path in (archive, optimize_path, manifest_path))):
             return None
         try:
+            from vast_ohlcv_integrity import require_manifest_proof
+            require_manifest_proof(self, source_id)
             prepared = load_pb8_config(optimize_path)
             if not isinstance(prepared, dict) or prepared.get('backtest', {}).get('offline') is not True:
                 # Rebuild legacy online archives through native_job_config;
@@ -607,7 +637,7 @@ class JobStore:
             expected_digest = str(intent["bundle_sha256"])
             if expected_bytes <= 0 or not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
                 return None
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError, VastError):
             return None
 
         identifier = self.create_preparation(name, iterations, workers, use_adg, requeue_from=source_id)["id"]
@@ -630,6 +660,7 @@ class JobStore:
                 "id": identifier, "image": IMAGE, "pb8_revision": REVISION,
                 "results_root": str(results_root.resolve()), "bundle_sha256": expected_digest,
                 "bundle_bytes": expected_bytes, "source_config_sha256": source_sha256,
+                "manifest_sha256": digest(input_directory / 'manifest.json'),
             })
             progress = source.get("input_progress") or {}
             return self.update(
@@ -713,6 +744,7 @@ class JobStore:
                 'results_root': source_intent.get('results_root'),
                 'bundle_sha256': source_intent['bundle_sha256'],
                 'bundle_bytes': source_intent['bundle_bytes'],
+                'manifest_sha256': digest(target_input / 'manifest.json'),
                 'source_config_sha256': source_intent.get('source_config_sha256'),
             })
             progress = source.get('input_progress') or {}
@@ -753,6 +785,9 @@ class JobStore:
                 raise VastError("Offer CPU allocation is below the requested worker count", 422)
             if state["status"] != "ready" or self.read(identifier, "control.json")["stop"]:
                 raise VastError("Prepare a fresh job before starting", 409)
+            if state.get('kind') != 'worker':
+                from vast_ohlcv_integrity import require_manifest_proof
+                require_manifest_proof(self, identifier)
             active = [row for row in self.list() if row['id'] != identifier
                       and row['rental_state'] not in ('none', 'deletion_verified')]
             from vast_queue import CloudQueue

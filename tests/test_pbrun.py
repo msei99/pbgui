@@ -257,6 +257,36 @@ class FakeCoinDataIgnoredOnlyChange(FakeCoinData):
 class TestDynamicIgnoreRuntime:
     """Tests for mapping-based dynamic ignore behavior in PBRun runtime."""
 
+    def test_hip3_dexes_through_real_coindata_filter(self, tmp_path, monkeypatch):
+        """Dynamic Ignore preserves all active DEXes and reacts to mapping changes."""
+        monkeypatch.chdir(tmp_path)
+        coindata = object.__new__(PBCoinData_mod.CoinData)
+        coindata._exchange = "hyperliquid"
+        coindata._market_cap = 0
+        coindata._vol_mcap = float("inf")
+        coindata._only_cpt = False
+        coindata._notices_ignore = False
+        coindata._tags = []
+        rows = [{"coin": f"{dex.upper()}-FOOUSD", "quote": "USDC", "active": True, "swap": True,
+                 "linear": True, "open_interest": 100, "is_hip3": True, "dex": dex}
+                for dex in ["xyz", "para", "mkts", "flx", "newdex"]]
+        monkeypatch.setattr(coindata, "load_mapping", lambda **_: rows)
+        monkeypatch.setattr(PBRun_mod, "CoinData", lambda: coindata)
+        di = DynamicIgnore()
+        di.path = str(tmp_path)
+        saves = []
+        monkeypatch.setattr(di, "save", lambda: saves.append(True))
+        di.ignored_coins_long = ["PARA-FOOUSD"]
+        assert di.watch() is True
+        assert di.approved_coins == ["FLX-FOOUSD", "MKTS-FOOUSD", "NEWDEX-FOOUSD", "XYZ-FOOUSD"]
+        assert di.ignored_coins == ["PARA-FOOUSD"]
+        assert di.watch() is False
+        rows[2]["active"] = False
+        assert di.watch() is True
+        assert "MKTS-FOOUSD" not in di.approved_coins
+        assert di.ignored_coins == ["PARA-FOOUSD"]
+        assert len(saves) == 2
+
     def test_watch_uses_mapping_filters_and_updates_lists(self, monkeypatch):
         """watch() computes approved/ignored via filter_mapping and saves on approved changes.
 
@@ -1042,6 +1072,80 @@ class TestLocalVersionLoading:
 
 class TestDynamicIgnoreStartupGate:
     """Tests ensuring startup is delayed until dynamic ignore lists are ready."""
+
+    def test_bootstrap_without_daemon_or_existing_mapping(self, tmp_path, monkeypatch):
+        """The first consumer can prepare its lists before an unloaded daemon sees a bot."""
+        calls = []
+        mapping = tmp_path / "mapping.json"
+        coindata = SimpleNamespace(
+            exchange="bybit", cmc_pool_ready=lambda: True,
+            load_config=lambda: calls.append("config"),
+            load_data=lambda: calls.append("data"), load_metadata=lambda: calls.append("metadata"),
+            _source_is_newer_than_mapping=lambda exchange: (not mapping.exists(), "missing mapping.json"),
+        )
+
+        def refresh(exchange):
+            """Write only a synthetic bootstrap marker instead of fetching markets."""
+            calls.append(exchange)
+            mapping.write_text("{}")
+            return {"ok": True}
+
+        coindata.refresh_exchange_mapping = refresh
+        rv7 = PBRun_mod.RunV7()
+        rv7.path = str(tmp_path)
+        rv7.dynamic_ignore = SimpleNamespace(coindata=coindata, watch=lambda: calls.append("watch"), lists_ready=mapping.exists)
+        monkeypatch.setattr(PBRun_mod, "_log", lambda *a, **k: None)
+        monkeypatch.setattr(PBRun_mod.subprocess, "Popen", lambda *a, **k: pytest.fail("No real process"))
+        assert rv7._bootstrap_dynamic_ignore_data() is True
+        assert calls == ["config", "watch", "data", "metadata", "bybit", "watch"]
+
+    def test_main_owns_controller_only_in_five_second_maintenance(self, tmp_path, monkeypatch):
+        """PBRun initializes before election and reconciles once per existing maintenance tick."""
+        import credential_process_registry
+        import pbcoindata_controller
+        import signal
+        calls = []
+        clock = [0]
+
+        class Stop:
+            """Advance synthetic seconds without a real sleep or real signals."""
+            def is_set(self):
+                """Stop after seven loop iterations."""
+                return clock[0] >= 7
+            def wait(self, timeout):
+                """Advance the existing one-second outer loop."""
+                clock[0] += 1
+            def set(self):
+                """Support the registered shutdown handler."""
+                clock[0] = 7
+
+        class Controller:
+            """Record election lifecycle without any bot or daemon operations."""
+            def __init__(self, root):
+                calls.append("controller-init")
+            def reconcile(self, ready):
+                """Record each authorized maintenance scan."""
+                assert ready() is True
+                calls.append(("reconcile", clock[0]))
+            def close(self):
+                """Record deterministic release."""
+                calls.append("controller-close")
+
+        run = SimpleNamespace(pbgdir=tmp_path, pidfile=tmp_path / "pbrun.pid", pb7_ready=True, pb8_ready=False,
+                              run_v7=[], coindata=SimpleNamespace(cmc_pool_ready=lambda: True),
+                              is_running=lambda: False, save_pid=lambda: None,
+                              watch_v7=lambda: calls.append("bootstrap-and-watch"), watch_memory=lambda: None,
+                              refresh_runtime_config=lambda: (False, False), has_v7_runtime_changed=lambda: None)
+        monkeypatch.setattr(PBRun_mod, "PBRun", lambda: run)
+        monkeypatch.setattr(PBRun_mod, "_wait_for_cluster_boot_sync", lambda *a, **k: None)
+        monkeypatch.setattr(PBRun_mod, "_log", lambda *a, **k: None)
+        monkeypatch.setattr(PBRun_mod, "time", lambda: clock[0])
+        monkeypatch.setattr(PBRun_mod.threading, "Event", Stop)
+        monkeypatch.setattr(signal, "signal", lambda *a: None)
+        monkeypatch.setattr(pbcoindata_controller, "LegacyController", Controller)
+        monkeypatch.setattr(credential_process_registry, "ProcessCapabilityHeartbeat", lambda *a: SimpleNamespace(__enter__=lambda: None, __exit__=lambda *a: None))
+        PBRun_mod.main()
+        assert calls == ["bootstrap-and-watch", "controller-init", ("reconcile", 0), ("reconcile", 5), "controller-close"]
 
     def test_runv7_start_delays_when_dynamic_lists_not_ready(self, tmp_path, monkeypatch):
         """RunV7.start() must not spawn process while dynamic ignore lists are unavailable."""

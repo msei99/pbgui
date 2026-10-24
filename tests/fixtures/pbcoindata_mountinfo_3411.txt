@@ -1,0 +1,55 @@
+28 33 0:25 / /sys rw,nosuid,nodev,noexec,relatime shared:7 - sysfs synthetic-source rw
+29 33 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc synthetic-source rw
+30 33 0:7 / /dev rw,nosuid,relatime shared:2 - devtmpfs synthetic-source rw
+31 30 0:27 / /dev/pts rw,nosuid,noexec,relatime shared:3 - devpts synthetic-source rw
+32 33 0:28 / /run rw,nosuid,nodev,noexec,relatime shared:5 - tmpfs synthetic-source rw
+33 2 8:2 / / rw,relatime shared:1 - ext4 synthetic-source rw
+34 28 0:8 / /sys/kernel/security rw,nosuid,nodev,noexec,relatime shared:8 - securityfs synthetic-source rw
+35 30 0:29 / /dev/shm rw,nosuid,nodev shared:4 - tmpfs synthetic-source rw
+36 32 0:30 / /run/lock rw,nosuid,nodev,noexec,relatime shared:6 - tmpfs synthetic-source rw
+37 28 0:31 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime shared:9 - cgroup2 synthetic-source rw
+38 28 0:32 / /sys/fs/pstore rw,nosuid,nodev,noexec,relatime shared:10 - pstore synthetic-source rw
+39 28 0:33 / /sys/firmware/efi/efivars rw,nosuid,nodev,noexec,relatime shared:11 - efivarfs synthetic-source rw
+40 28 0:34 / /sys/fs/bpf rw,nosuid,nodev,noexec,relatime shared:12 - bpf synthetic-source rw
+41 29 0:35 / /proc/sys/fs/binfmt_misc rw,relatime shared:14 - autofs synthetic-source rw
+42 30 0:23 / /dev/mqueue rw,nosuid,nodev,noexec,relatime shared:15 - mqueue synthetic-source rw
+43 30 0:36 / /dev/hugepages rw,nosuid,nodev,relatime shared:16 - hugetlbfs synthetic-source rw
+44 28 0:14 / /sys/kernel/tracing rw,nosuid,nodev,noexec,relatime shared:17 - tracefs synthetic-source rw
+45 28 0:9 / /sys/kernel/debug rw,nosuid,nodev,noexec,relatime shared:18 - debugfs synthetic-source rw
+66 28 0:37 / /sys/fs/fuse/connections rw,nosuid,nodev,noexec,relatime shared:19 - fusectl synthetic-source rw
+46 28 0:21 / /sys/kernel/config rw,nosuid,nodev,noexec,relatime shared:20 - configfs synthetic-source rw
+47 33 7:0 / /snap/bare/5 ro,nodev,relatime shared:21 - squashfs synthetic-source ro
+48 33 7:1 / /snap/core22/2437 ro,nodev,relatime shared:23 - squashfs synthetic-source ro
+49 33 7:2 / /snap/core22/2955 ro,nodev,relatime shared:22 - squashfs synthetic-source ro
+50 33 7:4 / /snap/core24/1643 ro,nodev,relatime shared:24 - squashfs synthetic-source ro
+51 33 7:3 / /snap/core24/2124 ro,nodev,relatime shared:25 - squashfs synthetic-source ro
+53 33 7:7 / /snap/firmware-updater/258 ro,nodev,relatime shared:27 - squashfs synthetic-source ro
+56 33 7:10 / /snap/gnome-42-2204/263 ro,nodev,relatime shared:30 - squashfs synthetic-source ro
+57 33 7:9 / /snap/gnome-42-2204/247 ro,nodev,relatime shared:31 - squashfs synthetic-source ro
+59 33 7:12 / /snap/gtk-common-themes/1535 ro,nodev,relatime shared:33 - squashfs synthetic-source ro
+60 33 7:14 / /snap/mesa-2404/1165 ro,nodev,relatime shared:34 - squashfs synthetic-source ro
+61 33 7:13 / /snap/gnome-46-2404/164 ro,nodev,relatime shared:35 - squashfs synthetic-source ro
+62 33 7:15 / /snap/mesa-2404/1839 ro,nodev,relatime shared:36 - squashfs synthetic-source ro
+67 33 7:19 / /snap/snapd/27738 ro,nodev,relatime shared:40 - squashfs synthetic-source ro
+150 33 7:20 / /snap/snapd-desktop-integration/387 ro,nodev,relatime shared:41 - squashfs synthetic-source ro
+155 33 7:21 / /snap/snapd-desktop-integration/391 ro,nodev,relatime shared:42 - squashfs synthetic-source ro
+70 33 8:1 / /boot/efi rw,relatime shared:52 - vfat synthetic-source rw
+73 41 0:39 / /proc/sys/fs/binfmt_misc rw,nosuid,nodev,noexec,relatime shared:90 - binfmt_misc synthetic-source rw
+428 32 0:46 / /run/rpc_pipefs rw,relatime shared:92 - rpc_pipefs synthetic-source rw
+472 33 0:63 / /home/mani/magicnas1_home rw,nosuid,nodev,noexec,relatime shared:306 - nfs synthetic-source rw
+489 32 0:64 / /run/user/120 rw,nosuid,nodev,relatime shared:932 - tmpfs synthetic-source rw
+508 489 0:66 / /run/user/120/doc rw,nosuid,nodev,relatime shared:960 - fuse.portal synthetic-source rw
+985 32 0:28 /snapd/ns /run/snapd/ns rw,nosuid,nodev,noexec,relatime - tmpfs synthetic-source rw
+2441 985 0:5 mnt:[4026532668] /run/snapd/ns/snapd-desktop-integration.mnt rw - nsfs synthetic-source rw
+2452 32 0:81 / /run/user/1026 rw,nosuid,nodev,relatime shared:1288 - tmpfs synthetic-source rw
+2477 2452 0:82 / /run/user/1026/doc rw,nosuid,nodev,relatime shared:1369 - fuse.portal synthetic-source rw
+5209 33 7:22 / /snap/gnome-46-2404/168 ro,nodev,relatime shared:231 - squashfs synthetic-source ro
+3476 33 7:11 / /snap/snapd/28254 ro,nodev,relatime shared:32 - squashfs synthetic-source ro
+79 33 7:5 / /snap/snap-store/1447 ro,nodev,relatime shared:350 - squashfs synthetic-source ro
+4847 33 7:17 / /snap/firefox/9036 ro,nodev,relatime shared:38 - squashfs synthetic-source ro
+54 33 7:6 / /snap/firmware-updater/262 ro,nodev,relatime shared:28 - squashfs synthetic-source ro
+3457 985 0:5 mnt:[4026532400] /run/snapd/ns/firmware-updater.mnt rw - nsfs synthetic-source rw
+110 33 7:8 / /snap/firefox/9057 ro,nodev,relatime shared:165 - squashfs synthetic-source ro
+6230 985 0:5 mnt:[4026532421] /run/snapd/ns/firefox.mnt rw - nsfs synthetic-source rw
+6371 33 7:16 / /snap/snap-store/1468 ro,nodev,relatime shared:37 - squashfs synthetic-source ro
+4818 985 0:5 mnt:[4026532401] /run/snapd/ns/snap-store.mnt rw - nsfs synthetic-source rw

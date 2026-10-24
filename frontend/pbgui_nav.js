@@ -1379,6 +1379,26 @@
     try { return new Date(value * 1000).toLocaleString(); } catch (_) { return 'n/a'; }
   }
 
+  function alertThresholdLinks(item) {
+    var maps = {
+      system: {memory: ['mem_error_server', 'Memory'], swap: ['swap_error_server', 'Swap'],
+        disk: ['disk_error_server', 'Disk'], cpu: ['cpu_error_server', 'CPU']},
+      instance: {memory: ['mem_error_v7', 'Memory'], swap: ['swap_error_v7', 'Swap'],
+        cpu: ['cpu_error_v7', 'CPU'], errors: ['error_error_v7', 'Errors'], tracebacks: ['traceback_error_v7', 'Tracebacks']}
+    };
+    var map = Object.prototype.hasOwnProperty.call(maps, item.kind) ? maps[item.kind] : null;
+    if (!map) return '';
+    var base = _getAppBase() + '/api/services/main_page#api-server/settings';
+    var keys = Array.isArray(item.triggered_thresholds) ? item.triggered_thresholds : [];
+    var links = keys.filter(function (key, index) {
+      return Object.prototype.hasOwnProperty.call(map, key) && keys.indexOf(key) === index;
+    }).map(function (key) {
+      return '<a data-alert-settings href="' + escAttr(base + '/' + map[key][0]) + '">Adjust ' + map[key][1] + ' threshold</a>';
+    });
+    if (!links.length) links.push('<a data-alert-settings href="' + escAttr(base) + '">Threshold settings</a>');
+    return '<div class="pbgui-alert-meta">' + links.join(' · ') + '</div>';
+  }
+
   function renderAlertOverlay() {
     var summaryEl = document.getElementById('pbgui-alert-summary');
     var listEl = document.getElementById('pbgui-alert-list');
@@ -1422,7 +1442,7 @@
         html +=   '<div class="pbgui-alert-actions"><button type="button" class="pbgui-modal-btn secondary" data-alert-ack="' + escAttr(item.id) + '">Ack</button></div>';
       }
       html +=   '</div>';
-      html +=   '<div class="pbgui-alert-details">' + details + '</div>';
+      html +=   '<div class="pbgui-alert-details">' + details + '</div>' + alertThresholdLinks(item);
       html += '</div>';
     });
     if (history.length) {
@@ -1447,11 +1467,17 @@
         html +=       '</div>';
         html +=     '</div>';
         html +=   '</div>';
-        html +=   '<div class="pbgui-alert-details">' + details + '</div>';
+        html +=   '<div class="pbgui-alert-details">' + details + '</div>' + alertThresholdLinks(item);
         html += '</div>';
       });
     }
     listEl.innerHTML = html;
+    listEl.querySelectorAll('[data-alert-settings]').forEach(function (link) {
+      link.addEventListener('click', function () {
+        closeAlertOverlay();
+        if (link.href === window.location.href) window.dispatchEvent(new Event('hashchange'));
+      });
+    });
     listEl.querySelectorAll('[data-alert-ack]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         ackAlert(btn.getAttribute('data-alert-ack') || '');

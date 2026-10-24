@@ -202,6 +202,10 @@ Jeder automatische oder manuelle Zeitplan-Lauf erscheint wie ein normaler Copy-J
 
 Steuert den automatischen 1m-Candle-Refresh-Loop für Hyperliquid-Symbole.
 
+Die lokale Settings-Coinliste enthält aktive HIP-3-Märkte aller gemappten DEXe, einschließlich PARA und MKTS, ohne Live-Metadaten abzufragen. Doppelpunkt- und Bindestrich-Aliase verwenden denselben Settings-Schlüssel und dasselbe Datenverzeichnis; der vollständige Ticker bleibt erhalten (beispielsweise `para:FOOUSD` und `PARA-FOOUSD`). Candle-Abfragen lösen nur den angeforderten DEX auf; die XYZ-TradFi-Zuordnung bleibt getrennt. Bestehende XYZ-Datenverzeichnisse bleiben unverändert; Verzeichnisse werden nicht verschoben.
+
+Fehlt in einer älteren Mapping-Zeile der Coinname, kann Hyperliquid das CCXT-Symbol mit HIP-3-Kontext verwenden. Andere Exchanges behalten ihren nativen Marktsymbol-Fallback; ein zusätzliches CCXT-Anzeigesymbol macht aus `BTC` dadurch keinen fehlerhaften Paarnamen.
+
 - **Enabled coins** — Multiselect aus allen bekannten Hyperliquid-Symbolen
 - **Filter leeren + Select visible / Clear all** — alle Coins schnell aktivieren oder deaktivieren
 - **Cycle interval (s)** — wie oft alle aktivierten Coins aktualisiert werden (Standard: 1800s)

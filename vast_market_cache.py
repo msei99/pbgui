@@ -78,10 +78,12 @@ def stage_public_markets(connection):
             or any(not isinstance(name, str) or name not in SUPPORTED_EXCHANGES for name in exchanges)):
         raise VastError("Missing or unsupported exchanges for public market metadata", 422)
     try:
+        manifest = connection.store.read(connection.identifier, 'input/manifest.json')
+        frozen = (manifest.get('metadata_snapshot') or {}).get('markets')
         async def bounded_fetch():
             """Bound parsing of local market snapshots."""
             return await asyncio.wait_for(fetch_markets(list(dict.fromkeys(exchanges))), timeout=180)
-        snapshots = asyncio.run(bounded_fetch())
+        snapshots = frozen if frozen is not None else asyncio.run(bounded_fetch())
         if not isinstance(snapshots, dict) or set(snapshots) != set(exchanges):
             raise VastError('Public market metadata is incomplete', 422)
         for item in snapshots.values():

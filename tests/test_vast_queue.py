@@ -1,5 +1,6 @@
 """Offline shared-rental scheduling, queue cancellation and cached transfer contracts."""
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from vast_queue import CloudQueue, worker_step
 from vast_job_runner import rental_payload
 from setup.vast_gpu_benchmark import cloud_worker
 from vast_direction_fixtures import direction_config
+from vast_integrity_fixtures import freeze_test_proof
+from test_vast_ohlcv_integrity import preparation
 
 
 @pytest.fixture
@@ -30,6 +33,7 @@ def queue(tmp_path):
         if i:
             ensure_private_directory(directory / 'input')
             write_json(directory / 'input/optimize.json', direction_config())
+            freeze_test_proof(store, identifier)
     queue.update(worker_id=worker)
     return queue, worker
 
@@ -758,35 +762,52 @@ def test_manual_rental_can_end_and_cannot_outlive_deadline(queue, stop, now):
 
 
 @pytest.mark.parametrize('expired_bundle', [False, True])
-def test_missing_local_metadata_blocks_rental_before_worker_creation(tmp_path, monkeypatch, expired_bundle):
-    """Missing local snapshots and expired bundles both block a paid worker."""
+def test_missing_local_metadata_blocks_rental_before_worker_creation(preparation, tmp_path, monkeypatch, expired_bundle):
+    """Genuinely admitted input still cannot rent with missing or expired metadata."""
     import vast_market_cache
     import vast_queue
+    from vast_ohlcv_integrity import require_manifest_proof
     from vast_provider import VastError
 
-    store = JobStore(tmp_path / 'vast')
-    row = store.create_preparation('offline-cache', 512, 4, False)
-    store.update(row['id'], status='ready', exchanges=['bybit'])
-    input_dir = store.directory(row['id']) / 'input'
-    input_dir.mkdir()
-    write_json(input_dir / 'optimize.json', direction_config())
-    manifest = {'files': [{'path': 'ohlcv/bybit/1m/BTC_USDT:USDT/2024-01-01.npy'}]}
-    if expired_bundle:
-        manifest['public_market_cache_mtimes'] = {'bybit': time.time() - 86401}
-    write_json(input_dir / 'manifest.json', manifest)
+    p = preparation
+    store, row = p.store, p.run()
+    assert row['status'] == 'ready' and row['rental_state'] == 'none'
+    manifest = require_manifest_proof(store, row['id'])
+    assert len(manifest['files']) == 2
+    immutable = {name: (store.directory(row['id']) / name).read_bytes() for name in
+                 ('input/manifest.json', 'input/optimize.json', 'input.tar.gz')}
     market_root = tmp_path / 'data/coindata'
-    mapping = market_root / 'bybit/mapping.json'
-    mapping.parent.mkdir(parents=True)
-    mapping.write_text(json.dumps([{'coin': 'BTC', 'ccxt_symbol': 'BTC/USDT:USDT',
-                                    'quote': 'USDT', 'swap': True, 'linear': True}]))
+    shutil.copytree(p.mapping, market_root / 'bybit')
     monkeypatch.setattr(vast_queue, 'PROJECT', tmp_path)
     monkeypatch.setattr(vast_market_cache, 'MARKET_ROOT', market_root)
+
+    rental_calls = []
+    def start(*args, **kwargs):
+        """Fail at the local rental boundary before any provider or supervisor access."""
+        rental_calls.append(args)
+        pytest.fail('Metadata rejection must precede rental startup')
+
+    monkeypatch.setattr(store, 'start', start)
+    if expired_bundle:
+        # Age the real proof without rewriting/resealing its immutable snapshot.
+        expired = manifest['metadata_snapshot']['markets']['bybit']['fetched_at'] + 86401
+        monkeypatch.setattr(time, 'time', lambda: expired)
+        reason = 'Queue a cloud optimizer config first'
+    else:
+        (market_root / 'bybit/ccxt_markets.json').unlink()
+        reason = 'Local market metadata is missing for bybit'
     queue = CloudQueue(store)
-    reason = 'Prepared market cache is invalid or expired' if expired_bundle else 'Local market metadata is missing for bybit'
     with pytest.raises(VastError, match=reason):
         queue.start({'id': 42, 'machine_id': 70}, 1, 1, 300)
+    if expired_bundle:
+        failed = store.read(row['id'])
+        assert failed['status'] == 'failed'
+        assert 'Prepared market metadata is missing or expired' in failed['error']
+    assert rental_calls == []
+    assert not any(item.get('kind') == 'worker' for item in store.list())
     assert queue.worker() is None
     assert queue.read().get('worker_id') is None
+    assert all((store.directory(row['id']) / name).read_bytes() == data for name, data in immutable.items())
 
 
 def test_rent_without_jobs_starts_services_immediately(tmp_path, monkeypatch):

@@ -10,6 +10,7 @@ from vast_config_validation import validate_cloud_config
 from vast_exchanges import CCXT_EXCHANGES, quote_currency
 from vast_jobs import JobStore, native_job_config
 from vast_scenarios import scenario_plan
+from vast_integrity_fixtures import selection_only_boundaries
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +33,7 @@ def test_requeue_rebuilds_history_instead_of_reusing_old_bundle(config, tmp_path
     legacy = {'files': [{'path': 'ohlcv/binance/1m/BTC_USDT:USDT/2019-01-01.npy'}]}
     write_json(store.directory(old['id']) / 'input/manifest.json', legacy)
     make_market(tmp_path, 'binance', ['BTC'])
+    selection_only_boundaries(monkeypatch)
     monkeypatch.setattr('pb8_config.save_prepared_pb8_config',
                         lambda value, path: path.write_text(json.dumps(value)))
     monkeypatch.setattr(api, 'CloudQueue', lambda: queue)
@@ -55,12 +57,13 @@ def test_requeue_rebuilds_history_instead_of_reusing_old_bundle(config, tmp_path
 @pytest.fixture
 def config():
     """Use explicit common-side coin lists and canonical PB8 override paths."""
-    return {'live': {'strategy_kind': 'ema_anchor', 'approved_coins': {'long': ['BTC'], 'short': ['BTC']},
+    return {'live': {'strategy_kind': 'ema_anchor', 'minimum_coin_age_days': 0,
+                     'approved_coins': {'long': ['BTC'], 'short': ['BTC']},
                      'ignored_coins': {'long': [], 'short': []}, 'hedge_mode': True},
             'bot': {side: {'risk': {'n_positions': 1, 'total_wallet_exposure_limit': 1.0},
                            'hsl': {'enabled': False}} for side in ('long', 'short')},
             'backtest': {'suite_enabled': True, 'exchanges': ['binance'], 'start_date': '2024-01-01',
-                         'end_date': '2024-12-31', 'starting_balance': 1000,
+                         'end_date': '2024-12-31', 'starting_balance': 1000, 'gap_tolerance_ohlcvs_minutes': 120,
                          'scenarios': [{'label': 'base'}]},
             'optimize': {'iters': 512, 'n_cpus': 4, 'scoring': [{'metric': 'adg_strategy_eq', 'goal': 'max'}], 'limits': [],
                          'bounds': {f'{side}_{field}': [1, 1] for side in ('long', 'short')
@@ -203,6 +206,7 @@ def test_disabled_scenarios_do_not_expand_export(config, tmp_path):
 def test_frozen_job_stages_every_exported_exchange(config, tmp_path, monkeypatch):
     """Persist added scenario exchanges for market metadata and inception staging."""
     import pb8_config
+    selection_only_boundaries(monkeypatch)
     monkeypatch.setattr(pb8_config, 'save_prepared_pb8_config', lambda value, path: path.write_text(json.dumps(value)))
     config['backtest']['scenarios'] = [{'label': 'extra', 'coins': ['SOL'], 'exchanges': ['bybit']}]
     make_market(tmp_path, 'binance', ['BTC'])

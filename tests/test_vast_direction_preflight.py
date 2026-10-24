@@ -12,6 +12,7 @@ from vast_jobs import JobStore, IMAGE, REVISION, SUPPORTED_RENTAL_IMAGE_REVISION
 from vast_provider import VastError
 from vast_queue import CloudQueue, preflight_gpu_snapshots, worker_step
 from vast_direction_fixtures import direction_config
+from vast_integrity_fixtures import freeze_test_proof
 
 
 def unstable_config():
@@ -35,6 +36,7 @@ def prepared(store, config, *, kind='job'):
     write_json(directory / 'intent.json', dict(id=row['id'], image=IMAGE, pb8_revision=REVISION,
         source_config_sha256='synthetic-source', bundle_sha256=digest(archive), bundle_bytes=archive.stat().st_size,
         results_root=str(store.root / 'results')))
+    freeze_test_proof(store, row['id'])
     return store.update(row['id'], status='ready', kind=kind, exchanges=['binance'], input_bytes=1,
         input_progress={'stage': 'complete', 'files_completed': 0, 'files_total': 0, 'bytes_completed': 0, 'bytes_total': 0})
 

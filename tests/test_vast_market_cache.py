@@ -29,9 +29,20 @@ def test_stage_fresh_metadata(tmp_path, monkeypatch):
         subprocess.run([sys.executable, '-c', shlex.split(value)[2]], stdin=stdin, check=True)
 
     monkeypatch.setattr(cache, 'fetch_markets', fetch)
+    reads = []
+    def read(identifier, name='state.json'):
+        """An existing legacy job has no frozen market snapshot in its manifest."""
+        assert identifier == 'test'
+        reads.append(name)
+        if name == 'state.json':
+            return {'exchanges': ['binance', 'bybit']}
+        assert name == 'input/manifest.json'
+        return {'files': []}
+
     connection = SimpleNamespace(identifier='test', remote_root=str(tmp_path), command=command,
-        store=SimpleNamespace(read=lambda identifier: {'exchanges': ['binance', 'bybit']}))
+        store=SimpleNamespace(read=read))
     cache.stage_public_markets(connection)
+    assert reads == ['state.json', 'input/manifest.json']
     for ex in ('binance', 'bybit'):
         target = tmp_path / 'output/caches' / ex / 'markets.json'
         assert json.loads(target.read_text())['ETH/USDT:USDT']['swap']

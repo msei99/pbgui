@@ -1,3 +1,9 @@
+# Direct service entry: acquire the shared lifetime guard before any heavy import.
+if __name__ == "__main__":
+    from pathlib import Path as _GuardPath
+    from pbcoindata_guard import acquire_daemon as _acquire_daemon
+    _DAEMON_GUARD = _acquire_daemon(_GuardPath.cwd())
+
 import psutil
 import subprocess
 from time import sleep, time_ns
@@ -129,7 +135,7 @@ def remove_powers_of_ten(text):
 
 
 _HYPERLIQUID_K_PREFIX_COINS = {"BONK", "FLOKI", "LUNC", "PEPE", "SHIB", "DOGS", "NEIRO"}
-_HYPERLIQUID_HIP3_DEX_PREFIXES = {"XYZ", "FLX", "CASH", "HYNA", "KM", "VNTL", "ABCD"}
+_HYPERLIQUID_HIP3_DEX_PREFIXES = {"XYZ", "PARA", "MKTS", "FLX", "CASH", "HYNA", "KM", "VNTL", "ABCD"}
 
 
 def _strip_hyperliquid_k_prefix(name: str) -> str:
@@ -155,17 +161,52 @@ def _is_hyperliquid_hip3_base_symbol(name: str) -> bool:
     return prefix in _HYPERLIQUID_HIP3_DEX_PREFIXES
 
 
-def _normalize_hyperliquid_hip3_alias(symbol: str) -> str:
-    """Normalize supported Hyperliquid HIP-3 aliases to PBGui's XYZ-TICKER form."""
-    value = str(symbol or "").strip().upper()
-    if not value:
+def _hip3_qualified_base(symbol: str) -> tuple[str, str] | None:
+    """Parse a qualified base, removing only explicit pair/settlement parts."""
+    value = str(symbol or "").strip().upper().split("/", 1)[0]
+    value = re.sub(r"_(USDC|USDT)(?::|_)(USDC|USDT)$", "", value)
+    match = re.fullmatch(r"([A-Z0-9]{1,16})[:-]([A-Z0-9][A-Z0-9._-]*)(?::(?:USDC|USDT))?", value)
+    return (match[1], match[2]) if match else None
+
+
+def _normalize_hyperliquid_hip3_alias(symbol: str, mapping_record: dict | None = None) -> str:
+    """Pure HIP-3 parser; additional DEXes require a matching explicit row."""
+    parsed = _hip3_qualified_base(symbol)
+    if parsed is None:
         return ""
-    base = value.split("/", 1)[0].strip()
-    if base.startswith("XYZ:") and len(base) > 4:
-        return f"XYZ-{base[4:].strip()}"
-    if _is_hyperliquid_hip3_base_symbol(base):
-        return base
-    return ""
+    prefix, ticker = parsed
+    if mapping_record is not None:
+        dex = str(mapping_record.get("dex") or "").strip().lower()
+        if not mapping_record.get("is_hip3") or not re.fullmatch(r"[a-z0-9]{1,16}", dex) or prefix.lower() != dex:
+            return ""
+        qualified = [_hip3_qualified_base(mapping_record.get(key)) for key in ("coin", "base", "symbol", "ccxt_symbol")]
+        qualified = [value for value in qualified if value is not None]
+        if not qualified or any(value != parsed for value in qualified):
+            return ""
+    elif prefix not in _HYPERLIQUID_HIP3_DEX_PREFIXES:
+        return ""
+    return f"{prefix}-{ticker}"
+
+
+def get_hyperliquid_hip3_alias(symbol: str, mapping: list[dict] | None = None) -> str:
+    """Resolve known aliases or confirm additional ones from local mapping rows."""
+    if _hip3_qualified_base(symbol) is None:
+        return ""
+    known = _normalize_hyperliquid_hip3_alias(symbol)
+    if known and mapping is None:
+        return known
+    if mapping is None:
+        path = Path.cwd() / "data" / "coindata" / "hyperliquid" / "mapping.json"
+        if not path.exists():
+            return ""
+        try:
+            mapping = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            _log(SERVICE, f"Unable to read HIP-3 mapping ({type(exc).__name__})", level="WARNING")
+            return ""
+    matches = {_normalize_hyperliquid_hip3_alias(symbol, row) for row in mapping if isinstance(row, dict)} if isinstance(mapping, list) else set()
+    matches.discard("")
+    return next(iter(matches)) if len(matches) == 1 else known
 
 
 def compute_coin_name(market_id, quote=""):
@@ -283,13 +324,14 @@ def build_symbol_mappings(symbols):
     return mappings
 
 
-def normalize_symbol(symbol, symbol_mappings=None):
+def normalize_symbol(symbol, symbol_mappings=None, *, mapping_record=None):
     """
     Normalize a trading symbol to its base coin name.
     
     Args:
         symbol: Trading pair symbol (e.g., "1000SHIBUSDT", "kPEPE", "BTCUSDT")
         symbol_mappings: Optional pre-built mapping dict from build_symbol_mappings()
+        mapping_record: Optional matching Hyperliquid HIP-3 row for additional DEX prefixes.
     
     Returns:
         str: Normalized base coin (e.g., "SHIB", "PEPE", "BTC")
@@ -300,9 +342,11 @@ def normalize_symbol(symbol, symbol_mappings=None):
     # Remove quote currency suffixes
     base = str(symbol).strip().upper()
 
-    hip3_alias = _normalize_hyperliquid_hip3_alias(base)
+    hip3_alias = _normalize_hyperliquid_hip3_alias(base, mapping_record)
     if hip3_alias:
         return hip3_alias
+    if mapping_record is not None and mapping_record.get("is_hip3"):
+        return ""
     
     # Check for stablecoin/quote-like patterns that should NOT be stripped further
     # These are coins whose names resemble quotes (USDe, USDC as trading pair, etc.)
@@ -526,6 +570,7 @@ class CoinData:
         self.exchange_index = self.exchanges.index(self.exchange)
         self.update_symbols_ts = 0
         self.update_mappings_ts = 0
+        self._mapping_refresh_ts = {}
         self._symbols = []
         self._symbols_cpt = []
         self._symbols_all = []
@@ -820,10 +865,6 @@ class CoinData:
             return False
 
         if exchange == "hyperliquid":
-            if bool(record.get("is_hip3", False)):
-                dex = str(record.get("dex") or "").strip().lower()
-                if dex != "xyz":
-                    return False
             open_interest = self._to_float(record.get("open_interest"))
             if open_interest is not None and open_interest <= 0.0:
                 return False
@@ -1433,46 +1474,32 @@ class CoinData:
     
 
     def run(self):
-        if not self.is_running():
-            pbgdir = Path.cwd()
-            cmd = [sys.executable, '-u', PurePath(f'{pbgdir}/PBCoinData.py')]
-            if platform.system() == "Windows":
-                creationflags = subprocess.DETACHED_PROCESS
-                creationflags |= subprocess.CREATE_NO_WINDOW
-                subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, creationflags=creationflags)
-            else:
-                subprocess.Popen(cmd, stdout=None, stderr=None, cwd=pbgdir, text=True, start_new_session=True)
-            count = 0
-            while True:
-                if count > 5:
-                    _log(SERVICE, 'Can not start PBCoinData', level='ERROR')
-                    break
-                sleep(1)
-                if self.is_running():
-                    break
-                count += 1
+        """Use the shared exact, bounded legacy start path."""
+        from pbcoindata_process import manual_action, start
+        root = self.pidfile.resolve().parent.parent.parent
+        with manual_action(root, "start") as authorization:
+            start(root, authorization=authorization)
 
     def stop(self):
-        if self.is_running():
-            _log(SERVICE, 'Stop: PBCoinData', level='INFO')
-            try:
-                psutil.Process(self.my_pid).kill()
-            except psutil.NoSuchProcess:
-                pass
+        """Stop only this checkout's freshly verified exact process."""
+        from pbcoindata_process import manual_action, stop
+        root = self.pidfile.resolve().parent.parent.parent
+        with manual_action(root, "stop") as authorization:
+            stop(root, authorization=authorization)
 
     def restart(self):
-        if self.is_running():
-            self.stop()
-            self.run()
+        """Hold the action locks across the entire explicit restart."""
+        from pbcoindata_process import restart
+        restart(self.pidfile.resolve().parent.parent.parent)
 
     def is_running(self):
-        self.load_pid()
-        try:
-            if self.my_pid and psutil.pid_exists(self.my_pid) and any(sub.lower().endswith("pbcoindata.py") for sub in psutil.Process(self.my_pid).cmdline()):
-                return True
-        except psutil.NoSuchProcess:
-            pass
-        return False
+        """Do not collapse an inaccessible or foreign identity into a stopped PID."""
+        from pbcoindata_process import ProcessStateError, snapshot
+        state = snapshot(self.pidfile.resolve().parent.parent.parent)
+        self.my_pid = state.get("pid")
+        if state["status"] not in {"running", "stopped"}:
+            raise ProcessStateError(state.get("error", "PBCoinData state unknown"))
+        return state["status"] == "running"
 
     def load_pid(self):
         if self.pidfile.exists():
@@ -1484,11 +1511,9 @@ class CoinData:
                     self.my_pid = None
 
     def save_pid(self):
-        self.my_pid = os.getpid()
-        tmp_path = self.pidfile.with_suffix(self.pidfile.suffix + '.tmp')
-        with tmp_path.open('w', encoding='utf-8') as f:
-            f.write(str(self.my_pid))
-        tmp_path.replace(self.pidfile)
+        """Publish the singleton-owned numeric PID and private exact sidecar."""
+        from pbcoindata_process import register_current
+        self.my_pid = register_current(self.pidfile.resolve().parent.parent.parent).pid
 
     def has_new_config(self):
         """Return whether the current file generation has not been applied."""
@@ -1803,7 +1828,12 @@ class CoinData:
                 match_method = ""
                 coin_from_market_id = compute_coin_name(market_id, market.get("quote", ""))
                 if exchange_id == "hyperliquid" and is_hip3:
-                    coin_name = normalize_symbol(base or symbol, self._symbol_mappings)
+                    coin_name = normalize_symbol(base or symbol, self._symbol_mappings, mapping_record={
+                        "is_hip3": True, "dex": market.get("info", {}).get("dex"), "base": base or symbol,
+                        "ccxt_symbol": symbol, "symbol": market_id,
+                    })
+                    if not coin_name:
+                        continue
                 elif re.search(r"[A-Z]", coin_from_market_id):
                     coin_name = coin_from_market_id
                 else:
@@ -2858,8 +2888,8 @@ class CoinData:
                 return True
         return
 
-    def update_mappings(self):
-        """Fetch CCXT markets and build mappings for all V7-supported exchanges.
+    def update_mappings(self, *, exchanges=None):
+        """Refresh supported exchanges, optionally selected by the slave daemon.
         
         Runs on its own interval (mapping_interval, in hours).
         Includes HIP-3 stock perpetuals detection.
@@ -2867,17 +2897,44 @@ class CoinData:
         hyperliquid, kucoin, okx). Legacy exchanges are excluded.
         """
         now_ts = datetime.now().timestamp()
+        supported = V7.list()
+        requested = set(exchanges) if exchanges is not None else set(supported)
+        selected = [exchange for exchange in supported if exchange in requested] if requested <= set(supported) else supported
+        self._mapping_self_heal_state = {exchange: state for exchange, state in self._mapping_self_heal_state.items()
+                                         if exchange in supported}
+        self._mapping_refresh_ts = {exchange: timestamp for exchange, timestamp in self._mapping_refresh_ts.items()
+                                    if exchange in supported}
+        interval_cutoff = now_ts - 3600 * self._mapping_interval
+        regular_cycle = self.update_mappings_ts < interval_cutoff
+        tradfi_needed = "hyperliquid" in selected
 
         refreshed_in_self_heal = set()
 
+        def record_failure(exchange, error, phase):
+            """Keep failed self-heal/catch-up attempts separate from freshness."""
+            state = self._mapping_self_heal_state.get(exchange, {})
+            fails = int(state.get("fails", 0)) + 1
+            backoff_hours = min(2 ** (fails - 1), 24)
+            self._mapping_self_heal_state[exchange] = {
+                "fails": fails,
+                "next_retry_ts": now_ts + 3600 * backoff_hours,
+            }
+            _log(SERVICE,
+                f'{phase} mapping failed for {exchange}: {error}. '
+                f'Next retry in {backoff_hours}h (fail #{fails})',
+                level='ERROR'
+            )
+
         # Self-heal pass: if mapping is missing/stale, rebuild immediately
         # independent of interval, with exponential backoff up to 24h.
-        for exchange in V7.list():
+        for exchange in selected:
             needs_heal, reason = self._source_is_newer_than_mapping(exchange)
+            state = self._mapping_self_heal_state.get(exchange, {"fails": 0, "next_retry_ts": 0.0})
+            if not needs_heal and state.get("fails", 0):
+                needs_heal, reason = True, "pending failed refresh"
             if not needs_heal:
                 continue
 
-            state = self._mapping_self_heal_state.get(exchange, {"fails": 0, "next_retry_ts": 0.0})
             if now_ts < float(state.get("next_retry_ts", 0.0)):
                 continue
 
@@ -2892,32 +2949,49 @@ class CoinData:
                         f'prices_ok={result.get("prices_ok")})'
                     )
                 refreshed_in_self_heal.add(exchange)
+                self._mapping_refresh_ts[exchange] = now_ts
                 if exchange in self._mapping_self_heal_state:
                     del self._mapping_self_heal_state[exchange]
                 _log(SERVICE, f'Self-heal mapping succeeded for {exchange}', level='INFO')
             except Exception as e:
-                fails = int(state.get("fails", 0)) + 1
-                backoff_hours = min(2 ** (fails - 1), 24)
-                next_retry_ts = now_ts + 3600 * backoff_hours
-                self._mapping_self_heal_state[exchange] = {
-                    "fails": fails,
-                    "next_retry_ts": next_retry_ts,
-                }
-                _log(SERVICE,
-                    f'Self-heal mapping failed for {exchange}: {e}. '
-                    f'Next retry in {backoff_hours}h (fail #{fails})',
-                    level='ERROR'
-                )
+                record_failure(exchange, e, "Self-heal")
 
-        if self.update_mappings_ts < now_ts - 3600 * self._mapping_interval:
+        cycle_exchanges = selected if regular_cycle else []
+        if not regular_cycle and exchanges is not None:
+            # Exchanges joining during a global interval must not wait for that
+            # interval to end. Reuse fresh on-disk mappings after daemon restart.
+            for exchange in selected:
+                if exchange in refreshed_in_self_heal:
+                    continue
+                last_refresh = self._mapping_refresh_ts.get(exchange)
+                if last_refresh is None:
+                    mapping_path = self._get_exchange_dir(exchange) / "mapping.json"
+                    try:
+                        last_refresh = mapping_path.stat().st_mtime if mapping_path.exists() else 0
+                    except OSError as exc:
+                        _log(SERVICE, f"Mapping age unavailable for {exchange}: {type(exc).__name__}", level="WARNING")
+                        last_refresh = 0
+                retry_at = self._mapping_self_heal_state.get(exchange, {}).get("next_retry_ts", 0)
+                if last_refresh < interval_cutoff and now_ts >= retry_at:
+                    cycle_exchanges.append(exchange)
+
+        if regular_cycle or cycle_exchanges:
             cycle_started_ts = datetime.now().timestamp()
             cycle_results = []
-            _log(SERVICE, 'Starting mapping update for all exchanges', level='INFO')
-            for exchange in V7.list():
+            _log(SERVICE, f'Starting mapping update for exchanges: {", ".join(cycle_exchanges)}', level='INFO')
+            for exchange in cycle_exchanges:
                 try:
                     if exchange in refreshed_in_self_heal:
                         continue
-                    cycle_results.append(self.refresh_exchange_mapping(exchange))
+                    if now_ts < self._mapping_self_heal_state.get(exchange, {}).get("next_retry_ts", 0):
+                        continue
+                    result = self.refresh_exchange_mapping(exchange)
+                    cycle_results.append(result)
+                    if result.get("ok"):
+                        self._mapping_refresh_ts[exchange] = now_ts
+                        self._mapping_self_heal_state.pop(exchange, None)
+                    elif not regular_cycle:
+                        record_failure(exchange, "refresh result not ok", "Catch-up")
                 except Exception as e:
                     cycle_results.append({
                         "exchange": exchange,
@@ -2932,16 +3006,20 @@ class CoinData:
                         "ok": False,
                     })
                     _log(SERVICE, f'Failed to update mapping for {exchange}: {e}', level='ERROR')
-            self.update_mappings_ts = now_ts
+                    if not regular_cycle:
+                        record_failure(exchange, e, "Catch-up")
+            if regular_cycle:
+                self.update_mappings_ts = now_ts
 
             if not cycle_results:
                 total_elapsed = datetime.now().timestamp() - cycle_started_ts
                 _log(SERVICE,
-                    f'Mapping update skipped: all exchanges were already refreshed by self-heal in {total_elapsed:.1f}s',
+                    f'Mapping update skipped: no exchanges due after self-heal/backoff in {total_elapsed:.1f}s',
                     level='INFO'
                 )
                 _log(SERVICE, 'Mapping update complete', level='INFO')
-                self._run_tradfi_sync()
+                if tradfi_needed:
+                    self._run_tradfi_sync()
                 return
 
             total_elapsed = datetime.now().timestamp() - cycle_started_ts
@@ -2969,6 +3047,9 @@ class CoinData:
                 level='INFO'
             )
             _log(SERVICE, 'Mapping update complete', level='INFO')
+            if tradfi_needed:
+                self._run_tradfi_sync()
+        elif refreshed_in_self_heal and tradfi_needed:
             self._run_tradfi_sync()
 
     @staticmethod
@@ -3087,42 +3168,16 @@ class CoinData:
 
     @staticmethod
     def _has_dynamic_ignore_bots() -> bool:
-        """Check if any actually-running V7 instance on this node uses dynamic_ignore.
+        """Compatibility wrapper: unknown consumers must not imply idle."""
+        from pbcoindata_lifecycle import IDLE, consumer_demand
 
-        Scans data/run_v7/*/config.json for dynamic_ignore=True, then verifies
-        the bot is really running by checking for main.py + config_run.json in
-        the process cmdline (same detection logic as RunV7.pid() in PBRun.py).
-        """
-        run_v7_dir = Path('data/run_v7')
-        if not run_v7_dir.exists():
-            return False
-        for instance_dir in run_v7_dir.iterdir():
-            if not instance_dir.is_dir():
-                continue
-            config_file = instance_dir / 'config.json'
-            if not config_file.exists():
-                continue
-            try:
-                with open(config_file, encoding='utf-8') as f:
-                    cfg = json.load(f)
-                if not cfg.get('pbgui', {}).get('dynamic_ignore', False):
-                    continue
-            except Exception:
-                continue
-            config_run = instance_dir / 'config_run.json'
-            if not config_run.exists():
-                continue
-            for proc in psutil.process_iter():
-                try:
-                    cmdline = proc.cmdline()
-                except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
-                    continue
-                if (
-                    any('main.py' in s for s in cmdline)
-                    and any(_arg_matches_path(s, config_run) for s in cmdline)
-                ):
-                    return True
-        return False
+        try:
+            cfg = load_ini_snapshot(Path.cwd() / "pbgui.ini").parser
+            pb7_dir = cfg.get("main", "pb7dir", fallback="")
+        except Exception as exc:
+            _log(SERVICE, f"Consumer configuration unavailable: {type(exc).__name__}; idle is unconfirmed", level="WARNING")
+            return True
+        return consumer_demand(Path.cwd(), pb7_dir) != IDLE
 
     def _run_tradfi_sync(self):
         """Sync TradFi symbol map + XYZ spec after a mapping update cycle.
@@ -3298,21 +3353,59 @@ class CoinData:
         ignored_coins -= approved_coins
         return sorted(approved_coins), sorted(ignored_coins)
 
+def _daemon_mapping_exchanges():
+    """Restrict only explicit slaves with a complete, supported consumer scan."""
+    from pbcoindata_lifecycle import consumer_snapshot
+
+    try:
+        cfg = load_ini_snapshot(Path.cwd() / "pbgui.ini").parser
+        if cfg.get("main", "role", fallback="").strip().lower() != "slave":
+            return None
+        snapshot = consumer_snapshot(Path.cwd(), cfg.get("main", "pb7dir", fallback=""))
+        if snapshot.complete and snapshot.exchanges <= set(V7.list()):
+            return snapshot.exchanges
+    except Exception as exc:
+        _log(SERVICE, f"Consumer exchange selection unavailable: {type(exc).__name__}", level="WARNING")
+    return None
+
+
 def main():
     from credential_process_registry import ProcessCapabilityHeartbeat
+    from pbcoindata_process import clear_owned_files
+    from pbcoindata_guard import acquire_daemon
+    from process_identity import ProcessIdentity
+    import signal
 
-    pbcoindata = CoinData(defer_config=True)
-    if pbcoindata.is_running():
-        _log(SERVICE, 'PBCoinData already started', level='ERROR')
-        sys.exit(1)
-    _log(SERVICE, 'Start: PBCoinData', level='INFO')
-    pbcoindata.save_pid()
-    capability = ProcessCapabilityHeartbeat(Path(__file__).resolve().parent, "PBCoinData")
-    capability.__enter__()
-    pbcoindata._ini_watcher.start()
-    config_retry_count = 0
+    root = Path.cwd().resolve()
     try:
-        while True:
+        singleton = globals().get("_DAEMON_GUARD") or acquire_daemon(root)
+    except BlockingIOError:
+        _log(SERVICE, "PBCoinData singleton already owned", level="INFO")
+        return
+    pbcoindata = capability = None
+    published = None
+    previous_handlers = {}
+    stopping = False
+
+    def request_stop(_signum, _frame):
+        """Wake the existing daemon wait without requesting controller action locks."""
+        nonlocal stopping
+        stopping = True
+        if pbcoindata is not None:
+            pbcoindata._ini_watcher.changed.set()
+
+    try:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.signal(signum, request_stop)
+        pbcoindata = CoinData(defer_config=True)
+        _log(SERVICE, 'Start: PBCoinData', level='INFO')
+        capability = ProcessCapabilityHeartbeat(root, "PBCoinData")
+        capability.__enter__()
+        pbcoindata._ini_watcher.start()
+        published = ProcessIdentity(os.getpid(), psutil.Process().create_time())
+        pbcoindata.save_pid()
+        config_retry_count = 0
+        while not stopping:
             try:
                 pbcoindata._ini_watcher.changed.clear()
                 pbcoindata.load_config()
@@ -3329,19 +3422,36 @@ def main():
                         pbcoindata._ini_watcher.changed.wait(timeout=delay)
                         continue
                     if pbcoindata._logged_idle:
-                        _log(SERVICE, 'Running dynamic_ignore bot detected — resuming', level='INFO')
+                        _log(SERVICE, 'Consumer idle state no longer confirmed — resuming', level='INFO')
                         pbcoindata._logged_idle = False
                 pbcoindata.load_data()
                 pbcoindata.load_metadata()
-                pbcoindata.update_mappings()
+                exchanges = _daemon_mapping_exchanges()
+                if exchanges is None:
+                    pbcoindata.update_mappings()
+                else:
+                    pbcoindata.update_mappings(exchanges=exchanges)
                 delay = min(60, 2 ** min(config_retry_count, 5)) if config_retry_count else 60
                 pbcoindata._ini_watcher.changed.wait(timeout=delay)
             except Exception as e:
                 _log(SERVICE, f'Something went wrong, but continue: {e}', level='ERROR')
                 _log(SERVICE, 'PBCoinData main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
     finally:
-        pbcoindata._ini_watcher.stop()
-        capability.close()
+        try:
+            if pbcoindata is not None:
+                pbcoindata._ini_watcher.stop()
+        finally:
+            try:
+                if capability is not None:
+                    capability.close()
+            finally:
+                try:
+                    if published is not None:
+                        clear_owned_files(root, published)
+                finally:
+                    for signum, handler in previous_handlers.items():
+                        signal.signal(signum, handler)
+                    # The lifetime guard is intentionally retained until OS exit.
 
 if __name__ == '__main__':
     main()

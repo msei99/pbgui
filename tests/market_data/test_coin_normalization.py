@@ -42,6 +42,46 @@ from hyperliquid_aws import _normalize_archive_coin
 import market_data as market_data_mod
 
 
+@pytest.mark.parametrize("dex", ["xyz", "para", "mkts", "flx", "newdex"])
+@pytest.mark.parametrize("ticker", ["FOOUSD", "FOOUSDC", "FOOEUR", "FOODAI"])
+def test_hip3_settings_and_directories_share_identity(dex, ticker, monkeypatch, tmp_path):
+    """All supported aliases retain full tickers and the established XYZ paths."""
+    monkeypatch.chdir(tmp_path)
+    row = {"is_hip3": True, "dex": dex, "coin": f"{dex.upper()}-{ticker}",
+           "ccxt_symbol": f"{dex.upper()}-{ticker}/USDC:USDC"}
+    aliases = [f"{dex}:{ticker}", f"{dex.upper()}-{ticker}", row["ccxt_symbol"],
+               f"{dex.upper()}-{ticker}_USDC:USDC"]
+    for alias in aliases:
+        assert market_data_mod._canonical_enabled_coin("hyperliquid", alias, mapping=[row]) == f"{dex}:{ticker}"
+        assert market_data_mod.normalize_market_data_coin_dir("hyperliquid", alias, mapping=[row]) == f"{dex.upper()}-{ticker}_USDC:USDC"
+
+
+def test_extra_dex_context_loaded_from_local_mapping(monkeypatch, tmp_path):
+    """Default call sites resolve extra DEXes from local data without live APIs."""
+    import json
+    import api.market_data as api
+
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "data/coindata/hyperliquid/mapping.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps([{"is_hip3": True, "dex": " NewDex ", "coin": "NEWDEX-FOOUSD"}]))
+    for alias in ["NEWDEX-FOOUSD", "newdex:FOOUSD"]:
+        assert market_data_mod._canonical_enabled_coin("hyperliquid", alias) == "newdex:FOOUSD"
+        assert api._canonical_market_coin("hyperliquid", alias) == "newdex:FOOUSD"
+        assert market_data_mod.normalize_market_data_coin_dir("hyperliquid", alias) == "NEWDEX-FOOUSD_USDC:USDC"
+    assert market_data_mod._canonical_enabled_coin("hyperliquid", "UNCONFIRMED-FOOUSD") == "UNCONFIRMED-FOOUSD"
+
+
+@pytest.mark.parametrize("coin", ["PARA-TOTAL2", "para:TOTAL2", "MKTS-FOOUSD", "FLX-GOLD", "newdex:TSLA"])
+def test_non_xyz_hip3_coins_are_not_stock_perps(monkeypatch, coin):
+    """The XYZ TradFi routing remains separate from other HIP-3 DEXes."""
+    import hyperliquid_best_1m as best
+
+    monkeypatch.setattr(best, "_load_tradfi_symbol_map_cached", lambda: [{"xyz_coin": "TSLA"}, {"xyz_coin": "TOTAL2"}])
+    assert best._is_stock_perp_coin(coin) is False
+    assert best._is_stock_perp_coin("XYZ-TSLA") is True
+
+
 # ============================================================================
 # Tests for pbgui_purefunc.coin_from_symbol_code()
 # ============================================================================

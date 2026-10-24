@@ -1,0 +1,233 @@
+@simulation_data_scope
+async def prepare_hlcvs_internal(
+    config,
+    coins,
+    exchange,
+    effective_start_ts,
+    requested_start_ts,
+    end_ts,
+    om: HLCVManager,
+):
+    minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
+    interval_ms = 60_000
+
+    first_timestamps_unified = await get_first_timestamps_unified(
+        coins, exchange=exchange
+    )
+    per_coin_warmups = compute_per_coin_warmup_minutes(config)
+    default_warm = int(per_coin_warmups.get("__default__", 0))
+
+    valid_coin_data = {}
+    global_start_time = float("inf")
+    global_end_time = float("-inf")
+    await om.load_markets()
+    min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
+    tradfi_for_stock_perps = _has_stock_perp_calendar_context(
+        config.get("backtest", {}).get("ohlcv_source_dir")
+    )
+
+    progress = ProgressTracker(len(coins), f"{exchange} fetching candles")
+    progress.maybe_log(force=True)
+
+    # Async helper to fetch a single coin's data with all validation
+    async def fetch_coin_data(coin: str, sem: asyncio.Semaphore):
+        """Fetch and validate data for a single coin. Returns (coin, data, data_bounds) or None."""
+        async with sem:  # Rate limiting
+            fetch_stage = "validation"
+            try:
+                adjusted_start_ts = int(effective_start_ts)
+                is_stock_perp_coin = coin.startswith("xyz:")
+
+                # Validation: check if coin exists
+                if not om.has_coin(coin):
+                    _pct_log("info", progress.pct(), f"{exchange} coin {coin} missing, skipping")
+                    return None
+
+                if coin not in first_timestamps_unified and not (
+                    is_stock_perp_coin and tradfi_for_stock_perps
+                ):
+                    _pct_log(
+                        "info",
+                        progress.pct(),
+                        f"coin {coin} missing from first_timestamps_unified, skipping",
+                    )
+                    return None
+
+                # Minimum coin age validation
+                if minimum_coin_age_days > 0.0 and not (
+                    is_stock_perp_coin and tradfi_for_stock_perps
+                ):
+                    unified_first_ts = _coerce_positive_ts(
+                        first_timestamps_unified.get(coin)
+                    )
+                    if unified_first_ts is None:
+                        _pct_log(
+                            "info",
+                            progress.pct(),
+                            f"{exchange} coin {coin} has no authoritative inception; skipping",
+                        )
+                        return None
+                    fetch_stage = "get_first_timestamp"
+                    first_ts = await om.get_first_timestamp(coin)
+
+                    if first_ts >= end_ts:
+                        _pct_log(
+                            "info",
+                            progress.pct(),
+                            f"{exchange} Coin {coin} too young, start date {ts_to_date(first_ts)}. Skipping",
+                        )
+                        return None
+
+                    coin_age_days = int(
+                        round(utc_ms() - unified_first_ts) / (1000 * 60 * 60 * 24)
+                    )
+                    if coin_age_days < minimum_coin_age_days:
+                        _pct_log(
+                            "info",
+                            progress.pct(),
+                            f"{exchange} Coin {coin}: Not traded due to min_coin_age {int(minimum_coin_age_days)} days. "
+                            f"{coin} is {coin_age_days} days old. Skipping",
+                        )
+                        return None
+
+                    new_adjusted_start_ts = max(
+                        unified_first_ts + min_coin_age_ms, first_ts
+                    )
+                    if new_adjusted_start_ts > adjusted_start_ts:
+                        _pct_log(
+                            "info",
+                            progress.pct(),
+                            f"{exchange} Coin {coin}: Adjusting start date from {ts_to_date(adjusted_start_ts)} "
+                            f"to {ts_to_date(new_adjusted_start_ts)}",
+                        )
+                        adjusted_start_ts = int(new_adjusted_start_ts)
+
+                # Fetch OHLCV data
+                fetch_stage = "get_ohlcvs"
+                om.update_date_range(adjusted_start_ts)
+                df = await om.get_ohlcvs(coin)
+                data = df[["timestamp", "high", "low", "close", "volume"]].values
+                if "valid" in df.columns:
+                    valid_mask = df["valid"].eq(True).to_numpy(dtype=bool)
+                else:
+                    valid_mask = np.ones(len(data), dtype=bool)
+
+                if len(data) == 0:
+                    return None
+                if valid_mask.shape[0] != len(data):
+                    raise HlcvsDataIntegrityError(
+                        f"{exchange} invalid HLCV valid mask length for {coin}: "
+                        f"{valid_mask.shape[0]} != {len(data)}"
+                    )
+                finite_values = np.isfinite(data[:, 1:].astype(np.float64, copy=False)).all(axis=1)
+                valid_mask &= finite_values
+                if not valid_mask.any():
+                    return None
+
+                diffs = np.diff(data[:, 0].astype(np.int64, copy=False))
+                bad_steps = np.flatnonzero(diffs != interval_ms)
+                if bad_steps.size:
+                    first_bad_idx = int(bad_steps[0])
+                    raise HlcvsDataIntegrityError(
+                        f"{exchange} non-contiguous HLCV data for {coin}: "
+                        f"first_bad_step={first_bad_idx} "
+                        f"ts={int(data[first_bad_idx, 0])}->{int(data[first_bad_idx + 1, 0])} "
+                        f"step_ms={int(diffs[first_bad_idx])} expected_ms={interval_ms} "
+                        f"bad_steps={int(bad_steps.size)}"
+                    )
+
+                data = data.astype(np.float64, copy=True)
+                data[~valid_mask, 1:] = np.nan
+                data_bounds = (data[0, 0], data[-1, 0])
+
+                return (coin, data, data_bounds)
+
+            except HlcvsDataIntegrityError:
+                raise
+            except Exception as e:
+                _pct_log("error", progress.pct(), f"error with {fetch_stage} for {coin} {e}")
+                raise RuntimeError(f"{exchange} {fetch_stage} failed for {coin}: {e}") from e
+
+    # Parallelize coin fetching with rate limiting.
+    # Bybit is more sensitive to bursts; keep concurrency lower to reduce timeouts.
+    COIN_CONCURRENCY = 3 if str(exchange).lower() == "bybit" else 6
+    sem = asyncio.Semaphore(COIN_CONCURRENCY)
+
+    tasks = [fetch_coin_data(coin, sem) for coin in coins]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Process results
+    for result in results:
+        progress.maybe_log()
+
+        if isinstance(result, HlcvsDataIntegrityError):
+            raise result
+        if isinstance(result, Exception):
+            raise result
+        if result is None:
+            progress.update()
+            continue
+
+        coin, data, data_bounds = result
+        valid_coin_data[coin] = data
+        global_start_time = min(global_start_time, data_bounds[0])
+        global_end_time = max(global_end_time, data_bounds[1])
+        progress.update()
+
+    progress.log_done()
+
+    if not valid_coin_data:
+        logging.error(
+            "[%s] no valid coins found with data for %s -> %s (coins=%s)",
+            exchange,
+            ts_to_date(effective_start_ts),
+            ts_to_date(end_ts),
+            ",".join(coins),
+        )
+        raise ValueError("No valid coins found with data")
+
+    n_timesteps = int((global_end_time - global_start_time) / interval_ms) + 1
+    timestamps = np.arange(global_start_time, global_end_time + interval_ms, interval_ms)
+    valid_index_ranges = {}
+    aligned_values_by_coin = {}
+
+    logging.info(
+        f"{exchange} Aligning data for {len(valid_coin_data)} coin{'s' if len(valid_coin_data) > 1 else ''} into shared payload..."
+    )
+    for coin in valid_coin_data:
+        ohlcv = valid_coin_data[coin]
+        start_idx = int((ohlcv[0, 0] - global_start_time) / interval_ms)
+        end_idx = start_idx + len(ohlcv)
+        coin_data = ohlcv[:, 1:]
+        aligned = np.full((n_timesteps, 4), np.nan, dtype=np.float64)
+        aligned[start_idx:end_idx, :] = coin_data
+        aligned_values_by_coin[coin] = aligned
+        valid_mask = np.isfinite(coin_data[:, 0])
+        valid_idx = np.flatnonzero(valid_mask)
+        if valid_idx.size == 0:
+            continue
+        first_idx = int(start_idx + int(valid_idx[0]))
+        last_idx = int(start_idx + int(valid_idx[-1]))
+        warm_minutes = int(per_coin_warmups.get(coin, default_warm))
+        trade_start_idx = first_idx + warm_minutes
+        if trade_start_idx > last_idx:
+            trade_start_idx = last_idx
+        valid_index_ranges[coin] = (first_idx, last_idx)
+    mss = {}
+    for coin in sorted(valid_coin_data):
+        meta = om.get_market_specific_settings(coin)
+        first_idx, last_idx = valid_index_ranges.get(
+            coin, (n_timesteps, n_timesteps)
+        )
+        meta["first_valid_index"] = first_idx
+        meta["last_valid_index"] = last_idx
+        warm_minutes = int(per_coin_warmups.get(coin, default_warm))
+        meta["warmup_minutes"] = warm_minutes
+        meta["warmup_minutes_source"] = "history"
+        trade_start_idx = first_idx + warm_minutes
+        if trade_start_idx > last_idx:
+            trade_start_idx = last_idx
+        meta["trade_start_index"] = trade_start_idx
+        mss[coin] = meta
+    return mss, timestamps, aligned_values_by_coin
+

@@ -241,12 +241,15 @@ def test_settings_load_retries_after_http_failure_and_blocks_duplicate_requests(
     """Only a successfully applied settings response should satisfy the loaded guard."""
 
     source = PAGE.read_text(encoding="utf-8")
-    code = _extract_function(source, "loadSettings")
+    code = "var _settingsDrafts = Object.create(null);\n" + "\n".join(
+        _extract_function(source, name) for name in ('getSettingsDraft', 'releaseSettingsDraft', 'loadSettings')
+    )
     script = """
 const assert = require('node:assert/strict');
 const API_BASE = '/api/services';
 var _settingsLoaded = {};
 var _settingsLoading = {};
+function focusSettingsTarget() {}
 const requests = [];
 const applied = [];
 function fetch(url) { return new Promise(resolve => requests.push({url, resolve})); }
@@ -471,6 +474,62 @@ function assertRecovered() {
 """
 
 
+def test_coindata_readiness_status_and_controls() -> None:
+    """Background readiness overrides Skipped and keeps labels, classes and controls consistent."""
+    source = PAGE.read_text(encoding="utf-8")
+    code = '\n'.join(_extract_function(source, name) for name in (
+        'serviceSkipped', 'serviceStatusClass', 'serviceStatusText',
+        'serviceActionProgressText', 'renderServiceButtons'))
+    _run_node("const assert = require('node:assert/strict');\n"
+              "let _statusRequestState='ready', _serviceActionPending={};\n" + code + r"""
+const svc = {id:'pbcoindata'};
+for (const expected of [true,false]) {
+  const starting = {actual_status:'starting', running:false, expected, can_enable:true};
+  assert.equal(serviceStatusClass(starting), 'starting');
+  assert.match(serviceStatusText(starting, svc.id), /^Starting/);
+  const buttons = renderServiceButtons(svc, starting, false);
+  for (const label of ['Start','Restart','Enable']) assert.ok(buttons.includes('disabled>'+label+'</button>'));
+  assert.ok(!buttons.includes('>Stop</button>'));
+  starting.can_stop = true;
+  assert.ok(renderServiceButtons(svc, starting, true).includes('>Stop</button>'));
+}
+for (const [actual, text, cls] of [['unknown','Unknown',''],['failed','Failed','stopped'],['running','Running','running'],['stopping','Stopping','starting']]) {
+  const item = {actual_status:actual, running:actual==='running', expected:false};
+  assert.equal(serviceStatusText(item, svc.id), text);
+  assert.equal(serviceStatusClass(item), cls);
+  if (actual === 'stopping') {
+    const controls = renderServiceButtons(svc, {...item,can_enable:true}, false);
+    for (const label of ['Start','Restart','Enable']) assert.ok(controls.includes('disabled>'+label+'</button>'));
+    assert.ok(!controls.includes('>Stop</button>'));
+  }
+}
+assert.equal(serviceStatusText({running:false, expected:false}, 'pbdata'), 'Skipped');
+""")
+    _run_node(_service_status_harness() + r"""
+(async () => {
+  const starting = {actual_status:'starting', running:false, expected:false, can_enable:true, can_stop:true};
+  _statusRequestState = 'ready';
+  _status = {...healthy, pbcoindata:starting};
+  updateStatusUI();
+  assert.match(elements['sl-pbcoindata'].textContent, /^Starting/);
+  assert.equal(elements['dot-pbcoindata'].className, 'sb-dot starting');
+  assert.ok(elements['overview-grid'].innerHTML.includes('svc-card starting'));
+  assert.ok(elements['ctrl-btns-pbcoindata'].innerHTML.includes('disabled>Start'));
+  document.hidden = true; listeners.visibilitychange();
+  document.hidden = false; listeners.visibilitychange();
+  requests.at(-1).resolve(response({...healthy, pbcoindata:starting}));
+  await settle();
+  assert.match(elements['sl-pbcoindata'].textContent, /^Starting/);
+  assert.ok(elements['ctrl-btns-pbcoindata'].innerHTML.includes('disabled>Enable'));
+  for (const actual of ['unknown','running','failed','stopping']) {
+    _status = {...healthy, pbcoindata:{...starting, actual_status:actual, running:actual==='running', can_stop:false}};
+    updateStatusUI();
+    assert.ok(elements['sl-pbcoindata'].textContent.startsWith({unknown:'Unknown',running:'Running',failed:'Failed',stopping:'Stopping'}[actual]));
+  }
+})().catch(error => { console.error(error); process.exitCode=1; });
+""")
+
+
 @pytest.mark.parametrize("after_success", [False, True], ids=["initial", "after-success"])
 @pytest.mark.parametrize("failure", ["http", "network", "json"])
 def test_service_status_failure_and_automatic_recovery(after_success: bool, failure: str) -> None:
@@ -544,4 +603,314 @@ function _resultPopup() { throw new Error('Unexpected action failure'); }
   updateStatusUI = originalUpdate;
   requests[3].resolve(response(healthy)); await settle(); assertRecovered();
 })().catch(error => { console.error(error); process.exitCode = 1; });
+""")
+
+
+@pytest.mark.parametrize(('kind', 'key', 'field'), [
+    ('system', 'memory', 'mem_error_server'), ('system', 'swap', 'swap_error_server'),
+    ('system', 'disk', 'disk_error_server'), ('system', 'cpu', 'cpu_error_server'),
+    ('instance', 'memory', 'mem_error_v7'), ('instance', 'swap', 'swap_error_v7'),
+    ('instance', 'cpu', 'cpu_error_v7'), ('instance', 'errors', 'error_error_v7'),
+    ('instance', 'tracebacks', 'traceback_error_v7'),
+])
+def test_alert_threshold_links_use_kind_specific_allowlist(kind, key, field):
+    """Only known metrics link to the correct kind's field, retaining the mount prefix."""
+    source = (ROOT / 'frontend/pbgui_nav.js').read_text()
+    code = _extract_function(source, 'alertThresholdLinks')
+    _run_node("""
+const assert = require('node:assert/strict');
+function _getAppBase() { return '/mounted'; }
+function escAttr(text) { return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
+""" + code + "\nconst item = " + json.dumps({'kind': kind, 'triggered_thresholds': [key]}) + ";\n" + """
+const html = alertThresholdLinks(item);
+assert.ok(html.includes('/mounted/api/services/main_page#api-server/settings/FIELD'));
+assert.equal((html.match(/<a /g) || []).length, 1);
+assert.ok(!alertThresholdLinks({kind:'offline'}));
+assert.ok(!alertThresholdLinks({kind:'__proto__'}));
+assert.ok(!alertThresholdLinks({kind:'instance',triggered_thresholds:['<img onerror=x>', '__proto__']}).includes('<img'));
+assert.ok(alertThresholdLinks({kind:'instance'}).includes('Threshold settings'));
+""".replace('FIELD', field))
+
+
+def test_settings_request_timeout_abort_stale_response_and_edits():
+    """Bound loading and discard cancelled responses while retaining input made during loading."""
+    source = PAGE.read_text()
+    code = "var _settingsDrafts = Object.create(null);\n" + "\n".join(
+        _extract_function(source, name) for name in ('getSettingsDraft', 'releaseSettingsDraft', 'loadSettings')
+    )
+    _run_node("""
+const assert = require('node:assert/strict');
+const API_BASE = '/mounted/api/services';
+var _settingsLoaded = {}, _settingsLoading = {}, _settingsFieldTarget = {};
+const requests = [], applied = [], timers = new Map(), listeners = {};
+let timerId = 0;
+function setTimeout(fn, ms) { assert.equal(ms,15000); timers.set(++timerId,fn); return timerId; }
+function clearTimeout(id) { timers.delete(id); }
+const field = {id:'apiserver-host', value:'draft.local', checked:false};
+const save = {disabled:false};
+const panel = {querySelector: (sel) => sel === '.form-btn.save' ? save : null,
+  addEventListener:(name,fn)=>listeners[name]=fn, removeEventListener:(name)=>delete listeners[name]};
+const document = {getElementById:id=>id==='apiserver-host'?field:panel};
+function authOptions(options) {return options;}
+function focusSettingsTarget() {}
+function applySettings(svc,data) { applied.push(data.host); field.value = data.host; }
+function fetch(url,options) {return new Promise(resolve=>requests.push({url,options,resolve}));}
+const console = {error:()=>{}};
+""" + code + """
+function response(host) {return {ok:true,json:()=>Promise.resolve({host})};}
+(async()=>{
+  let pending = loadSettings('api-server');
+  assert.equal(save.disabled,true);
+  assert.equal(requests[0].url, '/mounted/api/services/settings/api-server');
+  timers.values().next().value();
+  await pending;
+  assert.equal(requests[0].options.signal.aborted,true);
+  assert.equal(_settingsLoaded['api-server'],undefined);
+  assert.equal(timers.size,0);
+  assert.equal(save.disabled,true);
+  pending = loadSettings('api-server');
+  requests[0].resolve(response('obsolete.local'));
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(applied,[]);
+  listeners.input({target:field});
+  requests[1].resolve(response('server.local'));
+  await pending;
+  assert.deepEqual(applied,['server.local']);
+  assert.equal(field.value,'draft.local');
+  assert.equal(_settingsFieldTarget,null);
+  assert.equal(save.disabled,false);
+  assert.equal(timers.size,0);
+  delete _settingsLoaded['api-server'];
+  pending=loadSettings('api-server');
+  const old=_settingsLoading['api-server'];
+  delete _settingsLoading['api-server'];
+  old.cancel();
+  await pending;
+  assert.equal(requests[2].options.signal.aborted,true);
+  requests[2].resolve(response('after-unload.local'));
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(applied,['server.local']);
+  assert.equal(timers.size,0);
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+""")
+
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_settings_same_page_hash_navigation_and_missing_field(missing):
+    """Hash changes and reload use a generation guarded field target and safe fallback."""
+    source = PAGE.read_text()
+    code = '\n'.join(_extract_function(source, name) for name in
+                     ('settingsTargetNotice', 'focusSettingsTarget', 'restoreFromHash'))
+    _run_node("""
+const assert=require('node:assert/strict');
+var _settingsLoaded={}, _settingsFieldTarget=null, _settingsNavigationGeneration=0;
+var MONITOR_THRESHOLD_FIELDS=['mem_error_v7','cpu_error_v7'];
+const notices=[], focused=[];
+let currentHash='#api-server/settings/mem_error_v7';
+const notice={textContent:''};
+const btn={getAttribute:()=> 'settings'};
+const panel={querySelectorAll:()=>[btn],querySelector:()=>notice};
+const document={getElementById:id=>id==='panel-api-server'||id==='api-server-tab-settings'?panel:
+  (MISSING?null:{scrollIntoView:()=>{},focus:()=>focused.push(id)}), createElement:()=>({})};
+const window={location:{pathname:'/mounted/api/services/main_page',search:'',get hash(){return currentHash;}},
+ switchTab:()=>{++_settingsNavigationGeneration;_settingsFieldTarget=null;currentHash='#api-server/settings';},
+ addEventListener:(name,fn)=>{assert.equal(name,'hashchange');window.hashListener=fn;}};
+const history={replaceState:(_,__,url)=>{currentHash='#'+url.split('#')[1];}};
+function selectPanel(){++_settingsNavigationGeneration;_settingsFieldTarget=null;}
+""".replace('MISSING', json.dumps(missing)) + code + "\n" + """
+window.addEventListener('hashchange',restoreFromHash);
+restoreFromHash();
+assert.equal(currentHash,'#api-server/settings/mem_error_v7');
+assert.deepEqual(focused,[]);
+// A newer destination replaces the pending target before loading finishes.
+currentHash='#api-server/settings/cpu_error_v7';
+window.hashListener();
+_settingsLoaded['api-server']=true;
+focusSettingsTarget();
+if (MISSING) {
+  assert.equal(notice.textContent,'This threshold setting is unavailable.');
+  assert.equal(currentHash,'#api-server/settings');
+} else {
+  assert.deepEqual(focused,['mc-cpu_error_v7']);
+  assert.equal(currentHash,'#api-server/settings/cpu_error_v7');
+}
+currentHash='#api-server/settings/<invalid>';
+window.hashListener();
+assert.equal(currentHash,'#api-server/settings');
+assert.equal(notice.textContent,'This threshold setting is unavailable.');
+// A load after leaving the original context must never take focus.
+_settingsLoaded['api-server']=false;
+currentHash='#api-server/settings/mem_error_v7';restoreFromHash();
+++_settingsNavigationGeneration;
+_settingsLoaded['api-server']=true;
+const before=focused.length;focusSettingsTarget();assert.equal(focused.length,before);
+""".replace('MISSING', json.dumps(missing)))
+    assert "window.addEventListener('hashchange', restoreFromHash)" in source
+
+
+@pytest.mark.parametrize('failure', ['timeout', 'http', 'network', 'json'])
+def test_settings_draft_survives_failed_load_retry_and_unload(failure):
+    """Form-owned drafts survive failed attempts, keep newer edits and are released on success or exit."""
+    source = PAGE.read_text()
+    functions = '\n'.join(_extract_function(source, name) for name in
+                          ('getSettingsDraft', 'releaseSettingsDraft', 'loadSettings'))
+    start = source.index("  window.addEventListener('pagehide', function (event) {")
+    unload = source[start:source.index('\n  });', start) + 6]
+    _run_node("""
+const assert = require('node:assert/strict');
+const API_BASE = '/api/services';
+var _settingsLoaded = {}, _settingsLoading = {}, _settingsDrafts = Object.create(null);
+var _settingsFieldTarget = {}, _settingsNavigationGeneration = 0;
+const requests = [], timers = new Map(), listeners = new Map();
+const host = {id:'apiserver-host', value:'', checked:undefined};
+const checkbox = {id:'apiserver-auto-restart', value:'on', checked:false};
+const save = {disabled:false};
+let timerId = 0, applied = 0, pagehide;
+function setTimeout(fn) { timers.set(++timerId,fn); return timerId; }
+function clearTimeout(id) { timers.delete(id); }
+const panel = {
+  querySelector:sel => sel === '.form-btn.save' ? save : null,
+  addEventListener:(name, fn)=>{assert.equal(listeners.has(name),false);listeners.set(name,fn);},
+  removeEventListener:(name, fn)=>{assert.equal(listeners.get(name),fn);listeners.delete(name);}
+};
+const document = {getElementById:id=>id===host.id?host:id===checkbox.id?checkbox:panel};
+const window = {addEventListener:(name,fn)=>{assert.equal(name,'pagehide');pagehide=fn;}};
+function focusSettingsTarget() {}
+function authOptions(options) {return options;}
+function fetch(url,options) {return new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}));}
+function applySettings(svc,data) {applied++;host.value=data.host;checkbox.checked=data.auto_restart;}
+const console = {error:()=>{}};
+""" + functions + '\n' + unload + '\nconst failure = ' + json.dumps(failure) + ";\n" + """
+function response(host) {return {ok:true,json:()=>Promise.resolve({host,auto_restart:true})};}
+(async()=>{
+  let pending = loadSettings('api-server');
+  host.value='before-failure.local';listeners.get('input')({target:host});
+  listeners.get('change')({target:checkbox});
+  const draft=_settingsDrafts['api-server'];
+  if(failure==='timeout') timers.values().next().value();
+  if(failure==='http') requests[0].resolve({ok:false});
+  if(failure==='network') requests[0].reject(new Error('Offline'));
+  if(failure==='json') requests[0].resolve({ok:true,json:()=>Promise.reject(new SyntaxError('Invalid JSON'))});
+  await pending;
+  assert.equal(applied,0);assert.equal(save.disabled,true);
+  assert.equal(listeners.size,2);assert.equal(timers.size,0);
+  assert.strictEqual(_settingsDrafts['api-server'],draft);
+  // Edits made between the failed attempt and Retry belong to the same draft.
+  host.value='after-failure.local';listeners.get('input')({target:host});
+  pending=loadSettings('api-server');
+  assert.strictEqual(_settingsDrafts['api-server'],draft);
+  if(failure==='timeout') requests[0].resolve(response('obsolete.local'));
+  await Promise.resolve();await Promise.resolve();
+  assert.equal(applied,0);
+  requests[1].resolve(response('server.local'));await pending;
+  assert.equal(host.value,'after-failure.local');assert.equal(checkbox.checked,false);
+  assert.equal(save.disabled,false);assert.equal(applied,1);
+  assert.equal(listeners.size,0);assert.equal(draft.edits.size,0);
+  assert.equal(_settingsDrafts['api-server'],undefined);assert.equal(timers.size,0);
+  delete _settingsLoaded['api-server'];
+  pending=loadSettings('api-server');
+  host.value='unloaded.local';listeners.get('input')({target:host});
+  const abandoned=_settingsDrafts['api-server'];
+  pagehide();await pending;
+  assert.equal(requests[2].options.signal.aborted,true);
+  assert.equal(listeners.size,0);assert.equal(abandoned.edits.size,0);
+  assert.equal(_settingsDrafts['api-server'],undefined);assert.equal(timers.size,0);
+  requests[2].resolve(response('too-late.local'));
+  await Promise.resolve();await Promise.resolve();
+  assert.equal(applied,1);assert.equal(host.value,'unloaded.local');
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+""")
+
+
+@pytest.mark.parametrize(('state', 'edited'), [
+    ('pending', True), ('pending', False), ('failed', True), ('loaded', True), ('inactive', True),
+])
+def test_settings_cached_return_preserves_draft_and_navigation(state, edited):
+    """Cached pages retain drafts and targets, resume only active Settings and reject obsolete jobs."""
+    source = PAGE.read_text()
+    functions = '\n'.join(_extract_function(source, name) for name in
+                          ('getSettingsDraft', 'releaseSettingsDraft', 'loadSettings'))
+    lifecycle = []
+    for event in ('pagehide', 'pageshow'):
+        start = source.index("  window.addEventListener('" + event + "', function (event) {")
+        lifecycle.append(source[start:source.index('\n  });', start) + 6])
+    _run_node("""
+const assert = require('node:assert/strict');
+const API_BASE='/api/services';
+var _settingsLoaded={}, _settingsLoading={}, _settingsDrafts=Object.create(null);
+var _settingsNavigationGeneration=7, _settingsFieldTarget={field:'mem_error_v7',generation:7};
+var _currentPanelId='api-server';
+const events={}, listeners=new Map(), requests=[], timers=new Map(), focused=[];
+const host={id:'apiserver-host',value:'',checked:undefined};
+const checkbox={id:'apiserver-auto-restart',value:'on',checked:false};
+const save={disabled:false};
+let timerId=0, active=true, applied=0;
+const pane={
+ classList:{contains:name=>name==='active'&&active},
+ querySelector:sel=>sel==='.form-btn.save'?save:null,
+ addEventListener:(name,fn)=>{assert.equal(listeners.has(name),false);listeners.set(name,fn);},
+ removeEventListener:(name,fn)=>{assert.strictEqual(listeners.get(name),fn);listeners.delete(name);}
+};
+const document={getElementById:id=>id===host.id?host:id===checkbox.id?checkbox:id==='api-server-tab-settings'?pane:null};
+const window={addEventListener:(name,fn)=>events[name]=fn};
+function setTimeout(fn){timers.set(++timerId,fn);return timerId;}
+function clearTimeout(id){timers.delete(id);}
+function authOptions(options){return options;}
+function fetch(url,options){return new Promise(resolve=>requests.push({url,options,resolve}));}
+function applySettings(svc,data){applied++;host.value=data.host;checkbox.checked=data.auto_restart;}
+function focusSettingsTarget(){
+ if(_settingsFieldTarget&&_settingsFieldTarget.generation===_settingsNavigationGeneration){
+   focused.push(_settingsFieldTarget.field);_settingsFieldTarget=null;
+ }
+}
+function restoreFromHash(){throw new Error('A cached page must retain its existing navigation');}
+const console={error:()=>{}};
+""" + functions + '\n' + '\n'.join(lifecycle) + '\nconst state=' + json.dumps(state) + ';const edited=' + json.dumps(edited) + ";\n" + """
+function response(){return {ok:true,json:()=>Promise.resolve({host:'server.local',auto_restart:true})};}
+async function settle(){for(let i=0;i<20;i++)await Promise.resolve();}
+(async()=>{
+ const initial=loadSettings('api-server');
+ if(state==='loaded'){requests[0].resolve(response());await initial;focused.length=0;}
+ if(edited){
+   host.value='unsaved.local';checkbox.checked=false;
+   if(listeners.has('input')){
+     listeners.get('input')({target:host});listeners.get('change')({target:checkbox});
+   }
+ }
+ const draft=_settingsDrafts['api-server'];
+ if(state==='failed'){timers.values().next().value();await initial;}
+ if(state==='inactive')active=false;
+ events.pagehide({persisted:true});
+ await settle();
+ assert.equal(timers.size,0);assert.equal(Object.keys(_settingsLoading).length,0);
+ assert.equal(_settingsNavigationGeneration,7);
+ if(draft){assert.strictEqual(_settingsDrafts['api-server'],draft);assert.equal(listeners.size,2);}
+ const appliedBefore=applied;
+ events.pageshow({persisted:true});
+ if(state==='loaded'){
+   assert.equal(requests.length,1);assert.equal(host.value,'unsaved.local');
+ }else{
+   if(state==='inactive'){
+     assert.equal(requests.length,1);active=true;loadSettings('api-server');
+   }
+   assert.equal(requests.length,2);
+   assert.equal(requests[0].options.signal.aborted,true);
+   // A second pageshow cannot create duplicate requests or listeners.
+   events.pageshow({persisted:true});assert.equal(requests.length,2);
+   requests[0].resolve(response());await settle();assert.equal(applied,appliedBefore);
+   requests[1].resolve(response());await settle();
+   assert.equal(applied,appliedBefore+1);assert.equal(_settingsLoaded['api-server'],true);
+   assert.equal(host.value,edited?'unsaved.local':'server.local');
+   assert.equal(checkbox.checked,edited?false:true);
+   assert.equal(save.disabled,false);assert.equal(listeners.size,0);
+   assert.equal(Object.keys(_settingsDrafts).length,0);assert.equal(draft.edits.size,0);
+ }
+ assert.deepEqual(focused,edited?[]:['mem_error_v7']);
+ // A later final exit must discard an abandoned draft instead of retaining it.
+ delete _settingsLoaded['api-server'];loadSettings('api-server');
+ const abandoned=_settingsDrafts['api-server'];
+ events.pagehide({persisted:false});await settle();
+ assert.equal(abandoned.edits.size,0);assert.equal(listeners.size,0);
+ assert.equal(Object.keys(_settingsDrafts).length,0);assert.equal(timers.size,0);
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
 """)

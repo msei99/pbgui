@@ -89,6 +89,8 @@
     .card-status-row { display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: #64748b; }
     .card-dot { width: 7px; height: 7px; border-radius: 50%; background: #4a5568; flex-shrink: 0; }
     .card-dot.running { background: #21c354; }
+    .sb-dot.starting, .status-dot.starting, .card-dot.starting { background: #d69e2e; }
+    .svc-card.starting { border-color: rgba(214,158,46,0.45); }
     .card-dot.stopped { background: #ff4b4b; }
     .card-dot.warn { background: #f59e0b; }
     .card-btn {
@@ -1153,6 +1155,13 @@ window.PBGUI_NAV_CONFIG = {
   var _pollerMetricsTimer = null;
   var _settingsLoaded = {};
   var _settingsLoading = {};
+  var _settingsDrafts = Object.create(null);
+  var _settingsNavigationGeneration = 0;
+  var _settingsFieldTarget = null;
+  var MONITOR_THRESHOLD_FIELDS = [
+    'mem_error_server', 'swap_error_server', 'disk_error_server', 'cpu_error_server',
+    'mem_error_v7', 'swap_error_v7', 'cpu_error_v7', 'error_error_v7', 'traceback_error_v7'
+  ];
   var _workers = { counts: { total: 0, running: 0 }, groups: [] };
   var _workerIndex = {};
   var _workersGeneration = 0;
@@ -1243,15 +1252,22 @@ window.PBGUI_NAV_CONFIG = {
   });
 
   function serviceSkipped(item) {
-    return item.expected === false && !item.running;
+    return item.expected === false && !item.running && !['starting', 'stopping', 'unknown', 'failed'].includes(item.actual_status);
   }
 
   function serviceStatusClass(item) {
+    if (['starting', 'stopping'].includes(item.actual_status)) return 'starting';
+    if (item.actual_status === 'unknown') return '';
+    if (item.actual_status === 'failed') return 'stopped';
     return serviceSkipped(item) ? '' : (item.running ? 'running' : 'stopped');
   }
 
   function serviceStatusText(item, svcId) {
     var base = serviceSkipped(item) ? 'Skipped' : (item.running ? 'Running' : 'Stopped');
+    if (item.actual_status === 'starting') base = 'Starting';
+    if (item.actual_status === 'stopping') base = 'Stopping';
+    if (item.actual_status === 'unknown') base = 'Unknown';
+    if (item.actual_status === 'failed') base = 'Failed';
     if (item.can_enable) {
       base += ' · ' + (item.enabled ? 'Enabled' : 'Disabled');
     }
@@ -1281,6 +1297,7 @@ window.PBGUI_NAV_CONFIG = {
   function serviceStatusTitle(item) {
     var parts = [];
     if (item.reason) parts.push(item.reason);
+    if (item.error) parts.push(item.error);
     if (item.unit) parts.push('Unit: ' + item.unit);
     if (item.systemd_state) parts.push('State: ' + item.systemd_state);
     if (item.systemd_enabled_state) parts.push('Autostart: ' + item.systemd_enabled_state);
@@ -1297,6 +1314,13 @@ window.PBGUI_NAV_CONFIG = {
     var disabledAttr = pending ? ' disabled' : '';
     var pendingText = pending ? serviceActionProgressText(pending) : '';
     var html = '';
+    if (svc.id === 'pbcoindata' && ['starting', 'stopping', 'unknown'].includes(item.actual_status)) {
+      if (item.can_stop) html += '<button class="' + cls + ' stop" onclick="svcAction(\'' + svc.id + '\',\'stop\')' + stopProp + '"' + disabledAttr + '>Stop</button>';
+      html += '<button class="' + cls + ' start" disabled>Start</button>';
+      html += '<button class="' + cls + ' restart" disabled>Restart</button>';
+      if (item.can_enable && !item.enabled) html += '<button class="' + cls + ' enable" disabled>Enable</button>';
+      return html;
+    }
     if (!skipped) {
       if (svc.isApiServer) {
         html += running
@@ -1965,6 +1989,8 @@ window.PBGUI_NAV_CONFIG = {
 
   /* ── Panel navigation ──────────────────────────────────── */
   function selectPanel(panelId, tab) {
+    ++_settingsNavigationGeneration;
+    _settingsFieldTarget = null;
     _currentPanelId = panelId;
     document.querySelectorAll('.sb-btn').forEach(function (b) {
       b.classList.toggle('active', b.getAttribute('data-panel') === panelId);
@@ -1996,6 +2022,8 @@ window.PBGUI_NAV_CONFIG = {
 
   /* ── Tab switching ─────────────────────────────────────── */
   window.switchTab = function (btn) {
+    ++_settingsNavigationGeneration;
+    _settingsFieldTarget = null;
     var svc = btn.getAttribute('data-svc');
     var tab = btn.getAttribute('data-tab');
     var panel = document.getElementById('panel-' + svc);
@@ -2023,20 +2051,67 @@ window.PBGUI_NAV_CONFIG = {
   };
 
   /* ── Restore panel/tab from URL hash on load ───────────── */
-  (function restoreFromHash() {
-    var hash = window.location.hash.replace('#', '');
-    if (!hash) return;
-    var parts = hash.split('/');
+  function settingsTargetNotice(message) {
+    var pane = document.getElementById('api-server-tab-settings');
+    if (!pane) return;
+    var notice = pane.querySelector('.settings-target-notice');
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'settings-target-notice';
+      pane.prepend(notice);
+    }
+    notice.textContent = message;
+  }
+
+  function focusSettingsTarget() {
+    var target = _settingsFieldTarget;
+    if (!target || target.generation !== _settingsNavigationGeneration || !_settingsLoaded['api-server']) return;
+    _settingsFieldTarget = null;
+    var field = document.getElementById('mc-' + target.field);
+    if (!field) {
+      settingsTargetNotice('This threshold setting is unavailable.');
+      history.replaceState(null, '', window.location.pathname + window.location.search + '#api-server/settings');
+      return;
+    }
+    field.scrollIntoView({block: 'center'});
+    field.focus({preventScroll: true});
+  }
+
+  function restoreFromHash() {
+    var parts = window.location.hash.replace('#', '').split('/');
     var panelId = parts[0];
-    var tabId   = parts[1] || null;
+    var tabId = parts[1] || null;
+    // Match known DOM values instead of interpolating hash contents into selectors.
     var panel = document.getElementById('panel-' + panelId);
     if (!panel) return;
     selectPanel(panelId);
     if (tabId) {
-      var tabBtn = panel.querySelector('.tab-btn[data-tab="' + tabId + '"]');
+      var tabBtn = Array.from(panel.querySelectorAll('.tab-btn')).find(function (btn) {
+        return btn.getAttribute('data-tab') === tabId;
+      });
       if (tabBtn) window.switchTab(tabBtn);
     }
-  })();
+    if (panelId === 'api-server' && tabId === 'settings') {
+      settingsTargetNotice('');
+      if (parts[2]) {
+        if (parts.length !== 3 || MONITOR_THRESHOLD_FIELDS.indexOf(parts[2]) === -1) {
+          settingsTargetNotice('This threshold setting is unavailable.');
+          return;
+        }
+        _settingsFieldTarget = {field: parts[2], generation: _settingsNavigationGeneration};
+        history.replaceState(null, '', window.location.pathname + window.location.search + '#api-server/settings/' + parts[2]);
+        focusSettingsTarget();
+      }
+    }
+  }
+  window.addEventListener('hashchange', restoreFromHash);
+  window.addEventListener('pageshow', function (event) {
+    if (!event.persisted) return;
+    // A cached page already retains its panel, tab, field target and editing context.
+    var pane = document.getElementById(_currentPanelId + '-tab-settings');
+    if (pane && pane.classList.contains('active')) loadSettings(_currentPanelId);
+  });
+  restoreFromHash();
 
   /* ── Log viewer ────────────────────────────────────────── */
   function initLogViewer(svcId) {
@@ -2139,18 +2214,64 @@ window.PBGUI_NAV_CONFIG = {
   };
 
   /* ── Settings loaders ──────────────────────────────────── */
+  function getSettingsDraft(svcId, panel) {
+    if (_settingsDrafts[svcId]) return _settingsDrafts[svcId];
+    var draft = {panel: panel, edits: new Map()};
+    draft.rememberEdit = function (event) {
+      var field = event.target;
+      if (svcId === 'api-server') _settingsFieldTarget = null;
+      if (field.id) draft.edits.set(field.id, {value: field.value, checked: field.checked});
+    };
+    if (panel) {
+      panel.addEventListener('input', draft.rememberEdit);
+      panel.addEventListener('change', draft.rememberEdit);
+    }
+    _settingsDrafts[svcId] = draft;
+    return draft;
+  }
+
+  function releaseSettingsDraft(svcId, draft) {
+    if (draft.panel) {
+      draft.panel.removeEventListener('input', draft.rememberEdit);
+      draft.panel.removeEventListener('change', draft.rememberEdit);
+    }
+    draft.edits.clear();
+    if (_settingsDrafts[svcId] === draft) delete _settingsDrafts[svcId];
+  }
+
   function loadSettings(svcId) {
     var ep = { pbcoindata: '/settings/pbcoindata', pbdata: '/settings/pbdata', 'api-server': '/settings/api-server' }[svcId];
     if (!ep || _settingsLoaded[svcId] || _settingsLoading[svcId]) return Promise.resolve();
-    _settingsLoading[svcId] = true;
-    return fetch(API_BASE + ep, authOptions())
+    var controller = new AbortController();
+    var job = {controller: controller};
+    _settingsLoading[svcId] = job;
+    var panelNode = typeof document === 'undefined' ? null : document.getElementById(svcId + '-tab-settings');
+    var save = panelNode && panelNode.querySelector('.form-btn.save');
+    if (save) save.disabled = true;
+    var draft = getSettingsDraft(svcId, panelNode);
+    var timeout;
+    var cancelled = new Promise(function (_, reject) {
+      job.cancel = function () { clearTimeout(timeout); controller.abort(); reject(new Error('Settings request cancelled.')); };
+      timeout = setTimeout(function () {
+        controller.abort();
+        reject(new Error('Settings request timed out.'));
+      }, 15000);
+    });
+    return Promise.race([fetch(API_BASE + ep, authOptions({signal: controller.signal}))
       .then(function (r) {
         if (!r.ok) throw new Error('Settings request failed.');
         return r.json();
-      })
+      }), cancelled])
       .then(function (data) {
+        if (_settingsLoading[svcId] !== job) return;
         applySettings(svcId, data);
+        draft.edits.forEach(function (edit, id) {
+          var field = document.getElementById(id);
+          if (field) { field.value = edit.value; field.checked = edit.checked; }
+        });
+        releaseSettingsDraft(svcId, draft);
         _settingsLoaded[svcId] = true;
+        if (svcId === 'api-server') focusSettingsTarget();
         var panel = typeof document === 'undefined' ? null : document.getElementById(svcId + '-tab-settings');
         if (panel && svcId !== 'pbdata') {
           var notice = panel.querySelector('.settings-load-error');
@@ -2160,6 +2281,7 @@ window.PBGUI_NAV_CONFIG = {
         }
       })
       .catch(function (error) {
+        if (_settingsLoading[svcId] !== job) return;
         console.error('Failed to load service settings', error);
         if (svcId !== 'pbdata') {
           var panel = typeof document === 'undefined' ? null : document.getElementById(svcId + '-tab-settings');
@@ -2192,8 +2314,28 @@ window.PBGUI_NAV_CONFIG = {
         retry.addEventListener('click', function () { loadSettings(svcId); });
         wrap.append(message, retry);
       })
-      .finally(function () { delete _settingsLoading[svcId]; });
+      .finally(function () {
+        clearTimeout(timeout);
+        if (_settingsLoading[svcId] === job) delete _settingsLoading[svcId];
+      });
   }
+
+  window.addEventListener('pagehide', function (event) {
+    var persisted = !!(event && event.persisted);
+    if (!persisted) {
+      ++_settingsNavigationGeneration;
+      _settingsFieldTarget = null;
+    }
+    Object.keys(_settingsLoading).forEach(function (svcId) {
+      var job = _settingsLoading[svcId];
+      delete _settingsLoading[svcId];
+      job.cancel();
+    });
+    if (persisted) return;
+    Object.keys(_settingsDrafts).forEach(function (svcId) {
+      releaseSettingsDraft(svcId, _settingsDrafts[svcId]);
+    });
+  });
 
   function applySettings(svcId, data) {
     if (svcId === 'pbcoindata') {
@@ -3484,6 +3626,7 @@ window.PBGUI_NAV_CONFIG = {
   };
 
   window.saveApiServerSettings = async function () {
+    if (!_settingsLoaded['api-server'] || _settingsLoading['api-server']) return;
     var hosts = [];
     document.querySelectorAll('#vps-hosts-select .tag:not(.inactive)').forEach(function (el) { hosts.push(el.getAttribute('data-host')); });
     var body = {

@@ -86,6 +86,8 @@ Die **Coin Overrides → Config File**-Editoren für `long` / `short` nutzen das
 
 ### Coins & Filter
 
+Bei Hyperliquid stehen aktive HIP-3-Märkte aller gemappten DEXe zur Verfügung. Coin-Auswahl und Statusprüfung ausgewählter Coins erhalten vollständige Ticker wie `NEWDEX-FOODAI`; Doppelpunkt- und Paar-Aliase werden nur für bekannte oder durch das Mapping bestätigte DEX-Identitäten aufgelöst. Ein unbestätigter Alias bleibt ungültig, statt stillschweigend einen kürzeren Ticker auszuwählen.
+
 Diese Felder steuern, welche Coins über die PBGui-Coin-Datenbank einbezogen werden.
 Nach dem Anpassen **Apply Filters** klicken, um die Approved/Ignored-Listen zu aktualisieren.
 

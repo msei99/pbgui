@@ -36,6 +36,9 @@ def worker_compatible_jobs(store: JobStore, jobs: list[dict], *, image: str = IM
             if snapshot.get('backtest', {}).get('offline') is not True:
                 errors.append({'path': 'backtest.offline',
                                'message': 'Offline input cannot be checked or is disabled. Prepare this job again on PBGui; Vast requires offline=true.'})
+            if not errors and image != IMAGE:
+                from vast_ohlcv_integrity import require_manifest_proof
+                require_manifest_proof(store, row['id'])
         except (VastError, OSError, ValueError, TypeError) as exc:
             errors = [{'message': 'Cannot verify the prepared job for this worker. Prepare the job again.'}]
             if report_errors:
@@ -64,6 +67,7 @@ def preflight_gpu_snapshots(store: JobStore, jobs: list[dict], *, reject: bool =
 
     accepted = []
     for row in jobs:
+        checking_integrity = False
         try:
             config = store.read(row['id'], 'input/optimize.json')
             errors, _warnings = validate_gpu_directions(config)
@@ -90,11 +94,15 @@ def preflight_gpu_snapshots(store: JobStore, jobs: list[dict], *, reject: bool =
                     raw = read_regular_file_nofollow(store.directory(row['id']) / 'input/optimize.json', store.root)
                     if hashlib.sha256(raw).hexdigest() != expected or json.loads(raw) != config:
                         raise VastError('Frozen optimizer input changed; prepare the job again', 409)
+            if not errors:
+                checking_integrity = True
+                from vast_ohlcv_integrity import require_manifest_proof
+                require_manifest_proof(store, row['id'])
         except (OSError, ValueError, TypeError, VastError) as exc:
             message = f"Job {row['id']}: GPU direction snapshot cannot be checked; prepare the job again. {exc}"
             if row.get('error') != message:
                 human_log(SERVICE, message, level='WARNING')
-                store.update(row['id'], error=message)
+                store.update(row['id'], **({'status': 'failed'} if checking_integrity else {}), error=message)
             if reject:
                 raise VastError(message, 422) from exc
             continue
@@ -151,6 +159,9 @@ def preflight_local_metadata(store: JobStore, jobs: list[dict], resolve_missing:
         if set(required) != set(row.get('exchanges') or []):
             raise VastError('Prepared cloud exchange list changed; prepare the job again', 409)
         cache_times = manifest.get('public_market_cache_mtimes') or {}
+        frozen = (manifest.get('metadata_snapshot') or {}).get('markets')
+        if isinstance(frozen, dict):
+            cache_times = {ex: item.get('fetched_at') for ex, item in frozen.items()}
         if cache_times:
             if (not isinstance(cache_times, dict) or set(cache_times) != set(required)
                     or any(type(stamp) not in (int, float) or not 0 <= time.time() - stamp < 86400

@@ -86,6 +86,8 @@ The **Coin Overrides → Config File** `long` / `short` JSON editors use the sam
 
 ### Coins & Filters
 
+For Hyperliquid, active HIP-3 markets from every mapped DEX are available. The picker and selected-coin status checks preserve full tickers such as `NEWDEX-FOODAI`; colon and pair aliases are resolved only for known or mapping-confirmed DEX identities. An unconfirmed alias remains invalid instead of silently selecting a shorter ticker.
+
 These fields control which coins are included via PBGui's coin database.
 After adjusting them click **Apply Filters** to update the approved/ignored lists.
 

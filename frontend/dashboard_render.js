@@ -2097,6 +2097,7 @@
             container._dpUpdate(data.positions, data.source || 'db');
             return;
         }
+        if (container._dpCloseManage) container._dpCloseManage(false);
         if (container._dpStatusTimer) clearInterval(container._dpStatusTimer);
         container.innerHTML = '';
         container._dpStatusSource = (data && data.source) || 'db';
@@ -2354,9 +2355,85 @@
             statusEl.textContent = msg || '';
         }
 
-        function openConfigPreviewModal(config, titleText) {
+        // Capture before shared bubble handlers: closing an upper dialog must never
+        // let the same key close this dialog, regardless of registration order.
+        function bindModalKeyboard(overlay, modal, title, close, trigger) {
+            modal.setAttribute('role', 'dialog');
+            modal.setAttribute('aria-modal', 'true');
+            modal.setAttribute('aria-labelledby', title.id);
+            modal.tabIndex = -1;
+            var upperDialogs = [
+                ['pbgui-dialog-ovl', 'pbgui-dialog-close'],
+                ['pbgui-confirm-ovl', 'pbgui-confirm-cancel'],
+                ['pbgui-alert-ovl', 'pbgui-alert-close'],
+                ['pbgui-about-ovl', 'pbgui-about-close'],
+                ['pbgui-shared-help-ovl', 'pbgui-shared-help-close']
+            ];
+            function onKeyDown(event) {
+                if (event.defaultPrevented || !overlay.isConnected) return;
+                // The Dashboard shell owns Guide/confirmations outside this iframe.
+                // Outer frames take precedence over every dialog inside their iframe.
+                var ancestors = [];
+                var owner = window;
+                while (owner.parent && owner.parent !== owner) {
+                    try {
+                        owner = owner.parent;
+                        ancestors.push(owner.document);
+                    } catch (err) {
+                        if (err && err.name === 'SecurityError') break;
+                        throw err;
+                    }
+                }
+                for (var ai = ancestors.length - 1; ai >= 0; ai--) {
+                    for (var ui = 0; ui < upperDialogs.length; ui++) {
+                        var parentOverlay = ancestors[ai].getElementById(upperDialogs[ui][0]);
+                        if (!parentOverlay || !parentOverlay.classList.contains('visible')) continue;
+                        if (event.key === 'Escape' || event.key === 'Tab') {
+                            event.preventDefault();
+                            event.stopImmediatePropagation();
+                            var parentClose = ancestors[ai].getElementById(upperDialogs[ui][1]);
+                            if (parentClose) {
+                                // Use exactly one explicit action; redispatching Escape
+                                // could dismiss both Guide and a shared confirmation.
+                                if (event.key === 'Escape') parentClose.click();
+                                else parentClose.focus();
+                            }
+                        }
+                        return;
+                    }
+                }
+                for (var i = 0; i < upperDialogs.length; i++) {
+                    var upper = document.getElementById(upperDialogs[i][0]);
+                    if (upper && upper.classList.contains('visible')) return;
+                }
+                var preview = document.getElementById('dp-preview-modal');
+                if (preview && preview !== overlay) return;
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    close();
+                } else if (event.key === 'Tab') {
+                    // Resolve on every key press; live positions can replace controls.
+                    var targets = Array.from(modal.querySelectorAll('button, input, select, textarea, a[href], [tabindex]')).filter(function (el) {
+                        return !el.disabled && el.tabIndex >= 0 && el.getClientRects().length && window.getComputedStyle(el).visibility !== 'hidden';
+                    });
+                    var index = targets.indexOf(document.activeElement);
+                    var next = event.shiftKey ? (index <= 0 ? targets.length - 1 : index - 1) : (index + 1) % targets.length;
+                    event.preventDefault();
+                    (targets[next] || modal).focus();
+                }
+            }
+            document.addEventListener('keydown', onKeyDown, true);
+            (modal.querySelector('button') || modal).focus();
+            return function (restoreFocus) {
+                document.removeEventListener('keydown', onKeyDown, true);
+                if (restoreFocus !== false && trigger && trigger.isConnected) trigger.focus();
+            };
+        }
+
+        function openConfigPreviewModal(config, titleText, trigger) {
             var old = document.getElementById('dp-preview-modal');
-            if (old && old.parentNode) old.parentNode.removeChild(old);
+            if (old && old._dpClose) old._dpClose(false);
             var overlay = document.createElement('div');
             overlay.className = 'dp-modal-ovl';
             overlay.id = 'dp-preview-modal';
@@ -2374,6 +2451,7 @@
             head.className = 'dp-modal-head';
             var title = document.createElement('div');
             title.className = 'dp-modal-title';
+            title.id = 'dp-preview-title';
             title.textContent = titleText || 'Panic config preview';
             var closeBtn = document.createElement('button');
             closeBtn.type = 'button';
@@ -2405,12 +2483,21 @@
             body.appendChild(actions);
             modal.appendChild(body);
 
-            function closePreview() {
+            var cleanupKeyboard = null;
+            var closed = false;
+            function closePreview(restoreFocus) {
+                if (closed) return;
+                closed = true;
                 if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                if (cleanupKeyboard) cleanupKeyboard(restoreFocus);
             }
+            overlay._dpClose = closePreview;
+            overlay._dpOwner = manageState.overlay;
+            closeBtn.setAttribute('aria-label', 'Close');
             closeBtn.addEventListener('click', closePreview);
             closeOnlyBtn.addEventListener('click', closePreview);
             document.body.appendChild(overlay);
+            cleanupKeyboard = bindModalKeyboard(overlay, modal, title, closePreview, trigger || document.activeElement);
         }
 
         function requestManageAction(body, statusEl, confirmBtn) {
@@ -2437,7 +2524,9 @@
             .then(function (data) {
                 if (data && data.dry_run) {
                     var previewLabel = body.action === 'graceful_stop_all' ? 'Graceful stop' : (body.action === 'tp_only_all' ? 'Take Profit Only' : 'Panic');
-                    openConfigPreviewModal(data.config || null, previewLabel + ' config preview for ' + (body.user || 'user'));
+                    if (manageState.overlay && manageState.status === statusEl && manageState.overlay.isConnected) {
+                        openConfigPreviewModal(data.config || null, previewLabel + ' config preview for ' + (body.user || 'user'), confirmBtn);
+                    }
                     setStatus(statusEl, 'Preview only. No config was saved and no SSH sync was started.', 'ok');
                 } else if (body.action === 'market_close') {
                     setStatus(statusEl, 'Market close order sent.', 'ok');
@@ -2841,20 +2930,9 @@
 
         function openManageModal() {
             if (!rows.length || !opts.apiBase) return;
+            var trigger = manageBtn || document.activeElement;
             var old = document.getElementById('dp-manage-modal');
-            if (old && old.parentNode) old.parentNode.removeChild(old);
-            manageState.overlay = null;
-            manageState.modal = null;
-            manageState.tbody = null;
-            manageState.tableWrap = null;
-            manageState.status = null;
-            manageState.panicAllBtn = null;
-            manageState.previewAllBtn = null;
-            manageState.gracefulAllBtn = null;
-            manageState.previewGracefulBtn = null;
-            manageState.tpOnlyAllBtn = null;
-            manageState.previewTpOnlyBtn = null;
-            manageState.pendingRefresh = false;
+            if (old && old._dpClose) old._dpClose(false);
 
             var overlay = document.createElement('div');
             overlay.className = 'dp-modal-ovl';
@@ -2874,6 +2952,7 @@
             head.className = 'dp-modal-head';
             var title = document.createElement('div');
             title.className = 'dp-modal-title';
+            title.id = 'dp-manage-title';
             title.textContent = 'Manage positions';
             var closeBtn = document.createElement('button');
             closeBtn.type = 'button';
@@ -2957,10 +3036,19 @@
             var cleanupDrag = null;
             var cleanupResize = null;
 
-            function closeModal() {
+            var cleanupKeyboard = null;
+            var closed = false;
+            function closeModal(restoreFocus) {
+                if (closed) return;
+                closed = true;
+                var preview = document.getElementById('dp-preview-modal');
+                if (preview && preview._dpOwner === overlay) preview._dpClose(false);
                 if (cleanupDrag) cleanupDrag();
                 if (cleanupResize) cleanupResize();
                 if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                if (cleanupKeyboard) cleanupKeyboard(restoreFocus);
+                if (container._dpCloseManage === closeModal) delete container._dpCloseManage;
+                if (manageState.overlay !== overlay) return;
                 manageState.overlay = null;
                 manageState.modal = null;
                 manageState.tbody = null;
@@ -2975,6 +3063,9 @@
                 manageState.pendingRefresh = false;
             }
 
+            overlay._dpClose = closeModal;
+            container._dpCloseManage = closeModal;
+            closeBtn.setAttribute('aria-label', 'Close');
             closeBtn.addEventListener('click', closeModal);
             closeOnlyBtn.addEventListener('click', closeModal);
             previewAllBtn.addEventListener('click', function () {
@@ -3150,6 +3241,7 @@
             manageState.previewTpOnlyBtn = previewTpOnlyBtn;
             updatePanicAllButton();
             renderManageRows();
+            cleanupKeyboard = bindModalKeyboard(overlay, modal, title, closeModal, trigger);
         }
 
         function renderRows() {
@@ -3230,7 +3322,12 @@
             syncManageRowsAfterLiveUpdate();
         };
         container._dpStatusTimer = setInterval(function () {
-            if (!container.isConnected) { clearInterval(container._dpStatusTimer); container._dpStatusTimer = null; return; }
+            if (!container.isConnected) {
+                if (container._dpCloseManage) container._dpCloseManage(false);
+                clearInterval(container._dpStatusTimer);
+                container._dpStatusTimer = null;
+                return;
+            }
             updatePositionsStatus();
         }, 1000);
     }
@@ -3284,7 +3381,7 @@
                 borderColor: '#2d3748',
                 timeVisible: _tfShowTime,
                 secondsVisible: false,
-                rightOffset: 30
+                lockVisibleTimeRangeOnResize: true
             },
             handleScroll: true,
             handleScale: true
@@ -3386,14 +3483,216 @@
         } catch (_) {}
         volSeries.setData(_volData);
 
-        /* Fit content after the browser has laid out the container.
-           Two-phase: rAF for first paint, setTimeout for autoSize ResizeObserver settling. */
-        var _initialFitFrame = requestAnimationFrame(function () {
-            if (!_destroyed) chart.timeScale().fitContent();
+        /* Logical ranges retain fractional zoom and whitespace beyond the final candle.
+           Remember a visible candle's time before reindexing history, not its old index. */
+        var _rightMargin = 0;
+        var _following = true;
+        var _viewportDepth = 0;
+        var _programmaticRange = null;
+        var _pendingViewportRange = null;
+        var _lastViewportRange = null;
+        var _layoutWidth = 0;
+        var _initialView = true;
+        var _layoutGeneration = 0;
+        var _layoutFrame = null;
+        var _initialFitTimer = null;
+        var _initialCorrections = 0;
+        var _resizeObserver = null;
+        var _measureContext = document.createElement('canvas').getContext('2d');
+
+        function _plotWidth() {
+            return Math.max(1, chart.timeScale().width() || chartDiv.clientWidth - 100 || 1);
+        }
+        function _minimumSpacing() {
+            return Math.max(0.5, chart.timeScale().options().minBarSpacing || 0.5);
+        }
+        function _labelPixels(spacing) {
+            var layout = chart.options().layout;
+            var size = layout.fontSize || 12;
+            _measureContext.font = size + 'px ' + layout.fontFamily;
+            var text = 0;
+            if (_entryLine) text = Math.max(text, _measureContext.measureText('Entry').width);
+            if (_priceLine) text = Math.max(text, _measureContext.measureText('Price').width);
+            // LWC titles have their own badge inside the pane. Reserve both insets,
+            // the border, six CSS pixels of clearance, and half a candle/wick width.
+            return text + (text ? 2 * size + 4 : 0) + 6 + Math.max(1, spacing / 2);
+        }
+        function _barSpacing(span, width) {
+            var scale = chart.timeScale();
+            var range = scale.getVisibleLogicalRange();
+            if (range && Math.abs(range.to - range.from - span) < 0.00001) {
+                var left = scale.logicalToCoordinate(0), right = scale.logicalToCoordinate(1);
+                if (left !== null && right !== null && right > left) return right - left;
+            }
+            return Math.max(_minimumSpacing(), width / Math.max(1, span + 1));
+        }
+        function _marginForSpan(span, width) {
+            var spacing = _barSpacing(span, width);
+            var margin = Math.max(8, _labelPixels(spacing) / spacing);
+            // A deliberately tight zoom must retain its span and a visible candle.
+            return Math.min(margin, Math.max(0, span - 1));
+        }
+        function _atLatest(range) {
+            var span = range.to - range.from;
+            var width = _layoutWidth || _plotWidth();
+            var spacing = _barSpacing(span, width);
+            var target = lwData.length - 1 + _marginForSpan(span, width);
+            return Math.abs(range.to - target) <= 6 / spacing;
+        }
+        function _sizeChanged() {
+            return Math.abs(_plotWidth() - _layoutWidth) > 0.5;
+        }
+        function _scheduleLayout(initial) {
+            if (_destroyed || (initial && (!_initialView || _initialCorrections >= 3))) return;
+            cancelAnimationFrame(_layoutFrame);
+            var gen = _layoutGeneration;
+            var passes = 0;
+            function adjust() {
+                _layoutFrame = null;
+                if (_destroyed || gen !== _layoutGeneration) return;
+                if (initial) {
+                    if (!_initialView || _initialCorrections >= 3) return;
+                    _initialCorrections++;
+                    _fitLatest();
+                } else {
+                    _withViewport(function () {});
+                }
+                // Public coordinates settle on the next chart frame. At most three
+                // corrections per layout event; never create a persistent fit loop.
+                if (++passes < 3 && _following && (!initial || _initialCorrections < 3)) {
+                    _layoutFrame = requestAnimationFrame(adjust);
+                }
+            }
+            _layoutFrame = requestAnimationFrame(adjust);
+        }
+        var _containerWidth = chartDiv.clientWidth || _plotWidth();
+        var _containerHeight = chartDiv.clientHeight || 0;
+        function _onLayoutChange() {
+            if (_destroyed) return;
+            var width = chartDiv.clientWidth || _plotWidth();
+            var height = chartDiv.clientHeight || 0;
+            // ResizeObserver emits an initial notification even without a resize.
+            // It must not add another set of initial corrections.
+            if (width === _containerWidth && height === _containerHeight) return;
+            _containerWidth = width;
+            _containerHeight = height;
+            _scheduleLayout(false);
+        }
+        function _onFontChange() { _scheduleLayout(false); }
+
+        function _sameRange(a, b) {
+            return a && b && Math.abs(a.from - b.from) < 0.00001 && Math.abs(a.to - b.to) < 0.00001;
+        }
+        function _captureViewport() {
+            // A setVisibleLogicalRange queued for the next frame already owns the
+            // viewport. An immediate snapshot must not restore the previous zoom.
+            var range = _pendingViewportRange || (_sizeChanged() && _lastViewportRange)
+                || chart.timeScale().getVisibleLogicalRange();
+            if (!range || !lwData.length) return null;
+            var index = Math.max(0, Math.min(lwData.length - 1, Math.ceil(range.from)));
+            return {range: range, time: lwData[index].time, index: index,
+                follow: _following};
+        }
+        function _setLogicalRange(range) {
+            _programmaticRange = {from: range.from, to: range.to};
+            _lastViewportRange = _programmaticRange;
+            _pendingViewportRange = _sameRange(range, chart.timeScale().getVisibleLogicalRange())
+                ? null : _programmaticRange;
+            chart.timeScale().setVisibleLogicalRange(range);
+        }
+        function _restoreViewport(view) {
+            if (!view) return;
+            var shift = 0;
+            var span = view.range.to - view.range.from;
+            if (view.follow) {
+                // Respect LWC's density limit when a narrower plot cannot represent
+                // the previous span; otherwise retain the user's exact zoom.
+                span = Math.min(span, Math.max(1, _plotWidth() / _minimumSpacing() - 1));
+                _rightMargin = _marginForSpan(span, _plotWidth());
+                shift = lwData.length - 1 + _rightMargin - view.range.to;
+            } else {
+                var index = lwData.findIndex(function (c) { return c.time === view.time; });
+                if (index >= 0) shift = index - view.index;
+            }
+            _following = view.follow;
+            _layoutWidth = _plotWidth();
+            _setLogicalRange({from: view.range.to + shift - span, to: view.range.to + shift});
+        }
+        function _withViewport(change) {
+            var view = _captureViewport();
+            _viewportDepth++;
+            try { change(); _restoreViewport(view); }
+            finally { _viewportDepth--; }
+        }
+        function _cancelInitialFit(event) {
+            if (_destroyed) return;
+            if (event) {
+                // A gesture during a queued resize owns the new layout immediately.
+                _layoutWidth = _plotWidth();
+                var range = chart.timeScale().getVisibleLogicalRange();
+                if (range) {
+                    _lastViewportRange = {from: range.from, to: range.to};
+                    _following = _atLatest(range);
+                }
+            }
+            _pendingViewportRange = null;
+            _programmaticRange = null;
+            _initialView = false;
+            _layoutGeneration++;
+            cancelAnimationFrame(_layoutFrame);
+            _layoutFrame = null;
+            clearTimeout(_initialFitTimer);
+        }
+        function _fitLatest() {
+            if (_destroyed || !_initialView) return;
+            _viewportDepth++;
+            try {
+                // Solve margin = pixels * candles / (width - pixels) before the
+                // first paint. If minBarSpacing limits density, show less history.
+                var width = _plotWidth();
+                var count = Math.max(1, lwData.length);
+                var pixels = _labelPixels(Math.max(_minimumSpacing(), width / count));
+                var margin = Math.max(8, pixels * count / Math.max(1, width - pixels));
+                var span = Math.min(Math.max(9, count - 1 + margin), Math.max(1, width / _minimumSpacing() - 1));
+                _rightMargin = _marginForSpan(span, width);
+                _layoutWidth = width;
+                _following = true;
+                if (lwData.length) {
+                    var to = lwData.length - 1 + _rightMargin;
+                    _setLogicalRange({from: to - span, to: to});
+                }
+            } finally { _viewportDepth--; }
+        }
+        function _programmaticViewport(range) {
+            // The library also emits deferred callbacks. Ignore our final range and
+            // obsolete intermediate callbacks, even after the synchronous guard ends.
+            return _viewportDepth || _sizeChanged() || _pendingViewportRange || _sameRange(range, _programmaticRange)
+                || !_sameRange(range, chart.timeScale().getVisibleLogicalRange());
+        }
+        function _onViewportChange(range) {
+            if (_destroyed || !range) return;
+            if (_sameRange(range, _programmaticRange)
+                    && _sameRange(range, chart.timeScale().getVisibleLogicalRange())) {
+                _pendingViewportRange = null;
+                return;
+            }
+            if (!_programmaticViewport(range)) {
+                _cancelInitialFit();
+                _following = _atLatest(range);
+                _lastViewportRange = {from: range.from, to: range.to};
+            }
+        }
+        chart.timeScale().subscribeVisibleLogicalRangeChange(_onViewportChange);
+        ['pointerdown', 'touchstart', 'wheel'].forEach(function (event) {
+            chartDiv.addEventListener(event, _cancelInitialFit, {passive: true});
         });
-        var _initialFitTimer = setTimeout(function () {
-            if (!_destroyed) chart.timeScale().fitContent();
-        }, 200);
+        // Queue the conservative range synchronously, before LWC's first visible paint.
+        _fitLatest();
+        _scheduleLayout(true);
+        _initialFitTimer = setTimeout(function () { _scheduleLayout(true); }, 200);
+        _resizeObserver = new ResizeObserver(_onLayoutChange);
+        _resizeObserver.observe(chartDiv);
+        if (document.fonts) document.fonts.addEventListener('loadingdone', _onFontChange);
 
         /* ── Lazy history loading: fire onLoadMore when user scrolls near left edge ── */
         var _loadingMore = false;
@@ -3405,7 +3704,7 @@
                 try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(_loadMoreHandler); } catch (_) {}
             }
             _loadMoreHandler = function (range) {
-                if (!range) return;
+                if (_destroyed || !range || _programmaticViewport(range)) return;
                 if (_loadingMore) return;
                 if (range.from < 20) {
                     _loadingMore = true;
@@ -3419,7 +3718,7 @@
         }
         _armLoadMore();
 
-        /* autoSize:true handles responsive resizing — no manual ResizeObserver needed */
+        /* LWC owns sizing; our observer preserves intent and recalculates only the margin. */
 
         var _candleRevision = 0;
         var _candleRevisions = {};
@@ -3429,22 +3728,22 @@
         var _currentTimeframe = opts.timeframe || '4h';
 
         function _mergeCandles(newCandles, revision) {
-            var range = chart.timeScale().getVisibleRange();
-            var byTime = lwData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
-            var volumeByTime = _volData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
-            newCandles.forEach(function (c) {
-                var t = Math.floor(c.t / 1000);
-                // Do not roll back a WS update received after this request began.
-                if (revision !== undefined && (_candleRevisions[t] || 0) > revision) return;
-                byTime[t] = {time: t, open: c.o, high: c.h, low: c.l, close: c.c};
-                volumeByTime[t] = {time: t, value: c.v,
-                    color: c.c >= c.o ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)'};
+            _withViewport(function () {
+                var byTime = lwData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
+                var volumeByTime = _volData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
+                newCandles.forEach(function (c) {
+                    var t = Math.floor(c.t / 1000);
+                    // Do not roll back a WS update received after this request began.
+                    if (revision !== undefined && (_candleRevisions[t] || 0) > revision) return;
+                    byTime[t] = {time: t, open: c.o, high: c.h, low: c.l, close: c.c};
+                    volumeByTime[t] = {time: t, value: c.v,
+                        color: c.c >= c.o ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)'};
+                });
+                lwData = Object.values(byTime).sort(function (a, b) { return a.time - b.time; });
+                _volData = Object.values(volumeByTime).sort(function (a, b) { return a.time - b.time; });
+                series.setData(lwData);
+                volSeries.setData(_volData);
             });
-            lwData = Object.values(byTime).sort(function (a, b) { return a.time - b.time; });
-            _volData = Object.values(volumeByTime).sort(function (a, b) { return a.time - b.time; });
-            series.setData(lwData);
-            volSeries.setData(_volData);
-            if (range) chart.timeScale().setVisibleRange(range);
             if (lwData.length) {
                 _lastClose = lwData[lwData.length - 1].close;
                 if (_priceLine) _priceLine.applyOptions({price: _lastClose});
@@ -3506,23 +3805,25 @@
                 /* candle: [t, o, h, l, c, v] (raw exchange format) */
                 var t = Math.floor(candle[0] / 1000);
                 if (_destroyed || (lwData.length && t < lwData[lwData.length - 1].time)) return;
-                _candleRevisions[t] = ++_candleRevision;
-                // Keep the backing arrays current so loading history cannot undo live updates.
-                var candleRow = {time: t, open: candle[1], high: candle[2], low: candle[3], close: candle[4]};
-                var volumeRow = {time: t, value: candle[5],
-                    color: candle[4] >= candle[1] ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)'};
-                if (lwData.length && lwData[lwData.length - 1].time === t) {
-                    lwData[lwData.length - 1] = candleRow;
-                    _volData[_volData.length - 1] = volumeRow;
-                } else { lwData.push(candleRow); _volData.push(volumeRow); }
-                _lastClose = candle[4];
-                series.update({
-                    time: t, open: candle[1], high: candle[2],
-                    low: candle[3], close: candle[4]
-                });
-                volSeries.update({
-                    time: t, value: candle[5],
-                    color: candle[4] >= candle[1] ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)'
+                _withViewport(function () {
+                    _candleRevisions[t] = ++_candleRevision;
+                    // Keep the backing arrays current so loading history cannot undo live updates.
+                    var candleRow = {time: t, open: candle[1], high: candle[2], low: candle[3], close: candle[4]};
+                    var volumeRow = {time: t, value: candle[5],
+                        color: candle[4] >= candle[1] ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)'};
+                    if (lwData.length && lwData[lwData.length - 1].time === t) {
+                        lwData[lwData.length - 1] = candleRow;
+                        _volData[_volData.length - 1] = volumeRow;
+                    } else { lwData.push(candleRow); _volData.push(volumeRow); }
+                    _lastClose = candle[4];
+                    series.update({
+                        time: t, open: candle[1], high: candle[2],
+                        low: candle[3], close: candle[4]
+                    });
+                    volSeries.update({
+                        time: t, value: candle[5],
+                        color: candle[4] >= candle[1] ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)'
+                    });
                 });
                 /* Update market-price line to follow latest close */
                 if (_priceLine) {
@@ -3533,6 +3834,7 @@
                         lineStyle: LWC.LineStyle.Dotted, axisLabelVisible: true, title: 'Price',
                         autoscaleInfoProvider: function () { return null; }
                     });
+                    _scheduleLayout(false);
                 }
                 /* Update entry line color based on latest close vs entry */
                 if (_entryLine && pos && pos.entry) {
@@ -3542,6 +3844,7 @@
                 }
             },
             updatePosition: function (posData) {
+                if (_destroyed) return;
                 /* posData: {entry, size, upnl, side} or null */
                 if (_entryLine) {
                     try { series.removePriceLine(_entryLine); } catch (_) {}
@@ -3560,6 +3863,7 @@
                         autoscaleInfoProvider: function () { return null; }
                     });
                 }
+                _scheduleLayout(false);
             },
             updateOrders: function (ordersList, ordersUnknown) {
                 /* ordersList: [{price, amount, side}, ...] */
@@ -3589,72 +3893,94 @@
             },
             prependData: function (olderCandles, gen) {
                 /* Skip stale calls from a previous timeframe */
-                if (gen !== undefined && gen !== _dataGen) return;
-                /* Prepend older candles to front of chart without losing current view */
-                var newLw = olderCandles.map(function (c) {
-                    return { time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c };
+                if (_destroyed || (gen !== undefined && gen !== _dataGen)) return;
+                _withViewport(function () {
+                    /* Prepend older candles to front of chart without losing current view */
+                    var newLw = olderCandles.map(function (c) {
+                        return { time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c };
+                    });
+                    var newVol = olderCandles.map(function (c) {
+                        return { time: Math.floor(c.t / 1000), value: c.v,
+                            color: c.c >= c.o ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)' };
+                    });
+                    /* Merge: newLw first, then existing lwData (deduplicate by time) */
+                    var existing = lwData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
+                    newLw.forEach(function (c) { if (!existing[c.time]) { existing[c.time] = c; } });
+                    lwData = Object.values(existing).sort(function (a, b) { return a.time - b.time; });
+                    series.setData(lwData);
+                    /* same for volume */
+                    var existingVol = _volData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
+                    newVol.forEach(function (c) { if (!existingVol[c.time]) { existingVol[c.time] = c; } });
+                    _volData = Object.values(existingVol).sort(function (a, b) { return a.time - b.time; });
+                    volSeries.setData(_volData);
                 });
-                var newVol = olderCandles.map(function (c) {
-                    return { time: Math.floor(c.t / 1000), value: c.v,
-                        color: c.c >= c.o ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)' };
-                });
-                /* Merge: newLw first, then existing lwData (deduplicate by time) */
-                var existing = lwData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
-                newLw.forEach(function (c) { if (!existing[c.time]) { existing[c.time] = c; } });
-                lwData = Object.values(existing).sort(function (a, b) { return a.time - b.time; });
-                series.setData(lwData);
-                /* same for volume */
-                var existingVol = _volData.reduce(function (m, c) { m[c.time] = c; return m; }, {});
-                newVol.forEach(function (c) { if (!existingVol[c.time]) { existingVol[c.time] = c; } });
-                _volData = Object.values(existingVol).sort(function (a, b) { return a.time - b.time; });
-                volSeries.setData(_volData);
             },
             setData: function (newCandles, timeframe) {
-                if (_reconcileAbort) { _reconcileAbort.abort(); _reconcileAbort = null; }
-                _currentTimeframe = timeframe || _currentTimeframe;
-                _candleRevisions = {};
-                _scheduleReconcile(0);
-                /* Full candle replacement (e.g. timeframe switch) — no chart rebuild */
-                _dataGen++;          /* invalidate any in-flight prependData calls */
-                _loadingMore = false; /* allow fresh onLoadMore triggers */
-                lwData = newCandles.map(function (c) {
-                    return { time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c };
-                });
-                _volData = newCandles.map(function (c) {
-                    return { time: Math.floor(c.t / 1000), value: c.v,
-                        color: c.c >= c.o ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)' };
-                });
-                /* Recalibrate precision for new price range */
-                if (newCandles.length > 0) {
-                    var _lp2 = newCandles[newCandles.length - 1].c;
-                    var _pr2 = _lp2 < 0.0001 ? 8 : _lp2 < 0.001 ? 7 : _lp2 < 0.01 ? 6
-                             : _lp2 < 0.1 ? 5 : _lp2 < 1 ? 4 : _lp2 < 10 ? 3 : 2;
-                    series.applyOptions({ priceFormat: { type: 'price', precision: _pr2,
-                        minMove: parseFloat(Math.pow(10, -_pr2).toFixed(_pr2)) } });
-                    _lastClose = _lp2;
-                    /* Refresh price-line position */
-                    if (_priceLine) _priceLine.applyOptions({ price: _lp2 });
-                }
-                /* Auto-detect timeframe from data spacing and update time axis */
-                if (newCandles.length >= 2) {
-                    var _span = newCandles[1].t - newCandles[0].t;
-                    var _showTime = _span < 86400000; /* less than 1-day interval → show time */
-                    chart.applyOptions({ timeScale: { timeVisible: _showTime, secondsVisible: false } });
-                }
-                series.setData(lwData);
-                volSeries.setData(_volData);
-                chart.timeScale().fitContent();
+                if (_destroyed) return;
+                _cancelInitialFit();
+                _initialView = true;
+                _initialCorrections = 0;
+                _viewportDepth++;
+                try {
+                    if (_reconcileAbort) { _reconcileAbort.abort(); _reconcileAbort = null; }
+                    _currentTimeframe = timeframe || _currentTimeframe;
+                    _candleRevisions = {};
+                    _scheduleReconcile(0);
+                    /* Full candle replacement (e.g. timeframe switch) — no chart rebuild */
+                    _dataGen++;          /* invalidate any in-flight prependData calls */
+                    _loadingMore = false; /* allow fresh onLoadMore triggers */
+                    lwData = newCandles.map(function (c) {
+                        return { time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c };
+                    });
+                    _volData = newCandles.map(function (c) {
+                        return { time: Math.floor(c.t / 1000), value: c.v,
+                            color: c.c >= c.o ? 'rgba(72,187,120,0.35)' : 'rgba(245,101,101,0.35)' };
+                    });
+                    /* Recalibrate precision for new price range */
+                    if (newCandles.length > 0) {
+                        var _lp2 = newCandles[newCandles.length - 1].c;
+                        var _pr2 = _lp2 < 0.0001 ? 8 : _lp2 < 0.001 ? 7 : _lp2 < 0.01 ? 6
+                                 : _lp2 < 0.1 ? 5 : _lp2 < 1 ? 4 : _lp2 < 10 ? 3 : 2;
+                        series.applyOptions({ priceFormat: { type: 'price', precision: _pr2,
+                            minMove: parseFloat(Math.pow(10, -_pr2).toFixed(_pr2)) } });
+                        _lastClose = _lp2;
+                        /* Refresh price-line position */
+                        if (_priceLine) _priceLine.applyOptions({ price: _lp2 });
+                    }
+                    /* Auto-detect timeframe from data spacing and update time axis */
+                    if (newCandles.length >= 2) {
+                        var _span = newCandles[1].t - newCandles[0].t;
+                        var _showTime = _span < 86400000; /* less than 1-day interval → show time */
+                        chart.applyOptions({ timeScale: { timeVisible: _showTime, secondsVisible: false } });
+                    }
+                    series.setData(lwData);
+                    volSeries.setData(_volData);
+                    _fitLatest();
+                    _scheduleLayout(true);
+                } finally { _viewportDepth--; }
                 /* Re-arm load-more handler for the new dataset */
                 _armLoadMore();
+            },
+            preserveViewport: function () {
+                if (!_destroyed) _scheduleLayout(false);
             },
             _gen: function () { return _dataGen; },
             destroy: function () {
                 if (_destroyed) return;
                 _destroyed = true;
                 clearTimeout(_initialFitTimer);
-                cancelAnimationFrame(_initialFitFrame);
+                _layoutGeneration++;
+                cancelAnimationFrame(_layoutFrame);
+                if (_resizeObserver) _resizeObserver.disconnect();
+                if (document.fonts) document.fonts.removeEventListener('loadingdone', _onFontChange);
+                _measureContext = null;
                 clearTimeout(_reconcileTimer);
                 document.removeEventListener('visibilitychange', _onCandleVisibility);
+                chart.timeScale().unsubscribeVisibleLogicalRangeChange(_onViewportChange);
+                if (_loadMoreHandler) chart.timeScale().unsubscribeVisibleLogicalRangeChange(_loadMoreHandler);
+                ['pointerdown', 'touchstart', 'wheel'].forEach(function (event) {
+                    chartDiv.removeEventListener(event, _cancelInitialFit);
+                });
                 if (_reconcileAbort) { _reconcileAbort.abort(); _reconcileAbort = null; }
                 chart.remove();
             },
@@ -3868,7 +4194,11 @@
         }
 
         /* Wire up fullscreen after ctrl is available */
+        var _fullscreenTimer = null;
+        var _ordersDestroyed = false;
         function _syncFs() {
+            if (_ordersDestroyed) return;
+            clearTimeout(_fullscreenTimer);
             var isFull = !!(document.fullscreenElement === root || document.webkitFullscreenElement === root);
             if (isFull) {
                 fsBtn.textContent = '\u2715';
@@ -3878,9 +4208,11 @@
                 root.classList.remove('do-fullscreen');
             }
             if (ctrl) {
-                /* autoSize:true reflows automatically; just re-fit the visible range */
-                setTimeout(function () {
-                    ctrl.chart.timeScale().fitContent();
+                /* autoSize + lockVisibleTimeRangeOnResize keeps the logical span.
+                   Read it at execution time so intervening user gestures win. */
+                _fullscreenTimer = setTimeout(function () {
+                    _fullscreenTimer = null;
+                    if (!_ordersDestroyed) ctrl.preserveViewport();
                 }, 150);
             }
         }
@@ -3901,6 +4233,8 @@
         if (ctrl) {
             var _origDestroy = ctrl.destroy;
             ctrl.destroy = function () {
+                _ordersDestroyed = true;
+                clearTimeout(_fullscreenTimer);
                 document.removeEventListener('fullscreenchange', _syncFs);
                 document.removeEventListener('webkitfullscreenchange', _syncFs);
                 if (_clockInterval) clearInterval(_clockInterval);
@@ -4171,7 +4505,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20261021a',
+        VERSION:            '20261023d',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

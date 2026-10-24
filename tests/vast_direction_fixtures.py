@@ -5,7 +5,8 @@ import copy
 def direction_config():
     """Supply a single-coin Long-only config with all four direction bounds."""
     return {
-        'live': {'strategy_kind': 'ema_anchor', 'approved_coins': {'long': ['BTC'], 'short': []}},
+        'live': {'strategy_kind': 'ema_anchor', 'minimum_coin_age_days': 0,
+                 'approved_coins': {'long': ['BTC'], 'short': []}},
         'bot': {side: {'risk': {'total_wallet_exposure_limit': 1.0 if side == 'long' else 0.0,
                               'n_positions': 1 if side == 'long' else 0}}
                 for side in ('long', 'short')},

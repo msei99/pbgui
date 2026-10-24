@@ -8,6 +8,44 @@ import pytest
 from api import balance_calc
 
 
+@pytest.mark.parametrize("empty_coin", [False, True])
+@pytest.mark.parametrize("style", ["{dex}-FOOUSD", "{dex}:FOOUSD", "{dex}-FOOUSD/USDC:USDC",
+                                  "{dex}:FOOUSD/USDC:USDC", "{dex}-FOOUSD_USDC:USDC", "{dex}:FOOUSD_USDC:USDC"])
+def test_all_hip3_dexes_and_aliases_have_balance_rows(monkeypatch, empty_coin, style):
+    """Approved HIP-3 names retain complete tickers and usable minimum-order checks."""
+    dexes = ["xyz", "para", "mkts", "flx", "newdex"]
+    rows = [{"coin": "" if empty_coin else f"{dex.upper()}-FOOUSD", "symbol": str(i),
+             "ccxt_symbol": f"{dex.upper()}-FOOUSD/USDC:USDC", "quote": "USDC", "active": True,
+             "swap": True, "linear": True, "open_interest": 100, "is_hip3": True, "dex": dex,
+             "min_order_price": 10} for i, dex in enumerate(dexes)]
+    bad = [{**rows[1], "coin": f"PARA-BAD{i}", "ccxt_symbol": f"PARA-BAD{i}/USDC:USDC", **change}
+           for i, change in enumerate([{"active": False}, {"swap": False}, {"linear": False},
+                                       {"open_interest": 0}, {"open_interest": -1}, {"quote": "USDT"},
+                                       {"min_order_price": 0}, {"dex": "xyz"}])]
+    monkeypatch.setattr(balance_calc, "_load_mapping", lambda _: rows + bad)
+    config = {"live": {"approved_coins": {"long": [style.format(dex=dex.upper()) for dex in dexes] +
+                                                       [f"PARA-BAD{i}" for i in range(len(bad))], "short": []}},
+              "bot": {"long": {"n_positions": 5, "total_wallet_exposure_limit": 1, "entry_initial_qty_pct": 1}, "short": {}}}
+    result = balance_calc._calculate(config, "hyperliquid")
+    assert [row["coin"] for row in result["balance_long"]] == sorted(f"{dex.upper()}-FOOUSD" for dex in dexes)
+    config["live"]["ignored_coins"] = {"long": ["NEWDEX:FOOUSD", "PARA:FOOUSD"]}
+    result = balance_calc._calculate(config, "hyperliquid")
+    assert [row["coin"] for row in result["balance_long"]] == ["FLX-FOOUSD", "MKTS-FOOUSD", "XYZ-FOOUSD"]
+
+
+def test_hip3_ambiguous_bare_alias_never_crosses_dexes(monkeypatch):
+    """A bare ticker shared by DEXes cannot silently select either instrument."""
+    rows = [{"coin": f"{dex.upper()}-SAME", "base": "SAME", "quote": "USDC", "active": True,
+             "swap": True, "linear": True, "is_hip3": True, "dex": dex, "min_order_price": 10}
+            for dex in ["xyz", "para", "newdex"]]
+    monkeypatch.setattr(balance_calc, "_load_mapping", lambda _: rows)
+    config = {"live": {"approved_coins": {"long": ["SAME"], "short": []}},
+              "bot": {"long": {"n_positions": 3, "total_wallet_exposure_limit": 1, "entry_initial_qty_pct": 1}, "short": {}}}
+    assert "error" in balance_calc._calculate(config, "hyperliquid")
+    config["live"]["approved_coins"]["long"] = ["XYZ:SAME", "PARA:SAME", "NEWDEX:SAME"]
+    assert [row["coin"] for row in balance_calc._calculate(config, "hyperliquid")["balance_long"]] == ["NEWDEX-SAME", "PARA-SAME", "XYZ-SAME"]
+
+
 def _write_instance(root: Path, name: str) -> None:
     """Create one minimal instance config below a temporary run root."""
     instance_dir = root / name

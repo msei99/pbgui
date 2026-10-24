@@ -1,0 +1,69 @@
+def _plan_combined_coin(
+    *,
+    coin: str,
+    base_start_ts: int,
+    end_ts: int,
+    first_timestamps_unified: dict,
+    minimum_coin_age_days: float,
+    min_coin_age_ms: int,
+    tradfi_for_stock_perps: bool,
+    forced_sources: Dict[str, str],
+    exchanges_to_consider: Sequence[str],
+    normalization_candidate_exchanges: Sequence[str] = (),
+) -> Optional[CombinedCoinPlan]:
+    is_stock_perp_coin = coin.startswith("xyz:")
+    if coin not in first_timestamps_unified and not (is_stock_perp_coin and tradfi_for_stock_perps):
+        return None
+
+    if is_stock_perp_coin and tradfi_for_stock_perps:
+        effective_start_ts = int(base_start_ts)
+        coin_fts = None
+    else:
+        coin_fts = _coerce_positive_ts(first_timestamps_unified[coin])
+        if minimum_coin_age_days > 0.0 and coin_fts is None:
+            logging.info(
+                "%s: skipping - no authoritative inception for min_age=%d days",
+                coin,
+                int(minimum_coin_age_days),
+            )
+            return None
+        coin_fts = int(coin_fts or 0)
+        effective_start_ts = max(int(base_start_ts), coin_fts + int(min_coin_age_ms))
+    if effective_start_ts > end_ts:
+        logging.info(
+            "%s: skipping - effective start %s > end %s (coin first available: %s, min_age=%d days)",
+            coin,
+            ts_to_date(effective_start_ts),
+            ts_to_date(end_ts),
+            ts_to_date(coin_fts) if coin_fts is not None else "tradfi",
+            int(minimum_coin_age_days),
+        )
+        return None
+    if effective_start_ts > base_start_ts:
+        logging.info(
+            "%s: adjusting start from %s to %s (coin first available: %s, min_age=%d days)",
+            coin,
+            ts_to_date(base_start_ts),
+            ts_to_date(effective_start_ts),
+            ts_to_date(coin_fts) if coin_fts is not None else "tradfi",
+            int(minimum_coin_age_days),
+        )
+
+    forced_exchange = forced_sources.get(coin)
+    if forced_exchange is None and coin.startswith("xyz:"):
+        forced_exchange = forced_sources.get(coin[4:])
+    selection_exchanges = (
+        (forced_exchange,) if forced_exchange is not None else tuple(exchanges_to_consider)
+    )
+    candidate_exchanges = tuple(
+        dict.fromkeys([*selection_exchanges, *normalization_candidate_exchanges])
+    )
+    return CombinedCoinPlan(
+        coin=coin,
+        effective_start_ts=int(effective_start_ts),
+        forced_exchange=forced_exchange,
+        selection_exchanges=tuple(selection_exchanges),
+        candidate_exchanges=tuple(candidate_exchanges),
+    )
+
+

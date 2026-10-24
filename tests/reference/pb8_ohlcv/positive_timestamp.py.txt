@@ -1,0 +1,9 @@
+def _coerce_positive_ts(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        ts = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return ts if ts > 0 else None
+

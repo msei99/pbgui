@@ -5,18 +5,23 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import requests
 import numpy as np
 
 from market_data import append_exchange_download_log, get_exchange_raw_root_dir, normalize_market_data_coin_dir
-from PBCoinData import get_symbol_for_coin
+from PBCoinData import get_symbol_for_coin, _normalize_hyperliquid_hip3_alias, get_hyperliquid_hip3_alias
+from logging_helpers import human_log as _log
 
 
 HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
-_HYPERLIQUID_META_CACHE: dict[str, Any] = {"ts": 0.0, "names": set(), "names_upper": {}}
+SERVICE = "HyperliquidAPI"
+_HYPERLIQUID_META_CACHE: dict[str, tuple[float, set[str], dict[str, str]]] = {}
 _HYPERLIQUID_META_TTL_S = 300.0
+_HYPERLIQUID_META_MAX_ENTRIES = 64
+_HYPERLIQUID_META_LOCK = RLock()
 
 
 def _utc_day_start_ms(d: date) -> int:
@@ -39,7 +44,7 @@ def _ensure_date(v: Any) -> date:
     raise ValueError(f"Invalid date: {v!r}")
 
 
-def normalize_hyperliquid_coin(coin: str) -> str:
+def normalize_hyperliquid_coin(coin: str, *, mapping_record: dict | None = None) -> str:
     """Normalize coin identifier for Hyperliquid /info endpoints.
 
     - Market Data config usually uses base coin (e.g. ETH).
@@ -50,16 +55,21 @@ def normalize_hyperliquid_coin(coin: str) -> str:
     if not c:
         raise ValueError("coin is empty")
 
+    hip3 = _normalize_hyperliquid_hip3_alias(c, mapping_record)
+    if hip3:
+        dex, ticker = hip3.split("-", 1)
+        return f"{dex.lower()}:{ticker}"
+
     if "/" in c:
         c = c.split("/", 1)[0]
     elif "_" in c and ":" in c:
         c = c.split("_", 1)[0]
+    if not c or c in {".", ".."} or any(ord(char) < 32 for char in c):
+        raise ValueError("Invalid Hyperliquid coin")
 
     c_u = c.upper()
-    # Normalize stock-perp aliases to Hyperliquid dex-meta format.
-    # Supported inputs: xyz:AAPL, XYZ:AAPL, xyz-aapl, XYZ-AAPL
-    if (c_u.startswith("XYZ:") or c_u.startswith("XYZ-")) and len(c_u) > 4:
-        return f"xyz:{c_u[4:]}"
+    if ":" in c_u or "-" in c_u:
+        return c_u
 
     for suffix in ("USDC", "USD", "USDT"):
         if c_u.endswith(suffix) and len(c_u) > len(suffix):
@@ -68,50 +78,62 @@ def normalize_hyperliquid_coin(coin: str) -> str:
     return c_u
 
 
-def _load_hyperliquid_meta_names(*, timeout_s: float = 30.0) -> tuple[set[str], dict[str, str]]:
-    """Cache metadata names and DEX-qualified aliases for bare universe names."""
-    now = time.time()
-    cached = _HYPERLIQUID_META_CACHE.get("names")
-    cached_upper = _HYPERLIQUID_META_CACHE.get("names_upper")
-    if cached and cached_upper and (now - float(_HYPERLIQUID_META_CACHE.get("ts", 0.0)) < _HYPERLIQUID_META_TTL_S):
-        return set(cached), dict(cached_upper)
-
-    names: set[str] = set()
-    names_upper: dict[str, str] = {}
-    try:
-        for payload in ({"type": "meta"}, {"type": "meta", "dex": "xyz"}):
+def _load_hyperliquid_meta_names(*, dex: str = "", timeout_s: float = 30.0) -> tuple[set[str], dict[str, str]]:
+    """Cache only the requested namespace, with bounded ownership and expiry."""
+    with _HYPERLIQUID_META_LOCK:
+        now = time.monotonic()
+        for key, entry in list(_HYPERLIQUID_META_CACHE.items()):
+            if now - entry[0] >= _HYPERLIQUID_META_TTL_S:
+                del _HYPERLIQUID_META_CACHE[key]
+        cached = _HYPERLIQUID_META_CACHE.get(dex)
+        if cached is not None:
+            return set(cached[1]), dict(cached[2])
+        payload = {"type": "meta", **({"dex": dex} if dex else {})}
+        try:
             res = hyperliquid_info_post(payload, timeout_s=timeout_s)
-            if not isinstance(res, dict):
-                continue
-            universe = res.get("universe")
-            if isinstance(universe, list):
-                for item in universe:
-                    if not isinstance(item, dict):
-                        continue
-                    name = item.get("name")
-                    if isinstance(name, str) and name:
-                        names.add(name)
-                        names_upper[name.upper()] = name
-                        dex = payload.get("dex")
-                        if dex and ":" not in name:
-                            alias = f"{dex}:{name}"
-                            names.add(alias)
-                            names_upper[alias.upper()] = alias
-    except Exception:
-        names = set()
-        names_upper = {}
-
-    _HYPERLIQUID_META_CACHE["ts"] = now
-    _HYPERLIQUID_META_CACHE["names"] = names
-    _HYPERLIQUID_META_CACHE["names_upper"] = names_upper
-    return set(names), dict(names_upper)
+            if not isinstance(res, dict) or not isinstance(res.get("universe"), list):
+                return set(), {}
+            names: set[str] = set()
+            for item in res["universe"]:
+                name = item.get("name") if isinstance(item, dict) else None
+                if not isinstance(name, str) or not name:
+                    continue
+                if dex:
+                    if ":" in name:
+                        prefix, ticker = name.split(":", 1)
+                        if prefix.lower() != dex or not ticker:
+                            continue
+                        name = f"{dex}:{ticker}"
+                    else:
+                        name = f"{dex}:{name}"
+                elif ":" in name:
+                    continue
+                names.add(name)
+            names_upper = {name.upper(): name for name in names}
+        except Exception as exc:
+            _log(SERVICE, f"Hyperliquid metadata unavailable ({type(exc).__name__})", level="WARNING")
+            return set(), {}
+        while len(_HYPERLIQUID_META_CACHE) >= _HYPERLIQUID_META_MAX_ENTRIES:
+            oldest = min(_HYPERLIQUID_META_CACHE, key=lambda key: _HYPERLIQUID_META_CACHE[key][0])
+            del _HYPERLIQUID_META_CACHE[oldest]
+        _HYPERLIQUID_META_CACHE[dex] = (time.monotonic(), names, names_upper)
+        return set(names), dict(names_upper)
 
 
 def resolve_hyperliquid_coin_name(*, coin: str, timeout_s: float = 30.0) -> str:
     """Resolve to the canonical coin name from Hyperliquid meta."""
 
-    coin_norm = normalize_hyperliquid_coin(coin)
-    names, names_upper = _load_hyperliquid_meta_names(timeout_s=timeout_s)
+    hip3 = get_hyperliquid_hip3_alias(coin)
+    if hip3:
+        dex, ticker = hip3.split("-", 1)
+        dex = dex.lower()
+        coin_norm = f"{dex}:{ticker}"
+    else:
+        dex = ""
+        coin_norm = normalize_hyperliquid_coin(coin)
+        if ":" in coin_norm or "-" in coin_norm:
+            raise ValueError("Unconfirmed Hyperliquid DEX-qualified coin")
+    names, names_upper = _load_hyperliquid_meta_names(dex=dex, timeout_s=timeout_s)
     if coin_norm in names:
         return coin_norm
     if coin_norm.upper() in names_upper:
@@ -120,12 +142,12 @@ def resolve_hyperliquid_coin_name(*, coin: str, timeout_s: float = 30.0) -> str:
     try:
         sym = get_symbol_for_coin(coin_norm, "hyperliquid.swap")
         sym_norm = normalize_hyperliquid_coin(sym)
-        if sym_norm in names:
+        if sym_norm in names and (not dex or sym_norm.startswith(f"{dex}:")):
             return sym_norm
         if sym_norm.upper() in names_upper:
             return names_upper[sym_norm.upper()]
-    except Exception:
-        pass
+    except Exception as exc:
+        _log(SERVICE, f"Hyperliquid local symbol lookup failed ({type(exc).__name__})", level="WARNING")
 
     if names:
         raise ValueError(f"Hyperliquid meta does not contain coin '{coin_norm}'")
@@ -134,8 +156,11 @@ def resolve_hyperliquid_coin_name(*, coin: str, timeout_s: float = 30.0) -> str:
 
 def hyperliquid_info_post(payload: dict[str, Any], *, timeout_s: float = 30.0) -> Any:
     r = requests.post(HYPERLIQUID_INFO_URL, json=payload, timeout=timeout_s)
-    r.raise_for_status()
-    return r.json()
+    try:
+        r.raise_for_status()
+        return r.json()
+    finally:
+        r.close()
 
 
 def fetch_candle_snapshot(

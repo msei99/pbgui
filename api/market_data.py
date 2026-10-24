@@ -28,6 +28,7 @@ from hyperliquid_best_1m import (
 from credential_store import CredentialStore
 from api.page_templates import render_page_urls, script_json
 from market_data import (
+    _canonical_enabled_coin,
     CoinSnapshotReadError,
     MarketDataCoinSnapshot,
     get_local_market_data_coin_snapshot,
@@ -219,16 +220,8 @@ def _get_exchange_settings_meta(exchange: str) -> tuple[str, dict[str, Any]]:
 
 
 def _canonical_market_coin(exchange_name: str, coin_value: str) -> str:
-    ex_name = str(exchange_name or "").strip().lower()
-    value = str(coin_value or "").strip()
-    if not value:
-        return ""
-    if ex_name == "hyperliquid":
-        lower = value.lower()
-        if lower.startswith("xyz:") or lower.startswith("xyz-"):
-            tail = value[4:].strip().upper()
-            return f"xyz:{tail}" if tail else ""
-    return value.upper()
+    """Keep the compatibility helper aligned with shared settings identities."""
+    return _canonical_enabled_coin(exchange_name, coin_value)
 
 
 def _coin_options_for_exchange(exchange: str) -> list[str]:

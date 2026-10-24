@@ -775,10 +775,12 @@ async def _worker_watchdog_loop() -> None:
     """
     from task_queue import list_jobs
     from task_worker_ownership import ensure_task_worker_started, get_task_worker_status
+    from pbcoindata_process import reap_children
     _log(SERVICE, "[watchdog] task-worker watchdog started", level="INFO")
     while True:
         try:
             await asyncio.sleep(_WATCHDOG_INTERVAL_S)
+            reap_children()
             worker_status = await asyncio.to_thread(get_task_worker_status)
             if worker_status.running or worker_status.suppressed:
                 continue
@@ -951,6 +953,12 @@ async def _lifespan(app: FastAPI):
                 task.cancel()
         if lifecycle_tasks:
             await asyncio.gather(*lifecycle_tasks, return_exceptions=True)
+
+        try:
+            from pbcoindata_process import reap_children
+            reap_children()
+        except Exception as exc:
+            _log(SERVICE, f"[lifespan] PBCoinData child reaping failed: {type(exc).__name__}", level="ERROR", meta={"traceback": traceback.format_exc()})
 
         try:
             await loop8_shutdown()

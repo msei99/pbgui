@@ -39,6 +39,8 @@ Die PB8-Initialgroesse folgt dem aktiven Strategie-Schema: Trailing-Strategien v
 
 ## Exchange-Auswahl
 
+Bei Hyperliquid stehen aktive HIP-3-Märkte aller gemappten DEXe zur Verfügung, einschließlich PARA und MKTS. `PARA-TOTAL2` und `para:TOTAL2` bezeichnen dasselbe gemappte Instrument. Voraussetzung bleiben ein linearer USDC-Swap, positives Open Interest, sofern gemeldet, und verwendbare Mindestorderdaten; ignorierte Coins bleiben ausgeschlossen. Die Berechnung erteilt keine Orders.
+
 - Backtest- und Run-Absprünge wählen den erkannten Exchange vor.
 - Beim direkten Öffnen gilt die aktuelle Dropdown-Auswahl.
 - Der Exchange kann jederzeit über das **Exchange**-Dropdown geändert werden.

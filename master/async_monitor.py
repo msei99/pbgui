@@ -29,6 +29,7 @@ import asyncssh
 from MonitorConfig import MonitorConfig
 from pbgui_purefunc import IniSnapshot, PBGDIR, load_ini, load_ini_snapshot, save_ini, update_ini
 from logging_helpers import human_log as _log
+from pbcoindata_lifecycle import metadata_expected
 from ini_watcher import IniWatcher
 from master.async_pool import AsyncSSHPool, ConnectionStatus, remote_path_join, remote_shell_path
 from master.async_store import VPSStore, SystemMetrics
@@ -1091,16 +1092,25 @@ def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any
             cpu_value = cpu_60s if cpu_confirmed else cpu_live
             errors_today = int(monitor.get('et') or 0)
             tracebacks_today = int(monitor.get('tt') or 0)
-            if (
-                memory_mb > monitor_config.mem_error_v7
-                or swap_value > monitor_config.swap_error_v7
-                or (not metrics_stale and cpu_confirmed and cpu_value > monitor_config.cpu_error_v7)
-                or errors_today > monitor_config.error_error_v7
-                or tracebacks_today > monitor_config.traceback_error_v7
+            triggered_thresholds = []
+            triggered_parts = []
+            for key, label, value, limit, unit, eligible in (
+                ("memory", "Memory", memory_mb, monitor_config.mem_error_v7, "MB", True),
+                ("swap", "Swap", swap_value, monitor_config.swap_error_v7, "MB", True),
+                ("cpu", "CPU 60s avg", cpu_value, monitor_config.cpu_error_v7, "%", not metrics_stale and cpu_confirmed),
+                ("errors", "Errors today", errors_today, monitor_config.error_error_v7, "", True),
+                ("tracebacks", "Tracebacks today", tracebacks_today, monitor_config.traceback_error_v7, "", True),
             ):
+                if eligible and value > limit:
+                    triggered_thresholds.append(key)
+                    reading_text = str(value).removesuffix(".0")
+                    limit_text = str(limit).removesuffix(".0")
+                    triggered_parts.append(f"{label} {reading_text}{unit} > {limit_text}{unit}")
+            if triggered_thresholds:
                 bot_name = str(monitor.get("u") or monitor.get("name") or f"unknown-{idx}")
                 details = (
-                    f"Memory {round(memory_mb, 1)}MB, swap {round(swap_value, 1)}MB, "
+                    f"Triggered: {'; '.join(triggered_parts)}\n"
+                    f"Current: Memory {round(memory_mb, 1)}MB, swap {round(swap_value, 1)}MB, "
                     f"CPU {cpu_value:.1f}%, errors today {errors_today}, tracebacks today {tracebacks_today}"
                 )
                 alerts.append({
@@ -1109,8 +1119,9 @@ def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any
                     "host": hostname,
                     "name": bot_name,
                     "severity": "error",
-                    "summary": f"Instance thresholds exceeded for {bot_name} on {hostname}",
+                    "summary": f"Instance thresholds exceeded for {bot_name} on {hostname}: {', '.join(triggered_thresholds)}",
                     "details": details,
+                    "triggered_thresholds": triggered_thresholds,
                 })
     return alerts
 
@@ -3591,7 +3602,7 @@ def collect_legacy_cron_count(pbgui_dir):
     return len(collect_legacy_cron_lines(pbgui_dir))
 
 
-def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configured, credential_active):
+def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configured, credential_active, coindata_lifecycle=None):
     pbgui_path = Path(pbgui_dir)
     python_bin = pbgui_path.parent / 'venv_pbgui' / 'bin' / 'python'
     systemctl_path = run(['which', 'systemctl'], timeout=5)
@@ -3606,8 +3617,11 @@ def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configure
     units = [systemd_unit_status(unit, systemctl_exists) for unit in all_unit_names]
     by_name = {item['unit']: item for item in units}
     coindata_unit = by_name.get('pbgui-pbcoindata.service', {})
+    if isinstance(coindata_lifecycle, dict):
+        credential_active = coindata_lifecycle.get('expected')
     if credential_active is True or (
         credential_active is None
+        and coindata_lifecycle is None
         and (coindata_unit.get('enabled') == 'enabled' or coindata_unit.get('active') == 'active')
     ):
         required_unit_names.append('pbgui-pbcoindata.service')
@@ -3785,6 +3799,16 @@ firewall_ssh_ips = config_value('firewall', 'ssh_ips')
 pbrun_configured = pbrun_required_for_host(PBGDIR, pbname)
 pbdata_configured = pbdata_required()
 credentials = credential_metadata()
+try:
+    sys.path.insert(0, PBGDIR)
+    from pbcoindata_lifecycle import lifecycle_decision
+    cached_lifecycle = os.environ.get('PBGUI_PBCOINDATA_LIFECYCLE')
+    coindata_lifecycle = json.loads(cached_lifecycle) if cached_lifecycle else lifecycle_decision(Path(PBGDIR), credentials['credential_active'], config=cfg)
+    if not cached_lifecycle:
+        from pbcoindata_controller import controller_metadata
+        coindata_lifecycle.update(controller_metadata(Path(PBGDIR)))
+except Exception:
+    coindata_lifecycle = None
 
 result = {
     'role': role,
@@ -3810,6 +3834,7 @@ result = {
     'pb8blocked': False,
     'pb8reason': '',
     **credentials,
+    **({'pbcoindata_lifecycle': coindata_lifecycle} if coindata_lifecycle is not None else {}),
     'firewall_settings_present': firewall_settings_present,
     'firewall': firewall_enabled,
     'firewall_ssh_port': firewall_ssh_port,
@@ -3817,7 +3842,7 @@ result = {
     'optional_services': {
         'PBRun': pbrun_configured,
         'PBData': pbdata_configured,
-        'PBCoinData': credentials['credential_active'],
+        'PBCoinData': coindata_lifecycle['expected'] if coindata_lifecycle is not None else credentials['credential_active'],
     },
 }
 
@@ -3888,7 +3913,7 @@ if os.path.isdir(logs_dir):
         if os.path.isfile(full) and (f.endswith('.log') or f.endswith('.log.old')):
             available.append('data/logs/' + f)
 result['available_logs'] = available
-result['systemd_migration'] = build_systemd_migration_status(PBGDIR, pbrun_configured, pbdata_configured, credentials['credential_active'])
+result['systemd_migration'] = build_systemd_migration_status(PBGDIR, pbrun_configured, pbdata_configured, credentials['credential_active'], coindata_lifecycle)
 if 'PBGUI_CACHED_SOFTWARE_PROBES' in os.environ:
     result['_software_probe_cache'] = _next_software_probes
 
@@ -4365,8 +4390,10 @@ class VPSMonitor:
     def _optional_service_expected(self, hostname: str, service_name: str) -> bool | None:
         if service_name == "PBCluster":
             return self._pbcluster_expected(hostname)
-        meta = self.store.host_meta.get(hostname, {}) if self.store else {}
+        meta = self.store.host_meta.get(hostname, {}) if getattr(self, "store", None) else {}
         if service_name == "PBCoinData":
+            if isinstance(meta, dict) and "pbcoindata_lifecycle" in meta:
+                return metadata_expected(meta["pbcoindata_lifecycle"])
             active = meta.get("credential_active") if isinstance(meta, dict) else None
             return active if isinstance(active, bool) else None
         if service_name not in OPTIONAL_SERVICE_REQUIREMENTS:
@@ -4429,7 +4456,12 @@ class VPSMonitor:
 
     def _auto_restart_allowed_for_host(self, hostname: str, service_name: str) -> bool:
         """Return whether this monitor may auto-restart a service on a host."""
-        del service_name
+        if service_name == "PBCoinData":
+            meta = self.store.host_meta.get(hostname, {}) if getattr(self, "store", None) else {}
+            if (meta.get("pbcoindata_lifecycle") or {}).get("controller") in {"monitor-agent", "pbrun"}:
+                return False
+            if self._optional_service_expected(hostname, service_name) is not True:
+                return False
         return str(hostname or "").strip() == self._local_master_hostname()
 
     @property
@@ -6621,7 +6653,10 @@ class VPSMonitor:
     async def _check_service(self, hostname: str, svc: ServiceInfo
                              ) -> dict:
         """Check if a service is running on a VPS."""
-        if not self._optional_service_expected(hostname, svc.name):
+        if self._optional_service_expected(hostname, svc.name) is False:
+            meta = self.store.host_meta.get(hostname, {}) if getattr(self, "store", None) else {}
+            if svc.name == "PBCoinData" and "pbcoindata_lifecycle" in meta:
+                return await self._check_systemd_service(hostname, svc.name) or {"status": "unknown", "pid": None, "error": "Service state unavailable", "was_restarted": False}
             return self._disabled_service_check(svc.name)
 
         systemd_status = await self._check_systemd_service(hostname, svc.name)
@@ -6692,7 +6727,9 @@ class VPSMonitor:
         if not svc:
             return False
 
-        if not self._optional_service_expected(hostname, service_name):
+        meta = self.store.host_meta.get(hostname, {}) if getattr(self, "store", None) else {}
+        local_policy = service_name == "PBCoinData" and "pbcoindata_lifecycle" in meta
+        if self._optional_service_expected(hostname, service_name) is False and not local_policy:
             reason = (OPTIONAL_SERVICE_REQUIREMENTS.get(service_name) or {}).get("reason") or "service is not configured"
             _log(SERVICE, f"[service] Skip restart for {service_name} on {hostname}: {reason}")
             return False
@@ -6806,7 +6843,13 @@ class VPSMonitor:
             if not isinstance(services, dict):
                 services = {}
             for svc_name in MONITORED_SERVICES.keys():
-                if not self._optional_service_expected(hostname, svc_name):
+                raw_check = services.get(svc_name)
+                meta = self.store.host_meta.get(hostname, {}) if getattr(self, "store", None) else {}
+                local_policy = svc_name == "PBCoinData" and (
+                    (isinstance(raw_check, dict) and "pbcoindata_lifecycle" in raw_check)
+                    or (isinstance(meta.get("pbcoindata_lifecycle"), dict) and meta["pbcoindata_lifecycle"].get("controller") in {"monitor-agent", "pbrun"})
+                )
+                if self._optional_service_expected(hostname, svc_name) is False and not local_policy:
                     check = self._disabled_service_check(svc_name)
                 else:
                     raw_check = services.get(svc_name)
@@ -6822,6 +6865,8 @@ class VPSMonitor:
                 if (
                     status_val == ServiceStatus.STOPPED.value
                     and self.auto_restart
+                    and not local_policy
+                    and self._optional_service_expected(hostname, svc_name) is True
                     and self._auto_restart_allowed_for_host(hostname, svc_name)
                 ):
                     _log(SERVICE, f"[service] {svc_name} down on {hostname}, "

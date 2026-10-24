@@ -144,11 +144,15 @@ def ensure_local_inception(markets):
 
     helper = Path(__file__).parent / 'setup/vast_gpu_benchmark/resolve_local_inception.py'
     try:
-        completed = subprocess.run(
-            [str(Path(interpreter).expanduser().absolute()), '-I', str(helper)],
-            input=json.dumps({'pb8_dir': str(root.parent), 'markets': missing}),
-            cwd=str(root.parent), text=True, capture_output=True, timeout=300, check=False,
-        )
+        # subprocess.run kills and reaps the direct child on timeout/abort.
+        # Its TemporaryDirectory cannot run a finalizer after SIGKILL, so the
+        # parent owns the enclosing directory until the child has been reaped.
+        with tempfile.TemporaryDirectory(prefix='pbgui-vast-inception-owner-') as temporary_root:
+            completed = subprocess.run(
+                [str(Path(interpreter).expanduser().absolute()), '-I', str(helper)],
+                input=json.dumps({'pb8_dir': str(root.parent), 'markets': missing, 'temporary_root': temporary_root}),
+                cwd=str(root.parent), text=True, capture_output=True, timeout=300, check=False,
+            )
         if completed.returncode or len(completed.stdout) > 1024 * 1024:
             raise ValueError('PB8 resolver failed')
         resolved = json.loads(completed.stdout)
@@ -192,8 +196,10 @@ def stage_inception(connection):
     """Install complete first-timestamp caches before starting any optimizer process."""
     try:
         manifest = connection.store.read(connection.identifier, 'input/manifest.json')
-        markets = required_markets(manifest, PROJECT / 'data/coindata')
-        snapshot = load_local_inception(markets)
+        snapshot = (manifest.get('metadata_snapshot') or {}).get('inception')
+        if snapshot is None:  # Keep already running legacy jobs recoverable.
+            markets = required_markets(manifest, PROJECT / 'data/coindata')
+            snapshot = load_local_inception(markets)
     except Exception as exc:
         human_log(SERVICE, 'Local first-candle metadata preparation failed; optimizer was not started',
                   level='ERROR', meta={'error_type': type(exc).__name__})

@@ -577,7 +577,7 @@ def test_migration_status_requires_not_ready_default_unit(monkeypatch, tmp_path)
             for service, unit in services._SYSTEMD_SERVICE_UNITS.items()
         ],
     )
-    monkeypatch.setattr(services, "_migration_required_services", lambda pbgdir=None: {"api-server", "pbdata"})
+    monkeypatch.setattr(services, "_migration_required_services", lambda pbgdir=None, **kwargs: {"api-server", "pbdata"})
     monkeypatch.setattr(services, "load_ini", lambda section, key: "")
     monkeypatch.setattr(services, "_detect_pbgui_python", lambda: str(tmp_path / "venv" / "bin" / "python"))
 
@@ -603,7 +603,7 @@ def test_migration_status_ignores_not_ready_unrequired_units(monkeypatch, tmp_pa
             for service, unit in services._SYSTEMD_SERVICE_UNITS.items()
         ],
     )
-    monkeypatch.setattr(services, "_migration_required_services", lambda pbgdir=None: {"api-server"})
+    monkeypatch.setattr(services, "_migration_required_services", lambda pbgdir=None, **kwargs: {"api-server"})
     monkeypatch.setattr(services, "load_ini", lambda section, key: "")
     monkeypatch.setattr(services, "_detect_pbgui_python", lambda: str(tmp_path / "venv" / "bin" / "python"))
 
@@ -1098,6 +1098,53 @@ def test_ohlcv_preload_worker_persists_real_exit_code(tmp_path, monkeypatch) -> 
     assert state["returncode"] == 7
 
 
+@pytest.mark.parametrize("worker_state", ["running", "suppressed", "empty"])
+def test_api_watchdog_reaps_only_ended_coindata_children(monkeypatch, tmp_path, worker_state) -> None:
+    """Existing API maintenance reaps an externally ended synthetic child before early exits."""
+    import os
+    import signal
+    import pbcoindata_process
+    import task_queue
+    import task_worker_ownership
+
+    children = [subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], cwd=tmp_path,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ) for _ in range(2)]
+    ended, live = children
+    registry = {child.pid: child for child in children}
+    monkeypatch.setattr(pbcoindata_process, "_CHILDREN", registry)
+    monkeypatch.setattr(PBApiServer, "_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(task_worker_ownership, "get_task_worker_status", lambda: SimpleNamespace(
+        running=worker_state == "running", suppressed=worker_state == "suppressed",
+    ))
+    monkeypatch.setattr(task_queue, "list_jobs", lambda **kwargs: [])
+    cycles = 0
+
+    async def tick(_delay):
+        """Run one real watchdog cycle without waiting or starting a worker."""
+        nonlocal cycles
+        cycles += 1
+        if cycles == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(PBApiServer.asyncio, "sleep", tick)
+    try:
+        os.kill(ended.pid, signal.SIGKILL)  # Only this test's temporary synthetic child.
+        os.waitid(os.P_PID, ended.pid, os.WEXITED | os.WNOWAIT)
+        assert ended.returncode is None  # Kernel exit is confirmed but not reaped yet.
+        asyncio.run(PBApiServer._worker_watchdog_loop())
+        assert ended.returncode == -signal.SIGKILL
+        assert ended.pid not in registry
+        assert registry == {live.pid: live}
+        assert live.poll() is None
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=3)
+
+
 def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch, tmp_path) -> None:
     """A partial API startup failure must not bypass unrelated resource cleanup."""
     import api.auth
@@ -1105,8 +1152,10 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch, tmp
     import api.vps
     import master.async_logs
     import master.async_monitor
+    import pbcoindata_process
 
     calls: list[str] = []
+    monkeypatch.setattr(pbcoindata_process, "reap_children", lambda: calls.append("coindata-reap"))
     migration_errors: list[str] = []
     monkeypatch.setattr(PBApiServer, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(PBApiServer.Path, "home", classmethod(lambda cls: tmp_path))
@@ -1169,6 +1218,7 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch, tmp
     asyncio.run(scenario())
 
     assert "monitor-stop" in calls
+    assert "coindata-reap" in calls
     assert migration_errors == ["RuntimeError: credential recovery required"]
     for name in (
         "auth_shutdown", "live_shutdown", "dashboard_shutdown", "heatmap_shutdown",

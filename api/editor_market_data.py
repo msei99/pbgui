@@ -72,13 +72,17 @@ def filter_symbols(
 
 def classify_coins(exchanges: list[str], coins: list[str]) -> dict[str, dict]:
     """Resolve selected coin names against current exchange mappings."""
-    from PBCoinData import CoinData, build_symbol_mappings, normalize_symbol
+    from PBCoinData import (
+        CoinData, build_symbol_mappings, normalize_symbol,
+        _hip3_qualified_base, _normalize_hyperliquid_hip3_alias,
+    )
 
     if not exchanges or not coins:
         return {}
     coin_data = CoinData()
     active_coins: set[str] = set()
     symbol_mappings: dict[str, str] = {}
+    hip3_records: list[dict] = []
     for exchange in exchanges:
         try:
             approved, ignored = coin_data.filter_mapping(
@@ -101,6 +105,8 @@ def classify_coins(exchanges: list[str], coins: list[str]) -> dict[str, dict]:
                 if str(record.get("symbol") or "").strip()
             ]
             symbol_mappings.update(build_symbol_mappings(raw_symbols))
+            if exchange == "hyperliquid":
+                hip3_records.extend(record for record in mapping if record.get("is_hip3"))
         except Exception as exc:
             _log(SERVICE, f"Failed to classify coins for exchange {exchange}: {exc}", level="WARNING")
 
@@ -112,7 +118,18 @@ def classify_coins(exchanges: list[str], coins: list[str]) -> dict[str, dict]:
         if value.lower() == "all":
             statuses[value] = {"input": value, "normalized": "all", "status": "valid"}
             continue
-        normalized = str(normalize_symbol(value.upper(), symbol_mappings) or value).upper()
+        upper = value.upper()
+        if upper in active_coins:
+            # A canonical mapping name must never lose a quote-like ticker ending.
+            normalized = upper
+        elif "hyperliquid" in exchanges and _hip3_qualified_base(value) is not None:
+            candidates = {_normalize_hyperliquid_hip3_alias(value)}
+            candidates.update(_normalize_hyperliquid_hip3_alias(value, record) for record in hip3_records)
+            candidates.discard("")
+            # Never guess a different ticker by stripping an unconfirmed HIP-3 alias.
+            normalized = next(iter(candidates)) if len(candidates) == 1 else upper
+        else:
+            normalized = str(normalize_symbol(upper, symbol_mappings) or value).upper()
         statuses[value] = {
             "input": value,
             "normalized": normalized,

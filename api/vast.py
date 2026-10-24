@@ -164,7 +164,7 @@ def _run_preparation(store: JobStore, identifier: str, name: str, config: dict, 
                       iterations, workers, use_adg, identifier=identifier)
     except Exception as exc:
         try:
-            store.update(identifier, status="failed", error="Input preparation failed; no instance rented")
+            store.update(identifier, status="failed", error=str(exc) if isinstance(exc, VastError) else "Input preparation failed; no instance rented")
         except Exception:
             pass
         _log(SERVICE, "Cloud input preparation failed: " + type(exc).__name__, level="ERROR")
