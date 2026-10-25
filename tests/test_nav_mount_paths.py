@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("prefix", [
-    "<absent>", "", "/pbgui", "/team/pbgui", "/team%20space/pbgui",
+    "<absent>", "", "/mounted", "/pbgui", "/team/pbgui", "/team%20space/pbgui",
     "/a%20b/%3C%3E%26%22%25/%C3%A4", "/literal%252f",
 ])
 @pytest.mark.parametrize("origin", ["http://example.test:8080", "https://example.test", "http://[::1]:8080", "https://[2001:db8::1]:8443"])

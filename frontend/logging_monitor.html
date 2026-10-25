@@ -369,7 +369,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 </script>
 <script src="/app/js/log_viewer_panel.js?v=50"></script>
 <script src="/app/js/pbgui_dialogs.js?v=11"></script>
-<script src="/app/js/shared_help_overlay.js?v=9"></script>
+<script src="/app/js/shared_help_overlay.js?v=11"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -385,13 +385,29 @@ window.PBGuiAI.registerPageContext({
 
 
 /* ── HTTP helpers ────────────────────────────────────────── */
+function formatApiError(detail, fallback) {
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    var messages = detail.map(function(item) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+      var field = Array.isArray(item.loc) ? item.loc.slice(1).filter(function(part) {
+        return typeof part === 'string' || (typeof part === 'number' && Number.isFinite(part));
+      }).join('.') : '';
+      var message = typeof item.msg === 'string' && item.msg.trim() ? item.msg : 'is invalid';
+      return (field || 'value') + ' ' + message;
+    }).filter(function(message) { return message; }).join('; ');
+    if (messages) return messages;
+  }
+  return fallback;
+}
+
 function apiGet(path) {
   return fetch(API_BASE + path).then(function(r) {
     return r.json().catch(function(error) {
       if (r.ok) throw error;
       return {};
     }).then(function(data) {
-      if (!r.ok) throw new Error(data && typeof data.detail === 'string' ? data.detail : ('HTTP ' + r.status));
+      if (!r.ok) throw new Error(formatApiError(data && data.detail, 'HTTP ' + r.status));
       return data;
     });
   });
@@ -402,8 +418,11 @@ function apiPost(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }).then(function(r) {
-    return r.json().then(function(data) {
-      if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    return r.json().catch(function(error) {
+      if (r.ok) throw error;
+      return {};
+    }).then(function(data) {
+      if (!r.ok) throw new Error(formatApiError(data && data.detail, 'HTTP ' + r.status));
       return data;
     });
   });
@@ -433,6 +452,20 @@ function numberOrDefault(value, fallback, minValue) {
     return minValue;
   }
   return parsed;
+}
+
+function rotationValues(maxInput, copiesInput) {
+  var errors = [];
+  var values = [maxInput, copiesInput].map(function(input, index) {
+    var text = input.value.trim();
+    var value = Number(text);
+    if (!/^\d+$/.test(text) || !Number.isSafeInteger(value) ||
+        value < Number(input.min) || value > Number(input.max)) {
+      errors.push((index === 0 ? 'Max MB' : 'Copies') + ' must be a whole number from ' + input.min + ' to ' + input.max);
+    }
+    return value;
+  });
+  return { max_mb: values[0], backup_count: values[1], error: errors.join('; ') };
 }
 
 /* ── State ──────────────────────────────────────────────── */
@@ -513,14 +546,14 @@ async function purgeCurrentFile() {
       } else {
         window.PBGuiDialogs.alert({
           title: 'Purge failed',
-          message: String(data.detail || JSON.stringify(data) || 'Unknown error')
+          message: formatApiError(data.detail, formatApiError(data.error, 'Unknown error'))
         });
       }
     })
     .catch(function(err) {
       window.PBGuiDialogs.alert({
         title: 'Purge error',
-        message: String(err)
+        message: err.message || 'Purge failed'
       });
     });
   } finally {
@@ -665,17 +698,25 @@ function loadRotationSettings() {
 }
 
 function saveManagedScope(scopeId) {
-  var maxMb = numberOrDefault(document.getElementById('managed-mb-' + scopeId).value, 10, 1);
-  var copies = numberOrDefault(document.getElementById('managed-bc-' + scopeId).value, 0, 0);
-  apiPost('/rotation', { scope: 'managed:' + scopeId, max_mb: maxMb, backup_count: copies }).then(function(data) {
-    if (!data.success) throw new Error(data.error || data.detail || 'Save failed');
-    var message = document.getElementById('managed-msg-' + scopeId);
+  var message = document.getElementById('managed-msg-' + scopeId);
+  var messageGeneration = (Number(message.dataset.generation) || 0) + 1;
+  message.dataset.generation = String(messageGeneration);
+  var values = rotationValues(document.getElementById('managed-mb-' + scopeId), document.getElementById('managed-bc-' + scopeId));
+  if (values.error) {
+    message.textContent = values.error;
+    message.style.color = '#fca5a5';
+    message.classList.add('visible');
+    return;
+  }
+  apiPost('/rotation', { scope: 'managed:' + scopeId, max_mb: values.max_mb, backup_count: values.backup_count }).then(function(data) {
+    if (message.dataset.generation !== String(messageGeneration)) return;
+    if (!data.success) throw new Error(formatApiError(data.error, formatApiError(data.detail, 'Save failed')));
     message.style.color = '';
     message.textContent = data.apply && data.apply.message ? data.apply.message : 'Saved';
     message.classList.add('visible');
-    setTimeout(function() { message.classList.remove('visible'); }, 2000);
+    setTimeout(function() { if (message.dataset.generation === String(messageGeneration)) message.classList.remove('visible'); }, 2000);
   }).catch(function(error) {
-    var message = document.getElementById('managed-msg-' + scopeId);
+    if (message.dataset.generation !== String(messageGeneration)) return;
     message.textContent = 'Save failed: ' + error.message;
     message.style.color = '#fca5a5';
     message.classList.add('visible');
@@ -683,39 +724,53 @@ function saveManagedScope(scopeId) {
 }
 
 function saveDefault() {
-  var maxMb = numberOrDefault(document.getElementById('def-max-mb').value, 10, 1);
-  var bc    = numberOrDefault(document.getElementById('def-backup-count').value, 0, 0);
+  var values = rotationValues(document.getElementById('def-max-mb'), document.getElementById('def-backup-count'));
   var msg   = document.getElementById('def-msg');
   var messageGeneration = (Number(msg.dataset.generation) || 0) + 1;
   msg.dataset.generation = String(messageGeneration);
-  apiPost('/rotation', { scope: 'default', max_mb: maxMb, backup_count: bc })
+  if (values.error) {
+    msg.textContent = values.error; msg.className = 'settings-msg err';
+    return;
+  }
+  apiPost('/rotation', { scope: 'default', max_mb: values.max_mb, backup_count: values.backup_count })
     .then(function(data) {
+      if (msg.dataset.generation !== String(messageGeneration)) return;
       if (data.success) {
         msg.textContent = data.apply && data.apply.message ? data.apply.message : 'Saved'; msg.className = 'settings-msg ok';
       } else {
-        msg.textContent = String(data.detail || data.error || 'Save failed'); msg.className = 'settings-msg err';
+        msg.textContent = formatApiError(data.detail, formatApiError(data.error, 'Save failed')); msg.className = 'settings-msg err';
       }
       setTimeout(function() { if (msg.dataset.generation === String(messageGeneration)) msg.className = 'settings-msg'; }, 2500);
     })
     .catch(function(error) {
+      if (msg.dataset.generation !== String(messageGeneration)) return;
       msg.textContent = error.message || 'Save failed'; msg.className = 'settings-msg err';
       setTimeout(function() { if (msg.dataset.generation === String(messageGeneration)) msg.className = 'settings-msg'; }, 2500);
     });
 }
 
 function saveService(svc, maxInput, copiesInput, msgEl) {
-  var maxMb = numberOrDefault(maxInput.value, 10, 1);
-  var bc    = numberOrDefault(copiesInput.value, 0, 0);
-  apiPost('/rotation', { scope: svc, max_mb: maxMb, backup_count: bc })
+  var messageGeneration = (Number(msgEl.dataset.generation) || 0) + 1;
+  msgEl.dataset.generation = String(messageGeneration);
+  var values = rotationValues(maxInput, copiesInput);
+  if (values.error) {
+    msgEl.textContent = values.error;
+    msgEl.style.color = '#fca5a5';
+    msgEl.classList.add('visible');
+    return;
+  }
+  apiPost('/rotation', { scope: svc, max_mb: values.max_mb, backup_count: values.backup_count })
     .then(function(data) {
-      if (!data.success) throw new Error(data.error || data.detail || 'Save failed');
+      if (msgEl.dataset.generation !== String(messageGeneration)) return;
+      if (!data.success) throw new Error(formatApiError(data.error, formatApiError(data.detail, 'Save failed')));
       if (data.success) {
         msgEl.style.color = '';
         msgEl.textContent = data.apply && data.apply.message ? data.apply.message : 'Saved';
         msgEl.classList.add('visible');
-        setTimeout(function() { msgEl.classList.remove('visible'); }, 2000);
+        setTimeout(function() { if (msgEl.dataset.generation === String(messageGeneration)) msgEl.classList.remove('visible'); }, 2000);
       }
     }).catch(function(error) {
+      if (msgEl.dataset.generation !== String(messageGeneration)) return;
       msgEl.textContent = 'Save failed: ' + error.message;
       msgEl.style.color = '#fca5a5';
       msgEl.classList.add('visible');

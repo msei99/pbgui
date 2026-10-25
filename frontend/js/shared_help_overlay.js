@@ -117,18 +117,34 @@
     var prefix = window.PBGUI_BASE_PREFIX;
     if (prefix === undefined) prefix = window.BASE_PREFIX;
     if (prefix === undefined) {
-      var apiBase = String(window.API_BASE || '');
+      var navConfig = window.PBGUI_NAV_CONFIG || {};
+      var apiBase = String((navConfig.apiBase !== undefined ? navConfig.apiBase : window.API_BASE) || '');
       try {
-        var apiPath = new URL(apiBase, window.location.origin).pathname;
-        var apiMarker = apiPath.lastIndexOf('/api/');
-        if (apiMarker >= 0) prefix = apiPath.slice(0, apiMarker);
+        var apiUrl = new URL(apiBase, window.location.origin);
+        if (apiUrl.origin === window.location.origin) {
+          var apiPath = apiUrl.pathname;
+          var apiMarker = apiPath.endsWith('/api') ? apiPath.length - 4 : apiPath.lastIndexOf('/api/');
+          if (apiMarker >= 0) prefix = apiPath.slice(0, apiMarker);
+        }
       } catch (_) {}
     }
     if (prefix === undefined) {
       var appMarker = window.location.pathname.lastIndexOf('/app/');
       prefix = appMarker >= 0 ? window.location.pathname.slice(0, appMarker) : '';
     }
-    return String(prefix || '').replace(/\/+$/, '') + path;
+    // Apply the navigation's mount validation before loading local Guide assets.
+    if (prefix !== '') {
+      if (typeof prefix !== 'string' || !/^\/(?:[A-Za-z0-9._~/-]|%[0-9a-f]{2})*$/i.test(prefix)
+          || prefix.indexOf('//') === 0) throw new Error('Invalid PBGui mount path');
+      prefix.split('/').forEach(function (part) {
+        var decoded;
+        try { decoded = decodeURIComponent(part); } catch (_) { throw new Error('Invalid PBGui mount path'); }
+        if (decoded === '.' || decoded === '..' || /[\\/\x00-\x1f\x7f]/.test(decoded)) {
+          throw new Error('Invalid PBGui mount path');
+        }
+      });
+    }
+    return prefix.replace(/\/+$/, '') + path;
   }
 
   function loadScript(src) {
@@ -557,8 +573,9 @@
         state.pendingAnchor = '';
         window.setTimeout(function () { scrollToAnchor(anchor); }, 0);
       })
-      .catch(function () {
+      .catch(function (error) {
         if (requestSeq !== state.topicRequestSeq) return;
+        console.error('Error loading help topic:', error);
         dom('pbgui-shared-help-content').innerHTML = '<div class="pbgui-shared-help-loading">Failed to load content.</div>';
       });
   }

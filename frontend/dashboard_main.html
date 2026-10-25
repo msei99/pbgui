@@ -1478,9 +1478,12 @@ html, body {
       if (!t) return;
       helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
       fetch(API_BASE + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang)
-        .then(function (r) { return r.json(); })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(function (d) { helpContent.innerHTML = mdToHtml(d.content || ''); helpContent.scrollTop = 0; })
-        .catch(function () { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
+        .catch(function (error) {
+          console.error('Error loading help topic:', error);
+          helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>';
+        });
     }
 
     helpFilter.addEventListener('input', renderToc);
@@ -1567,7 +1570,7 @@ html, body {
     serial:   _NAV_SERIAL
   };
 </script>
-<script src="/app/js/shared_help_overlay.js?v=9"></script>
+<script src="/app/js/shared_help_overlay.js?v=11"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

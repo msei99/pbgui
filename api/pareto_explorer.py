@@ -3372,6 +3372,7 @@ def main_page(
         "v8" if str(optimize_version).strip().lower() == "v8" else "v7"
     )
     html = html.replace('"%%OPTIMIZE_VERSION%%"', json.dumps(optimize_version))
+    html = html.replace("%%OPTIMIZE_LABEL%%", optimize_version.upper())
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
     html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))

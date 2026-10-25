@@ -1,5 +1,9 @@
 # Dashboards
 
+Open **Information → Dashboards**, then **System → PBGUI Services** to switch to Services. Main navigation retains the application mount prefix (for example `/mounted`), including when Dashboard supplies an API base ending in `/api`. Implicit prefixes are derived only from same-origin API bases; an explicitly configured API origin remains supported.
+
+**Guide** opens over the current Dashboard without changing its address or sidebar filter. Its local scripts and help requests retain the same application mount prefix.
+
 Browser reload keeps the selected dashboard, view/edit mode and sidebar filter, while loading current dashboard content. The sidebar list updates automatically; there is no manual list-refresh button. If the selected dashboard no longer exists, the page explains this and offers the dashboard list.
 
 Deleting the active dashboard clears its content frame before showing the empty state.

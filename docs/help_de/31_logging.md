@@ -94,6 +94,21 @@ Auf **⚙ Settings** in der Sidebar klicken, um die Log-Rotation zu konfiguriere
   API-Konsole, Jobs, Backtests, Optimierungen, VPS-Manager-Runs,
   OHLCV-Preloads, Monitor-Agent-Livedaten, Pareto-Sessions und API-Handoff
 
+Alle drei Bereiche verlangen ganze Zahlen: **Max file size (MB)** / **Max MB**
+von **1 bis 10240** und **Rotated copies** / **Copies** von **0 bis 20**.
+Leere, nicht ganzzahlige oder außerhalb dieser Grenzen liegende Eingaben zeigen
+die betroffenen Felder neben Save an. Es wird keine Speicheranfrage gesendet;
+Ihre Eingaben bleiben zur Korrektur unverändert erhalten.
+Servervalidierungsfehler nennen Feld und Grund; mehrere Meldungen sind durch
+`; ` getrennt. Fehlgeschlagene Settings-Lese- und Speicheranfragen verwenden
+dasselbe Fehlerformat. Unbrauchbare Fehlerdetails zeigen ersatzweise den
+HTTP-Status. Auch Purge-Fehler erscheinen als lesbarer Text, ohne die gesamte
+Validierungsantwort anzuzeigen. Erfolgreiches Speichern erhält die Servermeldung,
+etwa **Applies on next log write**.
+Ein neuer Save-Versuch, auch bei lokal abgelehnten Eingaben, löst ältere
+Speicherantworten und Status-Timer derselben Zeile ab. Ein älteres Ergebnis
+kann die neuere Meldung weder ersetzen noch ausblenden.
+
 Änderungen werden beim nächsten Log-Schreibvorgang oder vor dem Öffnen des
 nächsten verwalteten Transkripts gelesen. Die Log-Rotation besitzt bewusst
 keinen Watcher und benötigt keinen Dienstneustart.

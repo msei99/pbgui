@@ -4,7 +4,22 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Job Monitor - PBGui</title>
-    <link rel="stylesheet" href="/app/css/app.css">
+    <link id="jobs-monitor-style" rel="stylesheet">
+    <script>
+        // Static embeds derive the mount only from their own page path.
+        const templatePrefix = "%%BASE_PREFIX%%";
+        const pagePath = window.location.pathname.match(/^(.*)\/(?:app\/jobs_monitor\.html|api\/jobs\/main_page)$/);
+        const staticPrefix = pagePath && !pagePath[1].startsWith('//') ? pagePath[1] : '';
+        const BASE_PREFIX = templatePrefix.startsWith('%') ? staticPrefix : templatePrefix;
+        const templateApiBase = "%%API_BASE%%";
+        const API_BASE = templateApiBase.startsWith('%') ? BASE_PREFIX + '/api' : templateApiBase;
+        const templateWsBase = "%%WS_BASE%%";
+        const WS_BASE = templateWsBase.startsWith('%')
+            ? (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + BASE_PREFIX
+            : templateWsBase;
+        const WS_URL = WS_BASE + '/ws/jobs';
+        document.getElementById('jobs-monitor-style').href = BASE_PREFIX + '/app/css/app.css';
+    </script>
     <style>
         /* Additional styles for new features */
         .job-actions {
@@ -498,8 +513,6 @@
     </div>
 
     <script>
-        const API_BASE = window.location.origin + '/api';
-        
         // Browser authentication is carried by the same-origin session cookie.
         const urlParams = new URLSearchParams(window.location.search);
         const EMBED_MODE = urlParams.get('embed') === '1';
@@ -607,9 +620,6 @@
             void _;
         }
         
-        const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const WS_URL = `${wsProto}//${window.location.host}/ws/jobs`;
-        
         let ws = null;
         let currentTab = 'running';
         let reconnectAttempts = 0;
@@ -629,7 +639,7 @@
         function logUiNotification(message, type) {
             const text = String(message == null ? '' : message).trim();
             if (!text) return;
-            fetch('/api/notify_log', {
+            fetch(`${API_BASE}/notify_log`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ msg: text, level: type || 'info' })

@@ -4,7 +4,10 @@ Job Queue API endpoints.
 Provides REST API for job management (list, cancel, delete, retry).
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 
@@ -17,7 +20,11 @@ from task_queue import (
     requeue_done_job,
 )
 from api.auth import require_auth, SessionToken, get_token_from_request
+from api.page_templates import render_page_urls
+from logging_helpers import human_log as _log
 from task_worker import start_pending_job
+
+SERVICE = "TaskQueue"
 
 router = APIRouter()
 
@@ -26,6 +33,22 @@ class CancelJobRequest(BaseModel):
     """Request payload for canceling a job."""
     job_id: str
     reason: Optional[str] = "user cancel"
+
+
+@router.get("/main_page", response_class=HTMLResponse)
+def get_main_page(request: Request, session: SessionToken = Depends(require_auth)) -> HTMLResponse:
+    """Serve the authenticated Jobs Monitor with same-origin mounted URLs."""
+    html_path = Path(__file__).resolve().parent.parent / "frontend" / "jobs_monitor.html"
+    if not html_path.is_file():
+        _log(SERVICE, "Jobs Monitor template is missing", level="ERROR")
+        raise HTTPException(status_code=500, detail="Jobs Monitor template is unavailable")
+    try:
+        html = html_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        _log(SERVICE, f"Failed to read Jobs Monitor template: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Jobs Monitor template is unavailable") from None
+    html = render_page_urls(request, html, "/api")
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/")

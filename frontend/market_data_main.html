@@ -3593,6 +3593,7 @@
 
   <script>
     var API_BASE = "%%API_BASE%%";
+    var BASE_PREFIX = "%%BASE_PREFIX%%";
     var PBGUI_VERSION = "%%VERSION%%";
     var PBGUI_SERIAL = "%%SERIAL%%";
 
@@ -3605,7 +3606,7 @@
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=9"></script>
+  <script src="/app/js/shared_help_overlay.js?v=11"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
   <script src="/app/js/log_viewer_panel.js?v=50"></script>
   <script src="/app/js/pbgui_dialogs.js?v=11"></script>
@@ -4150,7 +4151,7 @@
         var meta = getExchangeMeta(exchangeKey);
         var jobMeta = best1mJobMonitorMeta[meta.key];
         if (!jobMeta) return '';
-        var url = '/app/jobs_monitor.html?v=' + encodeURIComponent(PBGUI_SERIAL || '0')
+        var url = BASE_PREFIX + '/app/jobs_monitor.html?v=' + encodeURIComponent(PBGUI_SERIAL || '0')
           + '&embed=1'
           + '&exchange=' + encodeURIComponent(jobMeta.exchange)
           + '&job_type=' + encodeURIComponent(jobMeta.jobType);
@@ -4177,7 +4178,7 @@
       }
 
       function buildCopyDataJobMonitorUrl(forceReload) {
-        var url = '/app/jobs_monitor.html?v=' + encodeURIComponent(PBGUI_SERIAL || '0')
+        var url = BASE_PREFIX + '/app/jobs_monitor.html?v=' + encodeURIComponent(PBGUI_SERIAL || '0')
           + '&embed=1'
           + '&exchange=ohlcv'
           + '&job_type=' + encodeURIComponent('ohlcv_copy,ohlcv_copy_dry_run');
@@ -4202,7 +4203,7 @@
         var jobTypes = 'ohlcv_integrity_scan,ohlcv_integrity_repair,ohlcv_integrity_repair_all,ohlcv_removed_coin_delete,ohlcv_removed_coins_delete';
         if (meta.statusKey === 'hyperliquid') jobTypes += ',ohlcv_hyperliquid_normalize_fallback';
         if (meta.statusKey === 'bybit') jobTypes += ',ohlcv_checksum_publish,ohlcv_checksum_reference';
-        var url = '/app/jobs_monitor.html?v=' + encodeURIComponent(PBGUI_SERIAL || '0')
+        var url = BASE_PREFIX + '/app/jobs_monitor.html?v=' + encodeURIComponent(PBGUI_SERIAL || '0')
           + '&embed=1'
           + '&exchange=' + encodeURIComponent(meta.statusKey)
           + '&job_type=' + encodeURIComponent(jobTypes);

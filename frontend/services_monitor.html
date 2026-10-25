@@ -914,7 +914,7 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/js/pbgui_dialogs.js?v=11"></script>
-<script src="/app/js/shared_help_overlay.js?v=9"></script>
+<script src="/app/js/shared_help_overlay.js?v=11"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
 <script>
@@ -1819,7 +1819,7 @@ window.PBGUI_NAV_CONFIG = {
 
   function getWorkerMonitorUrl(item) {
     if (!item || !item.monitor_path) return '';
-    return item.monitor_path;
+    return BASE_PREFIX + item.monitor_path;
   }
 
   function updateWorkerLog(item) {

@@ -1,5 +1,9 @@
 # Dashboards
 
+Öffne **Information → Dashboards** und anschließend **System → PBGUI Services**, um zu Services zu wechseln. Die Hauptnavigation erhält den Anwendungspfad (zum Beispiel `/mounted`), auch wenn die API-Basis des Dashboards auf `/api` endet. Implizite Präfixe werden nur aus API-Basen desselben Ursprungs abgeleitet; ein ausdrücklich konfigurierter API-Ursprung bleibt unterstützt.
+
+**Guide** öffnet sich über dem aktuellen Dashboard, ohne dessen Adresse oder Seitenleistenfilter zu ändern. Die lokalen Skripte und Hilfeabrufe behalten denselben Anwendungspfad bei.
+
 Ein Browser-Refresh behält das ausgewählte Dashboard, den Anzeige-/Bearbeitungsmodus und den Seitenleistenfilter bei und lädt aktuelle Inhalte. Die Dashboard-Liste aktualisiert sich automatisch; ein manueller Listen-Refresh ist nicht nötig. Ist das ausgewählte Dashboard nicht mehr vorhanden, zeigt die Seite einen Hinweis und die Dashboard-Liste.
 
 Beim Löschen des aktiven Dashboards wird dessen Inhaltsrahmen geleert, bevor der leere Zustand angezeigt wird.

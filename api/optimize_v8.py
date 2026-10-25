@@ -3625,6 +3625,7 @@ def main_page(request: Request, session: SessionToken = Depends(require_auth)) -
         '"%%SERIAL%%"': script_json(PBGUI_SERIAL),
         "%%SERIAL%%": PBGUI_SERIAL,
         "%%OPTIMIZE_VERSION%%": "v8",
+        "%%OPTIMIZE_LABEL%%": "V8",
         "%%OPTIMIZE_NAV_TITLE%%": "PBv8 OPTIMIZE",
         "%%OPTIMIZE_NAV_CURRENT%%": "v8_optimize",
         "%%BACKTEST_VERSION%%": "v8",

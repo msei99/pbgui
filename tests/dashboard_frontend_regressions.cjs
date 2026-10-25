@@ -130,6 +130,161 @@ function mainContext(html = source('dashboard_main.html')) {
     })};
 }
 
+function helpRequests() {
+    const requests = [], errors = [];
+    return {
+        requests, errors,
+        console: {error: (...args) => errors.push(args)},
+        fetch(url, options) {
+            return new Promise((resolve, reject) => requests.push({url, options, resolve, reject}));
+        }
+    };
+}
+
+function legacyHelpContext() {
+    const {ctx} = mainContext();
+    const http = helpRequests();
+    Object.assign(ctx, http, {
+        helpTopics: [{file: '33_dashboard.md', title: 'Dashboards'}],
+        helpLang: 'EN', helpSel: 0, helpContent: new Element(), helpFilter: new Element(), helpTocList: new Element(),
+        mdToHtml: text => '<p>' + text + '</p>'
+    });
+    ctx.document.createElement = tag => new Element(tag);
+    for (const name of ['renderToc', 'loadTopic']) {
+        vm.runInContext(functionCode(source('dashboard_main.html'), name), ctx);
+    }
+    ctx.renderToc();
+    return {...http, content: ctx.helpContent, load: () => ctx.helpTocList.children[0].click()};
+}
+
+async function sharedHelpContext() {
+    const code = source('js/shared_help_overlay.js');
+    const nodes = {};
+    for (const match of code.matchAll(/id="(pbgui-shared-help-[^"]+)"/g)) nodes[match[1]] = new Element();
+    nodes['pbgui-shared-help-css'] = new Element();
+    const document = new Element();
+    document.body = new Element();
+    document.getElementById = id => nodes[id] || null;
+    document.createElement = tag => {
+        const element = new Element(tag);
+        if (tag === 'template') element.content = new Element();
+        return element;
+    };
+    const http = helpRequests();
+    const ctx = vm.createContext({
+        ...http, document, URL, encodeURIComponent,
+        PBGUI_BASE_PREFIX: '/pbgui', location: {...location, pathname: '/pbgui/api/dashboard/main_page'},
+        localStorage: {getItem: () => null}, setTimeout: fn => { fn(); },
+        marked: {parse: text => '<p>' + text + '</p>'}, DOMPurify: {sanitize: html => html}
+    });
+    ctx.window = ctx;
+    vm.runInContext(code, ctx);
+    // Use the actual Dashboard Guide opener and public shared overlay, with inert DOM/network.
+    const opener = source('dashboard_main.html').match(
+        /    window\._openDashboardHelp = function \(\) \{[\s\S]*?window\.PBGUI_HELP_OPENER = window\._openDashboardHelp;/
+    );
+    assert.ok(opener);
+    vm.runInContext(opener[0], ctx);
+    ctx.PBGUI_HELP_OPENER();
+    await tick();
+    const index = http.requests.shift();
+    assert.equal(index.url, '/pbgui/api/help/index?lang=EN');
+    assert.equal(index.options.credentials, 'same-origin');
+    index.resolve({ok: true, json: async () => [
+        {file: '33_dashboard.md', title: 'Dashboards'}, {file: '00_overview.md', title: 'Overview'}
+    ]});
+    await tick();
+    assert.equal(nodes['pbgui-shared-help-ovl'].classList.contains('visible'), true);
+    assert.equal(ctx.location.pathname, '/pbgui/api/dashboard/main_page');
+    const initial = http.requests.shift();
+    assert.equal(initial.url, '/pbgui/api/help/content?file=33_dashboard.md&lang=EN');
+    assert.equal(initial.options.credentials, 'same-origin');
+    initial.resolve({ok: true, json: async () => ({content: 'Initial guide'})});
+    await tick();
+    assert.equal(nodes['pbgui-shared-help-content'].innerHTML, '<p>Initial guide</p>');
+    return {...http, content: nodes['pbgui-shared-help-content'],
+        load: index => nodes['pbgui-shared-help-toc-list'].children[index].click()};
+}
+
+async function checkHelpFailures(createContext) {
+    for (const scenario of ['network', 404, 500, 'json', 'success']) {
+        const help = await createContext();
+        help.load(0);
+        assert.match(help.content.innerHTML, /Loading\.\.\./);
+        assert.equal(help.requests.length, 1);
+        const request = help.requests.shift();
+        const failure = scenario === 'network' ? new TypeError('Failed to fetch') : new SyntaxError('Invalid JSON');
+        let jsonRead = false;
+        if (scenario === 'network') request.reject(failure);
+        else request.resolve({
+            ok: typeof scenario !== 'number', status: typeof scenario === 'number' ? scenario : 200,
+            json: async () => {
+                jsonRead = true;
+                if (scenario === 'json') throw failure;
+                return {content: 'Loaded guide'};
+            }
+        });
+        await tick();
+        if (scenario === 'success') {
+            assert.equal(help.content.innerHTML, '<p>Loaded guide</p>');
+            assert.equal(help.content.scrollTop, 0);
+            assert.equal(help.errors.length, 0, 'successful content never logs an error');
+        } else {
+            assert.match(help.content.innerHTML, />Failed to load content\.<\/div>$/);
+            assert.equal(help.errors.length, 1);
+            assert.equal(help.errors[0][0], 'Error loading help topic:');
+            if (typeof scenario === 'number') {
+                assert.equal(help.errors[0][1].message, 'HTTP ' + scenario);
+                assert.equal(jsonRead, false, 'HTTP errors are rejected before reading even valid JSON');
+            } else assert.equal(help.errors[0][1], failure, 'the original error object is logged');
+            help.load(0);
+            help.requests.shift().resolve({ok: true, json: async () => ({content: 'Recovered guide'})});
+            await tick();
+            assert.equal(help.content.innerHTML, '<p>Recovered guide</p>');
+            assert.equal(help.errors.length, 1, 'successful retry adds no error log');
+        }
+    }
+}
+
+async function helpTopicLegacy() {
+    await checkHelpFailures(legacyHelpContext);
+}
+
+async function helpTopicShared() {
+    await checkHelpFailures(sharedHelpContext);
+}
+
+async function helpTopicGenerations() {
+    for (const stale of ['network', 404, 500, 'json', 'success', 'pending-json']) {
+        const help = await sharedHelpContext();
+        help.load(0);
+        help.load(1);
+        const [older, newer] = help.requests.splice(0);
+        let finishJson;
+        if (stale === 'pending-json') {
+            older.resolve({ok: true, json: () => new Promise(resolve => { finishJson = resolve; })});
+            await tick();
+        }
+        newer.resolve({ok: true, json: async () => ({content: 'Newest guide'})});
+        await tick();
+        assert.equal(help.content.innerHTML, '<p>Newest guide</p>');
+        help.content.scrollTop = 123;
+        if (stale === 'network') older.reject(new TypeError('Old network failure'));
+        else if (stale === 'pending-json') finishJson({content: 'Old guide'});
+        else older.resolve({
+            ok: typeof stale !== 'number', status: stale,
+            json: async () => {
+                if (stale === 'json') throw new SyntaxError('Old invalid JSON');
+                return {content: 'Old guide'};
+            }
+        });
+        await tick();
+        assert.equal(help.content.innerHTML, '<p>Newest guide</p>', 'stale results cannot replace current content');
+        assert.equal(help.content.scrollTop, 123, 'stale results preserve the current reading position');
+        assert.equal(help.errors.length, 0, 'superseded requests never log errors');
+    }
+}
+
 async function creation() {
     const {ctx, requests, send} = mainContext();
     send({type: 'pbgui_dashboard_created', name: 'new dash'});
@@ -1355,7 +1510,8 @@ async function manageModal() {
     assert.equal(timers.size, 0);
 }
 
-({creation, templates, cancel, resize, charts, cards, pnl, ppl, emptyOrders, messages, assets, candles, page, manageModal})[process.argv[2]]().catch(error => {
+({creation, templates, cancel, resize, charts, cards, pnl, ppl, emptyOrders, messages, assets, candles, page, manageModal,
+    helpTopicLegacy, helpTopicShared, helpTopicGenerations})[process.argv[2]]().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

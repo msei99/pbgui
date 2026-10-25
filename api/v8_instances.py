@@ -2690,7 +2690,7 @@ def _render_page(request: Request, filename: str, replacements: dict[str, Any]) 
 def get_v8_main_page(request: Request, session: SessionToken = Depends(require_auth)) -> HTMLResponse:
     """Serve the PB8 Run list page."""
 
-    return _render_page(request, "v7_run.html", {"RUN_VERSION": "v8"})
+    return _render_page(request, "v7_run.html", {"RUN_VERSION": "v8", "RUN_LABEL": "PBv8"})
 
 
 @router.get("/edit_page", response_class=HTMLResponse)
@@ -2710,6 +2710,7 @@ def get_v8_edit_page(
         "IS_NEW": "true" if new == "1" else "false",
         "DRAFT_ID": draft_id,
         "RUN_VERSION": "v8",
+        "RUN_LABEL": "PBv8",
     })
 
 

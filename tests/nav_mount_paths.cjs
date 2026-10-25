@@ -5,12 +5,27 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../frontend/pbgui_nav.js'), 'utf8');
+const helpSource = fs.readFileSync(path.join(__dirname, '../frontend/js/shared_help_overlay.js'), 'utf8');
+const dashboard = fs.readFileSync(path.join(__dirname, '../frontend/dashboard_main.html'), 'utf8');
+const dashboardBootstrap = [...dashboard.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  .map(match => match[1]).find(script => script.includes('window.PBGUI_NAV_CONFIG ='));
+assert.ok(dashboardBootstrap, 'Real Dashboard navigation bootstrap is present');
 const prefixArg = process.argv[2];
 const prefix = prefixArg === '<absent>' ? '' : prefixArg;
 const origin = process.argv[3];
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-function browser(apiBase = prefix + '/api/balance-calc', mount = prefixArg) {
+function guidePath(browserContext, target = '/app/vendor/marked.min.js') {
+  // Run the complete real Guide helper separately so nav lazy-loading stays real.
+  const context = {...browserContext, localStorage: {getItem: () => null},
+    document: {addEventListener() {}}};
+  context.window = context;
+  vm.runInNewContext(helpSource.replace(/\}\(\)\);\s*$/,
+    'window.testGuidePath = appPath;\n}());'), context);
+  return context.testGuidePath(target);
+}
+
+function browser(apiBase = prefix + '/api/balance-calc', mount = prefixArg, options = {}) {
   const requests = [], assets = [], streams = [], redirects = [], assigned = [];
   const timeouts = [], intervals = [], listeners = {}, documentListeners = {}, nodes = {};
   let navItems = [];
@@ -36,7 +51,7 @@ function browser(apiBase = prefix + '/api/balance-calc', mount = prefixArg) {
     'pbgui-notify-btn', 'pbgui-notify-panel', 'pbgui-alert-ovl', 'pbgui-alert-open-monitor',
     'pbgui-about-ovl', 'pbgui-confirm-ovl', 'pbgui-restart-btn', 'pbgui-confirm-title',
     'pbgui-confirm-msg', 'pbgui-confirm-detail', 'pbgui-confirm-cancel', 'pbgui-confirm-accept']) nodes[id] = element(id);
-  const location = new URL(origin + prefix + '/api/balance-calc/main_page');
+  const location = new URL(origin + (options.pathname || prefix + '/api/balance-calc/main_page'));
   location.assign = value => assigned.push(value);
   location.replace = value => redirects.push(value);
   location.reload = () => {};
@@ -77,8 +92,14 @@ function browser(apiBase = prefix + '/api/balance-calc', mount = prefixArg) {
   context.top = {location: {replace: value => redirects.push(value)}};
   if (mount !== '<absent>') context.PBGUI_BASE_PREFIX = mount;
   vm.createContext(context);
+  if (options.dashboard) {
+    // Dashboard's API_BASE is IIFE-local; only its real nav config is global.
+    delete context.API_BASE;
+    vm.runInContext(dashboardBootstrap.replace('"%%API_BASE%%"', JSON.stringify(apiBase))
+      .replace('"%%VERSION%%"', '"fixture"').replace('"%%SERIAL%%"', '"1"'), context);
+  }
   // Test-only bridge; production code has no testing exports or alternate logic.
-  const bridge = `window.testNav = {_getApiOrigin, _getAppBase, _getWsBase, _appPath,
+  const bridge = `window.testNav = {_getBasePrefix, _getApiOrigin, _getAppBase, _getWsBase, _appPath,
     tokenRefreshUrl, redirectToLogin, confirmTokenStillValid, ackAlert, ackAllAlerts,
     renderAlertOverlay, FASTAPI_PAGES};`;
   vm.runInContext(source.replace(/\}\(\)\);\s*$/, bridge + '\n}());'), context);
@@ -92,6 +113,80 @@ function browser(apiBase = prefix + '/api/balance-calc', mount = prefixArg) {
 }
 
 async function main() {
+  // Real Dashboard bootstrap has apiBase='/mount/api' and no global prefix.
+  for (const suffix of ['/api', '/api/', '/api/dashboard', '/api/inner/api', '/api/inner/api/x']) {
+    const expected = prefix + (suffix.includes('/inner/') ? '/api/inner' : '');
+    for (const base of [prefix + suffix, origin + prefix + suffix]) {
+      const b = browser(base, '<absent>', {dashboard: true});
+      const c = b.context;
+      assert.equal(c.PBGUI_BASE_PREFIX, undefined);
+      assert.equal(c.BASE_PREFIX, undefined);
+      assert.equal(c.API_BASE, undefined);
+      assert.equal(c.PBGUI_NAV_CONFIG.current, 'dashboards');
+      assert.equal(c.testNav._getBasePrefix(), expected, base);
+      assert.equal(guidePath(c), expected + '/app/vendor/marked.min.js', base);
+      assert.equal(c.testNav._appPath('/app/test.js'), expected + '/app/test.js');
+      assert.equal(c.testNav._getAppBase(), origin + expected);
+      assert.equal(c.testNav._getWsBase(), origin.replace(/^http/, 'ws') + expected);
+      b.start();
+      await flush();
+      for (const item of b.navItems) {
+        item.click();
+        assert.equal(c.location.href, origin + expected + c.testNav.FASTAPI_PAGES[item.getAttribute('data-page')]);
+      }
+      for (const endpoint of ['/api/token-refresh', '/api/vps/alerts', '/api/server-status', '/api/ai/preferences']) {
+        assert.ok(b.requests.some(r => new URL(r.input, origin).href === origin + expected + endpoint), endpoint);
+      }
+      assert.equal(b.streams[0].url, origin + expected + '/api/server-status/stream');
+      b.nodes['pbgui-guide-btn'].click();
+      assert.equal(b.assets.at(-1).src, expected + '/app/js/shared_help_overlay.js?v=11');
+      b.assets.at(-1).onerror();
+      assert.equal(c.location.href, origin + expected + '/app/help.html?v=1779');
+    }
+  }
+
+  // Segment boundaries and untrusted origins cannot create implicit mounts.
+  for (const base of ['/apix', '/mounted/apix/foo', 'http://other.test/mounted/api/x',
+    '//other.test/mounted/api', 'https://other.test/mounted/api', 'http://[invalid']) {
+    for (const fallback of ['', '/static%20mount/nested']) {
+      const b = browser(base, '<absent>', {dashboard: true, pathname: fallback + '/app/help.html'});
+      assert.equal(b.context.testNav._getBasePrefix(), fallback, base);
+      assert.equal(guidePath(b.context), fallback + '/app/vendor/marked.min.js', base);
+      assert.equal(b.context.testNav._appPath('/app/test.js'), fallback + '/app/test.js');
+      assert.equal(b.context.testNav._getWsBase(), origin.replace(/^http/, 'ws') + fallback);
+    }
+  }
+  const foreign = browser('http://other.test/mounted/api/x', '<absent>', {dashboard: true});
+  assert.equal(foreign.context.testNav._getBasePrefix(), '');
+  assert.equal(guidePath(foreign.context), '/app/vendor/marked.min.js');
+  assert.equal(foreign.context.testNav._getApiOrigin(), 'http://other.test');
+  assert.equal(foreign.context.testNav._getAppBase(), 'http://other.test');
+  foreign.context.BASE_PREFIX = '/explicit/';
+  assert.equal(foreign.context.testNav._getAppBase(), 'http://other.test/explicit');
+  assert.equal(guidePath(foreign.context), '/explicit/app/vendor/marked.min.js');
+  foreign.context.PBGUI_BASE_PREFIX = '/preferred///';
+  assert.equal(foreign.context.testNav._getBasePrefix(), '/preferred');
+  assert.equal(guidePath(foreign.context), '/preferred/app/vendor/marked.min.js');
+  foreign.context.PBGUI_BASE_PREFIX = '';
+  assert.equal(foreign.context.testNav._getBasePrefix(), '');
+  assert.equal(guidePath(foreign.context), '/app/vendor/marked.min.js');
+  delete foreign.context.PBGUI_BASE_PREFIX;
+  for (const invalid of ['//x', '..', '/bad\\path']) {
+    foreign.context.BASE_PREFIX = invalid;
+    assert.throws(() => foreign.context.testNav._getBasePrefix(), /Invalid PBGui mount path/);
+    assert.throws(() => guidePath(foreign.context), /Invalid PBGui mount path/);
+  }
+  for (const base of [origin + '//outside/api', '/bad%2fsegment/api', '/%5c/api', '/%00/api']) {
+    const b = browser(base, '<absent>', {dashboard: true});
+    assert.throws(() => b.context.testNav._getBasePrefix(), /Invalid PBGui mount path/);
+    assert.throws(() => guidePath(b.context), /Invalid PBGui mount path/);
+  }
+  const configPriority = browser('/global/api', '<absent>');
+  configPriority.context.PBGUI_NAV_CONFIG.apiBase = '/configured/api';
+  assert.equal(guidePath(configPriority.context), '/configured/app/vendor/marked.min.js');
+  configPriority.context.PBGUI_NAV_CONFIG.apiBase = '';
+  assert.equal(guidePath(configPriority.context), '/app/vendor/marked.min.js');
+
   // Relative and absolute API bases both retain exactly one explicit mount.
   for (const apiBase of [prefix + '/api/balance-calc', origin + prefix + '/api/balance-calc']) {
     const b = browser(apiBase);
@@ -101,6 +196,7 @@ async function main() {
     const app = origin + prefix;
     assert.equal(c.testNav._getApiOrigin(), origin);
     assert.equal(c.testNav._getAppBase(), app);
+    assert.equal(guidePath(c), prefix + '/app/vendor/marked.min.js');
     const requested = b.requests.map(request => new URL(request.input, origin).href);
     for (const endpoint of ['/api/token-refresh', '/api/vps/alerts', '/api/server-status', '/api/ai/preferences']) {
       assert.ok(requested.includes(app + endpoint), endpoint);
@@ -124,9 +220,9 @@ async function main() {
     assert.equal(b.requests.at(-1).input, app + '/api/vps/alerts/ack-all');
 
     b.nodes['pbgui-guide-btn'].click();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/shared_help_overlay.js?v=9');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/shared_help_overlay.js?v=11');
     b.assets.at(-1).onerror();
-    assert.equal(c.location.href, app + '/app/help.html?v=1775');
+    assert.equal(c.location.href, app + '/app/help.html?v=1779');
     b.nodes['pbgui-ai-btn'].click();
     assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=27');
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/pbgui_dialogs.js?v=11');
@@ -148,7 +244,7 @@ async function main() {
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/jev_transfer_preview.js?v=1');
     c.PBGuiJevTransferPreview = {review() {}};
     b.assets.at(-1).onload();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=77');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=80');
     b.nodes['pbgui-notify-btn'].click();
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/log_viewer_panel.js?v=50');
     let viewerOptions;
@@ -233,6 +329,7 @@ async function main() {
     '/%ff', '/a?b', '/a#b', '/a\\b', '/a\nb', '/a b']) {
     const b = browser(undefined, invalid);
     assert.throws(() => b.context.testNav._appPath('/api/token-refresh'), /Invalid PBGui mount path/);
+    assert.throws(() => guidePath(b.context), /Invalid PBGui mount path/);
     assert.equal(b.requests.length, 0);
   }
 }

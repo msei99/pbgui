@@ -2486,6 +2486,7 @@ def get_main_page(
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
     html = html.replace('"%%RUN_VERSION%%"', json.dumps("v7"))
+    html = html.replace("%%RUN_LABEL%%", "PBv7")
     html = html.replace('"%%MASTER_NAME%%"', json.dumps(_get_master_hostname()))
 
     from pbgui_purefunc import PBGUI_VERSION
@@ -2529,6 +2530,7 @@ def get_edit_page(
     html = html.replace('"%%IS_NEW%%"', json.dumps(is_new))
     html = html.replace('"%%DRAFT_ID%%"', json.dumps(draft_id))
     html = html.replace('"%%RUN_VERSION%%"', json.dumps("v7"))
+    html = html.replace("%%RUN_LABEL%%", "PBv7")
     html = html.replace('"%%MASTER_NAME%%"', json.dumps(_get_master_hostname()))
 
     from pbgui_purefunc import PBGUI_VERSION

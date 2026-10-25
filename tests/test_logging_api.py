@@ -2,6 +2,8 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+from html.parser import HTMLParser
+import re
 
 import pytest
 from fastapi import FastAPI
@@ -255,3 +257,27 @@ def test_logging_ui_builds_managed_rows_without_html_interpolation():
     assert "textContent" in managed_block
     assert "innerHTML" not in managed_block
     assert "managed:" in html
+
+
+def test_rotation_input_limits_match_backend_for_static_and_dynamic_rows():
+    """Default, managed and per-log input attributes must match the API bounds."""
+    html = (Path(logging_api.__file__).parent.parent / 'frontend/logging_monitor.html').read_text(encoding='utf-8')
+    inputs = {}
+
+    class InputParser(HTMLParser):
+        """Collect static input attributes without executing the page."""
+
+        def handle_starttag(self, tag, attrs):
+            """Keep only inputs that have an ID."""
+            attrs = dict(attrs)
+            if tag == 'input' and attrs.get('id'):
+                inputs[attrs['id']] = attrs
+
+    InputParser().feed(html)
+    max_mb = str(logging_api.MAX_ROTATE_MAX_BYTES // (1024 * 1024))
+    copies = str(logging_api.MAX_ROTATE_BACKUP_COUNT)
+    for field, lower, upper in [('def-max-mb', '1', max_mb), ('def-backup-count', '0', copies)]:
+        assert (inputs[field]['min'], inputs[field]['max']) == (lower, upper)
+    for variable, lower, upper in [('maxInput', '1', max_mb), ('copiesInput', '0', copies)]:
+        limits = re.findall(rf"{variable}\.min = '(\d+)'; {variable}\.max = '(\d+)'", html)
+        assert limits == [(lower, upper), (lower, upper)]  # Managed and per-log renderers.

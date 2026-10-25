@@ -49,6 +49,8 @@ Use the sidebar on the left to switch between services or return to the Overview
 
 ## Workers panel
 
+Open **System → PBGUI Services → Workers → Market Data Queue** to inspect the embedded Jobs Monitor. The authenticated standalone entry is `/api/jobs/main_page` beneath your PBGui application prefix. Both this entry and static monitor embeds keep API, WebSocket, notification, and stylesheet requests on the same origin and retain the application prefix. Existing `embed`, `exchange`, and `job_type` URL parameters also work on the standalone entry.
+
 The **Workers** sidebar entry opens a dedicated admin panel inside the Services page. It is intended for operations and troubleshooting, not for day-to-day bot usage.
 
 The panel groups workers into:

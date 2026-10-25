@@ -2622,6 +2622,7 @@ def main_page(
     html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
     html = html.replace("%%OPTIMIZE_VERSION%%", "v7")
+    html = html.replace("%%OPTIMIZE_LABEL%%", "V7")
     html = html.replace("%%BACKTEST_VERSION%%", "v7")
     html = html.replace("%%OPTIMIZE_NAV_TITLE%%", "PBv7 OPTIMIZE")
     html = html.replace("%%OPTIMIZE_NAV_CURRENT%%", "v7_optimize")

@@ -92,6 +92,19 @@ Click **⚙ Settings** in the sidebar to configure log rotation:
   such as API console, jobs, backtests, optimizations, VPS Manager runs,
   OHLCV preloads, monitor-agent live data, Pareto sessions, and API handoff
 
+All three sections require whole numbers: **Max file size (MB)** / **Max MB**
+from **1 to 10240**, and **Rotated copies** / **Copies** from **0 to 20**.
+Empty, fractional or out-of-range inputs show the affected fields beside Save;
+no save request is sent, and your entries remain unchanged for correction.
+Server validation errors show the field and reason, with multiple errors
+separated by `; `. Failed Settings reads and writes use the same error format;
+unusable error details fall back to the HTTP status. Purge errors are also
+shown as readable text without displaying the full validation payload.
+Successful saves keep the server's status, such as **Applies on next log write**.
+A newer Save attempt, including a local validation failure, supersedes older
+save responses and status timers for that row. An older result cannot replace
+or hide the newer message.
+
 Changes are read on the next log write or before the next managed transcript is
 opened. Logging rotation deliberately has no watcher and does not require a
 service restart.

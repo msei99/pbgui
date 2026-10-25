@@ -1105,9 +1105,13 @@
     if (prefix === undefined) {
       var apiBase = String(cfg().apiBase || '');
       try {
-        var apiPath = new URL(apiBase, window.location.origin).pathname;
-        var apiMarker = apiPath.lastIndexOf('/api/');
-        if (apiMarker >= 0) prefix = apiPath.slice(0, apiMarker);
+        var apiUrl = new URL(apiBase, window.location.origin);
+        // Implicit mounts belong to this origin; explicit origins remain supported.
+        if (apiUrl.origin === window.location.origin) {
+          var apiPath = apiUrl.pathname;
+          var apiMarker = apiPath.endsWith('/api') ? apiPath.length - 4 : apiPath.lastIndexOf('/api/');
+          if (apiMarker >= 0) prefix = apiPath.slice(0, apiMarker);
+        }
       } catch (_) {
         prefix = undefined;
       }
@@ -1798,7 +1802,7 @@
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
-    'help':               '/app/help.html?v=1776',
+    'help':               '/app/help.html?v=1779',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
@@ -2056,7 +2060,7 @@
 
       guideBtn.disabled = true;
       var script = document.createElement('script');
-      script.src = _appPath('/app/js/shared_help_overlay.js?v=9');
+      script.src = _appPath('/app/js/shared_help_overlay.js?v=11');
       script.onload = function () {
         guideBtn.disabled = false;
         if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {

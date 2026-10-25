@@ -49,6 +49,8 @@ Klicke auf eine Service-Kachel (oder den Sidebar-Eintrag), um ein dediziertes De
 
 ## Workers-Panel
 
+Über **System → PBGUI Services → Workers → Market Data Queue** öffnest du den eingebetteten Jobs Monitor. Der authentifizierte eigenständige Einstieg ist `/api/jobs/main_page` unterhalb des PBGui-Anwendungsprefixes. Dieser Einstieg und die statischen Monitor-Einbettungen behalten für API-, WebSocket-, Benachrichtigungs- und Stylesheet-Aufrufe denselben Ursprung und den Anwendungsprefix bei. Die bisherigen URL-Parameter `embed`, `exchange` und `job_type` funktionieren auch beim eigenständigen Einstieg.
+
 Der Sidebar-Eintrag **Workers** öffnet ein eigenes Admin-Panel innerhalb der Services-Seite. Es ist für Betrieb und Fehlersuche gedacht, nicht für die tägliche Bot-Bedienung.
 
 Das Panel gruppiert Worker in:
