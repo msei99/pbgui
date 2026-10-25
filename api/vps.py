@@ -562,19 +562,15 @@ def get_main_page(
     html_path = _P(__file__).parent.parent / "frontend" / "vps_monitor.html"
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
+    from api.page_templates import render_page_urls, script_json
 
-    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+    html = render_page_urls(request, html, "/api/vps")
 
     from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
 
     nav_js = _P(__file__).parent.parent / "frontend" / "pbgui_nav.js"

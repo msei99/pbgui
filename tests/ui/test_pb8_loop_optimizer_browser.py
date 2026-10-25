@@ -260,6 +260,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
     for key, value in replacements.items():
         source = source.replace('%%' + key + '%%', value)
     loops, starts, errors, diff_queries, continuations = [], [], [], [], []
+    diff_fixture = {'delay':False, 'pending':[]}
     continuation_delay = {'enabled': False, 'pending': []}
     connection_fixture = {'fail': False, 'action_fail': False, 'unverified': False, 'action_requests': 0}
     knowledge_fixture = {'entries': [], 'fail': False}
@@ -418,7 +419,12 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
                 route.fulfill(json={'rental':rental_fixture})
             elif path.endswith('/diff') and path.startswith('/api/optimize-v8/loops/'):
                 query=parse_qs(urlparse(route.request.url).query);diff_queries.append(query)
-                route.fulfill(json={'fields':[{'path':'optimize.limits.2.value','before':None,'after':.25}],'truncated':False})
+                payload={'fields':[{'path':'optimize.limits.2.value','before':None,'after':.25}] +
+                         [{'path':'fixture.parameter_'+str(index),'before':index,'after':index+1} for index in range(80)],'truncated':False}
+                if diff_fixture['delay']:
+                    diff_fixture['pending'].append((route,payload))
+                else:
+                    route.fulfill(json=payload)
             elif path.endswith('/log-target') and path.startswith('/api/optimize-v8/loops/'):
                 operation=parse_qs(urlparse(route.request.url).query)['operation'][0]
                 log_targets.append(operation)
@@ -778,6 +784,10 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
              'native_iters':10000000,'changes':[{'path':'optimize.limits.2.value','before':None,'after':.25}],'created_at':1100,'run_started_at':1110,'ended_at':1150},
             {'operation':check1,'name':'validate_first','kind':'validation','round':0,'status':'completed','candidate_optimizer':first},
             {'operation':check2,'name':'validate_second','kind':'validation','round':1,'status':'completed','candidate_optimizer':second}]
+        loops[0]['initial_snapshot_digest']='initial-content'
+        for job in loops[0]['jobs']:
+            if job['kind']=='optimizer':
+                job['snapshot_digest']=job['operation']+'-content'
         loops[0]['validation_count']=2
         for job in loops[0]['jobs']:
             job['log_available']=True
@@ -970,6 +980,81 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
         page.locator('#loop-report-tab-changes').click()
         page.wait_for_function("document.querySelector('#loop-report-body').textContent.includes('optimize.limits.2.value')")
         assert diff_queries[-1]['baseline']==[first]
+        # Completed historical comparisons survive later-round polling and keep live controls attached.
+        before_diff=len(diff_queries)
+        page.locator('#loop-diff-operation').focus()
+        page.evaluate("""()=>{window.diffSelect=document.querySelector('#loop-diff-operation');
+            window.diffTable=document.querySelector('#loop-report-body .loop-diff-selectors').nextElementSibling.firstElementChild;
+            document.querySelector('#loop-report-body').scrollTop=140;}""")
+        diff_scroll=page.locator('#loop-report-body').evaluate('node=>node.scrollTop')
+        assert diff_scroll>0
+        for tick in range(3):
+            changing['ai_calls']=100+tick
+            changing['cycles'][1]['status']='Diff poll '+str(tick)
+            page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("text=>document.querySelector('#loop-report-title').textContent.includes(text)",arg='Diff poll '+str(tick))
+            assert len(diff_queries)==before_diff
+            assert page.evaluate("window.diffSelect===document.activeElement && window.diffTable===document.querySelector('#loop-report-body .loop-diff-selectors').nextElementSibling.firstElementChild")
+            assert page.locator('#loop-report-body').evaluate('node=>node.scrollTop')==diff_scroll
+            assert 'Loading parameter diff' not in page.locator('#loop-report-body').text_content()
+        third,later='5'*32,'a'*32
+        changing['jobs'].extend([
+            {'operation':third,'name':'fixture_variant','kind':'optimizer','round':1,'status':'completed','snapshot_digest':'third-content'},
+            {'operation':later,'name':'fixture_later','kind':'optimizer','round':2,'status':'running','snapshot_digest':'later-content'}])
+        changing['cycles'].append({'round':2,'status':'running','goals':[]})
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        page.wait_for_function("document.querySelector('#loop-diff-operation').options.length===2 && document.querySelector('#loop-diff-baseline').options.length===4")
+        assert len(diff_queries)==before_diff
+        assert page.evaluate('window.diffSelect===document.activeElement')
+        # An actual relevant content revision reloads once, while polling reuses the in-flight request.
+        diff_fixture['delay']=True
+        changing['jobs'][1]['snapshot_digest']='second-revised'
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        page.wait_for_function("document.querySelector('#loop-report-body').textContent.includes('Loading parameter diff')")
+        page.wait_for_timeout(100)
+        assert len(diff_queries)==before_diff+1 and len(diff_fixture['pending'])==1
+        changing['cycles'][1]['status']='Pending diff poll'
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        page.wait_for_function("document.querySelector('#loop-report-title').textContent.includes('Pending diff poll')")
+        assert len(diff_queries)==before_diff+1
+        page.locator('#loop-diff-operation').select_option(third)
+        page.wait_for_function("new URL(location.href).searchParams.get('loop_variant')==='5'.repeat(32)")
+        page.locator('#loop-diff-baseline').select_option('initial')
+        page.wait_for_function("new URL(location.href).searchParams.get('loop_compare')==='initial'")
+        page.wait_for_timeout(100)
+        assert len(diff_queries)==before_diff+3
+        assert diff_queries[-1]=={'operation':[third],'baseline':['initial']}
+        newest_route,newest_payload=diff_fixture['pending'].pop()
+        newest_payload['fields'].append({'path':'fixture.current_comparison','before':0,'after':1})
+        newest_route.fulfill(json=newest_payload)
+        page.wait_for_function("document.querySelector('#loop-report-body').textContent.includes('fixture.current_comparison')")
+        while diff_fixture['pending']:
+            stale_route,stale_payload=diff_fixture['pending'].pop(0)
+            stale_payload['fields']=[{'path':'fixture.stale_response','before':0,'after':1}]
+            stale_route.fulfill(json=stale_payload)
+        assert 'fixture.stale_response' not in page.locator('#loop-report-body').text_content()
+        # Switching tabs and closing discard pending responses; reopening reads the current comparison.
+        page.locator('#loop-diff-baseline').select_option(first)
+        page.wait_for_timeout(100)
+        page.locator('#loop-report-tab-goals').click()
+        while diff_fixture['pending']:
+            delayed_route,payload=diff_fixture['pending'].pop(0)
+            delayed_route.fulfill(json=payload)
+        assert page.locator('#loop-diff-operation').count()==0
+        page.locator('#loop-report-tab-changes').click()
+        page.wait_for_timeout(100)
+        page.locator('#loop-report-close').click()
+        while diff_fixture['pending']:
+            delayed_route,payload=diff_fixture['pending'].pop(0)
+            delayed_route.fulfill(json=payload)
+        assert page.locator('#loop-report-overlay').get_attribute('aria-hidden')=='true'
+        diff_fixture['delay']=False
+        changing['cycles'].pop()
+        changing['cycles'][1]['status']='validated'
+        changing['jobs']=changing['jobs'][:-2]
+        row.get_by_role('button',name='Open',exact=True).click()
+        page.locator('#loop-report-tab-changes').click()
+        page.wait_for_function("document.querySelector('#loop-report-body').textContent.includes('optimize.limits.2.value')")
         page.locator('#loop-diff-baseline').select_option('initial')
         page.wait_for_function("new URL(location.href).searchParams.get('loop_compare')==='initial'")
         assert '0.25' in page.locator('#loop-report-body').inner_text()
@@ -1337,3 +1422,331 @@ def test_pb8_loop_navigation_setup_polling_and_restore_wide():
 def test_pb8_unverified_model_is_visible_before_start(viewport_width):
     """Only insufficient/unknown context blocks start, without a model allowlist."""
     test_pb8_loop_navigation_setup_polling_and_restore(viewport_width, capability_only=True)
+
+
+@pytest.fixture
+def loop_sort_browser():
+    """Serve the real shell, all assets and mutable synthetic records with no network access."""
+    __tracebackhide__ = True
+    playwright = pytest.importorskip('playwright.sync_api')
+    source = (ROOT / 'frontend/v7_optimize.html').read_text()
+    for key, value in {'API_BASE':'/api/optimize-v8','OPTIMIZE_VERSION':'v8','VERSION':'test',
+            'SERIAL':'1','NAV_HASH':'test','BASE_PREFIX':'','LIMITS_META':'{}','BACKTEST_VERSION':'v8',
+            'OPTIMIZE_NAV_TITLE':'PB8 Optimize','OPTIMIZE_NAV_CURRENT':'v8_optimize'}.items():
+        source = source.replace('%%'+key+'%%', value)
+    definitions, runs, diffs, errors, mutations = [], [], [], [], []
+    for index, number in enumerate((2, 10)):
+        goals = [{'goal':'gain','metric':'gain','value':number,'direction':'max'}]
+        definitions.append(dict(name=f'Config {number}',updated_at=1790892000+index*1468800,
+            settings={'config_name':f'Start {number}','execution':'cpu' if index==0 else 'gpu'}))
+        for ended in (False, True):
+            run_id = ('abcd'[index + (2 if ended else 0)])*32
+            run = dict(id=run_id,name=f'Run {number}',created_at=1790892000+index*1468800,
+                started_at=1000,deadline=2000000000,ended=ended,status='completed' if ended else 'running',
+                phase='optimize',round=1,settings={'config_name':'fixture','execution':'cpu','goals':{}},
+                jobs=[],observer_jobs=[],history=[],cycles=[],observer_enabled=True,
+                best={'round':1,'candidate_id':f'Candidate {number}','assessment':{'goals':goals}})
+            for round_number in range(2):
+                run['cycles'].append(dict(round=round_number,status='complete',started_at=1000+round_number*100,
+                    duration_seconds=2 if round_number==0 else 10,completed_backtests=number+round_number,
+                    backtests=number+round_number+1,goals=[dict(goals[0],value=number+round_number)],
+                    score=number+round_number,score_delta=number+round_number,observations=[]))
+                for variant in range(2):
+                    run['jobs'].append(dict(round=round_number,kind='optimizer',operation=f'opt{round_number}{variant}',
+                        name=f'Optimizer {variant+1}',status='complete',created_at=1000+round_number*100+variant*10,
+                        ended_at=1200+round_number*100+variant*10,log_available=False))
+                run['jobs'].append(dict(round=round_number,kind='validation',operation=f'check{round_number}',
+                    name='Comparison',status='complete',created_at=1020+round_number*100,ended_at=1250+round_number*100))
+                run['observer_jobs'].append(dict(round=round_number,kind='observer_holdout',operation=f'obs{round_number}',
+                    name='Holdout',status='complete',created_at=1030+round_number*100,run_started_at=1040+round_number*100,
+                    ended_at=1300+round_number*100,simulation_complete=True,selected_for_full_range=True,
+                    metrics={'gain':number,'drawdown':number/100}))
+            runs.append(run)
+    with playwright.sync_playwright() as driver:
+        browser = driver.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={'width':1200,'height':900})
+            page.set_default_timeout(7000)
+            page.on('pageerror', lambda error: errors.append(str(error)))
+
+            def respond(route):
+                """Intercept every request, including actions; all input data belongs to this fixture."""
+                parsed = urlparse(route.request.url)
+                path = parsed.path
+                if path.startswith('/api/optimize-v8/loops') and route.request.method not in ('GET', 'HEAD'):
+                    mutations.append(path)
+                if path in {'/audit','/api/optimize-v8/main_page'}:
+                    route.fulfill(body=source.replace('navCurrent: "v8_optimize"','navCurrent: "dashboards"') if path=='/audit' else source,content_type='text/html')
+                elif path.startswith('/app/'):
+                    asset = ROOT/'frontend'/path.removeprefix('/app/')
+                    content = asset.read_text() if asset.is_file() else ''
+                    if asset.name=='pb8_loop_optimizer.js':
+                        # Fail immediately if any display sort mutates the original arrays.
+                        content = content.replace('  function renderWorkflow() {', '''  function renderWorkflow() {
+    rows.forEach(function(run){Object.freeze(run.jobs);Object.freeze(run.observer_jobs);Object.freeze(run.cycles);});Object.freeze(rows);
+''')
+                    route.fulfill(body=content,content_type='text/css' if asset.suffix=='.css' else 'text/javascript')
+                elif path=='/api/optimize-v8/loops':
+                    route.fulfill(json={'loops':runs})
+                elif path=='/api/optimize-v8/loops/configs':
+                    route.fulfill(json={'configs':definitions})
+                elif path=='/api/optimize-v8/loops/options':
+                    route.fulfill(json={'configs':['fixture'],'profiles':[],'providers':{},'presets':[]})
+                elif path.endswith('/diff'):
+                    diffs.append(parse_qs(parsed.query))
+                    route.fulfill(json={'fields':[],'truncated':False})
+                elif path=='/api/help/index':
+                    route.fulfill(json=[{'file':'43_pbv8_optimize','title':'PB8 Optimize'}])
+                elif path=='/api/help/content':
+                    route.fulfill(json={'content':'# PB8 Optimize\n\nIsolated sorting guide.'})
+                else:
+                    route.fulfill(json={})
+            page.route('**/*', respond)
+            page.route_web_socket('**/*', lambda socket: socket.on_message(lambda _message: None))
+            page.goto('http://pbgui.test/audit')
+            page.locator('.nav-group-btn[data-group="pbv8"]').click()
+            page.locator('.nav-item[data-page="v8_optimize"]').click()
+            page.wait_for_url('**/api/optimize-v8/main_page')
+            yield page, definitions, runs, diffs
+            assert not errors, errors
+            assert not mutations, mutations
+        finally:
+            browser.close()
+
+
+def test_loop_config_sort_headers_filters_reload_and_layout(loop_sort_browser):
+    """Check all configuration headers, persistent independent state, real Guide and shared sidebar bounds."""
+    __tracebackhide__ = True
+    page, definitions, _, _ = loop_sort_browser
+    page.locator('.sb-section[data-panel="loops-config"]').click()
+    selector = '#loop-config-list'
+    page.wait_for_selector(selector+' tbody tr[data-selection]')
+
+    def names():
+        """Read identities from the actual renderer, excluding empty-state rows."""
+        return page.locator(selector+' tbody tr[data-selection]').evaluate_all('rows=>rows.map(row=>row.dataset.selection)')
+    assert names()==['Config 10','Config 2']
+    for key in ('name','config_name','execution','updated_at'):
+        control = page.locator(selector+f' [data-sort="{key}"]')
+        control.click()
+        direction = control.locator('..').get_attribute('aria-sort')
+        expected = ['Config 2','Config 10'] if direction=='ascending' else ['Config 10','Config 2']
+        assert names()==expected
+        control.press('Enter')
+        assert names()==expected[::-1]
+        assert control.evaluate('node=>node===document.activeElement')
+    page.locator(selector+' [data-sort="name"]').click()
+    page.locator(selector+' tr[data-selection="Config 2"] td').first.click()
+    search = page.get_by_role('textbox', name='Search AI Loops config')
+    search.fill('Config 2')
+    assert names()==['Config 2']
+    search.fill('')
+    before = names()
+    definitions[0]['updated_at'] += 2000000
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_function("stamp=>document.querySelector('#loop-config-list').dataset.signature.includes(String(stamp))",arg=definitions[0]['updated_at'])
+    assert page.locator(selector+' th[aria-sort="ascending"] [data-sort="name"]').count()==1
+    assert names()==before
+    page.reload()
+    page.wait_for_selector(selector+' tr[data-selection="Config 2"]')
+    assert page.locator(selector+' tr[data-selection="Config 2"]').evaluate('node=>node.classList.contains("selected")'), page.evaluate("JSON.parse(localStorage.getItem('pbgui.pb8.loops.workflow')).config_selection")
+    assert names()==before
+    assert page.locator(selector+' th[aria-sort="ascending"] [data-sort="name"]').count()==1
+    for viewport, width in ((1200,160),(1200,420),(700,160)):
+        page.set_viewport_size({'width':viewport,'height':900})
+        page.evaluate('(width)=>document.getElementById("sidebar").style.width=width+"px"',width)
+        assert page.locator('#sidebar').evaluate('node=>node.scrollWidth<=node.clientWidth+1')
+        assert page.locator(selector+' .loop-table-scroll').evaluate('node=>node.getBoundingClientRect().right<=innerWidth')
+    destination = page.url
+    page.locator('#pbgui-guide-btn').click()
+    page.wait_for_selector('#pbgui-shared-help-ovl.visible')
+    assert page.url==destination
+    page.locator('#pbgui-shared-help-close').click()
+
+
+@pytest.mark.parametrize('panel', ['loops-queue','loops-results'])
+def test_loop_tree_sort_headers_groups_variants_and_actions(loop_sort_browser, panel):
+    """Sort all tree headers through real controls and retain parents, references, expansion and variant targets."""
+    __tracebackhide__ = True
+    page, _, runs, diffs = loop_sort_browser
+    page.locator(f'.sb-section[data-panel="{panel}"]').click()
+    host = '#'+panel+'-table'
+    ids = [run['id'] for run in runs if run['ended']==(panel=='loops-results')]
+    page.wait_for_selector(host+' tr[data-selection]')
+    assert page.locator(host+' tr[data-selection]').evaluate_all('rows=>rows.map(row=>row.dataset.selection)')==ids[::-1]
+    selected = host+' tr[data-key="'+ids[1]+'"]'
+    page.locator(selected+' td').nth(2).click()
+    page.locator(selected+' .loop-disclosure').click()
+    for number in (0,1):
+        page.locator(host+f' tr[data-key="{ids[1]}:{number}"] .loop-disclosure').click()
+    original = copy.deepcopy(runs)
+
+    def keys():
+        """Read the flattened display order while keeping model identities visible."""
+        return page.locator(host+' tr[data-key]').evaluate_all('rows=>rows.map(row=>row.dataset.key)')
+    displayed = keys()
+    assert displayed.index(ids[1]+':1')<displayed.index(ids[1]+':0')
+    assert [key for key in displayed if key.startswith(ids[1]+':1:')]==[
+        ids[1]+':1:check1',ids[1]+':1:opt11',ids[1]+':1:opt10']
+    assert displayed.index(ids[1]+':observer:obs1')<displayed.index(ids[1]+':1:check1')
+    for key in ('name','status','execution','duration','backtests','metrics','selection','decision','created_at','holdout','full_range'):
+        control = page.locator(host+f' [data-sort="{key}"]')
+        control.click()
+        direction = control.locator('..').get_attribute('aria-sort')
+        control.press('Space')
+        assert control.locator('..').get_attribute('aria-sort')!=direction
+        assert control.evaluate('node=>node===document.activeElement')
+        assert page.locator(selected).evaluate('node=>node.classList.contains("selected")')
+        assert page.locator(host+' .loop-disclosure[aria-expanded="true"]').count()==3
+        displayed = keys()
+        start = displayed.index(ids[1])
+        end = displayed.index(ids[0]) if displayed.index(ids[0])>start else len(displayed)
+        assert all(key.startswith(ids[1]+':') for key in displayed[start+1:end])
+        for number in (0,1):
+            group_start = displayed.index(ids[1]+':'+str(number))
+            child_indices = [displayed.index(ids[1]+f':{number}:{operation}') for operation in (f'check{number}',f'opt{number}0',f'opt{number}1')]
+            child_indices.append(displayed.index(ids[1]+f':observer:obs{number}'))
+            assert min(child_indices)>group_start
+            assert max(child_indices)-min(child_indices)==3
+    assert runs==original
+    # The display order must not change the prior-round comparison or the original variant index.
+    round_two = page.locator(host+f' tr[data-key="{ids[1]}:1"]')
+    assert 'vs Loop 1' in round_two.locator('td').nth(5).locator('.loop-metric-change').get_attribute('title')
+    variant = page.locator(host+f' tr[data-key="{ids[1]}:1:opt11"]')
+    assert 'Optimizer Variant 2' in variant.locator('td').first.inner_text()
+    variant.get_by_role('button',name='Open',exact=True).click()
+    page.wait_for_selector('#loop-diff-operation')
+    assert page.locator('#loop-diff-operation').input_value()=='opt11'
+    page.wait_for_function("()=>!document.querySelector('#loop-report-body').textContent.includes('Loading parameter diff')")
+    assert diffs[-1]['operation']==['opt11'] and diffs[-1]['baseline']==['opt01']
+    page.locator('#loop-report-close').click()
+    round_two.get_by_role('button',name='Open',exact=True).click()
+    assert page.locator('#loop-report-title').inner_text().startswith('Round 2')
+    page.locator('#loop-report-close').click()
+
+
+def test_loop_duration_auto_sort_focus_selection_and_reload(loop_sort_browser):
+    """Prove live duration reordering and clock-only DOM stability, filters, drag selection and reload."""
+    __tracebackhide__ = True
+    page, _, runs, _ = loop_sort_browser
+    page.locator('.sb-section[data-panel="loops-queue"]').click()
+    host = '#loops-queue-table'
+    run = next(run for run in runs if run['id']=='b'*32)
+    parent = host+f' tr[data-key="{run["id"]}"]'
+    page.wait_for_selector(parent)
+    page.locator(parent+' td').nth(2).click()
+    page.locator(parent+' .loop-disclosure').click()
+    round_selector = host+f' tr[data-key="{run["id"]}:0"]'
+    page.locator(round_selector+' .loop-disclosure').click()
+    page.locator(host+' [data-sort="duration"]').click()
+    page.locator(round_selector+' .loop-disclosure').focus()
+    page.locator(host+' .loop-table-scroll').evaluate('node=>node.scrollLeft=200')
+    run['cycles'][0]['duration_seconds']=20
+    page.wait_for_function("(id)=>{const rows=[...document.querySelectorAll('#loops-queue-table tr[data-key]')];return rows.findIndex(row=>row.dataset.key===id+':0')<rows.findIndex(row=>row.dataset.key===id+':1');}",arg=run['id'])
+    assert page.locator(round_selector+' .loop-disclosure').evaluate('node=>node===document.activeElement')
+    assert page.locator(host+' .loop-table-scroll').evaluate('node=>node.scrollLeft')==200
+    assert page.locator(parent+'.selected').count()==1
+    page.locator(host+' [data-sort="created_at"]').click()
+    page.locator(round_selector+' .loop-disclosure').focus()
+    page.locator(round_selector).evaluate('node=>window.clockRow=node')
+    run['cycles'][0]['duration_seconds']=30
+    page.wait_for_function("()=>document.querySelector('[data-clock=\"'+ 'b'.repeat(32)+':0\"]').textContent.includes('30')")
+    assert page.locator(round_selector).evaluate('node=>node===window.clockRow')
+    assert page.locator(round_selector+' .loop-disclosure').evaluate('node=>node===document.activeElement')
+    search = page.get_by_role('textbox',name='Search AI Loops queue')
+    search.fill('Run 10')
+    page.locator('#panel-loops-queue select[aria-label="Status filter"]').select_option('running')
+    page.locator(host+' [data-sort="backtests"]').click()
+    page.locator('.sb-section[data-panel="loops-results"]').click()
+    assert page.locator('#loops-results-table th[aria-sort="descending"] [data-sort="created_at"]').count()==1
+    page.locator('#loops-results-table [data-sort="name"]').click()
+    page.locator('.sb-section[data-panel="loops-queue"]').click()
+    page.reload()
+    page.wait_for_selector(parent+'.selected')
+    assert search.input_value()=='Run 10'
+    assert page.locator('#panel-loops-queue select[aria-label="Status filter"]').input_value()=='running'
+    assert page.locator(host+' th[aria-sort="ascending"] [data-sort="backtests"]').count()==1
+    assert page.locator(round_selector+' .loop-disclosure').get_attribute('aria-expanded')=='true'
+    search.fill('')
+    # Drag selection follows the current visible order, and polling cannot rebuild during the drag.
+    selection = page.locator(host+' tr[data-selection]')
+    selection.first.dispatch_event('pointerdown',{'button':0})
+    signature = page.locator(host).get_attribute('data-signature')
+    run['cycles'][0]['duration_seconds']=40
+    selection.last.dispatch_event('pointerenter')
+    assert page.locator(host+' tr[data-selection].selected').count()==2
+    assert page.locator(host).get_attribute('data-signature')==signature
+    page.dispatch_event('body','pointerup')
+    page.locator('.sb-section[data-panel="loops-results"]').click()
+    assert page.locator('#loops-results-table th[aria-sort="ascending"] [data-sort="name"]').count()==1
+
+
+@pytest.mark.parametrize('first_read', ['delayed', 'network', 'http'])
+def test_loop_config_actions_wait_for_loaded_selection(loop_sort_browser, first_read):
+    """Keep restored selection while disabling actions during a delayed or failed first list read."""
+    __tracebackhide__ = True
+    playwright = pytest.importorskip('playwright.sync_api')
+    page, definitions, _, _ = loop_sort_browser
+    page.locator('.sb-section[data-panel="loops-config"]').click()
+    selected = '#loop-config-list tr[data-selection="Config 2"]'
+    page.locator(selected+' td').first.click()
+    page.locator('#loop-config-list [data-sort="name"]').click()
+    search = page.get_by_role('textbox', name='Search AI Loops config')
+    search.fill('Config 2')
+    state = {'hold':True, 'pending':[]}
+
+    def hold_definitions(route):
+        """Delay only the isolated definition list; automatic retries use the same local fixture."""
+        if state['hold']:
+            state['pending'].append(route)
+        else:
+            route.fulfill(json={'configs':definitions})
+
+    try:
+        page.route('**/api/optimize-v8/loops/configs', hold_definitions)
+        page.reload(wait_until='domcontentloaded')
+        controls = [page.locator('#loop-'+name+'-config') for name in ('edit','duplicate','queue','delete')]
+        playwright.expect(controls[0]).to_be_visible()
+        for control in controls:
+            playwright.expect(control).to_be_disabled()
+        assert page.evaluate("JSON.parse(localStorage.getItem('pbgui.pb8.loops.workflow')).config_selection")==['Config 2']
+        assert state['pending']
+        # Programmatic dispatch must also be harmless if a previously scheduled callback runs.
+        for control in controls:
+            control.dispatch_event('click')
+        assert page.locator('#pbgui-dialog-ovl.visible').count()==0
+        assert not page.locator('#loop-message').inner_text()
+        initial = state['pending'].pop(0)
+        if first_read!='delayed':
+            if first_read=='network':
+                initial.abort('failed')
+                message = 'Connection interrupted. Retrying automatically'
+            else:
+                initial.fulfill(status=503, json={'detail':'Isolated definition list unavailable'})
+                message = 'Isolated definition list unavailable'
+            playwright.expect(page.locator('#loop-message')).to_contain_text(message)
+            for control in controls:
+                playwright.expect(control).to_be_disabled()
+            assert page.evaluate("JSON.parse(localStorage.getItem('pbgui.pb8.loops.workflow')).config_selection")==['Config 2']
+            state['hold'] = False
+            if first_read=='http':
+                # Existing non-transient HTTP errors retry on returning to the view.
+                page.locator('.sb-section[data-panel="loops-results"]').click()
+                page.locator('.sb-section[data-panel="loops-config"]').click()
+            # Transient network failures recover through the existing automatic poll.
+        else:
+            state['hold'] = False
+            initial.fulfill(json={'configs':definitions})
+        while state['pending']:
+            state['pending'].pop(0).fulfill(json={'configs':definitions})
+        playwright.expect(page.locator(selected)).to_have_class(re.compile(r'\bselected\b'))
+        for control in controls:
+            playwright.expect(control).to_be_enabled()
+        assert search.input_value()=='Config 2'
+        assert page.locator('#loop-config-list th[aria-sort="ascending"] [data-sort="name"]').count()==1
+        playwright.expect(page.locator('#loop-message')).to_be_empty()
+    finally:
+        state['hold'] = False
+        page.unroute('**/api/optimize-v8/loops/configs', hold_definitions)
+        while state['pending']:
+            state['pending'].pop(0).abort()

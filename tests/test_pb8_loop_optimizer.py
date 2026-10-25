@@ -883,8 +883,26 @@ def test_owner_api_only_lists_own_loops(record, tmp_path, monkeypatch):
     store.create('b' * 32, settings(), config(), {}, {}, [], config()['backtest'])
     monkeypatch.setattr(api, '_controller', LoopController(tmp_path, store=store, backend=FakeBackend(), ai=FakeAI()))
     monkeypatch.setattr(api, 'owner_key', lambda user: OWNER)
-    response = asyncio.run(api.list_loops(SimpleNamespace(user_id='user')))
-    assert [loop['id'] for loop in json.loads(response.body)['loops']] == [row['id']]
+    api._clear_list_cache()
+    calls = []
+    real_projection = api.projection
+    def counted_projection(value):
+        """Track cache misses without touching production state."""
+        calls.append(value['id'])
+        return real_projection(value)
+    monkeypatch.setattr(api, 'projection', counted_projection)
+    try:
+        response = asyncio.run(api.list_loops(SimpleNamespace(user_id='user')))
+        assert [loop['id'] for loop in json.loads(response.body)['loops']] == [row['id']]
+        initial_digest = json.loads(response.body)['loops'][0]['initial_snapshot_digest']
+        again = asyncio.run(api.list_loops(SimpleNamespace(user_id='user')))
+        assert again.body == response.body and calls == [row['id']]
+        store.update(OWNER, row['id'], lambda value: value.update(status='paused'))
+        changed = asyncio.run(api.list_loops(SimpleNamespace(user_id='user')))
+        assert len(calls) == 2
+        assert json.loads(changed.body)['loops'][0]['initial_snapshot_digest'] == initial_digest
+    finally:
+        api._clear_list_cache()
 
 
 def test_paid_ai_usage_is_recorded_and_reconciled(record):
@@ -2132,6 +2150,47 @@ def test_job_projection_reports_actual_pinned_changes_and_candidate_links(record
     assert not {'config','overrides','executed_config'} & actual.keys()
     assert report['jobs'][1]['candidate_optimizer']==optimizer['operation']
 
+    assert not {'initial_config', 'initial_overrides'} & report.keys()
+    assert report['jobs'][1]['snapshot_digest'] is None
+    expected_initial = report['initial_snapshot_digest']
+    expected_job = actual['snapshot_digest']
+    row.update(status='paused', phase='evaluate', updated_at=12345)
+    optimizer.update(status='complete', result_count=99)
+    optimizer['config'] = dict(reversed(list(optimizer['config'].items())))
+    optimizer['overrides'] = dict(reversed(list(optimizer['overrides'].items())))
+    row['initial_config'] = dict(reversed(list(row['initial_config'].items())))
+    assert projection(row)['initial_snapshot_digest'] == expected_initial
+    assert projection(row)['jobs'][0]['snapshot_digest'] == expected_job
+    for target in ('config', 'overrides'):
+        original = copy.deepcopy(optimizer[target])
+        optimizer[target]['digest_test'] = {'b': 2, 'a': 1}
+        changed_digest = projection(row)['jobs'][0]['snapshot_digest']
+        assert changed_digest != expected_job
+        optimizer[target]['digest_test'] = {'a': 1, 'b': 2}
+        assert projection(row)['jobs'][0]['snapshot_digest'] == changed_digest
+        assert projection(row)['initial_snapshot_digest'] == expected_initial
+        optimizer[target] = original
+    for target in ('initial_config', 'initial_overrides'):
+        original = copy.deepcopy(row[target])
+        row[target]['digest_test'] = {'b': 2, 'a': 1}
+        changed_digest = projection(row)['initial_snapshot_digest']
+        assert changed_digest != expected_initial
+        row[target]['digest_test'] = {'a': 1, 'b': 2}
+        assert projection(row)['initial_snapshot_digest'] == changed_digest
+        assert projection(row)['jobs'][0]['snapshot_digest'] == expected_job
+        row[target] = original
+    optimizer['config']['digest_many'] = {f'field_{index:03d}': index for index in range(100)}
+    limited = projection(row)
+    assert len(limited['jobs'][0]['changes']) == 80
+    optimizer['config']['digest_many']['field_099'] = 999
+    beyond_limit = projection(row)
+    assert beyond_limit['jobs'][0]['changes'] == limited['jobs'][0]['changes']
+    assert beyond_limit['jobs'][0]['snapshot_digest'] != limited['jobs'][0]['snapshot_digest']
+    optimizer['overrides']['ZZZ'] = {'bot': {'long': {'risk': {'n_positions': 9}}}}
+    override_beyond_limit = projection(row)
+    assert override_beyond_limit['jobs'][0]['changes'] == beyond_limit['jobs'][0]['changes']
+    assert override_beyond_limit['jobs'][0]['snapshot_digest'] != beyond_limit['jobs'][0]['snapshot_digest']
+
 
 @pytest.mark.parametrize('evidence_kind', ['missing','proxy','incomparable','unowned','pending','valid'])
 def test_next_cycle_requires_completed_owned_exact_backtest(record,tmp_path,evidence_kind):
@@ -2512,3 +2571,115 @@ def test_proxy_progress_persists_missing_and_older_samples(record, tmp_path):
         assert exposed['proxy_limit'] == 100000
         assert store.read(OWNER,row['id'])['jobs'][0].get('proxy_evaluations') == expected
     assert not backend.starts and not backend.stops
+
+
+def test_loop_table_sort_raw_values_and_immutable_groups():
+    """Exercise production comparators, every column, fallback dates and immutable semantic references."""
+    import subprocess
+    script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
+function fn(name){const start=source.indexOf('  function '+name+'(');return source.slice(start,source.indexOf('\n  function ',start+1));}
+const context=vm.createContext({Intl,Date,workflow:{},selectedObserver:(run,round,kind)=>(run.observer_jobs||[]).find(job=>job.round===round&&job.kind===kind)});
+vm.runInContext(['cycleRows','executionName','completeComparison','comparisonReference'].map(fn).join('\n')+
+ source.slice(source.indexOf('  var configColumns ='),source.indexOf('  function captureTableState(')),context);
+vm.runInContext(`
+function equal(actual,expected){if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error(JSON.stringify({actual,expected}));}
+function sorted(values,direction='asc'){return sortedDisplay(values,{direction},value=>value);}
+equal(sorted([10,2,null,NaN].map(sortNumber)),[2,10,null,null]);
+equal(sorted([2,null,10,null],'desc'),[10,2,null,null]);
+equal(sorted(['item 10','ITEM 2','item 2',null]),['ITEM 2','item 2','item 10',null]);
+const january=Date.UTC(2026,0,1)/1000,december=Date.UTC(2025,11,31)/1000;
+equal(sorted([december,january], 'desc'),[january,december]);
+equal(sorted([[2,10],[2,2],[10,1],null]),[[2,2],[2,10],[10,1],null]);
+equal(sorted([[2,null],[2,10],[2,2]],'desc'),[[2,10],[2,2],[2,null]]);
+equal(sorted([10,'A',2,'b']),[2,10,'A','b']);
+equal(sorted([10,'A',2,'b'],'desc'),['b','A',10,2]);
+equal(tableSort('config'),{key:'updated_at',direction:'desc'});
+equal(tableSort('loops-queue'),{key:'created_at',direction:'desc'});
+equal(tableSort('loops-results'),{key:'created_at',direction:'desc'});
+workflow.config_sort={key:'invalid',direction:'asc'};equal(tableSort('config'),{key:'updated_at',direction:'desc'});
+workflow['loops-queue_sort']={key:'duration',direction:'invalid'};equal(tableSort('loops-queue'),{key:'created_at',direction:'desc'});
+workflow.config_sort={key:'name',direction:'asc'};equal(tableSort('config'),{key:'name',direction:'asc'});
+equal(tableSort('loops-results'),{key:'created_at',direction:'desc'});
+const goal=value=>({goal:'gain',metric:'gain',value,direction:'max'});
+const makeRun=(id,n)=>({id,name:'Run '+n,status:n===2?'completed':'failed',created_at:n,started_at:1,deadline:100,ended:true,
+ settings:{config_name:'Config '+n,execution:n===2?'cpu':'gpu'},best:{round:0,candidate_id:'Candidate '+n},
+ jobs:[{round:0,kind:'optimizer',operation:'variant-one',created_at:1,ended_at:n+1},
+ {round:0,kind:'optimizer',operation:'variant-two',created_at:n,ended_at:2*n},
+ ...Array.from({length:n},(_,index)=>({round:0,kind:'validation',operation:'check'+index,status:'complete',created_at:index+1,ended_at:index+3}))],
+ cycles:[{round:0,status:'complete',started_at:n,duration_seconds:n,completed_backtests:n,backtests:n+1,score:n,score_delta:n,goals:[goal(n)],observations:[]},
+ {round:1,status:'complete',started_at:n+1,duration_seconds:n+1,completed_backtests:n+1,backtests:n+2,score:n+1,score_delta:n+1,goals:[goal(n+1)],observations:[]}],
+ observer_jobs:['observer_holdout','observer_full_range'].map(kind=>({round:1,kind,status:'complete',simulation_complete:true,metrics:{gain:n,drawdown:n/100}}))});
+const small=makeRun('small',2),large=makeRun('large',10),runs=[large,small];
+function freeze(value){if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value);}}freeze(runs);
+const original=JSON.stringify(runs),cycles=cycleRows(large),reference=comparisonReference(large,cycles,cycles[1]);
+for(const [key] of runColumns){
+ const value=run=>runSortValue(run,cycleRows(run),null,null,run.name,key);
+ equal(sortedDisplay(runs,{direction:'asc'},value).map(run=>run.id),key==='decision'?['large','small']:['small','large']);
+ equal(sortedDisplay(runs,{direction:'desc'},value).map(run=>run.id),['large','small']);
+ // Sort rounds and mixed child jobs without mutating the persisted arrays.
+ sortedDisplay(cycles,{direction:'desc'},cycle=>runSortValue(large,cycles,cycle,null,'Loop '+(cycle.round+1),key));
+ sortedDisplay(large.jobs.concat(large.observer_jobs),{direction:'desc'},job=>runSortValue(large,cycles,cycles[0],job,job.operation||job.kind,key));
+}
+equal(JSON.stringify(runs),original);equal(comparisonReference(large,cycles,cycles[1]),reference);
+equal(large.jobs.filter(job=>job.kind==='optimizer').map(job=>job.operation),['variant-one','variant-two']);
+equal(sortedDisplay([{id:'a',v:2},{id:'b',v:2},{id:'c',v:null}],{direction:'desc'},row=>row.v).map(row=>row.id),['a','b','c']);
+equal(jobCreated({created_at:null,run_started_at:10}),10);equal(jobCreated({created_at:0,run_started_at:10}),0);
+equal(cycleCreated({jobs:[{round:1,created_at:10},{round:1,created_at:2}],observer_jobs:[]},{round:1}),[2,1]);
+equal(cycleCreated({jobs:[]},{round:2}),[null,2]);
+equal(sortedDisplay([{round:1},{round:2}],{direction:'desc'},cycle=>cycleCreated({jobs:[]},cycle)).map(cycle=>cycle.round),[2,1]);
+equal(goalSortValue([goal(10)],{goals:[goal(2)]},true),[['gain:gain',10,8]]);
+equal(goalSortValue([goal(10)],{goals:[goal(2)]},false),[['gain:gain',10,null]]);
+equal(goalSortValue([],{goals:[]},true),null);
+equal(observerSortValue({observer_jobs:[{round:0,kind:'observer_holdout',status:'running',metrics:{gain:100}}]},0,'observer_holdout'),null);
+equal(observerSortValue({observer_jobs:[{round:0,kind:'observer_holdout',status:'complete',simulation_complete:true,metrics:{gain:null}}]},0,'observer_holdout'),null);
+const live={...small,ended:false,started_at:1};
+equal(runSortValue(live,live.cycles,null,null,live.name,'duration',11),10);
+equal(sortedDisplay([live,{...live,id:'same-duration'}],{direction:'desc'},run=>runSortValue(run,run.cycles,null,null,run.name,'duration',11)).map(run=>run.id),['small','same-duration']);
+equal(runSortValue(small,small.cycles,small.cycles[0],null,'Loop 1','selection'),2);
+equal(runSortValue(small,small.cycles,{...small.cycles[0],ai_evaluated:true,winner_candidate_id:'ten'},null,'Loop 1','selection'),'ten');
+`,context);
+"""
+    result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_loop_config_action_handlers_reject_unavailable_targets():
+    """Validate action targets independently of button state and recheck after asynchronous confirmation."""
+    import subprocess
+    script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
+function fn(name){const start=source.indexOf('  '+(name==='knownDefinitions'?'function ':'async function ')+name+'(');const rest=source.slice(start);return rest.slice(0,rest.search(/\n  (?:async )?function /));}
+const events=[];
+const context=vm.createContext({Set,definitions:[],definitionsLoaded:false,selectedDefinitions:new Set(['saved']),
+ queueing:false,state:{navigationSeq:1},selected:'run',window:{PBGuiAI:true},syncContext(){},
+ PBGuiAI:{ensureSelection:async()=>{events.push('ai');context.state.navigationSeq++;return {}; }},
+ PBGuiDialogs:{confirm:async()=>{events.push('confirm');return false;}},
+ request:async path=>{events.push(path);return {id:'new'};},poll:async()=>events.push('poll')});
+vm.runInContext(['knownDefinitions','openDefinition','queueDefinitions','deleteDefinitions'].map(fn).join('\n'),context);
+(async()=>{
+ await context.openDefinition(undefined,false);
+ await context.openDefinition({name:'saved'},true);
+ await context.queueDefinitions(['saved']);
+ await context.deleteDefinitions();
+ assert.deepEqual(events,[],'unloaded targets cannot open, queue, or reach confirmation');
+ context.definitions=[{name:'saved'}];context.definitionsLoaded=true;
+ await context.queueDefinitions(['saved','missing']);
+ context.selectedDefinitions=new Set(['saved','missing']);await context.deleteDefinitions();
+ assert.deepEqual(events,[],'mixed invalid selections cannot partially execute');
+ context.selectedDefinitions=new Set(['saved']);await context.deleteDefinitions();
+ assert.deepEqual(events,['confirm'],'loaded delete still uses explicit confirmation');events.length=0;
+ context.PBGuiDialogs.confirm=async()=>{events.push('confirm');context.definitions=[];return true;};
+ await context.deleteDefinitions();assert.deepEqual(events,['confirm'],'disappeared target cannot be deleted after confirmation');events.length=0;
+ // Save & Queue may use a freshly saved definition even if the initial list has not arrived.
+ context.definitions=[{name:'saved'}];context.definitionsLoaded=false;
+ await context.queueDefinitions(['saved']);assert.deepEqual(events,['ai','/configs/saved/queue','poll']);
+ assert.equal(context.queueing,false);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr

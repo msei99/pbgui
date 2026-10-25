@@ -3357,25 +3357,19 @@ def main_page(
 
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api/pareto-explorer"
-    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
+    from api.page_templates import render_page_urls, script_json
 
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
-    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
-    html = html.replace('"%%RESULT_PATH%%"', json.dumps(str(result_path or "")))
+    html = render_page_urls(request, html, "/api/pareto-explorer")
+    html = html.replace('"%%RESULT_PATH%%"', script_json(str(result_path or "")))
     result_dir = _resolve_result_dir(result_path)
     optimize_version = _result_optimize_version(result_dir) if result_dir else (
         "v8" if str(optimize_version).strip().lower() == "v8" else "v7"
     )
-    html = html.replace('"%%OPTIMIZE_VERSION%%"', json.dumps(optimize_version))
+    html = html.replace('"%%OPTIMIZE_VERSION%%"', script_json(optimize_version))
     html = html.replace("%%OPTIMIZE_LABEL%%", optimize_version.upper())
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
 
     nav_js = Path(__file__).resolve().parent.parent / "frontend" / "pbgui_nav.js"

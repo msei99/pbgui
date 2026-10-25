@@ -49,7 +49,7 @@
   var starting = false, formEdited = false, setupGeneration = 0, initialSetupRestored = false, optionsReady;
   var jevEnabled=true;
   var uiError = '', uiErrorPanel = 'loops-config', definitions = [], editingName = '', editingRevision = null, editingQueue = '';
-  var pollError = '', pollErrorPanel = 'loops-config';
+  var pollError = '', pollErrorPanel = 'loops-config', definitionsLoaded = false;
   var editorSource = null, sourceDefaults = null, sourceDigest = null, editorVisible = false, editorLoading = false, editorGeneration = 0, queueing = false;
   var selectedDefinitions = new Set(), selectedRuns = new Set(), expanded = new Set();
   var logGeneration=0, logOpening=false, logRun='', logOperation='';
@@ -138,6 +138,7 @@
     var url=new URL(location.href); if(editorVisible)url.searchParams.set('loop_edit',byId('name').value || 'new');else url.searchParams.delete('loop_edit');history.replaceState(null,'',url);
   }
   async function openDefinition(row, duplicate) {
+    row=row&&definitions.find(function(item){return item.name===row.name;});if(!row)return;
     var token=++editorGeneration, navigation=state.navigationSeq;editorLoading=true;editorVisible=false;syncContext();syncStart();
     try {
     closeReport(); editorSource={kind:'definition',id:row.name}; sourceDefaults=row.config_defaults;sourceDigest=row.bundle_digest || null;
@@ -172,8 +173,11 @@
     editingName=definition?definition.name:(row.name||row.settings.config_name); editingRevision=definition?definition.revision:null;
     editingQueue=row.status==='queued'?row.id:''; saveDraft();editorLocation();
   }
+  function knownDefinitions(names) {
+    return names.length>0&&names.every(function(name){return definitions.some(function(row){return row.name===name;});});
+  }
   async function queueDefinitions(names) {
-    if(queueing)return;queueing=true;var navigation=state.navigationSeq,selection=selected,created=[];syncContext();
+    if(queueing||!knownDefinitions(names))return;queueing=true;var navigation=state.navigationSeq,selection=selected,created=[];syncContext();
     try {
     if(!window.PBGuiAI || !PBGuiAI.ensureSelection)throw new Error('PBGui AI is still loading. Try again shortly.');
     var ai=await PBGuiAI.ensureSelection();
@@ -194,8 +198,8 @@
     } catch(exc){error(exc);} finally{starting=false;syncStart();renderWorkflow();}
   }
   async function deleteDefinitions() {
-    var names=Array.from(selectedDefinitions);if(!names.length)return;
-    var accepted=await PBGuiDialogs.confirm({title:'Delete loop configurations',message:'Delete '+names.length+' selected configuration(s)? Run history will be retained.',confirmText:'Delete',danger:true});if(!accepted)return;
+    var names=Array.from(selectedDefinitions);if(!definitionsLoaded||!knownDefinitions(names))return;
+    var accepted=await PBGuiDialogs.confirm({title:'Delete loop configurations',message:'Delete '+names.length+' selected configuration(s)? Run history will be retained.',confirmText:'Delete',danger:true});if(!accepted||!knownDefinitions(names))return;
     for(var name of names)await request('/configs/'+encodeURIComponent(name),null,'DELETE');selectedDefinitions.clear();await poll();
   }
   function forgetRun(id) {
@@ -382,6 +386,7 @@
   function button(parent, label, action) { var node = element('button', label, 'btn'); node.type = 'button'; node.addEventListener('click', action); parent.appendChild(node); return node; }
   var reportWindow, reportOverlay, reportDialog, reportBody, reportTabs, reportTitle, reportView = '', reportRound = 0, reportTab = 'overview';
   var reportSignature = '', reportSuspended=false, diffRequest, diffGeneration = 0, diffOperation = '', diffBaseline = '', reportReturnFocus,reportReturnKey='';
+  var diffState=null;
   var tabNames = {overview:'Overview', goals:'Goals', backtests:'Backtests', performance:'User evaluation', changes:'Changes', analysis:'AI analysis'};
   function numeric(value) { return typeof value === 'number' && Number.isFinite(value) ? Number(value.toPrecision(6)).toLocaleString() : '—'; }
   function duration(value) { if (value === null || value === undefined) return '—'; value=Math.max(0,Math.floor(value)); return Math.floor(value/3600)+'h '+Math.floor(value%3600/60)+'m '+value%60+'s'; }
@@ -401,7 +406,7 @@
     history.replaceState(null,'',url);
   }
   function closeReport(clearNavigation) {
-    if(diffRequest)diffRequest.abort(); diffGeneration++; reportSignature=''; reportView='';reportSuspended=false;
+    resetDiff(); reportSignature=''; reportView='';reportSuspended=false;
     if(reportWindow)reportWindow.cancel();
     if(reportOverlay){reportOverlay.classList.remove('is-open');reportOverlay.setAttribute('aria-hidden','true');}
     if(clearNavigation!==false)reportNavigation();
@@ -409,9 +414,10 @@
     var focus=reportReturnFocus&&reportReturnFocus.isConnected?reportReturnFocus:document.getElementById(reportReturnFocus&&reportReturnFocus.id)||document.getElementById('loop-cycle-row-'+reportRound)||Array.from(document.querySelectorAll('.loop-panel tr[data-key]')).find(function(row){return row.dataset.key===(reportReturnKey||selected);});
     if(focus)focus.focus({preventScroll:true});
   }
-  function openReport(view,round,tab) {
+  function openReport(view,round,tab,operation) {
+    resetDiff();
     reportReturnFocus=document.activeElement;var origin=reportReturnFocus&&reportReturnFocus.closest('tr[data-key]');reportReturnKey=origin?origin.dataset.key:'';reportView=view; reportRound=round||0; reportTab=tab||'overview';workflow.focus=view==='cycle'?selected+':'+reportRound:view==='initial'?selected+':initial':selected;persistWorkflow();renderWorkflow();
-    diffOperation='';diffBaseline='';reportSignature=''; reportNavigation(); updateReport();
+    diffOperation=operation||'';diffBaseline='';reportSignature=''; reportNavigation(); updateReport();
     root.querySelectorAll('.loop-cycle-table tbody tr').forEach(function(line){line.classList.toggle('selected',view==='cycle'&&Number(line.dataset.cycle)===reportRound);});
   }
   function makeReportDialog() {
@@ -424,7 +430,7 @@
     var reportProblem=button(header,'Report this problem',function(){var row=rows.find(function(item){return item.id===selected;});if(row&&window.PBGuiSupport)window.PBGuiSupport.reportError({area:'v8_optimize_ai_loop',loop_id:row.id,message:row.reason||'AI Loop failed',detail:((row.failure||{}).detail)||''},reportProblem);});reportProblem.id='loop-report-problem';reportProblem.hidden=true;
     var close=button(header,'×',function(){closeReport();});close.id='loop-report-close';close.className='pbg-modal-close';close.setAttribute('aria-label','Close');close.title='Close';reportDialog.appendChild(header);
     reportTabs=element('div',undefined,'pbg-modal-tabs');reportTabs.setAttribute('role','tablist');
-    Object.keys(tabNames).forEach(function(tab){var item=button(reportTabs,tabNames[tab],function(){reportTab=tab;reportSignature='';reportNavigation();updateReport();});item.className='pbg-modal-tab';item.dataset.tab=tab;item.id='loop-report-tab-'+tab;item.setAttribute('role','tab');item.setAttribute('aria-controls','loop-report-body');});
+    Object.keys(tabNames).forEach(function(tab){var item=button(reportTabs,tabNames[tab],function(){if(reportTab!==tab)resetDiff();reportTab=tab;reportSignature='';reportNavigation();updateReport();});item.className='pbg-modal-tab';item.dataset.tab=tab;item.id='loop-report-tab-'+tab;item.setAttribute('role','tab');item.setAttribute('aria-controls','loop-report-body');});
     reportTabs.addEventListener('keydown',function(event){var tabs=Object.keys(tabNames).filter(function(tab){return !document.getElementById('loop-report-tab-'+tab).hidden;}),index=tabs.indexOf(reportTab);if(event.key==='ArrowRight')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft')index=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();document.getElementById('loop-report-tab-'+tabs[index]).click();document.getElementById('loop-report-tab-'+tabs[index]).focus();});
     reportDialog.appendChild(reportTabs);reportBody=element('div',undefined,'pbg-modal-body');reportBody.id='loop-report-body';reportBody.setAttribute('role','tabpanel');reportDialog.appendChild(reportBody);
     reportOverlay.appendChild(reportDialog);document.body.appendChild(reportOverlay);
@@ -575,25 +581,55 @@
       reportTable(parent,['Metric','Current','Change vs start','Change vs previous round'],['gain','drawdown','recovery_days','adg','sharpe','sortino','trades'].map(function(metric){return [{gain:'Gain',drawdown:'Drawdown',recovery_days:'Recovery time',adg:'ADG',sharpe:'Sharpe',sortino:'Sortino',trades:'Fills'}[metric],observerValue((job.metrics||{})[metric],metric),observerValue((job.delta_start||{})[metric],metric),observerValue((job.delta_previous||{})[metric],metric)];}));
     });
   }
-  function renderDiff(row,cycle) {
+  function resetDiff() {
+    if(diffRequest)diffRequest.abort();
+    diffRequest=null;diffGeneration++;diffState=null;
+  }
+  function normalizeDiff(row,cycle) {
     var jobs=row.jobs.filter(function(job){return job.kind==='optimizer';}), variants=jobs.filter(function(job){return job.round===cycle.round;});
-    if(!variants.length){reportBody.appendChild(element('p','No optimizer snapshot for this round.'));return;}
+    if(!variants.length)return null;
     if(!variants.some(function(job){return job.operation===diffOperation;}))diffOperation=variants[0].operation;
     var prior=jobs.filter(function(job){return job.round<cycle.round;});
     if(!diffBaseline||diffBaseline===diffOperation||diffBaseline!=='initial'&&!jobs.some(function(job){return job.operation===diffBaseline;}))diffBaseline=prior.length?prior[prior.length-1].operation:'initial';
-    var selectors=element('div',undefined,'loop-diff-selectors');
-    function selector(label,id,values,selectedValue,change){var field=element('label',label),input=element('select');input.id=id;values.forEach(function(value){var option=element('option',value.label);option.value=value.value;input.appendChild(option);});input.value=selectedValue;input.addEventListener('change',change);field.appendChild(input);selectors.appendChild(field);return input;}
-    selector('Optimizer variant','loop-diff-operation',variants.map(function(job){return {value:job.operation,label:job.name};}),diffOperation,function(){diffOperation=this.value;reportSignature='';reportNavigation();updateReport();});
-    selector('Compare with','loop-diff-baseline',[{value:'initial',label:'Starting config'}].concat(jobs.filter(function(job){return job.operation!==diffOperation;}).map(function(job){return {value:job.operation,label:'Round '+(job.round+1)+' · '+job.name};})),diffBaseline,function(){diffBaseline=this.value;reportSignature='';reportNavigation();updateReport();});
+    var operation=variants.find(function(job){return job.operation===diffOperation;}),baseline=jobs.find(function(job){return job.operation===diffBaseline;});
+    var before=diffBaseline==='initial'?row.initial_snapshot_digest:baseline&&baseline.snapshot_digest;
+    // Older APIs cannot identify snapshot content: retain their conservative invalidation.
+    var revisions=before&&operation.snapshot_digest?[before,operation.snapshot_digest]:JSON.stringify(row,reportReplacer);
+    return {jobs:jobs,variants:variants,key:JSON.stringify([row.id,reportView,cycle.round,diffOperation,diffBaseline,revisions])};
+  }
+  function reportReplacer(key,value) {
+    return ['updated_at','duration_seconds','last_observed_at'].includes(key)?undefined:value;
+  }
+  function renderDiff(row,cycle,comparison) {
+    if(!comparison){resetDiff();reportBody.appendChild(element('p','No optimizer snapshot for this round.'));return;}
+    if(!diffState){
+      var container=element('div'),selectors=element('div',undefined,'loop-diff-selectors'),output=element('div');
+      container.appendChild(selectors);container.appendChild(output);reportBody.appendChild(container);
+      diffState={container:container,selectors:selectors,output:output,key:'',status:'empty'};
+    }
+    var held=diffState;
+    function selector(label,id,values,selectedValue,change){
+      var input=document.getElementById(id);
+      if(!input){var field=element('label',label);input=element('select');input.id=id;input.addEventListener('change',change);field.appendChild(input);held.selectors.appendChild(field);}
+      var signature=JSON.stringify(values);
+      if(input.dataset.options!==signature){input.replaceChildren();values.forEach(function(value){var option=element('option',value.label);option.value=value.value;input.appendChild(option);});input.dataset.options=signature;}
+      if(input.value!==selectedValue)input.value=selectedValue;
+    }
+    selector('Optimizer variant','loop-diff-operation',comparison.variants.map(function(job){return {value:job.operation,label:job.name};}),diffOperation,function(){diffOperation=this.value;reportSignature='';reportNavigation();updateReport();});
+    selector('Compare with','loop-diff-baseline',[{value:'initial',label:'Starting config'}].concat(comparison.jobs.filter(function(job){return job.operation!==diffOperation;}).map(function(job){return {value:job.operation,label:'Round '+(job.round+1)+' · '+job.name};})),diffBaseline,function(){diffBaseline=this.value;reportSignature='';reportNavigation();updateReport();});
     reportNavigation();
-    reportBody.appendChild(selectors);var output=element('div');reportBody.appendChild(output);output.appendChild(element('p','Loading parameter diff…','muted-line'));
+    if(held.key===comparison.key&&['pending','complete'].includes(held.status))return;
+    held.key=comparison.key;held.status='pending';
+    var output=held.output;output.replaceChildren(element('p','Loading parameter diff…','muted-line'));
     var token=++diffGeneration;if(diffRequest)diffRequest.abort();diffRequest=new AbortController();
     fetch(base+'/'+encodeURIComponent(row.id)+'/diff?operation='+encodeURIComponent(diffOperation)+'&baseline='+encodeURIComponent(diffBaseline),{credentials:'same-origin',cache:'no-store',signal:diffRequest.signal}).then(async function(response){var data=await response.json();if(!response.ok)throw new Error(data.detail||'Diff unavailable');return data;}).then(function(data){
-      if(token!==diffGeneration||!reportOverlay.classList.contains('is-open'))return;output.replaceChildren();
+      if(token!==diffGeneration)return;
+      if(!reportOverlay.classList.contains('is-open')){held.status='failed';return;}
+      held.status='complete';output.replaceChildren();
       if(!data.fields.length)output.appendChild(element('p','No parameter changes.'));
       else reportTable(output,['Parameter','Before','After'],data.fields.map(function(field){return [field.path,JSON.stringify(field.before),JSON.stringify(field.after)];}));
       if(data.truncated)output.appendChild(element('p','Diff exceeds 4096 fields.','loop-error'));
-    }).catch(function(exc){if(exc.name !== 'AbortError' && token === diffGeneration){output.replaceChildren(element('p',exc.message,'loop-error'));}});
+    }).catch(function(exc){if(token===diffGeneration){held.status='failed';if(exc.name!=='AbortError')output.replaceChildren(element('p',exc.message,'loop-error'));}});
   }
   function updateReport() {
     if(!reportView||!reportDialog||reportSuspended)return;
@@ -601,17 +637,20 @@
     var cycles=cycleRows(row),cycle=cycles.find(function(item){return item.round===reportRound;});
     if(reportView==='run'&&['backtests','changes'].includes(reportTab)){reportTab='overview';reportNavigation();}
     if(reportView==='cycle'&&!cycle){closeReport();uiErrorPanel=state.panel;uiError='The selected round is no longer available.';showMessages();return;}
-    var signature=JSON.stringify([reportView,reportRound,reportTab,diffOperation,diffBaseline,row],function(key,value){return ['updated_at','duration_seconds','last_observed_at'].includes(key)?undefined:value;});
-    if(signature===reportSignature){var clock=reportBody.querySelector('[data-report-duration]');if(clock&&cycle)clock.textContent=duration(cycle.duration_seconds);return;}
-    reportSignature=signature;if(diffRequest)diffRequest.abort();diffGeneration++;
+    var diffCycle=reportTab==='changes'?(reportView==='cycle'?cycle:reportView==='initial'?cycles[0]:null):null;
+    var comparison=diffCycle?normalizeDiff(row,diffCycle):null;
+    if(!diffCycle||!comparison)resetDiff();
+    var signature=JSON.stringify([reportView,reportRound,reportTab,diffOperation,diffBaseline,row],reportReplacer);
+    if(signature===reportSignature&&!(diffState&&diffState.status==='failed')){var clock=reportBody.querySelector('[data-report-duration]');if(clock&&cycle)clock.textContent=duration(cycle.duration_seconds);return;}
+    reportSignature=signature;
     var scroll=reportBody.scrollTop,focus=document.activeElement&&document.activeElement.id;
     var continueRound=reportView==='cycle'?reportRound:null;
     var continueKey=(reportView==='run'&&row.best||reportView==='cycle'&&canContinueRound(cycle))?JSON.stringify([row.id,reportView,continueRound]):'';
     var controls=reportBody.firstElementChild;
     if(!continueKey||!controls||controls.dataset.continuationKey!==continueKey)controls=null;
     // Keep the live form attached: removing/reinserting even the same input loses focus.
-    Array.from(reportBody.children).forEach(function(node){if(node!==controls)node.remove();});
-    if(continueKey&&!controls)continuationControls(reportBody,row,continueRound,continueKey);
+    Array.from(reportBody.children).forEach(function(node){if(node!==controls&&!(diffCycle&&diffState&&node===diffState.container))node.remove();});
+    if(continueKey&&!controls){continuationControls(reportBody,row,continueRound,continueKey);reportBody.prepend(reportBody.lastElementChild);}
     if(reportTab==='analysis')button(reportBody,'View instructions',function(){closeReport();PBGuiLoopInstructions.openRun(row.id);});
     if(reportView==='run'&&reportTab==='overview')resultSummary(reportBody,row);
     reportTitle.textContent=reportView==='cycle'?'Round '+(reportRound+1)+' · '+cycle.status:reportView==='initial'?'Initial result evaluation':'Loop details';
@@ -626,7 +665,7 @@
         reportTable(reportBody,['Job','Kind','Status','Duration'],jobs.map(function(job){return [job.name,job.kind,job.status,duration(job.run_started_at&&job.ended_at?job.ended_at-job.run_started_at:null)];}));
         jobs.filter(function(job){return job.error||job.result_error;}).forEach(function(job){reportBody.appendChild(element('p',job.name+': '+(job.error||job.result_error),'loop-error'));});
       } else if(reportTab==='goals')goalTable(reportBody,cycle.goals||[]);
-      else if(reportTab==='changes')renderDiff(row,cycle);
+      else if(reportTab==='changes')renderDiff(row,cycle,comparison);
       else if(reportTab==='backtests'){
         var checks=jobs.filter(function(job){return ['validation','holdout'].includes(job.kind);});
         var comparison=row.comparison||{};reportTable(reportBody,['Comparison period','Exchanges'],[[[comparison.start_date,comparison.end_date].filter(Boolean).join(' → ')||'Not recorded',(comparison.exchanges||[]).join(', ')||'Not recorded']]);
@@ -644,7 +683,7 @@
       if(row.baseline)goalTable(reportBody,row.baseline.assessment.goals||[]);
       if(!initial)reportBody.appendChild(element('p','No initial saved-result evaluation was recorded.'));
       else if(reportTab==='analysis'){reportBody.appendChild(element('p',initial.reason||'Evaluation pending.','loop-analysis'));if(initial.knowledge)reportBody.appendChild(element('p',initial.knowledge,'loop-analysis'));}
-      else if(reportTab==='changes'){var initialCycle=cycles[0];if(initialCycle){renderDiff(row,initialCycle);}else reportBody.appendChild(element('p','No optimizer snapshot yet.'));}
+      else if(reportTab==='changes'){var initialCycle=cycles[0];if(initialCycle){renderDiff(row,initialCycle,comparison);}else reportBody.appendChild(element('p','No optimizer snapshot yet.'));}
       else if(reportTab==='backtests')reportBody.appendChild(element('p','Historical optimizer results require separate exact comparison backtests. Open a round to inspect those jobs.'));
       else {reportBody.appendChild(element('p','Status: '+initial.status));reportBody.appendChild(element('p',(initial.candidate_count||0)+' historical candidates · pending exact comparison'));reportTable(reportBody,['Saved result run'],(initial.sources||[]).map(function(source){return [source];}));if(reportTab==='goals')reportTable(reportBody,['Goal','Metrics','Target'],(row.rubric||[]).map(function(rule){return [rule.goal,rule.metrics.join(', '),numeric(rule.target)];}));}
     } else {
@@ -659,7 +698,7 @@
     if(reportView==='run'&&reportTab==='overview')renderAIRecovery(reportBody,row);
     document.getElementById('loop-report-problem').hidden=row.status!=='failed';
     if(row.status==='failed'&&['overview','analysis'].includes(reportTab)&&(reportView==='run'||reportView==='initial'&&row.phase==='bootstrap'||reportView==='cycle'&&reportRound===((row.failure||{}).round==null?row.round:row.failure.round)))terminationReport(reportBody,row);
-    reportSignature=JSON.stringify([reportView,reportRound,reportTab,diffOperation,diffBaseline,row],function(key,value){return ['updated_at','duration_seconds','last_observed_at'].includes(key)?undefined:value;});
+    reportSignature=JSON.stringify([reportView,reportRound,reportTab,diffOperation,diffBaseline,row],reportReplacer);
     reportBody.scrollTop=scroll;if(!reportOverlay.classList.contains('is-open')){reportOverlay.classList.add('is-open');reportOverlay.setAttribute('aria-hidden','false');reportWindow.fit();document.getElementById('loop-report-close').focus();}else if(focus){var focused=document.getElementById(focus);if(focused&&reportDialog.contains(focused))focused.focus({preventScroll:true});}
   }
   function executionName(value){return {cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai',validation:'Local CPU'}[value]||'Unknown';}
@@ -764,7 +803,112 @@
     line.addEventListener('pointerenter',function(){var table=line.closest('table'),range=table._loop_range;if(table.dataset.selecting==='1'&&range){table.dataset.dragged='1';var selection=getSelection(),lines=Array.from(table.querySelectorAll('tbody tr[data-selection]')),to=lines.indexOf(line);selection.clear();range.baseline.forEach(function(value){selection.add(value);});lines.slice(Math.min(range.from,to),Math.max(range.from,to)+1).forEach(function(row){if(range.remove)selection.delete(row.dataset.selection);else selection.add(row.dataset.selection);});persistWorkflow();paint();}});
     line.dataset.selection=key;
   }
-  function tableShell(parent, headings) { var wrap=element('div',undefined,'loop-table-scroll');var table=element('table',undefined,'tbl loop-table');var head=element('thead'),line=element('tr');headings.forEach(function(title){line.appendChild(element('th',title));});head.appendChild(line);table.appendChild(head);var body=element('tbody');table.appendChild(body);wrap.appendChild(table);parent.appendChild(wrap);return body; }
+  var configColumns = [
+    ['name','Name'],['config_name','Starting config'],['execution','Execution'],['updated_at','Updated']
+  ];
+  var runColumns = [
+    ['name','Name / round / job'],['status','Status'],['execution','Execution'],['duration','Duration'],
+    ['backtests','Backtests'],['metrics','Comparison metrics · Δ prior round'],['selection','AI selection'],
+    ['decision','Decision'],['created_at','Created'],['holdout','Holdout gain / DD'],['full_range','Full range gain / DD']
+  ];
+  var sortCollator = new Intl.Collator('en', {numeric:true, sensitivity:'base'});
+  function tableSort(panel) {
+    var columns=panel==='config'?configColumns:runColumns, fallback=panel==='config'?'updated_at':'created_at';
+    var saved=workflow[panel+'_sort'];
+    if(!saved||!columns.some(function(column){return column[0]===saved.key;})||!['asc','desc'].includes(saved.direction)) {
+      saved={key:fallback,direction:'desc'};workflow[panel+'_sort']=saved;
+    }
+    return saved;
+  }
+  function sortNumber(value) { return typeof value==='number'&&Number.isFinite(value)?value:null; }
+  function sortText(value) { return typeof value==='string'&&value.trim()?value:null; }
+  function compareSortValue(a,b,direction) {
+    // Missing values stay last in both directions, including inside composite keys.
+    if(a==null||b==null)return a==null?(b==null?0:1):-1;
+    if(Array.isArray(a)&&Array.isArray(b)) {
+      for(var index=0;index<Math.max(a.length,b.length);index++) {
+        var compared=compareSortValue(a[index],b[index],direction);if(compared)return compared;
+      }
+      return 0;
+    }
+    var result=typeof a===typeof b?(typeof a==='number'?a-b:sortCollator.compare(a,b)):(typeof a==='number'?-1:1);
+    return direction==='desc'?-result:result;
+  }
+  function sortedDisplay(items,sort,value) {
+    return items.map(function(item,index){return {item:item,index:index,value:value(item)};}).sort(function(a,b){
+      return compareSortValue(a.value,b.value,sort.direction)||a.index-b.index;
+    }).map(function(entry){return entry.item;});
+  }
+  function goalSortValue(goals,reference,complete) {
+    var values=(goals||[]).filter(function(goal){return goal.metric||(goal.metrics||[]).length||goal.target!=null;}).map(function(goal){
+      var metric=goal.metric||(goal.metrics||[])[0]||'',prior=(reference.goals||[]).find(function(other){return other.goal===goal.goal&&(other.metric||(other.metrics||[])[0]||'')===metric;});
+      return [String(goal.goal||'')+':'+metric,sortNumber(goal.value),complete&&prior&&sortNumber(prior.value)!=null&&sortNumber(goal.value)!=null?goal.value-prior.value:null];
+    });
+    values=sortedDisplay(values,{direction:'asc'},function(value){return value[0];});
+    return values.length?values:null;
+  }
+  function observerSortValue(run,round,kind,specificJob) {
+    var job=specificJob||selectedObserver(run,round,kind);
+    if(!job||!['complete','completed'].includes(job.status)||!job.simulation_complete||job.report_done===false)return null;
+    var values=[sortNumber((job.metrics||{}).gain),sortNumber((job.metrics||{}).drawdown)];
+    return values.some(function(value){return value!=null;})?values:null;
+  }
+  function jobCreated(job) { return sortNumber(job.created_at) ?? sortNumber(job.run_started_at) ?? sortNumber(job.started_at); }
+  function cycleCreated(run,cycle) {
+    var times=run.jobs.concat(run.observer_jobs||[]).filter(function(job){return job.round===cycle.round;}).map(jobCreated).filter(function(value){return value!=null;});
+    return [sortNumber(cycle.started_at) ?? (times.length?Math.min.apply(null,times):null),sortNumber(cycle.round)];
+  }
+  function runDuration(run,now) {
+    return run.deadline==null?null:(run.ended?Math.max.apply(null,run.jobs.map(function(job){return job.ended_at||run.created_at;})):(now==null?Date.now()/1000:now))-(run.started_at||run.created_at);
+  }
+  function runSortValue(run,cycles,cycle,job,name,key,now) {
+    var latest=cycles.filter(function(item){return item.ai_evaluated||item.score!=null;}).slice(-1)[0];
+    var summary=cycle||cycles.find(function(item){return run.best&&item.round===run.best.round;})||latest;
+    var round=cycle?cycle.round:latest?latest.round:-1, observer=job&&job.kind.startsWith('observer_');
+    if(key==='name')return sortText(name);
+    if(key==='status')return sortText(job?(job.display_status||job.status):cycle?cycle.status:run.status);
+    if(key==='execution')return cycle&&!job?null:executionName(job?(observer?'cpu':job.execution||(job.kind==='optimizer'?run.settings.execution:'cpu')):run.settings.execution);
+    if(key==='duration')return sortNumber(job?(job.ended_at&&(observer?job.run_started_at:job.created_at)?job.ended_at-(observer?job.run_started_at:job.created_at):null):cycle?cycle.duration_seconds:runDuration(run,now));
+    if(key==='created_at')return job?jobCreated(job):cycle?cycleCreated(run,cycle):sortNumber(run.created_at);
+    if(key==='holdout'||key==='full_range')return job?(observer&&job.kind===(key==='holdout'?'observer_holdout':'observer_full_range')?observerSortValue(run,round,job.kind,job):null):observerSortValue(run,round,key==='holdout'?'observer_holdout':'observer_full_range');
+    if(job) {
+      var observation=cycle&&(cycle.observations||[]).find(function(item){return item.operation===job.operation;});
+      return key==='metrics'&&observation&&observation.assessment?goalSortValue(observation.assessment.goals,comparisonReference(run,cycles,cycle),observation.assessment.comparable!==false&&observation.assessment.simulation_complete!==false):null;
+    }
+    if(key==='backtests') {
+      var checks=run.jobs.filter(function(item){return item.kind!=='optimizer';});
+      return cycle?[sortNumber(cycle.completed_backtests),sortNumber(cycle.backtests)]:[checks.filter(function(item){return ['complete','completed'].includes(item.status);}).length,checks.length];
+    }
+    if(key==='metrics')return summary?goalSortValue(summary.goals,comparisonReference(run,cycles,summary),completeComparison(summary)):null;
+    if(key==='selection')return cycle?(cycle.ai_evaluated?(cycle.winner_candidate_id||'No qualified winner'):sortNumber(cycle.score)):run.best?(run.best.candidate_id||'Selected'):null;
+    if(key==='decision')return cycle?(cycle.ai_evaluated?'View analysis':completeComparison(cycle)?sortNumber(cycle.score_delta):null):null;
+    return null;
+  }
+  function captureTableState(host) {
+    var scroll=host.querySelector('.loop-table-scroll'),active=document.activeElement,inside=active&&host.contains(active);
+    var row=inside&&active.closest('tr[data-key],tr[data-selection]');
+    return {left:scroll?scroll.scrollLeft:0,top:scroll?scroll.scrollTop:0,parentTop:host.parentNode.scrollTop,
+      sort:inside&&active.dataset.sort,key:row&&(row.dataset.key||row.dataset.selection),
+      control:row?Array.from(row.querySelectorAll('button,a,input,select,textarea')).indexOf(active):-1};
+  }
+  function restoreTableState(host,saved) {
+    var scroll=host.querySelector('.loop-table-scroll');if(scroll){scroll.scrollLeft=saved.left;scroll.scrollTop=saved.top;}
+    var target=saved.sort?Array.from(host.querySelectorAll('[data-sort]')).find(function(node){return node.dataset.sort===saved.sort;}):null;
+    if(saved.key){var row=Array.from(host.querySelectorAll('tr[data-key],tr[data-selection]')).find(function(node){return (node.dataset.key||node.dataset.selection)===saved.key;});if(row)target=saved.control<0?row:row.querySelectorAll('button,a,input,select,textarea')[saved.control];}
+    if(target)target.focus({preventScroll:true});host.parentNode.scrollTop=saved.parentTop;
+  }
+  function tableShell(parent, columns, panel) {
+    var sort=tableSort(panel),wrap=element('div',undefined,'loop-table-scroll'),table=element('table',undefined,'tbl loop-table');
+    var head=element('thead'),line=element('tr');
+    columns.forEach(function(column){
+      var active=sort.key===column[0],cell=element('th');cell.setAttribute('scope','col');cell.setAttribute('aria-sort',active?(sort.direction==='asc'?'ascending':'descending'):'none');
+      var control=button(cell,column[1]+(active?(sort.direction==='asc'?' ↑':' ↓'):''),function(){
+        workflow[panel+'_sort']={key:column[0],direction:active?(sort.direction==='asc'?'desc':'asc'):(['created_at','updated_at','duration'].includes(column[0])?'desc':'asc')};
+        persistWorkflow();renderWorkflow();
+      });control.className='loop-sort';control.dataset.sort=column[0];line.appendChild(cell);
+    });
+    head.appendChild(line);table.appendChild(head);var body=element('tbody');table.appendChild(body);wrap.appendChild(table);parent.appendChild(wrap);return body;
+  }
   function disclosure(cell,key,callback) {var toggle=button(cell,expanded.has(key)?'▾':'▸',function(){if(expanded.has(key))expanded.delete(key);else expanded.add(key);persistWorkflow();callback();});toggle.className='act-btn loop-disclosure';toggle.setAttribute('aria-expanded',String(expanded.has(key)));toggle.setAttribute('aria-label',(expanded.has(key)?'Collapse ':'Expand ')+(cell.firstChild.textContent||'group'));}
   function renderWorkflow() {
     if(!root)return;
@@ -886,13 +1030,14 @@
     document.getElementById('panel-loops-knowledge').scrollTop=scroll;
   }
   function renderConfigurations() {
-    var host=byId('config-list');var sig=JSON.stringify([definitions,workflow.config_filter]);if(host.querySelector('table[data-selecting]'))return;if(host.dataset.signature===sig){host.querySelectorAll('tr[data-selection]').forEach(function(line){line.classList.toggle('selected',selectedDefinitions.has(line.dataset.selection));});return;}host.dataset.signature=sig;
-    host.replaceChildren();var body=tableShell(host,['Name','Starting config','Execution','Updated']);
-    var query=(workflow.config_filter || '').toLowerCase();definitions.filter(function(row){return !query || (row.name+' '+row.settings.config_name).toLowerCase().includes(query);}).forEach(function(row){
+    var host=byId('config-list');var sort=tableSort('config'),sig=JSON.stringify([definitions,workflow.config_filter,sort]);if(host.querySelector('table[data-selecting]'))return;if(host.dataset.signature===sig){host.querySelectorAll('tr[data-selection]').forEach(function(line){line.classList.toggle('selected',selectedDefinitions.has(line.dataset.selection));});return;}host.dataset.signature=sig;
+    var saved=captureTableState(host);host.replaceChildren();var body=tableShell(host,configColumns,'config');
+    var query=(workflow.config_filter || '').toLowerCase();sortedDisplay(definitions.filter(function(row){return !query || (row.name+' '+row.settings.config_name).toLowerCase().includes(query);}),sort,function(row){return sort.key==='updated_at'?sortNumber(row.updated_at):sortText(sort.key==='name'?row.name:sort.key==='execution'?executionName(row.settings.execution):row.settings.config_name);}).forEach(function(row){
       var line=element('tr');[row.name,row.settings.config_name,{cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai'}[row.settings.execution],dateText(row.updated_at)].forEach(function(value){line.appendChild(element('td',value));});body.appendChild(line);
       tableSelection(line,row.name,function(){return selectedDefinitions;},renderWorkflow);line.addEventListener('dblclick',function(){openDefinition(row,false).catch(error);});line.addEventListener('keydown',function(event){if(event.key==='Enter')openDefinition(row,false).catch(error);});
     });
     if(!body.children.length){var line=element('tr'),cell=element('td','No loop configurations.');cell.colSpan=4;line.appendChild(cell);body.appendChild(line);}
+    restoreTableState(host,saved);
   }
   function overviewActivity(cell,run) {
     if(run.ended)return;
@@ -915,16 +1060,17 @@
     });
   }
   function renderRunTree(panel, ended) {
-    var host=document.getElementById(panel+'-table');var query=(workflow[panel+'_filter'] || '').toLowerCase(),status=workflow[panel+'_status'] || '';
+    var now=Date.now()/1000,host=document.getElementById(panel+'-table');var query=(workflow[panel+'_filter'] || '').toLowerCase(),status=workflow[panel+'_status'] || '';
     var visible=rows.filter(function(row){return !!row.ended===ended && (!query || ((row.name||row.settings.config_name)+' '+row.id).toLowerCase().includes(query)) && (!status || row.status===status);});
-    var sig=JSON.stringify([visible,Array.from(expanded)],function(key,value){return ['updated_at','duration_seconds'].includes(key)?undefined:value;});
+    var sort=tableSort(panel),sortValues=visible.map(function(run){var cycles=cycleRows(run);return [runSortValue(run,cycles,null,null,run.name||run.settings.config_name,sort.key,now),cycles.map(function(cycle){return runSortValue(run,cycles,cycle,null,'Loop '+(cycle.round+1),sort.key,now);})];});
+    var sig=JSON.stringify([sort,sortValues,visible,Array.from(expanded)],function(key,value){return ['updated_at','duration_seconds'].includes(key)?undefined:value;});
     if(host.querySelector('table[data-selecting]'))return;
-    if(host.dataset.signature===sig){host.querySelectorAll('tr[data-key]').forEach(function(line){line.classList.toggle('selected',selectedRuns.has(line.dataset.selection));line.classList.toggle('is-selected',line.dataset.key===workflow.focus && !line.dataset.selection);});host.querySelectorAll('[data-clock]').forEach(function(clock){var pair=clock.dataset.clock.split(':'),row=rows.find(function(row){return row.id===pair[0];}),cycle=row && cycleRows(row).find(function(cycle){return cycle.round===Number(pair[1]);});if(cycle)clock.textContent=duration(cycle.duration_seconds);});return;}host.dataset.signature=sig;var oldScroll=host.querySelector('.loop-table-scroll'),scrollLeft=oldScroll?oldScroll.scrollLeft:0;var focused=document.activeElement,focusedRow=focused&&focused.closest('tr[data-key]'),focusKey=focusedRow&&host.contains(focusedRow)?focusedRow.dataset.key:'';host.replaceChildren();
-    var body=tableShell(host,['Name / round / job','Status','Execution','Duration','Backtests','Comparison metrics · Δ prior round','AI selection','Decision','Created','Holdout gain / DD','Full range gain / DD']);
+    if(host.dataset.signature===sig){host.querySelectorAll('tr[data-key]').forEach(function(line){line.classList.toggle('selected',selectedRuns.has(line.dataset.selection));line.classList.toggle('is-selected',line.dataset.key===workflow.focus && !line.dataset.selection);});host.querySelectorAll('[data-clock]').forEach(function(clock){var pair=clock.dataset.clock.split(':'),row=rows.find(function(row){return row.id===pair[0];}),cycle=row && cycleRows(row).find(function(cycle){return cycle.round===Number(pair[1]);});if(cycle)clock.textContent=duration(cycle.duration_seconds);});return;}host.dataset.signature=sig;var saved=captureTableState(host);host.replaceChildren();
+    var body=tableShell(host,runColumns,panel);
     function line(values, depth, key, report) {values=values.slice();values.splice(5,0,'');var row=element('tr');values.forEach(function(value,index){var cell=element('td',String(value==null?'—':value));if(index===0)cell.style.paddingLeft='calc(var(--sp-md) + '+depth+' * 20px)';row.appendChild(cell);});while(row.cells.length<11)row.appendChild(element('td',''));body.appendChild(row);row.dataset.key=key;row.classList.toggle('is-selected',key===workflow.focus);row.tabIndex=0;if(report){row.addEventListener('dblclick',report);row.addEventListener('keydown',function(event){if(event.key==='Enter'){event.preventDefault();report();}});var open=button(row.cells[0],'Open',report);open.className='act-btn loop-open';}return row;}
-    visible.forEach(function(run){
+    sortedDisplay(visible,sort,function(run){return runSortValue(run,cycleRows(run),null,null,run.name||run.settings.config_name,sort.key,now);}).forEach(function(run){
       var cycles=cycleRows(run), latest=cycles.filter(function(cycle){return cycle.ai_evaluated||cycle.score!=null;}).pop(),checks=run.jobs.filter(function(job){return job.kind!=='optimizer';});
-      var parent=line([(run.name||run.settings.config_name)+' · '+run.id.slice(0,8),run.status,{cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai'}[run.settings.execution],run.deadline==null?'—':duration((run.ended?Math.max.apply(null,run.jobs.map(function(job){return job.ended_at||run.created_at;})):Date.now()/1000)-(run.started_at||run.created_at)),checks.filter(function(job){return ['completed','complete'].includes(job.status);}).length+' / '+checks.length,run.best?(run.best.candidate_id||'Selected'):'—','—',dateText(run.created_at)],0,run.id,function(){select(run.id);openReport('run',0,'overview');});
+      var parent=line([(run.name||run.settings.config_name)+' · '+run.id.slice(0,8),run.status,{cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai'}[run.settings.execution],duration(runDuration(run,now)),checks.filter(function(job){return ['completed','complete'].includes(job.status);}).length+' / '+checks.length,run.best?(run.best.candidate_id||'Selected'):'—','—',dateText(run.created_at)],0,run.id,function(){select(run.id);openReport('run',0,'overview');});
       overviewActivity(parent.cells[1],run);
       var bestCycle=cycles.find(function(cycle){return run.best&&cycle.round===run.best.round;})||latest;
       overviewObserver(parent.cells[9],run,latest?latest.round:-1,'observer_holdout');overviewObserver(parent.cells[10],run,latest?latest.round:-1,'observer_full_range');
@@ -932,21 +1078,22 @@
       tableSelection(parent,run.id,function(){return selectedRuns;},function(){selected=run.id;workflow.focus=run.id;persistWorkflow();var url=new URL(location.href);url.searchParams.set('loop_id',selected);history.replaceState(null,'',url);renderWorkflow();});disclosure(parent.cells[0],run.id,renderWorkflow);
       if(run.ended&&run.best)continueButton(parent.cells[0],run,null);
       var latestRound=Math.max.apply(null,run.jobs.filter(function(job){return job.kind==='optimizer';}).map(function(job){return job.round;}));overviewProxy(parent.cells[1],run.jobs.filter(function(job){return job.kind==='optimizer'&&job.round===latestRound;}));nativeLogButton(parent.cells[0],run,run.jobs.filter(function(job){return job.kind==='optimizer'&&job.round===latestRound;}));
-      function observerLines(number,depth){(run.observer_jobs||[]).filter(function(job){return job.round===number;}).forEach(function(job){var native=line([(number<0?'Start · ':'')+observerName(job)+' · user evaluation',job.display_status||job.status,'Local CPU',duration(job.ended_at&&job.run_started_at?job.ended_at-job.run_started_at:null),'','','',dateText(job.created_at)],depth,run.id+':observer:'+job.operation+(job.source_round==null?'':':'+number),function(){select(run.id);openReport(number<0?'initial':'cycle',Math.max(0,number),'performance');});overviewObserver(native.cells[job.kind==='observer_holdout'?9:10],run,number,job.kind,job);nativeLogButton(native.cells[0],run,[job]);backtestButton(native.cells[0],run,job);});}
+      function observerLines(number,depth,jobLines){(run.observer_jobs||[]).filter(function(job){return job.round===number;}).forEach(function(job){var native=line([(number<0?'Start · ':'')+observerName(job)+' · user evaluation',job.display_status||job.status,'Local CPU',duration(job.ended_at&&job.run_started_at?job.ended_at-job.run_started_at:null),'','','',dateText(job.created_at)],depth,run.id+':observer:'+job.operation+(job.source_round==null?'':':'+number),function(){select(run.id);openReport(number<0?'initial':'cycle',Math.max(0,number),'performance');});overviewObserver(native.cells[job.kind==='observer_holdout'?9:10],run,number,job.kind,job);nativeLogButton(native.cells[0],run,[job]);backtestButton(native.cells[0],run,job);if(jobLines)jobLines.push({node:native,job:job,name:(number<0?'Start · ':'')+observerName(job)+' · user evaluation'});});}
       if(!expanded.has(run.id))return;
       line(['Initial evaluation',run.bootstrap?run.bootstrap.status:'Not recorded','','','','','',''],1,run.id+':initial',function(){select(run.id);openReport('initial',0,'overview');});
-      observerLines(-1,1);
+      var initialJobs=[];observerLines(-1,1,initialJobs);sortedDisplay(initialJobs,sort,function(entry){return runSortValue(run,cycles,null,entry.job,entry.name,sort.key,now);}).forEach(function(entry){body.appendChild(entry.node);});
       run.jobs.filter(function(job){return job.kind==='baseline';}).forEach(function(job){var baseline=line(['Start comparison',job.display_status||job.status,'Local CPU',duration(job.ended_at&&job.created_at?job.ended_at-job.created_at:null),'','','',''],1,run.id+':baseline',function(){select(run.id);openReport('initial',0,'backtests');});if(run.baseline&&run.baseline.assessment)overviewGoals(baseline.cells[5],run.baseline.assessment.goals||[],{goals:[],label:'Unchanged start'},false);nativeLogButton(baseline.cells[0],run,[job]);backtestButton(baseline.cells[0],run,job);});
-      cycles.forEach(function(cycle){var jobs=run.jobs.filter(function(job){return job.round===cycle.round;}),optimizers=jobs.filter(function(job){return job.kind==='optimizer';}),validations=jobs.filter(function(job){return job.kind!=='optimizer';}),key=run.id+':'+cycle.round;
+      sortedDisplay(cycles,sort,function(cycle){return runSortValue(run,cycles,cycle,null,'Loop '+(cycle.round+1),sort.key,now);}).forEach(function(cycle){var jobLines=[],jobs=run.jobs.filter(function(job){return job.round===cycle.round;}),optimizers=jobs.filter(function(job){return job.kind==='optimizer';}),validations=jobs.filter(function(job){return job.kind!=='optimizer';}),key=run.id+':'+cycle.round;
         var round=line(['Loop '+(cycle.round+1),cycle.status,'',duration(cycle.duration_seconds),cycle.completed_backtests+' / '+cycle.backtests,cycle.ai_evaluated?(cycle.winner_candidate_id||'No qualified winner'):numeric(cycle.score),cycle.ai_evaluated?'View analysis':numeric(cycle.score_delta),''],1,key,function(){select(run.id);openReport('cycle',cycle.round,'overview');});overviewObserver(round.cells[9],run,cycle.round,'observer_holdout');overviewObserver(round.cells[10],run,cycle.round,'observer_full_range');var reference=comparisonReference(run,cycles,cycle);overviewGoals(round.cells[5],cycle.goals||[],reference,completeComparison(cycle));if(cycle.ai_evaluated){round.cells[7].title=cycle.reason||'';}else{round.cells[7].replaceChildren();overviewChange(round.cells[7],completeComparison(cycle)?cycle.score_delta:null,'max','score',reference.label);}round.cells[3].dataset.clock=key;disclosure(round.cells[0],key,renderWorkflow);
         if(cycle.round===run.round)overviewActivity(round.cells[1],run);
         overviewProxy(round.cells[1],optimizers);
         nativeLogButton(round.cells[0],run,optimizers);
         if(run.ended&&canContinueRound(cycle))continueButton(round.cells[0],run,cycle.round);
         if(!expanded.has(key))return;
-        optimizers.forEach(function(job,index){var native=line([optimizers.length>1?'Optimizer Variant '+(index+1):'Optimizer',job.display_status||job.status,executionName(job.execution||run.settings.execution),duration(job.ended_at&&job.created_at?job.ended_at-job.created_at:null),'', '', '',dateText(job.created_at)],2,key+':'+job.operation,function(){select(run.id);openReport('cycle',cycle.round,'changes');diffOperation=job.operation;reportSignature='';updateReport();});overviewProxy(native.cells[1],[job]);nativeLogButton(native.cells[0],run,[job]);});
-        observerLines(cycle.round,2);
-        validations.forEach(function(job,index){var native=line([(job.kind==='holdout'?'Final holdout':'Comparison backtest')+' '+(index+1),job.display_status||job.status,executionName(job.execution||'cpu'),duration(job.ended_at&&job.created_at?job.ended_at-job.created_at:null),'','','',dateText(job.created_at)],2,key+':'+job.operation,function(){select(run.id);openReport('cycle',cycle.round,'backtests');});var observation=(cycle.observations||[]).find(function(item){return item.operation===job.operation;});if(observation&&observation.assessment)overviewGoals(native.cells[5],observation.assessment.goals||[],reference,observation.assessment.comparable!==false&&observation.assessment.simulation_complete!==false);nativeLogButton(native.cells[0],run,[job]);backtestButton(native.cells[0],run,job);});
+        optimizers.forEach(function(job,index){var native=line([optimizers.length>1?'Optimizer Variant '+(index+1):'Optimizer',job.display_status||job.status,executionName(job.execution||run.settings.execution),duration(job.ended_at&&job.created_at?job.ended_at-job.created_at:null),'', '', '',dateText(job.created_at)],2,key+':'+job.operation,function(){select(run.id);openReport('cycle',cycle.round,'changes',job.operation);});overviewProxy(native.cells[1],[job]);nativeLogButton(native.cells[0],run,[job]);jobLines.push({node:native,job:job,name:optimizers.length>1?'Optimizer Variant '+(index+1):'Optimizer'});});
+        observerLines(cycle.round,2,jobLines);
+        validations.forEach(function(job,index){var native=line([(job.kind==='holdout'?'Final holdout':'Comparison backtest')+' '+(index+1),job.display_status||job.status,executionName(job.execution||'cpu'),duration(job.ended_at&&job.created_at?job.ended_at-job.created_at:null),'','','',dateText(job.created_at)],2,key+':'+job.operation,function(){select(run.id);openReport('cycle',cycle.round,'backtests');});var observation=(cycle.observations||[]).find(function(item){return item.operation===job.operation;});if(observation&&observation.assessment)overviewGoals(native.cells[5],observation.assessment.goals||[],reference,observation.assessment.comparable!==false&&observation.assessment.simulation_complete!==false);nativeLogButton(native.cells[0],run,[job]);backtestButton(native.cells[0],run,job);jobLines.push({node:native,job:job,name:(job.kind==='holdout'?'Final holdout':'Comparison backtest')+' '+(index+1)});});
+        sortedDisplay(jobLines,sort,function(entry){return runSortValue(run,cycles,cycle,entry.job,entry.name,sort.key,now);}).forEach(function(entry){body.appendChild(entry.node);});
       });
     });
     Array.from(body.rows).forEach(function(row){
@@ -960,14 +1107,14 @@
       controls.filter(function(control){return control.textContent==='Continue';}).forEach(function(control){actions.appendChild(control);});
       cell.appendChild(actions);
     });
-    host.querySelector('.loop-table-scroll').scrollLeft=scrollLeft;if(focusKey){var replacement=Array.from(body.children).find(function(row){return row.dataset.key===focusKey;});if(replacement)replacement.focus({preventScroll:true});}
+    restoreTableState(host,saved);
     if(!body.children.length){var empty=element('tr'),cell=element('td',ended?'No finished loops.':'No queued or active loops.');cell.colSpan=11;empty.appendChild(cell);body.appendChild(empty);}
   }
   function syncContext() {
     ['loops-config','loops-queue','loops-results','loops-knowledge'].forEach(function(panel){var context=document.getElementById('ctx-'+panel);if(context){context.hidden=state.panel!==panel;context.style.display=context.hidden?'none':'';}});
     byId('nav-count-knowledge').hidden=state.panel!=='loops-knowledge';
-    selectedDefinitions.forEach(function(name){if(!definitions.some(function(row){return row.name===name;}))selectedDefinitions.delete(name);});
-    var count=selectedDefinitions.size,single=definitions.find(function(row){return selectedDefinitions.has(row.name);});
+    if(definitionsLoaded)selectedDefinitions.forEach(function(name){if(!definitions.some(function(row){return row.name===name;}))selectedDefinitions.delete(name);});
+    var count=definitionsLoaded?definitions.filter(function(row){return selectedDefinitions.has(row.name);}).length:0;
     byId('edit-config').disabled=editorVisible||count!==1;byId('duplicate-config').disabled=editorVisible||count!==1;byId('queue-config').disabled=editorVisible||queueing||!count;byId('delete-config').disabled=editorVisible||!count;
     var currentRuns=rows.filter(function(row){return selectedRuns.has(row.id) && (state.panel==='loops-results'?row.ended:!row.ended);});var run=currentRuns[0];['queue','results'].forEach(function(panel){byId(panel+'-edit').disabled=currentRuns.length!==1||!run;});
     ['queue','results'].forEach(function(panel){['observer_holdout','observer_full_range'].forEach(function(kind){byId(panel+'-compare-'+kind).disabled=currentRuns.length!==1||!hasEvaluationResults(run,kind);});});
@@ -1063,7 +1210,7 @@
     try {
       var values=await Promise.all([request(''),request('/configs'),loadKnowledge?request('/knowledge?limit=200').then(function(data){return {data:data};},function(exc){return {error:exc.message};}):null]);
       if(stopped||token!==generation||panel!==state.panel||navigation!==state.navigationSeq)return;
-      rows=values[0].loops;definitions=values[1].configs;pollError='';pollBlocked='';
+      rows=values[0].loops;definitions=values[1].configs;definitionsLoaded=true;pollError='';pollBlocked='';
       if(loadKnowledge){knowledgeError=values[2].error||'';if(values[2].data){knowledgeEntries=values[2].data.entries||[];knowledgeLoaded=true;}}
       if(selected&&!rows.some(function(row){return row.id===selected;})){forgetRun(selected);uiErrorPanel=panel;uiError='The selected loop is no longer available.';}
       selectedRuns.forEach(function(id){if(!rows.some(function(row){return row.id===id;}))forgetRun(id);});
@@ -1216,10 +1363,10 @@
     byId('hours').addEventListener('input', function () { hoursEdited = true; syncRunLimit(); });
     runMode.addEventListener('change', syncRunLimit); syncRunLimit();
     byId('execution').addEventListener('change', function () { executionSummary(); if (this.value === 'vast' && Number(byId('hours').value) > Number(byId('hours').max)) byId('hours').value = byId('hours').max; syncRunLimit(); syncStart(); });
-    selected = new URL(location.href).searchParams.get('loop_id') || workflow.selected || '';selectedDefinitions=new Set(workflow.config_selection||[]);selectedRuns=new Set(workflow.run_selection|| (selected?[selected]:[]));expanded=new Set(workflow.expanded||[]);
+    selected = new URL(location.href).searchParams.get('loop_id') || workflow.selected || '';selectedDefinitions=new Set(workflow.config_selection||[]);selectedRuns=new Set(workflow.run_selection|| (selected?[selected]:[]));expanded=new Set(workflow.expanded||[]);syncContext();
     var reportUrl=new URL(location.href);reportView=['cycle','initial','run'].includes(reportUrl.searchParams.get('loop_view'))?reportUrl.searchParams.get('loop_view'):'';reportRound=/^\d{1,4}$/.test(reportUrl.searchParams.get('loop_cycle')||'')?Number(reportUrl.searchParams.get('loop_cycle')):0;reportTab=Object.keys(tabNames).includes(reportUrl.searchParams.get('loop_tab'))?reportUrl.searchParams.get('loop_tab'):'overview';diffOperation=/^[0-9a-f]{32}$/.test(reportUrl.searchParams.get('loop_variant')||'')?reportUrl.searchParams.get('loop_variant'):'';diffBaseline=/^(initial|[0-9a-f]{32})$/.test(reportUrl.searchParams.get('loop_compare')||'')?reportUrl.searchParams.get('loop_compare'):'';
     document.addEventListener('visibilitychange', function () { if (!document.hidden) { if (isLoopPanel()) loadOptions(true).catch(error); watch(); } }); window.addEventListener('hashchange', function () { if (isLoopPanel()) { loadOptions(true).catch(error); watch(); } });
-    window.addEventListener('pagehide', function (event) { saveLoopScroll();cancelLoopReads();if(reportWindow){if(event.persisted)reportWindow.cancel();else reportWindow.dispose();} stopped = true; if(rentalBillingRequest)rentalBillingRequest.abort();rentalBillingGeneration++;rentalBillingChecked=0;if(diffRequest)diffRequest.abort(); diffGeneration++; clearTimeout(timer); watchGeneration++; generation++; optionsGeneration++; });
+    window.addEventListener('pagehide', function (event) { saveLoopScroll();cancelLoopReads();if(reportWindow){if(event.persisted)reportWindow.cancel();else reportWindow.dispose();} stopped = true; if(rentalBillingRequest)rentalBillingRequest.abort();rentalBillingGeneration++;rentalBillingChecked=0;resetDiff();reportSignature=''; clearTimeout(timer); watchGeneration++; generation++; optionsGeneration++; });
     window.addEventListener('pageshow', function (event) { if (event.persisted) { stopped = false;loopRenderStarted=performance.now();pollAgain=!!pollFlight;optionsReady=loadOptions(true);optionsReady.catch(error);watch(); } });
     optionsReady = loadOptions(true);
     optionsReady.then(async function(){

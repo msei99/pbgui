@@ -578,7 +578,7 @@ const body=source.match(/  async function queueDefinitions\([\s\S]*?\n  \}/)[0];
 let releaseSelection,releaseQueue,requests=0,polls=0;
 const ai={ensureSelection(){return new Promise(resolve=>releaseSelection=resolve);}};
 const context=vm.createContext({queueing:false,selected:'previous',state:{navigationSeq:1},
- window:{PBGuiAI:ai},PBGuiAI:ai,syncContext(){},
+ window:{PBGuiAI:ai},PBGuiAI:ai,knownDefinitions:names=>names.length===1&&names[0]==='Named',syncContext(){},
  request(path,payload){requests++;assert.equal(path,'/configs/Named/queue');assert.equal(payload.authorization,true);return new Promise(resolve=>releaseQueue=resolve);},
  persistWorkflow(){throw Error('stale response persisted selection');},
  selectPanel(){throw Error('stale response redirected navigation');},
@@ -757,3 +757,74 @@ def test_user_evaluation_log_target_is_native_and_owner_scoped(workflow,monkeypa
     assert client.get(endpoint).status_code==422
     controller.store.update(OWNER,loop_id,lambda row:row['observer_jobs'][0]['backend'].pop('id'))
     assert client.get(endpoint).status_code==404
+
+
+def test_changes_comparison_reuses_requests_and_rejects_stale_responses():
+    """Keep current diff DOM across polls, retry failures and invalidate only relevant snapshots."""
+    import subprocess
+    from pathlib import Path
+    script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
+class Node {
+ constructor(tag,text){this.tag=tag;this.textContent=text;this.children=[];this.dataset={};this.value='';this.scrollTop=123;this.classList={contains:()=>true,toggle(){}};}
+ appendChild(node){node.parent=this;this.children.push(node);return node;}
+ replaceChildren(...nodes){this.children.forEach(node=>node.parent=null);this.children=[];nodes.forEach(node=>this.appendChild(node));}
+ remove(){if(this.parent)this.parent.children=this.parent.children.filter(node=>node!==this);this.parent=null;}
+ prepend(node){node.remove();this.children.unshift(node);node.parent=this;}
+ get firstElementChild(){return this.children[0];} get lastElementChild(){return this.children.at(-1);}
+ addEventListener(name,fn){this[name]=fn;} setAttribute(){} querySelector(){return null;} querySelectorAll(){return [];}
+ focus(){document.activeElement=this;}
+}
+const body=new Node('body'),problem=new Node('button'),overlay=new Node('overlay'),pending=[];
+const find=(node,id)=>node.id===id?node:node.children.map(child=>find(child,id)).find(Boolean);
+const document={activeElement:null,getElementById:id=>id==='loop-report-problem'?problem:find(body,id)};
+const run={id:'a',status:'running',jobs:[{kind:'optimizer',round:0,operation:'first',name:'First',snapshot_digest:'one'},
+ {kind:'optimizer',round:1,operation:'second',name:'Second',snapshot_digest:'two'}],cycles:[{round:1,status:'validated'}],initial_snapshot_digest:'start'};
+const context=vm.createContext({AbortController,JSON,document,base:'/loops',rows:[run],selected:'a',reportView:'cycle',reportRound:1,reportTab:'changes',
+ reportSuspended:false,reportSignature:'',diffState:null,diffRequest:null,diffGeneration:0,diffOperation:'',diffBaseline:'',
+ reportBody:body,reportDialog:{contains:()=>true},reportOverlay:overlay,reportTitle:new Node('h3'),reportTabs:new Node('tabs'),
+ element:(tag,text)=>new Node(tag,text),cycleRows:row=>row.cycles,canContinueRound:()=>false,reportNavigation(){},
+ reportTable(parent,headers,values){const table=new Node('table',JSON.stringify(values));parent.appendChild(table);},
+ fetch(url,options){return new Promise(resolve=>pending.push({url,options,resolve}));}});
+vm.runInContext(source.slice(source.indexOf('  function resetDiff('),source.indexOf('  function backtestButton(')),context);
+const flush=()=>new Promise(resolve=>setImmediate(resolve));
+const reply=async(index,label='result',ok=true)=>{pending[index].resolve({ok,json:async()=>ok?{fields:[{path:label,before:1,after:2}]}:{detail:'fixture failure'}});await flush();};
+const update=()=>context.updateReport();
+(async()=>{try{
+ update();assert.equal(pending.length,1);assert.equal(context.diffBaseline,'first');
+ const held=context.diffState,select=document.getElementById('loop-diff-operation');select.focus();
+ assert.ok(pending[0].url.includes('baseline=first'));
+ update();context.reportSignature='';run.ai_calls=2;run.cycles[0].status='running';update();
+ assert.equal(pending.length,1);assert.equal(pending[0].options.signal.aborted,false);
+ await reply(0);const rendered=held.output.firstElementChild;
+ for(let i=0;i<3;i++){run.ai_calls++;context.reportSignature='';update();}
+ assert.equal(pending.length,1);assert.equal(held.output.firstElementChild,rendered);
+ assert.equal(document.activeElement,select);assert.equal(body.scrollTop,123);assert.equal(context.reportTitle.textContent,'Round 2 · running');
+ run.jobs.push({kind:'optimizer',round:1,operation:'third',name:'Third',snapshot_digest:'three'});update();
+ assert.equal(pending.length,1);assert.equal(document.getElementById('loop-diff-operation'),select);assert.equal(select.children.length,2);
+ run.jobs[2].snapshot_digest='irrelevant';update();assert.equal(pending.length,1);
+ run.jobs[1].snapshot_digest='changed';update();assert.equal(pending.length,2);
+ // Both selector changes supersede in-flight requests, even when abort is ignored.
+ select.value='third';select.change.call(select);assert.equal(pending.length,3);assert.equal(pending[1].options.signal.aborted,true);
+ const baseline=document.getElementById('loop-diff-baseline');baseline.value='initial';baseline.change.call(baseline);assert.equal(pending.length,4);
+ await reply(3,'current');const current=held.output.firstElementChild;
+ await reply(1,'stale');await reply(2,'stale');assert.equal(held.output.firstElementChild,current);
+ run.initial_snapshot_digest='new-start';update();assert.equal(pending.length,5);
+ await reply(4,'',false);assert.equal(held.status,'failed');update();assert.equal(pending.length,6);
+ await reply(5,'retried');update();assert.equal(pending.length,6);
+ delete run.jobs[2].snapshot_digest;update();assert.equal(pending.length,7);await reply(6);
+ run.ai_calls++;update();assert.equal(pending.length,8);await reply(7);
+ // A real tab switch resets the held comparison and blocks late completion.
+ run.ai_calls++;update();const old=held.output.firstElementChild;
+ context.reportTab='goals';context.reportView='run';context.resetDiff();context.reportSignature='';
+ context.resultSummary=()=>{};context.goalTable=()=>{};run.rubric=[];update();
+ await reply(8,'after-tab');assert.equal(held.output.firstElementChild,old);
+ context.reportView='cycle';context.reportTab='changes';update();assert.equal(pending.length,10);
+ const closed=context.diffState;context.resetDiff();context.reportView='';await reply(9,'after-close');
+ assert.equal(closed.status,'pending');assert.equal(context.diffState,null);
+}finally{context.resetDiff();}})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr

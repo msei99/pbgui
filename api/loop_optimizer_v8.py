@@ -391,6 +391,7 @@ def projection(row):
             'ai_usd_reserved', 'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover',
             'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview', 'ai_preview', 'control_generation')} | {
         'gpu_replacement': _replacement_projection(row),
+        'initial_snapshot_digest': digest({'config': row['initial_config'], 'overrides': row['initial_overrides']}),
         'name': row['settings'].get('loop_name') or row['settings']['config_name'],
         'has_interrupted_ai': bool(row.get('interrupted_ai')),
         'definition_name': row['settings'].get('definition_name'),
@@ -407,6 +408,7 @@ def projection(row):
         'best': {'assessment': best['assessment'], 'metrics': best['metrics'],
                  'candidate_id': best['candidate']['id'], 'round': next((job['round'] for job in row['jobs'] if job['operation'] == best.get('operation')), None)} if best else None,
         'jobs': [{key: job.get(key) for key in ('operation', 'name', 'kind', 'round', 'status', 'started', 'reason', 'error', 'runner', 'executed_digest', 'run_started_at', 'limit_reached', 'results_consumed', 'result_count', 'result_error', 'created_at', 'ended_at', 'optimizer_archive')} | {
+                    'snapshot_digest': digest({'config': job['config'], 'overrides': job['overrides']}) if job['kind'] == 'optimizer' else None,
                     'changes': _job_changes(row['initial_config'], job['config'], row['initial_overrides'], job['overrides']) if job['kind'] == 'optimizer' else [],
                     'native_iters': job['config'].get('optimize', {}).get('iters') if job['kind'] == 'optimizer' else None,
                     'candidate_optimizer': (job.get('candidate') or {}).get('optimizer_job'),

@@ -6,6 +6,8 @@ import re
 import subprocess
 import textwrap
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -78,8 +80,81 @@ def _exact_page_function(page: str, name: str) -> str:
 def _run_node(script: str) -> None:
     """Run one isolated Node contract and surface assertion output."""
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False, timeout=30)
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+@pytest.mark.parametrize("version", ["v7", "v8"])
+@pytest.mark.parametrize("prefix", ["", "/team/pbgui", "/team%20space/pbgui"])
+@pytest.mark.parametrize("destination", ["backtest", "strategy"])
+def test_editor_draft_transitions_preserve_mount_and_payload(version, prefix, destination):
+    """Actual editor functions and adapter preserve mounted drafts and cookie auth offline."""
+    page = (ROOT / "frontend/v7_edit.html").read_text(encoding="utf-8")
+    adapter = (ROOT / "frontend/js/run_editor_adapter.js").read_text(encoding="utf-8")
+    functions = "\n".join(_exact_page_function(page, name) for name in (
+        "goBacktest", "strategyExplorerApiBase", "goStrategyExplorer",
+    ))
+    script = f"""
+    const assert = require('node:assert/strict');
+    const window = {{location: {{origin: 'https://browser.example', href: 'unchanged'}},
+      PBGuiEditorShared: {{clearFixedValidationStatus() {{}}}}}};
+    {adapter}
+    const API_BASE = {json.dumps(prefix + '/api/' + version)};
+    const INSTANCE_NAME = 'fixture <>&%';
+    const runEditorAdapter = window.PBGuiRunEditorAdapter.create({json.dumps(version)});
+    const config = {{live: {{user: 'offline-user'}}, pbgui: {{note: '<>&%%SERIAL%%'}}}};
+    const overrides = {{files: {{'BTC.json': {{bot: {{long: {{value: 1}}}}}}}}}};
+    const draftId = 'fixture draft/<>&%';
+    const requests = [], errors = [];
+    let rejectDraft = false;
+    function ensureRawJsonValidForSave() {{return true;}}
+    function ensureStructuredJsonFieldsValidForSave() {{return true;}}
+    function validateExecutionSyncFieldsForSave() {{return true;}}
+    function collectConfig() {{return config;}}
+    function coinOvSnapshotAllFiles() {{return Promise.resolve(overrides);}}
+    function toast(message) {{errors.push(message);}}
+    async function fetch(url, options) {{
+      requests.push({{url, options}});
+      return {{ok: !rejectDraft, status: rejectDraft ? 500 : 200,
+        json: async () => ({{draft_id: draftId}})}};
+    }}
+    {functions}
+    const go = {('goBacktest' if destination == 'backtest' else 'goStrategyExplorer')};
+    (async () => {{
+      go();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(errors.length, 0);
+      assert.equal(requests.length, 1);
+      const request = requests[0];
+      const prefix = {json.dumps(prefix)};
+      const isV8 = {json.dumps(version == 'v8')};
+      const isBacktest = {json.dumps(destination == 'backtest')};
+      const target = isBacktest ? '/api/backtest-' + {json.dumps(version)}
+        : '/api/strategy-explorer' + (isV8 ? '-v8' : '');
+      const expectedDraft = isBacktest
+        ? (isV8 ? prefix + target + '/optimize-draft' : API_BASE + '/draft')
+        : prefix + target + '/draft';
+      assert.equal(request.url, expectedDraft);
+      assert.equal(request.options.method, 'POST');
+      assert.equal(request.options.credentials, 'same-origin');
+      assert.equal(request.options.headers['Content-Type'], 'application/json');
+      assert.deepEqual(JSON.parse(request.options.body), isV8
+        ? {{config, override_configs: overrides}} : {{config}});
+      const queryKey = isBacktest && isV8 ? 'opt_draft_id' : 'draft_id';
+      const expectedPage = prefix + target + '/main_page?' + queryKey + '=' + encodeURIComponent(draftId)
+        + (isBacktest ? '&draft_name=' + encodeURIComponent(INSTANCE_NAME) : '');
+      assert.equal(window.location.href, expectedPage);
+      // A failed isolated draft request must report the error and leave the editor open.
+      window.location.href = 'editor-with-unsaved-draft';
+      rejectDraft = true;
+      go();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(errors.length, 1);
+      assert.match(errors[0], /HTTP 500/);
+      assert.equal(window.location.href, 'editor-with-unsaved-draft');
+    }})().catch(error => {{console.error(error); process.exit(1);}});
+    """
+    _run_node(script)
 
 
 def _adapter_fields(source: str, name: str) -> dict[str, str]:

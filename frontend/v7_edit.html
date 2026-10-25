@@ -1802,7 +1802,7 @@ function goBacktest() {
     return res.json();
   }).then(function(data) {
     var queryKey = runEditorAdapter.isV8 ? 'opt_draft_id' : 'draft_id';
-    var url = (runEditorAdapter.isV8 ? request.page : window.location.origin + '/api/backtest-v7/main_page')
+    var url = (runEditorAdapter.isV8 ? request.page : API_BASE.replace(/\/api\/v7$/, '/api/backtest-v7') + '/main_page')
       + '?' + queryKey + '=' + encodeURIComponent(data.draft_id)
       + '&draft_name=' + encodeURIComponent(INSTANCE_NAME || config.live.user || 'draft');
     window.location.href = url;
@@ -1812,9 +1812,7 @@ function goBacktest() {
 }
 
 function strategyExplorerApiBase() {
-  var match = String(API_BASE || '').match(/^(https?:\/\/[^/]+)/);
-  var origin = match ? match[1] : window.location.origin;
-  return origin + (runEditorAdapter.isV8 ? '/api/strategy-explorer-v8' : '/api/strategy-explorer');
+  return API_BASE.replace(/\/api\/v[78]$/, runEditorAdapter.isV8 ? '/api/strategy-explorer-v8' : '/api/strategy-explorer');
 }
 
 function goStrategyExplorer() {

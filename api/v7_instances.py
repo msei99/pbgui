@@ -2476,24 +2476,18 @@ def get_main_page(
     html_path = Path(__file__).parent.parent / "frontend" / "v7_run.html"
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api/v7"
-    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
+    from api.page_templates import render_page_urls, script_json
 
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
-    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
-    html = html.replace('"%%RUN_VERSION%%"', json.dumps("v7"))
+    html = render_page_urls(request, html, "/api/v7")
+    html = html.replace('"%%RUN_VERSION%%"', script_json("v7"))
     html = html.replace("%%RUN_LABEL%%", "PBv7")
-    html = html.replace('"%%MASTER_NAME%%"', json.dumps(_get_master_hostname()))
+    html = html.replace('"%%MASTER_NAME%%"', script_json(_get_master_hostname()))
 
     from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
 
     nav_js = Path(__file__).parent.parent / "frontend" / "pbgui_nav.js"
@@ -2515,29 +2509,23 @@ def get_edit_page(
     html_path = Path(__file__).parent.parent / "frontend" / "v7_edit.html"
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api/v7"
-    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
+    from api.page_templates import render_page_urls, script_json
 
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
-    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+    html = render_page_urls(request, html, "/api/v7")
 
     is_new = "true" if new == "1" else "false"
-    html = html.replace('"%%INSTANCE%%"', json.dumps(name))
-    html = html.replace('"%%IS_NEW%%"', json.dumps(is_new))
-    html = html.replace('"%%DRAFT_ID%%"', json.dumps(draft_id))
-    html = html.replace('"%%RUN_VERSION%%"', json.dumps("v7"))
+    html = html.replace('"%%INSTANCE%%"', script_json(name))
+    html = html.replace('"%%IS_NEW%%"', script_json(is_new))
+    html = html.replace('"%%DRAFT_ID%%"', script_json(draft_id))
+    html = html.replace('"%%RUN_VERSION%%"', script_json("v7"))
     html = html.replace("%%RUN_LABEL%%", "PBv7")
-    html = html.replace('"%%MASTER_NAME%%"', json.dumps(_get_master_hostname()))
+    html = html.replace('"%%MASTER_NAME%%"', script_json(_get_master_hostname()))
 
     from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
 
     nav_js = Path(__file__).parent.parent / "frontend" / "pbgui_nav.js"

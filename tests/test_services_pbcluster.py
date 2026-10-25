@@ -669,8 +669,16 @@ def test_worker_restart_uses_single_restart_action() -> None:
     assert "setTimeout(function () { window.workerAction(workerId, 'start')" not in source
 
 
-def test_worker_action_route_dispatches_restart(monkeypatch) -> None:
-    """Worker restart stops and starts the selected worker on the backend."""
+@pytest.mark.parametrize(
+    ("action", "expected_actions"),
+    [
+        ("start", ["start"]),
+        ("stop", ["stop"]),
+        ("restart", ["stop", "start"]),
+    ],
+)
+def test_worker_action_route_dispatches_restart(monkeypatch, action: str, expected_actions: list[str]) -> None:
+    """Worker actions dispatch in order inside a running event loop using mocked workers."""
 
     calls: list[tuple[str, str]] = []
 
@@ -687,11 +695,11 @@ def test_worker_action_route_dispatches_restart(monkeypatch) -> None:
     monkeypatch.setattr(services, "_start_worker", fake_start)
     monkeypatch.setattr(services, "_find_worker", fake_find)
 
-    result = asyncio.run(services.worker_action("market-data-task", "restart"))
+    result = asyncio.run(services.worker_action("market-data-task", action))
 
     assert result["ok"] is True
     assert result["worker"]["id"] == "market-data-task"
-    assert calls == [("stop", "market-data-task"), ("start", "market-data-task")]
+    assert calls == [(expected_action, "market-data-task") for expected_action in expected_actions]
 
 
 def test_pb8_optimize_controller_is_visible_and_controllable(monkeypatch) -> None:

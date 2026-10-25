@@ -93,3 +93,7 @@
 .loop-panel .loop-metric-change.is-better {color:var(--green);}
 .loop-panel .loop-metric-change.is-worse {color:var(--red);}
 .loop-panel .loop-metric-change.is-neutral {color:var(--text-dim);}
+
+.loop-panel .loop-sort {display:inline-flex;align-items:center;gap:var(--sp-xs);padding:0;border:0;background:none;color:inherit;font:inherit;text-transform:inherit;white-space:nowrap;cursor:pointer;}
+.loop-panel th[aria-sort="ascending"] .loop-sort,.loop-panel th[aria-sort="descending"] .loop-sort {color:var(--accent);}
+.loop-panel .loop-sort:focus-visible {outline:2px solid var(--accent);outline-offset:3px;}

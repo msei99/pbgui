@@ -96,11 +96,13 @@ def test_websocket_origin_is_browser_derived_and_uses_mount_prefix():
 @pytest.fixture
 def versioned_page_client(tmp_path, monkeypatch):
     """Serve actual page handlers with isolated metadata and result roots."""
-    from api import optimize_v7, optimize_v8, pareto_explorer, v7_instances, v8_instances
+    import pbgui_purefunc
+    from api import dashboard, optimize_v7, optimize_v8, pareto_explorer, v7_instances, v8_instances, vps, vps_manager
     from api.auth import require_auth
 
     monkeypatch.setattr(v7_instances, "_get_master_hostname", lambda: "test-master")
     monkeypatch.setattr(v8_instances, "_master_hostname", lambda: "test-master")
+    monkeypatch.setattr(pbgui_purefunc, "PBGDIR", tmp_path)
     monkeypatch.setattr(optimize_v7, "get_optimize_limits_meta_payload", lambda: {})
     monkeypatch.setattr(optimize_v8, "get_pb8_optimize_metadata", lambda **_kwargs: {"limits": {}})
 
@@ -118,6 +120,7 @@ def versioned_page_client(tmp_path, monkeypatch):
         (optimize_v7, "/api/optimize-v7"), (optimize_v8, "/api/optimize-v8"),
         (v7_instances, "/api/v7"), (v8_instances, "/api/v8"),
         (pareto_explorer, "/api/pareto-explorer"),
+        (dashboard, "/api/dashboard"), (vps, ""), (vps_manager, "/api/vps-manager"),
     ):
         app.include_router(module.router, prefix=prefix)
     with TestClient(app) as client:
@@ -181,3 +184,108 @@ def test_pareto_initial_title_prioritizes_selected_result(
     })
     _assert_initial_page_title(response, f"PBGui - {result_version.upper()} Pareto Explorer")
     assert f'window.OPTIMIZE_VERSION = "{result_version}";' in response.text
+
+
+AFFECTED_PAGES = [
+    ("/api/dashboard/main_page", "/api", "dashboard_main.html"),
+    ("/api/dashboard/editor_page", "/api", "dashboard_editor.html"),
+    ("/api/dashboard/templates_page", "/api", "dashboard_templates.html"),
+    ("/api/v7/main_page", "/api/v7", "v7_run.html"),
+    ("/api/v7/edit_page", "/api/v7", "v7_edit.html"),
+    ("/api/v8/main_page", "/api/v8", "v7_run.html"),
+    ("/api/v8/edit_page", "/api/v8", "v7_edit.html"),
+    ("/api/pareto-explorer/main_page", "/api/pareto-explorer", "v7_pareto_explorer.html"),
+    ("/api/vps/main_page", "/api/vps", "vps_monitor.html"),
+    ("/api/vps-manager/main_page", "/api/vps-manager", "vps_manager.html"),
+]
+
+
+def _initial_json(html, name):
+    """Read one JSON-valued initialization assignment without executing the page."""
+    match = re.search(r'\b' + re.escape(name) + r'\s*=\s*("(?:[^"\\]|\\.)*")\s*;', html)
+    assert match is not None, name
+    return json.loads(match[1])
+
+
+@pytest.mark.parametrize(("path", "api_path", "filename"), AFFECTED_PAGES)
+@pytest.mark.parametrize(("root", "prefix"), [
+    ("", ""), ("/", ""), ("/team/pbgui", "/team/pbgui"),
+    ("/team/pbgui/", "/team/pbgui"),
+    ('/a b/<>&"%/ä', "/a%20b/%3C%3E%26%22%25/%C3%A4"),
+    ("/literal%2f", "/literal%252f"),
+])
+def test_affected_page_mounts_and_complete_markers(
+    versioned_page_client, path, api_path, filename, root, prefix,
+):
+    """Every real route renders all markers and mounted URLs independent of authority."""
+    from pathlib import Path
+
+    client, _ = versioned_page_client
+    client.app.root_path = root
+    response = client.get(path, params={"api_base": "https://attacker.example", "root_path": "//attacker.example"},
+                          headers={"host": "attacker.example", "x-forwarded-host": "attacker.example"})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    html = response.text
+    assert _initial_json(html, "API_BASE") == prefix + api_path
+    assert not re.search(r"%%[A-Z_]+%%", html)
+    assert "attacker.example" not in html
+    template = (Path(__file__).resolve().parents[1] / "frontend" / filename).read_text(encoding="utf-8")
+    for asset in re.findall(r'''\b(?:src|href)\s*=\s*["'](/app/[^"']+)["']''', template):
+        if "%%NAV_HASH%%" not in asset:
+            assert prefix + asset in html
+    if "%%NAV_HASH%%" in template:
+        assert re.search(re.escape(prefix + "/app/pbgui_nav.js?v=") + r"[^\"']+", html)
+    if "%%WS_BASE%%" in template:
+        assert '"%%WS_BASE%%"' in template
+        assert ("(window.location.protocol === 'https:' ? 'wss://' : 'ws://')"
+                " + window.location.host + " + script_json(prefix)) in html
+    if "%%BASE_PREFIX%%" in template:
+        assert _initial_json(html, "BASE_PREFIX") == prefix
+    if filename == "vps_monitor.html":
+        assert "apiBase: API_BASE" in html
+
+
+@pytest.mark.parametrize(("path", "_api_path", "_filename"), AFFECTED_PAGES)
+@pytest.mark.parametrize("root", ["//attacker.example", "/x/../y", "/x\\y", "/x\n"])
+def test_affected_pages_reject_unsafe_mounts(versioned_page_client, path, _api_path, _filename, root):
+    """All page entry points fail closed on malformed deployment prefixes."""
+    client, _ = versioned_page_client
+    route = next(route for route in client.app.routes if route.path == path)
+    # Starlette may parse root_path as a regex before dispatch. Exercise the
+    # registered renderer directly so invalid escapes reach our own boundary.
+    kwargs = {field.name: field.default for field in route.dependant.query_params}
+    kwargs.update({dependency.name: None for dependency in route.dependant.dependencies})
+    with pytest.raises(HTTPException) as error:
+        route.endpoint(Request({"type": "http", "root_path": root}), **kwargs)
+    assert error.value.status_code == 500
+    assert error.value.detail == "Invalid page mount path"
+
+
+@pytest.mark.parametrize(("path", "_api_path", "_filename"), AFFECTED_PAGES)
+def test_affected_page_initial_values_are_inert_and_preserved(
+    versioned_page_client, monkeypatch, path, _api_path, _filename,
+):
+    """Names and draft paths survive later replacement passes without HTML injection."""
+    from api import v7_instances, v8_instances
+
+    value = 'fixture<>&%%VERSION%%-%%MASTER_NAME%%-%%RUN_LABEL%%-%%SERIAL%%-%%NAV_HASH%%'
+    monkeypatch.setattr(v7_instances, "_get_master_hostname", lambda: value)
+    monkeypatch.setattr(v8_instances, "_master_hostname", lambda: value)
+    client, _ = versioned_page_client
+    response = client.get(path, params={"name": value, "current": value, "draft_id": value, "result_path": value, "new": "1"})
+    assert response.status_code == 200
+    html = response.text
+    assert value not in html
+    assert not re.search(r"%%[A-Z_]+%%", html)
+    if "/v7/" in path or "/v8/" in path:
+        assert _initial_json(html, "MASTER_NAME") == value
+        if path.endswith("edit_page"):
+            assert _initial_json(html, "INSTANCE_NAME") == value
+            assert _initial_json(html, "DRAFT_ID") == value
+            assert _initial_json(html, "IS_NEW") == "true"
+    elif "pareto-explorer" in path:
+        assert _initial_json(html, "INIT_RESULT_PATH") == value
+    elif "dashboard" in path:
+        key = "ORIG_NAME" if path.endswith("editor_page") else "CURRENT"
+        assert _initial_json(html, key) == value

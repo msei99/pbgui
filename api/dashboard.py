@@ -2112,21 +2112,10 @@ def discard_pending_full(
 
 def _dashboard_page_html(request: Request, filename: str) -> str:
     """Bind dashboard URLs to the trusted ASGI mount, never to query parameters."""
-    from urllib.parse import quote
+    from api.page_templates import render_page_urls
 
-    root_path = request.scope.get("root_path", "").rstrip("/")
-    if root_path and (
-        not root_path.startswith("/") or root_path.startswith("//")
-        or "\\" in root_path or any(ord(char) < 32 or ord(char) == 127 for char in root_path)
-        or any(part in {".", ".."} for part in root_path.split("/"))
-    ):
-        _log(SERVICE, "Invalid dashboard ASGI root_path", level="ERROR")
-        raise HTTPException(status_code=500, detail="Invalid dashboard mount path")
-    prefix = quote(root_path, safe="/")
     html = (Path(__file__).parent.parent / "frontend" / filename).read_text(encoding="utf-8")
-    html = html.replace('"%%API_BASE%%"', _script_json(prefix + "/api"))
-    html = html.replace('"%%BASE_PREFIX%%"', _script_json(prefix))
-    return html.replace('src="/app/', f'src="{prefix}/app/')
+    return render_page_urls(request, html, "/api")
 
 
 @router.get("/editor_page", response_class=HTMLResponse)
