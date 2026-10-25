@@ -362,10 +362,11 @@ def test_native_optimizer_log_target_checks_real_job_ownership(workflow,monkeypa
     job={'operation':operation,'name':'Actual optimizer run','kind':'optimizer','round':0,'status':'running',
          'started':True,'config':bundle()['config'],'overrides':{},'backend':{'id':native_id,'execution':execution}}
     controller.store.update(OWNER,loop_id,lambda row:row.update(jobs=[job]))
-    controller.backend.poll=LoopBackend(tmp_path,controller.store).poll
+    controller.backend.native_target=LoopBackend(tmp_path,controller.store).native_target
     if execution=='vast':
         monkeypatch.setattr(vast_jobs,'JobStore',lambda:SimpleNamespace(read=lambda key:native,directory=lambda key:tmp_path/'native-input'))
     else:
+        (tmp_path/'native-queue.json').write_text('{}')
         monkeypatch.setattr(optimize_v8,'_queue_file',lambda key:tmp_path/'native-queue.json')
         monkeypatch.setattr(optimize_v8,'_read_json',lambda path:native)
         monkeypatch.setattr(optimize_v8,'_queue_status',lambda value:('running',None))
@@ -694,30 +695,65 @@ def test_retry_holdout_rejects_missing_proof_or_exhausted_allowance(workflow, ex
     assert not controller.store.read(OWNER,loop_id)['jobs']
 
 
+@pytest.mark.parametrize('execution', ['validation', 'vast'])
 @pytest.mark.parametrize('kind', ['observer_holdout', 'observer_full_range'])
-def test_user_evaluation_log_target_is_native_and_owner_scoped(workflow,monkeypatch,tmp_path,kind):
+def test_user_evaluation_log_target_is_native_and_owner_scoped(workflow,monkeypatch,tmp_path,kind,execution):
     """Observer logs resolve their native Backtest file without joining decision jobs."""
     from api import backtest_v8
     from pb8_loop_backend import LoopBackend
     client,controller,_,session,_=workflow
     save(client);loop_id=queue(client).json()['id'];operation='8'*32
-    native_id='88888888-8888-8888-8888-888888888888'
+    native_id='8'*32 if execution=='vast' else '88888888-8888-8888-8888-888888888888'
     native={'loop_id':loop_id,'loop_owner':OWNER,'status':'complete'}
     job={'operation':operation,'name':'User evaluation','kind':kind,'round':0,'status':'complete',
-         'observer_only':True,'report_done':True,'backend':{'id':native_id,'execution':'validation'}}
+         'observer_only':True,'report_done':True,'backend':{'id':native_id,'execution':execution}}
     controller.store.update(OWNER,loop_id,lambda row:row.update(observer_jobs=[job]))
-    controller.backend.poll=LoopBackend(tmp_path,controller.store).poll
-    monkeypatch.setattr(backtest_v8,'_queue_file',lambda key:tmp_path/'native.json')
+    controller.backend.native_target=LoopBackend(tmp_path,controller.store).native_target
+    import vast_jobs
+    from vast_provider import VastError
+    from api import optimize_v8
+    def forbidden(*args,**kwargs):
+        """Target resolution must never inspect processes, snapshots or logs."""
+        pytest.fail('Target resolution performed runtime polling')
+    for module in (backtest_v8,optimize_v8):
+        for name in ('_queue_status','_read_runner_state'):
+            monkeypatch.setattr(module,name,forbidden)
+    monkeypatch.setattr(backtest_v8,'_snapshot_file',forbidden)
+    monkeypatch.setattr(optimize_v8,'_launch_config_file',forbidden)
+    monkeypatch.setattr(optimize_v8,'_read_optimize_log_excerpt',forbidden)
+    native_path=tmp_path/'native.json';native_path.write_text('{}')
+    missing=[False]
+    def cloud_read(key):
+        """Model only the bounded native state record."""
+        if missing[0]:raise VastError('Cloud job not found',404)
+        return native
+    monkeypatch.setattr(vast_jobs,'JobStore',lambda:SimpleNamespace(read=cloud_read,directory=forbidden))
+    monkeypatch.setattr(backtest_v8,'_queue_file',lambda key:native_path)
     monkeypatch.setattr(backtest_v8,'_read_json',lambda path:native)
-    monkeypatch.setattr(backtest_v8,'_queue_status',lambda value:('complete',None))
-    monkeypatch.setattr(backtest_v8,'_snapshot_file',lambda key:tmp_path/'missing.json')
-    monkeypatch.setattr(backtest_v8,'_read_runner_state',lambda key:{})
+    controller.backend.poll=forbidden
     endpoint='/loops/'+loop_id+'/log-target?operation='+operation
     assert client.get('/loops/'+loop_id).json()['jobs']==[]
     response=client.get(endpoint)
     assert response.status_code==200,response.text
-    assert response.json()=={'id':native_id,'cloud':False,'name':'User evaluation','kind':kind}
+    assert response.json()=={'id':native_id,'cloud':execution=='vast','name':'User evaluation','kind':kind}
     native['loop_owner']=OTHER
     assert client.get(endpoint).status_code==422
     native['loop_owner']=OWNER;session.user_id=OTHER
+    assert client.get(endpoint).status_code==404
+
+    session.user_id=OWNER;native['loop_owner']=OWNER;native['loop_id']=OTHER
+    assert client.get(endpoint).status_code==422
+    native['loop_id']=loop_id
+    record=controller.store.read(OWNER,loop_id)
+    native['loop_owner']=OTHER
+    with pytest.raises(ValueError,match='ownership mismatch'):
+        controller.backend.native_target(record,record['observer_jobs'][0])
+    native['loop_owner']=OWNER
+    assert client.get('/loops/'+loop_id+'/log-target?operation=invalid').status_code==422
+    assert client.get('/loops/'+loop_id+'/log-target?operation='+'9'*32).status_code==404
+    missing[0]=True;native_path.unlink()
+    assert client.get(endpoint).status_code==404
+    controller.store.update(OWNER,loop_id,lambda row:row['observer_jobs'][0]['backend'].update(id='../escape'))
+    assert client.get(endpoint).status_code==422
+    controller.store.update(OWNER,loop_id,lambda row:row['observer_jobs'][0]['backend'].pop('id'))
     assert client.get(endpoint).status_code==404

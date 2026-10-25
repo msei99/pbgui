@@ -1,5 +1,9 @@
 # PBv8 Optimize
 
+Open **PBv8 → Optimize → AI Loops Queue** (or **AI Loops Results** for a finished run), expand the run, open its round and select **User evaluation**. **Results** for a completed Holdout or Full Time Range opens the native Backtest comparison. **Opening…** prevents duplicate navigation while the owned job is checked. **Back to AI Loop** returns to that round/tab with expansion, selection and scroll position preserved, including after browser reload. Loop reports load independently of source options and rental details; these update separately. A missing run/round is explained in the nearest available Loop context. This navigation only reads existing results and does not start simulations or change rentals.
+
+Rental details continue loading while automatic Loop status updates arrive. A slower response does not hold up the report or restart on every status update. Changing the Loop context or returning after suspension reads the appropriate current rental data automatically.
+
 For an explicit assistant **Block host** / **Unblock host** request from the cloud log's **Rental & Hardware** section, see [verified host exclusions](48_vast_gpu.md#verified-host-exclusions-in-ai-chat). Approval names the exact local machine and preserves the existing rental and optimizer.
 
 

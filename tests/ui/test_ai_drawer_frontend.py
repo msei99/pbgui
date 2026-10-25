@@ -82,9 +82,9 @@ def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     assert "jev_preview_id: jevPreviewId || null" in DRAWER
     assert "PBGuiAIUsage.renderOpenRouter(container, usage)" in DRAWER
     assert "/app/css/ai_drawer.css?v=27" in NAV
-    assert "/app/js/pbgui_dialogs.js?v=11" in NAV
+    assert "/app/js/pbgui_dialogs.js?v=12" in NAV
     loader = NAV.split("function loadDrawerScript", 1)[1].split("var pendingAIAction", 1)[0]
-    assert loader.index("pbgui_dialogs.js?v=11") < loader.index("dialogs.onload = loadDrawerScript")
+    assert loader.index("pbgui_dialogs.js?v=12") < loader.index("dialogs.onload = loadDrawerScript")
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
 

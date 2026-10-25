@@ -1006,11 +1006,12 @@ async function assets() {
 async function page() {
     const {html, page, prefix} = JSON.parse(fs.readFileSync(0, 'utf8'));
     const requests = [], sockets = [];
+    let responseData = {};
     const document = {head: new Element(), createElement: tag => new Element(tag)};
     const ctx = vm.createContext({window: {location}, document, location,
         DR_VERSION: 'test', _reconnTimer: null, clearTimeout() {},
         WebSocket: class { constructor(url) { sockets.push(url); } },
-        fetch(url) { requests.push(url); return Promise.resolve({ok: true, json: async () => ({})}); }
+        fetch(url) { requests.push(url); return Promise.resolve({ok: true, json: async () => responseData}); }
     });
     vm.runInContext(html.match(/var API_BASE\s*=[^\n]+/)[0], ctx);
     assert.equal(ctx.API_BASE, prefix + '/api');
@@ -1036,6 +1037,26 @@ async function page() {
         ctx._connectWs();
         assert.deepEqual(sockets, ['wss://pbgui.test:8443' + prefix + '/ws/dashboard']);
     } else if (page === 'main_page') {
+        const renders = [];
+        Object.assign(ctx, {
+            listGeneration: 0, DASHBOARDS: [],
+            pruneSelectedDashboards() { renders.push('selection'); },
+            renderList() { renders.push('list'); },
+            renderToolbar() { renders.push('toolbar'); }
+        });
+        vm.runInContext(functionCode(html, 'refreshList'), ctx);
+        for (const names of [['Zulu', 'alpha', 'middle'], []]) {
+            responseData = {dashboards: names};
+            requests.length = 0;
+            renders.length = 0;
+            let loaded = false;
+            ctx.refreshList(() => { loaded = true; });
+            await tick();
+            assert.equal(loaded, true, 'the complete list request chain must reach its callback');
+            assert.deepEqual(requests, [prefix + '/api/dashboards']);
+            assert.deepEqual([...ctx.DASHBOARDS], names.length ? ['alpha', 'middle', 'Zulu'] : []);
+            assert.deepEqual(renders, ['selection', 'list', 'toolbar']);
+        }
         const {ctx: main} = mainContext(html);
         main.API_BASE = ctx.API_BASE;
         main.loadView('mounted');

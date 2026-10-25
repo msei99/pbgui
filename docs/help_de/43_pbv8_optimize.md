@@ -1,5 +1,9 @@
 # PBv8 Optimize
 
+Öffne **PBv8 → Optimize → AI Loops Queue** (bei einem beendeten Run **AI Loops Results**), klappe den Run auf, öffne seine Runde und wähle **User evaluation**. **Results** eines abgeschlossenen Holdout oder Full Time Range öffnet den nativen Backtest-Vergleich. **Opening…** verhindert doppelte Navigation während der Prüfung des zugehörigen Jobs. **Back to AI Loop** führt mit aufgeklappten Zeilen, Auswahl und Scrollposition zu dieser Runde und diesem Tab zurück, auch nach Browser-Neuladen. Loop-Berichte laden unabhängig von Quelloptionen und Rental-Details; diese werden getrennt aktualisiert. Fehlende Runs/Runden werden im nächstliegenden verfügbaren Loop-Kontext erklärt. Diese Navigation liest nur vorhandene Ergebnisse und startet keine Simulationen oder Rental-Änderungen.
+
+Rental-Details laden weiter, während automatische Loop-Statusupdates eintreffen. Eine langsamere Antwort hält weder den Bericht auf noch beginnt der Abruf mit jedem Statusupdate erneut. Bei einem Wechsel des Loop-Kontexts oder der Rückkehr nach einer Seitenunterbrechung werden die passenden aktuellen Rental-Daten automatisch gelesen.
+
 Für ausdrückliche KI-Aufträge zu **Block host** / **Unblock host** aus **Rental & Hardware** im Cloudlog siehe [verifizierte Hostsperren](48_vast_gpu.md#verifizierte-hostsperren-im-ki-chat). Die Freigabe benennt die konkrete lokale Maschine; bestehende Miete und Optimizer laufen weiter.
 
 

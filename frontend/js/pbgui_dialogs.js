@@ -112,10 +112,10 @@
         if (focusable.length) {
           var first = focusable[0];
           var last = focusable[focusable.length - 1];
-          if (event.shiftKey && document.activeElement === first) {
+          if (event.shiftKey && (document.activeElement === first || !box.contains(document.activeElement))) {
             event.preventDefault();
             last.focus();
-          } else if (!event.shiftKey && document.activeElement === last) {
+          } else if (!event.shiftKey && (document.activeElement === last || !box.contains(document.activeElement))) {
             event.preventDefault();
             first.focus();
           }

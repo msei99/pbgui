@@ -13,6 +13,8 @@ Each instance ties together an API-key user, a bot configuration, and a target V
 
 ## Instance list
 
+Delete and the **P**, **G**, **T**, and **N** confirmations can be cancelled with **Escape**, **Cancel**, or **Close** without sending a delete or forced-mode request. Clicking the backdrop does not close them. The confirmation initially focuses its action button and returns focus to the triggering action on close. After a backdrop or message click, **Tab** returns to the first dialog control and **Shift+Tab** to the last; keyboard navigation cannot reach the page behind the confirmation. Repeated triggers are ignored while a confirmation or its request is pending; a late response cannot close a newer dialog.
+
 Displays all configured V7 instances in a table.
 
 Sidebar actions:

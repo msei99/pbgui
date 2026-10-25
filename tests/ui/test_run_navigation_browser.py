@@ -26,6 +26,7 @@ def run_browser():
         page.set_default_timeout(5000)
         state = SimpleNamespace(
             page=page, sockets=[], errors=[], loads=[], pending=[], hold=False,
+            writes=[], pending_writes=[], hold_writes=False,
             drop_rest_generation_guard=False,
             rows=[
                 {'name': 'gui-442-a', 'status': 'disabled', 'note': 'Alpha'},
@@ -80,6 +81,13 @@ def run_browser():
                     runListAdapter.configureUi();''')
                 route.fulfill(content_type='text/html', body=source,
                               headers={'Cache-Control': 'no-store'})
+            elif path.startswith(('/api/v7/instances/', '/api/v8/instances/')) and route.request.method in ('POST', 'DELETE'):
+                state.writes.append({'path': path, 'method': route.request.method,
+                                     'body': route.request.post_data_json})
+                if state.hold_writes:
+                    state.pending_writes.append(route)
+                else:
+                    route.fulfill(json={'version': 8})
             elif path in ('/api/v7/instances', '/api/v8/instances'):
                 state.loads.append(path)
                 if state.hold:
@@ -105,8 +113,10 @@ def run_browser():
         page.route('**/*', respond)
         page.route_web_socket('**/ws/v*', lambda socket: state.sockets.append(socket))
         page.goto('http://run.test/app/start.html')
-        yield state
-        browser.close()
+        try:
+            yield state
+        finally:
+            browser.close()
 
 
 def open_run(state, version):
@@ -327,4 +337,175 @@ def test_run_shared_shell_guide_and_sidebar_preserve_navigation(run_browser, ver
         assert page.locator('#sidebar-toolbar').evaluate('(el) => el.scrollWidth <= el.clientWidth')
         for control in ['#f-search', '#f-status']:
             assert page.locator(control).evaluate('(el) => el.getBoundingClientRect().right <= document.getElementById("sidebar").getBoundingClientRect().right')
+    assert not state.errors
+
+
+@pytest.mark.parametrize('version', ['v7', 'v8'])
+@pytest.mark.parametrize('action,label', [
+    ('delete', 'Delete'), ('panic', 'Panic'), ('graceful_stop', 'Graceful Stop'),
+    ('tp_only', 'Take Profit Only'), ('normal', 'Publish Normal'),
+])
+def test_run_action_dialog_dismissal_and_focus(run_browser, version, action, label):
+    """Real row actions support explicit cancellation, focus trapping and safe repeated opening."""
+    state, page = run_browser, run_browser.page
+    state.rows[0].update(version=7, forced_mode_long='panic', forced_mode_short='tp_only')
+    open_run(state, version)
+    page.locator('#f-search').fill('gui-442')
+    page.locator('#f-status').select_option('disabled')
+    page.locator('th[data-sort="note"]').click()
+    page.locator('th[data-sort="note"]').click()
+    destination = page.url
+    selector = '[data-delete]' if action == 'delete' else f'[data-forced-mode="{action}"]'
+    trigger = page.locator('tr[data-key="gui-442-a"]').locator(selector)
+    overlay = page.locator('#pbgui-dialog-ovl')
+    for dismissal in ['Escape', 'Cancel', 'Close']:
+        trigger.click()
+        expect(overlay).to_be_visible()
+        expect(page.locator('#pbgui-dialog-accept')).to_have_text(label)
+        expect(page.locator('#pbgui-dialog-message')).to_contain_text('gui-442-a')
+        expect(page.locator('#pbgui-dialog-accept')).to_be_focused()
+        # Pointer clicks must not dismiss the dialog or let either Tab
+        # direction reach the page behind it. Do not repair focus in the test.
+        for target in [overlay, page.locator('#pbgui-dialog-message')]:
+            for key in ['Tab', 'Shift+Tab']:
+                if target == overlay:
+                    target.click(position={'x': 3, 'y': 3})
+                else:
+                    target.click()
+                expect(overlay).to_be_visible()
+                page.keyboard.press(key)
+                assert page.evaluate('document.getElementById("pbgui-dialog-box").contains(document.activeElement)'), key
+        expect(page.locator('#pbgui-dialog-accept')).to_be_focused()
+        page.keyboard.press('Tab')
+        expect(page.locator('#pbgui-dialog-close')).to_be_focused()
+        page.keyboard.press('Shift+Tab')
+        expect(page.locator('#pbgui-dialog-accept')).to_be_focused()
+        for _ in range(4):
+            page.keyboard.press('Tab')
+            assert page.evaluate('document.getElementById("pbgui-dialog-box").contains(document.activeElement)')
+        if dismissal == 'Escape':
+            page.keyboard.press('Escape')
+        else:
+            page.locator('#pbgui-dialog-' + dismissal.lower()).click()
+        expect(overlay).not_to_be_visible()
+        expect(trigger).to_be_focused()
+        assert not state.writes
+        assert page.url == destination
+        assert_navigation(page)
+    page.reload()
+    assert_navigation(page)
+    trigger.click()
+    page.keyboard.press('Escape')
+    expect(trigger).to_be_focused()
+    assert not state.writes
+    assert not state.errors
+
+
+@pytest.mark.parametrize('mode', ['confirm', 'alert', 'prompt', 'choose'])
+def test_shared_dialog_recovers_keyboard_focus_after_pointer_click(run_browser, mode):
+    """All shared modes recover both Tab directions without changing their result contracts."""
+    state, page = run_browser, run_browser.page
+    open_run(state, 'v7')
+    trigger = page.locator('#f-search')
+    trigger.focus()
+    page.evaluate('''(mode) => {
+      window.__dialogResult = 'pending';
+      PBGuiDialogs[mode]({
+        title: 'Synthetic focus test', message: 'Synthetic message',
+        reportable: false, defaultValue: 'Unsaved input',
+        actions: [{label: 'First choice', value: 'first'}, {label: 'Last choice', value: 'last'}]
+      }).then(value => { window.__dialogResult = value; });
+    }''', mode)
+    overlay = page.locator('#pbgui-dialog-ovl')
+    last = (page.locator('#pbgui-dialog-choices button').last
+            if mode == 'choose' else page.locator('#pbgui-dialog-accept'))
+    for target in [overlay, page.locator('#pbgui-dialog-message')]:
+        for key in ['Tab', 'Shift+Tab']:
+            if target == overlay:
+                target.click(position={'x': 3, 'y': 3})
+            else:
+                target.click()
+            expect(overlay).to_be_visible()
+            assert page.evaluate('__dialogResult') == 'pending'
+            page.keyboard.press(key)
+            expect(page.locator('#pbgui-dialog-close') if key == 'Tab' else last).to_be_focused()
+    if mode == 'prompt':
+        expect(page.locator('#pbgui-dialog-input')).to_have_value('Unsaved input')
+    page.keyboard.press('Escape')
+    expect(overlay).not_to_be_visible()
+    expect(trigger).to_be_focused()
+    page.wait_for_function('window.__dialogResult !== "pending"')
+    assert page.evaluate('__dialogResult') == {'confirm': False, 'alert': True, 'prompt': None, 'choose': None}[mode]
+    assert not state.writes
+    assert not state.errors
+
+
+@pytest.mark.parametrize('version', ['v7', 'v8'])
+@pytest.mark.parametrize('action', ['delete', 'panic'])
+@pytest.mark.parametrize('ending', ['success', 'error'])
+def test_run_pending_action_preserves_later_dialog_and_navigation(run_browser, version, action, ending):
+    """Delayed synthetic writes stay locked and never close or refocus a subsequent dialog."""
+    state, page = run_browser, run_browser.page
+    state.rows[0].update(version=7, forced_mode_long='panic')
+    state.hold_writes = True
+    open_run(state, version)
+    page.locator('#f-search').fill('gui-442')
+    page.locator('#f-status').select_option('disabled')
+    page.locator('th[data-sort="note"]').click()
+    page.locator('th[data-sort="note"]').click()
+    destination = page.url
+    selector = '[data-delete]' if action == 'delete' else '[data-forced-mode="panic"]'
+    trigger = page.locator('tr[data-key="gui-442-a"]').locator(selector)
+    trigger.click()
+    with page.expect_request(lambda request: request.method in ('POST', 'DELETE')
+                             and '/instances/gui-442-a' in request.url):
+        page.locator('#pbgui-dialog-accept').click()
+    expect(page.locator('#pbgui-dialog-ovl')).not_to_be_visible()
+    page.wait_for_function('_deleteInFlight || _forcedModeInFlight')
+    expect(page.locator('#toast')).not_to_be_visible()
+    trigger.click()
+    expect(page.locator('#pbgui-dialog-ovl')).not_to_be_visible()
+    assert len(state.writes) == 1
+    assert state.writes[0] == {
+        'path': f'/api/{version}/instances/gui-442-a' + ('' if action == 'delete' else '/forced-mode'),
+        'method': 'DELETE' if action == 'delete' else 'POST',
+        'body': None if action == 'delete' else {'mode': 'panic'},
+    }
+    other_selector = '[data-forced-mode="graceful_stop"]' if action == 'delete' else '[data-delete]'
+    later_trigger = page.locator('tr[data-key="gui-442-c"]').locator(other_selector)
+    later_trigger.click()
+    expect(page.locator('#pbgui-dialog-ovl')).to_be_visible()
+    expect(page.locator('#pbgui-dialog-accept')).to_be_focused()
+    later_title = page.locator('#pbgui-dialog-title').inner_text()
+    loads = len(state.loads)
+    if ending == 'success':
+        if action == 'delete':
+            state.rows = [row for row in state.rows if row['name'] != 'gui-442-a']
+        else:
+            state.rows[0].update(version=8, forced_mode_long='panic', forced_mode_short='panic')
+        state.pending_writes.pop().fulfill(json={'version': 8})
+    else:
+        state.pending_writes.pop().fulfill(status=409, json={'detail': 'Synthetic conflict'})
+    page.wait_for_function('!_deleteInFlight && !_forcedModeInFlight')
+    if ending == 'success':
+        expect(page.locator('#toast')).to_contain_text('deleted' if action == 'delete' else 'published')
+        if action == 'delete':
+            expect(page.locator('tr[data-key="gui-442-a"]')).to_have_count(0)
+        else:
+            expect(page.locator('tr[data-key="gui-442-a"]')).to_contain_text('Global: PANIC')
+            assert len(state.loads) == loads + 1
+    else:
+        expect(page.locator('#toast')).to_contain_text('Synthetic conflict')
+    expect(page.locator('#pbgui-dialog-ovl')).to_be_visible()
+    expect(page.locator('#pbgui-dialog-title')).to_have_text(later_title)
+    expect(page.locator('#pbgui-dialog-accept')).to_be_focused()
+    assert page.url == destination
+    assert_navigation(page)
+    page.keyboard.press('Escape')
+    expect(later_trigger).to_be_focused()
+    # The completed action can be opened again, including after an HTTP error.
+    page.locator('tr[data-key="gui-442-c"]').locator(selector).click()
+    expect(page.locator('#pbgui-dialog-ovl')).to_be_visible()
+    page.keyboard.press('Escape')
+    assert len(state.writes) == 1
     assert not state.errors

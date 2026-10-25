@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import re
 from pathlib import Path
 import time
 
@@ -370,6 +371,38 @@ class LoopBackend:
         self.authorized(record)
         scoped.start(offer, settings['hours'], settings['budget'], settings['idle_seconds'],
                      loop_id=record['id'], loop_owner=record['owner'], loop_limits=settings)
+
+    def native_target(self, record, job):
+        """Read only the native identity and ownership; never reconcile runner state."""
+        from api import optimize_v8 as opt, backtest_v8 as bt
+        from vast_provider import VastError
+        backend = job.get('backend') or {}
+        identifier = backend.get('id')
+        if not identifier:
+            raise HTTPException(404, 'The native job is no longer available.')
+        if job.get('kind') not in {'optimizer', 'baseline', 'validation', 'holdout',
+                                   'observer_holdout', 'observer_full_range'}:
+            raise ValueError('Invalid native loop job type')
+        cloud = backend.get('execution') == 'vast'
+        if cloud:
+            from vast_jobs import JobStore, job_id
+            try:
+                job_id(identifier)
+                source = JobStore().read(identifier)
+            except VastError as exc:
+                raise HTTPException(exc.status, str(exc)) from exc
+        else:
+            if backend.get('execution') not in {'cpu', 'gpu', 'validation'} or not re.fullmatch(
+                    r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', str(identifier)):
+                raise ValueError('Invalid native queue identity')
+            api = opt if job['kind'] == 'optimizer' else bt
+            path = api._queue_file(identifier)
+            if not path.is_file() or path.is_symlink():
+                raise HTTPException(404, 'The native job is no longer available.')
+            source = api._read_json(path)
+        if source.get('loop_id') != record['id'] or source.get('loop_owner') != record['owner']:
+            raise ValueError('Cloud job ownership mismatch' if cloud else 'Queue job ownership mismatch')
+        return {'id': identifier, 'cloud': cloud, 'name': job['name'], 'kind': job['kind']}
 
     def poll(self, record, job):
         """Read authoritative owned runner state and reconcile persistent launch intent."""

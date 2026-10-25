@@ -3,6 +3,47 @@
   'use strict';
   var root, timer, generation = 0, optionsGeneration = 0, rows = [], selected = '', options = {}, hoursEdited = false;
   var base = '/api/optimize-v8/loops';
+  var readRequests=new Map(), pollFlight=null, pollAgain=false, rentalGeneration=0, resultsFlight=null, rentalFlight=null, pollBlocked='';
+  var loopRenderStarted=0, restoreScrollPending=true;
+  function navigationTiming(name, started) {
+    var key='pbgui.loop.'+name;
+    performance.clearMeasures(key);
+    performance.measure(key,{start:started,end:performance.now()});
+  }
+  function saveLoopScroll() {
+    var main=document.getElementById('panel-'+state.panel)||document.getElementById('main-content');
+    try { sessionStorage.setItem('pbgui.loop.scroll',JSON.stringify({
+      key:[selected,reportView,reportRound,reportTab,state.panel].join(':'),
+      report:reportBody?reportBody.scrollTop:0,report_left:reportBody?reportBody.scrollLeft:0,main:main?main.scrollTop:0,
+      tables:['loops-queue','loops-results'].map(function(panel){var table=document.querySelector('#'+panel+'-table .loop-table-scroll');return table?{top:table.scrollTop,left:table.scrollLeft}:null;})
+    })); } catch (_) {}
+    persistWorkflow();
+  }
+  function restoreLoopScroll() {
+    if(!restoreScrollPending)return;
+    restoreScrollPending=false;
+    try { var saved=JSON.parse(sessionStorage.getItem('pbgui.loop.scroll')||'null');
+      if(!saved||saved.key!==[selected,reportView,reportRound,reportTab,state.panel].join(':'))return;
+      if(reportBody){reportBody.scrollTop=Math.max(0,Number(saved.report)||0);reportBody.scrollLeft=Math.max(0,Number(saved.report_left)||0);}
+      ['loops-queue','loops-results'].forEach(function(panel,index){var table=document.querySelector('#'+panel+'-table .loop-table-scroll');if(table){var value=(saved.tables||[])[index]||{};table.scrollLeft=Math.max(0,Number(value.left)||0);table.scrollTop=Math.max(0,Number(value.top)||0);}});
+      var main=document.getElementById('panel-'+state.panel)||document.getElementById('main-content');if(main)main.scrollTop=Math.max(0,Number(saved.main)||0);
+    } catch (_) {}
+  }
+  function leaveForBacktest(url,back) {
+    saveLoopScroll();
+    // Only navigation metadata; no Loop records, configs, credentials or result data.
+    try { sessionStorage.setItem('pbgui.loop.handoff',JSON.stringify({from:location.href,to:url.href,back:back.href,length:history.length,created:Date.now()})); } catch (_) {}
+    location.assign(url.href);
+  }
+  function cancelResultTarget() {
+    if(resultsFlight)resultsFlight.controller.abort();resultsFlight=null;resultsGeneration++;
+    document.querySelectorAll('[data-loop-result]').forEach(function(node){node.disabled=false;node.textContent='Results';node.removeAttribute('aria-busy');});
+  }
+  function cancelLoopReads(keepOptions) {
+    readRequests.forEach(function(path,controller){if(!keepOptions||!path.startsWith('/options')){controller.abort();readRequests.delete(controller);}});
+    cancelResultTarget();
+    cancelRentalRead();
+  }
   var watchGeneration = 0, stopped = false, listSignature = '', detailSignature = '', renderedLoop = '';
   var expandedEvidence = new Map();
   var starting = false, formEdited = false, setupGeneration = 0, initialSetupRestored = false, optionsReady;
@@ -177,14 +218,27 @@
   }
   function byId(id) { return document.getElementById('loop-' + id); }
   function element(tag, text, cls) { var node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (cls) node.className = cls; return node; }
-  async function request(path, body, method) {
-    var response = await fetch(base + path, {credentials: 'same-origin', cache: 'no-store', headers: body ? {'Content-Type': 'application/json'} : {}, method: method || (body ? 'POST' : 'GET'), body: body ? JSON.stringify(body) : undefined});
-    var data = await response.json();
-    if (!response.ok) { if (response.status === 401) { clearTimeout(timer); generation++; } throw new Error(typeof data.detail === 'string' ? data.detail : Array.isArray(data.detail) ? data.detail.map(function(item){return item.msg;}).join('; ') : data.detail && data.detail.message ? data.detail.message : 'Loop request failed'); }
-    return data;
+  async function request(path, body, method, options) {
+    options=options||{};
+    var controller=new AbortController(),external=options.signal,timeout=options.timeout||(/\/log-target\?/.test(path)?10000:15000),expired=false;
+    function abort(){controller.abort();}
+    if(body||method&&method!=='GET')timeout=0;
+    if(external){if(external.aborted)abort();else external.addEventListener('abort',abort,{once:true});}
+    var timeoutId=timeout?setTimeout(function(){expired=true;controller.abort();},timeout):null;
+    if(!body&&(!method||method==='GET'))readRequests.set(controller,path);
+    try {
+      var response = await fetch(base + path, {signal:controller.signal,credentials: 'same-origin', cache: 'no-store', headers: body ? {'Content-Type': 'application/json'} : {}, method: method || (body ? 'POST' : 'GET'), body: body ? JSON.stringify(body) : undefined});
+      var data = await response.json();
+      if (!response.ok) {
+        if(response.status===401){stopped=true;clearTimeout(timer);watchGeneration++;generation++;cancelLoopReads();}
+        var failure=new Error(typeof data.detail === 'string' ? data.detail : Array.isArray(data.detail) ? data.detail.map(function(item){return item.msg;}).join('; ') : data.detail && data.detail.message ? data.detail.message : 'Loop request failed');failure.status=response.status;throw failure;
+      }
+      return data;
+    } catch(exc) {if(expired){var failure=new Error('Loop request timed out. Please try again.');failure.transient=true;throw failure;}if(exc instanceof TypeError)exc.transient=true;throw exc;}
+    finally {clearTimeout(timeoutId);readRequests.delete(controller);if(external)external.removeEventListener('abort',abort);}
   }
   function showMessages(){[byId('message'),document.getElementById('loops-queue-message'),document.getElementById('loops-results-message'),document.getElementById('loops-knowledge-message')].forEach(function(node){if(node){var panel=node===byId('message')?'loops-config':node.id.replace('-message','');node.textContent=(panel===uiErrorPanel?uiError:'')||(panel===pollErrorPanel?pollError:'');node.className='loop-error';}});}
-  function error(exc) { uiErrorPanel=(window.state && state.panel)||'loops-config';uiError=exc.message || String(exc);showMessages(); }
+  function error(exc) { if(exc.name==='AbortError')return;uiErrorPanel=(window.state && state.panel)||'loops-config';uiError=exc.message || String(exc);showMessages(); }
   function clearNativeLog() {
     logGeneration++;logOpening=false;logRun='';logOperation='';
     var url=new URL(location.href);url.searchParams.delete('loop_log');url.searchParams.delete('loop_log_run');history.replaceState(null,'',url);
@@ -322,7 +376,7 @@
       jev_enabled:jevEnabled,historical_advice:byId('historical-advice').checked,decision_timeout_seconds:number('ai-decision-time',null),model_call_timeout_seconds:number('ai-call-time',null),ai_decision_token_limit:number('ai-token-limit',null),ai_decision_usd_limit:number('ai-usd-limit',null),ai_budget_confirmed:byId('ai-confirm').checked,authorization: true};
   }
   function select(id) {
-    if (selected !== id) { setupGeneration++; closeReport(); }
+    if (selected !== id) { cancelResultTarget();setupGeneration++; closeReport(); }
     selected = id;workflow.focus=id;selectedRuns=new Set(id?[id]:[]);persistWorkflow();var url = new URL(location.href); if (id) url.searchParams.set('loop_id', id); else url.searchParams.delete('loop_id'); history.replaceState(null, '', url); render();
   }
   function button(parent, label, action) { var node = element('button', label, 'btn'); node.type = 'button'; node.addEventListener('click', action); parent.appendChild(node); return node; }
@@ -340,6 +394,7 @@
     });
   }
   function reportNavigation() {
+    cancelResultTarget();
     var url=new URL(location.href);
     ['loop_view','loop_cycle','loop_tab','loop_variant','loop_compare'].forEach(function (key) { url.searchParams.delete(key); });
     if (reportView) { url.searchParams.set('loop_view',reportView); url.searchParams.set('loop_tab',reportTab); if(reportView==='cycle')url.searchParams.set('loop_cycle',String(reportRound)); if(reportTab==='changes'){if(diffOperation)url.searchParams.set('loop_variant',diffOperation);if(diffBaseline)url.searchParams.set('loop_compare',diffBaseline);} }
@@ -545,7 +600,7 @@
     var row=rows.find(function(item){return item.id===selected;});if(!row)return;
     var cycles=cycleRows(row),cycle=cycles.find(function(item){return item.round===reportRound;});
     if(reportView==='run'&&['backtests','changes'].includes(reportTab)){reportTab='overview';reportNavigation();}
-    if(reportView==='cycle'&&!cycle){closeReport();uiError='The selected round is no longer available.';return;}
+    if(reportView==='cycle'&&!cycle){closeReport();uiErrorPanel=state.panel;uiError='The selected round is no longer available.';showMessages();return;}
     var signature=JSON.stringify([reportView,reportRound,reportTab,diffOperation,diffBaseline,row],function(key,value){return ['updated_at','duration_seconds','last_observed_at'].includes(key)?undefined:value;});
     if(signature===reportSignature){var clock=reportBody.querySelector('[data-report-duration]');if(clock&&cycle)clock.textContent=duration(cycle.duration_seconds);return;}
     reportSignature=signature;if(diffRequest)diffRequest.abort();diffGeneration++;
@@ -624,24 +679,34 @@
     url.pathname=url.pathname.replace(/\/optimize-v8\/main_page$/, '/backtest-v8/main_page');url.search='';url.hash='';
     url.searchParams.set('panel','results');url.searchParams.set('result_loop',run.id);url.searchParams.set('result_evaluation',kind);
     var back=new URL(origin);back.search='';['loop_id','loop_view','loop_cycle','loop_tab','loop_variant','loop_compare','loop_log_run','loop_log'].forEach(function(key){if(origin.searchParams.has(key))back.searchParams.set(key,origin.searchParams.get(key));});back.hash=state.panel;
-    url.searchParams.set('loop_return',back.pathname+back.search+back.hash);location.assign(url.href);
+    url.searchParams.set('loop_return',back.pathname+back.search+back.hash);leaveForBacktest(url,back);
   }
   function backtestButton(parent,run,job){
     if(!job.log_available)return;
+    var key=run.id+':'+job.operation;
     var control=button(parent,'Results',async function(){
+      if(resultsFlight)return;
       select(run.id);
+      var started=performance.now(),flight={key:key,controller:new AbortController()};resultsFlight=flight;
+      control.disabled=true;control.textContent='Opening…';control.setAttribute('aria-busy','true');
       var token=++resultsGeneration,navigation=state.navigationSeq,panel=state.panel,view=[reportView,reportRound,reportTab].join(':');
-      function current(){return token===resultsGeneration&&navigation===state.navigationSeq&&panel===state.panel&&selected===run.id&&view===[reportView,reportRound,reportTab].join(':');}
+      function current(){return !stopped&&token===resultsGeneration&&navigation===state.navigationSeq&&panel===state.panel&&selected===run.id&&view===[reportView,reportRound,reportTab].join(':');}
       try{
-        var target=await request('/'+run.id+'/log-target?operation='+encodeURIComponent(job.operation));
+        var target=await request('/'+run.id+'/log-target?operation='+encodeURIComponent(job.operation),null,null,{signal:flight.controller.signal,timeout:10000});
+        navigationTiming('target',started);
         if(!current())return;
-        var url=new URL('/api/backtest-v8/main_page',location.origin);
+        var origin=new URL(location.href),url=new URL(origin);
+        url.pathname=url.pathname.replace(/\/optimize-v8\/main_page$/, '/backtest-v8/main_page');url.search='';url.hash='';
         url.searchParams.set('panel','results');url.searchParams.set('result_filter',target.name);url.searchParams.set('result_compare','1');
-        var origin=new URL(location.href),back=new URL('/api/optimize-v8/main_page',location.origin);
+        var back=new URL(origin);back.search='';
         ['loop_id','loop_view','loop_cycle','loop_tab','loop_variant','loop_compare','loop_log_run','loop_log'].forEach(function(key){if(origin.searchParams.has(key))back.searchParams.set(key,origin.searchParams.get(key));});
-        back.hash=panel;url.searchParams.set('loop_return',back.pathname+back.search+back.hash);location.assign(url.href);
-      }catch(exc){if(current())error(exc);}
-    });control.className='act-btn loop-open';
+        back.hash=panel;url.searchParams.set('loop_return',back.pathname+back.search+back.hash);leaveForBacktest(url,back);
+      }catch(exc){if(current()&&exc.name!=='AbortError')error(exc);}
+      finally{
+        if(resultsFlight===flight){resultsFlight=null;document.querySelectorAll('[data-loop-result]').forEach(function(node){node.disabled=false;node.textContent='Results';node.removeAttribute('aria-busy');});}
+      }
+    });control.className='act-btn loop-open';control.dataset.loopResult=key;
+    if(resultsFlight){control.disabled=true;if(resultsFlight.key===key){control.textContent='Opening…';control.setAttribute('aria-busy','true');}}
   }
   function canContinueRound(cycle){return !!cycle.winner_operation&&(cycle.observations||[]).some(function(item){return item.assessment&&item.assessment.comparable!==false&&item.assessment.simulation_complete!==false;});}
   function continueButton(parent,run,round){
@@ -915,7 +980,7 @@
     var selected=panel==='configs'?Array.from(state.selectedConfigs):panel==='queue'?Array.from(state.selectedQueue):Array.from(state.selectedResults);
     if(selected.length!==1)return null;var id=selected[0];return panel==='queue' && id.startsWith('vast:')?{kind:'cloud',id:id.slice(5)}:{kind:{configs:'config',queue:'queue',results:'result'}[panel],id:id};
   }
-  function onPanel() { if(!root)return;syncContext();if(isLoopPanel())watch(); }
+  function onPanel() { if(!root)return;generation++;pollBlocked='';cancelLoopReads(true);if(pollFlight)pollAgain=true;syncContext();if(isLoopPanel())watch(); }
   function renderAIRecovery(parent,row) {
     if(row.ai_pause){parent.appendChild(element('h4','AI paused · '+row.ai_pause.reason));parent.appendChild(element('p',row.ai_pause.message,'loop-analysis'));}
     if(row.ai_evidence_status)reportTable(parent,['AI evidence','Value'],[['Mandatory pages',row.ai_evidence_status.required_pages],['Tool calls',row.ai_evidence_status.tool_calls],['Dialogs',row.ai_evidence_status.dialogs]]);
@@ -955,29 +1020,73 @@
       await request('/'+id+'/action',body);recoveryDrafts.delete(id);workflow.recovery_drafts=Object.fromEntries(recoveryDrafts);persistWorkflow();uiError='';await poll();
     }catch(exc){error(exc);}
   }
-  async function poll() {
-    var token=++generation;
-    if(state.panel==='loops-instructions'){await PBGuiLoopInstructions.refresh();return;}
-    var loadKnowledge=state.panel==='loops-knowledge';
-    try { var values=await Promise.all([request(''),request('/configs'),loadKnowledge?request('/knowledge?limit=200').then(function(data){return {data:data};},function(exc){return {error:exc.message};}):null]);if(token!==generation)return;rows=values[0].loops;definitions=values[1].configs;
-      pollError='';
-      var rentalTarget=state.panel==='loops-queue'&&rentalRun();
-      if(rentalTarget){
-        var rentalData=await request('/'+rentalTarget.id+'/rental').catch(function(exc){return {error:exc.message};});if(token!==generation)return;
-        var previousRental=(rentalSnapshots.get(rentalTarget.id)||{}).rental;
+  function cancelRentalRead() {
+    rentalGeneration++;
+    if(rentalFlight)rentalFlight.controller.abort();
+    rentalFlight=null;
+  }
+  async function loadRental(run, panel, selection) {
+    var key=[run.id,panel,selection,state.navigationSeq].join(':');
+    if(rentalFlight&&rentalFlight.key===key)return rentalFlight.promise;
+    cancelRentalRead();
+    var token=rentalGeneration,flight={key:key,controller:new AbortController()};
+    rentalFlight=flight;
+    flight.promise=(async function(){
+      try {
+        var rentalData=await request('/'+run.id+'/rental',null,null,{signal:flight.controller.signal}).catch(function(exc){return {error:exc.message};});
+        var currentRun=rentalRun();
+        if(stopped||token!==rentalGeneration||key!==[run.id,state.panel,selected,state.navigationSeq].join(':')||!currentRun||currentRun.id!==run.id)return;
+        var previousRental=(rentalSnapshots.get(run.id)||{}).rental;
         if(previousRental&&rentalData.rental&&previousRental.worker_id===rentalData.rental.worker_id&&
           Number((previousRental.billing||{}).reported_at||0)>Number((rentalData.rental.billing||{}).reported_at||0))rentalData.rental.billing=previousRental.billing;
-        rentalSnapshots.clear();rentalSnapshots.set(rentalTarget.id,rentalData);refreshRentalBilling(rentalTarget,rentalData.rental);
-      }
+        rentalSnapshots.clear();rentalSnapshots.set(run.id,rentalData);renderRental();refreshRentalBilling(currentRun,rentalData.rental);
+      } finally {if(rentalFlight===flight)rentalFlight=null;}
+    })();
+    return flight.promise;
+  }
+  function showLoopLoading(panel) {
+    if(rows.length)return;
+    var host=document.getElementById(panel+'-table');
+    if(host&&!host.firstElementChild){var status=element('p','Loading AI Loops…','muted-line');status.dataset.loopLoading='';status.setAttribute('role','status');host.appendChild(status);}
+    if(reportView&&reportOverlay&&!reportOverlay.classList.contains('is-open')){
+      reportTitle.textContent=reportView==='cycle'?'Round '+(reportRound+1)+' · Loading…':'Loading Loop report…';
+      reportBody.textContent='Loading Loop report…';reportOverlay.classList.add('is-open');reportOverlay.setAttribute('aria-hidden','false');reportWindow.fit();
+      reportTabs.querySelectorAll('button').forEach(function(item){item.classList.toggle('selected',item.dataset.tab===reportTab);item.setAttribute('aria-selected',String(item.dataset.tab===reportTab));});
+      document.getElementById('loop-report-close').focus({preventScroll:true});
+    }
+  }
+  async function pollCycle() {
+    var token=++generation,panel=state.panel,navigation=state.navigationSeq;
+    if(panel==='loops-instructions'){await PBGuiLoopInstructions.refresh();return;}
+    var loadKnowledge=panel==='loops-knowledge';
+    showLoopLoading(panel);
+    try {
+      var values=await Promise.all([request(''),request('/configs'),loadKnowledge?request('/knowledge?limit=200').then(function(data){return {data:data};},function(exc){return {error:exc.message};}):null]);
+      if(stopped||token!==generation||panel!==state.panel||navigation!==state.navigationSeq)return;
+      rows=values[0].loops;definitions=values[1].configs;pollError='';pollBlocked='';
       if(loadKnowledge){knowledgeError=values[2].error||'';if(values[2].data){knowledgeEntries=values[2].data.entries||[];knowledgeLoaded=true;}}
-      if(selected&&!rows.some(function(row){return row.id===selected;})){forgetRun(selected);uiError='The selected loop is no longer available.';}selectedRuns.forEach(function(id){if(!rows.some(function(row){return row.id===id;}))forgetRun(id);});render();await restoreNativeLog(); }
-    catch(exc){if(token===generation){pollErrorPanel=(window.state&&state.panel)||'loops-config';pollError=exc instanceof TypeError&&/Failed to fetch|NetworkError|Load failed/i.test(exc.message)?'Connection interrupted. Retrying automatically…':exc.message||String(exc);showMessages();}}
+      if(selected&&!rows.some(function(row){return row.id===selected;})){forgetRun(selected);uiErrorPanel=panel;uiError='The selected loop is no longer available.';}
+      selectedRuns.forEach(function(id){if(!rows.some(function(row){return row.id===id;}))forgetRun(id);});
+      render();restoreLoopScroll();if(loopRenderStarted!==null){navigationTiming('return-report',loopRenderStarted);loopRenderStarted=null;}
+      var rentalTarget=panel==='loops-queue'&&rentalRun();
+      if(rentalTarget)loadRental(rentalTarget,panel,selected);else cancelRentalRead();
+      await restoreNativeLog();
+    } catch(exc){if(!stopped&&token===generation&&panel===state.panel&&navigation===state.navigationSeq&&exc.name!=='AbortError'){document.querySelectorAll('[data-loop-loading]').forEach(function(node){node.textContent='Could not load AI Loops.';});if(!rows.length&&reportView&&reportBody)reportBody.textContent='Could not load Loop report: '+exc.message;if(!exc.transient)pollBlocked=panel;pollErrorPanel=panel;pollError=exc instanceof TypeError&&/Failed to fetch|NetworkError|Load failed/i.test(exc.message)?'Connection interrupted. Retrying automatically…':exc.message||String(exc);showMessages();}}
+  }
+  async function poll(force) {
+    if(stopped||force===false&&pollBlocked===state.panel)return;
+    pollBlocked='';
+    if(force!==false)cancelRentalRead();
+    if(pollFlight){if(force!==false)pollAgain=true;return pollFlight;}
+    pollAgain=false;
+    pollFlight=(async function(){do{pollAgain=false;await pollCycle();}while(pollAgain&&!stopped);})().finally(function(){pollFlight=null;});
+    return pollFlight;
   }
   async function watch() {
     clearTimeout(timer);
     var token = ++watchGeneration;
     if (stopped) return;
-    if (!document.hidden && window.state && isLoopPanel()) await poll();
+    if (!document.hidden && window.state && isLoopPanel()) await poll(false);
     if (!stopped && token === watchGeneration) timer = setTimeout(watch, 3000);
   }
   function mount() {
@@ -1110,12 +1219,11 @@
     selected = new URL(location.href).searchParams.get('loop_id') || workflow.selected || '';selectedDefinitions=new Set(workflow.config_selection||[]);selectedRuns=new Set(workflow.run_selection|| (selected?[selected]:[]));expanded=new Set(workflow.expanded||[]);
     var reportUrl=new URL(location.href);reportView=['cycle','initial','run'].includes(reportUrl.searchParams.get('loop_view'))?reportUrl.searchParams.get('loop_view'):'';reportRound=/^\d{1,4}$/.test(reportUrl.searchParams.get('loop_cycle')||'')?Number(reportUrl.searchParams.get('loop_cycle')):0;reportTab=Object.keys(tabNames).includes(reportUrl.searchParams.get('loop_tab'))?reportUrl.searchParams.get('loop_tab'):'overview';diffOperation=/^[0-9a-f]{32}$/.test(reportUrl.searchParams.get('loop_variant')||'')?reportUrl.searchParams.get('loop_variant'):'';diffBaseline=/^(initial|[0-9a-f]{32})$/.test(reportUrl.searchParams.get('loop_compare')||'')?reportUrl.searchParams.get('loop_compare'):'';
     document.addEventListener('visibilitychange', function () { if (!document.hidden) { if (isLoopPanel()) loadOptions(true).catch(error); watch(); } }); window.addEventListener('hashchange', function () { if (isLoopPanel()) { loadOptions(true).catch(error); watch(); } });
-    window.addEventListener('pagehide', function (event) { if(reportWindow){if(event.persisted)reportWindow.cancel();else reportWindow.dispose();} stopped = true; if(rentalBillingRequest)rentalBillingRequest.abort();rentalBillingGeneration++;rentalBillingChecked=0;if(diffRequest)diffRequest.abort(); diffGeneration++; clearTimeout(timer); watchGeneration++; generation++; optionsGeneration++; });
-    window.addEventListener('pageshow', function (event) { if (event.persisted) { stopped = false; watch(); } });
+    window.addEventListener('pagehide', function (event) { saveLoopScroll();cancelLoopReads();if(reportWindow){if(event.persisted)reportWindow.cancel();else reportWindow.dispose();} stopped = true; if(rentalBillingRequest)rentalBillingRequest.abort();rentalBillingGeneration++;rentalBillingChecked=0;if(diffRequest)diffRequest.abort(); diffGeneration++; clearTimeout(timer); watchGeneration++; generation++; optionsGeneration++; });
+    window.addEventListener('pageshow', function (event) { if (event.persisted) { stopped = false;loopRenderStarted=performance.now();pollAgain=!!pollFlight;optionsReady=loadOptions(true);optionsReady.catch(error);watch(); } });
     optionsReady = loadOptions(true);
     optionsReady.then(async function(){
       if(workflow.draft && new URL(location.href).searchParams.has('loop_edit')){var draft=workflow.draft;editorSource=draft.source;sourceDefaults=draft.defaults;sourceDigest=draft.digest || null;editingName=draft.editing_name;editingRevision=draft.revision;editingQueue=draft.queue_id||'';byId('name').value=draft.name;await loadSettings({settings:draft.settings});showEditor(false);}
-      await poll();
     }).catch(error);watch();
     function finishSelection(){document.querySelectorAll('[data-selecting]').forEach(function(table){delete table.dataset.selecting;delete table._loop_range;});persistWorkflow();syncContext();}
     document.addEventListener('pointerup',finishSelection);document.addEventListener('pointercancel',finishSelection);window.addEventListener('blur',finishSelection);

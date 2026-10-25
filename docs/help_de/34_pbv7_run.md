@@ -13,6 +13,8 @@ Jede Instanz verbindet einen API-Key-Benutzer, eine Bot-Konfiguration und einen 
 
 ## Instanzliste
 
+Die Bestätigungen für Delete sowie **P**, **G**, **T** und **N** lassen sich mit **Escape**, **Cancel** oder **Close** abbrechen, ohne eine Lösch- oder Forced-Mode-Anfrage zu senden. Ein Klick auf den Hintergrund schließt sie nicht. Beim Öffnen erhält der Bestätigungsbutton den Fokus; beim Schließen kehrt der Fokus zur auslösenden Aktion zurück. Nach einem Klick auf den Hintergrund oder Nachrichtentext führt **Tab** zum ersten und **Shift+Tab** zum letzten Dialogelement; die Tastaturnavigation erreicht die Seite hinter der Bestätigung nicht. Wiederholte Auslösungen werden während einer offenen Bestätigung oder laufenden Anfrage ignoriert; eine verspätete Antwort kann keinen neueren Dialog schließen.
+
 Zeigt alle konfigurierten V7 Instanzen in einer Tabelle.
 
 Sidebar-Aktionen:

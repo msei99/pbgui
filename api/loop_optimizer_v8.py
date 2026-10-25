@@ -1011,9 +1011,8 @@ async def log_target(loop_id: str, operation: str = Query(pattern=r'^[0-9a-f]{32
         if job is None or not (job.get('backend') or {}).get('id'):
             raise HTTPException(404, 'The native optimizer job has not been created or is no longer available.')
         # The native queue/job record must still belong to this loop and owner.
-        await asyncio.to_thread(_controller.backend.poll, row, job)
-        return JSONResponse({'id': job['backend']['id'], 'cloud': job['backend']['execution'] == 'vast',
-                             'name': job['name'], 'kind': job['kind']}, headers={'Cache-Control': 'no-store'})
+        target = await asyncio.to_thread(_controller.backend.native_target, row, job)
+        return JSONResponse(target, headers={'Cache-Control': 'no-store'})
     except Exception as exc:
         raise _error(exc) from exc
 

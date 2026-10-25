@@ -1099,7 +1099,7 @@ textarea.json-invalid:focus {
 <script src="/app/js/pb8_hsl_report.js?v=1"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=4"></script>
-<script src="/app/js/pbgui_dialogs.js?v=11"></script>
+<script src="/app/js/pbgui_dialogs.js?v=12"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -1413,12 +1413,40 @@ function apiFetch(path, opts) {
   return apiFetchFrom(base, path, opts);
 }
 
+var backtestReads=new Set(),backtestReadEpoch=0;
+function backtestTiming(name, started) {
+  var key='pbgui.backtest.'+name;performance.clearMeasures(key);
+  performance.measure(key,{start:started,end:performance.now()});
+}
+function cancelBacktestReads() {
+  backtestReadEpoch++;backtestReads.forEach(function(controller){controller.abort();});backtestReads.clear();
+}
+function timedBacktestRead(load, timeout) {
+  var controller=new AbortController(),expired=false;
+  var timer=setTimeout(function(){expired=true;controller.abort();},timeout||15000);backtestReads.add(controller);
+  return load(controller.signal).catch(function(error){
+    if(expired)throw new Error('Loading Backtest data timed out. Please try again.');throw error;
+  }).finally(function(){clearTimeout(timer);backtestReads.delete(controller);});
+}
+function backtestResultRead(base,path) {
+  return timedBacktestRead(function(signal){return apiFetchFrom(base,path,{signal:signal});});
+}
+window.addEventListener('pagehide',function(){cancelBacktestReads();_resultsLoadGeneration++;clearTimeout(_resultsEmptyRetryTimer);_resultsEmptyRetryTimer=null;});
+window.addEventListener('pageshow',function(event){
+  if(event.persisted&&currentPanel==='results'){
+    var url=new URL(window.location.href);
+    if(hasBacktestResultArrival(url))initializeBacktestPageFromUrl(url).catch(function(error){toast(error.message,'err');});
+    else loadResults(url.searchParams.get('result_filter')||'',{keepVisible:true});
+  }
+});
+
 function apiFetchFrom(base, path, opts) {
   opts = Object.assign({}, opts || {});
   var url = base + path;
   opts.headers = requestHeaders(opts.headers);
   opts.credentials = 'same-origin';
   return fetch(url, opts).then(function(r) {
+    if(r.status===401)cancelBacktestReads();
     return r.text().then(function(text) {
       var payload = null;
       if (text) {
@@ -1737,6 +1765,7 @@ function selectPanel(id, opts) {
   if (id !== 'archive') {
     document.getElementById('ctx-archive-results').style.display = 'none';
   }
+  if(currentPanel==='results'&&id!=='results'){cancelBacktestReads();_resultsLoadGeneration++;}
   currentPanel = id;
   if (id !== 'results' && _resultsEmptyRetryTimer) {
     clearTimeout(_resultsEmptyRetryTimer);
@@ -1762,7 +1791,7 @@ function selectPanel(id, opts) {
     } else {
       loadResults(new URL(location.href).searchParams.get('result_filter') || '', { keepVisible: results.length > 0 });
     }
-    loadArchives();
+    if(!opts.deferArchivesLoad)loadArchives();
   }
   if (id === 'archive' && archives.length === 0) loadArchives();
   if (id === 'legacy') { if (legacyResults.length === 0) loadLegacyResults(); else renderLegacyResults(); }
@@ -2752,12 +2781,13 @@ function saveLoopEvaluationSelection() {
 window.addEventListener('pagehide',saveLoopEvaluationSelection);
 
 async function loadLoopEvaluationResults(selection, filterName, options) {
+  var resultsStarted=performance.now();
   var generation=++_resultsLoadGeneration,failed=false;
   if (_resultsEmptyRetryTimer) {clearTimeout(_resultsEmptyRetryTimer);_resultsEmptyRetryTimer=null;}
   function current(){var next=loopEvaluationSelection();return !failed&&currentPanel==='results'&&generation===_resultsLoadGeneration&&next&&next.key===selection.key;}
   if (!options.keepVisible) document.getElementById('results-list').textContent='Loading Loop evaluations…';
   try {
-    var run=await apiFetchFrom(String(API_BASE).replace(/\/backtest-v8$/, '/optimize-v8/loops'), '/'+selection.run);
+    var run=await backtestResultRead(String(API_BASE).replace(/\/backtest-v8$/, '/optimize-v8/loops'), '/'+selection.run);
     if(!current())return results;
     var jobs=(run.observer_jobs||[]).filter(function(job){return job.kind===selection.kind&&job.simulation_complete&&['complete','completed'].includes(job.status)&&job.log_available;});
     jobs.sort(function(a,b){return a.round-b.round||a.name.localeCompare(b.name);});
@@ -2766,7 +2796,7 @@ async function loadLoopEvaluationResults(selection, filterName, options) {
       while(current()&&cursor<jobs.length){
         var index=cursor++,job=jobs[index],offset=0,items=[];
         while(current()){
-          var page=await apiFetchFrom(API_BASE,'/results?name='+encodeURIComponent(job.name)+'&offset='+offset+'&limit='+RESULTS_PAGE_SIZE);
+          var page=await backtestResultRead(API_BASE,'/results?name='+encodeURIComponent(job.name)+'&offset='+offset+'&limit='+RESULTS_PAGE_SIZE);
           if(!current())return;
           (page.results||[]).forEach(function(result){if(result.config_name===job.name)items.push(Object.assign({},result,{backtest_version:'v8',loop_compare_label:(job.round<0?'Unchanged start':'Loop '+(job.round+1))+' · '+(job.comparison_label||job.candidate_id||'')+' · '+(result.exchange_dir||result.exchange||result.result_name||result.path)}));});
           if(!page.pagination||!page.pagination.has_more)break;
@@ -2779,6 +2809,7 @@ async function loadLoopEvaluationResults(selection, filterName, options) {
     }
     await Promise.all(Array.from({length:Math.min(4,jobs.length)},worker));
     if(!current())return results;
+    backtestTiming('filtered-results',resultsStarted);backtestTiming('document-results',0);
     var seen=new Set(),matches=loaded.flat().filter(function(item){if(seen.has(item.path))return false;seen.add(item.path);return true;}),paths=matches.map(function(item){return item.path;});
     var previous=_loopEvaluationComparison,chosen=getSelectedResults();
     var all=previous.key!==selection.key || (chosen.length===previous.paths.length&&previous.paths.every(function(path){return chosen.includes(path);}));
@@ -2844,7 +2875,28 @@ function initializeBacktestLoopReturn() {
   var toolbar = document.getElementById('loop-return-toolbar');
   toolbar.hidden = !target;
   toolbar.style.display = target ? '' : 'none';
-  document.getElementById('loop-return-button').onclick = target ? function() { window.location.assign(target.href); } : null;
+  var pair=null;
+  try {
+    var saved=JSON.parse(sessionStorage.getItem('pbgui.loop.handoff')||'null');
+    var entry=performance.getEntriesByType('navigation')[0];
+    if(saved&&Date.now()-saved.created>=300000){sessionStorage.removeItem('pbgui.loop.handoff');saved=null;}
+    var source=saved&&new URL(saved.from,window.location.href);if(source)source.hash='';
+    if(target&&saved&&Date.now()-saved.created<300000&&saved.back===target.href&&saved.to===window.location.href&&
+       document.referrer===source.href&&entry&&entry.type==='navigate'&&history.length===saved.length+1) {
+      pair=saved;history.replaceState(Object.assign({},history.state,{pbguiLoopReturn:saved}),'',window.location.href);
+    } else if(target&&history.state&&history.state.pbguiLoopReturn){
+      var candidate=history.state.pbguiLoopReturn;
+      if(saved&&Date.now()-candidate.created<300000&&saved.created===candidate.created&&candidate.back===target.href&&history.length===candidate.length+1)pair=candidate;
+    }
+  } catch (_) {}
+  document.getElementById('loop-return-button').onclick = target ? function() {
+    if(pair&&history.length===pair.length+1)history.back();else window.location.assign(target.href);
+  } : null;
+}
+
+function hasBacktestResultArrival(url) {
+  if(!backtestEditorAdapter.isV8||url.searchParams.get('panel')!=='results'||url.hash&&url.hash!=='#results')return false;
+  return !!url.searchParams.get('result_filter')||!!loopEvaluationSelection(url);
 }
 
 async function initializeBacktestPageFromUrl(arrivalUrl) {
@@ -2853,10 +2905,10 @@ async function initializeBacktestPageFromUrl(arrivalUrl) {
   var nativeLog=url.searchParams.get('native_log');
   if(backtestEditorAdapter.isV8&&nativeLog&&/^[0-9a-f-]{32,36}$/.test(nativeLog))showLog(nativeLog);
   if (backtestEditorAdapter.isV8 && url.searchParams.get('panel')==='results' && /^[0-9a-f]{32}$/.test(url.searchParams.get('result_loop')||'') && ['observer_holdout','observer_full_range'].includes(url.searchParams.get('result_evaluation')) && (!url.hash||url.hash==='#results')) {
-    selectPanel('results',{deferResultsLoad:true});await loadResults(url.searchParams.get('result_filter')||'');return;
+    selectPanel('results',{deferResultsLoad:true,deferArchivesLoad:true});await loadResults(url.searchParams.get('result_filter')||'');return;
   }
   if (backtestEditorAdapter.isV8 && url.searchParams.get('panel') === 'results' && url.searchParams.get('result_filter') && (!url.hash || url.hash === '#results')) {
-    selectPanel('results', {deferResultsLoad:true});
+    selectPanel('results', {deferResultsLoad:true,deferArchivesLoad:true});
     var filter = url.searchParams.get('result_filter');
     var loading = loadResults(filter), loadGeneration = _resultsLoadGeneration;
     await loading;
@@ -6135,6 +6187,7 @@ function loadResults(filterName, loadOptions) {
     clearTimeout(_resultsEmptyRetryTimer);
     _resultsEmptyRetryTimer = null;
   }
+  var resultsStarted=performance.now();
   var loadGeneration = ++_resultsLoadGeneration;
   var selectedVersion = selectedResultsVersion();
   var versions = selectedVersion === 'both' ? ['v7', 'v8'] : [selectedVersion];
@@ -6178,7 +6231,7 @@ function loadResults(filterName, loadOptions) {
   function loadVersionPage(version, offset) {
     var path = '/results?offset=' + offset + '&limit=' + RESULTS_PAGE_SIZE;
     if (selectedFilter) path += '&name=' + encodeURIComponent(selectedFilter);
-    return apiFetchFrom(backtestApiBase(version), path).then(function(d) {
+    return backtestResultRead(backtestApiBase(version), path).then(function(d) {
       if (loadGeneration !== _resultsLoadGeneration) return;
       var page = (d.results || []).map(function(result) {
         return Object.assign({}, result, { backtest_version: version });
@@ -6205,6 +6258,7 @@ function loadResults(filterName, loadOptions) {
     return loadVersionPage(version, 0);
   })).then(function() {
     if (loadGeneration !== _resultsLoadGeneration) return results;
+    backtestTiming('filtered-results',resultsStarted);backtestTiming('document-results',0);
     var applied = results;
     var selectedItems = resultsForSelectedVersion(applied);
     if (currentPanel === 'results' && selectedItems.length === 0 && _resultsEmptyRetryCount < 3) {
@@ -6259,12 +6313,17 @@ function parseCSV(text) {
 /* ── Fetch CSV from file-streaming endpoint ── */
 function fetchCSV(path, file, result) {
   var url = resultApiBase(result) + '/results/' + file + '?path=' + encodeURIComponent(path);
-  return fetch(url, { credentials: 'same-origin' })
-    .then(function(r) {
-      if (!r.ok) throw new Error(r.statusText);
-      return r.text();
-    })
-    .then(function(text) { return parseCSV(text); });
+  var started=performance.now();
+  return timedBacktestRead(function(signal){
+    return fetch(url,{credentials:'same-origin',signal:signal}).then(function(r){
+      if(r.status===401)cancelBacktestReads();
+      if(!r.ok)throw new Error(r.statusText);return r.text();
+    }).then(function(text){
+      if(file==='equity')backtestTiming('equity-fetch',started);
+      var parseStarted=performance.now(),csv=parseCSV(text);
+      if(file==='equity')backtestTiming('equity-parse',parseStarted);return csv;
+    });
+  },60000);
 }
 
 /* ── Results table — icon buttons + row-click selection ── */
@@ -8640,6 +8699,8 @@ function _compareLegendLayout(traces, chartWidth) {
 }
 
 function _compareResultPaths(paths, resultSet, compareEl, chartId, isCurrent) {
+  var equityStarted=performance.now(),epoch=backtestReadEpoch;
+  var previousCurrent=isCurrent;isCurrent=function(){return epoch===backtestReadEpoch&&(!previousCurrent||previousCurrent());};
   compareEl.style.display = '';
   compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">Loading equity data for comparison…\x3C/div>';
 
@@ -8649,16 +8710,20 @@ function _compareResultPaths(paths, resultSet, compareEl, chartId, isCurrent) {
     var cacheKey = version + ':' + path;
     if (_beCache[cacheKey]) return Promise.resolve({ path: path, version: version, be: _beCache[cacheKey] });
     return fetchCSV(path, 'equity', r).then(function(csv) {
-      var be = normalizeBE(csv, r);
-      _beCache[cacheKey] = be;
+      var prepareStarted=performance.now(),be = normalizeBE(csv, r);
+      backtestTiming('equity-prepare',prepareStarted);
+      if(isCurrent())_beCache[cacheKey] = be;
       return { path: path, version: version, be: be };
-    }).catch(function() {
-      return { path: path, version: version, be: { time: [], equity: [], balance: [] } };
+    }).catch(function(error){
+      if(error.name==='AbortError')throw error;
+      return {path:path,version:version,be:{time:[],equity:[],balance:[]},error:error};
     });
   });
 
   return Promise.all(promises).then(function(allData) {
     if (isCurrent && !isCurrent()) return false;
+    backtestTiming('equity-total',equityStarted);var chartStarted=performance.now();
+    var failures=allData.filter(function(item){return item.error;});
     var traces = [];
     var colors = ['#4da6ff', '#21c354', '#ff8c00', '#ff4b4b', '#b366ff', '#ffcc00', '#00cccc', '#ff66b2'];
     allData.forEach(function(item, i) {
@@ -8669,7 +8734,7 @@ function _compareResultPaths(paths, resultSet, compareEl, chartId, isCurrent) {
       traces.push({ x: item.be.time, y: item.be.balance, name: 'bal ' + label, line: { width: 2.5, color: colors[i % colors.length], dash: 'dot' } });
     });
     if (!traces.length) {
-      compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">No equity data found for the selected results.\x3C/div>';
+      compareEl.textContent=failures.length?'Could not load comparison: '+failures[0].error.message:'No equity data found for the selected results.';
       return false;
     }
     var layout = _chartLayout('', 'Balance');
@@ -8679,8 +8744,19 @@ function _compareResultPaths(paths, resultSet, compareEl, chartId, isCurrent) {
     layout.margin.t = legendLayout.marginTop;
     layout.height = legendLayout.height;
     layout.legend = { orientation: 'h', x: 0, y: 1.02, xanchor: 'left', yanchor: 'bottom' };
-    Plotly.newPlot(chartId, traces, layout, _plotlyConf());
-    return true;
+    return Promise.resolve(Plotly.newPlot(chartId, traces, layout, _plotlyConf())).then(function(){
+      if(!isCurrent())return false;
+      backtestTiming('chart',chartStarted);
+      if(failures.length){
+        var warning=document.createElement('p');warning.setAttribute('role','status');
+        warning.textContent=failures.length+' of '+paths.length+' selected results could not load equity data.';
+        compareEl.prepend(warning);
+      }
+      return true;
+    });
+  }).catch(function(error){
+    if(!isCurrent()||error.name==='AbortError')return false;
+    compareEl.textContent='Could not load comparison: '+error.message;return false;
   });
 }
 
@@ -11232,15 +11308,14 @@ var initialViewState = loadStoredBacktestViewState();
 applyBacktestSortState(initialViewState.sorts);
 loadSettings().catch(function(error) { console.error('Failed to load Backtest settings:', error); });
 initBacktestOhlcvPreflightController();
-loadConfigs();
 connectWS();
-restoreAIQueueCompareRequest();
+if(!hasBacktestResultArrival(initialBacktestUrl))restoreAIQueueCompareRequest();
 if (initialViewState.panel === 'archive' && initialViewState.archive) {
   selectedArchiveName = initialViewState.archive;
   archiveResultsMode = archiveModeFromValue(initialViewState.archiveMode);
 }
-if (backtestEditorAdapter.initialPanels.indexOf(initialViewState.panel) >= 0) selectPanel(initialViewState.panel);
-initializeBacktestPageFromUrl(initialBacktestUrl);
+if (!hasBacktestResultArrival(initialBacktestUrl) && backtestEditorAdapter.initialPanels.indexOf(initialViewState.panel) >= 0) selectPanel(initialViewState.panel);
+initializeBacktestPageFromUrl(initialBacktestUrl).catch(function(error){toast(error.message,'err');});
 </script>
 
 <!-- ── Nav bar ──────────────────────────────────── -->

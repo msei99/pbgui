@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 
+import pytest
+
 
 def test_loop_backtest_links_keep_filters_logs_and_newer_navigation():
     """A native result link filters the real loader and does not override newer hash state."""
@@ -23,7 +25,7 @@ function editConfig(){}
 (async()=>{
  window.location.href='http://pbgui.test/api/backtest-v8/main_page?panel=results&result_filter=loop_name&native_log=11111111-1111-1111-1111-111111111111';
  await initializeBacktestPageFromUrl();
- assert.deepEqual(panels,[['results',{deferResultsLoad:true}]]);
+ assert.deepEqual(panels,[['results',{deferResultsLoad:true,deferArchivesLoad:true}]]);
  assert.deepEqual(filters,['loop_name']);assert.equal(logs.length,1);
  panels=[];filters=[];
  window.location.href+='\\x23queue';await initializeBacktestPageFromUrl();
@@ -70,15 +72,17 @@ def test_loop_results_link_carries_current_report_and_main_view():
 const assert=require('node:assert/strict');let handler,assigned='';
 let location={origin:'http://pbgui.test',href:'http://pbgui.test/api/optimize-v8/main_page?loop_id='+ 'a'.repeat(32)+'&loop_view=cycle&loop_cycle=1&loop_tab=backtests#loops-results'};
 location.assign=value=>assigned=value;
+let resultsFlight=null,stopped=false;function navigationTiming(){};function leaveForBacktest(url){location.assign(url.href);}
+let document={querySelectorAll:()=>[]};
 let state={panel:'loops-results',navigationSeq:1},selected='a'.repeat(32),resultsGeneration=0,reportView='cycle',reportRound=1,reportTab='backtests';function select(id){assert.equal(id,'a'.repeat(32));}
-function button(parent,label,action){handler=action;return {};}
+function button(parent,label,action){handler=action;return {dataset:{},setAttribute(){}};}
 async function request(){return {name:'specific backtest'};}function error(exc){throw exc;}
 ''' + source[start:end] + r'''
 backtestButton({}, {id:'a'.repeat(32)}, {log_available:true,operation:'b'.repeat(32)});
 (async()=>{
  await handler();let target=new URL(assigned);assert.equal(target.pathname,'/api/backtest-v8/main_page');assert.equal(target.searchParams.get('result_filter'),'specific backtest');assert.equal(target.searchParams.get('result_compare'),'1');assert.equal(target.searchParams.get('loop_return'),new URL(location.href).pathname+new URL(location.href).search+'#loops-results');
  assigned='';let resolve;request=()=>new Promise(done=>resolve=done);let pending=handler();state.navigationSeq++;resolve({name:'outdated'});await pending;assert.equal(assigned,'');
- let olderResolve,newerResolve;request=()=>new Promise(done=>olderResolve=done);let older=handler();request=()=>new Promise(done=>newerResolve=done);let newer=handler();newerResolve({name:'latest'});await newer;olderResolve({name:'stale'});await older;assert.equal(new URL(assigned).searchParams.get('result_filter'),'latest');
+ let resolveBusy,calls=0;request=()=>{calls++;return new Promise(done=>resolveBusy=done);};let older=handler();await handler();assert.equal(calls,1);resolveBusy({name:'latest'});await older;assert.equal(new URL(assigned).searchParams.get('result_filter'),'latest');
 })().catch(error=>{console.error(error);process.exit(1);});
 '''
     completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=False)
@@ -92,7 +96,7 @@ def test_native_compare_does_not_reopen_after_handoff_is_obsolete():
     end = source.index('function _resolveQueueComparePaths(', start)
     script = r'''
 const assert=require('node:assert/strict');let resolve,current=true,plots=0;
-let _beCache={},backtestEditorAdapter={version:'v8'};
+let backtestReadEpoch=0,performance={now:()=>0};function backtestTiming(){};let _beCache={},backtestEditorAdapter={version:'v8'};
 function fetchCSV(){return new Promise(done=>resolve=done);}
 function normalizeBE(){return {time:['2020-01-01'],balance:[1000],equity:[1000]};}
 let Plotly={newPlot:()=>plots++};
@@ -132,3 +136,113 @@ nativeLogButton({}, {}, [{status:'planned',log_available:false}]);
 assert.strictEqual(control.disabled,true);
 """
     subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+
+
+
+def test_loop_read_timeouts_abort_and_release_resources():
+    """Only affected reads have deadlines and cancelled work can restart after BFCache."""
+    source = (Path(__file__).resolve().parents[1] / 'frontend/js/pb8_loop_optimizer.js').read_text()
+    function = source[source.index('  async function request('):source.index('  function showMessages()')]
+    script = r"""
+const assert=require('node:assert/strict');let timers=new Map(),next=0,readRequests=new Map(),base='/api/optimize-v8/loops';
+let stopped=false,timer,generation=0,watchGeneration=0;
+function setTimeout(fn,ms){timers.set(++next,{fn,ms});return next;}function clearTimeout(id){timers.delete(id);}
+let fetch=(url,opts)=>new Promise((resolve,reject)=>opts.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError'))));
+function cancelLoopReads(){readRequests.forEach((path,controller)=>controller.abort());}
+"""+function+r"""
+(async()=>{
+ let target=request('/'+'a'.repeat(32)+'/log-target?operation='+'b'.repeat(32));
+ assert.equal([...timers.values()][0].ms,10000);[...timers.values()][0].fn();
+ await assert.rejects(target,/timed out/);assert.equal(timers.size,0);assert.equal(readRequests.size,0);
+ let read=request('/configs');assert.equal([...timers.values()][0].ms,15000);cancelLoopReads();await assert.rejects(read,{name:'AbortError'});
+ assert.equal(timers.size,0);assert.equal(readRequests.size,0);
+ fetch=async()=>({ok:true,json:async()=>({configs:[]})});assert.deepEqual(await request('/configs'),{configs:[]});
+ assert.equal(readRequests.size,0);assert.equal(timers.size,0);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_loop_history_return_requires_a_verified_adjacent_entry():
+    """Use history only for the exact recent handoff and retain mounted fallback validation."""
+    source = (Path(__file__).resolve().parents[1] / 'frontend/v7_backtest.html').read_text()
+    function = source[source.index('function getBacktestLoopReturnUrl()'):source.index('async function initializeBacktestPageFromUrl(')]
+    script = r"""
+const assert=require('node:assert/strict');let backCalls=0,assigned='',stored;
+const from='http://pbgui.test/nested/api/optimize-v8/main_page?loop_id='+'a'.repeat(32)+'&loop_view=cycle&loop_cycle=3&loop_tab=performance#loops-queue';
+const target=new URL('http://pbgui.test/nested/api/backtest-v8/main_page?panel=results&result_filter=fixture');target.searchParams.set('loop_return',from);
+let button={},toolbar={style:{}},backtestEditorAdapter={isV8:true};
+let document={referrer:from.split('#')[0],getElementById:id=>id==='loop-return-toolbar'?toolbar:button};
+let window={location:{href:target.href,assign:url=>assigned=url}},history={length:6,state:null,replaceState(value){this.state=value;},back(){backCalls++;}};
+let performance={getEntriesByType:()=>[{type:'navigate'}]},sessionStorage={getItem:()=>stored};
+"""+function+r"""
+stored=JSON.stringify({from,to:target.href,back:from,length:5,created:Date.now()});
+initializeBacktestLoopReturn();button.onclick();assert.equal(backCalls,1);assert.equal(assigned,'');
+// A reload with retained state can use the same pair.
+performance.getEntriesByType=()=>[{type:'reload'}];initializeBacktestLoopReturn();button.onclick();assert.equal(backCalls,2);
+// An unrelated entry/referrer cannot authorize history.back().
+history.state=null;document.referrer='http://pbgui.test/other';initializeBacktestLoopReturn();button.onclick();assert.equal(backCalls,2);assert.equal(assigned,from);
+"""
+    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+    assert completed.returncode == 0, completed.stderr
+
+
+
+def test_backtest_read_deadlines_and_bfcache_cleanup():
+    """Chart reads have their own 60-second budget and page suspension releases all timers."""
+    source=(Path(__file__).resolve().parents[1]/'frontend/v7_backtest.html').read_text()
+    function=source[source.index('var backtestReads='):source.index('function apiFetchFrom(')]
+    script=r"""
+const assert=require('node:assert/strict');let callbacks={},timers=new Map(),next=0,_resultsLoadGeneration=0,_resultsEmptyRetryTimer=null;
+let window={addEventListener:(name,fn)=>callbacks[name]=fn},currentPanel='results',loads=0;
+function setTimeout(fn,ms){timers.set(++next,{fn,ms});return next;}function clearTimeout(id){timers.delete(id);}
+function loadResults(){loads++;}function hasBacktestResultArrival(){return false;}
+window.location={href:'http://pbgui.test/api/backtest-v8/main_page#results'};
+"""+function+r"""
+const pending=signal=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError'))));
+(async()=>{
+ let chart=timedBacktestRead(pending,60000);assert.equal([...timers.values()][0].ms,60000);[...timers.values()][0].fn();
+ await assert.rejects(chart,/timed out/);assert.equal(timers.size,0);assert.equal(backtestReads.size,0);
+ let read=timedBacktestRead(pending);assert.equal([...timers.values()][0].ms,15000);callbacks.pagehide();await assert.rejects(read,{name:'AbortError'});
+ assert.equal(timers.size,0);assert.equal(backtestReads.size,0);callbacks.pageshow({persisted:true});assert.equal(loads,1);
+ assert.equal(await timedBacktestRead(async()=>42),42);assert.equal(timers.size,0);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    completed=subprocess.run(['node','-e',script],capture_output=True,text=True,timeout=10)
+    assert completed.returncode==0,completed.stderr
+
+
+
+@pytest.mark.parametrize('version', ['v7','v8'])
+@pytest.mark.parametrize('failure', ['Not Found','Loading Backtest data timed out. Please try again.'])
+def test_compare_keeps_available_curves_when_one_equity_read_fails(version, failure):
+    """A failed scenario reports its omission without hiding healthy PB7/PB8 comparison curves."""
+    source=(Path(__file__).resolve().parents[1]/'frontend/v7_backtest.html').read_text()
+    function=source[source.index('function _compareResultPaths('):source.index('function _resolveQueueComparePaths(')]
+    script=r"""
+const assert=require('node:assert/strict');let backtestReadEpoch=0,_beCache={},plots=[],warnings=[],current=true;
+const backtestEditorAdapter={version:process.argv[1]},failure=process.argv[2];
+function backtestTiming(){}
+function fetchCSV(path){return path==='healthy'?Promise.resolve({}):Promise.reject(new Error(failure));}
+function normalizeBE(){return {time:['2020-01-01'],equity:[1000],balance:[1000]};}
+function _chartLayout(){return {margin:{}};}function chartWrap(){return '';}function _compareLegendLayout(){return {marginTop:40,height:800};}function _plotlyConf(){return {};}
+const document={getElementById:()=>({clientWidth:800}),createElement:()=>({setAttribute(){},textContent:''})};
+const Plotly={newPlot:(id,traces)=>{plots.push(traces);return Promise.resolve();}};
+"""+function+r"""
+(async()=>{
+ const area={style:{},innerHTML:'',textContent:'',clientWidth:800,prepend:node=>warnings.push(node.textContent)};
+ const paths=['healthy','missing'],data=paths.map(path=>({path}));
+ assert.equal(await _compareResultPaths(paths,data,area,'chart',()=>current),true);
+ assert.equal(plots.length,1);assert.equal(plots[0].length,2,'healthy equity and balance remain visible');
+ assert.deepEqual(warnings,['1 of 2 selected results could not load equity data.']);assert.deepEqual(paths,['healthy','missing']);
+ assert.ok(_beCache[backtestEditorAdapter.version+':healthy']);assert.equal(_beCache[backtestEditorAdapter.version+':missing'],undefined);
+ assert.equal(await _compareResultPaths(['missing'],data,area,'chart',()=>current),false);
+ assert.equal(area.textContent,'Could not load comparison: '+failure);assert.equal(plots.length,1);
+ current=false;warnings=[];area.textContent='newer view';
+ assert.equal(await _compareResultPaths(['missing'],data,area,'chart',()=>current),false);
+ assert.deepEqual(warnings,[]);assert.equal(area.textContent,'newer view');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    completed=subprocess.run(['node','-e',script,version,failure],capture_output=True,text=True,timeout=10)
+    assert completed.returncode==0,completed.stderr

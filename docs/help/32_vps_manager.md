@@ -30,8 +30,8 @@ The Linux Updates dialog closes with either **×** in its header or **Close** at
 Overview interactions:
 
 - Click a column header to sort by that column; click the same header again to reverse the sort order.
-- Each visible column header includes a small hide icon so you can remove that column directly from the table.
-- A single small reset icon at the far right of the header row restores the default Overview columns and default sorting.
+- Each column header includes a **Hide column** (✕) button while more than one column is visible. Its centered click target is at least 24 × 24 px; clicking it hides only that column without changing the sorting. You can also focus the button with Tab and activate it with Enter or Space.
+- The **Reset view** (↺) button at the far right of the header row has the same minimum target size and restores the default Overview columns and default sorting.
 - Column visibility and sorting are saved locally in the browser.
 - Click and drag across VPS rows to select multiple deploy targets from the Overview table.
 
@@ -203,6 +203,8 @@ journalctl --user -u pbgui-monitor-agent.service
 `Cleanup VPS` also installs or refreshes two small daily cleanup cron jobs on the VPS: one user-level job for pip and rustup caches, plus one root-level job for `journalctl --vacuum-time=1d`. The periodic jobs run quietly and do not keep their own log history.
 
 Sensitive login fields such as **VPS User Password** include an eye button so you can temporarily reveal the value entered for the current session. VPS Manager has no raw CoinMarketCap key field or reveal action.
+
+The VPS user password prompt closes with **Escape**, **Cancel**, or **×**, without confirming or starting the requested action. Clicking the backdrop or inside the dialog does not close it. While an Overview deployment is validating a password, closing is blocked until validation finishes; after a validation error you can cancel again. If Guide or another dialog is above the prompt, Escape belongs to that window first.
 
 The reveal state is preserved during live updates, so opening an eye button does not immediately flip back to hidden when fresh WebSocket data arrives.
 

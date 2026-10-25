@@ -24,6 +24,8 @@ Before PB8 8.6 only: In **Advanced Settings → Modes & Policies**, `live.hsl_en
 
 ## Run List
 
+Delete and the **P**, **G**, **T**, and **N** confirmations can be cancelled with **Escape**, **Cancel**, or **Close** without sending a delete or forced-mode request. Clicking the backdrop does not close them. The confirmation initially focuses its action button and returns focus to the triggering action on close. After a backdrop or message click, **Tab** returns to the first dialog control and **Shift+Tab** to the last; keyboard navigation cannot reach the page behind the confirmation. Repeated triggers are ignored while a confirmation or its request is pending; a late response cannot close a newer dialog.
+
 Open **PBv8 -> Run** to view configs stored below `data/run_v8`. PB7 and PB8 use the same responsive Run-list layout with sidebar search and status filters. The table shows the active PB8 strategy, exchange user, target host, config and running versions, exposure summary, confirmed running hosts, note, and PBCluster desired state. Strategy is sortable and included in list search.
 
 The main **Status** column combines published desired state with exact PB8 process observations reported by the local runner and remote monitors:

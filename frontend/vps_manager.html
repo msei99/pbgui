@@ -1090,10 +1090,18 @@
     }
 
     .th-icon-btn {
+      /* Enlarge and center the hit target; offset padding to preserve table width. */
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      min-width: 24px;
+      min-height: 24px;
+      padding: 6px 7px;
+      margin: -6px -7px;
       border: 0;
       background: transparent;
       color: var(--text-dim);
-      padding: 0;
       cursor: pointer;
       font-size: 12px;
       line-height: 1;
@@ -3022,7 +3030,7 @@
   </div>
 
   <script src='/app/js/log_viewer_panel.js?v=50'></script>
-  <script src='/app/js/pbgui_dialogs.js?v=11'></script>
+  <script src='/app/js/pbgui_dialogs.js?v=12'></script>
   <script>
     const API_BASE = "%%API_BASE%%";
     const WS_BASE = "%%WS_BASE%%";
@@ -6155,9 +6163,15 @@
         store.pendingLocalSudoAction = null;
       }
       const overlay = document.getElementById('alertModalOverlay');
+      const passwordInput = overlay.querySelector('#pw-prompt-input');
+      const restorePasswordFocus = passwordInput && passwordInput.promptReturnFocus;
+      const ownsFocus = overlay.contains(document.activeElement) || document.activeElement === document.body;
       overlay.classList.remove('visible');
       overlay.classList.remove('deploy-log-overlay');
       resetAlertModalWindow();
+      if (restorePasswordFocus && restorePasswordFocus.isConnected && ownsFocus && !hasPasswordPromptOverlayPriority()) {
+        restorePasswordFocus.focus();
+      }
     }
 
     let fileBrowserPath = '';
@@ -6353,7 +6367,31 @@
       });
     }
 
+    function hasPasswordPromptOverlayPriority() {
+      // Check before bubbling handlers can hide overlays without consuming Escape.
+      return isClusterOnboardModalVisible() || !!document.querySelector(
+        '#help-ovl.visible, #pbgui-shared-help-ovl.visible, #pbgui-dialog-ovl.visible, ' +
+        '#pbgui-confirm-ovl.visible, #pbgui-alert-ovl.visible, #pbgui-about-ovl.visible, ' +
+        '#pbgui-notify-panel.visible, #cpuHistoryOverlay.visible'
+      ) || document.getElementById('fileBrowserOverlay').style.display === 'block';
+    }
+
+    // One capture listener observes ownership before Guide/navigation listeners,
+    // regardless of their registration order. Other alert-overlay users are untouched.
+    window.addEventListener('keydown', function (event) {
+      const overlay = document.getElementById('alertModalOverlay');
+      if (event.key !== 'Escape' || event.defaultPrevented || !overlay.classList.contains('visible')) return;
+      if (!overlay.querySelector('#pw-prompt-input') || !overlay.querySelector('#pw-prompt-confirm')) return;
+      if (hasPasswordPromptOverlayPriority()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeAlertModal();
+    }, true);
+
     function openPasswordPrompt(hostname, onConfirm, options) {
+      const previousInput = document.getElementById('pw-prompt-input');
+      const returnFocus = previousInput && previousInput === document.activeElement
+        ? previousInput.promptReturnFocus : document.activeElement;
       const opts = options || {};
       const title = String(opts.title || 'VPS User Password Required');
       const message = String(opts.message || 'Enter the VPS user password to run this command:');
@@ -6375,8 +6413,11 @@
       box.innerHTML = '<div style="display:grid;gap:10px"><div>' + esc(message) + '</div>' + targetHtml + '<div id="pw-prompt-error" class="field-sub error" style="display:none"></div><div class="pw-wrap"><input type="password" id="pw-prompt-input" class="pw-input" placeholder="VPS user password" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none"><button type="button" id="pw-prompt-eye" class="pw-eye" onclick="togglePwPromptVisibility()" title="Show or hide password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px;padding:4px">👁</button></div></div>';
       document.getElementById('alertModalBtnRow').innerHTML = '<button class=\'btn ghost\' type=\'button\' id=\'pw-prompt-cancel\' onclick=\'closeAlertModal()\'>Cancel</button> <button class=\'btn primary\' type=\'button\' id=\'pw-prompt-confirm\'>' + esc(confirmLabel) + '</button>';
       document.getElementById('alertModalOverlay').classList.add('visible');
-      document.getElementById('pw-prompt-confirm').onclick = function () {
-        const pw = document.getElementById('pw-prompt-input').value;
+      const input = document.getElementById('pw-prompt-input');
+      const confirm = document.getElementById('pw-prompt-confirm');
+      input.promptReturnFocus = returnFocus;
+      confirm.onclick = function () {
+        const pw = input.value;
         if (!pw) {
           setPasswordPromptStatus('Enter the VPS user password first.', 'error');
           return;
@@ -6390,13 +6431,18 @@
           closeAlertModal();
         }
       };
+      input.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' && !event.defaultPrevented) {
+          event.preventDefault();
+          confirm.click();
+        }
+      });
       setTimeout(function () {
-        const input = document.getElementById('pw-prompt-input');
-        if (input) {
+        const overlay = document.getElementById('alertModalOverlay');
+        if (document.getElementById('pw-prompt-input') === input && overlay.classList.contains('visible')
+            && !hasPasswordPromptOverlayPriority()
+            && (document.activeElement === returnFocus || document.activeElement === document.body)) {
           input.focus();
-          input.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter') document.getElementById('pw-prompt-confirm').click();
-          });
         }
       }, 100);
     }

@@ -2149,7 +2149,7 @@
         return;
       }
       var dialogs = document.createElement('script');
-      dialogs.src = _appPath('/app/js/pbgui_dialogs.js?v=11');
+      dialogs.src = _appPath('/app/js/pbgui_dialogs.js?v=12');
       dialogs.onload = loadDrawerScript;
       dialogs.onerror = loadDrawerScript;
       document.head.appendChild(dialogs);

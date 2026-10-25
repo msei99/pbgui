@@ -2,8 +2,10 @@
 
 import asyncio
 from pathlib import Path
+import subprocess
 import threading
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
@@ -156,6 +158,229 @@ def test_missing_monitor_unit_keeps_restart_prompt_visible(monkeypatch) -> None:
     assert payload["needs_restart"] is True
     assert payload["api_restart_required"] is True
     assert "VPS Monitor systemd migration required" in payload["runtime_restart_reasons"]
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_systemd_ownership_skips_non_linux_platforms(monkeypatch, platform) -> None:
+    """Non-Linux API processes need neither systemctl nor a user-manager lookup."""
+    run = Mock(side_effect=AssertionError("systemctl must not run"))
+    env = Mock(side_effect=AssertionError("user environment must not be inspected"))
+    monkeypatch.setattr(PBApiServer.sys, "platform", platform)
+    monkeypatch.setattr(PBApiServer.subprocess, "run", run)
+    monkeypatch.setattr(PBApiServer, "_systemd_user_env", env)
+
+    assert PBApiServer._systemd_owns_current_api() is False
+    run.assert_not_called()
+    env.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "expected"),
+    [
+        (1, "", False),
+        (0, "", False),
+        (0, "malformed response", False),
+        (0, "ActiveState=active\n", False),
+        (0, "MainPID={pid}\n", False),
+        (0, "ActiveState=inactive\nMainPID={pid}\n", False),
+        (0, "ActiveState=active\nMainPID=0\n", False),
+        (0, "ActiveState=active\nMainPID=invalid\n", False),
+        (0, "ActiveState=active\nMainPID=\n", False),
+        (0, "ActiveState=active\nMainPID={foreign_pid}\n", False),
+        (0, "ActiveState=active\nMainPID={pid}\n", True),
+    ],
+)
+def test_systemd_ownership_requires_active_unit_with_own_pid(
+    monkeypatch, returncode, stdout, expected,
+) -> None:
+    """Only a successful, active API unit with this MainPID permits migration."""
+    pid = PBApiServer.os.getpid()
+    run = Mock(return_value=subprocess.CompletedProcess(
+        [], returncode, stdout=stdout.format(pid=pid, foreign_pid=pid + 1), stderr="",
+    ))
+    env = {"XDG_RUNTIME_DIR": "/isolated/user-runtime"}
+    monkeypatch.setattr(PBApiServer.sys, "platform", "linux")
+    monkeypatch.setattr(PBApiServer.subprocess, "run", run)
+    monkeypatch.setattr(PBApiServer, "_systemd_user_env", lambda: env)
+
+    assert PBApiServer._systemd_owns_current_api() is expected
+    run.assert_called_once_with(
+        ["systemctl", "--user", "show", "pbgui-api.service", "-p", "ActiveState", "-p", "MainPID"],
+        check=False, capture_output=True, text=True, timeout=5, env=env,
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [FileNotFoundError("systemctl"), PermissionError("denied"), OSError("unavailable"),
+     subprocess.TimeoutExpired("systemctl", 5), RuntimeError("unexpected failure")],
+)
+def test_systemd_ownership_handles_unavailable_manager(monkeypatch, error) -> None:
+    """Failed bounded inspections cannot create an actionable migration reason."""
+    run = Mock(side_effect=error)
+    log = Mock()
+    monkeypatch.setattr(PBApiServer.sys, "platform", "linux")
+    monkeypatch.setattr(PBApiServer.subprocess, "run", run)
+    monkeypatch.setattr(PBApiServer, "_systemd_user_env", lambda: {})
+    monkeypatch.setattr(PBApiServer, "_log", log)
+
+    assert PBApiServer._systemd_owns_current_api() is False
+    run.assert_called_once()
+    if isinstance(error, RuntimeError):
+        assert log.call_args.kwargs["level"] == "ERROR"
+        assert "RuntimeError" in log.call_args.kwargs["meta"]["traceback"]
+    else:
+        log.assert_not_called()
+
+
+@pytest.fixture
+def isolated_monitor_lifespan(monkeypatch, tmp_path):
+    """Replace every productive startup/shutdown boundary with isolated doubles."""
+    import api.auth
+    import api.v7_instances
+    import api.v8_instances
+    import api.vps
+    import pbcoindata_process
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+    monkeypatch.setattr(PBApiServer, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(PBApiServer, "_PBGUI_ROOT", tmp_path)
+    heartbeat = SimpleNamespace(__enter__=Mock(), close=Mock())
+    monkeypatch.setattr(credential_process_registry, "ProcessCapabilityHeartbeat", Mock(return_value=heartbeat))
+    for name in (
+        "harden_sensitive_paths", "_setup_api_logging", "bootstrap_local_legacy_credentials",
+        "run_credential_migration", "persist_credential_migration_error", "db_tools_init",
+        "bt7_startup", "bt8_startup", "opt7_startup", "opt8_startup", "coin_data_startup",
+        "ohlcv_preload_startup", "vps_manager_startup", "vast_startup", "market_data_startup",
+        "strategy_explorer_v8_startup", "profit_sweep_startup", "loop8_startup",
+    ):
+        monkeypatch.setattr(PBApiServer, name, Mock())
+    monkeypatch.setattr(PBApiServer, "load_ini", Mock(return_value=None))
+    monkeypatch.setattr(PBApiServer, "run_startup_migrations", Mock(return_value={"skipped": True, "completed": []}))
+    monkeypatch.setattr(PBApiServer, "reconcile_pending_credentials", Mock(return_value={}))
+    for name in (
+        "ai_capabilities_startup", "_worker_watchdog_loop", "_serial_watcher_loop",
+        "loop8_shutdown", "auth_shutdown", "ai_chat_shutdown", "live_shutdown",
+        "dashboard_shutdown", "heatmap_shutdown", "pareto_explorer_shutdown",
+        "strategy_explorer_v8_shutdown", "coin_data_shutdown", "market_data_shutdown",
+        "profit_sweep_shutdown", "vps_manager_shutdown", "vast_shutdown", "cluster_shutdown",
+        "db_tools_shutdown", "bt7_shutdown", "bt8_shutdown", "opt7_shutdown", "opt8_shutdown",
+    ):
+        monkeypatch.setattr(PBApiServer, name, AsyncMock())
+    for module in (api.vps, api.v7_instances, api.v8_instances):
+        monkeypatch.setattr(module, "init", Mock())
+    monkeypatch.setattr(api.auth, "cleanup_expired_tokens", Mock(return_value=0))
+    monkeypatch.setattr(pbcoindata_process, "reap_children", Mock())
+    monitor = SimpleNamespace(pool=object(), client=object(), start=AsyncMock(), stop=AsyncMock())
+    in_process = Mock(return_value=monitor)
+    proxy = Mock(return_value=monitor)
+    monkeypatch.setitem(PBApiServer.sys.modules, "master.async_monitor", SimpleNamespace(VPSMonitor=in_process))
+    monkeypatch.setitem(PBApiServer.sys.modules, "master.async_logs", SimpleNamespace(AsyncLogStreamer=Mock()))
+    monkeypatch.setitem(PBApiServer.sys.modules, "master.vps_monitor_client", SimpleNamespace(
+        VPSMonitorProxy=proxy, RemoteLogStreamerProxy=Mock(),
+    ))
+    read_serial = Mock(return_value=500)
+    monkeypatch.setattr(PBApiServer, "_read_serial", read_serial)
+    monkeypatch.setattr(PBApiServer, "_startup_serial", 0)
+    monkeypatch.setattr(PBApiServer, "_needs_restart", False)
+    monkeypatch.setattr(PBApiServer, "_runtime_restart_reasons", [])
+    monkeypatch.setattr(PBApiServer, "_vps_monitor", None)
+    monkeypatch.setattr(PBApiServer, "_vps_monitor_in_process", False)
+    monkeypatch.setattr(PBApiServer, "_runtime_service_restart_state", Mock(return_value={"stale_services": []}))
+    log = Mock()
+    monkeypatch.setattr(PBApiServer, "_log", log)
+    monkeypatch.setattr(PBApiServer, "_systemd_user_env", Mock(return_value={}))
+    run_threads = []
+
+    def fake_run(*_args, **_kwargs):
+        """Record inspection placement without contacting a real user manager."""
+        run_threads.append(threading.get_ident())
+        return subprocess.CompletedProcess(
+            [], 0, stdout=f"ActiveState=active\nMainPID={PBApiServer.os.getpid()}\n", stderr="",
+        )
+
+    run = Mock(side_effect=fake_run)
+    monkeypatch.setattr(PBApiServer.subprocess, "run", run)
+    return SimpleNamespace(
+        home=home, monitor=monitor, in_process=in_process, proxy=proxy,
+        run=run, run_threads=run_threads, read_serial=read_serial, log=log, heartbeat=heartbeat,
+    )
+
+
+@pytest.mark.parametrize("mode", ["darwin", "win32", "linux-unmanaged", "linux-owned", "proxy"])
+@pytest.mark.parametrize("serial_changed", [False, True])
+def test_lifespan_only_requests_actionable_monitor_migration(
+    monkeypatch, isolated_monitor_lifespan, mode, serial_changed,
+) -> None:
+    """Real startup branching leaves normal in-process mode current and serial checks intact."""
+    state = isolated_monitor_lifespan
+    monkeypatch.setattr(PBApiServer.sys, "platform", mode if mode in {"darwin", "win32"} else "linux")
+    if mode == "linux-unmanaged":
+        state.run.side_effect = None
+        state.run.return_value = subprocess.CompletedProcess([], 1, stdout="", stderr="No user manager")
+    if mode == "proxy":
+        unit = state.home / ".config/systemd/user/pbgui-vps-monitor.service"
+        unit.parent.mkdir(parents=True)
+        unit.write_text("# isolated test unit\n", encoding="utf-8")
+
+    async def scenario() -> None:
+        """Exercise the actual lifespan with only temporary paths and mock resources."""
+        async with PBApiServer._lifespan(PBApiServer.app):
+            assert PBApiServer._vps_monitor is state.monitor
+            assert PBApiServer._vps_monitor_in_process is (mode != "proxy")
+            if serial_changed:
+                state.read_serial.return_value += 1
+            payload = PBApiServer._restart_status_payload()
+            migration = mode == "linux-owned"
+            assert payload["runtime_restart_reasons"] == (
+                ["VPS Monitor systemd migration required"] if migration else []
+            )
+            assert payload["serial_restart_required"] is serial_changed
+            assert payload["api_restart_required"] is (migration or serial_changed)
+            assert payload["needs_restart"] is (migration or serial_changed)
+            assert [item["label"] for item in payload["restart_services"]] == (
+                ["PBGui API Server"] if migration or serial_changed else []
+            )
+
+    asyncio.run(scenario())
+    state.monitor.stop.assert_awaited_once()
+    state.heartbeat.close.assert_called_once()
+    if mode == "proxy":
+        state.proxy.assert_called_once()
+        state.in_process.assert_not_called()
+    else:
+        state.in_process.assert_called_once()
+        state.proxy.assert_not_called()
+    if mode in {"darwin", "win32", "proxy"}:
+        state.run.assert_not_called()
+    else:
+        state.run.assert_called_once()
+    if mode == "linux-owned":
+        assert state.run_threads and all(ident != threading.get_ident() for ident in state.run_threads)
+    if mode in {"darwin", "win32", "linux-unmanaged"}:
+        assert any(
+            call.args[1] == "[lifespan] using in-process VPS monitor" and call.kwargs["level"] == "INFO"
+            for call in state.log.call_args_list
+        )
+
+
+def test_restart_rechecks_systemd_ownership_before_handoff(monkeypatch) -> None:
+    """A restart must inspect current ownership again rather than trust startup state."""
+    ownership = Mock(side_effect=[True, False])
+    prepare = Mock(return_value=(True, "prepared"))
+    queue = Mock(return_value=(True, "queued"))
+    monkeypatch.setattr(PBApiServer, "_systemd_owns_current_api", ownership)
+    monkeypatch.setattr(PBApiServer, "_vps_monitor_in_process", True)
+    monkeypatch.setattr(PBApiServer, "_prepare_vps_monitor_systemd_unit", prepare)
+    monkeypatch.setattr(PBApiServer, "_queue_current_api_systemd_restart", queue)
+    monkeypatch.setattr(PBApiServer, "_log", Mock())
+
+    assert PBApiServer._restart_current_api_systemd_unit() is True
+    assert PBApiServer._restart_current_api_systemd_unit() is False
+    assert ownership.call_count == 2
+    prepare.assert_called_once()
+    queue.assert_called_once()
 
 
 def test_shared_nav_restarts_all_reported_services_and_waits_for_serials() -> None:

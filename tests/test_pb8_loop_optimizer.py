@@ -1547,33 +1547,89 @@ def test_legacy_interpretation_proceeds_to_initial_optimizer(record, tmp_path):
 
 
 def test_overlapping_progress_watches_have_one_timer():
-    """Concurrent navigation/visibility watches cannot multiply polling timers."""
+    """Share initial work, render before rental, reject stale replies and retain action updates."""
     import subprocess
     script = r"""
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
-const body = source.match(/  async function watch\(\) \{[\s\S]*?\n  \}/)[0];
-const pending = [], timers = new Map();
-let counter = 0;
-const context = vm.createContext({timer:null,watchGeneration:0,stopped:false,
-    document:{hidden:false},window:{state:{}},state:{panel:'loops-queue'},isLoopPanel(){return true;},
-    clearTimeout(id){timers.delete(id);},
-    setTimeout(fn,delay){assert.equal(delay,3000);timers.set(++counter,fn);return counter;},
-    poll(){return new Promise(resolve=>pending.push(resolve));}});
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
+const body=source.slice(source.indexOf('  function cancelRentalRead('),source.indexOf('  function mount()'));
+const pending=[],rentals=[],timers=new Map(),order=[];let count=0;
+const run={id:'a',settings:{execution:'vast'}},snapshots=new Map();
+const context=vm.createContext({AbortController,performance,Map,Set,Promise,
+ timer:null,watchGeneration:0,generation:0,rentalGeneration:0,rentalFlight:null,pollFlight:null,pollAgain:false,pollBlocked:'',stopped:false,
+ rows:[],definitions:[],selected:'a',selectedRuns:new Set(['a']),rentalSnapshots:snapshots,
+ reportView:'',document:{hidden:false,getElementById:()=>null},window:{state:{}},state:{panel:'loops-queue',navigationSeq:1},loopRenderStarted:0,
+ showLoopLoading(){},isLoopPanel:()=>true,render:()=>order.push('render'),restoreLoopScroll(){},navigationTiming(){},
+ restoreNativeLog:async()=>order.push('log'),rentalRun:()=>run,
+ renderRental:()=>order.push('rental'),refreshRentalBilling(){},showMessages(){},forgetRun(){},
+ request(path){return new Promise(resolve=>{(path.includes('/rental')?rentals:pending).push({path,resolve});});},
+ clearTimeout:id=>timers.delete(id),setTimeout(fn,delay){assert.equal(delay,3000);timers.set(++count,fn);return count;}
+});
 vm.runInContext(body,context);
+const flush=()=>new Promise(resolve=>setImmediate(resolve));
+function reply(){assert.equal(pending.length,2);pending.shift().resolve({loops:[run]});pending.shift().resolve({configs:[]});}
 (async()=>{
-    const first=context.watch(), second=context.watch();
-    pending.shift()(); await first;
-    assert.equal(timers.size,0,'superseded watch must not schedule');
-    pending.shift()(); await second;
-    assert.equal(timers.size,1,'one active polling owner');
-    const third=context.watch();
-    assert.equal(timers.size,0);
-    context.stopped=true;context.watchGeneration++;
-    pending.shift()();await third;
-    assert.equal(timers.size,0,'page shutdown must not revive polling');
+ const first=context.watch(),second=context.watch();assert.equal(pending.length,2,'one initial fetch pair');
+ reply();await first;await second;
+ assert.equal(timers.size,1);assert.deepEqual(order,['render','log']);assert.equal(rentals.length,1,'rental cannot block report');
+ const action=context.poll(),another=context.poll(),third=context.poll();
+ assert.equal(pending.length,2);reply();await flush();assert.equal(pending.length,2,'exactly one fresh follow-up after actions');
+ reply();await Promise.all([action,another,third]);assert.equal(pending.length,0);
+ assert.equal(order.filter(x=>x==='render').length,3);assert.equal(order.filter(x=>x==='log').length,3,'one log restore per render');
+ rentals[0].resolve({rental:{worker_id:'old'}});await flush();assert.equal(snapshots.size,0,'stale rental ignored');
+ assert.equal(rentals.length,2,'follow-up main polls share the current rental read');
+ rentals[1].resolve({rental:{worker_id:'new'}});await flush();assert.equal(snapshots.get('a').rental.worker_id,'new');assert.equal(order.at(-1),'rental');
+ const leaving=context.watch();context.state.panel='loops-results';context.state.navigationSeq++;
+ reply();await leaving;assert.equal(order.filter(x=>x==='render').length,3,'older panel cannot render');
+ const final=context.watch();context.stopped=true;context.watchGeneration++;reply();await final;
+ assert.equal(timers.size,0,'shutdown cannot revive timer');
+ // A BFCache restart can finish cancelled old work and start a new cycle.
+ context.stopped=false;const resumed=context.watch();reply();await resumed;assert.equal(timers.size,1);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    result = subprocess.run(['node','-e',script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_slow_rental_reads_survive_regular_polls():
+    """Five-second reads finish across three-second polls; context changes and suspension cancel them."""
+    import subprocess
+    script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
+const body=source.slice(source.indexOf('  function cancelRentalRead('),source.indexOf('  function mount()'));
+let clock=0,next=0,rentalRequests=0,aborted=0,rentalRenders=0,loopRenders=0;
+const timers=new Map(),snapshots=new Map(),runs=[{id:'fixture',settings:{execution:'vast'}},{id:'other',settings:{execution:'vast'}}];
+function schedule(fn,delay){timers.set(++next,{fn,due:clock+delay});return next;}
+const context=vm.createContext({AbortController,performance,Map,Set,Promise,
+ timer:null,watchGeneration:0,generation:0,rentalGeneration:0,rentalFlight:null,pollFlight:null,pollAgain:false,pollBlocked:'',stopped:false,
+ rows:[],definitions:[],selected:'fixture',selectedRuns:new Set(['fixture']),rentalSnapshots:snapshots,
+ reportView:'',document:{hidden:false,getElementById:()=>null},window:{state:{}},state:{panel:'loops-queue',navigationSeq:1},loopRenderStarted:null,
+ isLoopPanel:()=>true,render(){loopRenders++;},restoreLoopScroll(){},navigationTiming(){},restoreNativeLog:async()=>{},
+ rentalRun:()=>runs.find(run=>run.id===context.selected),renderRental(){rentalRenders++;},refreshRentalBilling(){},showMessages(){},forgetRun(){},
+ request(path,body,method,options){
+   if(path==='')return Promise.resolve({loops:runs});if(path==='/configs')return Promise.resolve({configs:[]});
+   const attempt=++rentalRequests;
+   return new Promise((resolve,reject)=>{
+     const timer=schedule(()=>resolve({rental:{worker_id:'worker-'+attempt}}),5000);
+     options.signal.addEventListener('abort',()=>{aborted++;timers.delete(timer);reject(new DOMException('Aborted','AbortError'));},{once:true});
+   });
+ },clearTimeout:id=>timers.delete(id),setTimeout:schedule
+});
+vm.runInContext(body,context);
+const flush=()=>new Promise(setImmediate);
+async function advance(ms){const end=clock+ms;while(true){const entry=[...timers.entries()].filter(([id,item])=>item.due<=end).sort((a,b)=>a[1].due-b[1].due)[0];if(!entry)break;clock=entry[1].due;timers.delete(entry[0]);entry[1].fn();await flush();}clock=end;await flush();}
+(async()=>{
+ await context.watch();assert.equal(loopRenders,1);assert.equal(rentalRenders,0,'report does not wait for rental');
+ await advance(3000);assert.equal(loopRenders,2);assert.equal(rentalRequests,1,'regular polling shares a pending read');assert.equal(aborted,0);
+ await advance(2000);assert.equal(rentalRenders,1);assert.equal(snapshots.get('fixture').rental.worker_id,'worker-1');
+ await advance(7000);assert.equal(rentalRenders,2,'rental keeps updating across repeated poll intervals');assert.equal(rentalRequests,3);assert.equal(aborted,0);
+ context.selected='other';context.state.navigationSeq++;await context.poll(false);assert.equal(aborted,1,'new selected run cancels the old read');
+ context.state.panel='loops-results';context.state.navigationSeq++;await context.poll(false);assert.equal(aborted,2,'leaving the rental panel cancels its read');
+ await advance(5000);assert.equal(rentalRenders,2);assert.equal(snapshots.has('other'),false,'cancelled replies do not render');
+ context.state.panel='loops-queue';await context.poll(false);
+ context.stopped=true;context.watchGeneration++;context.clearTimeout(context.timer);context.cancelRentalRead();assert.equal(aborted,3);
+ context.stopped=false;await context.watch();await advance(5000);assert.equal(rentalRenders,3,'resumed lifecycle starts a fresh read');assert.equal(snapshots.has('other'),true);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
     result = subprocess.run(['node','-e',script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=10)

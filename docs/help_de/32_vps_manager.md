@@ -30,8 +30,8 @@ Der Dialog Linux Updates lässt sich über **×** im Kopf oder **Close** unten s
 Interaktionen in der Übersicht:
 
 - Klick auf einen Spaltenkopf sortiert nach dieser Spalte; ein zweiter Klick dreht die Sortierrichtung um.
-- Jeder sichtbare Spaltenkopf hat ein kleines Ausblend-Icon, mit dem sich genau diese Spalte direkt aus der Tabelle entfernen lässt.
-- Ganz rechts im Tabellenkopf setzt ein einzelnes kleines Reset-Icon die Standardspalten und die Standard-Sortierung wieder her.
+- Jeder Spaltenkopf enthält einen **Hide column**-Button (✕), solange mehr als eine Spalte sichtbar ist. Sein zentriertes Klickziel ist mindestens 24 × 24 px groß; ein Klick blendet nur diese Spalte aus, ohne die Sortierung zu ändern. Der Button lässt sich auch mit Tab fokussieren und mit Enter oder der Leertaste aktivieren.
+- Der **Reset view**-Button (↺) ganz rechts im Tabellenkopf hat dieselbe Mindestzielgröße und stellt die Standardspalten und die Standard-Sortierung wieder her.
 - Spaltensichtbarkeit und Sortierung werden lokal im Browser gespeichert.
 - Durch Klicken und Ziehen über VPS-Zeilen lassen sich mehrere Deploy-Ziele direkt in der Übersicht markieren.
 
@@ -203,6 +203,8 @@ journalctl --user -u pbgui-monitor-agent.service
 `Cleanup VPS` installiert oder aktualisiert jetzt zusätzlich zwei kleine tägliche Cleanup-Cronjobs auf der VPS: einen User-Job für Pip- und Rustup-Caches sowie einen Root-Job für `journalctl --vacuum-time=1d`. Die periodischen Jobs laufen still und behalten keine eigene Log-Historie.
 
 Sensible Login-Felder wie **VPS User Password** haben einen Auge-Button, damit der für die aktuelle Session eingegebene Wert kurz eingeblendet werden kann. Der VPS Manager besitzt kein rohes CoinMarketCap-Key-Feld und keine entsprechende Reveal-Aktion.
+
+Der VPS-Benutzerpasswortdialog schließt mit **Escape**, **Cancel** oder **×**, ohne die angeforderte Aktion zu bestätigen oder zu starten. Klicks auf den Hintergrund oder in den Dialog schließen ihn nicht. Während ein Overview-Deployment ein Passwort validiert, bleibt das Schließen bis zum Ende der Validierung gesperrt; nach einem Validierungsfehler kannst du wieder abbrechen. Liegt Guide oder ein anderer Dialog über der Passwortabfrage, gilt Escape zuerst diesem Fenster.
 
 Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöffnetes Auge nicht sofort wieder auf versteckt zurückspringt, wenn neue WebSocket-Daten ankommen.
 

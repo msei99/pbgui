@@ -1,4 +1,4 @@
-"""Isolated real-page regressions for Linux update counts and reusable dialog closing."""
+"""Isolated real-page regressions for VPS overview controls and Linux update dialogs."""
 import re
 from pathlib import Path
 from urllib.parse import urlparse
@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
-def manager():
+def manager(request):
     """Serve actual navigation/assets with synthetic state and no remote connections."""
     html = (ROOT / 'frontend/vps_manager.html').read_text()
     for key, value in {'API_BASE': '/prefix/api/vps-manager', 'WS_BASE': 'ws://manager.test/prefix',
@@ -19,7 +19,8 @@ def manager():
     html = html.replace('/app/', '/prefix/app/')
     with sync_playwright() as driver:
         browser = driver.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1450, 'height': 1000})
+        context = browser.new_context(viewport={'width': 1450, 'height': 1000})
+        page = context.new_page()
         page.set_default_timeout(5000)
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -27,6 +28,15 @@ def manager():
           static OPEN=1; static CONNECTING=0;
           constructor() { this.readyState=1; } send() {} close() {}
         };''')
+        if getattr(request, 'param', None) == 'reverse':
+            page.add_init_script('''window.testKeyListeners = [];
+              const add = EventTarget.prototype.addEventListener;
+              window.testOriginalAddListener = add;
+              EventTarget.prototype.addEventListener = function(type, listener, options) {
+                if (type === 'keydown' && (this === window || this === document))
+                  window.testKeyListeners.push({target:this,listener,options});
+                return add.call(this,type,listener,options);
+              };''')
 
         def respond(route):
             """Intercept all HTTP traffic; no VPS or production API can be contacted."""
@@ -57,9 +67,12 @@ def manager():
         page.locator('.nav-group-btn', has_text='System').click()
         page.locator('.nav-item[data-page="system_vps_manager_fastapi"]').click()
         expect(page.locator('#sidebar')).to_be_visible()
-        yield page
-        assert not errors
-        browser.close()
+        try:
+            yield page
+            assert not errors
+        finally:
+            context.close()
+            browser.close()
 
 
 def publish_state(page, **changes):
@@ -73,6 +86,189 @@ def publish_state(page, **changes):
     page.evaluate('''status => handleMessage({type:'state',data:{overview:{rows:[{
       name:'test-host',hostname:'test-host',nav:'vps',role:'slave',online:true,
       package_status:status}]},vps:[],deploys:{}}})''', status)
+
+
+OVERVIEW = '#overview-table-live'
+OVERVIEW_PREFS = 'pbgui_vps_manager_overview_prefs_v1'
+
+
+def publish_overview(page, revision=0):
+    """Send two isolated hosts through the real live handler so sorting is observable."""
+    page.evaluate('''revision => handleMessage({type:'state',data:{overview:{rows:[
+      {name:'test-alpha',hostname:'test-alpha',nav:'vps',role:'slave',online:true,
+       running_bots:revision,pbgui:'1.0',pb7:'7.0',pb8:'8.0'},
+      {name:'test-zulu',hostname:'test-zulu',nav:'vps',role:'slave',online:true,
+       running_bots:revision+1,pbgui:'1.0',pb7:'7.0',pb8:'8.0'}
+    ]},vps:[],deploys:{}}})''', revision)
+    expect(page.locator(OVERVIEW + ' tbody tr')).to_have_count(2)
+
+
+def overview_preferences(page):
+    """Read only the non-secret view preferences belonging to this isolated origin."""
+    return page.evaluate('(key) => JSON.parse(localStorage.getItem(key))', OVERVIEW_PREFS)
+
+
+def overview_button_point(button, offset=0):
+    """Check actual hit testing after scrolling the real control into its container."""
+    button.scroll_into_view_if_needed()
+    return button.evaluate('''(button, offset) => {
+      const rect = button.getBoundingClientRect();
+      const x = rect.x + rect.width / 2 + offset, y = rect.y + rect.height / 2;
+      if (document.elementFromPoint(x, y)?.closest('button') !== button)
+        throw new Error('Overview button target is clipped or covered');
+      return {x, y};
+    }''', offset)
+
+
+def click_overview_button(page, button, offset=0):
+    """Use a real pointer click at the verified center or near-center coordinate."""
+    point = overview_button_point(button, offset)
+    page.mouse.click(point['x'], point['y'])
+
+
+def assert_overview_targets(page):
+    """Check every rendered target, glyph centering, edges and adjacent sort labels."""
+    buttons = page.locator(OVERVIEW + ' .th-icon-btn')
+    for index in range(buttons.count()):
+        button = buttons.nth(index)
+        button.scroll_into_view_if_needed()
+        metrics = button.evaluate('''button => {
+          const rect = button.getBoundingClientRect();
+          const range = document.createRange(); range.selectNodeContents(button);
+          const glyph = range.getBoundingClientRect();
+          const points = [[0,0],[-7,0],[7,0],[-rect.width/2+.5,0],
+            [rect.width/2-.5,0],[0,-rect.height/2+.5],[0,rect.height/2-.5]];
+          return {width:rect.width,height:rect.height,
+            dx:Math.abs((glyph.left+glyph.right-rect.left-rect.right)/2),
+            dy:Math.abs((glyph.top+glyph.bottom-rect.top-rect.bottom)/2),
+            reachable:points.every(([x,y]) => document.elementFromPoint(
+              rect.x+rect.width/2+x,rect.y+rect.height/2+y)?.closest('button') === button)};
+        }''')
+        assert metrics['width'] >= 24, metrics
+        assert metrics['height'] >= 24, metrics
+        assert metrics['dx'] <= 1 and metrics['dy'] <= 1, metrics
+        assert metrics['reachable'], metrics
+    labels = page.locator(OVERVIEW + ' th.sortable .th-sort-main')
+    for index in range(labels.count()):
+        label = labels.nth(index)
+        label.scroll_into_view_if_needed()
+        assert label.evaluate('''label => {
+          const r = label.getBoundingClientRect();
+          return [r.left+1,(r.left+r.right)/2,r.right-1].every(x => {
+            const hit = document.elementFromPoint(x,(r.top+r.bottom)/2);
+            return hit?.closest('th') === label.closest('th') && !hit.closest('button');
+          });
+        }'''), 'Enlarged buttons must not cover adjacent sort labels'
+
+
+@pytest.mark.parametrize('offset', [0, -7, 7])
+def test_overview_hide_targets_do_not_sort(manager, offset):
+    """All 16 hide controls and reset accept center/±7px clicks without stray sorting."""
+    page = manager
+    publish_overview(page)
+    names = page.locator(OVERVIEW + ' button[title="Hide column"]').evaluate_all(
+        '(buttons) => buttons.map(button => button.getAttribute("aria-label"))')
+    assert len(names) == 16
+    for name in names:
+        # Deliberately sort via the label outside the enlarged button target.
+        page.locator(OVERVIEW + ' .th-sort-main').first.click(position={'x': 2, 'y': 2})
+        assert overview_preferences(page)['sort'] == {'field': 'name', 'dir': 'desc'}
+        assert page.locator(OVERVIEW + ' tbody tr').first.get_attribute('data-overview-host') == 'test-zulu'
+        button = page.get_by_role('button', name=name, exact=True)
+        click_overview_button(page, button, offset)
+        expect(button).to_have_count(0)
+        preferences = overview_preferences(page)
+        assert preferences['sort'] == {'field': 'name', 'dir': 'desc'}
+        assert sum(value is False for value in preferences['visible_columns'].values()) == 1
+        click_overview_button(page, page.get_by_role('button', name='Reset view', exact=True), offset)
+        expect(page.locator(OVERVIEW + ' button[title="Hide column"]')).to_have_count(16)
+        assert overview_preferences(page)['sort'] == {'field': 'name', 'dir': 'asc'}
+        assert all(overview_preferences(page)['visible_columns'].values())
+        assert page.locator(OVERVIEW + ' tbody tr').first.get_attribute('data-overview-host') == 'test-alpha'
+
+
+@pytest.mark.parametrize('viewport', [1600, 759, 761])
+def test_overview_target_layout_preserves_table_width(manager, viewport):
+    """Targets remain reachable without widening the table at desktop/mobile sidebar limits."""
+    page = manager
+    page.set_viewport_size({'width': viewport, 'height': 1000})
+    publish_overview(page)
+    for width in (160, 240, 420):
+        # Use the shared width preference, including on mobile where the handle is hidden.
+        page.evaluate('(width) => localStorage.setItem("pbgui.sidebar.width", String(width))', width)
+        page.reload()
+        publish_overview(page)
+        if viewport > 760:
+            assert page.locator('#sidebar').bounding_box()['width'] == width
+        table = page.locator(OVERVIEW + ' table')
+        fixed_width = table.bounding_box()['width']
+        old_css = page.add_style_tag(content='''.th-icon-btn {
+          display:inline-block; align-items:normal; justify-content:normal; flex-shrink:1;
+          min-width:0; min-height:0; padding:0; margin:0;
+        }''')
+        old_width = table.bounding_box()['width']
+        old_css.evaluate('(element) => element.remove()')
+        assert abs(fixed_width - old_width) <= .1
+        assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+        assert page.locator('#sidebar-actions').evaluate('(e) => e.scrollWidth <= e.clientWidth')
+        assert_overview_targets(page)
+        # Remove every column but Name via real buttons, including the final hide control.
+        while page.locator(OVERVIEW + ' button[title="Hide column"]').count():
+            click_overview_button(page, page.locator(OVERVIEW + ' button[title="Hide column"]').last)
+        expect(page.locator(OVERVIEW + ' th.sortable')).to_have_count(1)
+        expect(page.locator(OVERVIEW + ' .th-sort-main')).to_contain_text(['Name'])
+        assert_overview_targets(page)
+        publish_overview(page, revision=2)
+        expect(page.locator(OVERVIEW + ' th.sortable')).to_have_count(1)
+        assert_overview_targets(page)
+        click_overview_button(page, page.get_by_role('button', name='Reset view', exact=True))
+
+
+def test_overview_keyboard_reload_live_state_and_guide(manager):
+    """Native keyboard activation and reload/live updates preserve the chosen overview state."""
+    page = manager
+    assert page.url == 'http://manager.test/prefix/api/vps-manager/main_page'
+    publish_overview(page)
+    assert_overview_targets(page)
+    page.locator(OVERVIEW + ' .th-sort-main').first.click(position={'x': 2, 'y': 2})
+    for label, key in [('Hide column Name', 'Enter'), ('Hide column PB8 GitHub', 'Space')]:
+        button = page.get_by_role('button', name=label, exact=True)
+        button.scroll_into_view_if_needed()
+        button.focus()
+        # A keyboard event enables :focus-visible even after the preceding pointer action.
+        page.keyboard.press('Shift')
+        assert button.evaluate('''e => {
+          const style = getComputedStyle(e);
+          return e.matches(':focus-visible') && style.outlineStyle !== 'none'
+            && parseFloat(style.outlineWidth) > 0 && style.outlineColor !== 'rgba(0, 0, 0, 0)';
+        }''')
+        page.keyboard.press(key)
+        expect(button).to_have_count(0)
+    preferences = overview_preferences(page)
+    assert preferences['sort'] == {'field': 'name', 'dir': 'desc'}
+    publish_overview(page, revision=9)
+    expect(page.locator(OVERVIEW + ' tbody tr').first).to_contain_text('10')
+    assert overview_preferences(page) == preferences
+    expect(page.get_by_role('button', name='Hide column Name', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='Hide column PB8 GitHub', exact=True)).to_have_count(0)
+    assert_overview_targets(page)
+    page.locator('#pbgui-guide-btn').click()
+    expect(page.locator('#pbgui-shared-help-ovl')).to_have_class('visible')
+    assert page.url == 'http://manager.test/prefix/api/vps-manager/main_page'
+    assert overview_preferences(page) == preferences
+    page.reload()
+    publish_overview(page, revision=9)
+    assert page.url == 'http://manager.test/prefix/api/vps-manager/main_page'
+    assert overview_preferences(page) == preferences
+    expect(page.get_by_role('button', name='Hide column Name', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='Hide column PB8 GitHub', exact=True)).to_have_count(0)
+    assert page.locator(OVERVIEW + ' tbody tr').first.get_attribute('data-overview-host') == 'test-zulu'
+    assert_overview_targets(page)
+    reset = page.get_by_role('button', name='Reset view', exact=True)
+    reset.focus()
+    page.keyboard.press('Enter')
+    expect(page.locator(OVERVIEW + ' button[title="Hide column"]')).to_have_count(16)
+    assert overview_preferences(page)['sort'] == {'field': 'name', 'dir': 'asc'}
 
 
 def test_missing_pb7_is_neutral_and_live_updates_restore_diagnostics(manager):
@@ -113,6 +309,184 @@ def test_linux_update_x_recovers_after_busy_password_prompt(manager):
     page.locator('#alertModalClose').focus()
     page.keyboard.press('Enter')
     expect(page.locator('#alertModalOverlay')).not_to_have_class('visible')
+
+
+def open_test_password_prompt(page):
+    """Open the real prompt with an inert callback and synthetic password state."""
+    page.evaluate('''() => {
+      window.testConfirmations = 0; window.testCommands = [];
+      send = message => window.testCommands.push(message.cmd);
+      openPasswordPrompt('test-host', () => {window.testConfirmations++; return false;},
+        {persistToForm:false});
+    }''')
+
+
+@pytest.mark.parametrize('action', ['Escape', 'Cancel', '×'])
+def test_password_prompt_cancel_and_reopen(manager, action):
+    """Every close path cancels without confirmation or commands across repeated openings."""
+    page = manager
+    trigger = page.locator('#pbgui-guide-btn')
+    for _ in range(3):
+        trigger.focus()
+        open_test_password_prompt(page)
+        expect(page.locator('#pw-prompt-input')).to_be_focused()
+        page.locator('#pw-prompt-input').fill('synthetic-password')
+        if action == 'Escape':
+            page.keyboard.press('Escape')
+        else:
+            page.locator('#pw-prompt-cancel' if action == 'Cancel' else '#alertModalClose').click()
+        expect(page.locator('#alertModalOverlay')).not_to_have_class('visible')
+        expect(trigger).to_be_focused()
+        assert page.evaluate('[window.testConfirmations, window.testCommands]') == [0, []]
+
+
+def test_password_prompt_clicks_and_other_alert_users(manager):
+    """Backdrop/content clicks do not dismiss; Escape leaves unrelated alert users unchanged."""
+    page = manager
+    open_test_password_prompt(page)
+    page.locator('#alertModalOverlay').click(position={'x': 2, 'y': 2}, force=True)
+    page.locator('#alertModalTitle').click()
+    expect(page.locator('#alertModalOverlay')).to_have_class('visible')
+    assert page.evaluate('window.testConfirmations') == 0
+    page.keyboard.press('Escape')
+    for script in ("openAlertModal('Test notice', 'Synthetic content')",
+                   "openMasterPasswordPrompt(() => window.testConfirmations++, 'test command')",
+                   "openConfirmModal('Test confirmation', 'Synthetic content', () => window.testConfirmations++)"):
+        page.evaluate(script)
+        page.keyboard.press('Escape')
+        expect(page.locator('#alertModalOverlay')).to_have_class('visible')
+        page.locator('#alertModalClose').click()
+    assert page.evaluate('[window.testConfirmations, window.testCommands]') == [0, []]
+
+
+def test_password_prompt_validation_error_allows_escape(manager):
+    """Escape obeys the real validation lock and cancels safely after a synthetic failure."""
+    page = manager
+    page.evaluate('''() => {
+      window.testCommands = [];
+      send = message => window.testCommands.push(message.cmd);
+      startOverviewDeployPasswordFlow(['test-host'], 'vps-update', 'Update Linux', 'parallel', false, null);
+    }''')
+    page.locator('#pw-prompt-input').fill('synthetic-invalid-password')
+    page.locator('#pw-prompt-confirm').click()
+    assert page.evaluate('store.pendingOverviewDeploy.validating') is True
+    page.keyboard.press('Escape')
+    expect(page.locator('#alertModalOverlay')).to_have_class('visible')
+    expect(page.locator('#pw-prompt-error')).to_have_text('Wait until password validation finishes for test-host.')
+    expect(page.locator('#pw-prompt-cancel')).to_be_disabled()
+    expect(page.locator('#alertModalClose')).to_be_disabled()
+    page.evaluate("handleMessage({type:'error',cmd:'validate_and_stage_vps_deploy_host',error:'Synthetic validation failure'})")
+    expect(page.locator('#pw-prompt-error')).to_have_text('Synthetic validation failure')
+    expect(page.locator('#pw-prompt-cancel')).to_be_enabled()
+    expect(page.locator('#alertModalClose')).to_be_enabled()
+    commands = page.evaluate('window.testCommands.slice()')
+    assert commands.count('validate_and_stage_vps_deploy_host') == 1
+    page.keyboard.press('Escape')
+    expect(page.locator('#alertModalOverlay')).not_to_have_class('visible')
+    assert page.evaluate('store.pendingOverviewDeploy') is None
+    assert page.evaluate('window.testCommands') == commands
+
+
+@pytest.mark.parametrize('manager', ['normal', 'reverse'], indirect=True)
+@pytest.mark.parametrize('upper', ['guide', 'legacy-help', 'confirm', 'alert', 'about', 'shared'])
+def test_password_prompt_escape_overlay_priority(manager, upper):
+    """Real Guide/navigation/shared handlers close only their layer in either listener order."""
+    page = manager
+    open_test_password_prompt(page)
+    scripts = {
+        'guide': "document.getElementById('pbgui-guide-btn').click()",
+        'legacy-help': "document.getElementById('help-ovl').classList.add('visible')",
+        'confirm': "window.PBGuiConfirm({title:'Synthetic confirmation',message:'Test only'})",
+        'alert': "document.getElementById('pbgui-alert-ovl').classList.add('visible')",
+        'about': "document.getElementById('pbgui-about-ovl').classList.add('visible')",
+        'shared': "window.PBGuiDialogs.confirm({title:'Synthetic confirmation',message:'Test only'})",
+    }
+    ids = {'guide': 'pbgui-shared-help-ovl', 'legacy-help': 'help-ovl',
+           'confirm': 'pbgui-confirm-ovl', 'alert': 'pbgui-alert-ovl',
+           'about': 'pbgui-about-ovl', 'shared': 'pbgui-dialog-ovl'}
+    # Do not return an unresolved dialog Promise from evaluate.
+    page.evaluate('() => {' + scripts[upper] + ';}')
+    expect(page.locator('#' + ids[upper])).to_have_class('visible')
+    page.evaluate('''() => {
+      if (!window.testKeyListeners) return;
+      const listeners = window.testKeyListeners.slice();
+      for (const {target,listener,options} of listeners) target.removeEventListener('keydown',listener,options);
+      for (const {target,listener,options} of listeners.reverse())
+        window.testOriginalAddListener.call(target,'keydown',listener,options);
+    }''')
+    page.keyboard.press('Escape')
+    expect(page.locator('#' + ids[upper])).not_to_have_class('visible')
+    expect(page.locator('#alertModalOverlay')).to_have_class('visible')
+    page.keyboard.press('Escape')
+    expect(page.locator('#alertModalOverlay')).not_to_have_class('visible')
+    assert page.evaluate('[window.testConfirmations, window.testCommands]') == [0, []]
+
+
+def test_password_prompt_consumed_escape_and_cluster_priority(manager):
+    """Already consumed Escape and Cluster onboarding cannot cancel a VPS password flow."""
+    page = manager
+    open_test_password_prompt(page)
+    page.evaluate('''() => {
+      const event = new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});
+      event.preventDefault(); document.dispatchEvent(event);
+    }''')
+    expect(page.locator('#alertModalOverlay')).to_have_class('visible')
+    page.evaluate("document.getElementById('alertModalTitle').textContent = 'Add to Cluster'")
+    page.keyboard.press('Escape')
+    expect(page.locator('#alertModalOverlay')).to_have_class('visible')
+    assert page.evaluate('window.testConfirmations') == 0
+
+
+def test_password_prompt_focus_timer_and_single_enter(manager):
+    """Closed/replaced prompt timers cannot steal focus or duplicate Enter callbacks."""
+    page = manager
+    # Count focus attempts on removed inputs too; waiting is bounded to the 100-ms timer.
+    page.evaluate('''() => {
+      window.testFocusAttempts = []; window.testConfirmations = 0;
+      const focus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function(...args) {
+        if (this.id === 'pw-prompt-input') window.testFocusAttempts.push(this.dataset.opening);
+        return focus.apply(this,args);
+      };
+      openPasswordPrompt('test-host', () => false, {persistToForm:false});
+      document.getElementById('pw-prompt-input').dataset.opening = 'closed';
+      closeAlertModal();
+      openPasswordPrompt('test-host', () => false, {persistToForm:false});
+      document.getElementById('pw-prompt-input').dataset.opening = 'replaced';
+      openPasswordPrompt('test-host', () => {window.testConfirmations++; return false;}, {persistToForm:false});
+      document.getElementById('pw-prompt-input').dataset.opening = 'current';
+    }''')
+    expect(page.locator('#pw-prompt-input')).to_be_focused()
+    page.wait_for_timeout(150)
+    assert page.evaluate('window.testFocusAttempts') == ['current']
+    page.locator('#pw-prompt-input').fill('synthetic-password')
+    page.keyboard.press('Enter')
+    assert page.evaluate('window.testConfirmations') == 1
+    expect(page.locator('#alertModalOverlay')).to_have_class('visible')
+    page.keyboard.press('Escape')
+    page.evaluate('''() => {
+      openPasswordPrompt('test-host', () => false, {persistToForm:false});
+      document.getElementById('pbgui-guide-btn').click();
+    }''')
+    page.wait_for_timeout(150)
+    assert page.evaluate('window.testFocusAttempts') == ['current']
+    assert not page.locator('#pw-prompt-input').evaluate('(e) => e === document.activeElement')
+
+
+def test_password_prompt_close_preserves_newer_focus(manager):
+    """Closing a password prompt does not override a newer page input or shared dialog."""
+    page = manager
+    for upper in (False, True):
+        page.locator('#pbgui-guide-btn').focus()
+        open_test_password_prompt(page)
+        expect(page.locator('#pw-prompt-input')).to_be_focused()
+        if upper:
+            page.evaluate("() => {PBGuiDialogs.prompt({title:'Synthetic prompt',label:'Test value'});}")
+            expect(page.locator('#pbgui-dialog-input')).to_be_focused()
+        else:
+            page.locator('#pbgui-guide-btn').focus()
+        page.evaluate('closeAlertModal()')
+        expect(page.locator('#pbgui-dialog-input' if upper else '#pbgui-guide-btn')).to_be_focused()
 
 
 def test_security_normal_counts_colors_and_live_updates(manager):

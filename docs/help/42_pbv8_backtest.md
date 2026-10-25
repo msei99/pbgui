@@ -1,5 +1,9 @@
 # PBv8 Backtest
 
+AI Loop result links load their filtered results before unrelated saved panels or archives. **Results** shows **Opening…** while checking the owned native job, and comparison shows loading feedback while equity data is read. **Back to AI Loop** restores the originating round/tab, expansion, selection and scroll position; current Loop data then updates automatically. If the Loop is no longer available, PBGui explains this in the original Queue/Results context. A request deadline reports an error rather than leaving navigation busy indefinitely.
+
+If an equity file fails to load, the other available curves remain visible with a count of the affected selected results. The selection is retained. If no selected equity file can be loaded, the comparison displays an error instead of an empty chart.
+
 **Results** from an AI Loop opens the native **Compare** chart directly with all available scenario results of that Backtest job selected. A single result shows its equity/balance curves; missing results are reported explicitly. Browser reload restores the comparison, while closing it through Compare keeps it closed on reload. This also applies to the separate automatic Holdout/Full Time Range jobs under **User evaluation**; their Results open Compare and **Back to AI Loop** restores that tab.
 
 **Compare all Holdouts** and **Compare all Full Time Ranges** in AI Loops open this same view for every completed evaluation of that type in the selected run, including the unchanged start. Only matching native jobs are loaded; failed/incomplete evaluations are excluded. Curve labels include the round, comparison candidate and exchange. Newly completed jobs appear automatically, while a narrowed selection survives updates and browser reload. Starting a new “Compare all” action selects all eligible results again.

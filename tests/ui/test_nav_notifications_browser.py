@@ -54,7 +54,7 @@ def nav(request):
         '<script>window.PBGUI_BASE_PREFIX=' + json.dumps(prefix) + ";"
         "window.PBGUI_NAV_CONFIG=" + config + ";</script>"
         + (
-            '<script src="' + prefix + '/app/js/pbgui_dialogs.js?v=11"></script>'
+            '<script src="' + prefix + '/app/js/pbgui_dialogs.js?v=12"></script>'
             '<script>PBGuiDialogs.confirm({title:"Isolated setup",message:"No action"});'
             'document.getElementById("pbgui-dialog-cancel").click();</script>'
             if dialogs_before_nav else ""
@@ -336,7 +336,7 @@ def test_notification_on_help_through_real_menu(nav):
 def _show_shared_confirmation(nav):
     """Open an inert real shared confirmation without invoking an application action."""
     if not nav.page.evaluate("typeof PBGuiDialogs === 'object'"):
-        nav.page.add_script_tag(url="http://notify.test" + nav.prefix + "/app/js/pbgui_dialogs.js?v=11")
+        nav.page.add_script_tag(url="http://notify.test" + nav.prefix + "/app/js/pbgui_dialogs.js?v=12")
     nav.page.evaluate("""() => {
         PBGuiDialogs.confirm({title:'Isolated confirmation',message:'No action'})
             .then(value => { window.__sharedAnswer=value; });

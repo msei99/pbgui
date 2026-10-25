@@ -225,7 +225,7 @@ async function main() {
     assert.equal(c.location.href, app + '/app/help.html?v=1779');
     b.nodes['pbgui-ai-btn'].click();
     assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=27');
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/pbgui_dialogs.js?v=11');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/pbgui_dialogs.js?v=12');
     b.assets.at(-1).onload();
     // Follow the current local dependency chain before the drawer's usage module.
     for (const [global, asset] of [

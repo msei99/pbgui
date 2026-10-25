@@ -24,6 +24,8 @@ Nur vor PB8 8.6: Unter **Advanced Settings → Modes & Policies** waehlt `live.h
 
 ## Run-Liste
 
+Die Bestätigungen für Delete sowie **P**, **G**, **T** und **N** lassen sich mit **Escape**, **Cancel** oder **Close** abbrechen, ohne eine Lösch- oder Forced-Mode-Anfrage zu senden. Ein Klick auf den Hintergrund schließt sie nicht. Beim Öffnen erhält der Bestätigungsbutton den Fokus; beim Schließen kehrt der Fokus zur auslösenden Aktion zurück. Nach einem Klick auf den Hintergrund oder Nachrichtentext führt **Tab** zum ersten und **Shift+Tab** zum letzten Dialogelement; die Tastaturnavigation erreicht die Seite hinter der Bestätigung nicht. Wiederholte Auslösungen werden während einer offenen Bestätigung oder laufenden Anfrage ignoriert; eine verspätete Antwort kann keinen neueren Dialog schließen.
+
 Unter **PBv8 -> Run** werden Configs aus `data/run_v8` angezeigt. PB7 und PB8 verwenden dieselbe responsive Run-Listenansicht mit Sidebar-Suche und Statusfiltern. Die Tabelle zeigt die aktive PB8-Strategie, Exchange-User, Zielhost, Config- und laufende Version, Exposure-Uebersicht, bestaetigte Laufzeit-Hosts, Notiz und PBCluster-Sollzustand. Strategy ist sortierbar und Teil der Listensuche.
 
 Die Hauptspalte **Status** kombiniert den veroeffentlichten Sollzustand mit exakten PB8-Prozessbeobachtungen des lokalen Runners und der Remote-Monitore:

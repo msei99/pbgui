@@ -1,10 +1,64 @@
 """Offline Node-backed dashboard lifecycle and same-origin security regressions."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
+
+
+@pytest.mark.parametrize("root_path", ["", "/pbgui"])
+@pytest.mark.parametrize("names", [(), ("zulu", "alpha", "middle")])
+@pytest.mark.parametrize("authorized", [True, False])
+def test_dashboard_main_page_list_route(monkeypatch, tmp_path, root_path, names, authorized):
+    """Resolve the rendered main-page list URL through both real routers with isolated data."""
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+
+    import pbgui_purefunc
+    from api import dashboard, dashboards
+
+    monkeypatch.setattr(pbgui_purefunc, "PBGDIR", tmp_path)
+    dashboards_dir = tmp_path / "data" / "dashboards"
+    if names:
+        dashboards_dir.mkdir(parents=True)
+        for name in names:
+            (dashboards_dir / f"{name}.json").write_text(
+                json.dumps({"rows": 1, "cols": 1}, indent=4), encoding="utf-8"
+            )
+
+    app = FastAPI(root_path=root_path)
+    app.include_router(dashboard.router, prefix="/api/dashboard")
+    app.include_router(dashboards.router, prefix="/api/dashboards")
+    app.dependency_overrides[dashboard.require_auth] = lambda: object()
+
+    def reject_auth():
+        """Reject synthetically without accessing stored sessions or tokens."""
+        raise HTTPException(status_code=401, detail="Synthetic authentication rejection")
+
+    with TestClient(app) as client:
+        page = client.get(f"{root_path}/api/dashboard/main_page")
+        assert page.status_code == 200
+        api_base_match = re.search(r"var API_BASE\s*=\s*(\"[^\"]*\")\s*;", page.text)
+        assert api_base_match is not None
+        list_path = json.loads(api_base_match.group(1)) + "/dashboards"
+        assert list_path == f"{root_path}/api/dashboards"
+        if not names:
+            assert not dashboards_dir.exists()
+        if not authorized:
+            app.dependency_overrides[dashboards.require_auth] = reject_auth
+        response = client.get(list_path)
+
+    if authorized:
+        assert response.status_code == 200
+        assert response.json() == {"dashboards": sorted(names)}
+        assert dashboards_dir.is_dir()
+    else:
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Synthetic authentication rejection"}
+        if not names:
+            assert not dashboards_dir.exists()
 
 
 @pytest.mark.parametrize("case", ["creation", "templates", "cancel", "resize", "charts", "cards", "ppl", "emptyOrders", "messages", "assets", "candles", "manageModal", "helpTopicLegacy", "helpTopicShared", "helpTopicGenerations"])
