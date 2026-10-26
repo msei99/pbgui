@@ -49,6 +49,10 @@ PBCoinData kann ohne bereiten Pool weiterlaufen und Exchange-seitige Mapping-Inp
 
 ### Zeitplanung
 
+Öffne **System → PBGUI Services → PBCoinData → Settings** und nutze **Save** für diese nicht geheimen Zeitpläne. Eine panelunabhängige Rückmeldung bestätigt das Speichern mit der Anwendungsmeldung des Servers oder erklärt den Fehler; sie bleibt auch beim Wechsel zu **PBData** erreichbar. Fehler bleiben bis **Close** sichtbar, unabhängig von Rückmeldungen anderer Dienste. Inline-Meldungen bleiben ebenfalls erhalten.
+
+Die vollständige Anfrage hat eine Frist von 15 Sekunden. **Save unconfirmed** nach Timeout oder Verbindungsabbruch beweist nicht, dass nichts gespeichert wurde: Prüfe die gespeicherten Einstellungen, bevor du erneut speicherst. Beim Verlassen der Seite werden laufende Client-Anfragen abgebrochen; bei Rückkehr zu dieser Seite aus dem Browsercache erscheint für jeden unterbrochenen Save eine dauerhafte **Save unconfirmed**-Meldung. Bereits abgeschlossene Ergebnisse werden nicht umgedeutet; neuere Eingaben, Dialoge und Meldungen bleiben erhalten. Es gibt keine automatische Wiederholung. Wiederholte Klicks während des Speicherns senden keine doppelte Anfrage. Ein Panelwechsel erhält bearbeitete Felder; Browserreload stellt Panel/Tab wieder her und lädt gespeicherte Werte, keine ungespeicherten Entwürfe.
+
 | Einstellung | Standard | Beschreibung |
 |---|---|---|
 | `Fetch Interval` | `24` | Wie oft CMC-Listings neu abgerufen werden (Stunden) |

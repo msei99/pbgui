@@ -36,6 +36,10 @@ The clicked API Server restart button shows progress until the request finishes,
 
 ## Service detail panels
 
+Under **System → PBGUI Services**, saving **Settings** for **PBCoinData**, **PBData** or **PBAPIServer** shows a result above the service panels, even if you switch panels before the request finishes. Success includes the server's apply message when available. Each result has its own **Close** button; errors stay visible until explicitly closed, and another service's success does not replace them. Existing inline feedback remains available.
+
+Save requests, including reading the response body, time out after 15 seconds. **Save unconfirmed** means a timeout or connection interruption prevented confirmation; the server may already have saved the settings. There is no automatic retry. Check the persisted settings before deciding to save again. Panel switches preserve your inputs and do not cancel the save. Leaving the page cancels pending client requests; returning from the browser cache shows a persistent service-specific **Save unconfirmed** result for each interrupted save without reviving old requests, timers or locks. Already completed results are not reclassified; newer inputs, dialogs and results are preserved. Browser reload restores the panel and tab and loads persisted settings; it does not preserve an unsaved draft.
+
 Click a service card (or its sidebar entry) to open a dedicated detail panel with:
 
 - A control strip showing the service status and action buttons

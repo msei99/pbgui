@@ -1,5 +1,7 @@
 # VPS Manager
 
+**Guide** öffnet die Hilfe über VPS Manager, ohne die aktuelle Ansicht oder ungespeicherte Eingaben zu ändern. Schlägt das Laden der Themen oder Inhalte fehl, ersetzt eine sichtbare Fehlermeldung den Ladezustand; Details stehen in der Browserkonsole. Nach Behebung der Verbindung ein Thema erneut auswählen oder Guide schließen und wieder öffnen.
+
 Unter **System → VPS Manager → Settings → VPS Logging** speichert **Save Log Settings** lokal in PBGui. Bis zur Antwort ist der Button deaktiviert und zeigt **Saving...**, auch nach einem Ansichtswechsel und der Rückkehr. Nicht gespeicherte Größenänderungen bleiben bei Live-Updates und während des Speicherns erhalten; nach dem Versand geänderte Werte erfordern einen weiteren Speichervorgang. Fehler, Verbindungsabbrüche und ein Antworttimeout nach 30 Sekunden geben den Button ohne automatische Wiederholung frei. Bei Timeout oder Verbindungsabbruch bleibt das Speicherergebnis unbekannt; das Backend kann die Speicherung noch abschließen. Diese Aktion überträgt keine Einstellungen auf VPS-Hosts.
 
 Ein geöffneter VPS-Manager-Eingabedialog bleibt bei eintreffenden Speichermeldungen erhalten; die Meldung erscheint darüber, ohne die Eingabe zu ersetzen oder den Fokus zu verschieben. Ohne offenen Dialog zeigen Speicherfehler weiterhin das normale Fehlerfenster.
@@ -222,6 +224,8 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 ---
 
 ## Neuen VPS hinzufügen
+
+**Reset** setzt das Add-Formular lokal zurück und bleibt verfügbar, während die Startantwort aussteht; es startet oder beendet keinen VPS-Task. Eine verzögerte Initialisierungsantwort öffnet das Task-Log für den vom Backend zurückgegebenen Hostnamen, auch wenn das Formular inzwischen zurückgesetzt oder bearbeitet wurde. Setup-Fortschritt und PB8-Abschlussmeldung verwenden die Details dieses Hosts, unabhängig vom aktuellen Add-Formular. Fehlt der Hostname in der Antwort, meldet PBGui die fehlende UI-Task-Zuordnung, ohne einen fehlgeschlagenen Backend-Task zu behaupten oder den Host zu wechseln; **Task Logs** des vorgesehenen VPS prüfen.
 
 1. **Add VPS** in der linken Sidebar klicken oder **Import by Hostname** aus dem Bereich **Import Host** verwenden, um das Add-Formular aus einem bereits lokal in `/etc/hosts` eingetragenen Hostnamen vorzubelegen.
 2. Die Schritt-Karten oben auf der Seite durchgehen:

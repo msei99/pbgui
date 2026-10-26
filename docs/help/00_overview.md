@@ -1,5 +1,7 @@
 # Help Overview
 
+The separate **Guide** window shows a visible error alert if its topic list or content cannot be loaded, and logs the error in the browser console. A successful topic selection or reopening Guide replaces the error with current documentation. Superseded requests do not replace newer content or raise stale errors. **Information → Help** remains the full-page documentation entry.
+
 Help keeps the latest selected topic and language when requests finish out of order; older content and search results are ignored.
 
 This is the central Help page for PBGui. It contains general documentation and tutorials that are shared across multiple pages, such as Strategy Explorer (incl. Movie Builder) and Pareto Explorer.

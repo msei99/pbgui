@@ -121,7 +121,12 @@ def test_add_vps_offers_pb8_live_only_profile() -> None:
     assert "PB8 Live only (no PB7)" in source
     assert "PB7 + PB8" in source
     assert "PB8-only setup does not clone or install PB7" in source
-    assert "pb8Requested: ['pb8', 'pb7_pb8'].includes(String(store.addForm.runtime_profile || 'pb7'))" in source
+    completion = _extract_function(source, "handleMessage")
+    assert "(store.detail.config || {}).runtime_profile" in completion
+    assert "(store.detail.status || {}).runtime_profile" in completion
+    assert "['pb7', 'pb8', 'pb7_pb8'].includes(configProfile)" in completion
+    assert "['pb8', 'pb7_pb8'].includes(runtimeProfile)" in completion
+    assert "store.addForm.runtime_profile" not in completion
     assert "Setup and PB8 Live installation successful." in source
 
 
@@ -164,7 +169,7 @@ def _extract_function(source: str, name: str) -> str:
 
 
 def _run_node_assertions(
-    function_names: list[str], *, bootstrap: str, assertions: str, timeout: float | None = None
+    function_names: list[str], *, bootstrap: str, assertions: str, timeout: float = 15
 ) -> None:
     """Run focused Node assertions against extracted frontend helpers."""
     source = HTML_PATH.read_text(encoding="utf-8")
@@ -195,6 +200,184 @@ def _run_node_assertions(
         "Node-backed frontend regression failed\n"
         f"STDOUT:\n{result.stdout}\n"
         f"STDERR:\n{result.stderr}"
+    )
+
+
+def _run_init_setup_assertions(assertions: str) -> None:
+    """Exercise real init/result/detail handlers using only synthetic VPS messages."""
+    source = HTML_PATH.read_text(encoding="utf-8")
+    reset_handler = source.split("'>Reset</button>")[0].rsplit("onclick='", 1)[1]
+    _run_node_assertions(
+        ["defaultAddForm", "initAddVps", "handleResult", "handleMessage",
+         "openVpsTaskLog", "switchToVpsTaskLog"],
+        timeout=15,
+        bootstrap=r"""
+        const sent = [], notices = [], diagnostics = [], fetches = [], contexts = [], renders = [];
+        console.error = (...args) => diagnostics.push(args);
+        const store = {
+          view: 'add', hostname: '', contextGeneration: 7, detail: null, detailCache: {},
+          pendingAutoSetupSwitch: null, addForm: { hostname: 'started-host', runtime_profile: 'pb8' },
+          addPublicIp: { applied: true, ip: '203.0.113.10' }, addDebug: true,
+          master: { debug: false }
+        };
+        function canInitForm() { return true; }
+        function send(payload) { sent.push(payload); }
+        function toast(...args) { notices.push(args); }
+        function renderUi(options) { renders.push(options); }
+        function sendContext() { contexts.push([store.hostname, store.view]); }
+        function scheduleVpsDetailFetch(hostname) { fetches.push(hostname); }
+        function getVpsTaskLogFile(hostname, command) { return hostname + '/' + command; }
+        function isVpsContextView() { return store.view.startsWith('vps'); }
+        function isMasterContextView() { return store.view.startsWith('master'); }
+        function ensureVpsUi() {}
+        function resumeClusterOnboardProgress() {}
+        function detailMessage(hostname, configProfile, statusProfile, setupStatus = 'successful') {
+          return { type: 'detail', context_generation: 7, data: {
+            kind: 'vps', hostname, config: { runtime_profile: configProfile },
+            status: { runtime_profile: statusProfile },
+            progress: { init_status: 'successful', setup_status: setupStatus }
+          } };
+        }
+        """ + "\nfunction resetAddForm() { " + reset_handler + " }\n",
+        assertions=assertions,
+    )
+
+
+@pytest.mark.parametrize("previous_host", ["", "previous-host"])
+@pytest.mark.parametrize("form_change", ["reset", "edit"])
+@pytest.mark.parametrize("response_host", ["started-host", "  started-host \t"])
+def test_init_reply_tracks_response_host_after_form_change(previous_host, form_change, response_host):
+    """Delayed replies follow the response host after repeated Reset or editing."""
+    _run_init_setup_assertions(
+        "const caseData = " + json.dumps(dict(previous_host=previous_host, form_change=form_change,
+                                               response_host=response_host)) + ";\n" + r"""
+        store.hostname = caseData.previous_host;
+        initAddVps();
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].cmd, 'init_vps');
+        assert.equal(sent[0].form.hostname, 'started-host');
+        if (caseData.form_change === 'reset') {
+          for (let i = 0; i < 5; i++) resetAddForm();
+          assert.deepEqual(store.addForm, defaultAddForm());
+          assert.equal(store.addPublicIp.applied, false);
+          assert.equal(store.addDebug, false);
+        } else {
+          store.addForm.hostname = 'draft-host';
+          store.addForm.runtime_profile = 'pb7';
+        }
+        const draft = JSON.stringify(store.addForm);
+        handleMessage({ type: 'result', cmd: 'init_vps', data: { hostname: caseData.response_host } });
+        assert.deepEqual(store.pendingAutoSetupSwitch, {
+          hostname: 'started-host', initSeenSuccess: false, setupSeenRunning: false
+        });
+        assert.equal(store.hostname, 'started-host');
+        assert.equal(store.view, 'vps-task-log');
+        assert.equal(store.taskLog.hostname, 'started-host');
+        assert.equal(store.taskLog.command, 'vps-init');
+        assert.equal(store.taskLog.file, 'started-host/vps-init');
+        assert.deepEqual(fetches, ['started-host']);
+        assert.deepEqual(contexts, [['started-host', 'vps-task-log']]);
+        const pending = store.pendingAutoSetupSwitch;
+        for (let i = 0; i < 5; i++) resetAddForm();
+        assert.equal(store.pendingAutoSetupSwitch, pending);
+        store.addForm = JSON.parse(draft);
+        handleMessage(detailMessage('started-host', 'pb8', 'pb7', 'running'));
+        assert.equal(store.taskLog.hostname, 'started-host');
+        assert.equal(store.taskLog.command, 'vps-setup');
+        assert.equal(store.taskLog.file, 'started-host/vps-setup');
+        assert.equal(pending.initSeenSuccess, true);
+        assert.equal(pending.setupSeenRunning, true);
+        handleMessage(detailMessage('started-host', 'pb8', 'pb7'));
+        assert.equal(store.pendingAutoSetupSwitch, null);
+        assert.equal(store.hostname, 'started-host');
+        assert.equal(store.view, 'vps');
+        assert.deepEqual(notices.at(-1), ['Setup and PB8 Live installation successful.', 'success']);
+        assert.equal(JSON.stringify(store.addForm), draft);
+        assert.equal(sent.length, 1); // Neither Reset nor result/detail handling starts another task.
+        assert.deepEqual(diagnostics, []);
+        """
+    )
+
+
+@pytest.mark.parametrize("data", [None, {}, {"hostname": ""}, {"hostname": " \t "}])
+@pytest.mark.parametrize("previous_host", ["", "previous-host"])
+def test_init_reply_without_host_reports_ui_tracking_error(data, previous_host):
+    """A missing response host never falls back to draft/selection or reports start failure."""
+    _run_init_setup_assertions(
+        "const caseData = " + json.dumps(dict(data=data, previous_host=previous_host)) + ";\n" + r"""
+        store.hostname = caseData.previous_host;
+        store.pendingAutoSetupSwitch = { hostname: 'older-task' };
+        const before = JSON.stringify(store);
+        handleMessage({ type: 'result', cmd: 'init_vps', data: caseData.data });
+        assert.equal(JSON.stringify(store), before);
+        assert.deepEqual(notices, [[
+          'Initialization response is missing the hostname. UI task tracking is unavailable; check Task Logs for the VPS.',
+          'error'
+        ]]);
+        assert.deepEqual(diagnostics, [[
+          'VPS initialization result is missing the hostname for UI tracking.'
+        ]]);
+        assert.deepEqual(contexts, []);
+        assert.deepEqual(fetches, []);
+        assert.deepEqual(renders, []);
+        assert.deepEqual(sent, []);
+        """
+    )
+
+
+@pytest.mark.parametrize("config_profile,status_profile,pb8", [
+    ("pb7", "pb8", False), ("pb8", "pb7", True), ("pb7_pb8", "pb7", True),
+    (None, "pb7", False), (None, "pb8", True), (None, "pb7_pb8", True),
+    ("", "pb8", True), ("invalid", "pb8", True), ("invalid", "pb7", False),
+    (None, None, False), ("invalid", "invalid", False),
+])
+@pytest.mark.parametrize("form_profile", ["pb7", "pb8", "pb7_pb8"])
+def test_setup_completion_uses_matching_host_profile(config_profile, status_profile, pb8, form_profile):
+    """Completion prefers valid host config, falls back to host status, and ignores the draft."""
+    _run_init_setup_assertions(
+        "const caseData = " + json.dumps(dict(config=config_profile, status=status_profile,
+                                               pb8=pb8, form=form_profile)) + ";\n" + r"""
+        handleMessage({ type: 'result', cmd: 'init_vps', data: { hostname: 'started-host' } });
+        store.addForm = { hostname: 'unrelated-draft', runtime_profile: caseData.form };
+        const draft = JSON.stringify(store.addForm);
+        const message = detailMessage('started-host', caseData.config, caseData.status);
+        if (caseData.config === null) delete message.data.config;
+        if (caseData.status === null) delete message.data.status;
+        handleMessage(message);
+        assert.equal(store.pendingAutoSetupSwitch, null);
+        assert.deepEqual(notices.at(-1), [caseData.pb8
+          ? 'Setup and PB8 Live installation successful.' : 'Setup successful.', 'success']);
+        assert.equal(store.hostname, 'started-host');
+        assert.equal(store.view, 'vps');
+        assert.equal(JSON.stringify(store.addForm), draft);
+        assert.deepEqual(sent, []);
+        """
+    )
+
+
+@pytest.mark.parametrize("unrelated_detail", ["foreign-host", "old-generation", "other-pending-host"])
+def test_setup_tracking_ignores_unrelated_details(unrelated_detail):
+    """Foreign/stale details cannot complete or reassign the tracked setup."""
+    _run_init_setup_assertions(
+        "const unrelatedDetail = " + json.dumps(unrelated_detail) + ";\n" + r"""
+        handleMessage({ type: 'result', cmd: 'init_vps', data: { hostname: 'started-host' } });
+        if (unrelatedDetail === 'other-pending-host') {
+          store.pendingAutoSetupSwitch.hostname = 'another-task';
+        }
+        const pending = JSON.stringify(store.pendingAutoSetupSwitch);
+        const message = detailMessage(unrelatedDetail === 'foreign-host' ? 'foreign-host' : 'started-host', 'pb8', 'pb8');
+        if (unrelatedDetail === 'old-generation') message.context_generation = 6;
+        const noticeCount = notices.length;
+        const contextCount = contexts.length;
+        handleMessage(message);
+        assert.equal(JSON.stringify(store.pendingAutoSetupSwitch), pending);
+        assert.equal(store.hostname, 'started-host');
+        assert.equal(store.view, 'vps-task-log');
+        assert.equal(store.taskLog.command, 'vps-init');
+        assert.equal(notices.length, noticeCount);
+        assert.equal(contexts.length, contextCount);
+        assert.deepEqual(sent, []);
+        """
     )
 
 

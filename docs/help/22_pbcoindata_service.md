@@ -49,6 +49,10 @@ PBCoinData can run without a ready pool to refresh exchange-side mapping inputs,
 
 ### Scheduling
 
+Open **System → PBGUI Services → PBCoinData → Settings** and use **Save** for these non-secret schedules. A panel-independent result confirms the save with the server's apply message, or explains the failure; it remains accessible if you switch to **PBData**. Errors remain until **Close**, independently of results for other services. Inline messages are also retained.
+
+The complete request has a 15-second deadline. **Save unconfirmed** after a timeout or connection interruption is not proof that nothing was saved: check persisted settings before saving again. Leaving the page cancels pending client requests; returning to that page from the browser cache shows a persistent **Save unconfirmed** result for each interrupted save. Already completed results are not reclassified, and newer inputs, dialogs and results are preserved. Saves are not automatically retried. Repeated clicks during a pending save send no duplicate request. Switching panels preserves edited fields; browser reload restores the panel/tab and loads saved values, not unsaved drafts.
+
 | Setting | Default | Description |
 |---|---|---|
 | `Fetch Interval` | `24` | How often CMC listings are re-fetched (hours) |

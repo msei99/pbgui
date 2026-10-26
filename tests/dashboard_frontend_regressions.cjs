@@ -203,10 +203,11 @@ async function sharedHelpContext() {
     await tick();
     assert.equal(nodes['pbgui-shared-help-content'].innerHTML, '<p>Initial guide</p>');
     return {...http, content: nodes['pbgui-shared-help-content'],
+        toc: nodes['pbgui-shared-help-toc-list'], open: () => ctx.PBGUI_HELP_OPENER(),
         load: index => nodes['pbgui-shared-help-toc-list'].children[index].click()};
 }
 
-async function checkHelpFailures(createContext) {
+async function checkHelpFailures(createContext, shared = false) {
     for (const scenario of ['network', 404, 500, 'json', 'success']) {
         const help = await createContext();
         help.load(0);
@@ -230,7 +231,12 @@ async function checkHelpFailures(createContext) {
             assert.equal(help.content.scrollTop, 0);
             assert.equal(help.errors.length, 0, 'successful content never logs an error');
         } else {
-            assert.match(help.content.innerHTML, />Failed to load content\.<\/div>$/);
+            if (shared) {
+                const alerts = help.content.querySelectorAll('[role="alert"]');
+                assert.equal(alerts.length, 1);
+                assert.equal(alerts[0].textContent, 'Failed to load help content.');
+                assert.equal(alerts[0].className, 'pbgui-shared-help-error');
+            } else assert.match(help.content.innerHTML, />Failed to load content\.<\/div>$/);
             assert.equal(help.errors.length, 1);
             assert.equal(help.errors[0][0], 'Error loading help topic:');
             if (typeof scenario === 'number') {
@@ -251,7 +257,24 @@ async function helpTopicLegacy() {
 }
 
 async function helpTopicShared() {
-    await checkHelpFailures(sharedHelpContext);
+    await checkHelpFailures(sharedHelpContext, true);
+}
+
+async function helpIndexShared() {
+    const help = await sharedHelpContext();
+    help.open();
+    await tick();
+    const failure = new TypeError('Index network failure');
+    help.requests.shift().reject(failure);
+    await tick();
+    assert.equal(help.errors.length, 1);
+    assert.equal(help.errors[0][0], 'Error loading help index:');
+    assert.equal(help.errors[0][1], failure);
+    assert.equal(help.toc.textContent, 'Failed to load help topics.');
+    const alerts = help.content.querySelectorAll('[role="alert"]');
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].textContent, 'Failed to load help topics.');
+    assert.equal(help.content.innerHTML, '', 'old document and loading placeholder are cleared');
 }
 
 async function helpTopicGenerations() {
@@ -1532,7 +1555,7 @@ async function manageModal() {
 }
 
 ({creation, templates, cancel, resize, charts, cards, pnl, ppl, emptyOrders, messages, assets, candles, page, manageModal,
-    helpTopicLegacy, helpTopicShared, helpTopicGenerations})[process.argv[2]]().catch(error => {
+    helpTopicLegacy, helpTopicShared, helpTopicGenerations, helpIndexShared})[process.argv[2]]().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });

@@ -1,5 +1,7 @@
 # Hilfe Übersicht
 
+Das separate **Guide**-Fenster zeigt beim fehlgeschlagenen Laden der Themenliste oder Inhalte eine sichtbare Fehlermeldung und protokolliert den Fehler in der Browserkonsole. Eine erfolgreiche Themenauswahl oder erneutes Öffnen von Guide ersetzt den Fehler durch die aktuelle Dokumentation. Überholte Anfragen überschreiben keine neueren Inhalte und zeigen keine veralteten Fehler. **Information → Help** bleibt der Einstieg zur vollständigen Hilfeseite.
+
 Die Hilfe behält das zuletzt gewählte Thema und die Sprache bei, auch wenn Anfragen in anderer Reihenfolge enden; ältere Inhalte und Suchergebnisse werden ignoriert.
 
 Dies ist die zentrale Hilfeseite für PBGui. Sie enthält allgemeine Dokumentation und Tutorials, die auf mehreren Seiten verwendet werden, z. B. Strategy Explorer (inkl. Movie Builder) und Pareto Explorer.

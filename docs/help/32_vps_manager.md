@@ -1,5 +1,7 @@
 # VPS Manager
 
+**Guide** opens help above VPS Manager without changing the current view or unsaved inputs. If its topic or content request fails, a visible error alert replaces the loading state; details are logged in the browser console. After connectivity returns, select a topic again or close and reopen Guide.
+
 If the connection drops while **Read VPS settings** is running, the progress panel reports the interruption. After reconnecting, retry the read; it is not replayed automatically.
 
 The **VPS Manager** page lets you add, configure, and maintain remote VPS servers that run Passivbot instances.
@@ -238,6 +240,8 @@ The reveal state is preserved during live updates, so opening an eye button does
    If you switch hosts before the active-job lookup finishes, its delayed response cannot replace the newer operation. Returning to that host checks again so an active job can be restored without another start request.
 8. The same **Add to Cluster** action can be used for a VPS that was set up before automatic candidate registration existed. Manual **Edit**, **Repair SSH**, **Probe Active Nodes** and **Join & Sync** steps are not required for normal VPS onboarding.
 9. After initialization succeeds, use **Change VPS** and **Apply VPS Changes** for normal saved setting changes.
+
+**Reset** clears the Add form locally and remains available while a start response is pending; it does not start or cancel a VPS task. A delayed initialization response opens the task log for the hostname returned by the backend, even if you reset or edit the form meanwhile. Setup progress and the PB8 completion message use that host's details, independently of the current Add form. If the response has no hostname, PBGui reports that UI task tracking is unavailable without claiming the backend task failed or switching hosts; check **Task Logs** for the intended VPS.
 
 If a VPS was reinstalled, its SSH host key changes. The Add-page preflight blocks initialization and shows **Review changed key**. Verify the displayed SHA-256 fingerprint through a trusted channel, then explicitly confirm replacement. PBGui atomically replaces only the conflicting user `known_hosts` entries for that hostname and IP and repeats the connectivity check.
 

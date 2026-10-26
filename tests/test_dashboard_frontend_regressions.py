@@ -61,9 +61,19 @@ def test_dashboard_main_page_list_route(monkeypatch, tmp_path, root_path, names,
             assert not dashboards_dir.exists()
 
 
-@pytest.mark.parametrize("case", ["creation", "templates", "cancel", "resize", "charts", "cards", "ppl", "emptyOrders", "messages", "assets", "candles", "manageModal", "helpTopicLegacy", "helpTopicShared", "helpTopicGenerations"])
+@pytest.mark.parametrize("case", ["creation", "templates", "cancel", "resize", "charts", "cards", "ppl", "emptyOrders", "messages", "assets", "candles", "manageModal"])
 def test_dashboard_frontend_regressions(case: str) -> None:
     """Execute the real frontend handlers against isolated DOM and HTTP doubles."""
+    script = Path(__file__).with_name("dashboard_frontend_regressions.cjs")
+    result = subprocess.run(
+        ["node", str(script), case], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("case", ["helpTopicLegacy", "helpTopicShared", "helpTopicGenerations", "helpIndexShared"])
+def test_dashboard_help_regressions(case: str) -> None:
+    """Exercise legacy and shared Guide requests without unrelated dashboard tests."""
     script = Path(__file__).with_name("dashboard_frontend_regressions.cjs")
     result = subprocess.run(
         ["node", str(script), case], capture_output=True, text=True, timeout=30

@@ -238,6 +238,7 @@
       '#pbgui-shared-help-content th,#pbgui-shared-help-content td{border:1px solid #2d3748;padding:.4rem .7rem;text-align:left;font-size:13px;}',
       '#pbgui-shared-help-content th{background:#1a202c;color:#e2e8f0;font-weight:600;}',
       '.pbgui-shared-help-loading{color:#4a5568;font-style:italic;padding:2rem;text-align:center;}',
+      '.pbgui-shared-help-error{color:#fecaca;background:rgba(127,29,29,.3);border:1px solid #f87171;border-radius:6px;padding:1rem;}',
       '#pbgui-shared-help-search-wrap{display:flex;align-items:center;gap:3px;}',
       '.pbgui-shared-help-snav{background:#1a202c;border:1px solid #2d3748;border-radius:3px;color:#94a3b8;cursor:pointer;font-size:11px;padding:2px 5px;line-height:1.4;transition:color .1s,border-color .1s;}',
       '.pbgui-shared-help-snav:hover{color:#e2e8f0;border-color:#4a5568;}',
@@ -546,6 +547,16 @@
     });
   }
 
+  function showHelpError(message) {
+    var alert = document.createElement('div');
+    alert.className = 'pbgui-shared-help-error';
+    alert.setAttribute('role', 'alert');
+    alert.textContent = message;
+    var content = dom('pbgui-shared-help-content');
+    content.innerHTML = '';
+    content.appendChild(alert);
+  }
+
   function loadTopic(index, options) {
     options = options || {};
     var requestSeq = ++state.topicRequestSeq;
@@ -576,16 +587,22 @@
       .catch(function (error) {
         if (requestSeq !== state.topicRequestSeq) return;
         console.error('Error loading help topic:', error);
-        dom('pbgui-shared-help-content').innerHTML = '<div class="pbgui-shared-help-loading">Failed to load content.</div>';
+        showHelpError('Failed to load help content.');
       });
   }
 
   function loadHelpIndex(keyword, anchor) {
     var requestSeq = ++state.indexRequestSeq;
     state.topicRequestSeq += 1;
+    state.topics = [];
+    state.rawHtml = null;
+    state.searchMarks = [];
+    state.searchIndex = -1;
+    dom('pbgui-shared-help-search-count').textContent = '';
     state.currentKeyword = String(keyword || 'overview');
     state.pendingAnchor = String(anchor || '');
     dom('pbgui-shared-help-toc-list').innerHTML = '<div class="pbgui-shared-help-loading">Loading...</div>';
+    dom('pbgui-shared-help-content').innerHTML = '<div class="pbgui-shared-help-loading">Loading...</div>';
     fetch(appPath('/api/help/index?lang=') + state.lang, { credentials: 'same-origin' })
       .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
       .then(function (data) {
@@ -609,10 +626,11 @@
         state.loaded = true;
         loadTopic(startIndex, { anchor: state.pendingAnchor });
       })
-      .catch(function () {
+      .catch(function (error) {
         if (requestSeq !== state.indexRequestSeq) return;
-        dom('pbgui-shared-help-toc-list').innerHTML = '<div class="pbgui-shared-help-loading">Failed to load topics.</div>';
-        dom('pbgui-shared-help-content').innerHTML = '<div class="pbgui-shared-help-loading">Failed to load content.</div>';
+        console.error('Error loading help index:', error);
+        dom('pbgui-shared-help-toc-list').textContent = 'Failed to load help topics.';
+        showHelpError('Failed to load help topics.');
       });
   }
 

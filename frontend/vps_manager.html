@@ -1941,6 +1941,7 @@
     #help-content hr { border: none; border-top: 1px solid #1e2736; margin: 1rem 0; }
     #help-content img { max-width: 100%; border-radius: 6px; margin: 0.5rem 0; }
     .help-loading { color: #4a5568; font-style: italic; padding: 2rem; text-align: center; }
+    .help-error { color: #fecaca; background: rgba(127,29,29,.3); border: 1px solid #f87171; border-radius: 6px; padding: 1rem; }
 
     .log-viewer-shell {
       flex: 1;
@@ -6865,7 +6866,10 @@
       var helpTopics = [];
       var helpSel = 0;
       var helpDefaultTopic = 'vps_manager';
+      var helpCurrentTopic = helpDefaultTopic;
       var helpCache = {};
+      var helpTopicRequestSeq = 0;
+      var helpIndexRequestSeq = 0;
 
       function mdToHtml(md) {
         return DOMPurify.sanitize(marked.parse(String(md || '')));
@@ -6885,11 +6889,22 @@
         });
       }
 
+      function showHelpError(message) {
+        var alert = document.createElement('div');
+        alert.className = 'help-error';
+        alert.setAttribute('role', 'alert');
+        alert.textContent = message;
+        helpContent.innerHTML = '';
+        helpContent.appendChild(alert);
+      }
+
       function loadTopic(idx) {
+        var requestSeq = ++helpTopicRequestSeq;
         helpSel = idx;
         renderToc();
         var topic = helpTopics[idx];
         if (!topic) return;
+        helpCurrentTopic = topic.file;
         var cacheKey = helpLang + ':' + String(topic.file || '');
         if (helpCache[cacheKey] !== undefined) {
           helpContent.innerHTML = helpCache[cacheKey];
@@ -6903,24 +6918,32 @@
             return response.json();
           })
           .then(function (data) {
+            if (requestSeq !== helpTopicRequestSeq) return;
             var html = mdToHtml(data.content || '');
             helpCache[cacheKey] = html;
             helpContent.innerHTML = html;
             helpContent.scrollTop = 0;
           })
-          .catch(function () {
-            helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>';
+          .catch(function (error) {
+            if (requestSeq !== helpTopicRequestSeq) return;
+            console.error('Error loading help topic:', error);
+            showHelpError('Failed to load help content.');
           });
       }
 
       function loadHelpIndex(keyword) {
+        var requestSeq = ++helpIndexRequestSeq;
+        helpTopicRequestSeq += 1;
+        helpTopics = [];
         helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
+        helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
         fetch('/api/help/index?lang=' + helpLang, { credentials: 'same-origin' })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
           })
           .then(function (data) {
+            if (requestSeq !== helpIndexRequestSeq) return;
             helpTopics = Array.isArray(data) ? data : [];
             renderToc();
             if (!helpTopics.length) {
@@ -6941,8 +6964,11 @@
             }
             loadTopic(startIdx);
           })
-          .catch(function () {
-            helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>';
+          .catch(function (error) {
+            if (requestSeq !== helpIndexRequestSeq) return;
+            console.error('Error loading help index:', error);
+            helpTocList.textContent = 'Failed to load help topics.';
+            showHelpError('Failed to load help topics.');
           });
       }
 
@@ -6952,14 +6978,14 @@
         helpLang = 'EN';
         helpLangEN.classList.add('active');
         helpLangDE.classList.remove('active');
-        loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (helpDefaultTopic));
+        loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || helpCurrentTopic || (helpDefaultTopic));
       });
       helpLangDE.addEventListener('click', function () {
         if (helpLang === 'DE') return;
         helpLang = 'DE';
         helpLangDE.classList.add('active');
         helpLangEN.classList.remove('active');
-        loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || (helpDefaultTopic));
+        loadHelpIndex((helpTopics[helpSel] && helpTopics[helpSel].file) || helpCurrentTopic || (helpDefaultTopic));
       });
 
       window.closeHelp = function () {
@@ -7379,8 +7405,12 @@
               switchToVpsTaskLog(store.detail.hostname, 'vps-setup', 'Setup VPS');
             }
             if (pending.setupSeenRunning && setupStatus === 'successful') {
+              const configProfile = String((store.detail.config || {}).runtime_profile || '');
+              const runtimeProfile = ['pb7', 'pb8', 'pb7_pb8'].includes(configProfile)
+                ? configProfile : String((store.detail.status || {}).runtime_profile || '');
+              const pb8Requested = ['pb8', 'pb7_pb8'].includes(runtimeProfile);
               store.pendingAutoSetupSwitch = null;
-              toast(pending.pb8Requested ? 'Setup and PB8 Live installation successful.' : 'Setup successful.', 'success');
+              toast(pb8Requested ? 'Setup and PB8 Live installation successful.' : 'Setup successful.', 'success');
               store.hostname = store.detail.hostname;
               store.view = 'vps';
               sendContext();
@@ -7857,19 +7887,21 @@
           store.pendingOverviewDeploy = null;
         }
       } else if (cmd === 'init_vps') {
-        toast('Initialization started.', 'success');
-        const hostname = store.addForm.hostname || store.hostname;
-        if (hostname) {
-          store.pendingAutoSetupSwitch = {
-            hostname: hostname,
-            initSeenSuccess: false,
-            setupSeenRunning: false,
-            pb8Requested: ['pb8', 'pb7_pb8'].includes(String(store.addForm.runtime_profile || 'pb7'))
-          };
-          openVpsTaskLog(hostname, 'vps-init', 'Initialize');
-          scheduleVpsDetailFetch(hostname);
-          needsForceView = true;
+        const hostname = String((msg.data || {}).hostname || '').trim();
+        if (!hostname) {
+          console.error('VPS initialization result is missing the hostname for UI tracking.');
+          toast('Initialization response is missing the hostname. UI task tracking is unavailable; check Task Logs for the VPS.', 'error');
+          return;
         }
+        toast('Initialization started.', 'success');
+        store.pendingAutoSetupSwitch = {
+          hostname: hostname,
+          initSeenSuccess: false,
+          setupSeenRunning: false
+        };
+        openVpsTaskLog(hostname, 'vps-init', 'Initialize');
+        scheduleVpsDetailFetch(hostname);
+        needsForceView = true;
       } else if (cmd === 'setup_vps') {
         toast('Setup started.', 'success');
         const hostname = store.hostname || ((msg.data || {}).hostname || '');
@@ -13939,7 +13971,7 @@
       restoreViewFromHash();
     });
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=11"></script>
+  <script src="/app/js/shared_help_overlay.js?v=12"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

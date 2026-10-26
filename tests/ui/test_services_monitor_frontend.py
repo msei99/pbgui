@@ -1760,3 +1760,428 @@ window.WebSocket=class {
         finally:
             page.unroute_all(behavior='ignoreErrors')
             browser.close()
+
+
+def _settings_save_script(prefix: str = '/mounted') -> str:
+    """Run the real save callers and controller with isolated DOM, transport and clock."""
+    source = PAGE.read_text(encoding="utf-8")
+    start = source.index('  var pendingSettingsPosts = new Set();')
+    end = source.index('\n  function _val(', start)
+    callers = '\n'.join(_extract_window_function(source, name) for name in (
+        'saveCoinDataSettings', 'savePBDataSettings', 'saveApiServerSettings'))
+    return 'const API_BASE = ' + json.dumps(prefix + '/api/services') + ';\n' + r"""
+const assert = require('node:assert/strict');
+const events = {}, requests = [], timers = new Map(), inline = [], reloads = [], logs = [];
+let timerId = 0;
+const window = {addEventListener:(name, fn)=>events[name]=fn};
+var _settingsLoaded = {pbcoindata:true, pbdata:true, 'api-server':true};
+var _settingsLoading = {};
+class Element {
+  constructor() { this.children=[]; this.attrs={}; this.listeners={}; this.hidden=false; this.disabled=false; }
+  set innerHTML(value) { throw new Error('Untrusted save results must use textContent'); }
+  setAttribute(key,value) { this.attrs[key]=value; }
+  addEventListener(name,fn) { this.listeners[name]=fn; }
+  append(...nodes) { nodes.forEach(node=>{node.parent=this;this.children.push(node);}); }
+  prepend(node) { node.parent=this;this.children.unshift(node); }
+  remove() { this.parent.children=this.parent.children.filter(node=>node!==this); }
+  get childElementCount() { return this.children.length; }
+}
+const host = new Element(); host.hidden=true;
+const buttons = {}, panels = {}, messages = {}, fields = {};
+const ids = {pbcoindata:'coindata-save-msg',pbdata:'pbdata-save-msg','api-server':'apiserver-save-msg'};
+for(const svc of Object.keys(ids)) {
+  buttons[svc]=new Element();
+  panels[svc+'-tab-settings']={querySelector:()=>buttons[svc],hidden:false};
+  messages[ids[svc]]={previousElementSibling:buttons[svc]};
+}
+const document = {
+  createElement:()=>new Element(),
+  getElementById:id=>id==='settings-save-results'?host:(panels[id]||messages[id]||fields[id]||null),
+  querySelectorAll:()=>[]
+};
+function _val(id) { return fields[id] ? fields[id].value : ''; }
+function _flash(id,text,error) { if(messages[id]) inline.push({id,text,error}); }
+function collectMonitorConfigFromForm() { return {}; }
+function collectAlertRoutingFromForm() { return {}; }
+function loadSettings(svc) { reloads.push(svc); }
+function authOptions(options) { return options; }
+function fetch(url,options) { return new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})); }
+function setTimeout(fn,ms) { assert.equal(ms,15000); timers.set(++timerId,fn);return timerId; }
+function clearTimeout(id) { timers.delete(id); }
+const console = {error:(...args)=>logs.push(args)};
+function response(data={ok:true},status=200) { return {ok:status<400,status,json:()=>Promise.resolve(data)}; }
+async function settle() { for(let i=0;i<20;i++) await Promise.resolve(); }
+function fireTimeout() { assert.equal(timers.size,1);timers.values().next().value(); }
+function textAt(index=0) { return host.children[index].children[0].textContent; }
+""" + source[start:end] + '\n' + callers + '\n'
+
+
+@pytest.mark.parametrize('caller,svc', [
+    ('saveCoinDataSettings', 'pbcoindata'), ('savePBDataSettings', 'pbdata'),
+    ('saveApiServerSettings', 'api-server'),
+])
+@pytest.mark.parametrize('apply_message', [None, '<img src=x onerror=fail()> Applied on next cycle.'])
+def test_settings_save_all_callers_confirm_success(caller, svc, apply_message):
+    """All save entry points show safe global results and retain API reload callback."""
+    _run_node(_settings_save_script() + '\nconst caller=' + json.dumps(caller)
+              + ';const svc=' + json.dumps(svc) + ';const applyMessage=' + json.dumps(apply_message) + r""";
+(async()=>{
+  fields['coindata-fetch-interval']={value:'12'};
+  await window[caller]();
+  assert.equal(requests.length,1);
+  assert.equal(requests[0].url,API_BASE+'/settings/'+svc);
+  assert.equal(requests[0].options.method,'POST');
+  if(svc==='pbcoindata') assert.equal(JSON.parse(requests[0].options.body).fetch_interval,12);
+  assert.equal(buttons[svc].disabled,true);
+  await window[caller](); assert.equal(requests.length,1);
+  panels[svc+'-tab-settings'].hidden=true;
+  requests[0].resolve(response(applyMessage?{ok:true,apply:{message:applyMessage}}:{ok:true}));
+  await settle();
+  assert.equal(host.hidden,false); assert.equal(host.children.length,1);
+  assert.equal(host.children[0].attrs.role,'status');
+  assert.equal(textAt(),({pbcoindata:'PBCoinData',pbdata:'PBData','api-server':'PBAPIServer'})[svc]+': '+(applyMessage||'Settings saved.'));
+  assert.equal(inline[0].text,applyMessage||'Settings saved.');
+  assert.equal(buttons[svc].disabled,false);
+  assert.equal(pendingSettingsPosts.size,0);assert.equal(settingsPostJobs.size,0);assert.equal(timers.size,0);
+  assert.deepEqual(reloads,svc==='api-server'?['api-server']:[]);
+  assert.equal(fields['coindata-fetch-interval'].value,'12');
+  const close=host.children[0].children[1];
+  assert.equal(close.type,'button');assert.match(close.attrs['aria-label'],/^Close .* save result$/);
+  close.listeners.click();assert.equal(host.hidden,true);
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+""")
+
+
+@pytest.mark.parametrize('failure,expected', [
+    ("requests[0].reject(new TypeError('Failed to fetch'))", 'Save unconfirmed.'),
+    ("requests[0].reject(Object.assign(new Error('Aborted'),{name:'AbortError'}))", 'Save unconfirmed.'),
+    ("requests[0].resolve({ok:true,status:200,json:()=>Promise.reject(new TypeError('Failed to fetch'))})", 'Save unconfirmed.'),
+    ("requests[0].resolve({ok:true,status:200,json:()=>Promise.reject(Object.assign(new Error('Aborted'),{name:'AbortError'}))})", 'Save unconfirmed.'),
+    ("requests[0].resolve({ok:false,status:502,json:()=>Promise.reject(new SyntaxError('HTML'))})", 'Save failed: HTTP 502'),
+    ("requests[0].resolve(response({detail:[{loc:['body','fetch_interval'],msg:'Invalid value'}]},422))", 'Save failed: fetch_interval: Invalid value'),
+])
+@pytest.mark.parametrize('svc', ['pbcoindata', 'pbdata', 'api-server'])
+def test_settings_save_errors_remain_visible_across_panels_without_inline(svc, failure, expected):
+    """Network, abort, HTML and validation errors remain visible outside hidden panels."""
+    _run_node(_settings_save_script() + '\nconst svc=' + json.dumps(svc) + r""";
+(async()=>{
+  delete messages[ids[svc]];
+  const saving=_post('/settings/'+svc,{},ids[svc],()=>reloads.push(svc));
+  panels[svc+'-tab-settings'].hidden=true;
+  fields.draft={value:'unsaved draft'};
+  FAILURE;
+  await saving;
+  assert.equal(host.hidden,false);assert.equal(host.children[0].attrs.role,'alert');
+  assert.ok(textAt().includes(EXPECTED));assert.equal(timers.size,0);
+  assert.equal(buttons[svc].disabled,false);assert.equal(pendingSettingsPosts.size,0);
+  assert.equal(inline.length,0);assert.deepEqual(reloads,[]);assert.equal(logs.length,1);
+  assert.equal(fields.draft.value,'unsaved draft');
+  assert.equal(host.children.length,1); // No timer dismisses errors.
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+""".replace('FAILURE', failure).replace('EXPECTED', json.dumps(expected)))
+
+
+@pytest.mark.parametrize('phase', ['fetch', 'body'])
+def test_settings_save_deadline_releases_lock_and_rejects_late_results(phase):
+    """The deadline bounds fetch and body; old replies cannot notify or unlock a newer save."""
+    _run_node(_settings_save_script() + '\nconst phase=' + json.dumps(phase) + r""";
+(async()=>{
+  let resolveBody;
+  const first=_post('/settings/api-server',{},ids['api-server'],()=>reloads.push('old'));
+  if(phase==='body') {
+    requests[0].resolve({ok:true,status:200,json:()=>new Promise(resolve=>resolveBody=resolve)});
+    await settle();
+  }
+  fireTimeout();await first;
+  assert.equal(requests[0].options.signal.aborted,true);
+  assert.match(textAt(),/PBAPIServer: Save unconfirmed.*15 seconds.*server may have saved/);
+  assert.equal(timers.size,0);assert.equal(pendingSettingsPosts.size,0);
+  assert.equal(buttons['api-server'].disabled,false);
+  const second=_post('/settings/api-server',{},ids['api-server'],()=>reloads.push('new'));
+  await _post('/settings/api-server',{},ids['api-server']);assert.equal(requests.length,2);
+  if(phase==='body') resolveBody({ok:true,apply:{message:'obsolete'}});
+  else requests[0].resolve(response({ok:true,apply:{message:'obsolete'}}));
+  await settle();
+  assert.equal(host.children.length,1);assert.deepEqual(reloads,[]);
+  assert.equal(buttons['api-server'].disabled,true);
+  assert.equal(pendingSettingsPosts.size,1);assert.equal(timers.size,1);
+  requests[1].resolve(response());await second;
+  assert.equal(host.children.length,2);assert.deepEqual(reloads,['new']);
+  assert.equal(host.children[1].attrs.role,'alert');
+  assert.equal(timers.size,0);assert.equal(settingsPostJobs.size,0);
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+""")
+
+
+def test_settings_save_overlapping_services_preserve_independent_errors():
+    """Success in one service never replaces an unresolved error from another save."""
+    _run_node(_settings_save_script() + r"""
+(async()=>{
+  const coin=_post('/settings/pbcoindata',{},ids.pbcoindata);
+  const data=_post('/settings/pbdata',{},ids.pbdata);
+  const api=_post('/settings/api-server',{},ids['api-server']);
+  assert.equal(pendingSettingsPosts.size,3);
+  requests[0].reject(new TypeError('Failed to fetch'));await coin;
+  requests[1].resolve(response());await data;
+  requests[2].resolve(response());await api;
+  assert.equal(host.children.length,3);assert.equal(host.children[2].attrs.role,'alert');
+  assert.match(textAt(2),/^PBCoinData: Save unconfirmed/);
+  assert.match(textAt(0),/^PBAPIServer:/);assert.match(textAt(1),/^PBData:/);
+  host.children[0].children[1].listeners.click();assert.equal(host.hidden,false);
+  assert.equal(host.children[1].attrs.role,'alert');
+  assert.equal(pendingSettingsPosts.size,0);assert.equal(timers.size,0);
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+""")
+
+
+@pytest.mark.parametrize('persisted', [False, True])
+@pytest.mark.parametrize('phase', ['fetch', 'body'])
+@pytest.mark.parametrize('prefix', ['', '/mounted'])
+def test_settings_save_pagehide_cleans_captured_button_and_cached_return(persisted, phase, prefix):
+    """Leaving queues one unconfirmed result; return preserves drafts and newer owners."""
+    _run_node(_settings_save_script(prefix) + '\nconst persisted=' + json.dumps(persisted)
+              + ';const phase=' + json.dumps(phase) + ';const prefix=' + json.dumps(prefix) + r""";
+(async()=>{
+  let resolveBody;
+  fields.draft={value:'12'};
+  showSettingsSaveResult('PBData','Existing result.',false);
+  const oldButton=buttons['api-server'];
+  const first=_post('/settings/api-server',{},ids['api-server'],()=>reloads.push('old'));
+  assert.equal(requests.length,1);
+  assert.equal(requests[0].url,prefix+'/api/services/settings/api-server');
+  assert.equal(oldButton.disabled,true);
+  if(phase==='body') {
+    requests[0].resolve({ok:true,status:200,json:()=>new Promise(resolve=>resolveBody=resolve)});
+    await settle();
+  }
+  delete messages[ids['api-server']];delete panels['api-server-tab-settings'];
+  events.pagehide({persisted});
+  assert.equal(requests[0].options.signal.aborted,true);
+  assert.equal(pendingSettingsPosts.size,0);assert.equal(settingsPostJobs.size,0);
+  assert.equal(timers.size,0);assert.equal(oldButton.disabled,false);
+  assert.equal(pendingUnconfirmedSaves.length,1);
+  assert.equal(host.children.length,1);
+  await _post('/settings/api-server',{},ids['api-server']);assert.equal(requests.length,1);
+  // Resume immediately, before the cancelled save's catch/finally can execute.
+  fields.draft.value='13'; // Preserve edits made after the interrupted save.
+  events.pageshow({persisted});
+  assert.equal(pendingUnconfirmedSaves.length,0);
+  assert.equal(host.children.length,2);assert.equal(host.hidden,false);
+  assert.equal(host.children[0].attrs.role,'alert');
+  assert.match(textAt(),/^PBAPIServer: Save unconfirmed\..*server may have saved/);
+  assert.equal(textAt(1),'PBData: Existing result.');
+  events.pageshow({persisted});assert.equal(host.children.length,2);
+  assert.equal(requests.length,1);assert.equal(fields.draft.value,'13');
+  buttons['api-server']=new Element();
+  panels['api-server-tab-settings']={querySelector:()=>buttons['api-server']};
+  const second=_post('/settings/api-server',{},ids['api-server'],()=>reloads.push('new'));
+  await first;
+  if(phase==='body') resolveBody({ok:true});else requests[0].resolve(response());
+  await settle();
+  assert.equal(host.children.length,2);assert.deepEqual(reloads,[]);
+  assert.equal(host.children[0].attrs.role,'alert');
+  assert.match(textAt(),/^PBAPIServer: Save unconfirmed\..*server may have saved/);
+  assert.equal(buttons['api-server'].disabled,true);
+  assert.equal(pendingSettingsPosts.size,1);assert.equal(settingsPostJobs.size,1);assert.equal(timers.size,1);
+  requests[1].resolve(response());await second;
+  assert.deepEqual(reloads,['new']);assert.equal(host.children.length,3);
+  assert.equal(buttons['api-server'].disabled,false);assert.equal(timers.size,0);
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+""")
+
+
+@pytest.mark.parametrize('cleanup', ['success', 'error', 'timeout', 'pagehide'])
+@pytest.mark.parametrize('load_state', ['failed', 'loading'])
+def test_settings_save_cleanup_preserves_settings_load_button_lock(cleanup, load_state):
+    """Save completion or cancellation must not override a settings-load failure/lock."""
+    _run_node(_settings_save_script() + '\nconst cleanup=' + json.dumps(cleanup)
+              + ';const loadState=' + json.dumps(load_state) + r""";
+(async()=>{
+  const saving=_post('/settings/pbcoindata',{},ids.pbcoindata);
+  if(loadState==='failed') delete _settingsLoaded.pbcoindata;
+  else _settingsLoading.pbcoindata={};
+  if(cleanup==='success') requests[0].resolve(response());
+  if(cleanup==='error') requests[0].reject(new TypeError('Failed to fetch'));
+  if(cleanup==='timeout') fireTimeout();
+  if(cleanup==='pagehide') events.pagehide({persisted:true});
+  await saving;
+  assert.equal(buttons.pbcoindata.disabled,true);
+  assert.equal(pendingSettingsPosts.size,0);assert.equal(timers.size,0);
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+""")
+
+
+def test_settings_save_feedback_is_outside_switchable_panels():
+    """The feedback host precedes service panels; server-rendered entry is never cached."""
+    source = PAGE.read_text(encoding='utf-8')
+    main = source.index('<div id="main-content">')
+    feedback = source.index('<div id="settings-save-results"')
+    panel = source.index('<div id="panel-overview"')
+    assert main < feedback < panel
+    assert 'aria-label="Settings save results" hidden></div>' in source
+    assert '/app/js/shared_help_overlay.js?v=12' in source
+    services = (ROOT / 'api' / 'services.py').read_text(encoding='utf-8')
+    assert 'headers={"Cache-Control": "no-store"}' in services
+
+
+@pytest.mark.parametrize('prefix', ['', '/mounted'])
+@pytest.mark.parametrize('persisted', [False, True])
+@pytest.mark.parametrize('outcome', ['success', 'error', 'callback-pending'])
+def test_settings_save_completed_result_is_not_reclassified_on_return(prefix, persisted, outcome):
+    """Confirmed results stay confirmed, including while a success callback is pending."""
+    _run_node(_settings_save_script(prefix) + '\nconst persisted=' + json.dumps(persisted)
+              + ';const outcome=' + json.dumps(outcome) + r""";
+(async()=>{
+  let finishCallback;
+  const saving=_post('/settings/api-server',{},ids['api-server'],()=>{
+    if(outcome==='callback-pending') return new Promise(resolve=>finishCallback=resolve);
+  });
+  requests[0].resolve(outcome==='error'?response({detail:'Synthetic failure'},422):response());
+  await settle();
+  assert.equal(host.children.length,1);
+  const originalResult=host.children[0], originalText=textAt();
+  if(outcome==='callback-pending') assert.equal(settingsPostJobs.size,1);
+  events.pagehide({persisted});events.pageshow({persisted});
+  if(finishCallback) finishCallback();
+  await saving;
+  assert.equal(host.children.length,1);assert.strictEqual(host.children[0],originalResult);
+  assert.equal(textAt(),originalText);assert.doesNotMatch(textAt(),/unconfirmed/);
+  assert.equal(pendingUnconfirmedSaves.length,0);assert.equal(pendingSettingsPosts.size,0);
+  assert.equal(settingsPostJobs.size,0);assert.equal(timers.size,0);
+  assert.equal(buttons['api-server'].disabled,false);assert.equal(requests.length,1);
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+""")
+
+
+@pytest.mark.parametrize('prefix', ['', '/mounted'])
+@pytest.mark.parametrize('persisted', [False, True])
+@pytest.mark.parametrize('outcome', ['pending', 'success', 'error'])
+def test_settings_save_real_menu_simulated_lifecycle_feedback(prefix, persisted, outcome, monkeypatch):
+    """Real menu and DOM show interrupted saves honestly after synthetic lifecycle events."""
+    import mimetypes
+    from urllib.parse import urlparse
+
+    playwright = pytest.importorskip('playwright.sync_api')
+    html = _render_cmc_services_page(prefix, monkeypatch)
+    writes, errors, unexpected = [], [], []
+    services = ('pbcluster', 'pbrun', 'pbdata', 'pbcoindata', 'monitor-agent', 'vps-monitor', 'api-server')
+    with playwright.sync_playwright() as driver:
+        browser = driver.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={'width': 1450, 'height': 1000})
+            page.set_default_timeout(3000)
+            page.clock.install()
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.add_init_script("""
+window.WebSocket=class {
+  static OPEN=1; constructor(){this.readyState=1;setTimeout(()=>this.onopen?.({}),0);}
+  send(){} close(){this.readyState=3;this.onclose?.({});}
+};
+""")
+
+            def respond(route):
+                """Serve only local assets and synthetic data; block every other request."""
+                request = route.request
+                url = urlparse(request.url)
+                if url.hostname != 'cmc.test' or (prefix and not url.path.startswith(prefix + '/')):
+                    unexpected.append(request.url)
+                    route.fulfill(status=451, body='Blocked fixture request')
+                    return
+                path = url.path[len(prefix):] if prefix else url.path
+                if request.method == 'POST' and path == '/api/token-refresh':
+                    route.fulfill(json={'ok': True})
+                elif request.method == 'POST':
+                    if path == '/api/services/settings/pbcoindata':
+                        writes.append(route)
+                    else:
+                        unexpected.append(path)
+                        route.fulfill(status=451, body='Unexpected write blocked')
+                elif path == '/app/start.html':
+                    route.fulfill(content_type='text/html', body='<nav id="topnav"></nav><script>window.PBGUI_NAV_CONFIG={current:"welcome",authenticated:true,apiBase:' + json.dumps(prefix + '/api') + '};</script><script src="' + prefix + '/app/pbgui_nav.js"></script>')
+                elif path == '/api/services/main_page':
+                    route.fulfill(content_type='text/html', body=html)
+                elif path.startswith('/app/'):
+                    asset = (ROOT / 'frontend' / path.removeprefix('/app/')).resolve()
+                    if asset.is_relative_to((ROOT / 'frontend').resolve()) and asset.is_file():
+                        route.fulfill(body=asset.read_bytes(), content_type=mimetypes.guess_type(asset)[0] or 'application/octet-stream')
+                    else:
+                        unexpected.append(path)
+                        route.fulfill(status=404, body='Missing local asset')
+                elif path == '/api/services/settings/pbcoindata':
+                    route.fulfill(json={'fetch_interval': 24, 'fetch_limit': 5000, 'metadata_interval': 1, 'mapping_interval': 24})
+                elif path == '/api/services/status':
+                    route.fulfill(json={name: {'running': True, 'enabled': True, 'can_enable': True} for name in services})
+                elif path == '/api/services/workers/summary':
+                    route.fulfill(json={'counts': {'total': 7, 'running': 7}})
+                elif path == '/api/services/migration/status':
+                    route.fulfill(json={'migration_needed': False, 'warnings': []})
+                elif path == '/api/services/cmc-pool':
+                    route.fulfill(json={'ready': True, 'health': 'ok', 'keys': []})
+                elif path == '/api/services/cmc-pool/leases':
+                    route.fulfill(json={'authority': {}, 'leases': []})
+                elif path.endswith('/stream'):
+                    route.fulfill(status=204, body='')
+                elif path in {'/api/server-status', '/api/vps/alerts', '/api/ai/preferences', '/api/token-refresh', '/api/auth/me', '/api/notify_log'}:
+                    route.fulfill(json={'ok': True, 'authenticated': True, 'drawer_open': False, 'items': [],
+                                        'summary': {'new_count': 0, 'ack_count': 0, 'total_active': 0}})
+                else:
+                    unexpected.append(path)
+                    route.fulfill(status=404, json={'detail': 'Unexpected fixture request'})
+
+            page.route('**/*', respond)
+            page.goto('http://cmc.test' + prefix + '/app/start.html')
+            page.locator('.nav-group-btn', has_text='System').click()
+            page.locator('.nav-item[data-page="system_services"]').click()
+            page.locator('.sb-btn[data-panel="pbcoindata"]').click()
+            page.locator('.tab-btn[data-svc="pbcoindata"][data-tab="settings"]').click()
+            field = page.locator('#coindata-fetch-interval')
+            save = page.locator('#pbcoindata-tab-settings .form-btn.save')
+            playwright.expect(field).to_have_value('24')
+            field.fill('12')
+            save.click()
+            playwright.expect(save).to_be_disabled()
+            for _ in range(100):
+                if writes:
+                    break
+                page.wait_for_timeout(10)
+            assert len(writes) == 1
+            assert writes[0].request.post_data_json['fetch_interval'] == 12
+            results = page.locator('#settings-save-results')
+            if outcome != 'pending':
+                if outcome == 'success':
+                    writes[0].fulfill(json={'ok': True, 'apply': {'message': 'Synthetic settings confirmed'}})
+                else:
+                    writes[0].fulfill(status=422, json={'detail': 'Synthetic settings rejected'})
+                playwright.expect(results).to_contain_text('Synthetic settings')
+                playwright.expect(save).to_be_enabled()
+            field.fill('17')
+            page.locator('.tab-btn[data-svc="pbcoindata"][data-tab="pool"]').click()
+            page.get_by_role('button', name='Add Key', exact=True).click()
+            label = page.locator('#cmc-key-label')
+            label.fill('Unsaved synthetic draft')
+            page.evaluate("persisted => { window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted})); window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted})); }", persisted)
+            if outcome == 'pending':
+                writes[0].abort('aborted')
+                playwright.expect(results.locator('[role="alert"]')).to_contain_text('PBCoinData: Save unconfirmed.')
+                playwright.expect(results).to_contain_text('The server may have saved the settings.')
+            else:
+                playwright.expect(results).not_to_contain_text('Save unconfirmed')
+            playwright.expect(results.locator('.settings-save-result')).to_have_count(1)
+            playwright.expect(save).to_be_enabled()
+            playwright.expect(field).to_have_value('17')
+            playwright.expect(page.locator('#cmc-key-modal')).to_be_visible()
+            playwright.expect(label).to_have_value('Unsaved synthetic draft')
+            playwright.expect(label).to_be_focused()
+            page.locator('#cmc-key-modal').get_by_role('button', name='Cancel', exact=True).click()
+            page.locator('.tab-btn[data-svc="pbcoindata"][data-tab="settings"]').click()
+            playwright.expect(results).to_be_visible()
+            page.evaluate("persisted => window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted}))", persisted)
+            playwright.expect(results.locator('.settings-save-result')).to_have_count(1)
+            page.clock.run_for(16000)
+            playwright.expect(results.locator('.settings-save-result')).to_have_count(1)
+            assert len(writes) == 1
+            assert not errors, errors
+            assert not unexpected, unexpected
+        finally:
+            page.unroute_all(behavior='ignoreErrors')
+            browser.close()

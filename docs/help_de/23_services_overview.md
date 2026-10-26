@@ -36,6 +36,10 @@ Der angeklickte API-Server-Restart-Button zeigt bis zum Abschluss des Requests d
 
 ## Service-Detail-Panels
 
+Unter **System → PBGUI Services** erscheint beim Speichern der **Settings** von **PBCoinData**, **PBData** oder **PBAPIServer** eine Rückmeldung oberhalb der Dienst-Panels, auch wenn du vor Abschluss der Anfrage das Panel wechselst. Bei Erfolg enthält sie die Anwendungsmeldung des Servers, sofern vorhanden. Jede Rückmeldung hat einen eigenen **Close**-Button; Fehler bleiben bis zum ausdrücklichen Schließen sichtbar und werden nicht durch den Erfolg eines anderen Dienstes ersetzt. Bestehende Inline-Meldungen bleiben erhalten.
+
+Speicheranfragen einschließlich des Lesens der Antwort werden auf 15 Sekunden begrenzt. **Save unconfirmed** bedeutet, dass ein Timeout oder Verbindungsabbruch die Bestätigung verhindert hat; der Server könnte bereits gespeichert haben. Es gibt keine automatische Wiederholung. Prüfe die gespeicherten Einstellungen, bevor du erneut speicherst. Ein Panelwechsel erhält deine Eingaben und bricht das Speichern nicht ab. Beim Verlassen der Seite werden laufende Client-Anfragen abgebrochen; bei Rückkehr aus dem Browsercache erscheint für jeden unterbrochenen Save eine dauerhafte dienstbezogene **Save unconfirmed**-Meldung, ohne alte Anfragen, Timer oder Sperren wiederzubeleben. Bereits abgeschlossene Ergebnisse werden nicht umgedeutet; neuere Eingaben, Dialoge und Meldungen bleiben erhalten. Ein Browserreload stellt Panel und Tab wieder her und lädt gespeicherte Einstellungen; ungespeicherte Entwürfe bleiben dabei nicht erhalten.
+
 Klicke auf eine Service-Kachel (oder den Sidebar-Eintrag), um ein dediziertes Detail-Panel zu öffnen mit:
 
 - Einem Control-Strip mit Service-Status und Aktions-Buttons

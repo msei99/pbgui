@@ -2060,7 +2060,7 @@
 
       guideBtn.disabled = true;
       var script = document.createElement('script');
-      script.src = _appPath('/app/js/shared_help_overlay.js?v=11');
+      script.src = _appPath('/app/js/shared_help_overlay.js?v=12');
       script.onload = function () {
         guideBtn.disabled = false;
         if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {

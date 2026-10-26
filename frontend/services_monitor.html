@@ -37,6 +37,13 @@
     /* ── Main content ── */
     #main-content { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
 
+    /* Save results stay visible when switching service panels. */
+    #settings-save-results { flex-shrink: 0; max-height: 30vh; overflow-y: auto; }
+    .settings-save-result { display: flex; align-items: flex-start; gap: 8px; padding: 8px 16px; background: #052e16; border-bottom: 1px solid #166534; }
+    .settings-save-result.error { background: #2d1515; border-color: #7f1d1d; }
+    .settings-save-result span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .settings-save-result button { flex-shrink: 0; }
+
     /* ── Service panels ── */
     .svc-panel { display: none; flex-direction: column; height: 100%; overflow: hidden; }
     .svc-panel.active { display: flex; }
@@ -557,6 +564,8 @@
   <!-- ── Main content ── -->
   <div id="main-content">
 
+    <div id="settings-save-results" aria-label="Settings save results" hidden></div>
+
     <!-- Overview panel -->
     <div id="panel-overview" class="svc-panel active">
       <div class="overview-grid" id="overview-grid" style="padding:1.5rem;overflow-y:auto;flex:1;"></div>
@@ -910,7 +919,7 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
-<script src="/app/js/shared_help_overlay.js?v=11"></script>
+<script src="/app/js/shared_help_overlay.js?v=12"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
 <script>
@@ -3827,17 +3836,97 @@ window.PBGUI_NAV_CONFIG = {
   };
 
   var pendingSettingsPosts = new Set();
+  var settingsPostJobs = new Map();
+  var settingsPostsHidden = false;
+  var pendingUnconfirmedSaves = [];
+
+  function showSettingsSaveResult(service, message, isError) {
+    var host = document.getElementById('settings-save-results');
+    var result = document.createElement('div');
+    result.className = 'settings-save-result' + (isError ? ' error' : '');
+    result.setAttribute('role', isError ? 'alert' : 'status');
+    var text = document.createElement('span');
+    text.textContent = service + ': ' + message;
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'ctrl-btn';
+    close.textContent = 'Close';
+    close.setAttribute('aria-label', 'Close ' + service + ' save result');
+    close.addEventListener('click', function () {
+      result.remove();
+      host.hidden = !host.childElementCount;
+    });
+    result.append(text, close);
+    host.hidden = false;
+    host.prepend(result);
+    host.scrollTop = 0;
+  }
+
+  function releaseSettingsPost(msgId, job) {
+    if (settingsPostJobs.get(msgId) !== job) return;
+    clearTimeout(job.timer);
+    settingsPostJobs.delete(msgId);
+    pendingSettingsPosts.delete(msgId);
+    if (job.button) job.button.disabled = !_settingsLoaded[job.svcId] || !!_settingsLoading[job.svcId];
+  }
+
+  window.addEventListener('pagehide', function () {
+    settingsPostsHidden = true;
+    settingsPostJobs.forEach(function (job, msgId) {
+      if (!job.completed) pendingUnconfirmedSaves.push({
+        service: job.service,
+        message: 'Save unconfirmed. Page left before confirmation. The server may have saved the settings. Check current settings before saving again.'
+      });
+      releaseSettingsPost(msgId, job);
+      job.cancel();
+    });
+  });
+  window.addEventListener('pageshow', function () {
+    settingsPostsHidden = false;
+    var notices = pendingUnconfirmedSaves;
+    pendingUnconfirmedSaves = [];
+    notices.forEach(function (notice) {
+      showSettingsSaveResult(notice.service, notice.message, true);
+    });
+  });
+
   async function _post(ep, body, msgId, onSuccess) {
-    if (pendingSettingsPosts.has(msgId)) return;
-    pendingSettingsPosts.add(msgId);
+    if (settingsPostsHidden || pendingSettingsPosts.has(msgId)) return;
+    var svcId = ep.slice('/settings/'.length);
+    var service = {pbcoindata: 'PBCoinData', pbdata: 'PBData', 'api-server': 'PBAPIServer'}[svcId];
+    var panel = document.getElementById(svcId + '-tab-settings');
     var messageNode = document.getElementById(msgId);
-    var button = messageNode && messageNode.previousElementSibling;
+    var button = panel ? panel.querySelector('.form-btn.save') : messageNode && messageNode.previousElementSibling;
+    var controller = new AbortController();
+    var job = {svcId: svcId, service: service, button: button};
+    settingsPostJobs.set(msgId, job);
+    pendingSettingsPosts.add(msgId);
     if (button) button.disabled = true;
+    var cancelled = new Promise(function (_, reject) {
+      job.cancel = function () {
+        controller.abort();
+        reject(new Error('Settings save cancelled.'));
+      };
+      job.timer = setTimeout(function () {
+        job.timedOut = true;
+        controller.abort();
+        reject(new Error('Settings save timed out after 15 seconds.'));
+      }, 15000);
+    });
     try {
-      var response = await fetch(API_BASE + ep, authOptions({
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-      }));
-      var data = await response.json().catch(function () { return {}; });
+      // The deadline includes response-body consumption, even if abort is ignored.
+      var reply = await Promise.race([fetch(API_BASE + ep, authOptions({
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal
+      })).then(async function (response) {
+        return {response: response, data: await response.json().catch(function (error) {
+          // HTML error pages need the HTTP fallback; transport failures remain unconfirmed.
+          if (error.name === 'SyntaxError') return {};
+          throw error;
+        })};
+      }), cancelled]);
+      if (settingsPostJobs.get(msgId) !== job) return;
+      var response = reply.response;
+      var data = reply.data;
       if (!data || typeof data !== 'object') data = {};
       if (!response.ok || !data.ok) {
         var detail = data.detail || data.error;
@@ -3846,14 +3935,26 @@ window.PBGUI_NAV_CONFIG = {
         }).join('; ');
         throw new Error(typeof detail === 'string' ? detail : ('HTTP ' + response.status));
       }
-      _flash(msgId, data.apply && data.apply.message ? String(data.apply.message) : 'Saved', false);
+      var message = data.apply && data.apply.message ? String(data.apply.message) : 'Settings saved.';
+      job.completed = true;
+      _flash(msgId, message, false);
+      showSettingsSaveResult(service, message, false);
       if (typeof onSuccess === 'function') await onSuccess(data);
     } catch (error) {
+      if (settingsPostJobs.get(msgId) !== job) return;
       console.error('Settings save failed', error);
-      _flash(msgId, error.message, true);
+      var message = error.message || 'Settings save failed.';
+      if (job.timedOut || error instanceof TypeError || error.name === 'AbortError') {
+        message = 'Save unconfirmed. ' + (job.timedOut ? 'Request timed out after 15 seconds.' : message)
+          + ' The server may have saved the settings. Check current settings before saving again.';
+      } else {
+        message = 'Save failed: ' + message;
+      }
+      job.completed = true;
+      _flash(msgId, message, true);
+      showSettingsSaveResult(service, message, true);
     } finally {
-      pendingSettingsPosts.delete(msgId);
-      if (button) button.disabled = false;
+      releaseSettingsPost(msgId, job);
     }
   }
 
