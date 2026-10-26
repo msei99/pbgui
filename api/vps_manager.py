@@ -918,7 +918,8 @@ async def ws_vps_manager(websocket: WebSocket):
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "save_vps_logging_config":
                     data = await asyncio.to_thread(service.save_vps_logging_config, msg.get("data") or {})
-                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data,
+                                               "request_id": str(msg.get("request_id") or "")})
                 elif cmd == "save_vps_deploy_settings":
                     data = await asyncio.to_thread(service.save_vps_deploy_settings, msg.get("data") or {})
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})

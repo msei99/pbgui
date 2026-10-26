@@ -2921,6 +2921,85 @@ def test_vps_manager_cluster_status_resumes_registered_v2_candidate(tmp_path: Pa
     assert status["onboarding_complete"] is False
 
 
+@pytest.mark.parametrize("fails", [False, True])
+def test_cluster_onboarding_coalesces_active_starts_and_cleans_registries(
+    monkeypatch: pytest.MonkeyPatch, fails: bool,
+) -> None:
+    """Synthetic repeated starts share one job/task and release active ownership."""
+    monkeypatch.setattr(vps_manager_api, "_CLUSTER_ONBOARD_TASKS", {})
+    monkeypatch.setattr(vps_manager_api, "_CLUSTER_ONBOARD_JOBS", {})
+    monkeypatch.setattr(vps_manager_api, "_CLUSTER_ONBOARD_ACTIVE", {})
+    logs = []
+    monkeypatch.setattr(vps_manager_api, "_log", lambda *args, **kwargs: logs.append(args))
+
+    async def scenario() -> None:
+        """Bound every wait and dispose all synthetic tasks even after assertions fail."""
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+        owned_tasks = []
+
+        class Service:
+            """In-memory onboarding service with no SSH or filesystem operations."""
+
+            async def add_vps_to_cluster(self, token, hostname, *, progress_callback=None):
+                """Hold completion until the test releases this single operation."""
+                calls.append(hostname)
+                started.set()
+                await release.wait()
+                if fails:
+                    raise RuntimeError("Synthetic onboarding failure")
+                return {"hostname": hostname, "ok": True}
+
+        service = Service()
+        try:
+            job, task = vps_manager_api._start_cluster_onboard(service, "synthetic", "fixture-node")
+            owned_tasks.append(task)
+            for _ in range(5):
+                repeated, same_task = vps_manager_api._start_cluster_onboard(service, "synthetic", "fixture-node")
+                assert repeated["job_id"] == job["job_id"]
+                assert same_task is task
+            await asyncio.wait_for(started.wait(), timeout=1)
+            running, same_task = vps_manager_api._start_cluster_onboard(service, "synthetic", "fixture-node")
+            assert running["job_id"] == job["job_id"]
+            assert running["status"] == "running"
+            assert same_task is task
+            assert calls == ["fixture-node"]
+            assert len(vps_manager_api._CLUSTER_ONBOARD_TASKS) == 1
+            assert len(vps_manager_api._CLUSTER_ONBOARD_JOBS) == 1
+            assert vps_manager_api._CLUSTER_ONBOARD_ACTIVE == {"fixture-node": job["job_id"]}
+            release.set()
+            if fails:
+                with pytest.raises(RuntimeError, match="Synthetic onboarding failure"):
+                    await asyncio.wait_for(asyncio.shield(task), timeout=1)
+            else:
+                assert await asyncio.wait_for(asyncio.shield(task), timeout=1) == {
+                    "hostname": "fixture-node", "ok": True,
+                }
+            await asyncio.sleep(0)  # Run the registered completion callback.
+            assert vps_manager_api._CLUSTER_ONBOARD_TASKS == {}
+            assert vps_manager_api._CLUSTER_ONBOARD_ACTIVE == {}
+            terminal = vps_manager_api._CLUSTER_ONBOARD_JOBS[job["job_id"]]
+            assert terminal["status"] == ("error" if fails else "successful")
+            assert bool(logs) is fails
+            # Terminal job history remains readable; another attempt gets new ownership.
+            next_job, next_task = vps_manager_api._start_cluster_onboard(service, "synthetic", "fixture-node")
+            owned_tasks.append(next_task)
+            assert next_job["job_id"] != job["job_id"]
+            assert next_task is not task
+        finally:
+            for task in owned_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*owned_tasks, return_exceptions=True)
+            await asyncio.sleep(0)
+            vps_manager_api._CLUSTER_ONBOARD_TASKS.clear()
+            vps_manager_api._CLUSTER_ONBOARD_ACTIVE.clear()
+            vps_manager_api._CLUSTER_ONBOARD_JOBS.clear()
+
+    asyncio.run(scenario())
+
+
 def test_cluster_onboarding_survives_request_cancellation() -> None:
     """Navigating away does not cancel an API-owned Cluster onboarding task."""
 

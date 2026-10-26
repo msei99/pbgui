@@ -35,6 +35,16 @@ Use **Pool -> Add Key** to add one or more CMC keys. Secrets are stored in the o
 - A provider `429` cools down that key and the request can fail over to another eligible key. Invalid, disabled, exhausted, cooling, or conflicted keys are skipped.
 - **Rotate** is optional and replaces the selected key with a new immutable generation. **Disable** keeps its history; **Delete** publishes a tombstone.
 
+Pool data and the status bar update automatically while the PBCoinData panel is visible, including its Log and Settings tabs: on entry, return to the browser tab, and five seconds after each completed read. Reads time out after 15 seconds and retry automatically; existing data remains visible. There are no manual Refresh controls. Updates preserve open dialogs, unsaved input, selection and table scroll position. If a selected key disappears, the pool explains that it is no longer available.
+
+**Delete** is locked from confirmation until the mutation and its fresh pool snapshot finish. Repeated clicks cannot open another delete dialog or send another DELETE. Cancel or failure releases the lock; a different key selected during the operation stays selected. Automatic polling pauses during confirmation and mutations. Leaving the panel or hiding the page stops reads; it does not cancel or automatically repeat mutations. Returning loads current data.
+
+If another credential mutation starts while the post-delete snapshot is waiting, Delete remains locked until a new snapshot finishes after that mutation, including when the other mutation fails. These waiting actions share one fresh read; an older response cannot release the delete lock.
+
+Cancelling the delete dialog with **Cancel** or Escape returns keyboard focus to **Delete** once the button is enabled again, unless focus or the current view has changed.
+
+After a successful deletion, a cached row is marked **deleted** and cannot be selected or acted on until a successful current pool snapshot arrives. This protection survives leaving and returning to PBCoinData, hidden pages and failed or interrupted reads. Another selected key stays selected; returning automatically loads current data without repeating the deletion.
+
 PBCoinData can run without a ready pool to refresh exchange-side mapping inputs, but CMC listings and metadata fetches are skipped until at least one active key is materialized.
 
 ### Scheduling

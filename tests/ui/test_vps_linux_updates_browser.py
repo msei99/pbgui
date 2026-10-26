@@ -9,6 +9,242 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(params=['', '/mounted'])
+def detail_manager(request):
+    """Open the real menu at root/mount with fully intercepted traffic and fake hosts."""
+    prefix = request.param
+    html = (ROOT / 'frontend/vps_manager.html').read_text()
+    for key, value in {'API_BASE': prefix + '/api/vps-manager',
+                       'WS_BASE': 'ws://manager.test' + prefix,
+                       'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test'}.items():
+        html = html.replace('%%' + key + '%%', value)
+    html = html.replace('/app/', prefix + '/app/')
+    fixture = {'prefix': prefix, 'mode': 'success', 'pending': [], 'posts': [], 'gets': []}
+    with sync_playwright() as driver:
+        browser = driver.chromium.launch(headless=True)
+        context = browser.new_context(viewport={'width': 1450, 'height': 1000})
+        page = context.new_page()
+        page.set_default_timeout(5000)
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script('''window.WebSocket=class {
+          static OPEN=1; static CONNECTING=0;
+          constructor() {this.readyState=1; setTimeout(()=>this.onopen?.(),0);}
+          send() {} close() {}
+        };''')
+
+        def respond(route):
+            """No request reaches real services; detail replies can be released after a prompt opens."""
+            path = urlparse(route.request.url).path
+            if path == prefix + '/app/start.html':
+                route.fulfill(content_type='text/html', body=f'''<nav id="topnav"></nav><script>
+                window.PBGUI_NAV_CONFIG={{current:'welcome',authenticated:true,apiBase:'{prefix}/api'}};
+                </script><script src="{prefix}/app/pbgui_nav.js?v=test"></script>''')
+            elif path == prefix + '/api/vps-manager/main_page':
+                route.fulfill(content_type='text/html', body=html)
+            elif path.startswith(prefix + '/app/'):
+                asset = ROOT / 'frontend' / path.removeprefix(prefix + '/app/')
+                route.fulfill(status=200 if asset.is_file() else 404,
+                              body=asset.read_bytes() if asset.is_file() else b'',
+                              content_type='text/css' if asset.suffix == '.css' else 'text/javascript')
+            elif path.startswith(prefix + '/api/vps-manager/detail/'):
+                fixture['gets'].append(path)
+                if fixture['mode'] == 'hold':
+                    fixture['pending'].append(route)
+                elif fixture['mode'] == 'missing':
+                    route.fulfill(status=404, json={})
+                else:
+                    route.fulfill(json=fixture['detail'])
+            elif path.endswith('/notify_log'):
+                fixture['posts'].append((path, route.request.method, route.request.post_data_json))
+                route.fulfill(json={})
+            elif path == prefix + '/api/help/index':
+                route.fulfill(json=[{'file': '32_vps_manager', 'title': 'VPS Manager'}])
+            elif path == prefix + '/api/help/content':
+                route.fulfill(json={'content': '# VPS Manager\n\nSynthetic guide.'})
+            elif path.endswith('/stream'):
+                route.fulfill(status=204, body='')
+            else:
+                route.fulfill(json={})
+
+        page.route('**/*', respond)
+        page.goto('http://manager.test' + prefix + '/app/start.html')
+        page.locator('.nav-group-btn', has_text='System').click()
+        page.locator('.nav-item[data-page="system_vps_manager_fastapi"]').click()
+        expect(page.locator('#sidebar')).to_be_visible()
+        assert page.url == 'http://manager.test' + prefix + '/api/vps-manager/main_page'
+        publish_state(page)
+        fixture['detail'] = page.evaluate("buildProvisionalVpsDetail('test-host')")
+        fixture['detail'].pop('provisional')
+        fixture['detail']['status']['pb8_installed'] = True
+        try:
+            yield page, fixture
+            assert not errors
+        finally:
+            context.close()
+            browser.close()
+
+
+def test_vps_detail_delayed_failure_preserves_real_dialog(detail_manager):
+    """A delayed detail error stays above a real prompt without replacing input or its callback."""
+    __tracebackhide__ = True
+    page, fixture = detail_manager
+    fixture['mode'] = 'hold'
+    page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
+    # Wait for the actual scheduled entry request, without directly invoking the fetch helper.
+    page.wait_for_timeout(3200)
+    assert len(fixture['pending']) == 1
+    page.evaluate('''() => {
+      window.confirmed=0;
+      openMasterPasswordPrompt(()=>{window.confirmed++;},'Synthetic no-op');
+      window.promptInput=document.getElementById('master-pw-prompt-input');
+      window.promptBody=document.getElementById('alertModalBody');
+      window.promptConfirm=document.getElementById('master-pw-prompt-confirm');
+      window.promptButtons=document.getElementById('alertModalBtnRow').innerHTML;
+      window.cachedDetail=store.detail; window.cachedVpsUi=store.vps['test-host'];
+    }''')
+    input_box = page.locator('#master-pw-prompt-input')
+    expect(input_box).to_be_focused()
+    input_box.fill('nonsecret-fixture')
+    fixture['pending'].pop().fulfill(status=500, body='Sensitive fixture body must not appear')
+    notice = page.locator('#dialogToastContainer .toast.error')
+    expect(notice).to_have_text('Failed to load VPS details. Please try again.')
+    expect(input_box).to_have_value('nonsecret-fixture')
+    expect(input_box).to_be_focused()
+    expect(page.locator('#alertModalTitle')).to_have_text('Master sudo password required')
+    assert page.evaluate('''() => promptInput===document.getElementById('master-pw-prompt-input')
+      && promptBody===document.getElementById('alertModalBody')
+      && promptConfirm===document.getElementById('master-pw-prompt-confirm')
+      && promptButtons===document.getElementById('alertModalBtnRow').innerHTML
+      && cachedDetail===store.detail && cachedVpsUi===store.vps['test-host'] && confirmed===0''')
+    assert page.evaluate('''() => Number(getComputedStyle(document.getElementById('dialogToastContainer')).zIndex)
+      > Number(getComputedStyle(document.getElementById('alertModalOverlay')).zIndex)''')
+    page.wait_for_timeout(50)
+    # Shared navigation also records console.error with level "err".
+    toast_posts = [post for post in fixture['posts'] if post[2].get('level') == 'error']
+    assert toast_posts == [(fixture['prefix'] + '/api/notify_log', 'POST',
+                           {'msg': 'Failed to load VPS details. Please try again.', 'level': 'error'})]
+    assert all(post[0] == fixture['prefix'] + '/api/notify_log' for post in fixture['posts'])
+    assert all('nonsecret-fixture' not in str(post) for post in fixture['posts'])
+    input_box.press('Enter')
+    assert page.evaluate('confirmed') == 1
+    expect(page.locator('#alertModalOverlay')).not_to_have_class('visible')
+
+
+def test_vps_detail_error_and_404_reload(detail_manager):
+    """Network failure keeps its normal modal; a missing host explains and persists Overview."""
+    __tracebackhide__ = True
+    page, fixture = detail_manager
+    fixture['mode'] = 'hold'
+    page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
+    page.wait_for_timeout(3200)
+    assert len(fixture['pending']) == 1
+    fixture['pending'].pop().abort('failed')
+    expect(page.locator('#alertModalTitle')).to_have_text('Error')
+    expect(page.locator('#alertModalBody')).to_have_text('Failed to load VPS details. Please try again.')
+    page.locator('#alertModalClose').click()
+    fixture['mode'] = 'missing'
+    # Returning to a view uses the existing automatic context request.
+    page.locator('#sidebar-actions').get_by_role('button', name='Overview', exact=True).click()
+    page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
+    expect(page.locator('#alertModalBody')).to_have_text('This VPS is no longer available. Returning to Overview.')
+    assert page.url.endswith('#overview')
+    assert page.evaluate('[store.view,store.hostname]') == ['overview', '']
+    page.reload()
+    publish_state(page)
+    expect(page.locator(OVERVIEW)).to_be_visible()
+    assert page.url.endswith('#overview')
+    assert page.evaluate('[store.view,store.hostname]') == ['overview', '']
+
+
+def test_vps_detail_automatic_updates_navigation_and_controls(detail_manager):
+    """Real renderers retain drafts and branch actions through updates, return and reload."""
+    __tracebackhide__ = True
+    page, fixture = detail_manager
+    page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
+    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Branch', exact=True).click()
+    expect(page.locator('#viewRoot')).to_contain_text('VPS PBGui Branch Management')
+    page.wait_for_timeout(3200)
+    assert len(fixture['gets']) >= 1
+    for repo in ['PBGui', 'PB7', 'PB8']:
+        page.locator('#sidebar-actions').get_by_role('button', name=repo + ' Branch', exact=True).click()
+        if repo == 'PBGui':
+            expect(page.locator('#viewRoot')).to_contain_text('No branch history loaded yet.')
+            expect(page.locator('#viewRoot').get_by_role('button', name='+50', exact=True)).to_be_visible()
+            expect(page.locator('#viewRoot').get_by_role('button', name='All', exact=True)).to_be_visible()
+        else:
+            # PB7/PB8 supply their default branch even before history arrives.
+            expect(page.locator('#viewRoot')).to_contain_text('VPS ' + repo + ' Branch Management')
+            assert page.evaluate('''repo => {
+              const detail=JSON.parse(JSON.stringify(store.detail));
+              return renderPb7BranchPanel('test-host',detail.branches[repo]||{},repo).includes('Use Refresh');
+            }''', repo.lower()) is False
+        expect(page.locator('#viewRoot')).not_to_contain_text('Use Refresh')
+        expect(page.get_by_role('button', name='Reload', exact=True)).to_have_count(0)
+    page.evaluate("store.state.config={swap_options:['0','1G']}")
+    page.locator('#sidebar-actions').get_by_role('button', name='Change VPS', exact=True).click()
+    expect(page.locator('#viewRoot [data-vps-field="install_dir"]')).to_be_visible()
+    page.evaluate('''() => {
+      const input=document.querySelector('#viewRoot [data-vps-field="install_dir"]');
+      window.editInput=input; input.focus(); input.value='synthetic-unsaved';
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      window.editValue=input.value;
+      window.fixtureUpdated=JSON.parse(JSON.stringify(store.detail));
+      fixtureUpdated.status.online=true;
+      handleMessage({type:'detail',context_generation:store.contextGeneration,data:fixtureUpdated});
+    }''')
+    assert page.evaluate('''() => editInput===document.activeElement && editInput.isConnected
+      && editInput.value===editValue && store.view==='vps-setup' && store.hostname==='test-host' ''')
+    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Branch', exact=True).click()
+    destination = page.url
+    for width in [759, 761, 1450]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        for key, sidebar_width in [('Home', 160), ('End', 420)]:
+            if width >= 760:
+                page.locator('#sidebar-resize').focus()
+                page.keyboard.press(key)
+                assert page.locator('#sidebar').bounding_box()['width'] == sidebar_width
+            else:
+                # Shared narrow layout stacks the sidebar at the full viewport width.
+                assert page.locator('#sidebar').bounding_box()['width'] == width
+            for selector in ['#sidebar-actions', '#sidebar-sticky', '#sidebar-header']:
+                assert page.locator(selector).evaluate('(e)=>e.scrollWidth<=e.clientWidth')
+        page.locator('#pbgui-guide-btn').click()
+        expect(page.locator('#pbgui-shared-help-ovl')).to_have_class('visible')
+        for label in ['en', 'de']:
+            expect(page.locator('#pbgui-shared-help-lang-' + label)).to_be_visible()
+        assert page.locator('#pbgui-shared-help-box .lang-pill').evaluate('(e)=>e.scrollWidth<=e.clientWidth')
+        assert page.url == destination
+        page.locator('#pbgui-shared-help-close').click()
+    expect(page.locator('#viewRoot').get_by_role('button', name='Already Selected', exact=True)).to_be_visible()
+    page.locator('#pbgui-guide-btn').click()
+    expect(page.locator('#pbgui-shared-help-ovl')).to_have_class('visible')
+    assert page.url == destination
+    page.reload()
+    publish_state(page)
+    assert page.url == destination
+    expect(page.locator('#viewRoot')).to_contain_text('VPS PBGui Branch Management')
+    assert page.locator('#sidebar').bounding_box()['width'] == 420
+    page.locator('#sidebar-actions').get_by_role('button', name='Overview', exact=True).click()
+    expect(page.get_by_role('button', name='Refresh', exact=True)).to_have_count(0)
+    page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
+    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Branch', exact=True).click()
+    count = len(fixture['gets'])
+    page.wait_for_timeout(3200)
+    assert len(fixture['gets']) > count
+    assert page.url == destination
+    count = len(fixture['gets'])
+    page.evaluate('''() => {
+      window.previousSocket=store.ws;
+      store.ws.readyState=3; store.ws.onclose({code:1006});
+    }''')
+    page.wait_for_function('store.ws!==previousSocket && store.connected')
+    page.wait_for_timeout(3200)
+    assert len(fixture['gets']) > count
+    assert page.url == destination
+    assert page.evaluate('[store.hostname,store.view]') == ['test-host', 'vps-pbgui-branch']
+
+
 @pytest.fixture
 def manager(request):
     """Serve actual navigation/assets with synthetic state and no remote connections."""

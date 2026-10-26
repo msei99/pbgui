@@ -35,6 +35,16 @@ Unter **Pool -> Add Key** können ein oder mehrere CMC-Keys hinzugefügt werden.
 - Ein Provider-`429` setzt den betroffenen Key auf Cooldown und der Request kann auf den nächsten geeigneten Key wechseln. Ungültige, deaktivierte, erschöpfte, abkühlende oder konfliktbehaftete Keys werden übersprungen.
 - **Rotate** ist optional und ersetzt den gewählten Key durch eine neue unveränderliche Generation. **Disable** behält die Historie; **Delete** veröffentlicht einen Tombstone.
 
+Pool-Daten und Statusleiste aktualisieren sich automatisch, solange das PBCoinData-Panel sichtbar ist, auch in seinen Tabs Log und Settings: beim Öffnen, bei Rückkehr zum Browser-Tab und fünf Sekunden nach jedem abgeschlossenen Abruf. Leseanfragen werden nach 15 Sekunden beendet und automatisch wiederholt; vorhandene Daten bleiben sichtbar. Manuelle Refresh-Controls entfallen. Aktualisierungen erhalten offene Dialoge, ungespeicherte Eingaben, Auswahl und Tabellen-Scrollposition. Verschwindet ein ausgewählter Key, erklärt der Pool, dass er nicht mehr verfügbar ist.
+
+**Delete** ist von der Bestätigung bis zum Abschluss der Mutation und des anschließenden aktuellen Pool-Abrufs gesperrt. Wiederholtes Klicken öffnet keinen weiteren Löschdialog und sendet kein weiteres DELETE. Abbruch oder Fehler geben die Sperre frei; ein währenddessen ausgewählter anderer Key bleibt ausgewählt. Während Bestätigung und Mutationen pausieren automatische Abfragen. Das Verlassen des Panels oder Verbergen der Seite stoppt Leseanfragen, bricht jedoch keine Mutationen ab und wiederholt sie nicht automatisch. Bei Rückkehr werden aktuelle Daten geladen.
+
+Startet eine andere Credential-Mutation, während der Abruf nach dem Löschen noch wartet, bleibt Delete bis zum Abschluss eines neuen Abrufs nach dieser Mutation gesperrt, auch wenn die andere Mutation fehlschlägt. Die wartenden Aktionen teilen sich einen aktuellen Abruf; eine ältere Antwort kann die Löschsperre nicht lösen.
+
+Beim Abbrechen des Löschdialogs mit **Cancel** oder Escape kehrt der Tastaturfokus zu **Delete** zurück, sobald der Button wieder verfügbar ist, sofern Fokus oder aktuelle Ansicht nicht inzwischen gewechselt haben.
+
+Nach erfolgreichem Löschen wird eine noch gecachte Zeile als **deleted** markiert und bleibt bis zu einem erfolgreich geladenen aktuellen Pool-Snapshot für Auswahl und Aktionen gesperrt. Dieser Schutz bleibt beim Verlassen und Zurückkehren zu PBCoinData, beim Verbergen der Seite sowie bei fehlgeschlagenen oder abgebrochenen Abrufen bestehen. Ein anderer ausgewählter Key bleibt ausgewählt; bei Rückkehr werden aktuelle Daten automatisch geladen, ohne die Löschung zu wiederholen.
+
 PBCoinData kann ohne bereiten Pool weiterlaufen und Exchange-seitige Mapping-Inputs aktualisieren. CMC-Listings und Metadaten werden jedoch erst mit mindestens einem aktiven materialisierten Key abgerufen.
 
 ### Zeitplanung

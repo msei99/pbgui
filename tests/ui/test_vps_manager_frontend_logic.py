@@ -163,7 +163,9 @@ def _extract_function(source: str, name: str) -> str:
     raise AssertionError(f"Could not extract complete JavaScript function {name!r}")
 
 
-def _run_node_assertions(function_names: list[str], *, bootstrap: str, assertions: str) -> None:
+def _run_node_assertions(
+    function_names: list[str], *, bootstrap: str, assertions: str, timeout: float | None = None
+) -> None:
     """Run focused Node assertions against extracted frontend helpers."""
     source = HTML_PATH.read_text(encoding="utf-8")
     extracted = "\n\n".join(_extract_function(source, name) for name in function_names)
@@ -178,18 +180,950 @@ def _run_node_assertions(function_names: list[str], *, bootstrap: str, assertion
         {assertions}
         """
     )
-    result = subprocess.run(
-        ["node", "-e", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"Node-backed frontend regression exceeded {timeout} seconds", pytrace=False)
     assert result.returncode == 0, (
         "Node-backed frontend regression failed\n"
         f"STDOUT:\n{result.stdout}\n"
         f"STDERR:\n{result.stderr}"
     )
+
+
+def _run_hl_history_assertions(assertions: str) -> None:
+    """Exercise automatic history updates with synthetic responses and fake time."""
+    _run_node_assertions(
+        ["refreshOpenHlRateLimitHistory", "renderMetricHistoryPayload", "updateHlCreditCost"],
+        timeout=30,
+        bootstrap=r"""
+        const API_BASE = '/api/vps-manager';
+        const cached = { samples: [{ sampled_at: 10, used: 100, cap: 100 }], is_vault: false };
+        const fresh = { samples: [{ sampled_at: 20, used: 100, cap: 100 }], is_vault: false };
+        const cacheKey = 'test-host::hl_requests::test-bot';
+        let cpuHistoryLastPayload = { data: cached, host: 'test-host', botName: 'test-bot', metric: 'hl_requests' };
+        const originalContext = cpuHistoryLastPayload;
+        let cpuHistoryRequestGeneration = 0;
+        let cpuHistoryAbortController = null;
+        const metricHistoryCache = { [cacheKey]: cached };
+        let hlCreditPurchasePending = false;
+        const store = { authExpired: false, hlRateLimits: { accounts: [{ users: ['test-bot'], sampled_at: 20 }] } };
+        const overlay = { visible: true, classList: { contains: () => overlay.visible } };
+        const elements = {
+          cpuHistoryOverlay: overlay,
+          cpuHistorySubtitle: { textContent: 'Normal subtitle' },
+          cpuHistoryTitle: { textContent: 'Original title' },
+          cpuHistoryBody: { innerHTML: 'Original chart' },
+          cpuHistoryMeta: { innerHTML: 'Original metadata' },
+          hlCreditAmount: { value: '123', selectionStart: 1 },
+          hlCreditCost: { textContent: 'Original cost' },
+          hlCreditBuyButton: { disabled: false },
+          hlCreditPurchasePanel: { hidden: false },
+          hlCreditVaultNote: { hidden: true }
+        };
+        const document = { getElementById: id => elements[id], activeElement: elements.hlCreditAmount };
+        function metricHistorySeriesPoints() { return []; }
+        function metricHistoryTitle() { return 'History title'; }
+        function metricHistorySubtitle() { return 'Normal subtitle'; }
+        function hlCreditLimitReached() { return true; }
+        function canBuyHlCredits() { return true; }
+        function renderHlRateLimitHistoryMeta() { return 'Fresh metadata'; }
+        function renderHlRateLimitHistoryChart() { return 'Fresh chart'; }
+        const logged = [];
+        console.error = (...args) => logged.push(args);
+        const timers = new Map();
+        let timerId = 0;
+        function setTimeout(callback, delay) {
+          assert.equal(delay, 15000);
+          timers.set(++timerId, callback);
+          return timerId;
+        }
+        function clearTimeout(id) { timers.delete(id); }
+        function expire() {
+          assert.equal(timers.size, 1);
+          const [id, callback] = timers.entries().next().value;
+          timers.delete(id);
+          callback();
+        }
+        class AbortController {
+          constructor() {
+            const listeners = new Set();
+            this.signal = {
+              aborted: false, listeners,
+              addEventListener: (type, fn) => { assert.equal(type, 'abort'); listeners.add(fn); },
+              removeEventListener: (type, fn) => listeners.delete(fn)
+            };
+          }
+          abort() {
+            if (this.signal.aborted) return;
+            this.signal.aborted = true;
+            for (const fn of [...this.signal.listeners]) fn();
+          }
+        }
+        function deferred() {
+          let resolve, reject;
+          const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+          return { promise, resolve, reject };
+        }
+        let fetchImpl;
+        const requests = [];
+        function fetch(url, options) {
+          assert.equal(url, API_BASE + '/user-rate-limits/history/test-bot');
+          assert.equal(options.credentials, 'same-origin');
+          assert.equal(options.cache, 'no-store');
+          requests.push(options);
+          return fetchImpl();
+        }
+        async function flush() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
+        function assertPreserved() {
+          assert.equal(cpuHistoryLastPayload, originalContext);
+          assert.equal(metricHistoryCache[cacheKey], cached);
+          assert.equal(elements.cpuHistoryBody.innerHTML, 'Original chart');
+          assert.equal(elements.cpuHistoryMeta.innerHTML, 'Original metadata');
+          assert.equal(elements.cpuHistoryTitle.textContent, 'Original title');
+          assert.equal(elements.hlCreditAmount.value, '123');
+          assert.equal(elements.hlCreditAmount.selectionStart, 1);
+          assert.equal(document.activeElement, elements.hlCreditAmount);
+          assert.equal(elements.hlCreditCost.textContent, 'Original cost');
+          assert.equal(elements.hlCreditPurchasePanel.hidden, false);
+          assert.equal(elements.hlCreditBuyButton.disabled, false);
+        }
+        function assertClean(controller) {
+          assert.equal(timers.size, 0);
+          assert.equal(controller.signal.listeners.size, 0);
+          assert.equal(cpuHistoryAbortController, null);
+        }
+        """,
+        assertions="(async () => {\n" + assertions + "\n})().catch(error => { process.stderr.write(error.stack); process.exitCode = 1; });",
+    )
+
+
+def _run_master_detail_assertions(assertions: str) -> None:
+    """Exercise detail requests with controlled responses and unchanged edit state."""
+    _run_node_assertions(
+        ["fetchMasterDetail", "isMasterContextView"],
+        bootstrap=r"""
+        const API_BASE = '/api/vps-manager';
+        const original = {kind:'master', marker:'last loaded'};
+        const store = {
+          view:'master', hostname:'', contextGeneration:1, detailRequestGeneration:0,
+          masterDetailErrorContextGeneration:null, detail:original,
+          detailCache:{master:original}, master:{draft:'unsaved'}, selection:['fixture']
+        };
+        const requests = [], logs = [], toasts = [], renders = [], ensured = [];
+        let handlerFailure = '';
+        const console = {error:(...args)=>logs.push(args)};
+        function fetch(path, options) {
+          let resolve, reject;
+          const promise = new Promise((ok, fail)=>{resolve=ok; reject=fail;});
+          requests.push({path, options, resolve, reject});
+          return promise;
+        }
+        function toast(...args) {toasts.push(args);}
+        function ensureMasterUi(data) {
+          if (handlerFailure === 'ensure') throw new Error('Synthetic ensure failure');
+          ensured.push(data);
+        }
+        function renderUi(options) {
+          if (handlerFailure === 'render') throw new Error('Synthetic render failure');
+          renders.push(options);
+        }
+        function success(request, data={kind:'master', marker:'fresh'}) {
+          request.resolve({ok:true, json:()=>Promise.resolve(data)});
+        }
+        function unchanged() {
+          assert.equal(store.detail, original);
+          assert.equal(store.detailCache.master, original);
+          assert.deepEqual(store.master,{draft:'unsaved'});
+          assert.deepEqual(store.selection,['fixture']);
+          assert.equal(store.view,'master');
+          assert.equal(store.hostname,'');
+          assert.equal(renders.length,0);
+          assert.equal(ensured.length,0);
+        }
+        """,
+        assertions="(async () => {\n" + assertions
+        + "\n})().catch(error => {process.stderr.write(String(error.stack)); process.exitCode=1;});",
+    )
+
+
+@pytest.mark.parametrize("failure", ["network", "http500", "invalid_json", "ensure", "render"])
+def test_master_detail_reports_current_errors(failure: str) -> None:
+    """Fetch, parsing and success-handler errors reach the console and notification."""
+    _run_master_detail_assertions("const failure = " + json.dumps(failure) + ";\n" + r"""
+        const pending = fetchMasterDetail();
+        assert.equal(requests[0].path,'/api/vps-manager/detail-master');
+        assert.equal(requests[0].options.credentials,'same-origin');
+        assert.equal(requests[0].options.cache,'no-store');
+        if (failure === 'network') requests[0].reject(new TypeError('Synthetic offline'));
+        else if (failure === 'http500') requests[0].resolve({ok:false,status:500});
+        else if (failure === 'invalid_json') requests[0].resolve({
+          ok:true,json:()=>Promise.reject(new SyntaxError('Synthetic invalid JSON'))
+        });
+        else {handlerFailure=failure; success(requests[0]);}
+        await pending;
+        assert.equal(logs.length,1);
+        assert.equal(logs[0][0],'Failed to load master details:');
+        assert.ok(logs[0][1] instanceof Error);
+        assert.deepEqual(toasts,[['Failed to load master details. Please try again.',
+          'error',{preserveOpenDialog:true}]]);
+        assert.equal(store.masterDetailErrorContextGeneration,1);
+        if (!['ensure','render'].includes(failure)) unchanged();
+    """)
+
+
+@pytest.mark.parametrize("reason,response", [
+    ("abort", "failure"), ("request", "failure"), ("request", "success"),
+    ("context", "failure"), ("context", "success"),
+    ("view", "failure"), ("view", "success"),
+])
+def test_master_detail_ignores_cancelled_or_obsolete_requests(reason: str, response: str) -> None:
+    """Obsolete callbacks cannot log, render, notify or reset a newer error phase."""
+    _run_master_detail_assertions("const reason = " + json.dumps(reason)
+        + "; const response = " + json.dumps(response) + ";\n" + r"""
+        store.masterDetailErrorContextGeneration = 91;
+        const pending = fetchMasterDetail();
+        if (reason === 'request') {
+          fetchMasterDetail();
+          assert.equal(requests[0].options.signal.aborted,true);
+        }
+        if (reason === 'context') store.contextGeneration++;
+        if (reason === 'view') store.view='overview';
+        if (response === 'success') success(requests[0]);
+        else requests[0].reject(reason === 'abort'
+          ? new DOMException('Synthetic cancellation','AbortError') : new Error('Synthetic failure'));
+        await pending;
+        assert.equal(logs.length,0);
+        assert.equal(toasts.length,0);
+        assert.equal(store.masterDetailErrorContextGeneration,91);
+        if (reason === 'view') store.view='master';
+        unchanged();
+    """)
+
+
+def test_master_detail_deduplicates_until_valid_recovery_or_context_change() -> None:
+    """Only current validated detail success resets notification suppression."""
+    _run_master_detail_assertions(r"""
+        async function fail() {
+          const pending=fetchMasterDetail();
+          requests.at(-1).reject(new Error('Synthetic offline')); await pending;
+        }
+        await fail(); await fail();
+        assert.equal(logs.length,2);
+        assert.equal(toasts.length,1);
+        unchanged();
+        for (const invalid of [null, {}, {kind:'vps'}]) {
+          const pending=fetchMasterDetail(); success(requests.at(-1),invalid); await pending;
+          assert.equal(store.masterDetailErrorContextGeneration,1);
+        }
+        const obsolete=fetchMasterDetail(), oldRequest=requests.at(-1);
+        await fail();
+        success(oldRequest); await obsolete;
+        assert.equal(store.masterDetailErrorContextGeneration,1);
+        unchanged();
+        const fresh={kind:'master',marker:'recovered'};
+        const recovered=fetchMasterDetail(); success(requests.at(-1),fresh); await recovered;
+        assert.equal(store.masterDetailErrorContextGeneration,null);
+        assert.equal(store.detail,fresh);
+        assert.equal(store.detailCache.master,fresh);
+        assert.deepEqual(ensured,[fresh]);
+        assert.deepEqual(renders,[undefined]);
+        await fail();
+        assert.equal(toasts.length,2);
+        store.contextGeneration++;
+        await fail();
+        assert.equal(toasts.length,3);
+        assert.equal(store.masterDetailErrorContextGeneration,2);
+        assert.equal(logs.length,5);
+    """)
+
+
+def test_master_detail_first_success_forces_view_render() -> None:
+    """Initial valid data populates detail and cache and replaces the loading view."""
+    _run_master_detail_assertions(r"""
+        store.detail=null;
+        const pending=fetchMasterDetail(); success(requests[0]); await pending;
+        assert.equal(store.detail.marker,'fresh');
+        assert.equal(store.detailCache.master,store.detail);
+        assert.deepEqual(ensured,[store.detail]);
+        assert.deepEqual(renders,[{forceView:true}]);
+        assert.equal(toasts.length,0);
+        assert.equal(logs.length,0);
+    """)
+
+
+@pytest.mark.parametrize("kind", ["error", "warning"])
+@pytest.mark.parametrize("protected_dialog", [True, False])
+def test_master_detail_toast_preserves_real_sudo_dialog(kind: str, protected_dialog: bool) -> None:
+    """Real toast/dialog handlers preserve sudo content, callbacks, focus and timers."""
+    _run_node_assertions(
+        ["toast", "openAlertModal", "openMasterPasswordPrompt", "promptForMasterSudoAction",
+         "runPendingLocalSudoAction", "fetchMasterDetail", "isMasterContextView"],
+        bootstrap="const kind = " + json.dumps(kind) + "; const protectedDialog = "
+        + json.dumps(protected_dialog) + ";\n" + r"""
+        const API_BASE='/api/vps-manager';
+        const store={master:{},pendingOverviewDeploy:{marker:'pending overview'},
+          contextGeneration:1,detailRequestGeneration:0,detailCache:{},view:'master'};
+        const elements={}, timers=[], posts=[], logs=[], runs=[];
+        let resets=0;
+        function element(id) {
+          const classes=new Set();
+          return {id,style:{},children:[],className:'',textContent:'',value:'',listeners:{},
+            classList:{add:x=>classes.add(x),contains:x=>classes.has(x)},
+            appendChild(node) {this.children.push(node); node.parent=this;},
+            remove() {this.parent.children=this.parent.children.filter(node=>node!==this);},
+            focus() {document.activeElement=this;},
+            addEventListener(type,callback) {this.listeners[type]=callback;},
+            set innerHTML(value) {
+              for (const child of this.children) delete elements[child.id];
+              this.children=[]; this.html=value;
+              for (const match of value.matchAll(/id=['"]([^'"]+)['"]/g)) {
+                const child=element(match[1]); elements[child.id]=child; this.children.push(child);
+              }
+            },
+            get innerHTML() {return this.html;}
+          };
+        }
+        const document={activeElement:null,getElementById:id=>elements[id]||null,
+          createElement:()=>element('')};
+        for (const id of ['toastContainer','dialogToastContainer','alertModalOverlay',
+          'alertModalTitle','alertModalBody','alertModalBtnRow']) elements[id]=element(id);
+        const console={error:(...args)=>logs.push(args)};
+        const setTimeout=(callback,delay)=>{timers.push({callback,delay}); return timers.length;};
+        function fetch(path,options) {
+          if (path.endsWith('/detail-master')) return Promise.reject(new Error('Synthetic offline'));
+          posts.push({path,options}); return Promise.resolve({ok:true});
+        }
+        function resetAlertModalWindow() {resets++;}
+        function isClusterOnboardModalVisible() {return false;}
+        function isClusterOnboardRunning() {return false;}
+        function esc(value) {return String(value);}
+        function closeAlertModal() {throw new Error('Must not close the dialog');}
+        function runMasterWithLog(...args) {runs.push(args);}
+        function ensureMasterUi() {throw new Error('Must not update data');}
+        function renderUi() {throw new Error('Must not render');}
+        """,
+        assertions=r"""
+        (async () => {
+          promptForMasterSudoAction('fixture-command','Fixture action',{fixture:true});
+          timers.shift().callback(); // The actual prompt's delayed focus.
+          const input=elements['master-pw-prompt-input']; input.value='synthetic-test-password';
+          const pending=store.pendingLocalSudoAction, overview=store.pendingOverviewDeploy;
+          const body=elements.alertModalBody.innerHTML, buttons=elements.alertModalBtnRow.innerHTML;
+          const confirm=elements['master-pw-prompt-confirm'];
+          const confirmAction=confirm.listeners.click, keyAction=input.listeners.keydown;
+          if (protectedDialog && kind === 'error') await fetchMasterDetail();
+          else toast('Synthetic failure',kind,protectedDialog ? {preserveOpenDialog:true} : undefined);
+          assert.equal(posts.length,1);
+          assert.equal(posts[0].path,'/api/notify_log');
+          assert.equal(posts[0].options.method,'POST');
+          assert.equal(posts[0].options.credentials,'same-origin');
+          assert.equal(JSON.parse(posts[0].options.body).level,kind);
+          assert.equal(store.pendingLocalSudoAction,pending);
+          assert.equal(store.pendingOverviewDeploy,overview);
+          assert.equal(runs.length,0);
+          const layer=elements[protectedDialog ? 'dialogToastContainer' : 'toastContainer'];
+          assert.equal(layer.children.length,1);
+          assert.equal(elements[protectedDialog ? 'toastContainer' : 'dialogToastContainer'].children.length,0);
+          const node=layer.children[0];
+          assert.equal(node.className,'toast '+kind);
+          if (protectedDialog) {
+            assert.equal(resets,0);
+            assert.equal(elements.alertModalTitle.textContent,'Master sudo password required');
+            assert.equal(elements.alertModalBody.innerHTML,body);
+            assert.equal(elements.alertModalBtnRow.innerHTML,buttons);
+            assert.equal(elements['master-pw-prompt-input'],input);
+            assert.equal(elements['master-pw-prompt-confirm'],confirm);
+            assert.equal(input.value,'synthetic-test-password');
+            assert.equal(document.activeElement,input);
+            assert.equal(confirm.listeners.click,confirmAction);
+            assert.equal(input.listeners.keydown,keyAction);
+            if (kind === 'error') {
+              assert.equal(logs.length,1);
+              assert.equal(node.textContent,'Failed to load master details. Please try again.');
+            }
+          } else {
+            assert.equal(resets,1);
+            assert.equal(elements.alertModalTitle.textContent,kind === 'error' ? 'Error' : 'Warning');
+            assert.match(elements.alertModalBtnRow.innerHTML,/>Close<\/button>/);
+          }
+          assert.equal(timers[0].delay,kind === 'error' ? 4200 : 2600);
+          timers.shift().callback();
+          assert.equal(node.style.opacity,'0');
+          assert.equal(timers[0].delay,220);
+          timers.shift().callback();
+          assert.equal(layer.children.length,0);
+          assert.equal(timers.length,0);
+          if (protectedDialog) assert.equal(document.activeElement,input);
+          else {
+            // The option retains the normal error modal when no dialog is open.
+            elements.alertModalOverlay=element('alertModalOverlay');
+            toast('Closed dialog failure',kind,{preserveOpenDialog:true});
+            assert.equal(resets,2);
+            assert.equal(elements.toastContainer.children.length,1);
+            assert.equal(elements.dialogToastContainer.children.length,0);
+          }
+        })().catch(error=>{process.stderr.write(String(error.stack)); process.exitCode=1;});
+        """,
+    )
+
+
+def test_master_detail_toast_layer_and_menu_delivery_contract() -> None:
+    """The opt-in layer clears the modal and pointer rules; the menu serves uncached HTML."""
+    source = HTML_PATH.read_text(encoding="utf-8")
+    layer = source.rsplit("#dialogToastContainer {", 1)[1].split("}", 1)[0]
+    assert "z-index: 6500" in layer
+    common = source.split("#toastContainer,", 1)[1].split("}", 1)[0]
+    assert "position: fixed" in common
+    assert "pointer-events: none" in common
+    child = source.split("#dialogToastContainer .toast {", 1)[1].split("}", 1)[0]
+    assert "pointer-events: none" in child
+    assert "pointer-events: auto" in source.split("    .toast {", 1)[1].split("}", 1)[0]
+    assert "<div id='dialogToastContainer' role='status' aria-live='polite'></div>" in source
+    assert source.index("<div id='toastContainer'></div>") < source.index("<div id='dialogToastContainer'")
+    assert source.index("<div id='dialogToastContainer'") < source.index("<div id='alertModalOverlay'>")
+    nav = (ROOT / "frontend" / "pbgui_nav.js").read_text(encoding="utf-8")
+    assert "{ id: 'system', label: 'System'" in nav
+    assert "page: 'system_vps_manager_fastapi', icon: '&#128421;', label: 'VPS Manager'" in nav
+    assert "'system_vps_manager_fastapi': '/api/vps-manager/main_page'" in nav
+    route = (ROOT / "api" / "vps_manager.py").read_text(encoding="utf-8")
+    page = route.split('html_path = ', 1)[1].split('@router.get(', 1)[0]
+    assert '"vps_manager.html"' in page
+    assert 'headers={"Cache-Control": "no-store"}' in page
+
+
+def _run_vps_detail_assertions(assertions: str) -> None:
+    """Run current VPS requests and navigation with isolated deferred HTTP responses."""
+    _run_node_assertions(
+        ['fetchVpsDetail', 'isVpsContextView', 'isMasterContextView', 'selectView',
+         'detailContextKey', 'viewUrl', 'viewHash', 'openVpsHostLogs', 'restoreViewFromHash'],
+        bootstrap=r'''
+        const API_BASE='/api/vps-manager';
+        const original={kind:'vps',hostname:'test-host',marker:'cached'};
+        const store={view:'vps',hostname:'test-host',contextGeneration:1,detailRequestGeneration:0,
+          vpsDetailErrorHost:null,detail:original,detailCache:{'vps:test-host':original},
+          vps:{'test-host':{draft:'unsaved'}},selection:['test-host']};
+        const requests=[],logs=[],toasts=[],renders=[],ensured=[],contexts=[],scheduled=[];
+        const console={error:(...args)=>logs.push(args)};
+        const location={pathname:'/api/vps-manager/main_page',search:'',hash:'#vps/test-host'};
+        const window={location};
+        const history={replaceState:(a,b,url)=>{location.hash=url.slice(url.indexOf('#'));}};
+        function fetch(path,options) {
+          let resolve,reject; const promise=new Promise((ok,fail)=>{resolve=ok;reject=fail;});
+          requests.push({path,options,resolve,reject}); return promise;
+        }
+        function toast(...args) {toasts.push(args);}
+        function renderUi(options) {renders.push(options);}
+        function ensureVpsUi(host,data) {ensured.push({host,data});}
+        function sendContext() {contexts.push([store.view,store.hostname]);}
+        function defaultTaskLog() {return {};}
+        function buildProvisionalVpsDetail() {return null;}
+        function scheduleVpsDetailFetch(host) {scheduled.push(host);}
+        function scheduleMasterDetailFetch() {}
+        function success(request,data={kind:'vps',hostname:'test-host',marker:'fresh'}) {
+          request.resolve({ok:true,json:()=>Promise.resolve(data)});
+        }
+        function unchanged() {
+          assert.equal(store.detail,original); assert.equal(store.detailCache['vps:test-host'],original);
+          assert.deepEqual(store.vps,{'test-host':{draft:'unsaved'}});
+          assert.deepEqual(store.selection,['test-host']);
+          assert.equal(renders.length,0); assert.equal(ensured.length,0);
+        }
+        async function fail() {
+          const pending=fetchVpsDetail(store.hostname);
+          requests.at(-1).reject(new TypeError('Synthetic sensitive diagnostic')); await pending;
+        }
+        ''',
+        assertions='(async()=>{\n' + assertions
+        + '\n})().catch(error=>{process.stderr.write(String(error.stack));process.exitCode=1;});',
+    )
+
+
+@pytest.mark.parametrize('failure', ['network', 'http500', 'invalid_json'])
+def test_vps_detail_reports_current_failures(failure: str) -> None:
+    """A genuine failure logs controlled text and preserves cache, selection and drafts."""
+    _run_vps_detail_assertions('const failure=' + json.dumps(failure) + ';\n' + r'''
+        const pending=fetchVpsDetail('test-host');
+        assert.equal(requests[0].path,'/api/vps-manager/detail/test-host');
+        assert.equal(requests[0].options.credentials,'same-origin');
+        assert.equal(requests[0].options.cache,'no-store');
+        if (failure==='network') requests[0].reject(new TypeError('Sensitive fixture diagnostic'));
+        if (failure==='http500') requests[0].resolve({ok:false,status:500});
+        if (failure==='invalid_json') requests[0].resolve({ok:true,json:()=>Promise.reject(new SyntaxError('Sensitive fixture body'))});
+        await pending;
+        assert.deepEqual(logs,[['Failed to load VPS details.']]);
+        assert.deepEqual(toasts,[['Failed to load VPS details. Please try again.','error',{preserveOpenDialog:true}]]);
+        assert.equal(store.vpsDetailErrorHost,'test-host'); unchanged();
+    ''')
+
+
+@pytest.mark.parametrize('reason,response', [('abort', 'failure')] + [
+    (reason, response) for reason in ['request', 'context', 'host', 'view']
+    for response in ['failure', 'http500', 'http404', 'success', 'json']
+])
+def test_vps_detail_ignores_obsolete_requests(reason: str, response: str) -> None:
+    """Late headers, JSON and failures cannot affect another host, context or request."""
+    _run_vps_detail_assertions('const reason=' + json.dumps(reason)
+        + ', response=' + json.dumps(response) + ';\n' + r'''
+        store.vpsDetailErrorHost='existing-phase';
+        const pending=fetchVpsDetail('test-host');
+        let resolveJson;
+        if (response==='json') {
+          requests[0].resolve({ok:true,json:()=>new Promise(resolve=>{resolveJson=resolve;})});
+          await Promise.resolve(); await Promise.resolve();
+        }
+        if (reason==='request') {fetchVpsDetail('test-host'); assert.ok(requests[0].options.signal.aborted);}
+        if (reason==='context') store.contextGeneration++;
+        if (reason==='host') store.hostname='test-other';
+        if (reason==='view') store.view='overview';
+        if (response==='failure') requests[0].reject(reason==='abort'
+          ? new DOMException('Synthetic abort','AbortError') : new Error('Synthetic failure'));
+        if (response==='http500' || response==='http404') requests[0].resolve({ok:false,status:response==='http404'?404:500});
+        if (response==='success') success(requests[0]);
+        if (response==='json') resolveJson({kind:'vps',hostname:'test-host'});
+        await pending;
+        assert.equal(logs.length,0); assert.equal(toasts.length,0);
+        assert.equal(store.vpsDetailErrorHost,'existing-phase');
+        assert.equal(contexts.length,0); assert.equal(location.hash,'#vps/test-host'); unchanged();
+    ''')
+
+
+def test_vps_detail_deduplicates_and_recovers() -> None:
+    """Only a valid current success or host-context change starts another error phase."""
+    _run_vps_detail_assertions(r'''
+        await fail(); await fail(); assert.equal(toasts.length,1); unchanged();
+        for (const data of [null,{}, {kind:'master'}, {kind:'vps',hostname:'wrong'}]) {
+          const pending=fetchVpsDetail('test-host'); success(requests.at(-1),data); await pending;
+          assert.equal(store.vpsDetailErrorHost,'test-host');
+        }
+        const pending=fetchVpsDetail('test-host'); success(requests.at(-1)); await pending;
+        assert.equal(store.vpsDetailErrorHost,null); assert.equal(store.detail.marker,'fresh');
+        assert.equal(store.detailCache['vps:test-host'],store.detail);
+        assert.deepEqual(renders,[undefined]);
+        await fail(); assert.equal(toasts.length,2);
+        selectView('vps-setup','test-host');
+        assert.equal(store.vpsDetailErrorHost,'test-host');
+        await fail(); assert.equal(toasts.length,2);
+        selectView('overview',''); selectView('vps','test-host');
+        assert.equal(store.vpsDetailErrorHost,null);
+        await fail(); assert.equal(toasts.length,3);
+        openVpsHostLogs('test-other');
+        assert.equal(store.vpsDetailErrorHost,null); assert.equal(store.hostname,'test-other');
+        assert.equal(store.view,'vps-host-logs');
+        requests.at(-1).reject(new Error('Synthetic failure'));
+        await new Promise(resolve=>setImmediate(resolve));
+        assert.equal(toasts.length,4); assert.equal(store.vpsDetailErrorHost,'test-other');
+        assert.deepEqual(store.vps,{'test-host':{draft:'unsaved'}});
+    ''')
+
+
+def test_vps_detail_404_navigates_and_restores_overview() -> None:
+    """A current missing host uses the normal navigation path and survives reload."""
+    _run_vps_detail_assertions(r'''
+        const pending=fetchVpsDetail('test-host'); requests[0].resolve({ok:false,status:404}); await pending;
+        assert.deepEqual(toasts,[['This VPS is no longer available. Returning to Overview.','warning',{preserveOpenDialog:true}]]);
+        assert.equal(store.view,'overview'); assert.equal(store.hostname,''); assert.equal(store.detail,null);
+        assert.equal(location.hash,'#overview'); assert.deepEqual(contexts,[['overview','']]);
+        assert.equal(store.detailCache['vps:test-host'],original);
+        store.view='overview'; store.hostname=''; restoreViewFromHash();
+        assert.equal(store.view,'overview'); assert.equal(store.hostname,'');
+        assert.equal(logs.length,0);
+    ''')
+
+
+def test_vps_detail_host_logs_switch_ignores_old_404() -> None:
+    """Direct host-log navigation invalidates the former host's pending missing response."""
+    _run_vps_detail_assertions(r'''
+        const old=fetchVpsDetail('test-host');
+        store.vpsDetailErrorHost='test-host';
+        openVpsHostLogs('test-other');
+        assert.equal(requests[0].options.signal.aborted,true);
+        requests[0].resolve({ok:false,status:404}); await old;
+        assert.equal(store.view,'vps-host-logs'); assert.equal(store.hostname,'test-other');
+        assert.equal(store.vpsDetailErrorHost,null);
+        assert.equal(toasts.length,0); assert.equal(logs.length,0);
+        assert.deepEqual(contexts,[['vps-host-logs','test-other']]);
+        assert.equal(store.detailCache['vps:test-host'],original);
+    ''')
+
+
+def _run_cluster_onboard_assertions(assertions: str) -> None:
+    """Exercise real onboarding handlers/renderers with deferred offline requests."""
+    _run_node_assertions(
+        ["stopClusterOnboardProgressPolling", "isClusterOnboardRunning",
+         "isClusterOnboardModalVisible", "renderClusterOnboardProgressModal",
+         "isCurrentClusterOnboard", "pollClusterOnboardProgress", "startClusterOnboard",
+         "resumeClusterOnboardProgress", "addVpsToCluster", "openConfirmModal"],
+        bootstrap=r"""
+        const store = { clusterOnboard: {generation:0, resumeChecked:{}} };
+        const posts = [], gets = [], timers = [], cleared = [], toasts = [], details = [];
+        const deferred = () => {
+          let resolve, reject;
+          const promise = new Promise((ok, fail) => {resolve=ok; reject=fail;});
+          return {promise, resolve, reject};
+        };
+        const request = (list, path) => {
+          const item = {...deferred(), path}; list.push(item); return item.promise;
+        };
+        const vpsManagerPost = path => request(posts, path);
+        const vpsManagerGet = path => request(gets, path);
+        const settle = async () => { for (let i=0; i<6; i++) await Promise.resolve(); };
+        const window = {
+          innerWidth:1200, innerHeight:900,
+          setTimeout(callback, delay) {timers.push({callback,delay}); return timers.length;},
+          clearTimeout(id) {cleared.push(id);},
+          requestAnimationFrame(callback) {callback();}
+        };
+        const elements = {};
+        for (const id of ['alertModalTitle','alertModalBody','alertModalOverlay',
+                          'cluster-onboard-progress-log','close']) elements[id] = {style:{}};
+        const visible = new Set();
+        elements.alertModalOverlay.classList = {
+          add:value=>visible.add(value), contains:value=>visible.has(value)
+        };
+        elements.alertModalBtnRow = {
+          set innerHTML(value) {
+            this.html = value;
+            delete elements['cluster-onboard-retry']; delete elements['confirm-modal-ok'];
+            for (const id of ['cluster-onboard-retry','confirm-modal-ok']) {
+              if (value.includes("id='"+id+"'")) elements[id] = {
+                onclick:null, addEventListener(type, callback) {this[type]=callback;}
+              };
+            }
+          },
+          get innerHTML() {return this.html;}
+        };
+        const document = {
+          getElementById:id=>elements[id] || null,
+          querySelector:selector=>selector === '#alertModalHead .close-btn' ? elements.close : null
+        };
+        const esc = value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;')
+          .replaceAll('>','&gt;').replaceAll("'",'&#39;').replaceAll('"','&quot;');
+        const escAttr = esc;
+        const clusterImportProgressClass = status => status;
+        const prepareAlertModalWindow = () => {};
+        const closeAlertModal = () => visible.delete('visible');
+        const toast = (...args) => toasts.push(args);
+        const scheduleVpsDetailFetch = host => details.push(host);
+        const assertLocked = () => {
+          assert.match(elements.alertModalBtnRow.innerHTML, /<button[^>]* disabled>Onboarding in progress/);
+          assert.equal(document.getElementById('cluster-onboard-retry'),null);
+          assert.equal(elements.close.style.display,'none');
+        };
+        """,
+        assertions="(async () => {\n" + assertions
+        + "\n})().catch(error => {console.error(error); process.exitCode=1;});",
+    )
+
+
+@pytest.mark.parametrize("failure", ["request", "missing", "empty", "blank", "non_string"])
+def test_cluster_onboard_start_and_retry_lock(failure: str) -> None:
+    """Repeated Confirm/Retry and other hosts cannot reset queued/running work."""
+    _run_cluster_onboard_assertions("const failure = " + json.dumps(failure) + ";\n" + r"""
+        const checked = store.clusterOnboard.resumeChecked;
+        checked['fixture-node'] = true;
+        addVpsToCluster('fixture-node');
+        assert.equal(elements.alertModalTitle.textContent,'Add to Cluster');
+        assert.match(elements.alertModalBtnRow.innerHTML, />Confirm<\/button>/);
+        const confirm = elements['confirm-modal-ok'].click;
+        confirm();
+        const queued = store.clusterOnboard;
+        for (let i=0; i<5; i++) {
+          confirm(); startClusterOnboard('other-fixture'); addVpsToCluster('other-fixture');
+        }
+        assert.equal(posts.length,1);
+        assert.equal(store.clusterOnboard,queued);
+        assert.equal(queued.resumeChecked,checked);
+        assert.equal(cleared.length,0);
+        assertLocked();
+        assert.match(posts[0].path,/\/fixture-node\/start$/);
+        if (failure === 'request') posts[0].reject(new Error('Synthetic start failure'));
+        else posts[0].resolve(failure === 'missing' ? {} : {
+          job_id: {empty:'',blank:'  ',non_string:42}[failure], status:'queued'
+        });
+        await settle();
+        assert.equal(store.clusterOnboard.status,'error');
+        assert.match(elements.alertModalBody.innerHTML,
+          failure === 'request' ? /Synthetic start failure/ : /no valid job ID/);
+        assert.equal(gets.length,0);
+        assert.equal(posts.length,1); // No automatic POST retry.
+        const retry = elements['cluster-onboard-retry'].onclick;
+        retry();
+        const retryFlow = store.clusterOnboard;
+        for (let i=0; i<5; i++) { retry(); startClusterOnboard('other-fixture'); }
+        assert.equal(posts.length,2);
+        assert.equal(store.clusterOnboard,retryFlow);
+        assert.equal(retryFlow.resumeChecked,checked);
+        assertLocked();
+        posts[1].resolve({job_id:'fixture-job',status:'queued'});
+        await settle();
+        assert.equal(gets.length,1);
+        gets[0].resolve({status:'running',percent:36,label:'Synthetic progress'});
+        await settle();
+        const flow = store.clusterOnboard, timer = flow.progressTimer;
+        const clearedBefore = cleared.length;
+        assert.equal(timers[timer-1].delay,500);
+        for (let i=0; i<5; i++) {
+          retry(); startClusterOnboard('other-fixture'); addVpsToCluster('other-fixture');
+          resumeClusterOnboardProgress('other-fixture');
+        }
+        assert.equal(store.clusterOnboard,flow);
+        assert.equal(flow.progressTimer,timer);
+        assert.equal(cleared.length,clearedBefore);
+        assert.equal(posts.length,2);
+        assert.equal(gets.length,1);
+        assertLocked();
+        assert.match(elements.alertModalBody.innerHTML,/36%/);
+        timers[timer-1].callback();
+        assert.equal(gets.length,2);
+        gets[1].resolve({status:'successful',percent:100});
+        await settle();
+        assert.equal(flow.status,'successful');
+        assert.match(elements.alertModalBtnRow.innerHTML,/>Close<\/button>/);
+        assert.equal(elements['cluster-onboard-retry'],undefined);
+        assert.equal(elements.close.style.display,'');
+        assert.deepEqual(details,['fixture-node']);
+        assert.equal(toasts.length,1);
+    """)
+
+
+def test_cluster_onboard_job_failure_allows_explicit_retry() -> None:
+    """A terminal job error shows Retry and only an explicit click sends a POST."""
+    _run_cluster_onboard_assertions(r"""
+        startClusterOnboard('fixture-node');
+        posts[0].resolve({job_id:'failed-job',status:'running'});
+        await settle();
+        gets[0].resolve({status:'error',label:'Synthetic job failure',error:'Fixture failure'});
+        await settle();
+        assert.equal(store.clusterOnboard.status,'error');
+        assert.match(elements.alertModalBody.innerHTML,/Fixture failure/);
+        assert.equal(elements.close.style.display,'');
+        assert.equal(timers.length,0);
+        assert.equal(toasts.length,0);
+        assert.equal(details.length,0);
+        assert.equal(posts.length,1);
+        const retry = elements['cluster-onboard-retry'].onclick;
+        for (let i=0; i<5; i++) retry();
+        assert.equal(posts.length,2);
+        assert.match(posts[1].path,/\/fixture-node\/start$/);
+        assert.equal(store.clusterOnboard.jobId,'');
+        assertLocked();
+    """)
+
+
+@pytest.mark.parametrize("response", ["success", "error"])
+def test_cluster_onboard_ignores_stale_start(response: str) -> None:
+    """A superseded start response cannot overwrite or poll a newer generation."""
+    _run_cluster_onboard_assertions("const response = " + json.dumps(response) + ";\n" + r"""
+        startClusterOnboard('fixture-node');
+        const old = store.clusterOnboard;
+        // Model a replacement flow, including reuse of the same host.
+        store.clusterOnboard = {...old,status:'error'};
+        startClusterOnboard('fixture-node');
+        const current = store.clusterOnboard;
+        const html = elements.alertModalBody.innerHTML;
+        if (response === 'success') posts[0].resolve({job_id:'obsolete',status:'queued'});
+        else posts[0].reject(new Error('obsolete failure'));
+        await settle();
+        assert.equal(store.clusterOnboard,current);
+        assert.equal(current.status,'queued');
+        assert.equal(current.jobId,'');
+        assert.equal(elements.alertModalBody.innerHTML,html);
+        assert.equal(gets.length,0);
+        assertLocked();
+        posts[1].resolve({job_id:'current',status:'running'});
+        await settle();
+        assert.equal(current.jobId,'current');
+        assert.equal(gets.length,1);
+    """)
+
+
+@pytest.mark.parametrize("target", ["fixture-node", "other-fixture"])
+def test_cluster_onboard_resume_cannot_replace_start(target: str) -> None:
+    """Resume requested before Start stays obsolete and resumeChecked survives."""
+    _run_cluster_onboard_assertions("const target = " + json.dumps(target) + ";\n" + r"""
+        store.clusterOnboard.resumeChecked['checked-fixture'] = true;
+        resumeClusterOnboardProgress('fixture-node');
+        const checked = store.clusterOnboard.resumeChecked;
+        startClusterOnboard(target);
+        const current = store.clusterOnboard;
+        gets[0].resolve({active:true,job_id:'obsolete',status:'running'});
+        await settle();
+        assert.equal(store.clusterOnboard,current);
+        assert.equal(current.hostname,target);
+        assert.equal(current.jobId,'');
+        assert.equal(current.resumeChecked,checked);
+        assert.equal(checked['checked-fixture'],true);
+        assert.equal(checked['fixture-node'],undefined); // A superseded lookup never completed.
+        assert.equal(current.resumeAttempt,null);
+        assert.equal(gets.length,1);
+        assertLocked();
+        posts[0].resolve({job_id:'current',status:'running'});
+        await settle();
+        assert.equal(current.jobId,'current');
+        assert.equal(gets.length,2);
+    """)
+
+
+@pytest.mark.parametrize("response", ["active", "inactive", "error"])
+@pytest.mark.parametrize("arrival", ["before_return", "after_return"])
+def test_cluster_onboard_rechecks_superseded_resume_on_return(response: str, arrival: str) -> None:
+    """Returning A/B/A rechecks A, and obsolete replies cannot complete its new lookup."""
+    _run_cluster_onboard_assertions(
+        "const response = " + json.dumps(response) + "; const arrival = " + json.dumps(arrival) + ";\n" + r"""
+        const checked = store.clusterOnboard.resumeChecked;
+        checked['checked-fixture'] = true;
+        resumeClusterOnboardProgress('fixture-a');
+        resumeClusterOnboardProgress('fixture-a');
+        assert.equal(gets.length,1); // Detail updates share the pending lookup.
+        resumeClusterOnboardProgress('fixture-b');
+        gets[1].resolve({active:false,hostname:'fixture-b'});
+        await settle();
+        assert.equal(checked['fixture-b'],true);
+        const finishObsolete = async () => {
+          if (response === 'error') gets[0].reject(new Error('Obsolete lookup failure'));
+          else gets[0].resolve({active:response === 'active',hostname:'fixture-a',
+            job_id:'obsolete-a',status:'running'});
+          await settle();
+        };
+        if (arrival === 'before_return') await finishObsolete();
+        resumeClusterOnboardProgress('fixture-a');
+        assert.equal(gets.length,3,'Returning to A must recheck its active job');
+        const flow = store.clusterOnboard, attempt = flow.resumeAttempt;
+        const snapshot = JSON.stringify(flow);
+        if (arrival === 'after_return') await finishObsolete();
+        assert.equal(JSON.stringify(flow),snapshot);
+        assert.equal(flow.resumeAttempt,attempt);
+        assert.equal(checked['fixture-a'],undefined);
+        resumeClusterOnboardProgress('fixture-a');
+        assert.equal(gets.length,3);
+        assert.equal(timers.length,0);
+        assert.equal(isClusterOnboardModalVisible(),false);
+        gets[2].resolve({active:true,hostname:'fixture-a',job_id:'current-a',
+          status:'running',percent:47});
+        await settle();
+        assert.equal(flow.jobId,'current-a');
+        assert.equal(flow.hostname,'fixture-a');
+        assert.equal(flow.resumeChecked,checked);
+        assert.equal(checked['checked-fixture'],true);
+        assert.equal(checked['fixture-a'],true);
+        assert.equal(flow.resumeAttempt,null);
+        assert.equal(gets.length,4); // Only the current job is polled.
+        assert.match(gets[3].path,/\/jobs\/current-a$/);
+        assert.equal(posts.length,0);
+        assertLocked();
+    """)
+
+
+def test_cluster_onboard_checked_host_supersedes_pending_resume() -> None:
+    """A previously checked destination also invalidates the host being left."""
+    _run_cluster_onboard_assertions(r"""
+        store.clusterOnboard.resumeChecked['fixture-b'] = true;
+        resumeClusterOnboardProgress('fixture-a');
+        resumeClusterOnboardProgress('fixture-b');
+        assert.equal(gets.length,1); // No redundant lookup for a completed check.
+        gets[0].resolve({active:true,job_id:'obsolete-a',status:'running'});
+        await settle();
+        assert.equal(store.clusterOnboard.jobId || '','');
+        assert.equal(isClusterOnboardModalVisible(),false);
+        assert.equal(store.clusterOnboard.resumeChecked['fixture-a'],undefined);
+        resumeClusterOnboardProgress('fixture-a');
+        assert.equal(gets.length,2);
+        gets[1].resolve({active:true,job_id:'current-a',status:'running'});
+        await settle();
+        assert.equal(store.clusterOnboard.jobId,'current-a');
+        assert.equal(gets.length,3);
+        assert.equal(posts.length,0);
+        assertLocked();
+    """)
+
+
+def test_cluster_onboard_latest_resume_and_reload() -> None:
+    """Latest host resume wins; a fresh page restores progress without a POST."""
+    _run_cluster_onboard_assertions(r"""
+        resumeClusterOnboardProgress('old-fixture');
+        resumeClusterOnboardProgress('fixture-node');
+        gets[1].resolve({active:true,job_id:'current',status:'running',percent:50});
+        await settle();
+        gets[0].resolve({active:true,job_id:'obsolete',status:'running'});
+        await settle();
+        assert.equal(store.clusterOnboard.hostname,'fixture-node');
+        assert.equal(store.clusterOnboard.jobId,'current');
+        assert.equal(gets.length,3);
+        assertLocked();
+        // A reload creates a fresh frontend store; the API job is still active.
+        store.clusterOnboard = {generation:0,resumeChecked:{}};
+        resumeClusterOnboardProgress('fixture-node');
+        gets[3].resolve({active:true,job_id:'current',status:'running',percent:65});
+        await settle();
+        assert.equal(posts.length,0);
+        assert.equal(store.clusterOnboard.jobId,'current');
+        assert.equal(gets.length,5);
+        assert.match(elements.alertModalBody.innerHTML,/65%/);
+        assertLocked();
+    """)
+
+
+@pytest.mark.parametrize("response", ["success", "error"])
+@pytest.mark.parametrize("replacement", ["generation", "host", "job"])
+def test_cluster_onboard_ignores_stale_poll(response: str, replacement: str) -> None:
+    """Stale polling success/failure cannot mutate state or revive its timers."""
+    _run_cluster_onboard_assertions(
+        "const response = " + json.dumps(response)
+        + "; const replacement = " + json.dumps(replacement) + ";\n" + r"""
+        startClusterOnboard('fixture-node');
+        posts[0].resolve({job_id:'fixture-job',status:'running'});
+        await settle();
+        const old = store.clusterOnboard;
+        const current = store.clusterOnboard = {...old,
+          generation:old.generation + (replacement === 'generation' ? 1 : 0),
+          hostname:replacement === 'host' ? 'other-fixture' : old.hostname,
+          jobId:replacement === 'job' ? 'other-job' : old.jobId
+        };
+        const snapshot = JSON.stringify(current), html = elements.alertModalBody.innerHTML;
+        if (response === 'success') gets[0].resolve({status:'successful',percent:100});
+        else gets[0].reject(new Error('obsolete poll'));
+        await settle();
+        assert.equal(JSON.stringify(current),snapshot);
+        assert.equal(elements.alertModalBody.innerHTML,html);
+        assert.equal(timers.length,0);
+        assert.equal(toasts.length,0);
+        assert.equal(details.length,0);
+    """)
+
+
+@pytest.mark.parametrize("response", ["running", "error"])
+def test_cluster_onboard_stale_timer_cannot_poll(response: str) -> None:
+    """Both progress and transient-error timers verify ownership before a GET."""
+    _run_cluster_onboard_assertions("const response = " + json.dumps(response) + ";\n" + r"""
+        startClusterOnboard('fixture-node');
+        posts[0].resolve({job_id:'fixture-job',status:'running'});
+        await settle();
+        if (response === 'running') gets[0].resolve({status:'running',percent:25});
+        else gets[0].reject(new Error('transient network failure'));
+        await settle();
+        const old = store.clusterOnboard, timer = old.progressTimer;
+        assert.equal(timers[timer-1].delay,response === 'running' ? 500 : 1000);
+        assertLocked();
+        // An already-dispatched callback can run even after clearTimeout.
+        store.clusterOnboard = {...old,status:'error'};
+        startClusterOnboard('fixture-node');
+        assert.deepEqual(cleared,[timer]);
+        posts[1].resolve({job_id:'fixture-job',status:'running'});
+        await settle();
+        const current = store.clusterOnboard;
+        const snapshot = JSON.stringify(current);
+        timers[timer-1].callback();
+        assert.equal(gets.length,2);
+        assert.equal(JSON.stringify(current),snapshot);
+    """)
 
 
 class TestVpsManagerFrontendLogic:
@@ -842,6 +1776,147 @@ class TestVpsManagerFrontendLogic:
         assert "generation !== cpuHistoryRequestGeneration" in open_history
         assert "signal: cpuHistoryAbortController.signal" in open_history
 
+    @pytest.mark.parametrize("failure", ["network", "http_404", "http_500", "json", "timeout", "json_timeout"])
+    def test_hl_history_refresh_errors_preserve_data_and_recover(self, failure: str) -> None:
+        """Current failures retain chart/edit state; a later automatic update recovers."""
+        _run_hl_history_assertions(
+            "const failure = " + json.dumps(failure) + ";\n" + r"""
+            const body = deferred();
+            const networkError = new Error('Synthetic network failure');
+            fetchImpl = () => {
+              if (failure === 'network') return Promise.reject(networkError);
+              if (failure.startsWith('http_')) return Promise.resolve({ ok: false, status: Number(failure.slice(5)),
+                json: () => { throw new Error('HTTP failure must not parse JSON'); } });
+              if (failure === 'json') return Promise.resolve({ ok: true, json: () => Promise.reject(new SyntaxError('Synthetic JSON failure')) });
+              if (failure === 'json_timeout') return Promise.resolve({ ok: true, json: () => body.promise });
+              return body.promise;
+            };
+            const pending = refreshOpenHlRateLimitHistory();
+            const controller = cpuHistoryAbortController;
+            await flush();
+            if (failure.includes('timeout')) {
+              assert.equal(logged.length, 0);
+              expire();
+            }
+            await pending;
+            assert.equal(logged.length, 1);
+            assert.equal(logged[0][0], 'Rate limit history fetch failed:');
+            assert.ok(logged[0][1] instanceof Error);
+            if (failure === 'network') assert.equal(logged[0][1], networkError);
+            if (failure.includes('timeout')) {
+              assert.equal(controller.signal.aborted, true);
+              assert.match(logged[0][1].message, /timed out/);
+            }
+            assert.equal(elements.cpuHistorySubtitle.textContent,
+              'Failed to update rate limit history. Displaying cached data.');
+            assertPreserved();
+            assertClean(controller);
+            // A non-abortable body settling after the deadline cannot update cache/UI.
+            body.resolve(fresh);
+            await flush();
+            assertPreserved();
+            assert.equal(logged.length, 1);
+
+            fetchImpl = () => Promise.resolve({ ok: true, json: () => Promise.resolve(fresh) });
+            const recovery = refreshOpenHlRateLimitHistory();
+            const recoveryController = cpuHistoryAbortController;
+            await recovery;
+            assert.equal(metricHistoryCache[cacheKey], fresh);
+            assert.equal(cpuHistoryLastPayload.data, fresh);
+            assert.equal(elements.cpuHistorySubtitle.textContent, 'Normal subtitle');
+            assert.equal(elements.cpuHistoryBody.innerHTML, 'Fresh chart');
+            assert.equal(elements.hlCreditAmount.value, '123');
+            assert.equal(elements.hlCreditAmount.selectionStart, 1);
+            assert.equal(document.activeElement, elements.hlCreditAmount);
+            assert.equal(logged.length, 1);
+            assertClean(recoveryController);
+            // No redundant update without a newer sample; forced updates still work.
+            assert.equal(refreshOpenHlRateLimitHistory(), undefined);
+            assert.equal(requests.length, 2);
+            await refreshOpenHlRateLimitHistory(true);
+            assert.equal(requests.length, 3);
+            """
+        )
+
+    @pytest.mark.parametrize("context", ["closed", "host", "bot", "metric", "cleared", "auth", "generation", "abort", "abort_error"])
+    @pytest.mark.parametrize("outcome", ["failure", "success", "timeout"])
+    def test_hl_history_refresh_ignores_obsolete_results(self, context: str, outcome: str) -> None:
+        """Closed, superseded, unauthenticated and cancelled requests never alter UI."""
+        _run_hl_history_assertions(
+            "const context = " + json.dumps(context) + ";\n"
+            "const outcome = " + json.dumps(outcome) + ";\n" + r"""
+            const response = deferred();
+            fetchImpl = () => response.promise;
+            const pending = refreshOpenHlRateLimitHistory();
+            const controller = cpuHistoryAbortController;
+            if (context === 'closed') overlay.visible = false;
+            if (context === 'host') cpuHistoryLastPayload = { ...originalContext, host: 'another-host' };
+            if (context === 'bot') cpuHistoryLastPayload = { ...originalContext, botName: 'another-bot' };
+            if (context === 'metric') cpuHistoryLastPayload = { ...originalContext, metric: 'cpu' };
+            if (context === 'cleared') cpuHistoryLastPayload = null;
+            if (context === 'auth') store.authExpired = true;
+            if (context === 'generation') cpuHistoryRequestGeneration++;
+            if (context === 'abort') {
+              controller.abort();
+              assert.equal(timers.size, 0); // Cleared immediately, even if fetch never settles.
+            }
+            if (context === 'abort_error') {
+              response.reject(Object.assign(new Error('Intentional abort'), { name: 'AbortError' }));
+            } else if (outcome === 'timeout' && context !== 'abort') {
+              expire();
+            } else if (outcome === 'success') {
+              response.resolve({ ok: true, json: () => Promise.resolve(fresh) });
+            } else if (outcome === 'failure') {
+              response.reject(new Error('Obsolete error'));
+            }
+            await pending;
+            const changedContext = cpuHistoryLastPayload;
+            cpuHistoryLastPayload = originalContext;
+            assertPreserved();
+            cpuHistoryLastPayload = changedContext;
+            assert.equal(elements.cpuHistorySubtitle.textContent, 'Normal subtitle');
+            assert.equal(logged.length, 0);
+            assertClean(controller);
+            // Late completion after timeout/abort must stay silent as well.
+            response.resolve({ ok: true, json: () => Promise.resolve(fresh) });
+            await flush();
+            assert.equal(metricHistoryCache[cacheKey], cached);
+            assert.equal(cpuHistoryLastPayload, changedContext);
+            assert.equal(elements.cpuHistorySubtitle.textContent, 'Normal subtitle');
+            assert.equal(logged.length, 0);
+            """
+        )
+
+    def test_hl_history_refresh_cleanup_preserves_new_request_owner(self) -> None:
+        """Old abort/cleanup and late responses cannot clear a replacement controller."""
+        _run_hl_history_assertions(r"""
+            const first = deferred();
+            const second = deferred();
+            fetchImpl = () => first.promise;
+            const obsolete = refreshOpenHlRateLimitHistory();
+            const oldController = cpuHistoryAbortController;
+            fetchImpl = () => second.promise;
+            const active = refreshOpenHlRateLimitHistory();
+            const newController = cpuHistoryAbortController;
+            assert.notEqual(oldController, newController);
+            assert.equal(oldController.signal.aborted, true);
+            await obsolete;
+            assert.equal(oldController.signal.listeners.size, 0);
+            assert.equal(cpuHistoryAbortController, newController);
+            assert.equal(timers.size, 1);
+            assert.equal(newController.signal.aborted, false);
+            first.resolve({ ok: true, json: () => Promise.resolve({ samples: [] }) });
+            await flush();
+            assertPreserved();
+            assert.equal(logged.length, 0);
+            assert.equal(cpuHistoryAbortController, newController);
+            second.resolve({ ok: true, json: () => Promise.resolve(fresh) });
+            await active;
+            assert.equal(metricHistoryCache[cacheKey], fresh);
+            assert.equal(elements.cpuHistorySubtitle.textContent, 'Normal subtitle');
+            assertClean(newController);
+        """)
+
     def test_today_log_matches_show_loading_and_reject_stale_responses(self) -> None:
         """Error and traceback clicks respond immediately while one request is active."""
         source = HTML_PATH.read_text(encoding="utf-8")
@@ -966,7 +2041,7 @@ class TestVpsManagerFrontendLogic:
         assert "function addVpsToCluster(hostname)" in source
         assert "startClusterOnboard(target)" in source
         assert "function renderClusterOnboardProgressModal()" in source
-        assert "function pollClusterOnboardProgress(jobId)" in source
+        assert "function pollClusterOnboardProgress(jobId, generation)" in source
         assert "'/cluster-onboard/' + encodeURIComponent(target) + '/start'" in source
         assert "if (isClusterOnboardModalVisible() && isClusterOnboardRunning()) return;" in source
         assert source.count("if (isClusterOnboardModalVisible() && isClusterOnboardRunning()) return;") >= 2

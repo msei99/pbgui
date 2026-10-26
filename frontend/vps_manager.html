@@ -1362,7 +1362,8 @@
 
     .markdown-body a { color: var(--accent); }
 
-    #toastContainer {
+    #toastContainer,
+    #dialogToastContainer {
       position: fixed;
       right: 16px;
       bottom: 16px;
@@ -1370,6 +1371,14 @@
       gap: 8px;
       z-index: 2600;
       width: min(360px, calc(100vw - 32px));
+      pointer-events: none;
+    }
+
+    #dialogToastContainer {
+      z-index: 6500;
+    }
+
+    #dialogToastContainer .toast {
       pointer-events: none;
     }
 
@@ -2919,6 +2928,7 @@
 <body>
   <nav id='topnav'></nav>
   <div id='toastContainer'></div>
+  <div id='dialogToastContainer' role='status' aria-live='polite'></div>
 
   <div id='alertModalOverlay'>
     <div class='modal-box' id='alertModalBox'>
@@ -3061,6 +3071,8 @@
       pendingWsMessages: [],
       contextGeneration: 1,
       detailRequestGeneration: 0,
+      vpsDetailErrorHost: null,
+      masterDetailErrorContextGeneration: null,
       detailAbortController: null,
       detailCache: {},
       botLogMatchRequestId: 0,
@@ -3080,7 +3092,7 @@
       addPublicIp: { ip: '', loading: false, requested: false, applied: false },
       importExistingVps: defaultExistingVpsImportState(),
       clusterNodesImport: defaultClusterNodesImportState(),
-      clusterOnboard: { jobId: '', hostname: '', status: '', progress: null, progressTimer: 0, resumeChecked: {} },
+      clusterOnboard: { generation: 0, jobId: '', hostname: '', status: '', progress: null, progressTimer: 0, resumeAttempt: null, resumeChecked: {} },
       pendingAutoSetupSwitch: null,
       master: defaultMasterUi(),
       ufw: defaultUfwState(),
@@ -3108,7 +3120,10 @@
       packageCheckRequestId: '',
       vpsLoggingDeployHosts: [],
       vpsLoggingDeployHistory: [],
-      suppressNextVpsLoggingSaveToast: false,
+      vpsLoggingSave: null,
+      vpsLoggingSaveSequence: 0,
+      vpsLoggingDrafts: Object.create(null),
+      vpsLoggingDraftRevision: 0,
       suppressNextVpsDeploySaveToast: false,
       overviewSelectionAnchor: '',
       overviewSelectionMode: '',
@@ -3356,7 +3371,8 @@
       base.services = Array.isArray(cfg.services) ? cfg.services.map(function (item) {
         return {
           service: String((item || {}).service || ''),
-          max_mb: Number((item || {}).max_mb) || 0,
+          max_mb: (store.vpsLoggingDrafts || {})[String((item || {}).service || '')]
+            ? store.vpsLoggingDrafts[String(item.service)].value : Number((item || {}).max_mb) || 0,
           default_max_mb: Number((item || {}).default_max_mb) || 0,
           backup_count: 0
         };
@@ -3464,27 +3480,91 @@
     }
 
     function setVpsLoggingValue(serviceName, value) {
-      const config = getVpsLoggingConfig();
-      const nextValue = Number(value);
-      config.services = config.services.map(function (item) {
-        if (String(item.service || '') !== String(serviceName || '')) return item;
-        return Object.assign({}, item, { max_mb: nextValue });
-      });
-      if (store.state && store.state.config) {
-        store.state.config.vps_logging = config;
-      }
+      store.vpsLoggingDrafts[String(serviceName || '')] = {
+        value: String(value), revision: ++store.vpsLoggingDraftRevision
+      };
       refreshLocalInteractiveState();
     }
 
-    function saveVpsLoggingConfig(options) {
-      const opts = options || {};
-      store.suppressNextVpsLoggingSaveToast = !!opts.silent;
-      send({
-        cmd: 'save_vps_logging_config',
-        data: {
-          services: getVpsLoggingConfig().services
-        }
+    function syncVpsLoggingSettings() {
+      const btn = document.getElementById('save-log-btn');
+      if (btn) {
+        btn.disabled = !!store.vpsLoggingSave;
+        btn.textContent = store.vpsLoggingSave ? 'Saving...' : 'Save Log Settings';
+      }
+      const services = getVpsLoggingConfig().services;
+      document.querySelectorAll('[data-vps-logging-service]').forEach(function (input) {
+        const item = services.find(function (entry) { return entry.service === input.getAttribute('data-vps-logging-service'); });
+        if (item && input !== document.activeElement && input.value !== String(item.max_mb)) input.value = String(item.max_mb);
       });
+    }
+
+    function finishVpsLoggingSave(requestId, outcome, data) {
+      const pending = store.vpsLoggingSave;
+      if (!pending || !requestId || pending.requestId !== requestId) return false;
+      clearTimeout(pending.timer);
+      store.vpsLoggingSave = null;
+      if (outcome === 'success' && data && Array.isArray(data.services)) {
+        const config = ((store.state || {}).config || {}).vps_logging;
+        data.services.forEach(function (confirmed) {
+          const sent = pending.services.find(function (item) { return item.service === confirmed.service; });
+          const draft = store.vpsLoggingDrafts[confirmed.service];
+          if (!sent || (draft ? draft.revision : 0) !== pending.revisions[confirmed.service]
+              || Number(confirmed.max_mb) !== Number(sent.max_mb)) return;
+          if (config && Array.isArray(config.services)) {
+            config.services = config.services.map(function (item) {
+              return item.service === confirmed.service ? Object.assign({}, item, confirmed) : item;
+            });
+          }
+          delete store.vpsLoggingDrafts[confirmed.service];
+        });
+      }
+      syncVpsLoggingSettings();
+      if (outcome === 'success') {
+        if (!pending.silent) toast('VPS logging settings saved in PBGui.', 'success', { preserveOpenDialog: true });
+      } else if (outcome !== 'leave') {
+        const messages = {
+          error: 'Could not save log settings.',
+          timeout: 'Log settings save timed out. Save outcome is unknown.',
+          disconnect: 'Connection lost. Log settings save outcome is unknown.',
+          'send-failure': 'Could not send log settings. Reconnect and try again.'
+        };
+        toast(messages[outcome], 'error', { preserveOpenDialog: true });
+      }
+      return true;
+    }
+
+    function interruptVpsLoggingSave(outcome) {
+      const pending = store.vpsLoggingSave;
+      if (pending) finishVpsLoggingSave(pending.requestId, outcome);
+    }
+
+    function saveVpsLoggingConfig(options) {
+      if (store.vpsLoggingSave) return;
+      if (!store.ws || store.ws.readyState !== WebSocket.OPEN) {
+        toast('Connect before saving log settings.', 'error');
+        return;
+      }
+      const requestId = 'vps-logging-' + Date.now() + '-' + (++store.vpsLoggingSaveSequence);
+      const services = getVpsLoggingConfig().services.map(function (item) {
+        return Object.assign({}, item, { max_mb: Number(item.max_mb) });
+      });
+      const revisions = Object.create(null);
+      services.forEach(function (item) {
+        revisions[item.service] = (store.vpsLoggingDrafts[item.service] || {}).revision || 0;
+      });
+      const pending = { requestId: requestId, services: services, revisions: revisions, silent: !!(options || {}).silent, timer: 0 };
+      store.vpsLoggingSave = pending;
+      syncVpsLoggingSettings();
+      pending.timer = setTimeout(function () { finishVpsLoggingSave(requestId, 'timeout'); }, 30000);
+      try {
+        if (!send({ cmd: 'save_vps_logging_config', request_id: requestId, data: { services: services } })) {
+          finishVpsLoggingSave(requestId, 'send-failure');
+        }
+      } catch (error) {
+        console.error('Could not send VPS logging settings', error);
+        finishVpsLoggingSave(requestId, 'send-failure');
+      }
     }
 
     function setVpsDeployAction(value) {
@@ -4265,6 +4345,12 @@
 
     function getViewShellSignature() {
       const config = ((store.state || {}).config) || {};
+      if (isOverviewSettingsView()) {
+        return stableStringify({ view: store.view, selected_hosts: getSelectedOverviewHosts(),
+          services: getVpsLoggingConfig().services.map(function (item) {
+            return { service: item.service, default_max_mb: item.default_max_mb };
+          }) });
+      }
       if (store.view === 'overview' || isOverviewSettingsView() || isDeploysView()) {
         return stableStringify({
           view: store.view,
@@ -5297,6 +5383,10 @@
     }
 
     function refreshCurrentViewLive() {
+      if (isOverviewSettingsView()) {
+        syncVpsLoggingSettings();
+        return;
+      }
       if (store.view === 'overview') {
         setHtmlIfChanged('overview-table-live', renderOverviewTable(getOverviewRows()));
         return;
@@ -6107,21 +6197,23 @@
         </div>`;
     }
 
-    function toast(message, type) {
+    function toast(message, type, options) {
       const safeType = ['success', 'info', 'warning', 'error'].includes(type) ? type : 'info';
-      fetch('/api/notify_log', {
+      const overlay = document.getElementById('alertModalOverlay');
+      const preserveOpenDialog = !!(options && options.preserveOpenDialog && overlay && overlay.classList.contains('visible'));
+      fetch(API_BASE.replace('/api/vps-manager', '/api/notify_log'), {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ msg: String(message || ''), level: safeType === 'success' ? 'ok' : safeType })
       }).catch(function () {});
-      if (safeType === 'error' || safeType === 'warning') {
+      if (!preserveOpenDialog && (safeType === 'error' || safeType === 'warning')) {
         openAlertModal(safeType === 'error' ? 'Error' : 'Warning', message, safeType);
       }
       const node = document.createElement('div');
       node.className = 'toast ' + safeType;
       node.textContent = message;
-      document.getElementById('toastContainer').appendChild(node);
+      document.getElementById(preserveOpenDialog ? 'dialogToastContainer' : 'toastContainer').appendChild(node);
       setTimeout(function () {
         node.style.opacity = '0';
         node.style.transform = 'translateY(8px)';
@@ -6954,11 +7046,12 @@
       ws.onclose = function (event) {
         if (store.ws !== ws) return;
         store.connected = false;
+        interruptVpsLoggingSave('disconnect');
         clearInterruptedSettingsReads();
         store.packageCheckHosts = [];
         store.packageCheckRequestId = '';
         renderSummaryBar();
-        renderUi({ forceSidebarActions: true, forceView: true });
+        renderUi(isOverviewSettingsView() ? { forceSidebarActions: true } : { forceSidebarActions: true, forceView: true });
         if (event.code === 4001) {
           store.authExpired = true;
           store.ws = null;
@@ -7011,6 +7104,7 @@
 
     function queueWsMessage(payload) {
       if (!payload || !payload.cmd) return;
+      if (payload.cmd === 'save_vps_logging_config') return;
       if (payload.cmd === 'set_context') {
         store.pendingWsMessages = (store.pendingWsMessages || []).filter(function (item) {
           return !item || item.cmd !== 'set_context';
@@ -7086,13 +7180,12 @@
         cache: 'no-store'
       })
         .then(function (r) {
+          if (generation !== store.detailRequestGeneration || contextGeneration !== store.contextGeneration) return null;
+          if (store.hostname !== hostname || !isVpsContextView()) return null;
           if (!r.ok) {
-            if (r.status === 404 && store.hostname === hostname) {
-              store.hostname = '';
-              store.view = 'overview';
-              store.detail = null;
-              sendContext();
-              renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+            if (r.status === 404) {
+              toast('This VPS is no longer available. Returning to Overview.', 'warning', { preserveOpenDialog: true });
+              selectView('overview', '');
               return null;
             }
             throw new Error('detail fetch failed');
@@ -7104,7 +7197,8 @@
           if (contextGeneration !== store.contextGeneration) return;
           if (!data) return;
           if (!data || data.kind !== 'vps' || data.hostname !== hostname) return;
-          if (store.hostname !== hostname) return;
+          if (store.hostname !== hostname || !isVpsContextView()) return;
+          store.vpsDetailErrorHost = null;
           var hadDetail = !!(store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname);
           store.detail = data;
           store.detailCache['vps:' + hostname] = data;
@@ -7116,7 +7210,12 @@
           renderUi();
         })
         .catch(function (error) {
-          if (generation !== store.detailRequestGeneration || error.name === 'AbortError') return;
+          if (generation !== store.detailRequestGeneration || (error && error.name === 'AbortError')) return;
+          if (contextGeneration !== store.contextGeneration || store.hostname !== hostname || !isVpsContextView()) return;
+          console.error('Failed to load VPS details.');
+          if (store.vpsDetailErrorHost === hostname) return;
+          store.vpsDetailErrorHost = hostname;
+          toast('Failed to load VPS details. Please try again.', 'error', { preserveOpenDialog: true });
         });
     }
 
@@ -7139,6 +7238,7 @@
           if (contextGeneration !== store.contextGeneration) return;
           if (!data || data.kind !== 'master') return;
           if (!isMasterContextView()) return;
+          store.masterDetailErrorContextGeneration = null;
           var hadDetail = !!(store.detail && store.detail.kind === 'master');
           store.detail = data;
           store.detailCache.master = data;
@@ -7151,6 +7251,11 @@
         })
         .catch(function (error) {
           if (generation !== store.detailRequestGeneration || error.name === 'AbortError') return;
+          if (contextGeneration !== store.contextGeneration || !isMasterContextView()) return;
+          console.error('Failed to load master details:', error);
+          if (store.masterDetailErrorContextGeneration === contextGeneration) return;
+          store.masterDetailErrorContextGeneration = contextGeneration;
+          toast('Failed to load master details. Please try again.', 'error', { preserveOpenDialog: true });
         });
     }
 
@@ -7358,6 +7463,10 @@
         return;
       }
       if (msg.type === 'error') {
+        if (msg.cmd === 'save_vps_logging_config') {
+          finishVpsLoggingSave(msg.request_id, 'error');
+          return;
+        }
         const branchRequest = takeRuntimeBranchRequest(msg.request_id);
         if (branchRequest) {
           const retryKey = branchRequest.pending.kind === 'branches'
@@ -7658,14 +7767,8 @@
           return;
         }
       } else if (cmd === 'save_vps_logging_config') {
-        if (store.state && store.state.config && msg.data) {
-          store.state.config.vps_logging = msg.data;
-        }
-        if (store.suppressNextVpsLoggingSaveToast) {
-          store.suppressNextVpsLoggingSaveToast = false;
-        } else {
-          toast('VPS logging settings saved in PBGui.', 'success');
-        }
+        finishVpsLoggingSave(msg.request_id, msg.success === false ? 'error' : 'success', msg.data);
+        return;
       } else if (cmd === 'save_vps_deploy_settings') {
         if (store.state && store.state.config && msg.data) {
           store.state.config.vps_deploy = msg.data;
@@ -8025,6 +8128,7 @@
       const nextHostname = typeof hostname === 'string' ? hostname : (detailContextKey(view, store.hostname).indexOf('vps:') === 0 ? store.hostname : '');
       const nextContext = detailContextKey(view, nextHostname);
       if (nextContext !== previousContext) {
+        store.vpsDetailErrorHost = null;
         store.contextGeneration += 1;
         store.detailRequestGeneration += 1;
         if (store.detailAbortController) store.detailAbortController.abort();
@@ -8115,10 +8219,6 @@
         else if (sub === 'ufw') selectView('vps-ufw', hostname);
         else selectView('vps', hostname);
       }
-    }
-
-    function refreshState() {
-      send({ cmd: 'refresh' });
     }
 
     function checkLinuxUpdates(hostnames) {
@@ -9831,13 +9931,9 @@
     }
 
     function openVpsHostLogs(hostname) {
-      store.hostname = hostname || store.hostname;
-      store.view = 'vps-host-logs';
-      sendContext();
-      renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+      selectView('vps-host-logs', hostname || store.hostname);
       if (store.hostname) {
         fetchVpsDetail(store.hostname);
-        scheduleVpsDetailFetch(store.hostname);
       }
     }
 
@@ -9913,13 +10009,20 @@
       });
     }
 
-    function pollClusterOnboardProgress(jobId) {
+    function isCurrentClusterOnboard(generation, hostname, jobId) {
+      const flow = store.clusterOnboard || {};
+      return flow.generation === generation && flow.hostname === hostname
+        && (jobId === undefined || flow.jobId === jobId);
+    }
+
+    function pollClusterOnboardProgress(jobId, generation) {
       const cleanJobId = String(jobId || '').trim();
-      if (!cleanJobId) return;
+      const hostname = (store.clusterOnboard || {}).hostname;
+      if (!cleanJobId || !isCurrentClusterOnboard(generation, hostname, cleanJobId) || !isClusterOnboardRunning()) return;
       vpsManagerGet('/cluster-onboard/jobs/' + encodeURIComponent(cleanJobId), {})
         .then(function (progress) {
+          if (!isCurrentClusterOnboard(generation, hostname, cleanJobId)) return;
           const flow = store.clusterOnboard || {};
-          if (String(flow.jobId || '') !== cleanJobId) return;
           const status = String((progress || {}).status || 'running');
           flow.status = status;
           flow.progress = progress || null;
@@ -9927,7 +10030,7 @@
           store.clusterOnboard = flow;
           if (isClusterOnboardModalVisible()) renderClusterOnboardProgressModal();
           if (status === 'queued' || status === 'running') {
-            flow.progressTimer = window.setTimeout(function () { pollClusterOnboardProgress(cleanJobId); }, 500);
+            flow.progressTimer = window.setTimeout(function () { pollClusterOnboardProgress(cleanJobId, generation); }, 500);
             return;
           }
           if (status === 'successful') {
@@ -9936,34 +10039,39 @@
           }
         })
         .catch(function () {
+          if (!isCurrentClusterOnboard(generation, hostname, cleanJobId) || !isClusterOnboardRunning()) return;
           const flow = store.clusterOnboard || {};
-          if (String(flow.jobId || '') !== cleanJobId || !isClusterOnboardRunning()) return;
-          flow.progressTimer = window.setTimeout(function () { pollClusterOnboardProgress(cleanJobId); }, 1000);
+          flow.progressTimer = window.setTimeout(function () { pollClusterOnboardProgress(cleanJobId, generation); }, 1000);
           store.clusterOnboard = flow;
         });
     }
 
     function startClusterOnboard(hostname) {
       const target = String(hostname || '').trim();
-      if (!target) return;
+      if (!target || isClusterOnboardRunning()) return;
+      const generation = Number((store.clusterOnboard || {}).generation || 0) + 1;
       stopClusterOnboardProgressPolling();
       store.clusterOnboard = {
-        jobId: '', hostname: target, status: 'queued',
+        generation: generation, jobId: '', hostname: target, status: 'queued',
         progress: { status: 'queued', phase: 'queued', label: 'Queued Cluster onboarding...', percent: 0, events: [] },
-        progressTimer: 0, resumeChecked: (store.clusterOnboard || {}).resumeChecked || {}
+        progressTimer: 0, resumeAttempt: null, resumeChecked: (store.clusterOnboard || {}).resumeChecked || {}
       };
       renderClusterOnboardProgressModal();
       vpsManagerPost('/cluster-onboard/' + encodeURIComponent(target) + '/start', {})
         .then(function (job) {
+          if (!isCurrentClusterOnboard(generation, target)) return;
+          const jobId = typeof (job || {}).job_id === 'string' ? job.job_id.trim() : '';
+          if (!jobId) throw new Error('Cluster onboarding returned no valid job ID.');
           const flow = store.clusterOnboard || {};
-          flow.jobId = String((job || {}).job_id || '');
+          flow.jobId = jobId;
           flow.status = String((job || {}).status || 'queued');
           flow.progress = job || flow.progress;
           store.clusterOnboard = flow;
           renderClusterOnboardProgressModal();
-          if (flow.jobId) pollClusterOnboardProgress(flow.jobId);
+          pollClusterOnboardProgress(flow.jobId, generation);
         })
         .catch(function (err) {
+          if (!isCurrentClusterOnboard(generation, target)) return;
           const flow = store.clusterOnboard || {};
           flow.status = 'error';
           flow.progress = { status: 'error', phase: 'error', label: String(err && err.message ? err.message : err || 'Failed to start Cluster onboarding.'), error: String(err && err.message ? err.message : err || ''), percent: 0, events: [] };
@@ -9974,30 +10082,44 @@
 
     function resumeClusterOnboardProgress(hostname) {
       const target = String(hostname || '').trim();
-      if (!target) return;
+      if (!target || isClusterOnboardRunning()) return;
       const current = store.clusterOnboard || {};
       current.resumeChecked = current.resumeChecked || {};
-      if (current.resumeChecked[target] || (current.hostname === target && isClusterOnboardRunning())) return;
-      current.resumeChecked[target] = true;
+      // A host change supersedes pending resume work even if the new host was checked.
+      if (current.resumeAttempt && current.resumeAttempt.hostname !== target) {
+        current.generation = Number(current.generation || 0) + 1;
+        current.resumeAttempt = null;
+      }
+      if (current.resumeChecked[target] || (current.resumeAttempt && current.resumeAttempt.generation === current.generation)) return;
+      const generation = Number(current.generation || 0) + 1;
+      const attempt = { generation: generation, hostname: target };
+      stopClusterOnboardProgressPolling();
+      current.generation = generation;
+      current.resumeAttempt = attempt;
       store.clusterOnboard = current;
       vpsManagerGet('/cluster-onboard/' + encodeURIComponent(target) + '/active', {})
         .then(function (job) {
+          if (store.clusterOnboard !== current || current.generation !== generation || current.resumeAttempt !== attempt) return;
+          current.resumeAttempt = null;
+          current.resumeChecked[target] = true;
           if (!(job || {}).active) return;
+          const jobId = typeof job.job_id === 'string' ? job.job_id.trim() : '';
+          if (!jobId) return;
           const flow = store.clusterOnboard || {};
-          flow.jobId = String(job.job_id || '');
+          flow.jobId = jobId;
           flow.hostname = target;
           flow.status = String(job.status || 'running');
           flow.progress = job;
           store.clusterOnboard = flow;
           renderClusterOnboardProgressModal();
-          pollClusterOnboardProgress(flow.jobId);
+          pollClusterOnboardProgress(flow.jobId, generation);
         })
         .catch(function () {});
     }
 
     function addVpsToCluster(hostname) {
       const target = String(hostname || '').trim();
-      if (!target) return;
+      if (!target || isClusterOnboardRunning()) return;
       openConfirmModal(
         'Add to Cluster',
         'Add VPS ' + target + ' to this Cluster? PBGui will configure its stored SSH connection, install restricted Cluster keys, verify that no conflicting identity exists, join and synchronize the node, materialize assigned configs and API keys, and safely restart PBRun.',
@@ -10489,7 +10611,7 @@
 
     function renderBranchMessage(model, noun) {
       if (!model.availableBranches.length) {
-        return `<div class='notice warning'>No branch history loaded yet. Use Refresh or Load More to pull branch data into the local cache.</div>`;
+        return `<div class='notice warning'>No branch history loaded yet.</div>`;
       }
       if (model.sourceBranchKnown && !model.sourceBranchExists) {
         return `<div class='notice warning'>Cannot sync: source branch <span class='code'>${esc(model.sourceBranch || '-')}</span> is missing on the selected remote.</div>`;
@@ -10559,7 +10681,6 @@
         </div>`;
       const actions = `
         <div class='button-row'>
-          <button class='btn ghost' type='button' onclick='refreshState()'>Reload</button>
           <button class='btn ghost' type='button' onclick='send({ cmd: "load_more_commits", repo: "pbgui", branch: ${js(model.selectedBranch)}, limit: ${Math.max((model.commits || []).length + 50, 50)} })'>+50</button>
           <button class='btn ghost' type='button' onclick='send({ cmd: "load_more_commits", repo: "pbgui", branch: ${js(model.selectedBranch)}, limit: 999999 })'>All</button>
           <button class='btn primary' type='button' ${model.onTarget ? 'disabled' : ''} onclick='triggerPbguiBranchAction(${js(scope)})'>${esc(actionLabel)}</button>
@@ -11045,7 +11166,6 @@
         const sequentialBtnClass = String(deployConfig.mode || 'parallel') === 'sequential' ? 'sb-btn active' : 'sb-btn';
         html = `
           <div class='sb-icon-row'>
-            <button class='sb-icon-btn' type='button' title='Refresh' aria-label='Refresh' onclick='refreshState()'>↻</button>
             <button class='sb-icon-btn' type='button' title='Add VPS' aria-label='Add VPS' onclick='selectView("add")'>+</button>
           </div>
           <button class='sb-btn info' type='button' onclick='openExistingVpsImportPrompt()'>Import Existing VPS</button>
@@ -11225,13 +11345,13 @@
                 return `
                   <div class='field'>
                     <label>${esc(item.service)} Max Size (MB)</label>
-                    <input type='number' min='0.0625' step='0.0625' value='${escAttr(item.max_mb)}' oninput='setVpsLoggingValue(${js(item.service)}, this.value)'>
+                    <input data-vps-logging-service='${escAttr(item.service)}' type='number' min='0.0625' step='0.0625' value='${escAttr(item.max_mb)}' oninput='setVpsLoggingValue(${js(item.service)}, this.value)'>
                     <div class='field-help'>Default: ${esc(String(item.default_max_mb))} MB, single file only.</div>
                   </div>`;
               }).join('')}
             </div>
             <div class='button-row'>
-              <button class='btn' type='button' onclick='saveVpsLoggingConfig()'>Save Log Settings</button>
+              <button id='save-log-btn' class='btn' type='button' onclick='saveVpsLoggingConfig()' ${store.vpsLoggingSave ? 'disabled' : ''}>${store.vpsLoggingSave ? 'Saving...' : 'Save Log Settings'}</button>
             </div>
           </div>
         </div>`;
@@ -13389,17 +13509,50 @@
       if (!force && (!account || Number(account.sampled_at || 0) <= lastSample)) return;
       const generation = ++cpuHistoryRequestGeneration;
       if (cpuHistoryAbortController) cpuHistoryAbortController.abort();
-      cpuHistoryAbortController = new AbortController();
-      fetch(API_BASE + '/user-rate-limits/history/' + encodeURIComponent(current.botName), {
-        credentials: 'same-origin', signal: cpuHistoryAbortController.signal, cache: 'no-store'
+      const controller = new AbortController();
+      cpuHistoryAbortController = controller;
+      let timedOut = false;
+      let timer;
+      let onAbort;
+      function isCurrentHistory() {
+        const visible = cpuHistoryLastPayload;
+        return generation === cpuHistoryRequestGeneration && !store.authExpired
+          && overlay.classList.contains('visible') && visible && visible.metric === 'hl_requests'
+          && visible.host === current.host && visible.botName === current.botName;
+      }
+      const deadline = new Promise(function (resolve, reject) {
+        onAbort = function () {
+          clearTimeout(timer);
+          const error = new Error(timedOut ? 'Rate limit history update timed out' : 'History request cancelled');
+          error.name = 'AbortError';
+          reject(error);
+        };
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+        timer = setTimeout(function () {
+          timedOut = true;
+          controller.abort();
+        }, 15000);
+      });
+      const request = fetch(API_BASE + '/user-rate-limits/history/' + encodeURIComponent(current.botName), {
+        credentials: 'same-origin', signal: controller.signal, cache: 'no-store'
       }).then(function (response) {
         if (!response.ok) throw new Error('Account history read failed');
         return response.json();
-      }).then(function (data) {
-        if (generation !== cpuHistoryRequestGeneration || store.authExpired) return;
+      });
+      // Bound the entire request, including JSON reads that do not settle on abort.
+      return Promise.race([request, deadline]).then(function (data) {
+        if (!isCurrentHistory() || controller.signal.aborted) return;
         metricHistoryCache[current.host + '::hl_requests::' + current.botName] = data;
         renderMetricHistoryPayload(data, current.host, current.botName, 'hl_requests');
-      }).catch(function () { /* Keep the last chart until the next automatic update. */ });
+      }).catch(function (error) {
+        if (!isCurrentHistory() || (!timedOut && (controller.signal.aborted || (error && error.name === 'AbortError')))) return;
+        console.error('Rate limit history fetch failed:', error);
+        document.getElementById('cpuHistorySubtitle').textContent = 'Failed to update rate limit history. Displaying cached data.';
+      }).finally(function () {
+        clearTimeout(timer);
+        controller.signal.removeEventListener('abort', onAbort);
+        if (cpuHistoryAbortController === controller) cpuHistoryAbortController = null;
+      });
     }
 
     function fetchHlAccountLimits() {
@@ -13779,6 +13932,7 @@
     initSidebarResize();
     initAlertModalInteractions();
     connectWs();
+    window.addEventListener('pagehide', function () { interruptVpsLoggingSave('leave'); });
     fetchHlAccountLimits();
     window.setInterval(fetchHlAccountLimits, 30000);
     window.addEventListener('hashchange', function () {

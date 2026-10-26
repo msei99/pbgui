@@ -7,6 +7,10 @@ Each VPS is managed via Ansible playbooks executed from the Master (local) serve
 
 The default menu entry **System -> VPS Manager** opens the standalone **FastAPI** page.
 
+Under **Settings → VPS Logging**, **Save Log Settings** saves locally in PBGui. While awaiting a reply, it is disabled and shows **Saving...**, including after switching views and returning. Unsaved size edits remain intact during live updates and while a save is pending; edits made after sending require another save. Errors, disconnects and a 30-second response timeout release the button without automatic retries. A timeout or disconnect leaves the save outcome unknown; the backend may still finish. This action does not deploy settings to VPS hosts.
+
+An open VPS Manager input dialog is retained when save feedback arrives; the notification appears above it without replacing its input or moving focus. With no dialog open, save errors still show the normal error window.
+
 ---
 
 ## Overview table
@@ -40,7 +44,6 @@ Left sidebar:
 | Button | Action |
 |--------|--------|
 | **Add VPS** | Open the add / initialize form |
-| **Refresh** | Optionally force an immediate reload of all VPS status and version data via the refresh icon |
 | **Overview / Settings / History** | Switch between the live Overview table, shared deploy settings, and recent deploy history |
 | **Import by Hostname** | Open the manual hostname import dialog from the **Import Host** sidebar section; the hostname must already resolve via local `/etc/hosts` |
 | **Import Cluster Nodes** | Preview and import safe SSH metadata from Cluster Sync nodes into local VPS Manager host entries; secrets are not imported |
@@ -58,7 +61,7 @@ PB8 updates show one migration notice before starting, including combined PBGui/
 
 **Import Cluster Nodes** reads the local materialized `cluster_nodes` state and imports non-local nodes that have SSH metadata, regardless of their Cluster Sync mode. Disabled Cluster Sync nodes can still be imported into VPS Manager; disabled only means PBCluster should not replicate through that node. The import writes only safe local VPS Manager metadata such as hostname, SSH host, SSH user, SSH port and Remote PBGui Dir; passwords and private keys are not imported. CMC secrets are never VPS Manager fields: Cluster Sync materializes sealed pool generations separately. If local `/etc/hosts` is missing or points the hostname at a different IP, the import preview shows the required host entry changes and the apply step asks for the local sudo password before writing them. The modal asks for each imported host's VPS user password; rows left without a password are skipped, while entered passwords are used once to refresh remote settings, install the monitoring SSH key and keep the password only in the current browser/API session for later SSH-backed actions. Reloading the preview preserves these unsaved password drafts, and a failed import start returns to the preview so the request can be corrected and retried.
 
-The page keeps a live WebSocket connection for overview rows, progress logs, and branch state. The persistent VPSMonitor service checks PBGui, PB7, and PB8 upstream branch heads in the background every 60 seconds, retains the last known result across API restarts, and marks it stale when a transient Git check fails. Master and VPS update colors therefore do not require the page to be open or the manual Refresh action. PB7's verified pinned commit remains current by policy even when upstream `master` advances. Full branch histories and custom remote/fork commits are loaded only when branch management requests them. Browser authentication is cookie-only; PBGui never renders the session token into this page or sends a browser Bearer header.
+The page keeps a live WebSocket connection for overview rows, progress logs, and branch state. The persistent VPSMonitor service checks PBGui, PB7, and PB8 upstream branch heads in the background every 60 seconds, retains the last known result across API restarts, and marks it stale when a transient Git check fails. Master and VPS update colors therefore update automatically even while the page is closed. PB7's verified pinned commit remains current by policy even when upstream `master` advances. Full branch histories and custom remote/fork commits are loaded only when branch management requests them. Browser authentication is cookie-only; PBGui never renders the session token into this page or sends a browser Bearer header.
 
 The local Master row always displays the PBGui version imported by the currently running API process. A stale monitor-agent cache may still supply last-known package or PB7/PB8 details, but it can no longer replace the live local PBGui version with an obsolete value. Update button colors remain commit-based and require a verified cached upstream head; stale cache text alone never claims that an update is available.
 
@@ -70,7 +73,13 @@ Live refreshes now update only the changed status regions, so typing in Add/Edit
 
 ---
 
+If loading VPS details fails, PBGui reports **Failed to load VPS details. Please try again.** and logs a controlled message in the browser console. Repeated failures for the current host show one notification until a valid detail request succeeds or the host context changes. An open input dialog, its values, buttons, pending callback and focus stay intact; the message appears above it. Last loaded data, selections and unsaved edits remain available, and the existing automatic updates continue. Cancelled or outdated requests stay silent. If the current host returns HTTP 404, PBGui explains that it is no longer available and returns to **Overview**; browser reload then restores Overview.
+
+Status updates automatically when entering or returning to a host and after reconnection. There are no manual Refresh or Reload controls. Branch-history **+50** and **All** remain available. Browser reload restores the VPS overview, settings and branch destinations encoded in the URL, including Overview after a missing-host response.
+
 ## Master management
+
+If loading Master details fails, PBGui reports **Failed to load master details. Please try again.** and logs the error in the browser console. Repeated failures in the same context show one notification until a current detail request succeeds or you leave and return to Master. An open dialog, including its password input and pending action, stays intact; the message appears above it without taking focus. Failed requests preserve the current selection, edits and last loaded data; existing automatic updates continue.
 
 Open **Master** in the left control rail to manage the local server.
 
@@ -94,6 +103,8 @@ Sidebar actions:
 | **Install or Update rustup** | Install or refresh the Rust toolchain |
 
 In the **Monitor** bot table, **HL Limit** appears immediately before **CPU** for each mapped Hyperliquid bot, whether PB7 or PB8. The usage percentage appears above the actual Used/Cap counters. Bots sharing a wallet show the same address limit; bots without a known Hyperliquid account show a dash. The VPS running the bot queries `userRateLimit` once per unique local wallet every five minutes; Masters read the VPS agent cache. **nRequestsUsed**, **nRequestsCap**, remaining requests, and sample time describe the cumulative address action quota; they are not the IP REST weight limit. A failed read keeps the last successful sample marked **Stale**. The browser receives cached values and does not create additional Hyperliquid requests. Click a bot’s HL Limit value to open its 24-hour **Used** and **Cap** history in the same chart window as CPU and memory. Successful five-minute samples are stored on the Master and remain available after an API restart; gaps indicate missed samples. History begins with the first sample after this feature is installed. When a main account has used its full request quota, the history window lets you enter an exact whole number of request credits (1–100,000) and shows the cost at 0.0005 USDC per credit. **Buy credits** asks for explicit confirmation, then signs one `reserveRequestWeight` action using the saved Hyperliquid credentials. The charge comes from that main account’s Perps USDC balance; vault accounts are not supported. PBGui does not retry a purchase after an uncertain exchange response. A successful action triggers an immediate limit check and updates the chart automatically when available.
+
+If an automatic update of an open HL Limit history fails or takes more than 15 seconds (including reading its JSON response), the chart subtitle shows **Failed to update rate limit history. Displaying cached data.** and the browser console records the error. The existing chart, selection and credit input remain intact. The next successful automatic history update restores the normal subtitle. Cancelled or obsolete requests do not show an error after closing or switching history, or losing authentication.
 
 The **Master** content area also contains:
 - a live status grid for CoinData / last command state
@@ -223,6 +234,8 @@ The reveal state is preserved during live updates, so opening an eye button does
 5. Click **Save VPS** to create or update the stored record.
 6. Click **Initialize & Setup VPS** to start the bootstrap run directly from the Add view. The UI remains on the current host's task log while initialization and setup run. For PB8-only and combined hosts, PB8 clone, virtualenv installation, and validation run as a second play in the same setup job and appear in the same setup log.
 7. After setup succeeds, PBGui registers the host locally as a Cluster node candidate. Click **Add to Cluster** on the VPS detail page to complete onboarding. PBGui opens a progress window for registration, SSH repair, identity checks, pull/push synchronization, materialization and PBRun start. The window cannot be closed while onboarding is active; the API-owned job continues across a page reload or navigation and is restored when the VPS detail page is reopened.
+   While a start request or onboarding is pending, repeated confirmations or **Retry** clicks cannot start another operation, including for another host on this page. Progress updates automatically. After a start or onboarding error, **Retry** becomes available for an explicit new attempt; start requests are not retried automatically.
+   If you switch hosts before the active-job lookup finishes, its delayed response cannot replace the newer operation. Returning to that host checks again so an active job can be restored without another start request.
 8. The same **Add to Cluster** action can be used for a VPS that was set up before automatic candidate registration existed. Manual **Edit**, **Repair SSH**, **Probe Active Nodes** and **Join & Sync** steps are not required for normal VPS onboarding.
 9. After initialization succeeds, use **Change VPS** and **Apply VPS Changes** for normal saved setting changes.
 

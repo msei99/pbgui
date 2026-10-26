@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -19,6 +21,45 @@ from vps_manager_service import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_logging_save_websocket_correlates_success_and_error(monkeypatch, fails):
+    """The real route echoes the request ID without touching runtime data or hosts."""
+    import api.vps_manager as manager_api
+
+    payload = {'services': [{'service': 'PBRun', 'max_mb': 4}]}
+    message = {'cmd': 'save_vps_logging_config', 'request_id': 'logging-test-471', 'data': payload}
+
+    class Socket:
+        """Provide one isolated command and record its answer."""
+
+        def __init__(self):
+            """Keep response mocks local to this test case."""
+            self.send_json = AsyncMock()
+
+        async def iter_text(self):
+            """End the route after processing one logging save."""
+            yield json.dumps(message)
+
+    save = Mock(side_effect=ValueError('synthetic save failure') if fails else None, return_value=payload)
+    monkeypatch.setattr(manager_api, 'authenticate_websocket', AsyncMock(return_value=SimpleNamespace(token='test')))
+    monkeypatch.setattr(manager_api, '_get_service', lambda: SimpleNamespace(save_vps_logging_config=save))
+    monkeypatch.setattr(manager_api, '_push_loop', AsyncMock())
+    monkeypatch.setattr(manager_api, '_log', Mock())
+    socket = Socket()
+    asyncio.run(manager_api.ws_vps_manager(socket))
+    save.assert_called_once_with(payload)
+    socket.send_json.assert_awaited_once()
+    reply = socket.send_json.call_args.args[0]
+    assert reply['cmd'] == message['cmd']
+    assert reply['request_id'] == message['request_id']
+    assert reply['type'] == ('error' if fails else 'result')
+    if fails:
+        assert reply['error'] == 'synthetic save failure'
+    else:
+        assert reply['success'] is True
+        assert reply['data'] == payload
 
 
 def _package_payload(generated_at: float, *, upgrades: object = "4", reboot: object = True) -> dict:
