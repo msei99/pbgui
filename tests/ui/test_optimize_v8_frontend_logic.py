@@ -3782,3 +3782,43 @@ def test_local_cpu_preference_survives_cloud_save_reopen_and_return() -> None:
     assert 'optimizeLocalCpuValue(cfg)' in _page_function(page, 'populateOptimizeEditor')
     assert 'optimizeLocalCpuValue(cfg)' in _page_function(page, 'buildOptimizeEditorHtml')
     assert 'collectOptimizeCpuSettings(cfg,' in _page_function(page, 'collectEditorConfig')
+
+
+def test_local_convergence_controls_round_trip_and_pb7_isolation():
+    """Local detector fields survive collection without touching rental or PB7 settings."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    source = '\n'.join(_page_function(page, name) for name in (
+        'renderLocalConvergenceControls', 'collectLocalConvergence', 'renderLocalConvergence'))
+    _run_node("""
+const assert=require('node:assert/strict');
+const optimizeEditorAdapter={isV8:true};
+const ensureObjectSection=(obj,key)=>obj[key]||(obj[key]={});
+const nodes={}; const el=id=>nodes[id];
+const fieldSelect2=(id,label,options,value)=>`${id}:${label}:${value}`;
+const fieldNumber2=(id,label,value)=>`${id}:${label}:${value}`;
+for(const [id,value] of [['enabled','true'],['min','256'],['patience','128'],['tolerance','0.25']])
+ nodes['opted-convergence-'+id]={value};
+for(const id of ['local-convergence','local-convergence-phase','local-convergence-progress',
+ 'local-convergence-improvement','local-convergence-checked','local-convergence-reason'])nodes[id]={};
+"""+source+"""
+const config={pbgui:{vast:{convergence_enabled:false},optimize_runtime:{mode:'fresh'}}};
+collectLocalConvergence(config,true);
+const reopened=JSON.parse(JSON.stringify(config));
+assert.equal(reopened.pbgui.optimize_runtime.convergence_config.convergence_enabled,true);
+assert.equal(reopened.pbgui.vast.convergence_enabled,false);
+assert.match(renderLocalConvergenceControls(reopened),/Minimum exact evaluations:256/);
+for(const bad of ['NaN','Infinity','0','10.1']){
+ nodes['opted-convergence-tolerance'].value=bad;
+ assert.throws(()=>collectLocalConvergence(config,true),/Invalid convergence_tolerance_pct/);
+}
+renderLocalConvergence({convergence:{phase:'waiting',reason:'Unsupported objectives',checked_exact:256}});
+assert.equal(nodes['local-convergence-reason'].textContent,'Unsupported objectives');
+renderLocalConvergence(null);assert.equal(nodes['local-convergence'].hidden,true);
+optimizeEditorAdapter.isV8=false;
+assert.equal(renderLocalConvergenceControls(reopened),'');
+collectLocalConvergence({},true); // PB7 never reads these controls.
+renderLocalConvergence({convergence:{phase:'tracking'}});
+assert.equal(nodes['local-convergence'].hidden,true);
+""")
+    assert 'collectLocalConvergence(cfg, strict)' in _page_function(page, 'collectEditorConfig')
+    assert 'renderLocalConvergence(status)' in _page_function(page, 'renderOptimizeLogDashboard')

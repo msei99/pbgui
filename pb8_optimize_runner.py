@@ -17,6 +17,7 @@ from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_loc
 from secure_files import atomic_write_private_text
 from sweep_cycles import SWEEP_PLAN_FILENAME, validate_sweep_plan
 
+SERVICE = "OptimizeV8"
 
 EVALUATION_PROGRESS_FILENAME = ".pbgui_optimize_progress.json"
 
@@ -68,7 +69,16 @@ def _install_evaluation_progress_publisher(optimize_module):
     recorder_class.__init__ = patched_init
     recorder_class.record = patched_record
     recorder_class._pbgui_progress_patched = True
-    return lambda: [publish(instance, force=True) for instance in instances]
+    def finish():
+        """Publish final counts and release the temporary Recorder hooks."""
+        try:
+            for instance in instances:
+                publish(instance, force=True)
+        finally:
+            recorder_class.__init__ = original_init
+            recorder_class.record = original_record
+            del recorder_class._pbgui_progress_patched
+    return finish
 
 
 def _persist_open_sweep_plan(pb8_dir: Path, plan: dict) -> bool:
@@ -146,6 +156,8 @@ def main(argv: list[str] | None = None) -> int:
     sweep_plan = None
     runtime_pb8_dir = None
     publish_final_progress = lambda: None
+    convergence = None
+    convergence_payload = {}
     try:
         ownership = {"pid": os.getpid(), "create_time": psutil.Process(os.getpid()).create_time()}
         atomic_write_private_text(Path(ownership_path), json.dumps(ownership, indent=4) + "\n")
@@ -174,6 +186,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.argv = _optimizer_argv(cli_path, config_path, options)
             optimize_module = importlib.import_module("optimize")
             publish_final_progress = _install_evaluation_progress_publisher(optimize_module)
+            from optimize_convergence import validate_config
+            convergence_config = validate_config(options.get("convergence_config"))
+            if convergence_config["convergence_enabled"]:
+                from pb8_local_convergence import LocalConvergence
+                convergence = LocalConvergence(optimize_module, options, state_path, runtime_pb8_dir / "optimize_results")
+                convergence.install()
             atomic_write_private_text(Path(ready_path), f"{os.getpid()}\n")
         finally:
             runtime_lease.release()
@@ -195,12 +213,24 @@ def main(argv: list[str] | None = None) -> int:
             sys.argv = previous_argv
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
+    except KeyboardInterrupt:
+        returncode = 130
+        error = "Unexpected interrupt outside native optimizer shutdown"
     finally:
-        publish_final_progress()
+        if convergence is not None:
+            try:
+                convergence_payload = convergence.finish(returncode, error)
+            except Exception as exc:
+                convergence.restore()
+                error = f"Convergence final state failed: {type(exc).__name__}: {exc}"
+        try:
+            publish_final_progress()
+        except Exception as exc:
+            error = f"Final progress publication failed: {type(exc).__name__}: {exc}"
         sweep_stop.set()
         if sweep_thread is not None:
             sweep_thread.join(timeout=2)
-    payload = {"started_at": started_at, "completed_at": time.time(), "returncode": returncode}
+    payload = {"started_at": started_at, "completed_at": time.time(), "returncode": returncode, **convergence_payload}
     if error:
         payload["error"] = error
     atomic_write_private_text(Path(state_path), json.dumps(payload, indent=4) + "\n")

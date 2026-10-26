@@ -818,6 +818,7 @@ def test_pareto_directory_and_editor_seed_metadata_are_valid_launch_sources(opti
         "fine_tune_params": [],
         "polish_percentage": None,
         "polish_bounds_mode": "clamp",
+        "convergence_config": optimize_v8.validate_convergence_config({}),
     }
 
 
@@ -3803,3 +3804,272 @@ def test_api_shutdown_drains_autostart_launch_before_resource_cleanup(monkeypatc
     assert events[:len(expected)] == expected
     assert events[len(expected):] == ["cleanup"] * 15
     assert worker._launch_executor is None
+
+
+@pytest.mark.parametrize('settings', [
+    {'convergence_enabled': 'true'}, {'convergence_min_exact': True},
+    {'convergence_min_exact': 255}, {'convergence_min_exact': 256.5},
+    {'convergence_patience': 127}, {'convergence_patience': 10000001},
+    {'convergence_tolerance_pct': float('nan')}, {'convergence_tolerance_pct': float('inf')},
+    {'convergence_tolerance_pct': 0}, {'convergence_tolerance_pct': 10.1},
+])
+def test_local_convergence_validation_rejects_invalid_settings(settings):
+    """Local reviewed settings use strict finite values and cloud-equivalent limits."""
+    with pytest.raises(HTTPException) as error:
+        optimize_v8._validate_launch_options({'convergence_config': settings})
+    assert error.value.status_code == 422
+
+
+def test_local_convergence_immutable_options_and_resume(optimize_v8_roots, monkeypatch):
+    """A queued job retains its reviewed detector independently of saved/rental edits."""
+    from optimize_convergence import DEFAULTS
+    config = _full_pb8_config()
+    settings = {**DEFAULTS, 'convergence_enabled': True, 'convergence_min_exact': 256}
+    config['pbgui']['optimize_runtime']['convergence_config'] = settings
+    optimize_v8.save_config('local-convergence', config, None)
+    filename = optimize_v8.add_to_queue({'name': 'local-convergence'}, None)['filename']
+    config['pbgui']['optimize_runtime']['convergence_config'] = DEFAULTS
+    optimize_v8.save_config('local-convergence', config, None)
+    row = optimize_v8._read_json(optimize_v8._queue_file(filename))
+    assert row['launch_options']['convergence_config'] == settings
+    assert optimize_v8._read_json(optimize_v8._snapshot_file(filename))['pbgui']['optimize_runtime']['convergence_config'] == settings
+    result = _make_resumable_result(optimize_v8_roots[3] / 'resumable', config)
+    monkeypatch.setattr(optimize_v8, '_preflight_checkpoint_resume', lambda *_: None)
+    optimize_v8.resume_checkpoint(filename, {'source': str(result)}, None)
+    assert optimize_v8._read_json(optimize_v8._queue_file(filename))['launch_options']['convergence_config'] == settings
+
+
+@pytest.mark.parametrize('legacy,stopped', [(False, False), (True, False), (False, True)])
+def test_result_resume_preserves_reviewed_settings_and_convergence_history(
+    optimize_v8_roots, monkeypatch, legacy, stopped,
+):
+    """Native results without pbgui survive result rename, immutable queueing and actual launch options."""
+    import pb8_local_convergence as local
+    from optimize_convergence import advance, DEFAULTS
+    configs, _queue, _logs, results = optimize_v8_roots
+
+    def reject_host_process(*_args, **_kwargs):
+        """Any accidental real process inspection invalidates this isolated scenario."""
+        pytest.fail('Results-resume regression must not inspect host processes')
+
+    monkeypatch.setattr(optimize_v8.psutil, 'Process', reject_host_process)
+    native = _full_pb8_config()
+    native.pop('pbgui')  # PB8's native saved config omits PBGui metadata.
+    native['backtest']['base_dir'] = 'backtests/pbgui/original'
+    native['optimize']['iters'] = 10000
+    result = _make_resumable_result(results / 'native-result', native)
+    (result / 'pareto').mkdir()
+    point = result / 'pareto' / 'a.json'
+    point.write_text(json.dumps({'metrics': {'constraint_violation': 0, 'unpenalized_objectives': [1]}}))
+    store = SimpleNamespace(directory=str(result), n_iters=1000, _front=['a'],
+        _entries={'a': str(point)}, _lock=threading.RLock())
+    recorder = SimpleNamespace(store=store, scoring_specs=[SimpleNamespace(to_config=lambda: native['optimize']['scoring'][0])])
+    settings = {**DEFAULTS, 'convergence_enabled': True}
+    identity = (optimize_v8._legacy_convergence_identity if legacy else optimize_v8._convergence_identity)(native)
+    monkeypatch.setattr(local, '_log', lambda *a, **k: None)
+    first = local.LocalConvergence(SimpleNamespace(), {'mode': 'fresh', 'convergence_config': settings,
+        'convergence_identity': identity}, results.parent / 'first.json', results)
+    first.attach(recorder)
+    first.observed = 1024 if stopped else 700
+    first.state = advance(advance({}, [[1]], 512, settings), [[1]], first.observed, settings)
+    first.shutdown['complete'] = stopped
+    first.persist()
+    response = optimize_v8.queue_result_resume({'name': 'native-result_resume', 'path': str(result)}, None)
+    filename = response['filename']
+    row = optimize_v8._read_json(optimize_v8._queue_file(filename))
+    snapshot = optimize_v8._read_json(optimize_v8._snapshot_file(filename))
+    saved = optimize_v8._read_json(configs / 'native-result_resume' / 'optimize.json')
+    assert snapshot['backtest']['base_dir'] != native['backtest']['base_dir']
+    assert row['launch_options']['convergence_config'] == settings
+    assert saved['pbgui']['optimize_runtime']['convergence_config'] == settings
+    assert snapshot['pbgui']['optimize_runtime']['convergence_config'] == settings
+
+    # Exercise the real launch construction, but create no optimizer process or runtime reads.
+    monkeypatch.setattr(optimize_v8, 'PBGDIR', str(results.parent))
+    monkeypatch.setattr(optimize_v8, 'acquire_master_runtime_lock', lambda _root: SimpleNamespace(release=lambda: None))
+    monkeypatch.setattr(optimize_v8, 'load_ini_section', lambda _section: {})
+    monkeypatch.setattr(optimize_v8, 'pb8_runtime_status', lambda: {'ready': True,
+        'pb8dir': str(results.parent), 'pb8venv': '/isolated/python', 'cli_file': '/isolated/passivbot'})
+    monkeypatch.setattr(optimize_v8, '_runtime_commit', lambda _root: 'isolated')
+    phase = 'prelaunch'
+    ownership = {'pid': 123, 'create_time': 123.5, 'owned_results': [str(result)]}
+
+    def read_ownership(job):
+        """Ownership exists only for the expected job after the runner starts."""
+        assert job == filename
+        assert phase in ('prelaunch', 'started')
+        return copy.deepcopy(ownership) if phase == 'started' else None
+
+    def matches_ownership(job, record):
+        """Model only the exact synthetic identity, never an arbitrary live PID."""
+        assert job == filename
+        assert phase == 'started'
+        assert record == ownership
+        assert record['pid'] == 123 and record['create_time'] > 0
+        return True
+
+    def ready_runner(job, _command, _cwd, _log_path):
+        """Publish a complete identity and matching ready PID exactly once."""
+        nonlocal phase
+        assert job == filename
+        assert phase == 'prelaunch', 'Unexpected duplicate runner launch'
+        assert read_ownership(job) is None
+        phase = 'started'
+        optimize_v8._ready_file(filename).parent.mkdir(parents=True, exist_ok=True)
+        optimize_v8._ready_file(filename).write_text(str(ownership['pid']))
+        return None
+
+    monkeypatch.setattr(optimize_v8, '_launch_optimizer_runner', ready_runner)
+    monkeypatch.setattr(optimize_v8, '_read_process_record', read_ownership)
+    monkeypatch.setattr(optimize_v8, '_process_matches', matches_ownership)
+    assert optimize_v8._read_process_record(filename) is None
+    assert optimize_v8._queue_status(row) == ('queued', None)
+    launched = optimize_v8.OptimizeV8Worker().launch(filename)
+    assert launched == ownership
+    assert phase == 'started'
+    assert optimize_v8._queue_status(optimize_v8._read_json(optimize_v8._queue_file(filename))) == ('running', ownership['pid'])
+    options = optimize_v8._read_json(optimize_v8._launch_options_file(filename))
+    assert options['convergence_config'] == settings
+    assert options['convergence_identity'] == optimize_v8._convergence_identity(native)
+    resumed = local.LocalConvergence(SimpleNamespace(), options, results.parent / 'second.json', results)
+    resumed.attach(recorder)
+    assert resumed.observed == (0 if stopped else 700)
+    assert ('new convergence window' if stopped else 'Compatible convergence history restored') in resumed.state['reason']
+    if stopped:
+        assert resumed.previous_completion['completion_reason'] == 'convergence'
+    else:
+        assert resumed.state['scale'] == first.state['scale']
+        assert resumed.state['baseline_hv'] == first.state['baseline_hv']
+        assert resumed.state['stalled_exact'] == 188
+    assert not resumed.observe(recorder)
+    assert resumed.observed == (0 if stopped else 700)
+    resumed.pool_by_recorder[id(recorder)] = object()
+    store.n_iters += 1
+    assert not resumed.observe(recorder)
+    assert resumed.observed == (1 if stopped else 701)
+    if not stopped:
+        assert resumed.state['stalled_exact'] == 189
+
+
+@pytest.mark.parametrize('fault', ['foreign', 'invalid_config', 'corrupt', 'symlink'])
+def test_result_resume_rejects_invalid_convergence_settings_before_queueing(optimize_v8_roots, fault):
+    """Unreadable/mismatched reviewed settings must not silently become disabled defaults."""
+    configs, queue, _logs, results = optimize_v8_roots
+    native = _full_pb8_config()
+    native.pop('pbgui')
+    result = _make_resumable_result(results / 'bad-history', native)
+    path = result / optimize_v8.CONVERGENCE_STATE_FILENAME
+    state = {'version': 1, 'signature': 'a' * 64, 'result': str(result), 'observed_exact': 0,
+        'convergence': {}, 'config': {'convergence_enabled': True}}
+    if fault == 'foreign':
+        state['result'] = str(results / 'another-result')
+    elif fault == 'invalid_config':
+        state['config']['convergence_patience'] = 100
+    path.write_text('{' if fault == 'corrupt' else json.dumps(state))
+    if fault == 'symlink':
+        target = results / 'other.json'
+        path.rename(target)
+        path.symlink_to(target)
+    with pytest.raises(HTTPException) as error:
+        optimize_v8.queue_result_resume({'name': 'must-not-queue', 'path': str(result)}, None)
+    assert error.value.status_code == 422
+    assert 'convergence settings' in error.value.detail
+    assert not (configs / 'must-not-queue').exists()
+    assert list(queue.glob('*.json')) == []
+
+
+@pytest.mark.parametrize('section,key,value', [
+    ('optimize', 'scoring', [{'metric': 'different', 'goal': 'min'}]),
+    ('optimize', 'bounds', {}), ('optimize', 'limits', []), ('backtest', 'start_date', '2024-01-01'),
+])
+def test_convergence_identity_ignores_output_budget_resources_but_checks_evaluation(section, key, value):
+    """Rename/resource changes preserve identity; evaluation/search/constraint changes invalidate it."""
+    config = _full_pb8_config()
+    renamed = copy.deepcopy(config)
+    renamed['backtest']['base_dir'] = 'backtests/pbgui/renamed_resume'
+    renamed['optimize'].update(n_cpus=1, iters=999999)
+    renamed['pbgui']['name'] = 'renamed_resume'
+    assert optimize_v8._convergence_identity(config) == optimize_v8._convergence_identity(renamed)
+    renamed[section][key] = value
+    assert optimize_v8._convergence_identity(config) != optimize_v8._convergence_identity(renamed)
+
+
+@pytest.mark.parametrize('variant', ['convergence', 'manual', 'foreign', 'forced', 'cleanup', 'prior_error'])
+def test_local_convergence_classification_across_queue_paths(optimize_v8_roots, monkeypatch, variant):
+    """Queue, reconciliation, launch-failure handling and projection share the same proof."""
+    optimize_v8.save_config('classification', _full_pb8_config(), None)
+    filename = optimize_v8.add_to_queue({'name': 'classification'}, None)['filename']
+    row = optimize_v8._read_json(optimize_v8._queue_file(filename))
+    row['started_at'] = 1
+    optimize_v8._write_json(optimize_v8._queue_file(filename), row)
+    state = {'returncode': 130, 'run_id': 'this-run', 'evaluations': 384,
+        'completion_reason': 'convergence',
+        'convergence': {'stop_requested': True, 'request_run_id': 'this-run'},
+        'shutdown': {'complete': True}}
+    if variant == 'manual':
+        state.pop('completion_reason')
+    elif variant == 'foreign':
+        state['convergence']['request_run_id'] = 'old-run'
+    elif variant == 'forced':
+        state['shutdown']['forced'] = True
+    elif variant == 'cleanup':
+        state['shutdown']['errors'] = True
+    elif variant == 'prior_error':
+        state['error'] = 'original failure'
+    optimize_v8._write_json(optimize_v8._state_file(filename), state)
+    good = variant == 'convergence'
+    assert optimize_v8._queue_status(row)[0] == ('complete' if good else 'error')
+    optimize_v8._reconcile_queue_artifacts()
+    optimize_v8._record_launch_failure(filename, RuntimeError('launch returned early'))
+    item = optimize_v8._queue_item(optimize_v8._queue_file(filename))
+    assert item['status'] == ('complete' if good else 'error')
+    assert item['completion_reason'] == ('convergence' if good else None)
+    projected = optimize_v8.get_queue_status(filename, None)
+    assert projected['progress']['evaluations'] == 384
+    assert projected['progress']['evaluation_source'] == 'runner'
+    assert projected['status'] == item['status']
+    repaired = optimize_v8._read_json(optimize_v8._queue_file(filename))
+    assert bool(repaired.get('error_reason')) is not good
+    from pb8_loop_backend import LoopBackend
+    repaired.update(loop_id='loop', loop_owner='owner')
+    optimize_v8._write_json(optimize_v8._queue_file(filename), repaired)
+    polled = LoopBackend(optimize_v8_roots[0], None).poll(
+        {'id': 'loop', 'owner': 'owner', 'settings': {}},
+        {'kind': 'optimizer', 'backend': {'execution': 'cpu', 'id': filename}})
+    assert polled['status'] == item['status']
+
+
+def test_convergence_sidecars_survive_api_reconciliation_and_forced_stop_is_error(optimize_v8_roots):
+    """API restarts preserve current observations and cannot promote forced cleanup to success."""
+    _write_queue_job('sidecars', 0)
+    sidecar = optimize_v8._state_file('sidecars').with_suffix('.convergence.json')
+    optimize_v8._write_json(sidecar, {'convergence': {'phase': 'tracking'}})
+    optimize_v8._reconcile_queue_artifacts()
+    assert sidecar.is_file()
+    forced = optimize_v8._state_file('sidecars').with_suffix('.convergence.forced.json')
+    optimize_v8._write_json(forced, {'returncode': 1, 'error': 'Graceful convergence shutdown timed out',
+                                    'shutdown': {'forced': True}})
+    row = optimize_v8._read_json(optimize_v8._queue_file('sidecars'))
+    assert optimize_v8._queue_status(row)[0] == 'error'
+    optimize_v8._remove_queue_item('sidecars')
+    assert not sidecar.exists() and not forced.exists()
+
+
+def test_loop_prepare_keeps_ordinary_launch_defaults_separate_from_round_patience(optimize_v8_roots, monkeypatch):
+    """The real Loop prepare caller continues creating fresh jobs with local stopping disabled."""
+    import pb8_loop_backend as backend_module
+    from pb8_loop_store import fresh_optimizer_config
+    import ai_loop_search_limits
+    backend = backend_module.LoopBackend(optimize_v8_roots[0], None)
+    monkeypatch.setattr(backend, 'authorized', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(backend_module, 'validate_change', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(backend_module, 'validate_hsl_policy', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ai_loop_search_limits, 'exposure_ceiling', lambda *_args: 1)
+    monkeypatch.setattr(ai_loop_search_limits, 'validate_exposure_ceiling', lambda *_args: None)
+    config = fresh_optimizer_config(_full_pb8_config())
+    result = backend.prepare({'id': 'loop', 'owner': 'owner', 'settings': {'execution': 'cpu'}},
+        {'kind': 'optimizer', 'config': config, 'overrides': {}, 'name': 'loop-prepare', 'operation': 'f' * 32})
+    row = optimize_v8._read_json(optimize_v8._queue_file(result['id']))
+    assert row['loop_id'] == 'loop' and row['loop_owner'] == 'owner'
+    assert not row['launch_options']['convergence_config']['convergence_enabled']
+    assert config['pbgui']['optimize_runtime'] == {'mode': 'fresh'}

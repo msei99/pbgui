@@ -2782,7 +2782,17 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
     </details>
     <details id="optlog-convergence-group" class="optlog-accordion" hidden>
       <summary>Convergence &amp; Stagnation<span id="optlog-convergence-hint" class="optlog-hint"></span></summary>
-      <div id="optlog-convergence-body" class="optlog-accordion-body vast-component"></div>
+      <div id="optlog-convergence-body" class="optlog-accordion-body vast-component">
+        <div id="local-convergence" hidden>
+          <div class="optlog-summary-grid">
+            <div class="optlog-card"><div class="optlog-label">Convergence</div><div id="local-convergence-phase" class="optlog-value"></div></div>
+            <div class="optlog-card"><div class="optlog-label">Last sufficient improvement (observed exact)</div><div id="local-convergence-improvement" class="optlog-value"></div></div>
+            <div class="optlog-card"><div class="optlog-label">Warmup / patience</div><div id="local-convergence-progress" class="optlog-value"></div></div>
+            <div class="optlog-card"><div class="optlog-label">Last checked</div><div id="local-convergence-checked" class="optlog-value"></div></div>
+          </div>
+          <div id="local-convergence-reason" class="muted-line"></div>
+        </div>
+      </div>
     </details>
     <div id="vast-jobs-host" class="vast-component"></div>
   </div>
@@ -5732,7 +5742,51 @@ function buildOptimizeCpuTooltip(system, runtime, process) {
   return lines.join('\n');
 }
 
+function renderLocalConvergence(status) {
+  var node = el('local-convergence');
+  if (!node) return;
+  var history = status && status.convergence;
+  node.hidden = !optimizeEditorAdapter.isV8 || !history;
+  if (node.hidden) return;
+  var config = status.convergence_config || {};
+  var phase = status.completion_reason === 'convergence' ? 'Stopped on stagnation' : history.phase || 'waiting';
+  el('local-convergence-phase').textContent = phase;
+  el('local-convergence-progress').textContent = phase === 'warming'
+    ? 'Warmup: ' + (history.checked_exact || 0) + ' / ' + (history.minimum || config.convergence_min_exact || 512)
+    : 'Stagnation: ' + (history.stalled_exact || 0) + ' / ' + (history.patience || config.convergence_patience || 512);
+  el('local-convergence-improvement').textContent = history.last_improvement_exact == null ? '-' : String(history.last_improvement_exact);
+  el('local-convergence-checked').textContent = history.checked_at ? new Date(history.checked_at * 1000).toLocaleString() : '-';
+  el('local-convergence-reason').textContent = history.reason || (status.completion_reason === 'convergence' ? 'Stopped on stagnation' : '');
+}
+
+function renderLocalConvergenceControls(config) {
+  if (!optimizeEditorAdapter.isV8) return '';
+  var runtime = (config.pbgui || {}).optimize_runtime || {};
+  var settings = runtime.convergence_config || runtime;
+  return '<div id="opted-local-convergence" class="form-row cols-8">'
+    + fieldSelect2('opted-convergence-enabled', 'Stop on stagnation (Local)', [{value:'false',label:'Off'},{value:'true',label:'On'}], settings.convergence_enabled === true ? 'true' : 'false', false, 'Local CPU/GPU only. Uses completed exact results, independently of rental settings.', 2)
+    + fieldNumber2('opted-convergence-min', 'Minimum exact evaluations', settings.convergence_min_exact == null ? 512 : settings.convergence_min_exact, 1, 'Warmup before fixing the Pareto comparison scale. Minimum 256.', 2)
+    + fieldNumber2('opted-convergence-patience', 'Patience (exact evaluations)', settings.convergence_patience == null ? 512 : settings.convergence_patience, 1, 'Additional exact evaluations without sufficient improvement. Minimum 128.', 2)
+    + fieldNumber2('opted-convergence-tolerance', 'Improvement tolerance (%)', settings.convergence_tolerance_pct == null ? 0.25 : settings.convergence_tolerance_pct, 0.001, 'Cumulative relative hypervolume improvement against the last accepted baseline. Above 0, at most 10%.', 2)
+    + '</div>';
+}
+
+function collectLocalConvergence(cfg, strict) {
+  if (!optimizeEditorAdapter.isV8 || !el('opted-convergence-enabled')) return;
+  var settings = {convergence_enabled: el('opted-convergence-enabled').value === 'true'};
+  [['convergence_min_exact','min',256,10000000], ['convergence_patience','patience',128,10000000],
+   ['convergence_tolerance_pct','tolerance',0,10]].forEach(function(spec) {
+    var value = Number(el('opted-convergence-' + spec[1]).value);
+    if (strict && (!isFinite(value) || (spec[1] === 'tolerance' ? value <= 0 : !Number.isInteger(value) || value < spec[2]) || value > spec[3])) {
+      throw new Error('Invalid ' + spec[0]);
+    }
+    settings[spec[0]] = value;
+  });
+  ensureObjectSection(ensureObjectSection(cfg, 'pbgui'), 'optimize_runtime').convergence_config = settings;
+}
+
 function renderOptimizeLogDashboard(status) {
+  renderLocalConvergence(status);
   delete el('optlog-progress-label').dataset.tip;
   el('optlog-rental').hidden = true;
   var cpuEl = el('optlog-cpu');
@@ -9537,6 +9591,14 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
   var live = cfg.live || {};
   var optimize = cfg.optimize || {};
   var pbgui = cfg.pbgui || {};
+  if (optimizeEditorAdapter.isV8 && el('opted-local-convergence')) {
+    var convergenceRuntime = pbgui.optimize_runtime || {};
+    var convergenceSettings = convergenceRuntime.convergence_config || convergenceRuntime;
+    el('opted-convergence-enabled').value = convergenceSettings.convergence_enabled === true ? 'true' : 'false';
+    [['min','convergence_min_exact',512],['patience','convergence_patience',512],['tolerance','convergence_tolerance_pct',0.25]].forEach(function(spec) {
+      el('opted-convergence-' + spec[0]).value = convergenceSettings[spec[1]] == null ? spec[2] : convergenceSettings[spec[1]];
+    });
+  }
   var logging = cfg.logging || {};
   var pymoo = ensureOptimizePymooSection(optimize);
   var gpuDefaults = optimizeGpuDefaults();
@@ -9733,6 +9795,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       + fieldSelect2('opted-opt-backend', 'backend', getOptimizeBackendOptions(optimize.backend), backendValue, false, 'Vast.ai runs use the GPU backend. Local runs use the configured backend default.', 2)
     + '</div>'
 
+    + renderLocalConvergenceControls(config)
     + '<div id="optimize-gpu-section" style="display:' + (backendValue === 'gpu' ? '' : 'none') + '">'
       + '<div id="opted-gpu-runtime-warning" class="notice warning" style="display:' + (gpuCapability && gpuCapability.available === false ? '' : 'none') + ';margin-bottom:var(--sp-sm)">' + escapeHtml(optimizeBackendUnavailableMessage(gpuCapability)) + '</div>'
       + '<div style="display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-sm)"><b>GPU optimization</b><button id="opted-gpu-apply-measured" type="button" class="tiny-btn" hidden disabled>Apply measured suggestion</button><button type="button" class="tiny-btn" onclick="resetOptimizeGpuSettings()">Reset GPU defaults</button></div>'
@@ -10251,6 +10314,7 @@ function collectEditorConfig(baseConfig, opts) {
   var optimize = ensureObjectSection(cfg, 'optimize');
   var pbgui = ensureObjectSection(cfg, 'pbgui');
   var logging = ensureObjectSection(cfg, 'logging');
+  collectLocalConvergence(cfg, strict);
   var name = el('opted-name').value.trim();
   if (strict && !name) throw new Error('Config name is required.');
   var exchanges = optGetMs('ms-opt-exchanges');
@@ -15791,7 +15855,7 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=3"></script>
-<script src="/app/js/optimizer_log_layout.js?v=5"></script>
+<script src="/app/js/optimizer_log_layout.js?v=6"></script>
 <script src="/app/js/vast.js?v=175"></script>
 </body>
 </html>

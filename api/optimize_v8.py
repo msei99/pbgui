@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import datetime
+import hashlib
 import json
 import multiprocessing
 import os
@@ -82,6 +83,13 @@ from scenario_windows import validation_holdouts
 from sweep_cycles import SWEEP_METRIC_NAMES, SWEEP_PLAN_FILENAME, build_sweep_plan, evaluate_sweep_cycles, validate_sweep_plan
 
 SERVICE = "OptimizeV8"
+
+from optimize_convergence import convergence_complete, runner_complete, validate_config as validate_convergence_config
+from pb8_local_convergence import (
+    STATE_FILENAME as CONVERGENCE_STATE_FILENAME,
+    compatible_history as compatible_convergence_history,
+    read_state as read_convergence_state,
+)
 router = APIRouter()
 
 _CONFIG_FILENAME = "optimize.json"
@@ -889,9 +897,12 @@ def _process_matches(filename: str, record: dict) -> bool:
 
 def _read_runner_state(filename: str) -> dict | None:
     try:
+        forced = read_convergence_state(_state_file(filename).with_suffix('.convergence.forced.json'))
+        if forced:
+            return forced
         state = _read_json(_state_file(filename))
         return state if isinstance(state.get("returncode"), int) else None
-    except RuntimeError:
+    except (RuntimeError, OSError, ValueError, TypeError):
         return None
 
 
@@ -957,7 +968,7 @@ def _queue_status(data: dict) -> tuple[str, int | None]:
         return override, int(record["pid"]) if record else None
     state = _read_runner_state(filename)
     if state is not None:
-        return ("complete" if state["returncode"] == 0 else "error"), int(record["pid"]) if record else None
+        return ("complete" if runner_complete(state) else "error"), int(record["pid"]) if record else None
     log_status = _read_log_terminal_status(filename)
     if data.get("started_at") and log_status:
         return log_status, None
@@ -1050,7 +1061,7 @@ def _record_launch_failure(filename: str, exc: Exception) -> bool:
             return transient
         data = _read_json(path)
         state = _read_runner_state(filename)
-        if state is not None and state["returncode"] == 0:
+        if state is not None and runner_complete(state):
             return transient
         if data.get("status_override") == "error" and isinstance(exc, HTTPException) and exc.status_code == 409:
             return transient
@@ -1276,6 +1287,19 @@ def _resume_compatibility_fields(config: dict) -> dict:
     }
 
 
+def _convergence_identity(config: dict) -> str:
+    """Use the checkpoint evaluation contract, excluding names, budgets and resources."""
+    return hashlib.sha256(json.dumps(_resume_compatibility_fields(config),
+        sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
+def _legacy_convergence_identity(config: dict) -> str:
+    """Allow legacy history only when its old complete-config hash can be reproduced."""
+    return hashlib.sha256(json.dumps({
+        key: value for key, value in config.items() if key not in ('pbgui', 'logging')
+    }, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
 def _preflight_checkpoint_resume(snapshot: dict, result_dir: Path) -> None:
     readiness = _checkpoint_resume_readiness(result_dir)
     if not readiness["ready"]:
@@ -1297,6 +1321,10 @@ def _preflight_checkpoint_resume(snapshot: dict, result_dir: Path) -> None:
 
 def _validate_launch_options(raw: dict | None) -> dict:
     payload = copy.deepcopy(raw or {})
+    try:
+        convergence_config = validate_convergence_config(payload.get("convergence_config", payload))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     mode = str(payload.get("mode") or "fresh").strip().lower()
     if mode not in _LAUNCH_MODES:
         raise HTTPException(status_code=422, detail="Invalid optimize launch mode")
@@ -1340,6 +1368,7 @@ def _validate_launch_options(raw: dict | None) -> dict:
         "fine_tune_params": [item.strip() for item in fine_tune],
         "polish_percentage": polish,
         "polish_bounds_mode": bounds_mode,
+        "convergence_config": convergence_config,
     }
 
 
@@ -1502,6 +1531,7 @@ def _queue_record_item(data: dict, created: str, status: str, pid: int | None) -
         "name": str(data.get("name") or filename),
         "exchange": data.get("exchange") or [],
         "status": status,
+        "completion_reason": "convergence" if status == "complete" and convergence_complete(_read_runner_state(filename)) else None,
         "pid": pid,
         "created": created,
         "started_at": data.get("started_at"),
@@ -1658,7 +1688,7 @@ def _reconcile_queue_artifacts() -> None:
                 data.update(status_override="error", error_code="stale_ownership", error_reason=reason, launch_message=reason)
                 _append_queue_log(filename, reason)
                 changed = True
-            elif state is not None and state["returncode"] != 0 and not data.get("error_reason"):
+            elif state is not None and not runner_complete(state) and not data.get("error_reason"):
                 reason = str(state.get("error") or f"Optimizer exited with code {state['returncode']}; inspect the retained log.")
                 data.update(error_code="runner_failed", error_reason=reason)
                 changed = True
@@ -1676,7 +1706,9 @@ def _reconcile_queue_artifacts() -> None:
             artifact_ids.add(path.name.removesuffix(".pid"))
         for path in (_queue_dir() / "state").glob("*.json"):
             if path != _reorder_file():
-                artifact_ids.add(path.name.removesuffix(".json"))
+                suffix = next((suffix for suffix in ('.convergence.forced.json', '.convergence.json')
+                               if path.name.endswith(suffix)), '.json')
+                artifact_ids.add(path.name.removesuffix(suffix))
         for path in (_queue_dir() / "state").glob("*.launch-ready"):
             artifact_ids.add(path.name.removesuffix(".launch-ready"))
 
@@ -1689,7 +1721,7 @@ def _reconcile_queue_artifacts() -> None:
             if record and _process_matches(filename, record):
                 _log(SERVICE, f"Preserved live orphan PB8 optimizer artifacts for {filename}", level="WARNING")
                 continue
-            for artifact in (_pid_file(filename), _state_file(filename), _ready_file(filename)):
+            for artifact in (_pid_file(filename), _state_file(filename), _ready_file(filename), _state_file(filename).with_suffix('.convergence.json'), _state_file(filename).with_suffix('.convergence.forced.json')):
                 artifact.unlink(missing_ok=True)
             rmtree(_snapshot_dir(filename), ignore_errors=True)
             rmtree(_launch_dir(filename), ignore_errors=True)
@@ -3399,6 +3431,13 @@ class OptimizeV8Worker:
                 validate_pb8_override_bundle(_launch_config_file(filename))
                 from scenario_windows import build_validation_plan
                 runner_options = dict(options)
+                runner_options['convergence_backend'] = prepared.get('optimize', {}).get('backend', 'pymoo')
+                runner_options['convergence_identity'] = _convergence_identity(prepared)
+                if options['mode'] == 'checkpoint_resume':
+                    recovered = prepare_pb8_config(_checkpoint_resume_readiness(Path(options['source']))['config'])
+                    runner_options['convergence_legacy_identities'] = [
+                        _legacy_convergence_identity(prepared), _legacy_convergence_identity(recovered)]
+                runner_options['convergence_log'] = str(_log_dir() / f'{filename}.log')
                 validation_plan = build_validation_plan(launch_config)
                 if validation_plan is not None:
                     runner_options['pbgui_validation_plan'] = validation_plan
@@ -3406,6 +3445,8 @@ class OptimizeV8Worker:
                     runner_options["pbgui_sweep_plan"] = sweep_plan
                 _write_json(_launch_options_file(filename), runner_options)
                 _state_file(filename).unlink(missing_ok=True)
+                _state_file(filename).with_suffix('.convergence.json').unlink(missing_ok=True)
+                _state_file(filename).with_suffix('.convergence.forced.json').unlink(missing_ok=True)
                 _ready_file(filename).unlink(missing_ok=True)
                 data.update(
                     {
@@ -4276,6 +4317,8 @@ def _reset_queue_item(filename: str, options: dict) -> dict:
         if not path.is_file():
             raise HTTPException(status_code=404, detail="Queue item not found")
         data = _read_json(path)
+        options = {**options, 'convergence_config': options.get('convergence_config',
+            (data.get('launch_options') or {}).get('convergence_config', {}))}
         validated_options = _validate_launch_options(options)
         snapshot = _snapshot_file(filename)
         if not snapshot.is_file() or snapshot.is_symlink():
@@ -4284,7 +4327,7 @@ def _reset_queue_item(filename: str, options: dict) -> dict:
             _preflight_checkpoint_resume(_read_json(snapshot), Path(validated_options["source"]))
         _terminate_verified(filename)
         data["launch_options"] = validated_options
-        for artifact in (_pid_file(filename), _state_file(filename), _ready_file(filename)):
+        for artifact in (_pid_file(filename), _state_file(filename), _ready_file(filename), _state_file(filename).with_suffix('.convergence.json'), _state_file(filename).with_suffix('.convergence.forced.json')):
             artifact.unlink(missing_ok=True)
         rmtree(_launch_dir(filename), ignore_errors=True)
         data.pop("started_at", None)
@@ -4423,6 +4466,8 @@ def _remove_queue_item(filename: str, *, require_exists: bool = True) -> bool:
     path.unlink(missing_ok=True)
     _pid_file(filename).unlink(missing_ok=True)
     _state_file(filename).unlink(missing_ok=True)
+    _state_file(filename).with_suffix('.convergence.json').unlink(missing_ok=True)
+    _state_file(filename).with_suffix('.convergence.forced.json').unlink(missing_ok=True)
     _ready_file(filename).unlink(missing_ok=True)
     (_log_dir() / f"{filename}.log").unlink(missing_ok=True)
     rmtree(_snapshot_dir(filename), ignore_errors=True)
@@ -4894,6 +4939,10 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
     if item is None:
         raise HTTPException(status_code=404, detail="Queue item not found")
     state = _read_runner_state(filename) or {}
+    try:
+        convergence = read_convergence_state(_state_file(filename).with_suffix('.convergence.json'))
+    except (OSError, ValueError, TypeError):
+        convergence = {}
     log_path = _safe_path(_log_dir() / f"{filename}.log", _log_dir())
     log_summary = _parse_optimize_log_status(_read_optimize_log_excerpt(log_path))
     config = {}
@@ -4927,7 +4976,10 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
         if evaluations is None or durable_evaluations >= evaluations:
             evaluations = durable_evaluations
             evaluation_source = durable_progress.get("source") or "fallback_scan"
-    if evaluations is None and item["status"] == "complete" and target is not None:
+    if state.get('evaluations') is not None:
+        evaluations = state['evaluations']
+        evaluation_source = 'runner'
+    if evaluations is None and item["status"] == "complete" and target is not None and not convergence_complete(state):
         evaluations = target
         evaluation_source = "complete"
     percent = None
@@ -4965,6 +5017,8 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
     backend = log_summary["backend"] or optimize.get("backend")
     return {
         **item,
+        "convergence": convergence.get('convergence') or state.get('convergence'),
+        "convergence_config": convergence.get('config'),
         "phase": phase,
         "progress": {
             "eval": evaluations,
@@ -4986,7 +5040,7 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
             "generation": log_summary["generation"],
             "proxy_evaluations": log_summary["proxy_evaluations"],
             "proxy_rate": log_summary["proxy_rate"],
-            "exact_evaluations": log_summary["exact_evaluations"],
+            "exact_evaluations": evaluations if backend == 'gpu' and evaluation_source == 'runner' else log_summary["exact_evaluations"],
             "target_exact_evaluations": target if backend == "gpu" else None,
             "exact_inflight": log_summary["exact_inflight"],
             "dispatch": log_summary["dispatch"],
@@ -5037,6 +5091,25 @@ def get_result_config(path: str, session: SessionToken = Depends(require_auth)) 
         raise _configuration_error("Loading PB8 result config", exc) from exc
 
 
+def _result_convergence_config(result_dir: Path, fallback: dict) -> dict:
+    """Recover reviewed local settings from bounded, result-owned history, never native defaults."""
+    path = result_dir / CONVERGENCE_STATE_FILENAME
+    if not path.exists() and not path.is_symlink():
+        return validate_convergence_config(fallback)
+    try:
+        state = read_convergence_state(path)
+        signature = state.get('signature')
+        if (not isinstance(signature, str) or not re.fullmatch(r'[0-9a-f]{64}', signature)
+                or not isinstance(state.get('config'), dict)
+                or not compatible_convergence_history(state, signature, result_dir)):
+            raise ValueError('Invalid or mismatched result-owned convergence history')
+        return validate_convergence_config(state['config'])
+    except (OSError, ValueError, TypeError) as exc:
+        _log(SERVICE, f'Cannot restore local convergence settings for checkpoint resume: {exc}', level='WARNING')
+        raise HTTPException(status_code=422,
+            detail='Cannot restore local convergence settings for checkpoint resume: ' + str(exc)) from exc
+
+
 @router.post("/results/resume")
 def queue_result_resume(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
     """Validate and atomically create a managed config plus checkpoint queue item."""
@@ -5051,13 +5124,18 @@ def queue_result_resume(body: dict, session: SessionToken = Depends(require_auth
                 detail="Checkpoint cannot be resumed: " + "; ".join(readiness["reasons"]),
             )
         config = copy.deepcopy(readiness["config"])
+        runtime_options = (config.get('pbgui') or {}).get('optimize_runtime') or {}
+        convergence_config = _result_convergence_config(result_dir,
+            runtime_options.get('convergence_config', runtime_options))
+        config.setdefault('pbgui', {}).setdefault('optimize_runtime', {})['convergence_config'] = convergence_config
         result_overrides = _result_override_payloads(result_dir, config)
         try:
             candidate = prepare_pb8_config(_normalize_config(config, name))
         except PB8ConfigurationError as exc:
             raise _configuration_error("Preparing PB8 checkpoint resume", exc) from exc
         _preflight_checkpoint_resume(candidate, result_dir)
-        options = _validate_launch_options({"mode": "checkpoint_resume", "source": str(result_dir)})
+        options = _validate_launch_options({"mode": "checkpoint_resume", "source": str(result_dir),
+            "convergence_config": convergence_config})
         try:
             with _config_lock():
                 prepared = _save_config_bundle(

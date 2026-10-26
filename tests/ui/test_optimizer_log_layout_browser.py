@@ -749,3 +749,80 @@ def test_queue_settings_bfcache_during_initial_get(log_page):
     assert not page.locator('#btn-settings-save').is_disabled()
     assert control['settings_posts'] == []
     assert not errors
+
+
+def _check_local_convergence_automatic_status_and_context(log_page):
+    """The real local log shows exact-only state automatically and preserves group/geometry."""
+    page, _, _, errors, _, _, control = log_page
+    control['status'] = dict(name='Local job', status='running',
+        convergence_config=dict(convergence_enabled=True, convergence_min_exact=512, convergence_patience=512),
+        convergence=dict(phase='warming', checked_exact=100, checked_at=time.time(), minimum=512))
+    page.evaluate("openLogPanel('job','Local job')")
+    page.wait_for_function('!document.getElementById("optlog-convergence-group").hidden')
+    page.locator('#optlog-convergence-group summary').click()
+    assert page.locator('#local-convergence-progress').inner_text() == 'Warmup: 100 / 512'
+    assert page.locator('#cloud-convergence').is_hidden()
+    geometry = page.locator('#log-panel').bounding_box()
+    control['status']['convergence'].update(phase='tracking', checked_exact=700,
+        last_improvement_exact=512, stalled_exact=188, patience=512)
+    # Wait for the existing automatic 2.5-second status poll; no manual refresh control.
+    page.wait_for_function('document.getElementById("local-convergence-progress").textContent === "Stagnation: 188 / 512"')
+    assert page.locator('#local-convergence-improvement').inner_text() == '512'
+    assert page.locator('#optlog-convergence-group').get_attribute('open') is not None
+    assert page.locator('#log-panel').bounding_box() == geometry
+    page.reload()
+    page.wait_for_function('document.getElementById("local-convergence-progress").textContent === "Stagnation: 188 / 512"')
+    assert page.url.endswith('#queue')
+    assert page.locator('#optlog-convergence-group').get_attribute('open') is not None
+    control['status']['convergence'].update(phase='waiting', reason='Unsupported or invalid exact objectives')
+    page.wait_for_function('document.getElementById("local-convergence-reason").textContent.includes("Unsupported")')
+    control['status']['completion_reason'] = 'convergence'
+    control['status']['convergence'].update(phase='stopping', reason='')
+    page.wait_for_function('document.getElementById("local-convergence-phase").textContent === "Stopped on stagnation"')
+    page.locator('#log-panel-close').click()
+    open_cloud(page)
+    assert page.locator('#local-convergence').is_hidden()
+    assert not errors
+
+
+def test_local_convergence_automatic_status_and_context(log_page):
+    """Report a concise browser failure, including its exact failed assertion."""
+    try:
+        _check_local_convergence_automatic_status_and_context(log_page)
+    except Exception as exc:
+        pytest.fail(f'{type(exc).__name__}: {exc}', pytrace=False)
+
+
+@pytest.mark.parametrize('log_page', ['v7', 'v8'], indirect=True)
+def test_local_convergence_real_editor_controls(log_page):
+    """Real New Config controls remain usable at shared sidebar widths and in PB7."""
+    page, _, _, errors, _, _, _ = log_page
+    page.locator('[data-panel="configs"]').click()
+    page.locator('#btn-new-config').click()
+    page.wait_for_selector('#opted-name', state='visible')
+    if page.url.find('optimize-v7') >= 0:
+        assert page.locator('#opted-local-convergence').count() == 0
+        return
+    assert page.locator('#opted-convergence-enabled').input_value() == 'false'
+    page.locator('#opted-convergence-enabled').select_option('true')
+    page.locator('#opted-convergence-min').fill('256')
+    page.locator('#opted-convergence-patience').fill('128')
+    page.locator('#opted-convergence-tolerance').fill('0.5')
+    assert page.locator('#sidebar').bounding_box()['width'] == 240
+    for key, width in [('Home', 160), ('End', 420)]:
+        page.locator('#sidebar-resize').focus()
+        page.locator('#sidebar-resize').press(key)
+        assert page.locator('#sidebar').bounding_box()['width'] == width
+        assert page.locator('#opted-local-convergence').evaluate('(node)=>node.scrollWidth<=node.clientWidth')
+        assert page.locator('#opted-convergence-min').input_value() == '256'
+    for width in [760, 761]:
+        page.set_viewport_size({'width': width, 'height': 900})
+        assert page.locator('#opted-local-convergence').evaluate('(node)=>node.scrollWidth<=node.clientWidth')
+    page.locator('#opted-name').fill('isolated-convergence-draft')
+    settings = page.evaluate('collectEditorConfig(null,{strict:false}).config.pbgui.optimize_runtime.convergence_config')
+    assert settings == {'convergence_enabled': True, 'convergence_min_exact': 256,
+                        'convergence_patience': 128, 'convergence_tolerance_pct': .5}
+    page.reload()
+    page.wait_for_selector('#opted-convergence-min', state='visible')
+    assert page.locator('#opted-convergence-min').input_value() == '256'
+    assert not errors

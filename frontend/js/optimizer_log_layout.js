@@ -50,7 +50,10 @@
     hide(el('optlog-rental-group'), !optimizing || !cloud || (el('optlog-rental').hidden && el('cloud-calibration-result')?.hidden !== false));
     hide(el('optlog-run-group'), !optimizing);
     hide(el('optlog-utilization-group'), !optimizing || !cloud);
-    hide(el('optlog-convergence-group'), !optimizing || !cloud || el('cloud-convergence')?.hidden !== false);
+    hide(el('local-convergence'), cloud || el('local-convergence')?.hidden !== false);
+    hide(el('cloud-convergence'), !cloud || el('cloud-convergence')?.hidden !== false);
+    hide(el('convergence-sample'), !cloud || el('convergence-sample')?.hidden !== false);
+    hide(el('optlog-convergence-group'), !optimizing || (cloud ? el('cloud-convergence')?.hidden !== false : el('local-convergence')?.hidden !== false));
     hide(details, !groups.some(key => !el('optlog-' + key + '-group').hidden));
     hide(divider, details.hidden);
     const error = optimizing ? el('optlog-error').textContent.trim() : '';
@@ -267,7 +270,7 @@
       const terminal = ['completed', 'cancelled', 'failed'].includes(job.status);
       const current = !terminal && ['running', 'collecting'].includes(job.status) && age !== null && age <= 90;
       putText(hint, 'GPU ' + (el('cloud-gpu-util')?.textContent || '—') + ' · Exact/min ' + (el('cloud-exact-rate')?.textContent || '—') + ' · ' + (age === null ? 'No sample' : (current ? 'Sample ' : 'Last interval ') + age + 's ago'));
-      putText(el('optlog-convergence-hint'), (el('convergence-phase')?.textContent || '') + ' · ' + (el('convergence-progress')?.textContent || ''));
+      putText(el('optlog-convergence-hint'), cloudVisible() ? (el('convergence-phase')?.textContent || '') + ' · ' + (el('convergence-progress')?.textContent || '') : (el('local-convergence-phase')?.textContent || '') + ' · ' + (el('local-convergence-progress')?.textContent || ''));
       schedule();
     }
   };
