@@ -58,7 +58,7 @@ button { cursor: pointer; }
 .date-input-wrap input { padding-right: 28px; }
 .calendar-trigger { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); background: transparent; border: 0; color: var(--text); padding: 0 3px; font-size: var(--fs-sm); line-height: 1; cursor: pointer; }
 .field { display: flex; flex-direction: column; gap: 4px; }
-.field label { color: var(--text-dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; }
+.field label { color: var(--text-dim); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .field input, .field select { width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #0b0e14; color: var(--text); padding: 7px 8px; min-height: 32px; }
 [data-tip] { cursor: help; text-decoration-line: underline; text-decoration-style: dotted; text-decoration-color: #64748b; text-underline-offset: 2px; text-decoration-thickness: 1px; }
 #data-tip-tooltip { display: none; position: fixed; left: 0; top: 0; z-index: 9999; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 5px; font-size: var(--fs-xs); font-weight: normal; padding: 6px 10px; white-space: pre-wrap; max-width: 480px; line-height: 1.5; box-shadow: 0 4px 12px rgba(0,0,0,.5); pointer-events: none; will-change: transform; }
@@ -107,9 +107,10 @@ button { cursor: pointer; }
 #main-content.is-scrolling .js-plotly-plot { pointer-events: none; }
 .plot:fullscreen { width: 100vw; height: 100vh !important; min-height: 100vh; background: var(--bg); padding: 8px; }
 .plot:fullscreen > div { height: 100% !important; }
-textarea, pre.debug-json { width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #0b0e14; color: var(--text); font-family: var(--mono); font-size: var(--fs-xs); padding: 10px; overflow: auto; }
+textarea, pre.debug-json { width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #0b0e14; color: var(--text); font-family: var(--mono); font-size: var(--fs-sm); padding: 10px; overflow: auto; }
 textarea { min-height: 480px; resize: vertical; }
 #raw-config-panel .json-panel-wrap { margin-top: 0; }
+#raw-config-panel .json-pre { font-size: var(--fs-sm); }
 #raw-config-panel .json-pre[contenteditable="true"] { outline: none; cursor: text; }
 #raw-config-panel .json-pre.raw-invalid { border-color: rgba(255,75,75,.55); color: #ffb3b3; }
 .raw-config-status { margin-top: 8px; color: var(--text-dim); font-size: var(--fs-xs); }
@@ -155,7 +156,7 @@ pre.debug-json { max-height: 460px; white-space: pre-wrap; word-break: break-wor
 .slider-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slider-meta { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .slider-label .help { color: var(--text-dim); border: 1px solid var(--border); border-radius: 50%; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
-.slider-value { color: var(--accent); font-size: var(--fs-xs); font-weight: 700; padding-left: 0; font-family: var(--mono); }
+.slider-value { color: var(--accent); font-size: var(--fs-sm); font-weight: 700; padding-left: 0; font-family: var(--mono); }
 input.param-slider { -webkit-appearance: none; appearance: none; width: 100%; height: 14px; background: transparent; accent-color: var(--accent); cursor: pointer; }
 input.param-slider::-webkit-slider-runnable-track { height: 4px; background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--range-fill, 50%), rgba(255,255,255,.22) var(--range-fill, 50%), rgba(255,255,255,.22) 100%); border-radius: 999px; }
 input.param-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 0; margin-top: -4px; box-shadow: 0 0 0 1px rgba(14,17,23,.95); }
