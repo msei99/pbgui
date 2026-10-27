@@ -12,7 +12,7 @@ def test_date_input_focus_does_not_open_parameter_help():
         page.route('**/api/v8/parameter-help', lambda route: route.fulfill(json={'entries': {
             'backtest.start_date': {'text': 'Start date of backtest.', 'source': 'configuration.md'}}}))
         page.route('http://pbgui.test/', lambda route: route.fulfill(content_type='text/html', body='''
-            <div class="form-group"><label><span data-tip="Start date">start_date</span></label>
+            <div class="form-group"><label><span tabindex="0" data-tip="Start date">start_date</span></label>
             <input id="opted-start-date" value="2026-10-10"></div>
             <script>var API_BASE='/api/optimize-v8';</script>'''))
         page.goto('http://pbgui.test/')
@@ -31,5 +31,10 @@ def test_date_input_focus_does_not_open_parameter_help():
         field.focus()
         assert tip.is_hidden()
         field.hover()
+        assert tip.is_hidden()
+        page.locator('[data-tip]').focus()
+        assert tip.is_visible()
+        assert 'Start date of backtest.' in tip.inner_text()
+        field.focus()
         assert tip.is_hidden()
         browser.close()

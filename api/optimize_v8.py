@@ -41,6 +41,7 @@ from api.pb8_ohlcv_tools import (
     build_pb8_ohlcv_preflight,
     get_pb8_ohlcv_start_date_job,
     get_pb8_ohlcv_preload_job,
+    safe_start_date_error,
     shutdown_pb8_ohlcv_start_date_jobs,
     start_pb8_ohlcv_start_date_job,
     start_pb8_ohlcv_preload_job,
@@ -123,7 +124,20 @@ _RESULT_LIST_SCAN_LIMIT_BYTES = 8 * 1024 * 1024
 _MAX_OVERRIDE_BYTES = 1024 * 1024
 _MAX_OVERRIDE_BUNDLE_BYTES = 8 * 1024 * 1024
 _BACKTEST_COUNT_CACHE_TTL_SECONDS = 30
-_BACKTEST_COUNT_CACHE_MAX_ENTRIES = 128
+_BACKTEST_COUNT_CACHE_MAX_ENTRIES = 512
+_CONFIG_SUMMARY_CACHE_MAX_ENTRIES = 512
+_BACKTEST_COUNT_BATCH_MAX_NAMES = 16
+_BACKTEST_COUNT_SCAN_SECONDS = 0.1
+_BACKTEST_COUNT_SCAN_MAX_ENTRIES = 10_000
+_BACKTEST_COUNT_SCAN_MAX_ACTIVE = 256
+_BACKTEST_COUNT_SCAN_IDLE_SECONDS = 120
+_BACKTEST_COUNT_SCAN_MAX_AGE_SECONDS = 600
+_BACKTEST_COUNT_SCAN_MAX_PATH_BYTES = 256 * 1024
+_BACKTEST_COUNT_SAFE_SCANDIR_AVAILABLE = (
+    hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW")
+    and os.open in os.supports_dir_fd and os.scandir in os.supports_fd
+)
+_COUNT_ROOT_UNSET = object()
 _PARETO_LIST_CACHE_TTL_SECONDS = 5 * 60
 _PARETO_LIST_CACHE_MAX_ENTRIES = 2048
 _PARETO_WARNING_TTL_SECONDS = 60
@@ -162,6 +176,15 @@ _active_eval_scan_stops: dict[str, threading.Event] = {}
 _EVALUATION_PROGRESS_FILENAME = ".pbgui_optimize_progress.json"
 _backtest_count_cache: OrderedDict[str, dict] = OrderedDict()
 _backtest_count_cache_lock = threading.RLock()
+_backtest_count_scans: OrderedDict[str, dict] = OrderedDict()
+_backtest_count_expired: OrderedDict[str, tuple] = OrderedDict()
+_backtest_count_scans_lock = threading.RLock()
+_backtest_count_scans_condition = threading.Condition(_backtest_count_scans_lock)
+_backtest_count_scans_accepting = True
+_backtest_count_active_requests = 0
+_backtest_count_scan_loop = None
+_config_summary_cache: OrderedDict[str, dict] = OrderedDict()
+_config_summary_cache_lock = threading.RLock()
 _pareto_list_cache: OrderedDict[tuple[str, int | None, int, int], dict] = OrderedDict()
 _pareto_list_cache_lock = threading.RLock()
 _pareto_warning_cache: OrderedDict[str, float] = OrderedDict()
@@ -1402,48 +1425,367 @@ def _config_seed_metadata(config: dict) -> tuple[str, str]:
     return "none", ""
 
 
-def _managed_backtest_count(name: str, config: dict) -> int | None:
+def _file_identity(path: Path) -> tuple:
+    """Detect replacement and in-place edits, including preserved mtimes."""
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+
+
+def _config_summary(name: str, path: Path) -> tuple[dict, dict, tuple]:
+    """Cache lightweight metadata only while the validated file identity matches."""
+    identity = _file_identity(path)
+    key = str(path)
+    with _config_summary_cache_lock:
+        cached = _config_summary_cache.get(key)
+        if cached and cached["identity"] == identity:
+            _config_summary_cache.move_to_end(key)
+            return copy.deepcopy(cached["summary"]), copy.deepcopy(cached["count_config"]), identity
+    config = _read_json(path)
+    backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
+    seed_mode, seed_source = _config_seed_metadata(config)
+    live = config.get("live") if isinstance(config.get("live"), dict) else {}
+    summary = {
+        "name": name,
+        "exchange": backtest.get("exchanges") or [],
+        "start_date": backtest.get("start_date") or "",
+        "end_date": backtest.get("end_date") or "",
+        "strategy": live.get("strategy_kind", ""),
+        "seed_mode": seed_mode,
+        "seed_source": seed_source,
+        "modified": datetime.datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+    }
+    count_config = {"backtest": {"base_dir": backtest.get("base_dir")}}
+    # Never cache concurrent external edits under an identity for different bytes.
+    if _file_identity(path) == identity:
+        with _config_summary_cache_lock:
+            _config_summary_cache[key] = {"identity": identity, "summary": copy.deepcopy(summary),
+                                          "count_config": count_config}
+            _config_summary_cache.move_to_end(key)
+            while len(_config_summary_cache) > _CONFIG_SUMMARY_CACHE_MAX_ENTRIES:
+                _config_summary_cache.popitem(last=False)
+    return summary, copy.deepcopy(count_config), identity
+
+
+def _close_backtest_scan(scan: dict) -> None:
+    """Release a scan's directory iterator while holding its lock."""
+    iterator = scan.get("iterator")
+    scan["iterator"] = None
+    try:
+        if iterator is not None:
+            iterator.close()
+    finally:
+        descriptor = scan.pop("directory_fd", None)
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _open_backtest_scan_directory(root: Path, directory: Path) -> int:
+    """Open each managed directory component without following symbolic links."""
+    if not _BACKTEST_COUNT_SAFE_SCANDIR_AVAILABLE:
+        raise OSError("Safe directory-descriptor scans are unavailable on this platform")
+    relative = directory.relative_to(root)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptor = os.open(root, flags)
+    try:
+        for part in relative.parts:
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _descriptor_identity(descriptor: int) -> tuple:
+    """Read a directory identity from the opened descriptor."""
+    info = os.fstat(descriptor)
+    return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
+
+
+def _expire_backtest_scan(key: str, scan: dict) -> None:
+    """Expire an idle scan without blocking the API event loop on filesystem work."""
+    with _backtest_count_scans_lock:
+        if _backtest_count_scans.get(key) is not scan:
+            return
+        remaining = min(scan["touched"] + _BACKTEST_COUNT_SCAN_IDLE_SECONDS,
+                        scan["created"] + _BACKTEST_COUNT_SCAN_MAX_AGE_SECONDS) - time.monotonic()
+        if remaining > 0:
+            scan["timer"] = _backtest_count_scan_loop.call_later(remaining, _expire_backtest_scan, key, scan)
+            return
+        _backtest_count_scans.pop(key, None)
+        scan["cancelled"] = True
+        if time.monotonic() >= scan["created"] + _BACKTEST_COUNT_SCAN_MAX_AGE_SECONDS:
+            _backtest_count_expired[key] = scan["identity"]
+            _backtest_count_expired.move_to_end(key)
+            while len(_backtest_count_expired) > _BACKTEST_COUNT_SCAN_MAX_ACTIVE:
+                _backtest_count_expired.popitem(last=False)
+    if scan["lock"].acquire(blocking=False):
+        try:
+            try:
+                _close_backtest_scan(scan)
+            except OSError as exc:
+                _log(SERVICE, f"Unable to close expired backtest scan: {exc}", level="WARNING")
+        finally:
+            scan["lock"].release()
+
+
+def _schedule_backtest_scan_expiry(key: str, scan: dict) -> None:
+    """Schedule cleanup on the API-owned event loop."""
+    with _backtest_count_scans_lock:
+        if _backtest_count_scans.get(key) is scan and _backtest_count_scan_loop is not None:
+            scan["timer"] = _backtest_count_scan_loop.call_later(
+                _BACKTEST_COUNT_SCAN_IDLE_SECONDS, _expire_backtest_scan, key, scan,
+            )
+
+
+def _discard_backtest_scan(key: str, scan: dict) -> None:
+    """Remove a scan and close its iterator; caller holds its lock."""
+    with _backtest_count_scans_lock:
+        if _backtest_count_scans.get(key) is scan:
+            _backtest_count_scans.pop(key, None)
+        scan["cancelled"] = True
+        timer = scan.pop("timer", None)
+        if timer is not None:
+            timer.cancel()
+    _close_backtest_scan(scan)
+
+
+def _shutdown_backtest_scans() -> None:
+    """Close all API-owned scan iterators, including in-flight scans."""
+    global _backtest_count_scan_loop, _backtest_count_scans_accepting
+    with _backtest_count_scans_condition:
+        _backtest_count_scans_accepting = False
+        _backtest_count_scans_condition.notify_all()
+        _backtest_count_scan_loop = None
+        scans = list(_backtest_count_scans.items())
+        _backtest_count_scans.clear()
+        _backtest_count_expired.clear()
+        for _key, scan in scans:
+            scan["cancelled"] = True
+            timer = scan.pop("timer", None)
+            if timer is not None:
+                timer.cancel()
+    for key, scan in scans:
+        try:
+            with scan["lock"]:
+                _discard_backtest_scan(key, scan)
+        except Exception as exc:
+            _log(SERVICE, f"Unable to close backtest scan during shutdown: {exc}", level="WARNING")
+    with _backtest_count_scans_condition:
+        while _backtest_count_active_requests:
+            _backtest_count_scans_condition.wait()
+
+
+def _managed_backtest_count_status(
+    name: str, config: dict, root=_COUNT_ROOT_UNSET, *, config_identity: tuple = (), complete: bool = False,
+) -> tuple[str, int | None]:
+    """Track request ownership until all filesystem work has finished."""
+    global _backtest_count_active_requests
+    with _backtest_count_scans_condition:
+        if not _backtest_count_scans_accepting:
+            return "unknown", None
+        _backtest_count_active_requests += 1
+    try:
+        complete_until = time.monotonic() + _BACKTEST_COUNT_SCAN_MAX_AGE_SECONDS if complete else None
+        while True:
+            status, count = _managed_backtest_count_status_inner(
+                name, config, root, config_identity=config_identity, complete_until=complete_until,
+            )
+            if not complete or status != "pending":
+                return status, count
+            # Another request may have finished or invalidated the cursor while
+            # we waited for its lock. Revalidate and use its cache or a new scan.
+            with _backtest_count_scans_lock:
+                if not _backtest_count_scans_accepting or time.monotonic() >= complete_until:
+                    return "unknown", None
+    finally:
+        with _backtest_count_scans_condition:
+            _backtest_count_active_requests -= 1
+            _backtest_count_scans_condition.notify_all()
+
+
+def _managed_backtest_count_status_inner(
+    name: str, config: dict, root=_COUNT_ROOT_UNSET, *, config_identity: tuple = (), complete_until: float | None = None,
+) -> tuple[str, int | None]:
+    """Continue a bounded scan, publishing only a fully verified count."""
+    name = _validate_name(name)
     backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
     base_dir = str(backtest.get("base_dir") or "").strip()
     if PurePath(base_dir).parts != ("backtests", "pbgui", name):
-        return None
-    root = _backtests_root()
+        return "unknown", None
+    if root is _COUNT_ROOT_UNSET:
+        root = _backtests_root()
+    if root is None:
+        return "unknown", None
+    root = Path(os.path.abspath(root))
     try:
         target = _safe_path(root / name, root)
-    except RuntimeError:
-        return None
-    if not root.is_dir() or root.is_symlink() or not target.is_dir() or target.is_symlink():
-        return None
-    try:
-        stat_result = target.stat()
-    except OSError:
-        return None
-    key = str(target)
-    now = time.monotonic()
-    with _backtest_count_cache_lock:
-        cached = _backtest_count_cache.get(key)
-        if (
-            cached
-            and cached["mtime_ns"] == stat_result.st_mtime_ns
-            and now - cached["loaded_at"] < _BACKTEST_COUNT_CACHE_TTL_SECONDS
-        ):
-            _backtest_count_cache.move_to_end(key)
-            return cached["count"]
-    count = 0
-    try:
-        for index, path in enumerate(target.rglob("analysis.json")):
-            if index >= 10_000:
-                return None
-            if path.is_file() and not path.is_symlink():
-                count += 1
-    except OSError:
-        return None
-    with _backtest_count_cache_lock:
-        _backtest_count_cache[key] = {"mtime_ns": stat_result.st_mtime_ns, "loaded_at": now, "count": count}
-        _backtest_count_cache.move_to_end(key)
-        while len(_backtest_count_cache) > _BACKTEST_COUNT_CACHE_MAX_ENTRIES:
-            _backtest_count_cache.popitem(last=False)
-    return count
+        if not root.is_dir() or not target.is_dir():
+            return "unknown", None
+        identity = (_file_identity(root), _file_identity(target), config_identity, base_dir)
+        key = str(target)
+        now = time.monotonic()
+        with _backtest_count_cache_lock:
+            cached = _backtest_count_cache.get(key)
+            if (cached and cached["identity"] == identity
+                    and now - cached["loaded_at"] < _BACKTEST_COUNT_CACHE_TTL_SECONDS):
+                _backtest_count_cache.move_to_end(key)
+                return "known", cached["count"]
+
+        with _backtest_count_scans_lock:
+            if not _backtest_count_scans_accepting:
+                return "unknown", None
+            expired_identity = _backtest_count_expired.pop(key, None)
+            if expired_identity == identity:
+                return "unknown", None
+            scan = _backtest_count_scans.get(key)
+            if scan is not None and scan["identity"] != identity:
+                _backtest_count_scans.pop(key, None)
+                scan["cancelled"] = True
+                timer = scan.pop("timer", None)
+                if timer is not None:
+                    timer.cancel()
+                if scan["lock"].acquire(blocking=False):
+                    try:
+                        _close_backtest_scan(scan)
+                    finally:
+                        scan["lock"].release()
+                scan = None
+            if scan is None:
+                if len(_backtest_count_scans) >= _BACKTEST_COUNT_SCAN_MAX_ACTIVE:
+                    return "unknown", None
+                scan = {"identity": identity, "lock": threading.Lock(), "cancelled": False,
+                        "touched": now, "created": now, "stack": [target], "directories": [], "count": 0,
+                        "visited": 0, "bytes": len(os.fsencode(target)), "iterator": None,
+                        "verify_index": None, "verify_started": None, "timer": None}
+                _backtest_count_scans[key] = scan
+                loop = _backtest_count_scan_loop
+                if loop is not None:
+                    loop.call_soon_threadsafe(_schedule_backtest_scan_expiry, key, scan)
+            else:
+                scan["touched"] = now
+                _backtest_count_scans.move_to_end(key)
+        acquired = (scan["lock"].acquire(blocking=False) if complete_until is None else
+                    scan["lock"].acquire(timeout=max(0.0, complete_until - time.monotonic())))
+        if not acquired:
+            return ("pending" if complete_until is None else "unknown"), None
+        try:
+            if scan["cancelled"]:
+                return ("unknown" if complete_until is None else "pending"), None
+            if now - scan["created"] >= _BACKTEST_COUNT_SCAN_MAX_AGE_SECONDS:
+                _discard_backtest_scan(key, scan)
+                return "unknown", None
+            if config_identity and _file_identity(_config_file(name)) != config_identity:
+                _discard_backtest_scan(key, scan)
+                return "unknown", None
+            deadline = now + _BACKTEST_COUNT_SCAN_SECONDS
+            while not scan["cancelled"]:
+                if complete_until is not None and time.monotonic() >= min(
+                    complete_until, scan["created"] + _BACKTEST_COUNT_SCAN_MAX_AGE_SECONDS,
+                ):
+                    _discard_backtest_scan(key, scan)
+                    return "unknown", None
+                if scan["verify_index"] is not None:
+                    if time.monotonic() - scan["verify_started"] >= _BACKTEST_COUNT_CACHE_TTL_SECONDS:
+                        _discard_backtest_scan(key, scan)
+                        return "unknown", None
+                    index = scan["verify_index"]
+                    if index >= len(scan["directories"]):
+                        if (identity != (_file_identity(root), _file_identity(target), config_identity, base_dir)
+                                or (config_identity and _file_identity(_config_file(name)) != config_identity)):
+                            _discard_backtest_scan(key, scan)
+                            return "unknown", None
+                        if time.monotonic() - scan["verify_started"] >= _BACKTEST_COUNT_CACHE_TTL_SECONDS:
+                            _discard_backtest_scan(key, scan)
+                            return "unknown", None
+                        count = scan["count"]
+                        _discard_backtest_scan(key, scan)
+                        with _backtest_count_cache_lock:
+                            _backtest_count_cache[key] = {"identity": identity, "loaded_at": scan["verify_started"], "count": count}
+                            _backtest_count_cache.move_to_end(key)
+                            while len(_backtest_count_cache) > _BACKTEST_COUNT_CACHE_MAX_ENTRIES:
+                                _backtest_count_cache.popitem(last=False)
+                        return "known", count
+                    directory, expected = scan["directories"][index]
+                    descriptor = _open_backtest_scan_directory(root, _safe_path(directory, root))
+                    try:
+                        actual = _descriptor_identity(descriptor)
+                    finally:
+                        os.close(descriptor)
+                    if actual != expected:
+                        _discard_backtest_scan(key, scan)
+                        return "unknown", None
+                    scan["verify_index"] += 1
+                elif scan["iterator"] is None:
+                    if not scan["stack"]:
+                        scan["verify_started"] = time.monotonic()
+                        scan["verify_index"] = 0
+                        continue
+                    directory = _safe_path(scan["stack"].pop(), root)
+                    descriptor = _open_backtest_scan_directory(root, directory)
+                    scan["directory_fd"] = descriptor
+                    scan["directories"].append((directory, _descriptor_identity(descriptor)))
+                    scan["directory"] = directory
+                    scan["iterator"] = os.scandir(descriptor)
+                else:
+                    try:
+                        entry = next(scan["iterator"])
+                    except StopIteration:
+                        _close_backtest_scan(scan)
+                        continue
+                    scan["visited"] += 1
+                    if scan["visited"] > _BACKTEST_COUNT_SCAN_MAX_ENTRIES:
+                        _discard_backtest_scan(key, scan)
+                        return "unknown", None
+                    if not entry.is_symlink():
+                        if entry.is_dir(follow_symlinks=False):
+                            path = scan["directory"] / entry.name
+                            scan["bytes"] += len(os.fsencode(path))
+                            if scan["bytes"] > _BACKTEST_COUNT_SCAN_MAX_PATH_BYTES:
+                                _discard_backtest_scan(key, scan)
+                                return "unknown", None
+                            scan["stack"].append(path)
+                        elif entry.name == "analysis.json" and entry.is_file(follow_symlinks=False):
+                            scan["count"] += 1
+                if time.monotonic() >= deadline:
+                    if complete_until is not None:
+                        # Legacy/default callers wait for a complete count. Keep
+                        # the same secure cursor and resource limits as batches.
+                        with _backtest_count_scans_lock:
+                            scan["touched"] = time.monotonic()
+                        deadline = scan["touched"] + _BACKTEST_COUNT_SCAN_SECONDS
+                        continue
+                    if _backtest_count_scan_loop is None:
+                        _discard_backtest_scan(key, scan)
+                        return "unknown", None
+                    return "pending", None
+            _discard_backtest_scan(key, scan)
+            return "unknown", None
+        except (OSError, RuntimeError):
+            # next() may already have consumed the entry whose metadata failed.
+            # Cancel that cursor before a concurrent request can acquire its lock.
+            _discard_backtest_scan(key, scan)
+            raise
+        finally:
+            try:
+                if scan["cancelled"]:
+                    _close_backtest_scan(scan)
+            finally:
+                scan["lock"].release()
+    except (OSError, RuntimeError) as exc:
+        _log(SERVICE, f"Unable to count managed backtests for {name}: {exc}", level="WARNING")
+        if "scan" in locals() and scan["lock"].acquire(blocking=False):
+            try:
+                _discard_backtest_scan(key, scan)
+            finally:
+                scan["lock"].release()
+        return "unknown", None
+
+
+def _managed_backtest_count(name: str, config: dict, root=_COUNT_ROOT_UNSET, *, config_identity: tuple = ()) -> int | None:
+    """Keep synchronous callers waiting for a complete count, within safety limits."""
+    return _managed_backtest_count_status(name, config, root, config_identity=config_identity, complete=True)[1]
 
 
 def _normalize_autostart_cpu(value) -> int:
@@ -3578,7 +3920,7 @@ async def _queue_ws_snapshot() -> dict:
 
 def startup() -> None:
     """Start only the API-owned PB8 optimize controller."""
-    global _dash_admission_open, _migration_helper_warmup_task
+    global _dash_admission_open, _migration_helper_warmup_task, _backtest_count_scan_loop, _backtest_count_scans_accepting
     with _dash_lock:
         _dash_admission_open = False
     _recover_dash_registry()
@@ -3599,6 +3941,9 @@ def startup() -> None:
             warm_migration_helper(),
             name="pb8-migration-helper-warmup",
         )
+    with _backtest_count_scans_lock:
+        _backtest_count_scan_loop = asyncio.get_running_loop()
+        _backtest_count_scans_accepting = True
 
 
 async def shutdown() -> None:
@@ -3606,6 +3951,7 @@ async def shutdown() -> None:
     global _dash_admission_open, _migration_helper_warmup_task
     with _dash_lock:
         _dash_admission_open = False
+    await asyncio.to_thread(_shutdown_backtest_scans)
     await _worker.stop()
     await _worker.drain_autostart_launches()
     await asyncio.to_thread(_stop_all_dash_sessions)
@@ -3777,8 +4123,8 @@ def start_ohlcv_start_date_lookup(body: dict, session: SessionToken = Depends(re
     except HTTPException:
         raise
     except Exception as exc:
-        detail = str(exc).strip() or exc.__class__.__name__
-        _log(SERVICE, f"PB8 optimize OHLCV start-date lookup failed: {detail}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        detail = safe_start_date_error(exc)
+        _log(SERVICE, f"PB8 optimize OHLCV start-date lookup failed: {detail}", level="WARNING")
         status_code = 503 if isinstance(exc, PB8OhlcvUnavailableError) else 422
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
@@ -3899,7 +4245,9 @@ def prepare_config(body: dict, session: SessionToken = Depends(require_auth)) ->
 def list_configs(
     session: SessionToken = Depends(require_auth),
     include_result_summary: bool = True,
+    include_backtest_counts: bool = True,
 ) -> dict:
+    """Preserve default callers; the UI explicitly requests scan-free summaries."""
     configs = []
     result_summaries = []
     if include_result_summary:
@@ -3909,34 +4257,66 @@ def list_configs(
     for result in result_summaries:
         latest_result_by_name.setdefault(result["name"], result)
     root = _configs_dir()
+    count_root = _COUNT_ROOT_UNSET
     if root.is_dir() and not root.is_symlink():
         for directory in sorted(root.iterdir()):
-            path = directory / _CONFIG_FILENAME
-            if not directory.is_dir() or directory.is_symlink() or not path.is_file() or path.is_symlink():
+            if not directory.is_dir() or directory.is_symlink():
                 continue
             try:
-                config = _read_json(path)
-                backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
-                seed_mode, seed_source = _config_seed_metadata(config)
-                result_summary = latest_result_by_name.get(directory.name) or {}
-                configs.append(
-                    {
-                        "name": directory.name,
-                        "exchange": backtest.get("exchanges") or [],
-                        "start_date": backtest.get("start_date") or "",
-                        "end_date": backtest.get("end_date") or "",
-                        "strategy": (config.get("live") or {}).get("strategy_kind", ""),
-                        "seed_mode": seed_mode,
-                        "seed_source": seed_source,
-                        "backtest_count": _managed_backtest_count(directory.name, config),
-                        "result_mode": result_summary.get("mode", "unknown"),
-                        "scenario_count": result_summary.get("scenario_count", 0),
-                        "modified": datetime.datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
-                    }
+                name = _validate_name(directory.name)
+                path = _safe_path(directory / _CONFIG_FILENAME, root)
+                if not directory.is_dir() or not path.is_file():
+                    continue
+                summary, config, identity = _config_summary(name, path)
+                count = None
+                if include_backtest_counts:
+                    managed = PurePath(str(config["backtest"].get("base_dir") or "").strip()).parts == ("backtests", "pbgui", name)
+                    if managed and count_root is _COUNT_ROOT_UNSET:
+                        try:
+                            count_root = _backtests_root()
+                        except Exception as exc:
+                            count_root = None
+                            _log(SERVICE, f"Unable to resolve PB8 backtest root: {exc}", level="WARNING")
+                    count = _managed_backtest_count(name, config, count_root, config_identity=identity)
+                result_summary = latest_result_by_name.get(name) or {}
+                summary.update(
+                    backtest_count=count,
+                    backtest_count_status=("known" if count is not None else "unknown") if include_backtest_counts else "pending",
+                    result_mode=result_summary.get("mode", "unknown"),
+                    scenario_count=result_summary.get("scenario_count", 0),
                 )
+                configs.append(summary)
             except Exception as exc:
                 _log(SERVICE, f"Failed to list PB8 optimize config {directory.name}: {exc}", level="WARNING")
     return {"configs": configs}
+
+
+@router.post("/configs/backtest-counts")
+def config_backtest_counts(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Resolve at most sixteen validated names in a synchronous worker request."""
+    names = body.get("names")
+    if (not isinstance(names, list) or not 1 <= len(names) <= _BACKTEST_COUNT_BATCH_MAX_NAMES
+            or not all(isinstance(name, str) for name in names) or set(body) != {"names"}):
+        raise HTTPException(status_code=422, detail="Supply only 1 to 16 config names")
+    names = list(dict.fromkeys(_validate_name(name) for name in names))
+    try:
+        root = _backtests_root()
+    except Exception as exc:
+        _log(SERVICE, f"Unable to resolve PB8 backtest root: {exc}", level="WARNING")
+        root = None
+    rows = []
+    for name in names:
+        count = None
+        status = "unknown"
+        try:
+            path = _config_file(name)
+            if path.is_file() and not path.is_symlink():
+                _summary, config, identity = _config_summary(name, path)
+                status, count = _managed_backtest_count_status(name, config, root, config_identity=identity)
+        except (OSError, RuntimeError, ValueError) as exc:
+            _log(SERVICE, f"Unable to load count config {name}: {exc}", level="WARNING")
+        rows.append({"name": name, "backtest_count": count, "backtest_count_status": status})
+    return {"configs": rows}
 
 
 @router.get("/configs/{name}")

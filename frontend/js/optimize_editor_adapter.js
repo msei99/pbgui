@@ -166,6 +166,38 @@
         if (/^hsl(?:\.|$)/.test(clean)) return mode === 'unified';
         return true;
       },
+      normalizeHslRestartPolicies: function (config) {
+        if (!isV8) return false;
+        var mode = object(config.live).hsl_signal_mode || 'coin';
+        var bot = object(config.bot);
+        var overrides = object(object(config.optimize).fixed_runtime_overrides);
+        var changed = false;
+        (mode === 'unified' ? ['portfolio'] : ['long', 'short']).forEach(function (side) {
+          var parent = side === 'portfolio' ? bot : object(bot[side]);
+          var hsl = parent.hsl;
+          // Never create a missing side/portfolio or change HSL activation.
+          if (!hsl || typeof hsl !== 'object' || Array.isArray(hsl)) return;
+          var path = (side === 'portfolio' ? 'bot' : 'bot.' + side) + '.hsl.restart_after_red_policy';
+          var policyValue = function (value) {
+            var normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+            return normalized === 'always' || normalized === 'never' ? normalized : undefined;
+          };
+          // Native optimizer overrides win at evaluation time. Import once so
+          // the base config also validates and later form/JSON edits share it.
+          var override = policyValue(overrides[path]);
+          var base = policyValue(hsl.restart_after_red_policy);
+          var value = override !== undefined ? override : (base !== undefined ? base : 'always');
+          if (hsl.restart_after_red_policy !== value) {
+            hsl.restart_after_red_policy = value;
+            changed = true;
+          }
+          if (Object.prototype.hasOwnProperty.call(overrides, path)) {
+            delete overrides[path];
+            changed = true;
+          }
+        });
+        return changed;
+      },
       applyHslBudgetScaling: function (config) {
         // One-time import of persisted overrides when populating the editor.
         if (!isV8) return;
@@ -344,19 +376,27 @@
           if (match && !normalized.side) normalized.side = match[1];
           var sideLabel = normalized.side === 'long' ? 'Long' : (normalized.side === 'short' ? 'Short' : '');
           if (/\.hsl\.restart_after_red_policy$/.test(normalized.key)) {
+            normalized.side = match ? match[1] : 'portfolio';
+            normalized.storage = 'bot_hsl';
+            normalized.botKey = 'restart_after_red_policy';
             normalized.label = normalized.label && normalized.label !== normalized.key
               ? normalized.label
-              : sideLabel + ' HSL restart after RED';
+              : (sideLabel || 'Portfolio') + ' HSL restart after RED';
             normalized.type = 'string';
-            normalized.choices = Object.prototype.hasOwnProperty.call(object(object(bot.long).hsl), 'no_restart_drawdown_threshold')
-              ? ['always', 'threshold', 'never'] : ['always', 'never'];
-            normalized.tip = normalized.tip || 'Restart after HSL RED: always resumes after cooldown; never halts permanently. PB8 8.6 requires an explicit choice and re-backtesting.';
+            normalized.choices = ['always', 'never'];
+            normalized.tip = 'always permits restart after cooldown, subject to other requirements; never prevents automatic restart while the stop remains within the configured lookback. Unresolved policies default to always. Re-backtest before live use.';
           }
           var index = runtimeOverrides.findIndex(function (existing) { return existing.key === normalized.key; });
           if (index >= 0) runtimeOverrides[index] = normalized;
           else runtimeOverrides.push(normalized);
         }
         if (isV8) {
+          ['long', 'short', 'portfolio'].forEach(function (side) {
+            mergeRuntimeOverride({
+              key: (side === 'portfolio' ? 'bot' : 'bot.' + side) + '.hsl.restart_after_red_policy',
+              defaultValue: 'always'
+            });
+          });
           ['long', 'short'].forEach(function (side) {
             var sideLabel = side === 'long' ? 'Long' : 'Short';
             var hsl = object(object(bot[side]).hsl);

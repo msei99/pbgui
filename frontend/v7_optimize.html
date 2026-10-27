@@ -20,7 +20,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - %%OPTIMIZE_LABEL%% Optimize</title>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
-<script src="/app/js/optimize_editor_adapter.js?v=16"></script>
+<script src="/app/js/optimize_editor_adapter.js?v=17"></script>
 <script src="/app/js/floating_window.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/ai_loop_templates.css?v=6">
 <script src="/app/js/ai_loop_windows.js?v=1"></script>
@@ -2274,7 +2274,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
-<script defer src="/app/js/pb8_parameter_help.js?v=5"></script>
+<script defer src="/app/js/pb8_parameter_help.js?v=6"></script>
 <link rel="stylesheet" href="/app/css/vast.css?v=21">
 <link rel="stylesheet" href="/app/css/optimizer_log_layout.css?v=4">
   <script src="/app/js/sidebar_resize.js?v=3"></script>
@@ -2891,6 +2891,18 @@ var state = {
   queueRenderPending: false,
   queueConfigChoiceDetail: null,
   queueConfigChoiceIntent: '',
+  configGeneration: 0,
+  configRequest: null,
+  configCountRequest: null,
+  configCountRetryTimer: null,
+  configPollTimer: null,
+  configsDisposed: false,
+  configsLoadedOnce: false,
+  configSelectionRestorePending: false,
+  configPollError: '',
+  configCountError: '',
+  configSelectionInteracting: false,
+  configRenderPending: false,
   configs: [],
   queue: [],
   results: [],
@@ -5004,6 +5016,7 @@ function fieldOptimizeStartDate2(id, label, value, tip, span) {
       '<button type="button" class="act-btn opted-ohlcv-start-btn" style="padding:0 5px;white-space:nowrap" onclick="setOptimizeStartDateFromOhlcv(\'earliest\',this)" title="Set to the earliest selected market with OHLCV coverage" aria-label="Set earliest OHLCV start date">1st</button>' +
       '<button type="button" class="act-btn opted-ohlcv-start-btn" style="padding:0 5px;white-space:nowrap" onclick="setOptimizeStartDateFromOhlcv(\'all_markets\',this)" title="Set to the first date available for every selected exchange and coin" aria-label="Set common OHLCV start date">All</button>' +
     '</div>' +
+    '<div id="opted-ohlcv-start-status" role="status" aria-live="polite" style="margin-top:4px;font-size:var(--fs-xs);overflow-wrap:anywhere"></div>' +
     '<div id="opted-ohlcv-start-progress" style="display:none;margin-top:4px">' +
       '<div style="display:flex;align-items:center;gap:4px">' +
         '<div style="height:5px;flex:1;overflow:hidden;border-radius:3px;background:var(--bg3)"><div id="opted-ohlcv-start-progress-fill" style="height:100%;width:0;background:var(--accent);transition:width .2s"></div></div>' +
@@ -6199,6 +6212,8 @@ function normalizeOptimizeRuntimeOverrideValues(rawOverrides) {
   var overrides = normalizeOptimizeRuntimeOverrideMap(rawOverrides);
   var result = normalizeOptimizeRuntimeOverrideMap(overrides);
   OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.forEach(function(field) {
+    if (field.storage === 'bot_hsl' && field.botKey === 'restart_after_red_policy'
+        && !Object.prototype.hasOwnProperty.call(overrides, field.key)) return;
     if (field.type === 'boolean') {
       if (Object.prototype.hasOwnProperty.call(overrides, field.key)) {
         result[field.key] = normalizeOptimizeRuntimeOverrideBooleanValue(overrides[field.key], !!field.defaultValue);
@@ -6999,16 +7014,27 @@ function renderOptimizeRuntimeOverridesEditor() {
   var panel = el('opted-runtime-overrides-panel');
   if (!panel) return;
   if (optimizeEditorAdapter.isV8) {
+    var active = typeof document !== 'undefined' ? document.activeElement : null;
+    var focusAttribute = active && active.hasAttribute('data-runtime-override-help')
+      ? 'data-runtime-override-help' : 'data-runtime-override';
+    var focusKey = active && panel.contains(active) ? active.getAttribute(focusAttribute) : null;
     function renderRuntimeOverrideField(field) {
+      var invalidBotJson = false;
       var hasRuntimeValue = Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues || {}, field.key);
       var value = hasRuntimeValue
         ? state.runtimeOverrideValues[field.key]
         : (field.defaultValue === undefined ? field.defaultValueText : field.defaultValue);
-      if (field.storage === 'bot_hsl' && (!hasRuntimeValue || field.botKey === 'scale_budget_with_excess_allowance')) {
+      if (field.storage === 'bot_hsl' && (!hasRuntimeValue || field.botKey === 'scale_budget_with_excess_allowance' || field.botKey === 'restart_after_red_policy')) {
         var bot = ((state.editorLastConfig || {}).bot || {});
-        var sideBot = bot[field.side] || {};
-        var textarea = el('opted-bot-' + field.side);
-        try { if (textarea) sideBot = JSON.parse(textarea.value); } catch (error) {}
+        var sideBot = field.side === 'portfolio' ? bot : (bot[field.side] || {});
+        var textarea = el(field.side === 'portfolio' ? 'opted-raw-json' : 'opted-bot-' + field.side);
+        try {
+          if (textarea) sideBot = field.side === 'portfolio' ? (JSON.parse(textarea.value).bot || {}) : JSON.parse(textarea.value);
+          if (!sideBot || typeof sideBot !== 'object' || Array.isArray(sideBot)) invalidBotJson = true;
+          if (field.botKey === 'restart_after_red_policy' && sideBot && sideBot.hsl
+              && (typeof sideBot.hsl !== 'object' || Array.isArray(sideBot.hsl))) invalidBotJson = true;
+        } catch (error) { invalidBotJson = true; }
+        if (field.botKey === 'restart_after_red_policy' && !invalidBotJson && !sideBot.hsl) return '';
         value = optimizeEditorAdapter.getBotHslValue(sideBot, field.botKey, value);
       }
       var label = field.label || field.key;
@@ -7020,9 +7046,10 @@ function renderOptimizeRuntimeOverridesEditor() {
       }
       var choices = Array.isArray(field.choices) ? field.choices : [];
       if (choices.length) {
-        return '<label class="runtime-override-field"><span class="runtime-override-label" data-tip="' + escAttr(tip) + '">' + escapeHtml(label) + '</span>'
-          + '<select data-runtime-override="' + escAttr(field.key) + '" onchange="updateOptimizeRuntimeOverrideRawValue(' + escAttr(JSON.stringify(field.key)) + ', this.value)">'
-          + choices.map(function(choice) { return '<option value="' + escAttr(choice) + '"' + (String(choice) === String(value) ? ' selected' : '') + '>' + escapeHtml(choice) + '</option>'; }).join('')
+        return '<label class="runtime-override-field"><span class="runtime-override-label" tabindex="0" data-runtime-override-help="' + escAttr(field.key) + '" data-tip="' + escAttr(tip) + '">' + escapeHtml(label) + '</span>'
+          + '<select data-runtime-override="' + escAttr(field.key) + '"' + (invalidBotJson ? ' disabled' : '') + ' onchange="updateOptimizeRuntimeOverrideRawValue(' + escAttr(JSON.stringify(field.key)) + ', this.value)">'
+          + (invalidBotJson ? '<option value="" selected>Invalid Bot JSON</option>' : '')
+          + choices.map(function(choice) { return '<option value="' + escAttr(choice) + '"' + (!invalidBotJson && String(choice) === String(value) ? ' selected' : '') + '>' + escapeHtml(choice) + '</option>'; }).join('')
           + '</select></label>';
       }
       return '<label class="runtime-override-field"><span class="runtime-override-label" data-tip="' + escAttr(tip) + '">' + escapeHtml(label) + '</span>'
@@ -7052,6 +7079,13 @@ function renderOptimizeRuntimeOverridesEditor() {
     panel.innerHTML = fields
       ? '<div class="limits-panel runtime-overrides-panel"><div class="bounds-surface">' + fields + '</div></div>'
       : '<div class="limits-empty">No runtime overrides reported by the installed PB8 runtime.</div>';
+    if (focusKey !== null) {
+      Array.prototype.some.call(panel.querySelectorAll('[' + focusAttribute + ']'), function(node) {
+        if (node.getAttribute(focusAttribute) !== focusKey || node.disabled) return false;
+        node.focus({ preventScroll: true });
+        return true;
+      });
+    }
     return;
   }
   function renderRuntimeOverrideField(field) {
@@ -7159,7 +7193,12 @@ function updateOptimizeRuntimeOverrideRawValue(key, value) {
   var cleanKey = String(key || '').trim();
   if (!cleanKey) return;
   state.runtimeOverrideValues = state.runtimeOverrideValues || {};
-  state.runtimeOverrideValues[cleanKey] = value;
+  var field = getOptimizeRuntimeOverrideFieldMeta(cleanKey);
+  if (field && field.storage === 'bot_hsl' && field.botKey === 'restart_after_red_policy') {
+    if (value !== 'always' && value !== 'never') return;
+    delete state.runtimeOverrideValues[cleanKey];
+    if (!setOptimizeBotHslField(field.side, field.botKey, value)) return;
+  } else state.runtimeOverrideValues[cleanKey] = value;
   scheduleStructuredEditorSync();
 }
 
@@ -7336,10 +7375,13 @@ function collectOptimizeRuntimeOverrides(opts) {
   if (optimizeEditorAdapter.isV8) {
     var mode = opts.hslSignalMode || 'coin';
     Object.keys(result).forEach(function(key) {
-      if (!optimizeEditorAdapter.activeHslPath(key, mode)) delete result[key];
+      if (!optimizeEditorAdapter.activeHslPath(key, mode)
+          && !/^bot\.(?:(?:long|short)\.)?hsl\.restart_after_red_policy$/.test(key)) delete result[key];
     });
     OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.forEach(function(field) {
       if (field.storage === 'bot_hsl') {
+        // Keep policy overrides until normalization imports their effective value.
+        if (field.botKey === 'restart_after_red_policy') return;
         delete result[field.key];
         return;
       }
@@ -7549,6 +7591,10 @@ function currentMultiselectValues(id, fallback) {
 }
 
 function resetOptimizeEditorUiState() {
+  cancelOptimizeEditorSync();
+  _optStructuredBaseline = null;
+  _optEditorSyncError = '';
+  _optRawNeedsRender = false;
   resetOptimizeStartDateLookup();
   [
     'ms-opt-exchanges',
@@ -7605,6 +7651,13 @@ var _optCoinMsIds = {
   'ms-opt-ign-short': true
 };
 var _optRawLastApplied = '';
+var _optStructuredBaseline = null;
+var _optRawCoordTimer = null;
+var _optStructuredCoordTimer = null;
+var _optEditorSyncGeneration = 0;
+var _optEditorSyncError = '';
+var _optRawNeedsRender = false;
+var _optEditorSyncConflictText = 'Raw JSON and structured editor have conflicting edits. Resolve the differing values and retry.';
 var _optRawEditorSyncing = false;
 var _optStructuredEditorSyncing = false;
 var _optBotParamStatus = { long: {}, short: {} };
@@ -8868,7 +8921,8 @@ function kvLoadCoins(prefix) {
 }
 
 function optRebuildMs(id, options, selected) {
-  _optMsController.rebuild(id, uniqStrings(options), uniqStrings(selected));
+  // Rendering market metadata is not a user selection change.
+  _optMsController.rebuild(id, uniqStrings(options), uniqStrings(selected), {silent: optimizeEditorAdapter.isV8});
 }
 
 function optClearMs(id) {
@@ -9219,7 +9273,6 @@ async function loadOptSymbols(cfg, opts) {
         body: JSON.stringify({ exchanges: exchanges, coins: seededCoins })
       });
       symbolResults = [{ status: 'fulfilled', value: resolverResult }];
-      _optMarketStatusVerified = true;
     } catch (error) {
       if (requestSeq === _optSymbolsLoadSeq) toast('PB8 market resolver error: ' + error.message, 'err');
       return;
@@ -9234,6 +9287,7 @@ async function loadOptSymbols(cfg, opts) {
   }));
 
   if (requestSeq !== _optSymbolsLoadSeq) return;
+  if (optimizeEditorAdapter.isV8) _optMarketStatusVerified = true;
 
   var symbols = seededCoins.slice();
   _optMarketLabels = {};
@@ -9270,9 +9324,15 @@ async function loadOptSymbols(cfg, opts) {
   optRebuildMs('ms-opt-tags', tags, loadedTags);
   if (optimizeEditorAdapter.isV8 && symbolResults[0] && symbolResults[0].status === 'fulfilled') {
     var resolverStatuses = symbolResults[0].value.statuses || {};
-    ['ms-opt-app-long', 'ms-opt-app-short', 'ms-opt-ign-long', 'ms-opt-ign-short'].forEach(function(id) {
-      _optMsController.applyCoinStatus(id, resolverStatuses);
-    });
+    var wasSyncing = _optStructuredEditorSyncing;
+    _optStructuredEditorSyncing = true;
+    try {
+      ['ms-opt-app-long', 'ms-opt-app-short', 'ms-opt-ign-long', 'ms-opt-ign-short'].forEach(function(id) {
+        _optMsController.applyCoinStatus(id, resolverStatuses);
+      });
+    } finally { _optStructuredEditorSyncing = wasSyncing; }
+    // Commit any resolver normalization once, without treating each render as input.
+    if (!wasSyncing) scheduleStructuredEditorSync();
   }
   restoreOptimizeRawAnchor(loadedAnchor);
 }
@@ -9352,15 +9412,24 @@ function setOptimizeBotBoolField(side, key, value) {
 }
 
 function setOptimizeBotHslField(side, key, value) {
-  var textarea = el('opted-bot-' + side);
-  if (!textarea) return;
+  var textarea = el(side === 'portfolio' ? 'opted-raw-json' : 'opted-bot-' + side);
+  if (!textarea) return false;
   try {
     var obj = JSON.parse(textarea.value || '{}');
-    optimizeEditorAdapter.setBotHslValue(obj, key, value);
+    var target = side === 'portfolio' ? obj.bot : obj;
+    if (key === 'restart_after_red_policy' && (!target || !target.hsl || typeof target.hsl !== 'object' || Array.isArray(target.hsl))) {
+      throw new Error('HSL configuration is unavailable.');
+    }
+    optimizeEditorAdapter.setBotHslValue(target, key, value);
     textarea.value = JSON.stringify(obj, null, 2);
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     autoResizeTa(textarea);
-  } catch (error) {}
+    return true;
+  } catch (error) {
+    setPageEditorStatus('Cannot update HSL: correct the invalid Bot JSON first.', 'err');
+    renderOptimizeRuntimeOverridesEditor();
+    return false;
+  }
 }
 
 function editorStatusNode() {
@@ -9690,12 +9759,12 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
     + '</div>'
 
     + '<div class="form-row cols-2">'
-      + '<div class="form-group"><label><span data-tip="Coins approved for long trading.">approved_coins_long</span> <span class="ms-all-btn" onclick="optSelectAllMs(\'ms-opt-app-long\')" title="Select all">all</span> <span class="ms-clear-btn" onclick="optClearMs(\'ms-opt-app-long\')" title="Clear all">×</span></label>'
+      + '<div class="form-group"><label><span data-tip="Coins approved for long trading. An empty side is disabled.">approved_coins_long</span> <span class="ms-all-btn" onclick="optSelectAllMs(\'ms-opt-app-long\')" title="Select all">all</span> <span class="ms-clear-btn" onclick="optClearMs(\'ms-opt-app-long\')" title="Clear all">×</span></label>'
         + '<div class="ms-wrap" id="ms-opt-app-long">'
           + '<input class="ms-input" id="ms-opt-app-long-input" placeholder="Type to search..." autocomplete="off">'
           + '<div class="ms-dropdown" id="ms-opt-app-long-dd"></div>'
         + '</div></div>'
-      + '<div class="form-group"><label><span data-tip="Coins approved for short trading.">approved_coins_short</span> <span class="ms-all-btn" onclick="optSelectAllMs(\'ms-opt-app-short\')" title="Select all">all</span> <span class="ms-clear-btn" onclick="optClearMs(\'ms-opt-app-short\')" title="Clear all">×</span></label>'
+      + '<div class="form-group"><label><span data-tip="Coins approved for short trading. An empty side is disabled.">approved_coins_short</span> <span class="ms-all-btn" onclick="optSelectAllMs(\'ms-opt-app-short\')" title="Select all">all</span> <span class="ms-clear-btn" onclick="optClearMs(\'ms-opt-app-short\')" title="Clear all">×</span></label>'
         + '<div class="ms-wrap" id="ms-opt-app-short">'
           + '<input class="ms-input" id="ms-opt-app-short-input" placeholder="Type to search..." autocomplete="off">'
           + '<div class="ms-dropdown" id="ms-opt-app-short-dd"></div>'
@@ -9934,7 +10003,11 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 
 function populateOptimizeEditor(config, opts) {
   opts = opts || {};
+  var wasStructuredSyncing = _optStructuredEditorSyncing;
+  if (optimizeEditorAdapter.isV8) _optStructuredEditorSyncing = true;
+  try {
   var cfg = deepClone(config || {});
+  optimizeEditorAdapter.normalizeHslRestartPolicies(cfg);
   // Import legacy fixed values once. Subsequent edits use the side's Bot JSON.
   if (optimizeEditorAdapter.isV8) optimizeEditorAdapter.applyHslBudgetScaling(cfg);
   var backtest = cfg.backtest || {};
@@ -10036,8 +10109,8 @@ function populateOptimizeEditor(config, opts) {
   el('opted-min-coin-age').value = live.minimum_coin_age_days == null ? '' : String(live.minimum_coin_age_days);
   el('opted-hsl-signal-mode').value = normalizeOptimizeHslSignalModeValue(live.hsl_signal_mode);
   el('opted-hsl-signal-mode').onchange = function() {
-    renderOptimizeRuntimeOverridesEditor();
     scheduleStructuredEditorSync();
+    renderOptimizeRuntimeOverridesEditor();
     updateOptimizeHslBudgetScalingValidation();
   };
   var enableOverrides = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, live.strategy_kind);
@@ -10135,6 +10208,12 @@ function populateOptimizeEditor(config, opts) {
   setRawJsonValidationError(null);
   bindStructuredJsonFieldValidation();
   bindStructuredEditorSync();
+  try { _optStructuredBaseline = collectEditorConfig(cfg, {strict: false}).config; }
+  catch (error) {
+    _optStructuredBaseline = null;
+    console.error('Could not capture the normalized Optimize editor state.');
+  }
+  } finally { _optStructuredEditorSyncing = wasStructuredSyncing; }
 }
 
 function applyOptimizeSweepLongBoundsPreset() {
@@ -10535,7 +10614,8 @@ function collectEditorConfig(baseConfig, opts) {
     cfg.pbgui = cfg.pbgui || {};
     cfg.pbgui.execution = el('opted-execution').value === 'vast' ? 'vast' : 'local';
   }
-  return { name: name, config: cfg };
+  var hslRestartNormalized = optimizeEditorAdapter.normalizeHslRestartPolicies(cfg);
+  return { name: name, config: cfg, hslRestartNormalized: hslRestartNormalized };
 }
 
 function applyOptimizeExtraParamValues(cfg) {
@@ -10984,18 +11064,30 @@ function shouldIgnoreOptimizeStructuredSyncTarget(target, phase) {
   if (target.id === 'opted-raw-json') return true;
   if (target.classList && target.classList.contains('ms-input')) return true;
   if (phase === 'input' && target.tagName === 'TEXTAREA' && getOptimizeJsonFieldIds().indexOf(target.id) >= 0) {
-    return true;
+    return !optimizeEditorAdapter.isV8;
   }
   return false;
 }
 
 function optSyncEditorFromParsed(name, cfg) {
   var anchor = captureOptimizeRawAnchor();
+  var active = document.activeElement;
+  var activeId = active && active.id;
+  var activeAnchor = active && active.tagName === 'TEXTAREA'
+    ? window.PBGuiEditorShared.captureTextareaAnchor(active) : null;
   state.editorDraftName = name || '';
   state.editorBackendHint = inferOptimizeEditorBackendHint((cfg || {}).optimize);
   state.editorLastConfig = deepClone(cfg || {});
   populateOptimizeEditor(cfg || {}, { skipRawUpdate: true, name: name || '' });
   restoreOptimizeRawAnchor(anchor);
+  if (activeAnchor && activeId) {
+    var current = el(activeId);
+    if (current && current !== active) {
+      current.focus({ preventScroll: true });
+      active = current;
+    }
+  }
+  window.PBGuiEditorShared.restoreTextareaAnchor(active, activeAnchor);
 }
 
 var _optJsonSync = window.PBGuiEditorShared.createJsonSyncController({
@@ -11028,30 +11120,223 @@ var _optJsonSync = window.PBGuiEditorShared.createJsonSyncController({
   }
 });
 
+// Reconcile edits against the normalized state displayed after the last sync.
+// Arrays are atomic and conflicting edits are retained for explicit resolution.
+function mergeOptimizeEditorChanges(base, current, previousRaw, incoming, latestEdit) {
+  function equal(a, b) {
+    return optimizeOhlcvStartLookupSignature({value: a}) === optimizeOhlcvStartLookupSignature({value: b});
+  }
+  function object(value) { return value && typeof value === 'object' && !Array.isArray(value); }
+  function merge(previous, structured, oldRaw, raw) {
+    if (equal(previous, structured)) return raw;
+    if (object(previous) && object(structured) && object(raw)) {
+      var result = Object.assign({}, raw);
+      new Set(Object.keys(previous).concat(Object.keys(structured))).forEach(function(key) {
+        var value = merge(previous[key], structured[key], object(oldRaw) ? oldRaw[key] : undefined, raw[key]);
+        if (value === undefined) delete result[key]; else result[key] = value;
+      });
+      return result;
+    }
+    if (!latestEdit && !equal(oldRaw, raw) && !equal(structured, raw)) {
+      throw new Error(_optEditorSyncConflictText);
+    }
+    return structured;
+  }
+  return merge(base, current, previousRaw, incoming);
+}
+
+function cancelOptimizeEditorSync() {
+  _optEditorSyncGeneration += 1;
+  clearTimeout(_optRawCoordTimer);
+  clearTimeout(_optStructuredCoordTimer);
+  _optRawCoordTimer = null;
+  _optStructuredCoordTimer = null;
+  _optJsonSync.cancel();
+}
+
+// Each completed input contributes only its delta to the current config.
+// Baselines describe rendered views, not competing drafts. Timers never carry edits.
+function commitOptimizeEditorChange(rawEdit) {
+  if (_optRawEditorSyncing || _optStructuredEditorSyncing) return;
+  var raw = el('opted-raw-json');
+  if (!raw || !_optStructuredBaseline) throw new Error('Editor synchronization state is unavailable. Reopen the editor and retry.');
+  cancelOptimizeEditorSync();
+  var validation = validateRawJson(raw.value || '');
+  setRawJsonValidationError(validation.error);
+  if (rawEdit && validation.error) throw new Error('Raw JSON is invalid. Fix it and retry.');
+  var previous = JSON.parse(_optRawLastApplied);
+  var authoritative = state.editorLastConfig || previous;
+  // Accept a valid Raw delta even while another JSON editor is incomplete.
+  // Its text is now the comparison baseline, so later callbacks cannot replay it.
+  if (rawEdit) {
+    authoritative = mergeOptimizeEditorChanges(previous, validation.parsed, previous, authoritative, true);
+    state.editorLastConfig = deepClone(authoritative);
+    _optRawLastApplied = raw.value;
+    _optRawNeedsRender = true;
+  }
+  var invalidFields = [];
+  getOptimizeJsonFieldIds().forEach(function(id) {
+    var node = el(id);
+    if (node && validateJsonFieldTextarea(node).error) invalidFields.push({id: id, node: node});
+  });
+  var collected = collectEditorConfig(_optStructuredBaseline, {strict: false});
+  // The collector uses valid Bot JSON fallbacks. Extra JSON fields instead return
+  // their editing text on parse errors; exclude that text from config deltas.
+  invalidFields.forEach(function(field) {
+    if (field.id === 'opted-bot-long' || field.id === 'opted-bot-short') return;
+    var node = field.node;
+    var section = node.getAttribute('data-extra-param-section');
+    var key = node.getAttribute('data-extra-param-key');
+    if (!section || key == null) return;
+    var baseline = (_optStructuredBaseline[section] || {})[key];
+    if (baseline === undefined) delete collected.config[section][key];
+    else collected.config[section][key] = deepClone(baseline);
+  });
+  var merged = rawEdit
+    ? authoritative
+    : mergeOptimizeEditorChanges(_optStructuredBaseline, collected.config, _optStructuredBaseline, authoritative, true);
+  if (optimizeEditorAdapter.normalizeHslRestartPolicies(merged) || collected.hslRestartNormalized) _optRawNeedsRender = true;
+  state.editorLastConfig = deepClone(merged);
+  _optStructuredBaseline = deepClone(collected.config);
+  if (invalidFields.length) {
+    throw new Error('Invalid JSON in ' + invalidFields[0].id.replace('opted-', '') + '. Fix it and retry.');
+  }
+  // An unfinished Raw edit remains editing text. It is never persisted as a config.
+  if (validation.error) throw new Error('Raw JSON is invalid. Fix it and retry.');
+  if (_optRawNeedsRender) {
+    _optRawEditorSyncing = true;
+    try { optSyncEditorFromParsed(collected.name, merged); }
+    finally { _optRawEditorSyncing = false; }
+    _optRawNeedsRender = false;
+  } else {
+    state.editorDraftName = collected.name;
+    state.editorBackendHint = '';
+  }
+  var anchor = captureOptimizeRawAnchor();
+  if (optimizeOhlcvStartLookupSignature({value: merged}) !== optimizeOhlcvStartLookupSignature({value: validation.parsed})) {
+    raw.value = JSON.stringify(merged, null, 2);
+    autoResizeTa(raw);
+  }
+  _optRawLastApplied = raw.value;
+  restoreOptimizeRawAnchor(anchor);
+  var status = el('opted-ohlcv-start-status');
+  if (_optEditorSyncError && status && status.textContent === _optEditorSyncError) setOptimizeStartDateStatus('');
+  _optEditorSyncError = '';
+  return merged;
+}
+
+function recordOptimizeEditorChange(rawEdit) {
+  try { return commitOptimizeEditorChange(rawEdit); }
+  catch (error) {
+    var message = String(error && error.message || '');
+    if (!/^(Raw JSON|Invalid JSON|Editor synchronization state)/.test(message)) {
+      console.error('Optimize editor synchronization failed.');
+      message = 'Editor synchronization failed. Reopen the editor and retry.';
+    }
+    _optEditorSyncError = message;
+    setOptimizeStartDateStatus(message, 'error');
+  }
+}
+
+async function reconcileOptimizeEditorSync() {
+  if (optimizeEditorAdapter.isV8) {
+    if (_optRawEditorSyncing || _optStructuredEditorSyncing) throw new Error('Raw JSON is still synchronizing. Retry when it finishes.');
+    var currentRaw = el('opted-raw-json');
+    return commitOptimizeEditorChange(!!currentRaw && currentRaw.value !== _optRawLastApplied);
+  }
+  var raw = el('opted-raw-json');
+  if (!raw || _optRawEditorSyncing) throw new Error('Raw JSON is still synchronizing. Retry when it finishes.');
+  getOptimizeJsonFieldIds().forEach(function(id) {
+    var node = el(id);
+    if (node && validateJsonFieldTextarea(node).error) {
+      throw new Error('Invalid JSON in ' + id.replace('opted-', '') + '. Fix it and retry.');
+    }
+  });
+  var validation = validateRawJson(raw.value || '');
+  if (validation.error) throw new Error('Raw JSON is invalid. Fix it and retry.');
+  if ((raw.value || '') === _optRawLastApplied) {
+    var synced = _optJsonSync.applyStructured();
+    if (synced) _optStructuredBaseline = deepClone(synced);
+    return;
+  }
+  if (!_optStructuredBaseline) throw new Error('Editor synchronization state is unavailable. Reopen the editor and retry.');
+  var previous;
+  try { previous = JSON.parse(_optRawLastApplied); }
+  catch (error) { throw new Error('Editor synchronization state is unavailable. Reopen the editor and retry.'); }
+  var current = collectEditorConfig(previous, {strict: false}).config;
+  var merged = mergeOptimizeEditorChanges(_optStructuredBaseline, current, previous, validation.parsed);
+  var pending = raw.value || '';
+  // Include PBGui metadata here: unlike the lookup signature this comparison
+  // decides whether any editor change would be lost during synchronization.
+  if (optimizeOhlcvStartLookupSignature({value: merged}) !== optimizeOhlcvStartLookupSignature({value: validation.parsed})) {
+    var anchor = captureOptimizeRawAnchor();
+    pending = JSON.stringify(merged, null, 2);
+    raw.value = pending;
+    restoreOptimizeRawAnchor(anchor);
+  }
+  await _optJsonSync.applyRaw();
+  if (_optRawEditorSyncing || raw.value !== pending || _optRawLastApplied !== pending) {
+    throw new Error('Raw JSON changed while synchronizing. Retry the lookup.');
+  }
+}
+
+function scheduleOptimizeEditorReconciliation(raw) {
+  var generation = _optEditorSyncGeneration;
+  var timer = setTimeout(function() {
+    if (generation !== _optEditorSyncGeneration) return;
+    if (raw) _optRawCoordTimer = null; else _optStructuredCoordTimer = null;
+    if (optimizeEditorAdapter.isV8) { recordOptimizeEditorChange(false); return; }
+    reconcileOptimizeEditorSync().then(function() {
+      var status = el('opted-ohlcv-start-status');
+      if (status && status.textContent === _optEditorSyncConflictText) setOptimizeStartDateStatus('');
+    }).catch(function(error) {
+      // Keep both editors intact; lookup and Readiness report expected errors.
+      var message = String(error && error.message || '');
+      if (message === _optEditorSyncConflictText) {
+        setOptimizeStartDateStatus(_optEditorSyncConflictText, 'error');
+      } else if (!/^(Raw JSON|Invalid JSON|Editor synchronization state)/.test(message)) {
+        console.error('Optimize editor synchronization failed.');
+      }
+    });
+  }, raw ? 250 : 150);
+  if (raw) { clearTimeout(_optRawCoordTimer); _optRawCoordTimer = timer; }
+  else { clearTimeout(_optStructuredCoordTimer); _optStructuredCoordTimer = timer; }
+}
+
 function scheduleRawJsonEditorSync() {
-  _optJsonSync.scheduleRaw();
+  if (optimizeEditorAdapter.isV8) recordOptimizeEditorChange(true);
+  else scheduleOptimizeEditorReconciliation(true);
   if (window.PBGuiVast) window.PBGuiVast.scheduleValidation();
 }
 
 function scheduleStructuredEditorSync() {
-  _optJsonSync.scheduleStructured();
+  if (!_optRawEditorSyncing && !_optStructuredEditorSyncing) {
+    if (optimizeEditorAdapter.isV8) recordOptimizeEditorChange(false);
+    else scheduleOptimizeEditorReconciliation(false);
+  }
   if (typeof suiteRefreshVisualContext === 'function') suiteRefreshVisualContext();
   if (window.PBGuiVast) window.PBGuiVast.scheduleValidation();
 }
 
 function applyStructuredEditorSync() {
-  return _optJsonSync.applyStructured();
+  if (optimizeEditorAdapter.isV8) return commitOptimizeEditorChange(false);
+  var synced = _optJsonSync.applyStructured();
+  if (synced) _optStructuredBaseline = deepClone(synced);
+  return synced;
 }
 
 async function applyRawJsonEditorSync() {
-  return _optJsonSync.applyRaw();
+  return reconcileOptimizeEditorSync();
 }
 
 function bindStructuredEditorSync() {
   window.PBGuiEditorShared.bindStructuredSyncRoot('configs-editor', {
     boundKey: 'opt-v7-editor',
     shouldIgnoreTarget: shouldIgnoreOptimizeStructuredSyncTarget,
-    scheduleStructured: scheduleStructuredEditorSync,
+    scheduleStructured: function() {
+      if (optimizeEditorAdapter.isV8) recordOptimizeEditorChange(false);
+      else scheduleStructuredEditorSync();
+    },
     clickSelector: '.stepper-btn'
   });
 }
@@ -11061,7 +11346,9 @@ var _optOhlcvStartDateRequestId = 0;
 var _optOhlcvStartDateRun = null;
 var _optOhlcvStartDatePollTimer = null;
 
-function getOptimizeOhlcvPreflightPayload() {
+async function getOptimizeOhlcvPreflightPayload() {
+  cancelOptimizeEditorSync();
+  await reconcileOptimizeEditorSync();
   var fallbackConfig = state.editorLastConfig ? deepClone(state.editorLastConfig) : {};
   try {
     return collectEditorConfig(fallbackConfig, { strict: false });
@@ -11085,7 +11372,41 @@ function optimizeOhlcvLookupConfig(payload) {
 }
 
 function optimizeOhlcvStartLookupSignature(config) {
-  return JSON.stringify(config || {});
+  function canonical(value) {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object') {
+      var result = {};
+      Object.keys(value).sort().forEach(function(key) { result[key] = canonical(value[key]); });
+      return result;
+    }
+    return value;
+  }
+  var effective = Object.assign({}, config || {});
+  delete effective.pbgui; // The PB8 helper removes this metadata before preparation.
+  return JSON.stringify(canonical(effective));
+}
+
+async function collectOptimizeStartLookupConfig() {
+  var raw = el('opted-raw-json');
+  if (!raw) throw new Error('Raw JSON is unavailable. Reopen the editor and retry.');
+  cancelOptimizeEditorSync();
+  getOptimizeJsonFieldIds().forEach(function(id) {
+    var node = el(id);
+    if (node && validateJsonFieldTextarea(node).error) {
+      throw new Error('Invalid JSON in ' + id.replace('opted-', '') + '. Fix it and retry.');
+    }
+  });
+  await reconcileOptimizeEditorSync();
+  var validation = validateRawJson(raw.value || '');
+  if (validation.error) throw new Error('Raw JSON is invalid. Fix it and retry.');
+  return collectEditorConfig(null, {strict: false}).config;
+}
+
+function setOptimizeStartDateStatus(message, kind) {
+  var status = el('opted-ohlcv-start-status');
+  if (!status) return;
+  status.textContent = String(message || '').slice(0, 500);
+  status.style.color = kind === 'error' ? 'var(--red)' : 'var(--text-dim)';
 }
 
 function setOptimizeStartDateControlsRunning(running) {
@@ -11105,7 +11426,7 @@ function renderOptimizeStartDateProgress(payload) {
   var detail = progress.message || (payload && payload.status === 'stopping' ? 'Stopping...' : 'Working...');
   container.style.display = '';
   fill.style.width = percent + '%';
-  label.textContent = count + detail;
+  label.textContent = (count + detail).slice(0, 500);
   label.title = label.textContent;
   stopButton.disabled = !_optOhlcvStartDateRun || !!(payload && (payload.status === 'stopping' || payload.stop_requested));
   if (_optOhlcvStartDateRun) _optOhlcvStartDateRun.lastProgress = progress;
@@ -11130,15 +11451,22 @@ function resetOptimizeStartDateLookup() {
   _optOhlcvStartDateRequestId += 1;
   var run = _optOhlcvStartDateRun;
   clearOptimizeStartDateProgress();
+  setOptimizeStartDateStatus('');
   if (run && run.jobId) {
     apiFetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId), {method: 'DELETE'}).catch(function() {});
   }
 }
 
-function applyOptimizeStartDateResult(run, response) {
-  var currentConfig = optimizeOhlcvLookupConfig(getOptimizeOhlcvPreflightPayload());
+async function applyOptimizeStartDateResult(run, response) {
+  var currentConfig;
+  try { currentConfig = await collectOptimizeStartLookupConfig(); }
+  catch (error) {
+    if (_optOhlcvStartDateRun === run && !run.stopping) setOptimizeStartDateStatus('Lookup unsuccessful: ' + error.message, 'error');
+    return;
+  }
+  if (_optOhlcvStartDateRun !== run || run.stopping) return;
   if (run.signature !== optimizeOhlcvStartLookupSignature(currentConfig)) {
-    toast('OHLCV selection changed during lookup. Retry before setting start_date.', 'warn');
+    setOptimizeStartDateStatus('Lookup unsuccessful: editor inputs changed during lookup. Retry.', 'error');
     return;
   }
   var options = response && response.result && response.result.start_date_options;
@@ -11146,7 +11474,7 @@ function applyOptimizeStartDateResult(run, response) {
   if (!selected || !selected.available || !selected.start_date) {
     var pair = options && ((options.missing_market_pairs || [])[0] || (options.unknown_start_pairs || [])[0]);
     var pairText = pair ? ' First unresolved pair: ' + pair.coin + ' @ ' + pair.exchange + '.' : '';
-    toast(((selected && selected.detail) || 'No matching OHLCV start date is available.') + pairText, 'err');
+    setOptimizeStartDateStatus('Lookup unsuccessful: ' + ((selected && selected.detail) || 'No matching OHLCV start date is available.') + pairText + ' Retry after correcting the selection.', 'error');
     return;
   }
   var startInput = el('opted-start-date');
@@ -11155,14 +11483,10 @@ function applyOptimizeStartDateResult(run, response) {
   startInput.dataset.prev = selected.start_date;
   cfgEnsureDateOrder('opted-start-date', 'opted-end-date', 'start', false);
   scheduleStructuredEditorSync();
-  if (_optOhlcvPreflightController && _optOhlcvPreflightController.isOpen()) {
-    _optOhlcvPreflightController.markStale();
-  }
-  var warmup = options.warmup_minutes ? ' including ' + options.warmup_minutes.toLocaleString() + ' warmup minutes' : '';
+  if (_optOhlcvPreflightController && _optOhlcvPreflightController.isOpen()) _optOhlcvPreflightController.markStale();
   var coverage = run.mode === 'earliest' && options.known_pair_count < options.pair_count
-    ? '; based on ' + options.known_pair_count + ' of ' + options.pair_count + ' resolved market pairs'
-    : '';
-  toast('start_date set to ' + selected.start_date + ' (first data ' + selected.data_date + warmup + coverage + ')', 'ok');
+    ? ' Partial coverage: ' + options.known_pair_count + ' of ' + options.pair_count + ' market pairs resolved.' : '';
+  setOptimizeStartDateStatus('Lookup succeeded: start_date set to ' + selected.start_date + '.' + coverage);
 }
 
 function scheduleOptimizeStartDatePoll(delayMs) {
@@ -11170,83 +11494,80 @@ function scheduleOptimizeStartDatePoll(delayMs) {
   _optOhlcvStartDatePollTimer = window.setTimeout(refreshOptimizeStartDateLookup, Math.max(100, delayMs || 500));
 }
 
+function optimizeStartDateRequestDeadline(promise, ms) {
+  var timer;
+  return Promise.race([promise, new Promise(function(resolve, reject) {
+    timer = window.setTimeout(function() { reject(new Error('Request timed out')); }, ms);
+  })]).finally(function() { window.clearTimeout(timer); });
+}
+
 async function refreshOptimizeStartDateLookup() {
   var run = _optOhlcvStartDateRun;
-  if (!run) return;
+  if (!run || !run.jobId) return;
   try {
-    var response = await apiFetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId));
-    if (!_optOhlcvStartDateRun || _optOhlcvStartDateRun.jobId !== run.jobId) return;
+    var response = await optimizeStartDateRequestDeadline(apiFetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId)), 10000);
+    if (_optOhlcvStartDateRun !== run) return;
     if (run.stopping) {
       if (response.status === 'completed' || response.status === 'error' || response.status === 'stopped') {
-        if (!run.silentStop) toast('OHLCV start-date lookup stopped.', 'warn');
+        if (!run.silentStop) setOptimizeStartDateStatus('Lookup stopped. Retry when ready.');
         clearOptimizeStartDateProgress();
-      } else {
-        renderOptimizeStartDateProgress({
-          status: 'stopping',
-          stop_requested: true,
-          progress: Object.assign({}, run.lastProgress || {}, {message: 'Stopping PB8 lookup...'})
-        });
-        scheduleOptimizeStartDatePoll(250);
-      }
+      } else scheduleOptimizeStartDatePoll(250);
       return;
     }
     renderOptimizeStartDateProgress(response);
     if (response.status === 'completed') {
-      applyOptimizeStartDateResult(run, response);
-      clearOptimizeStartDateProgress();
+      await applyOptimizeStartDateResult(run, response);
+      if (_optOhlcvStartDateRun === run && !run.stopping) clearOptimizeStartDateProgress();
       return;
     }
-    if (response.status === 'error') {
-      toast(response.error || 'OHLCV start-date lookup failed.', 'err');
-      clearOptimizeStartDateProgress();
-      return;
-    }
-    if (response.status === 'stopped') {
-      if (!run.silentStop) toast('OHLCV start-date lookup stopped.', 'warn');
+    if (response.status === 'error' || response.status === 'stopped') {
+      setOptimizeStartDateStatus(response.status === 'error'
+        ? 'Lookup unsuccessful: ' + (response.error || 'PB8 lookup failed.') + ' Retry after correcting the problem.'
+        : 'Lookup stopped. Retry when ready.', response.status === 'error' ? 'error' : '');
       clearOptimizeStartDateProgress();
       return;
     }
     scheduleOptimizeStartDatePoll(500);
   } catch (error) {
-    if (!_optOhlcvStartDateRun || _optOhlcvStartDateRun.jobId !== run.jobId) return;
-    toast(error && error.message ? error.message : 'OHLCV start-date lookup failed.', 'err');
+    if (_optOhlcvStartDateRun !== run) return;
+    setOptimizeStartDateStatus('Lookup unsuccessful: request failed or timed out. The backend may still be stopping. Retry.', 'error');
+    apiFetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId), {method: 'DELETE'}).catch(function() {});
     clearOptimizeStartDateProgress();
   }
 }
 
 async function setOptimizeStartDateFromOhlcv(mode, triggerButton) {
   if (!optimizeEditorAdapter.isV8 || _optOhlcvStartDateRun) return;
-  if (mode !== 'earliest' && mode !== 'all_markets') return;
-  if (!triggerButton) return;
+  if ((mode !== 'earliest' && mode !== 'all_markets') || !triggerButton) return;
   var requestId = ++_optOhlcvStartDateRequestId;
+  var run = {jobId: null, mode: mode, requestId: requestId, silentStop: false};
+  _optOhlcvStartDateRun = run;
+  setOptimizeStartDateStatus('');
   setOptimizeStartDateControlsRunning(true);
   renderOptimizeStartDateProgress({status: 'queued', progress: {percent: 0, message: 'Starting PB8 lookup...'}});
   try {
-    var config = optimizeOhlcvLookupConfig(getOptimizeOhlcvPreflightPayload());
-    var signature = optimizeOhlcvStartLookupSignature(config);
-    var response = await apiFetch('/ohlcv-start-dates', {
-      method: 'POST',
-      body: JSON.stringify({ config: config })
-    });
-    if (requestId !== _optOhlcvStartDateRequestId || !editorVisible()) {
-      if (response && response.job_id) {
+    var config = await collectOptimizeStartLookupConfig();
+    if (_optOhlcvStartDateRun !== run) return;
+    run.signature = optimizeOhlcvStartLookupSignature(config);
+    var post = apiFetch('/ohlcv-start-dates', {method: 'POST', body: JSON.stringify({ config: config })});
+    // A late POST can still create a job after the UI times out or is closed.
+    post.then(function(response) {
+      if ((_optOhlcvStartDateRun !== run || run.stopping || !editorVisible()) && response && response.job_id) {
         apiFetch('/ohlcv-start-dates/' + encodeURIComponent(response.job_id), {method: 'DELETE'}).catch(function() {});
       }
-      return;
-    }
-    if (!response || !response.job_id) throw new Error('OHLCV start-date lookup returned no job ID');
-    _optOhlcvStartDateRun = {
-      jobId: response.job_id,
-      mode: mode,
-      signature: signature,
-      requestId: requestId,
-      silentStop: false
-    };
+    }).catch(function() {});
+    var response = await optimizeStartDateRequestDeadline(post, 10000);
+    if (_optOhlcvStartDateRun !== run || run.stopping || !editorVisible()) return;
+    if (!response || !response.job_id) throw new Error('Lookup returned no job ID. Retry.');
+    run.jobId = response.job_id;
     renderOptimizeStartDateProgress(response);
     scheduleOptimizeStartDatePoll(100);
   } catch (error) {
-    if (requestId !== _optOhlcvStartDateRequestId) return;
-    toast(error && error.message ? error.message : 'OHLCV start-date lookup failed.', 'err');
+    if (_optOhlcvStartDateRun !== run) return;
+    var message = error && error.message === 'Request timed out'
+      ? 'Request timed out before a job ID was received. The backend may still be starting or stopping; retry.'
+      : (error && error.message ? error.message : 'Lookup failed. Retry.');
+    setOptimizeStartDateStatus('Lookup unsuccessful: ' + message, 'error');
     clearOptimizeStartDateProgress();
   }
 }
@@ -11256,33 +11577,33 @@ async function stopOptimizeStartDateLookup(silent) {
   if (!run || run.stopping) return;
   run.silentStop = !!silent;
   run.stopping = true;
+  if (!run.jobId) {
+    if (!silent) setOptimizeStartDateStatus('Lookup stopped while starting. The backend may still be stopping. Retry when ready.');
+    clearOptimizeStartDateProgress();
+    return;
+  }
   run.stopTimer = window.setTimeout(function () {
     if (_optOhlcvStartDateRun !== run) return;
-    if (!run.silentStop) toast('Timed out waiting for OHLCV lookup to stop. The backend may still be stopping.', 'err');
+    if (!run.silentStop) setOptimizeStartDateStatus('Timed out waiting for lookup to stop. The backend may still be stopping.', 'error');
     clearOptimizeStartDateProgress();
   }, 10000);
   if (_optOhlcvStartDatePollTimer) {
     window.clearTimeout(_optOhlcvStartDatePollTimer);
     _optOhlcvStartDatePollTimer = null;
   }
-  renderOptimizeStartDateProgress({
-    status: 'stopping',
-    stop_requested: true,
-    progress: Object.assign({}, run.lastProgress || {}, {message: 'Stopping PB8 lookup...'})
-  });
+  renderOptimizeStartDateProgress({status: 'stopping', stop_requested: true,
+    progress: Object.assign({}, run.lastProgress || {}, {message: 'Stopping PB8 lookup...'})});
   try {
     var response = await apiFetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId), {method: 'DELETE'});
-    if (!_optOhlcvStartDateRun || _optOhlcvStartDateRun.jobId !== run.jobId) return;
+    if (_optOhlcvStartDateRun !== run) return;
     renderOptimizeStartDateProgress(response);
     if (response.status === 'completed' || response.status === 'error' || response.status === 'stopped') {
-      if (!run.silentStop) toast('OHLCV start-date lookup stopped.', 'warn');
+      if (!run.silentStop) setOptimizeStartDateStatus('Lookup stopped. Retry when ready.');
       clearOptimizeStartDateProgress();
-    } else {
-      scheduleOptimizeStartDatePoll(250);
-    }
+    } else scheduleOptimizeStartDatePoll(250);
   } catch (error) {
-    if (!_optOhlcvStartDateRun || _optOhlcvStartDateRun.jobId !== run.jobId) return;
-    if (!run.silentStop) toast(error && error.message ? error.message : 'Could not stop OHLCV lookup.', 'err');
+    if (_optOhlcvStartDateRun !== run) return;
+    if (!run.silentStop) setOptimizeStartDateStatus('Could not stop lookup. The backend may still be stopping.', 'error');
     clearOptimizeStartDateProgress();
   }
 }
@@ -11314,6 +11635,8 @@ function initOptimizeOhlcvPreflightController() {
 }
 
 function showStructuredEditor(config, name, sourceName, paramStatusOverride, backendHint) {
+  config = deepClone(config || {});
+  optimizeEditorAdapter.normalizeHslRestartPolicies(config);
   if (window.PBGuiVast) window.PBGuiVast.closeEditor();
   closeAllModals();
   resetOptimizeEditorUiState();
@@ -11530,6 +11853,9 @@ function renderSortableTableHead(theadId, sortKeys, activeKey, direction, labelF
 function renderConfigsTableHead() {
   var thead = el('configs-thead');
   if (!thead) return;
+  var signature = JSON.stringify([optimizeEditorAdapter.isV8, state.configSortKey, state.configSortDir]);
+  if (thead.configSignature === signature) return;
+  thead.configSignature = signature;
   var html = '<tr>';
   var configSortKeys = ['name', 'exchange'];
   if (optimizeEditorAdapter.isV8) configSortKeys.push('strategy');
@@ -11569,7 +11895,7 @@ function getConfigSortValue(cfg, sortKey) {
   if (sortKey === 'name') return String(cfg && cfg.name || '').toLowerCase();
   if (sortKey === 'exchange') return String(cfg && cfg.exchange || '').toLowerCase();
   if (sortKey === 'strategy') return String(cfg && cfg.strategy || '').toLowerCase();
-  if (sortKey === 'backtest_count') return Number(cfg && cfg.backtest_count || 0);
+  if (sortKey === 'backtest_count') return configCountValue(cfg);
   if (sortKey === 'start_date') return String(cfg && cfg.start_date || '');
   if (sortKey === 'end_date') return String(cfg && cfg.end_date || '');
   if (sortKey === 'modified') return String(cfg && cfg.modified || '');
@@ -11580,6 +11906,11 @@ function sortConfigs(items) {
   var sortKey = state.configSortKey || 'modified';
   var direction = state.configSortDir === 'desc' ? 'desc' : 'asc';
   return (items || []).slice().sort(function(a, b) {
+    if (sortKey === 'backtest_count') {
+      var missingA = configCountValue(a) === null;
+      var missingB = configCountValue(b) === null;
+      if (missingA !== missingB) return missingA ? 1 : -1;
+    }
     var primary = compareSortValues(getConfigSortValue(a, sortKey), getConfigSortValue(b, sortKey), direction);
     if (primary) return primary;
     return String(a && a.name || '').localeCompare(String(b && b.name || ''));
@@ -11617,6 +11948,7 @@ function toggleConfigSort(sortKey) {
     state.configSortKey = normalized;
     state.configSortDir = normalized === 'modified' || normalized === 'backtest_count' ? 'desc' : 'asc';
   }
+  persistConfigNavigation();
   renderConfigs();
 }
 
@@ -11660,6 +11992,7 @@ function setPanel(panel, vastView) {
   el('settings-modal').classList.toggle('open', panel === 'settings');
   if (state.panel !== panel) state.navigationSeq += 1;
   state.panel = panel;
+  scheduleOptimizeConfigs(true);
   Object.keys(PANEL_META).forEach(function(name) {
     var active = name === panel;
     el('panel-' + name).classList.toggle('active', active);
@@ -11899,48 +12232,70 @@ function renderEmpty(tbodyId, cols, message, actionText, actionId) {
 }
 
 function renderConfigs() {
+  if (state.configSelectionInteracting) { state.configRenderPending = true; return; }
+  state.configRenderPending = false;
   renderConfigsTableHead();
   var configs = filterConfigs();
   var tbody = el('configs-tbody');
-  tbody.innerHTML = '';
+  var scroll = el('configs-list-wrap');
+  var scrollTop = scroll ? scroll.scrollTop : 0;
+  var scrollLeft = scroll ? scroll.scrollLeft : 0;
+  var existing = new Map();
+  Array.from(tbody.children).forEach(function(row) {
+    if (row.hasAttribute('data-name')) existing.set(row.getAttribute('data-name'), row);
+    else row.remove();
+  });
   if (!configs.length) {
+    tbody.innerHTML = '';
     renderEmpty('configs-tbody', optimizeEditorAdapter.isV8 ? 9 : 8, 'No optimize configs found.', 'Create Config', 'empty-create-config');
     updateConfigSelectionUi(configs);
     updateMetaCounts();
     return;
   }
-  configs.forEach(function(cfg) {
-    var tr = document.createElement('tr');
+  var visibleNames = new Set(configs.map(function(cfg) { return cfg.name; }));
+  existing.forEach(function(row, name) { if (!visibleNames.has(name)) row.remove(); });
+  configs.forEach(function(cfg, index) {
+    var tr = existing.get(cfg.name) || document.createElement('tr');
+    var signature = JSON.stringify([cfg.name, cfg.exchange, cfg.strategy, cfg.start_date, cfg.end_date,
+      cfg.seed_mode, cfg.seed_source, cfg.starting_config, cfg.modified]);
     tr.setAttribute('data-name', cfg.name);
-    if (state.selectedConfigs.has(cfg.name)) tr.classList.add('selected');
-    var flags = [];
-    var seedMode = cfg.seed_mode || (cfg.starting_config ? 'self' : 'none');
-    if (seedMode === 'self') flags.push('<span class="metric-pill">seed: self</span>');
-    if (seedMode === 'path') flags.push('<span class="metric-pill">seed: path</span>');
-    tr.innerHTML = ''
-      + '<td title="' + escapeHtml(cfg.name) + '">' + escapeHtml(cfg.name) + '</td>'
-      + '<td>' + escapeHtml(formatExchange(cfg.exchange)) + '</td>'
-      + (optimizeEditorAdapter.isV8 ? '<td>' + escapeHtml(cfg.strategy || '-') + '</td>' : '')
-      + '<td>' + escapeHtml(String(cfg.backtest_count || 0)) + '</td>'
-      + '<td class="muted">' + escapeHtml(cfg.start_date || '-') + '</td>'
-      + '<td class="muted">' + escapeHtml(cfg.end_date || '-') + '</td>'
-      + '<td>' + (flags.join('') || '<span class="muted">-</span>') + '</td>'
-      + '<td class="muted">' + escapeHtml(formatIso(cfg.modified)) + '</td>'
-      + '<td class="actions-cell">'
-      + '<button class="icon-btn cfg-edit" data-name="' + escapeHtml(cfg.name) + '" title="Edit config">✏️</button>'
-      + '<button class="icon-btn cfg-queue" data-name="' + escapeHtml(cfg.name) + '" title="Queue config">▶</button>'
-      + (!optimizeEditorAdapter.isV8 ? '<button class="icon-btn cfg-migrate-v8" data-name="' + escapeHtml(cfg.name) + '" title="Convert to PB8 Optimize">V8</button>' : '')
-      + '<button class="icon-btn danger cfg-delete" data-name="' + escapeHtml(cfg.name) + '" title="Delete config">🗑</button>'
-      + '</td>';
-    tbody.appendChild(tr);
+    tr.classList.toggle('selected', state.selectedConfigs.has(cfg.name));
+    if (tr.configSignature !== signature) {
+      var flags = [];
+      var seedMode = cfg.seed_mode || (cfg.starting_config ? 'self' : 'none');
+      if (seedMode === 'self') flags.push('<span class="metric-pill">seed: self</span>');
+      if (seedMode === 'path') flags.push('<span class="metric-pill">seed: path</span>');
+      tr.innerHTML = ''
+        + '<td title="' + escapeHtml(cfg.name) + '">' + escapeHtml(cfg.name) + '</td>'
+        + '<td>' + escapeHtml(formatExchange(cfg.exchange)) + '</td>'
+        + (optimizeEditorAdapter.isV8 ? '<td>' + escapeHtml(cfg.strategy || '-') + '</td>' : '')
+        + '<td class="config-backtest-count">' + escapeHtml(configCountText(cfg)) + '</td>'
+        + '<td class="muted">' + escapeHtml(cfg.start_date || '-') + '</td>'
+        + '<td class="muted">' + escapeHtml(cfg.end_date || '-') + '</td>'
+        + '<td>' + (flags.join('') || '<span class="muted">-</span>') + '</td>'
+        + '<td class="muted">' + escapeHtml(formatIso(cfg.modified)) + '</td>'
+        + '<td class="actions-cell">'
+        + '<button class="icon-btn cfg-edit" data-name="' + escapeHtml(cfg.name) + '" title="Edit config">✏️</button>'
+        + '<button class="icon-btn cfg-queue" data-name="' + escapeHtml(cfg.name) + '" title="Queue config">▶</button>'
+        + (!optimizeEditorAdapter.isV8 ? '<button class="icon-btn cfg-migrate-v8" data-name="' + escapeHtml(cfg.name) + '" title="Convert to PB8 Optimize">V8</button>' : '')
+        + '<button class="icon-btn danger cfg-delete" data-name="' + escapeHtml(cfg.name) + '" title="Delete config">🗑</button>'
+        + '</td>';
+      tr.configSignature = signature;
+    }
+    var cell = tr.querySelector('.config-backtest-count');
+    var countText = configCountText(cfg);
+    if (cell && cell.textContent !== countText) cell.textContent = countText;
+    if (tbody.children[index] !== tr) tbody.insertBefore(tr, tbody.children[index] || null);
   });
+  if (scroll) { scroll.scrollTop = scrollTop; scroll.scrollLeft = scrollLeft; }
   updateConfigSelectionUi(configs);
   updateMetaCounts();
 }
 
 function updateConfigSelectionUi(filteredConfigs) {
   var configs = filteredConfigs || filterConfigs();
-  pruneSelectionSet('selectedConfigs', state.configs.map(function(cfg) { return cfg.name; }));
+  if (state.configsLoadedOnce) pruneSelectionSet('selectedConfigs', state.configs.map(function(cfg) { return cfg.name; }));
+  persistConfigNavigation();
   var selectedCount = state.selectedConfigs.size;
   el('config-selection-summary').textContent = selectedCount
     ? selectedCount + ' config' + (selectedCount === 1 ? '' : 's') + ' selected.'
@@ -12713,12 +13068,22 @@ function storeOptimizeDraft(payload) {
 }
 
 function captureOptimizeDraftForRefresh() {
-  if (!editorVisible() || state.editorSourceName || state.editorQueueFilename) return;
+  if (!editorVisible() || state.editorQueueFilename || (state.editorSourceName && !optimizeEditorAdapter.isV8)) return;
   try {
+    if (optimizeEditorAdapter.isV8) {
+      var raw = el('opted-raw-json');
+      commitOptimizeEditorChange(!!raw && raw.value !== _optRawLastApplied);
+    }
     var collected = collectEditorConfig(null, {strict: false});
     storeOptimizeDraft({config: collected.config, name: collected.name,
+      source_name: state.editorSourceName || '',
+      param_status: typeof _optBotParamStatus !== 'undefined' ? _optBotParamStatus : {},
+      migration_report: state.editorMigrationReport || null,
       override_configs: state.editorOverrideConfigs || {}});
   } catch (error) {
+    if (optimizeEditorAdapter.isV8) {
+      try { window.sessionStorage.removeItem(optimizeDraftStorageKey()); } catch (storageError) {}
+    }
     setPageEditorStatus('Could not update draft recovery. Save before refreshing.', 'err');
   }
 }
@@ -12787,7 +13152,7 @@ window.addEventListener('pbgui:ai-action-completed', function(event) {
   if (!optimizeEditorAdapter.isV8 || (result.action !== 'save' && result.action !== 'save_and_queue')) return;
   var name = String(result.name || '').trim();
   if (!name) return;
-  loadConfigs().catch(function(error) {
+  loadConfigs(true).catch(function(error) {
     console.error('Could not refresh Optimize configs after PBGui AI action:', error);
   });
   if (!editorVisible()) return;
@@ -13636,6 +14001,8 @@ async function saveEditor(andQueue) {
       setPageEditorStatus('Some JSON sections are invalid.', 'err');
       return;
     }
+    cancelOptimizeEditorSync();
+    await reconcileOptimizeEditorSync();
     try {
       var collected = collectEditorConfig(null, { strict: true });
       name = collected.name;
@@ -13701,9 +14068,9 @@ async function saveEditor(andQueue) {
   }
   if (queueAfterSave) {
     setPanel('queue');
-    Promise.all([loadConfigs(), loadQueue()]).catch(handleError);
+    Promise.all([loadConfigs(true), loadQueue()]).catch(handleError);
   } else {
-    await loadConfigs();
+    await loadConfigs(true);
     await loadQueue();
   }
   } catch (error) {
@@ -14093,14 +14460,220 @@ function loadSettings() {
   return request.promise;
 }
 
-async function loadConfigs() {
-  var path = '/configs' + (optimizeEditorAdapter.isV8 ? '?include_result_summary=false' : '');
-  var data = await apiFetch(path);
-  state.configs = data.configs || [];
-  renderConfigs();
+function configCountValue(cfg) {
+  if (!cfg || cfg.backtest_count_status === 'pending' || cfg.backtest_count_status === 'unknown') return null;
+  return typeof cfg.backtest_count === 'number' && Number.isFinite(cfg.backtest_count) ? cfg.backtest_count : null;
+}
+
+function configCountText(cfg) {
+  var value = configCountValue(cfg);
+  if (value !== null) return String(value);
+  return cfg && cfg.backtest_count_status === 'pending' ? '…' : '—';
+}
+
+function configNavigationKey() {
+  return 'pbgui.optimize.' + (optimizeEditorAdapter.isV8 ? 'v8' : 'v7') + '.configs.navigation.v1';
+}
+
+function persistConfigNavigation() {
+  try {
+    window.sessionStorage.setItem(configNavigationKey(), JSON.stringify({
+      search: state.configSearch, sortKey: state.configSortKey, sortDir: state.configSortDir,
+      selected: Array.from(state.selectedConfigs)
+    }));
+  } catch (error) { /* Storage can be disabled; in-memory navigation still works. */ }
+}
+
+function restoreConfigNavigation() {
+  try {
+    var saved = JSON.parse(window.sessionStorage.getItem(configNavigationKey()) || 'null');
+    if (!saved || typeof saved !== 'object') return;
+    if (typeof saved.search === 'string') state.configSearch = saved.search;
+    if (['name','exchange','strategy','backtest_count','start_date','end_date','modified'].includes(saved.sortKey)) state.configSortKey = saved.sortKey;
+    if (saved.sortDir === 'asc' || saved.sortDir === 'desc') state.configSortDir = saved.sortDir;
+    if (Array.isArray(saved.selected)) {
+      state.selectedConfigs = new Set(saved.selected.filter(function(name) { return typeof name === 'string'; }));
+      state.configSelectionRestorePending = true;
+    }
+    el('config-search').value = state.configSearch;
+  } catch (error) { /* Ignore invalid or unavailable non-secret navigation storage. */ }
+}
+
+function cancelConfigRequests(preserveCountProgress) {
+  state.configGeneration += 1;
+  if (state.configCountRetryTimer) window.clearTimeout(state.configCountRetryTimer);
+  state.configCountRetryTimer = null;
+  [state.configRequest, state.configCountRequest].forEach(function(request) {
+    if (!request) return;
+    request.controller.abort();
+    window.clearTimeout(request.timer);
+  });
+  state.configRequest = null;
+  state.configCountRequest = null;
+  if (!preserveCountProgress) state.configCountProgress = null;
+}
+
+function configCountsVisible() {
+  return !state.configsDisposed && state.panel === 'configs' && document.visibilityState === 'visible';
+}
+
+async function loadConfigCounts(generation) {
+  if (!optimizeEditorAdapter.isV8 || !configCountsVisible()) return;
+  var progress = state.configCountProgress || {completed: new Map(), attempted: new Map()};
+  state.configCountProgress = progress;
+  var identities = new Map(state.configs.map(function(cfg) { return [cfg.name, cfg.modified]; }));
+  var names = state.configs.filter(function(cfg) {
+    return (!progress.completed.has(cfg.name) || progress.completed.get(cfg.name) !== cfg.modified)
+      && (!progress.attempted.has(cfg.name) || progress.attempted.get(cfg.name) !== cfg.modified);
+  }).map(function(cfg) { return cfg.name; });
+  for (var offset = 0; offset < names.length; offset += 16) {
+    if (generation !== state.configGeneration || !configCountsVisible()) return;
+    var request = {controller: new AbortController(), timer: null};
+    state.configCountRequest = request;
+    request.timer = window.setTimeout(function() { request.controller.abort(); }, 10000);
+    try {
+      var batch = names.slice(offset, offset + 16);
+      var data = await apiFetch('/configs/backtest-counts', {
+        method: 'POST', body: JSON.stringify({names: batch}), signal: request.controller.signal
+      });
+      if (generation !== state.configGeneration || request.controller.signal.aborted || !configCountsVisible()) return;
+      var counts = new Map((data.configs || []).map(function(cfg) { return [cfg.name, cfg]; }));
+      var batchNames = new Set(batch);
+      state.configs.forEach(function(cfg) {
+        if (!batchNames.has(cfg.name)) return;
+        var result = counts.get(cfg.name);
+        if (result && result.backtest_count_status === 'pending') {
+          if (configCountValue(cfg) === null) {
+            cfg.backtest_count = null;
+            cfg.backtest_count_status = 'pending';
+          }
+          progress.completed.delete(cfg.name);
+          progress.attempted.set(cfg.name, identities.get(cfg.name));
+          return;
+        }
+        cfg.backtest_count = result && result.backtest_count_status === 'known' ? result.backtest_count : null;
+        cfg.backtest_count_status = configCountValue(result) === null ? 'unknown' : 'known';
+        progress.attempted.delete(cfg.name);
+        progress.completed.set(cfg.name, identities.get(cfg.name));
+      });
+      renderConfigs();
+    } catch (error) {
+      if (generation !== state.configGeneration || !configCountsVisible()) return;
+      if (request.controller.signal.aborted) {
+        var timedOut = new Set(names.slice(offset, offset + 16));
+        state.configs.forEach(function(cfg) {
+          if (!timedOut.has(cfg.name)) return;
+          cfg.backtest_count = null;
+          cfg.backtest_count_status = 'unknown';
+          progress.attempted.delete(cfg.name);
+          progress.completed.set(cfg.name, identities.get(cfg.name));
+        });
+        renderConfigs();
+        continue;
+      }
+      state.configs.forEach(function(cfg) {
+        if (cfg.backtest_count_status === 'pending') cfg.backtest_count_status = 'unknown';
+      });
+      renderConfigs();
+      if (state.configCountError !== error.message) console.error('Could not load Optimize backtest counts:', error);
+      state.configCountError = error.message;
+      return;
+    } finally {
+      window.clearTimeout(request.timer);
+      if (state.configCountRequest === request) state.configCountRequest = null;
+    }
+  }
+  if (progress.attempted.size && generation === state.configGeneration && configCountsVisible()) {
+    progress.attempted.clear();
+    state.configCountRetryTimer = window.setTimeout(function() {
+      state.configCountRetryTimer = null;
+      if (generation === state.configGeneration && configCountsVisible()) loadConfigCounts(generation);
+    }, 2000);
+    return;
+  }
+  if (state.configCountProgress === progress) state.configCountProgress = null;
+  state.configCountError = '';
+}
+
+function loadConfigs(force, resumeCounts) {
+  if (state.configsDisposed) return Promise.resolve();
+  if (state.configRequest && !force) return state.configRequest.promise;
+  cancelConfigRequests(!!resumeCounts);
+  var generation = state.configGeneration;
+  var request = {controller: new AbortController(), timer: null, promise: null};
+  state.configRequest = request;
+  request.timer = window.setTimeout(function() { request.controller.abort(); }, 10000);
+  request.promise = (async function() {
+    try {
+      var path = '/configs' + (optimizeEditorAdapter.isV8 ? '?include_result_summary=false&include_backtest_counts=false' : '');
+      var data = await apiFetch(path, {signal: request.controller.signal});
+      if (generation !== state.configGeneration || request.controller.signal.aborted || state.configsDisposed) return;
+      if (optimizeEditorAdapter.isV8) {
+        if (state.configCountProgress) {
+          var current = new Map((data.configs || []).map(function(cfg) { return [cfg.name, cfg.modified]; }));
+          [state.configCountProgress.completed, state.configCountProgress.attempted].forEach(function(entries) {
+            entries.forEach(function(modified, name) {
+              if (!current.has(name) || current.get(name) == null || current.get(name) !== modified) entries.delete(name);
+            });
+          });
+        }
+        var previous = new Map(state.configs.map(function(cfg) { return [cfg.name, cfg]; }));
+        (data.configs || []).forEach(function(cfg) {
+          var old = previous.get(cfg.name);
+          if (!old || cfg.modified == null || cfg.modified !== old.modified) return;
+          if (configCountValue(old) === null) {
+            if (state.configCountProgress && state.configCountProgress.completed.has(cfg.name)
+                && state.configCountProgress.completed.get(cfg.name) === cfg.modified
+                && old.backtest_count_status === 'unknown') cfg.backtest_count_status = 'unknown';
+            return;
+          }
+          cfg.backtest_count = old.backtest_count;
+          cfg.backtest_count_status = 'known';
+        });
+      }
+      state.configs = data.configs || [];
+      if (state.configSelectionRestorePending) {
+        var available = new Set(state.configs.map(function(cfg) { return cfg.name; }));
+        if (Array.from(state.selectedConfigs).some(function(name) { return !available.has(name); })) {
+          toast('Some previously selected configs are no longer available.', 'info');
+        }
+        state.configSelectionRestorePending = false;
+      }
+      state.configsLoadedOnce = true;
+      state.configPollError = '';
+      renderConfigs();
+      // The usable rows are delivered before any batch scan is awaited.
+      loadConfigCounts(generation);
+    } catch (error) {
+      if (generation !== state.configGeneration || state.configsDisposed) return;
+      if (error.name === 'AbortError') throw new Error('Optimize config request timed out.');
+      throw error;
+    } finally {
+      window.clearTimeout(request.timer);
+      if (state.configRequest === request) state.configRequest = null;
+    }
+  })();
+  return request.promise;
+}
+
+function scheduleOptimizeConfigs(refresh) {
+  if (state.configPollTimer) window.clearInterval(state.configPollTimer);
+  state.configPollTimer = null;
+  if (!optimizeEditorAdapter.isV8) return;
+  if (!configCountsVisible()) { cancelConfigRequests(); return; }
+  var poll = function() {
+    if (state.configRequest) return;
+    loadConfigs(false, true).catch(function(error) {
+      if (state.configPollError !== error.message) console.error('Could not load Optimize configs:', error);
+      state.configPollError = error.message;
+    });
+  };
+  state.configPollTimer = window.setInterval(poll, 30000);
+  if (refresh && !state.initialLoadPending) poll();
 }
 
 function removeConfigsFromState(names) {
+  cancelConfigRequests();
   var removed = new Set(Array.isArray(names) ? names : [names]);
   state.configs = state.configs.filter(function(cfg) {
     return !removed.has(cfg.name);
@@ -14413,7 +14986,7 @@ async function duplicateSelected() {
     body: JSON.stringify({ new_name: newName.trim() })
   });
   toast('Config duplicated.', 'ok');
-  await loadConfigs();
+  await loadConfigs(true);
 }
 
 async function deleteSelectedConfigs() {
@@ -14721,8 +15294,13 @@ function scheduleOptimizeLiveResults() {
 }
 
 function attachEventHandlers() {
+  scheduleOptimizeConfigs(false);
   scheduleOptimizeLiveResults();
   window.addEventListener('pagehide', function() {
+    state.configsDisposed = true;
+    cancelConfigRequests();
+    if (state.configPollTimer) window.clearInterval(state.configPollTimer);
+    state.configPollTimer = null;
     state.settingsDisposed = true;
     state.settingsLifecycle += 1;
     state.settingsSaveSeq += 1;
@@ -14732,6 +15310,8 @@ function attachEventHandlers() {
     state.livePanelRefreshTimer = null;
   });
   window.addEventListener('pageshow', function(event) {
+    state.configsDisposed = false;
+    scheduleOptimizeConfigs(true);
     state.settingsDisposed = false;
     scheduleOptimizeLiveResults();
     if (event && event.persisted) loadSettings();
@@ -14745,6 +15325,7 @@ function attachEventHandlers() {
     }
   });
   document.addEventListener('visibilitychange', function() {
+    scheduleOptimizeConfigs(false);
     scheduleOptimizeLiveResults();
     if (document.visibilityState !== 'visible') {
       if (state.logStatusTimer) {
@@ -14794,6 +15375,7 @@ function attachEventHandlers() {
   });
   el('config-search').addEventListener('input', function(event) {
     state.configSearch = event.target.value || '';
+    persistConfigNavigation();
     renderConfigs();
   });
   el('result-search').addEventListener('input', function(event) {
@@ -15026,6 +15608,12 @@ function initSelections() {
     updateConfigSelectionUi();
   }, function(name) {
     openConfigEditor(name).catch(handleError);
+  }, {
+    onInteractionStart: function() { state.configSelectionInteracting = true; },
+    onInteractionEnd: function() {
+      state.configSelectionInteracting = false;
+      if (state.configRenderPending) renderConfigs();
+    }
   });
   initRowSelection('queue-tbody', 'selectedQueue', 'data-filename', function() {
     updateQueueSelectionUi();
@@ -15293,8 +15881,24 @@ async function handleOpenConfigParam() {
       openEditorWithConfig(draft, draft.name || '', '');
       return;
     }
+    var recovery = null;
+    if (optimizeEditorAdapter.isV8 && configName && !queueFilename) {
+      try { recovery = JSON.parse(window.sessionStorage.getItem(optimizeDraftStorageKey()) || 'null'); }
+      catch (error) { console.warn('Optimize draft recovery could not be read.'); }
+    }
     if (queueFilename) await openQueueConfigEditor(queueFilename);
-    else await openConfigEditor(configName);
+    else {
+      // Always check current existence/access on the server before restoring a
+      // named draft. The existing tab-local store still rejects secret fields.
+      await openConfigEditor(configName);
+      if (recovery && recovery.source_name === configName && recovery.config
+          && state.editorSourceName === configName
+          && new URL(window.location.href).searchParams.get('open_config') === configName) {
+        state.editorMigrationReport = recovery.migration_report || null;
+        openEditorWithConfig(recovery, recovery.name || configName, configName);
+        setPageEditorStatus('Recovered unsaved edits from this browser tab.', 'info');
+      }
+    }
   } catch (error) {
     handleError(error);
   }
@@ -15358,6 +15962,7 @@ async function init() {
     optimizeEditorAdapter.configureUi();
     el('nav-vast').hidden = !optimizeEditorAdapter.isV8;
     window.PBGuiLoopOptimizer?.mount();
+    restoreConfigNavigation();
     attachEventHandlers();
     initSelections();
     initSidebarResize();

@@ -671,6 +671,30 @@ def _finished_start_date_job(job_id):
     pytest.fail("isolated start-date helper or its owned I/O threads did not finish")
 
 
+@pytest.mark.parametrize(
+    ("helper_detail", "expected"),
+    [
+        ("OHLCV start-date lookup requires explicitly selected approved coins", "explicitly selected approved coins"),
+        ("configuration contains secret-token-123", "Check the configuration and PB8 runtime"),
+    ],
+)
+def test_start_date_job_exposes_only_safe_helper_errors(start_date_helper_process, monkeypatch, helper_detail, expected):
+    """Helper exceptions cannot expose configuration or secrets in responses or logs."""
+    start, _processes, _released = start_date_helper_process
+    logs = []
+    monkeypatch.setattr(pb8_ohlcv_tools, "_log", lambda *args, **kwargs: logs.append((args, kwargs)))
+    script = (
+        "import sys,json; json.load(sys.stdin); "
+        f"print(json.dumps({{'ok':False,'detail':{helper_detail!r}}}),flush=True)"
+    )
+    result = _finished_start_date_job(start(script))
+
+    assert result["status"] == "error"
+    assert expected in result["error"]
+    assert "secret-token-123" not in repr(result)
+    assert "secret-token-123" not in repr(logs)
+
+
 @pytest.mark.parametrize("result_size", [524288, 4 * 1024 * 1024])
 def test_start_date_large_stdout_does_not_deadlock_progress_pipe(start_date_helper_process, result_size):
     """A result larger than pipe capacity completes while stderr remains open until exit."""
@@ -767,3 +791,229 @@ def test_start_date_stop_during_result_parse_wins_over_completion(start_date_hel
     result = _finished_start_date_job(job_id)
     assert result["status"] == "stopped"
     assert result["result"] is None
+
+
+@pytest.mark.parametrize("stage,category", [
+    ("configuration", "invalid_input"),
+    ("warmup", "invalid_input"),
+    ("market_resolution", "timeout"),
+    ("runtime", "unavailable"),
+    ("helper", "unavailable"),
+])
+def test_start_date_main_reports_safe_stage_from_actual_failure(tmp_path, monkeypatch, stage, category):
+    """The real helper entry point retains a stage without serializing exception text."""
+    secret = "secret-token-123 /private/config.json <script>unsafe</script>"
+    config = {"backtest": {"exchanges": ["binance", "bybit"], "start_date": "2021-04-20",
+                           "end_date": "2026-07-21"},
+              "live": {"approved_coins": {"long": ["HYPE"], "short": []}, "minimum_coin_age_days": 0}}
+
+    def require(config, key):
+        """Read only the synthetic fixture's requested field."""
+        value = config
+        for part in key.split("."):
+            value = value[part]
+        return value
+
+    def fail(*args, **kwargs):
+        """Raise a deliberately sensitive exception only in the selected operation."""
+        kind = ImportError if stage == "runtime" else OSError if stage == "helper" else ValueError
+        raise kind(secret)
+
+    async def format_coins(config, exchanges):
+        """Exercise the market-resolution boundary without network requests."""
+        raise TimeoutError(secret)
+
+    modules = {
+        "prepare_config": fail if stage == "configuration" else lambda config, **kwargs: config,
+        "require_config_value": require, "require_live_value": lambda config, key: config["live"][key],
+        "format_end_date": lambda value: value, "date_to_ts": lambda value: 1_700_000_000_000,
+        "compute_backtest_warmup_minutes": fail if stage == "warmup" else lambda config: 60,
+        "format_approved_ignored_coins": format_coins, "OhlcvCatalog": fail,
+    }
+    if stage == "helper":
+        catalog = tmp_path / "caches" / "ohlcvs" / "catalog.sqlite"
+        catalog.parent.mkdir(parents=True)
+        catalog.touch()
+    monkeypatch.setattr(pb8_ohlcv_runtime_helper, "_load_modules", fail if stage == "runtime" else lambda root: modules)
+    stdin = io.StringIO(json.dumps({"pb8_dir": str(tmp_path), "config": config, "include_start_date_options": True}))
+    stdout, stderr = io.StringIO(), io.StringIO()
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+    assert pb8_ohlcv_runtime_helper.main() == 1
+    response = json.loads(stdout.getvalue())
+    assert response == {"ok": False, "error": "StartDateLookupError",
+                        "detail": "PB8 OHLCV start-date lookup failed.",
+                        "error_stage": stage, "error_category": category}
+    assert secret not in stdout.getvalue() + stderr.getvalue()
+
+
+@pytest.mark.parametrize("stage,category,expected_stage,expected_category", [
+    ("configuration", "invalid_input", "configuration", "invalid_input"),
+    ("warmup", "failure", "warmup", "failure"),
+    ("market_resolution", "timeout", "market_resolution", "timeout"),
+    ("runtime", "unavailable", "runtime", "unavailable"),
+    ("helper", "failure", "helper", "failure"),
+    ("secret-token-123 /private/config.json", "<script>unsafe</script>", "helper", "failure"),
+    (["secret-token-123"], {"secret": "token"}, "helper", "failure"),
+    (None, None, "helper", "failure"),
+])
+def test_start_date_job_allowlists_diagnostic_codes(start_date_helper_process, monkeypatch,
+                                                   stage, category, expected_stage, expected_category):
+    """Status and logs retain only allowlisted codes and fixed actionable hints."""
+    start, _processes, _released = start_date_helper_process
+    logs = []
+    monkeypatch.setattr(pb8_ohlcv_tools, "_log", lambda *args, **kwargs: logs.append((args, kwargs)))
+    response = {"ok": False, "detail": "secret-token-123 /private/config.json <script>unsafe</script>",
+                "error_stage": stage, "error_category": category}
+    script = "import sys,json; json.load(sys.stdin); print(json.dumps(" + repr(response) + "),flush=True)"
+    result = _finished_start_date_job(start(script))
+    assert result["status"] == "error"
+    assert (result["error_stage"], result["error_category"]) == (expected_stage, expected_category)
+    code = f"[{expected_stage}/{expected_category}]"
+    assert code in result["error"] and code in repr(logs)
+    for forbidden in ("secret-token-123", "/private/config.json", "<script>unsafe</script>"):
+        assert forbidden not in repr(result) + repr(logs)
+    assert "Check the configuration and PB8 runtime" in result["error"]
+
+
+@pytest.mark.parametrize("stage", ["runtime", "configuration"])
+def test_start_date_parent_failure_retains_safe_stage(pb8_runtime, monkeypatch, stage):
+    """Runtime/path preparation failures get codes without leaking their exception data."""
+    logs = []
+
+    def fail(*args, **kwargs):
+        """Reject synthetic inputs before any helper process starts."""
+        raise ValueError("secret-token-123 /private/config.json")
+
+    monkeypatch.setattr(pb8_ohlcv_tools, "_log", lambda *args, **kwargs: logs.append((args, kwargs)))
+    monkeypatch.setattr(pb8_ohlcv_tools, "_runtime" if stage == "runtime" else "resolve_pb8_ohlcv_paths", fail)
+    result = _finished_start_date_job(pb8_ohlcv_tools.start_pb8_ohlcv_start_date_job({"backtest": {}})["job_id"])
+    assert result["status"] == "error" and result["error_stage"] == stage
+    assert result["error_category"] == "invalid_input"
+    assert f"[{stage}/invalid_input]" in result["error"]
+    assert "secret-token-123" not in repr(result) + repr(logs)
+    assert "/private/config.json" not in repr(result) + repr(logs)
+
+
+def test_start_date_isolated_main_preserves_diagnosis_through_job(start_date_helper_process, monkeypatch):
+    """Python -I runs the actual helper entry point with only a synthetic failing runtime."""
+    start, _processes, _released = start_date_helper_process
+    # An actual helper entry point can need more startup time than a one-line stub.
+    monkeypatch.setattr(pb8_ohlcv_tools, "_START_DATE_TIMEOUT_SECONDS", 3)
+    helper_path = str(Path(pb8_ohlcv_runtime_helper.__file__).resolve())
+    script = f'''import runpy
+ns = runpy.run_path({helper_path!r}, run_name="isolated_diagnostic_probe")
+def unavailable(root):
+    raise ImportError("secret-token-123 /private/config.json")
+ns["main"].__globals__["_load_modules"] = unavailable
+raise SystemExit(ns["main"]())
+'''
+    result = _finished_start_date_job(start(script))
+    assert result["status"] == "error"
+    assert (result["error_stage"], result["error_category"]) == ("runtime", "unavailable")
+    assert "[runtime/unavailable]" in result["error"]
+    assert "secret-token-123" not in repr(result)
+    assert "/private/config.json" not in repr(result)
+
+
+def test_start_date_main_preserves_safe_pair_limit(tmp_path, monkeypatch):
+    """The diagnostic boundary preserves the existing bounded pair-limit explanation."""
+    config = {"backtest": {"exchanges": ["binance", "bybit"], "start_date": "2021-04-20",
+                           "end_date": "2026-07-21"},
+              "live": {"approved_coins": {"long": [f"TEST{i}" for i in range(101)], "short": []},
+                       "minimum_coin_age_days": 0}}
+
+    def require(config, key):
+        """Resolve a fixture-only nested config path."""
+        value = config
+        for part in key.split("."):
+            value = value[part]
+        return value
+
+    async def format_coins(config, exchanges):
+        """Keep the explicitly selected synthetic coins unchanged."""
+
+    modules = {"prepare_config": lambda config, **kwargs: config,
+               "require_config_value": require, "require_live_value": lambda config, key: config["live"][key],
+               "format_end_date": lambda value: value, "date_to_ts": lambda value: 1_700_000_000_000,
+               "compute_backtest_warmup_minutes": lambda config: 0,
+               "format_approved_ignored_coins": format_coins}
+    monkeypatch.setattr(pb8_ohlcv_runtime_helper, "_load_modules", lambda root: modules)
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"config": config, "pb8_dir": str(tmp_path),
+                                                            "include_start_date_options": True})))
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", io.StringIO())
+    assert pb8_ohlcv_runtime_helper.main() == 1
+    response = json.loads(stdout.getvalue())
+    assert response["detail"] == "OHLCV start-date lookup expands to 202 exchange/coin pairs; maximum is 200"
+    assert (response["error_stage"], response["error_category"]) == ("configuration", "invalid_input")
+    assert pb8_ohlcv_tools.safe_start_date_error(RuntimeError(response["detail"])) == response["detail"]
+
+
+@pytest.mark.parametrize("scope", ["bot.long.hsl", "bot.short.hsl", "bot.hsl"])
+def test_hsl_lookup_prerequisite_names_only_allowlisted_field(tmp_path, monkeypatch, scope):
+    """The native missing-choice template becomes a fixed actionable lookup diagnostic."""
+    original = {"backtest": {}, "bot": {"long": {"hsl": {"enabled": True, "restart_after_red_policy": None}}}}
+    detail = scope + ".restart_after_red_policy requires an explicit choice of always or never; threshold is removed"
+
+    def prepare(config, **kwargs):
+        """Reproduce only the verified native prerequisite, before any market lookup."""
+        assert config == original
+        raise ValueError(detail)
+
+    monkeypatch.setattr(pb8_ohlcv_runtime_helper, "_load_modules", lambda root: {"prepare_config": prepare})
+    stdout = io.StringIO()
+    payload = {"config": original, "pb8_dir": str(tmp_path), "include_start_date_options": True}
+    unchanged = json.dumps(payload, sort_keys=True)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", io.StringIO())
+    assert pb8_ohlcv_runtime_helper.main() == 1
+    response = json.loads(stdout.getvalue())
+    assert scope + ".restart_after_red_policy" in response["detail"]
+    assert "always or never" in response["detail"]
+    assert "Bounds & Overrides" in response["detail"]
+    assert "Unresolved policies default to always" in response["detail"]
+    assert (response["error_stage"], response["error_category"]) == ("configuration", "invalid_input")
+    assert pb8_ohlcv_tools.safe_start_date_error(ValueError(response["detail"])) == response["detail"]
+    assert pb8_ohlcv_tools.safe_start_date_error(ValueError(detail)) == response["detail"]
+    assert json.dumps(payload, sort_keys=True) == unchanged
+
+
+@pytest.mark.parametrize("detail", [
+    "bot.other.hsl.restart_after_red_policy requires an explicit choice of always or never; threshold is removed",
+    "coin_overrides.secret.hsl.restart_after_red_policy requires an explicit choice of always or never; threshold is removed",
+    "bot.long.hsl.restart_after_red_policy requires an explicit choice of always or never; threshold is removed /private/config.json",
+    "/private/config.json: bot.long.hsl.restart_after_red_policy requires an explicit choice of always or never; threshold is removed",
+    "bot.long.hsl.restart_after_red_policy must be always or never: secret-token-123",
+])
+def test_hsl_lookup_prerequisite_rejects_unapproved_error_templates(detail):
+    """Similar but unapproved paths/messages cannot reach status or log as raw text."""
+    helper_detail = str(pb8_ohlcv_runtime_helper._StartDateFailure("configuration", "invalid_input", detail))
+    assert helper_detail == "PB8 OHLCV start-date lookup failed."
+    public_detail = pb8_ohlcv_tools.safe_start_date_error(ValueError(detail))
+    assert "Check the configuration and PB8 runtime" in public_detail
+    assert detail not in public_detail
+
+
+@pytest.mark.parametrize("scope", ["bot.long.hsl", "bot.short.hsl", "bot.hsl"])
+@pytest.mark.parametrize("native_detail", [False, True])
+def test_hsl_lookup_prerequisite_survives_job_and_log(start_date_helper_process, monkeypatch, scope, native_detail):
+    """Only the fixed field decision reaches the public job and log; no policy is selected."""
+    start, _processes, _released = start_date_helper_process
+    logs = []
+    monkeypatch.setattr(pb8_ohlcv_tools, "_log", lambda *args, **kwargs: logs.append((args, kwargs)))
+    native = scope + ".restart_after_red_policy requires an explicit choice of always or never; threshold is removed"
+    detail = native if native_detail else str(pb8_ohlcv_runtime_helper._StartDateFailure("configuration", "invalid_input", native))
+    response = {"ok": False, "detail": detail, "error_stage": "configuration", "error_category": "invalid_input"}
+    script = "import sys,json; data=json.load(sys.stdin); assert data['config']['bot']['long']['hsl']['restart_after_red_policy'] is None; print(json.dumps(" + repr(response) + "),flush=True)"
+    config = {"backtest": {}, "bot": {"long": {"hsl": {"enabled": True, "restart_after_red_policy": None}}}}
+    result = _finished_start_date_job(start(script, config))
+    assert result["status"] == "error"
+    assert scope + ".restart_after_red_policy" in result["error"]
+    assert "always or never" in result["error"] and "Bounds & Overrides" in result["error"]
+    assert result["error"] in repr(logs)
+    assert config["bot"]["long"]["hsl"] == {"enabled": True, "restart_after_red_policy": None}
+    assert pb8_ohlcv_runtime_helper._START_DATE_HSL_RESTART_CHOICES == pb8_ohlcv_tools._START_DATE_HSL_RESTART_CHOICES

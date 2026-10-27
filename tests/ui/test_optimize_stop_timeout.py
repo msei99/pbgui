@@ -12,7 +12,7 @@ def test_start_date_stop_deadline(scenario):
     """Run real stop/poll/cleanup functions with deterministic timers and requests."""
     source = (Path(__file__).resolve().parents[2] / 'frontend/v7_optimize.html').read_text()
     functions = []
-    for name in ['stopOptimizeStartDateLookup','clearOptimizeStartDateProgress','refreshOptimizeStartDateLookup','scheduleOptimizeStartDatePoll']:
+    for name in ['stopOptimizeStartDateLookup','clearOptimizeStartDateProgress','refreshOptimizeStartDateLookup','scheduleOptimizeStartDatePoll','optimizeStartDateRequestDeadline']:
         start = re.search(r'^(?:async )?function '+name+r'\(',source,re.M).start()
         end = source.index('\n}',start)
         functions.append(source[start:end+2])
@@ -27,7 +27,7 @@ const container = {style:{display:'block'}};
 function el() { return container; }
 function setOptimizeStartDateControlsRunning(value) { locked=value; }
 function renderOptimizeStartDateProgress() { rendered++; }
-function toast(message,kind) { notices.push([message,kind]); }
+function setOptimizeStartDateStatus(message,kind) { notices.push([message,kind]); }
 function applyOptimizeStartDateResult() { throw new Error('must not apply stopping result'); }
 function apiFetch() { requests++; return new Promise(resolve=>pendingResolve=resolve); }
 (async()=>{
@@ -47,7 +47,7 @@ function apiFetch() { requests++; return new Promise(resolve=>pendingResolve=res
    pendingResolve({status:'running'}); await polling;
   }
   deadline.fn();
-  assert.equal(notices.at(-1)[1],'err');
+  assert.equal(notices.at(-1)[1],'error');
   assert.match(notices.at(-1)[0],/Timed out/);
  }
  assert.equal(_optOhlcvStartDateRun,null);

@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import re
 import sys
-from contextlib import nullcontext, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,69 @@ STATUS_RANK = {
 }
 MAX_START_DATE_PAIRS = 200
 PROGRESS_PREFIX = "PBGUI_OHLCV_START_PROGRESS "
+_START_DATE_SAFE_VALIDATION_DETAILS = {
+    "config must be an object",
+    "backtest.exchanges is empty",
+    "backtest.offline must be a boolean",
+    "The installed PB8 runtime does not support backtest.offline",
+    "OHLCV start-date lookup requires explicitly selected approved coins",
+    "Select at least one approved coin before looking up an OHLCV start date",
+}
+
+
+_START_DATE_HSL_RESTART_CHOICES = {
+    scope + ".restart_after_red_policy requires an explicit choice of always or never; threshold is removed": (
+        "HSL restart policy unresolved: " + scope + ".restart_after_red_policy. "
+        + ("For an existing portfolio HSL configuration, " if scope == "bot.hsl" else "")
+        + "Review always or never in Bounds & Overrides > "
+        + {"bot.long.hsl": "Long", "bot.short.hsl": "Short", "bot.hsl": "Portfolio"}[scope]
+        + " HSL restart after RED. "
+        + ("Otherwise complete the portfolio HSL configuration first. " if scope == "bot.hsl" else "")
+        + "Unresolved policies default to always in the form."
+    )
+    for scope in ("bot.long.hsl", "bot.short.hsl", "bot.hsl")
+}
+
+
+class _StartDateFailure(RuntimeError):
+    """Carry only fixed diagnostic codes across the lookup helper boundary."""
+
+    def __init__(self, stage: str, category: str, detail: str) -> None:
+        detail = _START_DATE_HSL_RESTART_CHOICES.get(detail, detail)
+        safe_detail = (
+            detail in _START_DATE_SAFE_VALIDATION_DETAILS
+            or detail in _START_DATE_HSL_RESTART_CHOICES.values()
+            or re.fullmatch(
+                r"OHLCV start-date lookup expands to [0-9]{1,8} exchange/coin pairs; maximum is [0-9]{1,8}", detail
+            )
+        )
+        super().__init__(detail if safe_detail
+                         else "PB8 OHLCV start-date lookup failed.")
+        self.stage = stage
+        self.category = category
+
+
+@contextmanager
+def _start_date_diagnostics(diagnostic):
+    """Replace lookup exceptions with bounded codes; leave readiness unchanged."""
+    try:
+        yield
+    except Exception as exc:
+        if diagnostic is None:
+            raise
+        category = (
+            "timeout" if isinstance(exc, TimeoutError)
+            else "invalid_input" if isinstance(exc, (TypeError, ValueError, KeyError))
+            else "unavailable" if isinstance(exc, (ImportError, OSError))
+            else "failure"
+        )
+        raise _StartDateFailure(diagnostic["stage"], category, str(exc)) from None
+
+
+def _set_start_date_stage(diagnostic, stage: str) -> None:
+    """Track a fixed operation stage without collecting config or exception text."""
+    if diagnostic is not None:
+        diagnostic["stage"] = stage
 
 
 def _emit_progress(**payload: Any) -> None:
@@ -368,7 +432,7 @@ def _build_start_date_options(
     }
 
 
-async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
+async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict[str, Any]:
     """Prepare a config and evaluate its local ranges with PB8 modules."""
     pb8_dir = Path(str(payload.get("pb8_dir") or "")).resolve()
     if modules is None:
@@ -379,6 +443,7 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
     candidate = copy.deepcopy(raw_config)
     include_start_date_options = bool(payload.get("include_start_date_options"))
     candidate.pop("pbgui", None)
+    _set_start_date_stage(diagnostic, "configuration")
     config = modules["prepare_config"](
         candidate,
         base_config_path=str(pb8_dir / ".pbgui-ohlcv-preflight.json"),
@@ -405,7 +470,9 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
     end_date = modules["format_end_date"](require_config_value(config, "backtest.end_date"))
     requested_start_ts = int(modules["date_to_ts"](requested_start_date))
     end_ts = int(modules["date_to_ts"](end_date))
+    _set_start_date_stage(diagnostic, "warmup")
     warmup_minutes = max(0, int(modules["compute_backtest_warmup_minutes"](config)))
+    _set_start_date_stage(diagnostic, "configuration")
     effective_start_ts = max(0, requested_start_ts - warmup_minutes * 60_000)
     effective_start_ts = (effective_start_ts // 60_000) * 60_000
     minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
@@ -418,6 +485,7 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
     catalog_path = pb8_dir / "caches" / "ohlcvs" / "catalog.sqlite"
     # PB8 deliberately bypasses its v2 store when an explicit caller-managed
     # source is selected, so the readiness result must do the same.
+    _set_start_date_stage(diagnostic, "helper")
     catalog = (
         modules["OhlcvCatalog"](catalog_path)
         if catalog_path.exists() and source_dir is None
@@ -427,7 +495,9 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
     uses_all_coins = _uses_all_coins(live.get("approved_coins"))
     if include_start_date_options:
         _emit_progress(phase="resolving_universe", completed=0, total=0, message="Resolving approved coins")
+    _set_start_date_stage(diagnostic, "market_resolution")
     await modules["format_approved_ignored_coins"](config, exchanges)
+    _set_start_date_stage(diagnostic, "configuration")
     approved = require_live_value(config, "approved_coins")
     coin_sides = _collect_coin_sides(approved)
     coins = sorted(coin_sides)
@@ -480,6 +550,7 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
     start_date_pairs_completed = 0
     start_date_pair_total = len(coins) * len(base_exchanges)
     for raw_exchange in exchanges:
+        _set_start_date_stage(diagnostic, "market_resolution")
         ccxt_exchange = modules["to_ccxt_exchange_id"](raw_exchange)
         store_exchange = modules["to_standard_exchange_name"](ccxt_exchange)
         manager = modules["HLCVManager"](
@@ -509,6 +580,7 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
                 )
             await manager.load_markets()
             for coin in coins:
+                _set_start_date_stage(diagnostic, "market_resolution")
                 track_start_date_pair = include_start_date_options and str(raw_exchange) in base_exchanges
                 if track_start_date_pair:
                     _emit_progress(
@@ -563,6 +635,7 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
                             note="Minimum coin age pushes the usable start beyond the end date.",
                         )
                     elif catalog is None:
+                        _set_start_date_stage(diagnostic, "helper")
                         inspection = None
                         if legacy_root is not None:
                             inspection = modules["inspect_legacy_range"](
@@ -590,6 +663,7 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
                             ),
                         )
                     else:
+                        _set_start_date_stage(diagnostic, "helper")
                         plan = modules["plan_local_symbol_range"](
                             catalog=catalog,
                             legacy_root=legacy_root,
@@ -645,6 +719,7 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
             }
         )
 
+    _set_start_date_stage(diagnostic, "helper")
     best_entries = []
     best_counts = _counts()
     requirements = []
@@ -739,18 +814,21 @@ async def _build(payload: dict[str, Any], modules=None) -> dict[str, Any]:
 
 async def _build_with_data_policy(payload: dict[str, Any]) -> dict[str, Any]:
     """Keep metadata and inception lookups inside PB8's offline policy when requested."""
-    config = payload.get("config")
-    if not isinstance(config, dict):
-        raise TypeError("config must be an object")
-    offline = config.get("backtest", {}).get("offline", False)
-    if not isinstance(offline, bool):
-        raise ValueError("backtest.offline must be a boolean")
-    modules = _load_modules(Path(str(payload.get("pb8_dir") or "")).resolve())
-    policy = modules.get("simulation_data_policy")
-    if offline and policy is None:
-        raise ValueError("The installed PB8 runtime does not support backtest.offline")
-    with policy(config) if policy else nullcontext():
-        return await _build(payload, modules=modules)
+    diagnostic = {"stage": "configuration"} if payload.get("include_start_date_options") else None
+    with _start_date_diagnostics(diagnostic):
+        config = payload.get("config")
+        if not isinstance(config, dict):
+            raise TypeError("config must be an object")
+        offline = config.get("backtest", {}).get("offline", False)
+        if not isinstance(offline, bool):
+            raise ValueError("backtest.offline must be a boolean")
+        _set_start_date_stage(diagnostic, "runtime")
+        modules = _load_modules(Path(str(payload.get("pb8_dir") or "")).resolve())
+        policy = modules.get("simulation_data_policy")
+        if offline and policy is None:
+            raise ValueError("The installed PB8 runtime does not support backtest.offline")
+        with policy(config) if policy else nullcontext():
+            return await _build(payload, modules=modules, diagnostic=diagnostic)
 
 
 def main() -> int:
@@ -762,6 +840,9 @@ def main() -> int:
         with redirect_stdout(sys.stderr):
             result = asyncio.run(_build_with_data_policy(payload))
         response = {"ok": True, "result": result}
+    except _StartDateFailure as exc:
+        response = {"ok": False, "error": "StartDateLookupError", "detail": str(exc),
+                    "error_stage": exc.stage, "error_category": exc.category}
     except Exception as exc:
         response = {"ok": False, "error": type(exc).__name__, "detail": str(exc)}
     json.dump(response, sys.stdout, separators=(",", ":"))

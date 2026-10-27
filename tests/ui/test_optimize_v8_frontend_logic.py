@@ -8,6 +8,71 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_hsl_restart_normalization_preserves_effective_scopes() -> None:
+    """Import effective overrides without creating HSL objects or changing activation."""
+    adapter = (ROOT / 'frontend/js/optimize_editor_adapter.js').read_text()
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        const window = {{}};
+        {adapter}
+        const v8 = window.PBGuiOptimizeEditorAdapter.create('v8');
+        const clone = value => JSON.parse(JSON.stringify(value));
+        for (const mode of ['coin', 'pside', 'unified']) {{
+          for (const enabled of [false, true]) {{
+            for (const policy of [undefined, null, 'threshold', 'invalid', 1, 'always', 'never', ' NEVER ']) {{
+              for (const override of [undefined, null, 'threshold', 'always', 'never', ' Never ']) {{
+                const scope = mode === 'unified' ? 'bot.hsl' : 'bot.long.hsl';
+                const key = scope + '.restart_after_red_policy';
+                const config = {{live:{{hsl_signal_mode:mode}},bot:{{long:{{}},short:{{}}}},
+                  optimize:{{fixed_runtime_overrides:{{unrelated:123}}}}, other:{{edit:2345}}}};
+                const parent = mode === 'unified' ? config.bot : config.bot.long;
+                parent.hsl = {{enabled,red_threshold:0.15,restart_after_red_policy:policy}};
+                if (override !== undefined) config.optimize.fixed_runtime_overrides[key] = override;
+                const before = clone(config);
+                v8.normalizeHslRestartPolicies(config);
+                const canonical = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
+                const valid = value => ['always','never'].includes(canonical(value));
+                const expected = valid(override) ? canonical(override) : (valid(policy) ? canonical(policy) : 'always');
+                assert.equal(parent.hsl.restart_after_red_policy,expected);
+                assert.equal(parent.hsl.enabled,enabled);
+                assert.deepEqual(config.bot.short,{{}});
+                assert.equal(Object.hasOwn(config.optimize.fixed_runtime_overrides,key),false);
+                const saved = clone(config);
+                assert.equal(v8.normalizeHslRestartPolicies(config),false);
+                assert.deepEqual(config,saved);
+                // The only allowed changes are this policy and its matching override.
+                if (mode === 'unified') before.bot.hsl.restart_after_red_policy=expected;
+                else before.bot.long.hsl.restart_after_red_policy=expected;
+                delete before.optimize.fixed_runtime_overrides[key];
+                assert.deepEqual(config,before);
+              }}
+            }}
+          }}
+          const absent = {{live:{{hsl_signal_mode:mode}},bot:{{long:{{}},short:{{}}}}}};
+          const before = clone(absent);
+          assert.equal(v8.normalizeHslRestartPolicies(absent),false);
+          assert.deepEqual(absent,before);
+        }}
+        const scopes = {{live:{{hsl_signal_mode:'unified'}},
+          bot:{{hsl:{{enabled:true,restart_after_red_policy:null}},long:{{hsl:{{enabled:false,restart_after_red_policy:'never'}}}}}},
+          optimize:{{fixed_runtime_overrides:{{'bot.long.hsl.restart_after_red_policy':'always'}}}}}};
+        v8.normalizeHslRestartPolicies(scopes);
+        assert.equal(scopes.bot.hsl.restart_after_red_policy,'always');
+        assert.equal(scopes.bot.long.hsl.restart_after_red_policy,'never');
+        assert.equal(scopes.optimize.fixed_runtime_overrides['bot.long.hsl.restart_after_red_policy'],'always');
+        scopes.live.hsl_signal_mode='coin';
+        v8.normalizeHslRestartPolicies(scopes);
+        assert.equal(scopes.bot.long.hsl.restart_after_red_policy,'always');
+        assert.equal(scopes.bot.long.hsl.enabled,false);
+        const metadata=v8.normalizeMetadata({{template:{{bot:{{long:{{hsl:{{no_restart_drawdown_threshold:1}}}}}}}},
+          runtime_overrides:[{{key:'bot.long.hsl.restart_after_red_policy',choices:['threshold']}}]}});
+        const field=metadata.runtimeOverrides.find(x=>x.key==='bot.long.hsl.restart_after_red_policy');
+        assert.deepEqual(field.choices,['always','never']);
+        assert.equal(field.storage,'bot_hsl');
+        assert.doesNotMatch(field.tip,/halts permanently/);
+    """))
+
+
 def test_hsl_checkbox_and_json_share_one_value_across_modes() -> None:
     """Later Bot JSON edits win over checkbox state, including when the control is hidden."""
     page = (ROOT / 'frontend/v7_optimize.html').read_text()
@@ -601,6 +666,15 @@ def test_late_symbol_load_preserves_first_approved_coin_clear() -> None:
         let _optSymbolsLoadSeq = 0;
         let _optMarketStatusVerified = false;
         let _optMarketLabels = {{}};
+        let _optStructuredEditorSyncing = false;
+        const synchronizedSelections = [];
+        const scheduleStructuredEditorSync = () => {{
+          assert.equal(_optStructuredEditorSyncing, false);
+          synchronizedSelections.push({{
+            long: selected['ms-opt-app-long'].slice(),
+            short: selected['ms-opt-app-short'].slice()
+          }});
+        }};
         const optimizeEditorAdapter = {{isV8: true}};
         const _optMsController = {{applyCoinStatus: () => {{}}}};
         const toast = () => {{}};
@@ -624,12 +698,15 @@ def test_late_symbol_load_preserves_first_approved_coin_clear() -> None:
           }};
           const pending = loadOptSymbols(config, {{preferConfigValues: true}});
           assert.deepEqual(selected['ms-opt-app-long'], ['BTC', 'ETH']);
+          assert.deepEqual(synchronizedSelections, []);
           selected['ms-opt-app-long'] = [];
           selected['ms-opt-app-short'] = [];
           resolveCoins({{symbols: ['BTC', 'ETH', 'XRP'], catalog: [], statuses: {{}}}});
           await pending;
           assert.deepEqual(selected['ms-opt-app-long'], []);
           assert.deepEqual(selected['ms-opt-app-short'], []);
+          assert.equal(_optStructuredEditorSyncing, false);
+          assert.deepEqual(synchronizedSelections, [{{long: [], short: []}}]);
         }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
         """
     )
@@ -1474,7 +1551,7 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
     assert '"%%OPTIMIZE_VERSION%%": "v8"' in api_v8
     assert '"%%OPTIMIZE_NAV_CURRENT%%": "v8_optimize"' in api_v8
     assert not (ROOT / "frontend" / "v8_optimize.html").exists()
-    assert '/app/js/optimize_editor_adapter.js?v=16' in page
+    assert '/app/js/optimize_editor_adapter.js?v=17' in page
     assert "PBGuiOptimizeEditorAdapter.create(OPTIMIZE_VERSION" in page
     assert 'backtestVersion: BACKTEST_VERSION' in page
     for panel in ("panel-configs", "panel-queue", "panel-results", "panel-paretos"):
@@ -1779,6 +1856,9 @@ def test_adapter_preserves_v7_and_round_trips_nested_v8_paths() -> None:
         assert.equal(metadata.strategyDefaults.long.ema_anchor.entry.offset, 3);
         assert.deepEqual(metadata.hslSignalModes, ['coin', 'pside', 'unified']);
         assert.deepEqual(metadata.runtimeOverrides.map(field => field.key), [
+          'bot.long.hsl.restart_after_red_policy',
+          'bot.short.hsl.restart_after_red_policy',
+          'bot.hsl.restart_after_red_policy',
           'bot.long.hsl.enabled',
           'bot.short.hsl.enabled',
           'future.runtime.option'
@@ -1794,16 +1874,19 @@ def test_adapter_preserves_v7_and_round_trips_nested_v8_paths() -> None:
           }}
         }});
         assert.deepEqual(runtimeMetadata.runtimeOverrides.map(field => field.key), [
+          'bot.long.hsl.restart_after_red_policy',
+          'bot.short.hsl.restart_after_red_policy',
+          'bot.hsl.restart_after_red_policy',
           'bot.long.hsl.enabled',
           'bot.long.hsl.no_restart_drawdown_threshold',
           'bot.short.hsl.enabled',
-          'bot.short.hsl.no_restart_drawdown_threshold',
-          'bot.long.hsl.restart_after_red_policy',
-          'bot.short.hsl.restart_after_red_policy'
+          'bot.short.hsl.no_restart_drawdown_threshold'
         ]);
         const longPolicy = runtimeMetadata.runtimeOverrides.find(field => field.key === 'bot.long.hsl.restart_after_red_policy');
         assert.equal(longPolicy.label, 'Long HSL restart after RED');
-        assert.deepEqual(longPolicy.choices, ['always', 'threshold', 'never']);
+        assert.deepEqual(longPolicy.choices, ['always', 'never']);
+        assert.equal(longPolicy.storage, 'bot_hsl');
+        assert.equal(longPolicy.botKey, 'restart_after_red_policy');
         const shortEnabled = runtimeMetadata.runtimeOverrides.find(field => field.key === 'bot.short.hsl.enabled');
         assert.equal(shortEnabled.defaultValue, true);
         assert.equal(shortEnabled.storage, 'bot_hsl');
@@ -1928,6 +2011,7 @@ def test_initial_configs_load_does_not_wait_for_settings_metadata() -> None:
         const location = {{hash: ''}};
         const window = {{location: {{href: 'https://example.test/api/optimize-v8/main_page'}}}};
         const PANEL_META = {{}};
+        function restoreConfigNavigation() {{}}
         function attachEventHandlers() {{}}
         function initSelections() {{}}
         function initSidebarResize() {{}}
@@ -2080,6 +2164,8 @@ def test_v8_save_and_queue_with_new_name_does_not_rebind_opened_job() -> None:
         function editorVisible() {{ return true; }}
         function ensureRawJsonValidForSave() {{ return true; }}
         function ensureStructuredJsonFieldsValidForSave() {{ return true; }}
+        function cancelOptimizeEditorSync() {{}}
+        async function reconcileOptimizeEditorSync() {{}}
         function collectEditorConfig() {{ return {{name: 'HYPE_trailing_035', config: {{optimize: {{n_cpus: 4}}}}}}; }}
         function setPageEditorStatus() {{}}
         function closeEditor() {{}}
@@ -2280,6 +2366,7 @@ def test_pb8_hsl_controls_write_bot_config_and_not_runtime_overrides() -> None:
             "setOptimizeBotHslField",
             "toggleOptimizeRuntimeOverrideCheckbox",
             "updateOptimizeRuntimeOverrideValue",
+            "updateOptimizeRuntimeOverrideRawValue",
             "collectOptimizeRuntimeOverrides",
         )
     )
@@ -2289,7 +2376,7 @@ def test_pb8_hsl_controls_write_bot_config_and_not_runtime_overrides() -> None:
         const fields = [
           {{key: 'bot.long.hsl.enabled', side: 'long', storage: 'bot_hsl', botKey: 'enabled', type: 'boolean'}},
           {{key: 'bot.long.hsl.no_restart_drawdown_threshold', side: 'long', storage: 'bot_hsl', botKey: 'no_restart_drawdown_threshold', type: 'number'}},
-          {{key: 'bot.long.hsl.restart_after_red_policy', side: 'long', type: 'string'}}
+          {{key: 'bot.long.hsl.restart_after_red_policy', side: 'long', storage: 'bot_hsl', botKey: 'restart_after_red_policy', type: 'string'}}
         ];
         const textarea = {{
           value: JSON.stringify({{hsl: {{enabled: false, no_restart_drawdown_threshold: 1}}}}),
@@ -2312,12 +2399,12 @@ def test_pb8_hsl_controls_write_bot_config_and_not_runtime_overrides() -> None:
 
         toggleOptimizeRuntimeOverrideCheckbox('bot.long.hsl.enabled', true);
         updateOptimizeRuntimeOverrideValue('bot.long.hsl.no_restart_drawdown_threshold', '0.75', null);
+        updateOptimizeRuntimeOverrideRawValue('bot.long.hsl.restart_after_red_policy', 'never');
         const bot = JSON.parse(textarea.value);
+        assert.equal(bot.hsl.restart_after_red_policy, 'never');
         assert.equal(bot.hsl.enabled, true);
         assert.equal(bot.hsl.no_restart_drawdown_threshold, 0.75);
-        assert.deepEqual(collectOptimizeRuntimeOverrides({{fallbackValue: {{}}}}), {{
-          'bot.long.hsl.restart_after_red_policy': 'always'
-        }});
+        assert.deepEqual(collectOptimizeRuntimeOverrides({{fallbackValue: {{}}}}), {{}});
         """
     )
     _run_node(script)
@@ -3456,13 +3543,15 @@ def test_pareto_explorer_accepts_same_origin_api_root() -> None:
 
 
 def test_editor_url_restores_config_and_queue_after_refresh():
-    """Editor URLs round-trip encoded names and preserve queue origin on reload."""
+    """Both editor versions round-trip encoded names and preserve queue origin on reload."""
     page = (ROOT / 'frontend/v7_optimize.html').read_text()
     functions = '\n'.join(_page_function(page, name) for name in (
-        'updateOptimizeEditorUrl', 'handleOpenConfigParam')).split('/* ── data-tip')[0]
+        'optimizeDraftStorageKey', 'updateOptimizeEditorUrl', 'handleOpenConfigParam')).split('/* ── data-tip')[0]
     _run_node("""
 const assert=require('node:assert/strict');
-const window={location:{href:'http://localhost/app/optimize?keep=yes#configs'}};
+const window={location:{href:'http://localhost/app/optimize?keep=yes#configs',pathname:'/app/optimize'},
+ sessionStorage:{getItem:()=>null}};
+const optimizeEditorAdapter={isV8:false};
 const history={replaceState:(_,title,path)=>{window.location.href=new URL(path,window.location.href).href;}};
 let opened;
 const openConfigEditor=async name=>{opened=['config',name];};
@@ -3470,6 +3559,8 @@ const openQueueConfigEditor=async name=>{opened=['queue',name];};
 const handleError=e=>{throw e;};
 """ + functions + """
 (async()=>{
+for(const isV8 of [false,true]){
+optimizeEditorAdapter.isV8=isV8;
 updateOptimizeEditorUrl('ETH test & 1',null);
 await handleOpenConfigParam();
 assert.deepEqual(opened,['config','ETH test & 1']);
@@ -3480,6 +3571,7 @@ assert.deepEqual(opened,['queue','job.json']);
 assert.equal(new URL(window.location.href).searchParams.has('open_config'),false);
 updateOptimizeEditorUrl(null,null);
 assert.equal(new URL(window.location.href).searchParams.has('open_queue_config'),false);
+}
 })().catch(e=>{console.error(e);process.exit(1);});
 """)
 
@@ -3495,6 +3587,7 @@ const location={hash:'#configs'},PANEL_META={},state={};
 const document={documentElement:{classList:{remove(){}}}};
 const el=()=>({hidden:true});
 const optimizeEditorAdapter={configureUi(){}};
+function restoreConfigNavigation(){}
 function attachEventHandlers(){} function initSelections(){} function initSidebarResize(){}
 function initPlotModalWindow(){} function initOptimizeOhlcvPreflightController(){} function connectWS(){}
 const loadOptimizeMetadata=async()=>{},loadSettings=async()=>{},loadConfigs=async()=>{},loadQueue=async()=>{};
@@ -3575,6 +3668,10 @@ def test_save_actions_report_failures_and_allow_retry():
       const ensureRawJsonValidForSave = () => true;
       const ensureStructuredJsonFieldsValidForSave = () => true;
       let failure='', notices=[], requests=[], closed=0, statuses=[];
+      const cancelOptimizeEditorSync = () => {};
+      const reconcileOptimizeEditorSync = async () => {
+        if(failure==='conflict') throw Error('Raw JSON and structured editor have conflicting edits.');
+      };
       const dialogs=[];
       const window={PBGuiDialogs:{alert:async options=>{dialogs.push(options);}}};
       function collectEditorConfig() {
@@ -3595,15 +3692,18 @@ def test_save_actions_report_failures_and_allow_retry():
       const setPanel = ()=>{};
     """ + source + """
       for (const queue of [false,true]) {
+        requests=[];
         const dialogsBefore=dialogs.length;
-        for (failure of ['validation','api']) {
+        for (failure of ['conflict','validation','api']) {
           const before=closed;
           await saveEditor(queue);
           assert.equal(closed,before);
           assert.equal(state.editorSaving,false);
-          assert.equal(notices.at(-1),failure==='api'?'Save rejected by API':'Select at least one exchange.');
+          assert.equal(requests.length,0);
+          assert.equal(notices.at(-1),failure==='api'?'Save rejected by API':failure==='conflict'?'Raw JSON and structured editor have conflicting edits.':'Select at least one exchange.');
         }
         assert.deepEqual(dialogs.slice(dialogsBefore).map(({title,message})=>({title,message})),queue?[
+          {title:'Cannot queue configuration',message:'Raw JSON and structured editor have conflicting edits.'},
           {title:'Cannot queue configuration',message:'Select at least one exchange.'},
           {title:'Cannot queue configuration',message:'Save rejected by API'}
         ]:[]);
@@ -3635,6 +3735,9 @@ const window={addEventListener:(name,fn)=>{listeners[name]=fn;},location:{href:'
  sessionStorage:{setItem:(k,v)=>storage.set(k,v),getItem:k=>storage.get(k),removeItem:k=>storage.delete(k)}};
 const history={replaceState:(_,t,p)=>{window.location.href=new URL(p,window.location.href).href;}};
 const state={}; let shown,status;
+const optimizeEditorAdapter={isV8:true};
+const el=()=>({value:'{}'}), _optRawLastApplied='{}';
+let reconciled=0;const commitOptimizeEditorChange=()=>{reconciled++};
 const deepClone=x=>JSON.parse(JSON.stringify(x));
 const normalizeOptimizeEditorPayload=p=>({...p,param_status:{}});
 const showStructuredEditor=(config,name,source)=>{shown={config,name};state.editorSourceName=source;};
@@ -3648,6 +3751,7 @@ const handleError=e=>{throw e;};
 openEditorWithConfig({config:{bot:{}},override_configs:{ETH:{bot:{long:{test:1}}}}},'Copy','');
 assert.equal(new URL(window.location.href).searchParams.get('open_draft'),'1');
 listeners.beforeunload();
+assert.equal(reconciled,1);
 await handleOpenConfigParam();
 assert.deepEqual(shown,edited);
 assert.equal(state.editorOverrideConfigs.ETH.bot.long.test,1);
@@ -3822,3 +3926,266 @@ assert.equal(nodes['local-convergence'].hidden,true);
 """)
     assert 'collectLocalConvergence(cfg, strict)' in _page_function(page, 'collectEditorConfig')
     assert 'renderLocalConvergence(status)' in _page_function(page, 'renderOptimizeLogDashboard')
+
+
+def test_start_lookup_signature_tracks_effective_config() -> None:
+    """Key ordering and PBGui metadata are ignored; all PB8 inputs remain guarded."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    function = _page_function(page, 'optimizeOhlcvStartLookupSignature')
+    _run_node(textwrap.dedent(f"""
+        const assert = require('node:assert/strict');
+        {function}
+        const config = {{backtest:{{start_date:'2021-04-20',end_date:'2026-07-21',exchanges:['binance','bybit'],ohlcv_source_dir:'source',coin_sources:{{HYPE:'source'}}}},
+          live:{{approved_coins:{{long:['HYPE'],short:[]}},ignored_coins:{{long:[],short:[]}},minimum_coin_age_days:0}},
+          bot:{{long:{{ema_span_0:10}},short:{{}}}},pbgui:{{tags:['a']}}}};
+        const sig=optimizeOhlcvStartLookupSignature(config);
+        const reordered={{pbgui:{{tags:['b']}},bot:{{short:{{}},long:{{ema_span_0:10}}}},live:config.live,backtest:config.backtest}};
+        assert.equal(sig,optimizeOhlcvStartLookupSignature(reordered));
+        for (const path of [['backtest','start_date'],['backtest','end_date'],['backtest','exchanges'],
+          ['backtest','ohlcv_source_dir'],['backtest','coin_sources'],['live','approved_coins'],
+          ['live','ignored_coins'],['live','minimum_coin_age_days'],['bot','long']]) {{
+          const changed=structuredClone(config); changed[path[0]][path[1]]='changed';
+          assert.notEqual(sig,optimizeOhlcvStartLookupSignature(changed),path.join('.'));
+        }}
+    """))
+
+
+def _start_lookup_sync_harness(page: str) -> str:
+    """Exercise the PB8 event coordinator with isolated config and textarea views."""
+    adapter = (ROOT / 'frontend/js/optimize_editor_adapter.js').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'optimizeOhlcvStartLookupSignature', 'mergeOptimizeEditorChanges',
+        'cancelOptimizeEditorSync', 'commitOptimizeEditorChange', 'recordOptimizeEditorChange',
+        'reconcileOptimizeEditorSync', 'scheduleOptimizeEditorReconciliation',
+        'scheduleRawJsonEditorSync', 'scheduleStructuredEditorSync', 'collectOptimizeStartLookupConfig'))
+    return """
+const assert=require('node:assert/strict');
+const window={};
+""" + adapter + """
+let optimizeEditorAdapter=window.PBGuiOptimizeEditorAdapter.create('v8');
+const baseline={backtest:{start_date:'2021-04-20',starting_balance:1000},bot:{long:{ema:1}},pbgui:{tags:['before']}};
+let structured,raw,bot,tags,_optRawLastApplied,_optStructuredBaseline;
+let _optRawEditorSyncing=false,_optStructuredEditorSyncing=false,_optRawNeedsRender=false;
+let _optRawCoordTimer=null,_optStructuredCoordTimer=null,_optEditorSyncGeneration=0,_optEditorSyncError='';
+const state={},status={textContent:'',style:{}};
+const _optEditorSyncConflictText='Raw JSON and structured editor have conflicting edits. Resolve the differing values and retry.';
+const setOptimizeStartDateStatus=text=>status.textContent=text,deepClone=x=>structuredClone(x);
+const el=id=>id==='opted-raw-json'?raw:id==='opted-bot-long'?bot:status;
+const validateRawJson=s=>{try{return {parsed:JSON.parse(s)}}catch(e){return {error:true}}};
+const setRawJsonValidationError=()=>{};
+const validateJsonFieldTextarea=n=>{try{let v=JSON.parse(n.value);return {error:!v||Array.isArray(v)||typeof v!=='object'}}catch(e){return {error:true}}};
+const getOptimizeJsonFieldIds=()=>['opted-bot-long'];
+const collectEditorConfig=base=>{let c=deepClone(base||JSON.parse(raw.value));c.backtest={...c.backtest,...structured};c.bot.long=JSON.parse(bot.value);c.pbgui.tags=deepClone(tags);return {name:'Test',config:c}};
+const captureOptimizeRawAnchor=()=>null,restoreOptimizeRawAnchor=()=>{},autoResizeTa=()=>{},_optJsonSync={cancel(){}};
+const optSyncEditorFromParsed=(name,c)=>{state.editorLastConfig=deepClone(c);structured=deepClone(c.backtest);bot.value=JSON.stringify(c.bot.long);tags=deepClone(c.pbgui.tags);_optStructuredBaseline=deepClone(c)};
+function reset(){structured=deepClone(baseline.backtest);bot={value:JSON.stringify(baseline.bot.long)};tags=deepClone(baseline.pbgui.tags);raw={value:JSON.stringify(baseline)};_optRawLastApplied=raw.value;_optStructuredBaseline=deepClone(baseline);state.editorLastConfig=deepClone(baseline)}
+""" + functions
+
+
+def test_start_lookup_flushes_raw_and_rejects_invalid_or_busy_edits() -> None:
+    """Ordered user deltas converge; older callbacks cannot replay previous values."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    _run_node(_start_lookup_sync_harness(page) + """
+(async()=>{
+ for(const rawFirst of [true,false]) for(const timer of [false,true]){
+  reset();
+  const editRaw=()=>{let c=JSON.parse(raw.value);c.backtest.starting_balance=2345;raw.value=JSON.stringify(c);scheduleRawJsonEditorSync()};
+  const editForm=()=>{structured.start_date='2022-02-02';tags=['edited'];scheduleStructuredEditorSync()};
+  if(rawFirst){editRaw();editForm()}else{editForm();editRaw()}
+  if(timer)await new Promise(r=>setTimeout(r,320));
+  const c=await collectOptimizeStartLookupConfig();
+  assert.equal(c.backtest.starting_balance,2345);assert.equal(c.backtest.start_date,'2022-02-02');assert.deepEqual(c.pbgui.tags,['edited']);
+  assert.deepEqual(JSON.parse(raw.value),state.editorLastConfig);
+ }
+ reset();let c=JSON.parse(raw.value);c.backtest.starting_balance=2345;raw.value=JSON.stringify(c);scheduleRawJsonEditorSync();
+ structured.starting_balance=3456;scheduleStructuredEditorSync();
+ c=JSON.parse(raw.value);c.backtest.start_date='2023-03-03';raw.value=JSON.stringify(c);scheduleRawJsonEditorSync();
+ assert.equal((await collectOptimizeStartLookupConfig()).backtest.starting_balance,3456);
+ scheduleOptimizeEditorReconciliation(false);structured.starting_balance=4567;scheduleStructuredEditorSync();
+ await new Promise(r=>setTimeout(r,320));assert.equal(JSON.parse(raw.value).backtest.starting_balance,4567);
+ _optRawEditorSyncing=true;await assert.rejects(collectOptimizeStartLookupConfig(),/still synchronizing/);
+ _optRawEditorSyncing=false;raw.value='{';scheduleRawJsonEditorSync();
+ structured.start_date='2024-04-04';scheduleStructuredEditorSync();
+ assert.equal(raw.value,'{');assert.match(status.textContent,/Raw JSON is invalid/);
+ await assert.rejects(collectOptimizeStartLookupConfig(),/Raw JSON is invalid/);
+})().catch(e=>{console.error(e);process.exit(1)});
+""")
+
+
+def test_start_lookup_keeps_invalid_bot_json_when_raw_sync_is_pending() -> None:
+    """Invalid bot text blocks apply; the newest valid correction updates both views."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    _run_node(_start_lookup_sync_harness(page) + """
+(async()=>{
+ reset();bot.value='{';let c=JSON.parse(raw.value);c.bot.long.ema=2;raw.value=JSON.stringify(c);scheduleRawJsonEditorSync();
+ scheduleStructuredEditorSync();await new Promise(r=>setTimeout(r,320));assert.equal(bot.value,'{');
+ await assert.rejects(collectOptimizeStartLookupConfig(),/Invalid JSON in bot-long/);
+ bot.value='[]';await assert.rejects(collectOptimizeStartLookupConfig(),/Invalid JSON in bot-long/);
+ bot.value='{"ema":3}';scheduleStructuredEditorSync();
+ assert.equal(JSON.parse(raw.value).bot.long.ema,3);assert.equal((await collectOptimizeStartLookupConfig()).bot.long.ema,3);
+ assert.equal(bot.value,'{"ema":3}');assert.equal(status.textContent,'');
+})().catch(e=>{console.error(e);process.exit(1)});
+""")
+
+
+def test_pb7_editor_sync_retains_existing_debounce() -> None:
+    """The PB8 coordinator leaves PB7 on its existing delayed shared controller."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    _run_node(_start_lookup_sync_harness(page) + """
+(async()=>{
+ reset();optimizeEditorAdapter=window.PBGuiOptimizeEditorAdapter.create('v7');let applied=0;
+ _optJsonSync.applyStructured=()=>{applied++;let c=collectEditorConfig(null).config;raw.value=JSON.stringify(c);_optRawLastApplied=raw.value;return c};
+ structured.start_date='2022-02-02';scheduleStructuredEditorSync();
+ assert.equal(applied,0);assert.equal(JSON.parse(raw.value).backtest.start_date,'2021-04-20');
+ await new Promise(r=>setTimeout(r,320));
+ assert.equal(applied,1);assert.equal(JSON.parse(raw.value).backtest.start_date,'2022-02-02');
+})().catch(e=>{console.error(e);process.exit(1)});
+""")
+
+
+def test_readiness_waits_for_editor_reconciliation_and_rejects_conflicts() -> None:
+    """Readiness sends reconciled values and does not fall back after a conflict."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    function = _page_function(page, 'getOptimizeOhlcvPreflightPayload')
+    _run_node(textwrap.dedent(f"""
+        const assert=require('node:assert/strict');
+        const state={{editorLastConfig:{{backtest:{{start_date:'2021-04-20'}}}}}};
+        const deepClone=x=>structuredClone(x);
+        let conflict=false, reconciled=false, collected=0;
+        function cancelOptimizeEditorSync() {{}}
+        async function reconcileOptimizeEditorSync() {{
+          await Promise.resolve();
+          if (conflict) throw new Error('conflicting edits');
+          reconciled=true;
+        }}
+        function collectEditorConfig() {{
+          assert.equal(reconciled,true);collected++;
+          return {{config:{{backtest:{{start_date:'2022-02-02'}}}}}};
+        }}
+        {function}
+        (async()=>{{
+          assert.equal((await getOptimizeOhlcvPreflightPayload()).config.backtest.start_date,'2022-02-02');
+          conflict=true;reconciled=false;
+          await assert.rejects(getOptimizeOhlcvPreflightPayload(),/conflicting edits/);
+          assert.equal(collected,1);
+        }})().catch(e=>{{console.error(e);process.exit(1);}});
+    """))
+
+
+def test_start_lookup_status_is_bounded_and_text_only() -> None:
+    """Terminal lookup text is bounded and displayed through textContent."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    function = _page_function(page, 'setOptimizeStartDateStatus')
+    _run_node(textwrap.dedent(f"""
+        const assert=require('node:assert/strict');
+        const status={{textContent:'',style:{{}}}}; const el=()=>status;
+        {function}
+        setOptimizeStartDateStatus('<img onerror=x>'+ 'a'.repeat(600),'error');
+        assert.equal(status.textContent.length,500);
+        assert.ok(status.textContent.startsWith('<img onerror=x>'));
+        setOptimizeStartDateStatus(''); assert.equal(status.textContent,'');
+    """))
+
+
+def test_start_lookup_applies_or_rejects_and_retry_replaces_status() -> None:
+    """Success, partial coverage, stale and missing results keep the right date and status."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'optimizeOhlcvStartLookupSignature', 'applyOptimizeStartDateResult', 'setOptimizeStartDateStatus'))
+    _run_node(textwrap.dedent(f"""
+        const assert=require('node:assert/strict');
+        let config={{backtest:{{start_date:'2021-04-20'}},pbgui:{{tags:['a']}}}};
+        const input={{value:'2021-04-20',dataset:{{}}}}, status={{textContent:'',style:{{}}}};
+        const el=id=>id==='opted-start-date'?input:status;
+        const collectOptimizeStartLookupConfig=async()=>structuredClone(config);
+        const cfgEnsureDateOrder=()=>{{}}, scheduleStructuredEditorSync=()=>{{}};
+        let _optOhlcvPreflightController=null, _optOhlcvStartDateRun;
+        {functions}
+        (async()=>{{
+          const run={{mode:'earliest',signature:optimizeOhlcvStartLookupSignature(config)}};
+          _optOhlcvStartDateRun=run;
+          const options={{earliest:{{available:true,start_date:'2025-01-01'}},known_pair_count:1,pair_count:2}};
+          config.pbgui.tags=['b'];
+          await applyOptimizeStartDateResult(run,{{result:{{start_date_options:options}}}});
+          assert.equal(input.value,'2025-01-01'); assert.match(status.textContent,/Partial coverage/);
+          input.value='2021-04-20'; config.backtest.start_date='2022-01-01';
+          await applyOptimizeStartDateResult(run,{{result:{{start_date_options:options}}}});
+          assert.equal(input.value,'2021-04-20'); assert.match(status.textContent,/changed during lookup/);
+          run.signature=optimizeOhlcvStartLookupSignature(config);
+          options.earliest={{available:false,detail:'No markets'}}; options.missing_market_pairs=[{{coin:'HYPE',exchange:'binance'}}];
+          await applyOptimizeStartDateResult(run,{{result:{{start_date_options:options}}}});
+          assert.equal(input.value,'2021-04-20'); assert.match(status.textContent,/HYPE @ binance/);
+          options.earliest={{available:true,start_date:'2026-01-01'}};
+          await applyOptimizeStartDateResult(run,{{result:{{start_date_options:options}}}});
+          assert.equal(input.value,'2026-01-01'); assert.match(status.textContent,/succeeded/);
+        }})().catch(e=>{{console.error(e);process.exit(1);}});
+    """))
+
+
+def test_start_lookup_late_post_is_stopped_after_timeout() -> None:
+    """A POST that returns its job ID after the deadline is stopped, not applied."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'setOptimizeStartDateFromOhlcv', 'optimizeStartDateRequestDeadline'))
+    _run_node(textwrap.dedent(f"""
+        const assert=require('node:assert/strict');
+        let timers=new Map(), seq=0, resolvePost, deleted=[], status='';
+        const window={{setTimeout(fn){{timers.set(++seq,fn);return seq;}},clearTimeout(id){{timers.delete(id);}}}};
+        let _optOhlcvStartDateRun=null, _optOhlcvStartDateRequestId=0;
+        const optimizeEditorAdapter={{isV8:true}};
+        const setOptimizeStartDateStatus=x=>{{status=x;}}, setOptimizeStartDateControlsRunning=()=>{{}},
+          renderOptimizeStartDateProgress=()=>{{}}, editorVisible=()=>true,
+          collectOptimizeStartLookupConfig=async()=>({{backtest:{{}}}}), optimizeOhlcvStartLookupSignature=()=>'',
+          scheduleOptimizeStartDatePoll=()=>{{throw Error('must not poll');}},
+          clearOptimizeStartDateProgress=()=>{{_optOhlcvStartDateRun=null;}};
+        const apiFetch=(path,opts)=>opts.method==='POST'?new Promise(r=>resolvePost=r)
+          :(deleted.push(path),Promise.resolve({{status:'stopped'}}));
+        {functions}
+        (async()=>{{
+          const pending=setOptimizeStartDateFromOhlcv('earliest',{{}});
+          await Promise.resolve(); await Promise.resolve();
+          [...timers.values()][0](); await pending;
+          assert.match(status,/timed out/); assert.equal(_optOhlcvStartDateRun,null);
+          resolvePost({{job_id:'late'}}); await Promise.resolve(); await Promise.resolve();
+          assert.deepEqual(deleted,['/ohlcv-start-dates/late']);
+        }})().catch(e=>{{console.error(e);process.exit(1);}});
+    """))
+
+
+def test_long_only_selection_survives_async_symbol_rebuild() -> None:
+    """Real symbol loading preserves HYPE long-only across both rebuilds and sync."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join(_page_function(page, name) for name in (
+        'loadOptSymbols', 'optRebuildMs', 'collectApprovedCoinsFromMs', 'optimizeOhlcvStartLookupSignature',
+        'mergeOptimizeEditorChanges'))
+    _run_node(textwrap.dedent(f"""
+        const assert=require('node:assert/strict');
+        let resolveCoins, _optSymbolsLoadSeq=0, _optMarketStatusVerified=false, _optMarketLabels={{}}, _optStructuredEditorSyncing=false;
+        const selected={{'ms-opt-exchanges':['binance','bybit']}};
+        const _optMsController={{rebuild:(id,options,values)=>selected[id]=values.slice(),applyCoinStatus:()=>{{}}}};
+        const optimizeEditorAdapter={{isV8:true}}, toast=()=>{{}}, captureOptimizeRawAnchor=()=>null,
+          restoreOptimizeRawAnchor=()=>{{}}, uniqStrings=x=>[...new Set(x.filter(Boolean))],
+          coinSideSelection=(x,s)=>x&&x[s]||[], currentMultiselectValues=(id,f)=>selected[id]||f,
+          optGetMs=id=>selected[id]||[], scheduleStructuredEditorSync=()=>{{}};
+        const optFetchV7Json=path=>path==='/coins/status'?new Promise(r=>resolveCoins=r):Promise.resolve({{tags:[]}});
+        {functions}
+        (async()=>{{
+          const config={{backtest:{{exchanges:['binance','bybit']}},live:{{approved_coins:{{long:['HYPE'],short:[]}},ignored_coins:{{long:[],short:[]}}}}}};
+          const sig=optimizeOhlcvStartLookupSignature(config);
+          const pending=loadOptSymbols(config,{{preferConfigValues:true}});
+          assert.deepEqual(collectApprovedCoinsFromMs(),config.live.approved_coins);
+          resolveCoins({{symbols:['HYPE'],catalog:[],statuses:{{}}}}); await pending;
+          scheduleStructuredEditorSync();
+          const after={{...config,live:{{...config.live,approved_coins:collectApprovedCoinsFromMs()}}}};
+          assert.equal(optimizeOhlcvStartLookupSignature(after),sig);
+          const incoming=structuredClone(config);incoming.backtest.starting_balance=2345;
+          assert.deepEqual(mergeOptimizeEditorChanges(config,after,config,incoming),incoming);
+        }})().catch(e=>{{console.error(e);process.exit(1);}});
+    """))
+
+
+def test_approved_coin_tooltips_explain_empty_sides() -> None:
+    """Both side selectors explain that an empty side is disabled."""
+    page = (ROOT / 'frontend/v7_optimize.html').read_text()
+    for side in ('long', 'short'):
+        assert f'Coins approved for {side} trading. An empty side is disabled.' in page

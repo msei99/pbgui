@@ -79,6 +79,23 @@ def test_ohlcv_start_date_routes_start_poll_and_stop_owned_job(monkeypatch) -> N
     assert stopped["status"] == "stopping"
 
 
+def test_ohlcv_start_date_start_error_does_not_expose_exception(monkeypatch) -> None:
+    """Unexpected startup failures never leak their text through responses or logs."""
+    logs = []
+    monkeypatch.setattr(
+        optimize_v8, "start_pb8_ohlcv_start_date_job",
+        lambda _config: (_ for _ in ()).throw(RuntimeError("secret-token-123")),
+    )
+    monkeypatch.setattr(optimize_v8, "_log", lambda *args, **kwargs: logs.append((args, kwargs)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        optimize_v8.start_ohlcv_start_date_lookup({"config": {}}, None)
+
+    assert exc_info.value.status_code == 422
+    assert "secret-token-123" not in exc_info.value.detail
+    assert "secret-token-123" not in repr(logs)
+
+
 @pytest.fixture
 def optimize_v8_roots(tmp_path, monkeypatch):
     """Redirect every PB8 optimize managed root to isolated test storage."""
@@ -97,6 +114,7 @@ def optimize_v8_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(optimize_v8, "_log_dir", lambda: logs)
     monkeypatch.setattr(optimize_v8, "_results_root", lambda: results)
     monkeypatch.setattr(optimize_v8, "_backtests_root", lambda: backtests)
+    monkeypatch.setattr(optimize_v8, "_backtest_count_scans_accepting", True)
     monkeypatch.setattr(optimize_v8, "_v7_configs_dir", lambda: v7_configs)
     monkeypatch.setattr(optimize_v8, "prepare_pb8_config", lambda config, **kwargs: copy.deepcopy(config))
     monkeypatch.setattr(optimize_v8, "load_pb8_config", lambda path: json.loads(Path(path).read_text(encoding="utf-8")))
@@ -111,6 +129,8 @@ def optimize_v8_roots(tmp_path, monkeypatch):
         optimize_v8._active_eval_count_cache.clear()
     with optimize_v8._backtest_count_cache_lock:
         optimize_v8._backtest_count_cache.clear()
+    with optimize_v8._config_summary_cache_lock:
+        optimize_v8._config_summary_cache.clear()
     with optimize_v8._pareto_list_cache_lock:
         optimize_v8._pareto_list_cache.clear()
         optimize_v8._pareto_warning_cache.clear()
@@ -4073,3 +4093,931 @@ def test_loop_prepare_keeps_ordinary_launch_defaults_separate_from_round_patienc
     assert row['loop_id'] == 'loop' and row['loop_owner'] == 'owner'
     assert not row['launch_options']['convergence_config']['convergence_enabled']
     assert config['pbgui']['optimize_runtime'] == {'mode': 'fresh'}
+
+
+def _write_list_config(configs, backtests, name, count=0):
+    """Create small managed list fixtures without PB8/runtime data access."""
+    directory = configs / name
+    directory.mkdir()
+    payload = {"backtest": {"base_dir": f"backtests/pbgui/{name}", "exchanges": ["binance"]},
+               "live": {"strategy_kind": "ema_anchor"}}
+    (directory / "optimize.json").write_text(json.dumps(payload), encoding="utf-8")
+    (backtests / name).mkdir()
+    for index in range(count):
+        run = backtests / name / f"run-{index}"
+        run.mkdir()
+        (run / "analysis.json").write_text("{}", encoding="utf-8")
+    return payload
+
+
+def test_config_list_190_scan_free_and_bounded_warm_caches(optimize_v8_roots, monkeypatch):
+    """190 rows load without root/scans and retain summary/count cache hits after a full pass."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    for index in range(190):
+        _write_list_config(configs, root, f"config-{index:03d}", count=12)
+    calls = {"root": 0, "scan": 0, "read": 0}
+    read, scandir = optimize_v8._read_json, os.scandir
+
+    def resolve():
+        """Count root resolutions."""
+        calls["root"] += 1
+        return root
+
+    def scan(path):
+        """Count directory scans."""
+        if isinstance(path, int) or Path(path).is_relative_to(root):
+            calls["scan"] += 1
+        return scandir(path)
+
+    def read_config(path):
+        """Count JSON reads."""
+        calls["read"] += 1
+        return read(path)
+
+    monkeypatch.setattr(optimize_v8, "_backtests_root", resolve)
+    monkeypatch.setattr(optimize_v8.os, "scandir", scan)
+    monkeypatch.setattr(optimize_v8, "_read_json", read_config)
+    monkeypatch.setattr(optimize_v8, "_list_results", lambda: pytest.fail("no result scan"))
+    for _ in range(2):
+        rows = optimize_v8.list_configs(None, include_result_summary=False, include_backtest_counts=False)["configs"]
+        assert len(rows) == 190
+        assert all(row["backtest_count"] is None and row["backtest_count_status"] == "pending" for row in rows)
+    assert calls == {"root": 0, "scan": 0, "read": 190}
+    cold = optimize_v8.list_configs(None, include_result_summary=False)["configs"]
+    assert all(row["backtest_count"] == 12 for row in cold)
+    assert calls == {"root": 1, "scan": 190 * 13, "read": 190}
+    warm = optimize_v8.list_configs(None, include_result_summary=False)["configs"]
+    assert warm == cold
+    assert calls == {"root": 2, "scan": 190 * 13, "read": 190}
+    for entry in optimize_v8._backtest_count_cache.values():
+        entry["loaded_at"] -= 31
+    expired = optimize_v8.list_configs(None, include_result_summary=False)["configs"]
+    assert expired == cold
+    assert calls == {"root": 3, "scan": 190 * 26, "read": 190}
+    assert len(optimize_v8._backtest_count_cache) == 190
+    assert len(optimize_v8._config_summary_cache) <= 512
+
+
+@pytest.mark.parametrize("body,status", [
+    ({"names": []}, 422), ({"names": ["a"] * 17}, 422), ({"names": "a"}, 422),
+    ({"names": [1]}, 422), ({"names": [".."]}, 400), ({"names": ["a/b"]}, 400),
+    ({"names": ["a\\b"]}, 400), ({"names": ["bad\nname"]}, 400),
+    ({"names": ["a"], "path": "/tmp"}, 422),
+])
+def test_config_count_batch_rejects_untrusted_input(optimize_v8_roots, monkeypatch, body, status):
+    """Malformed and path-bearing requests fail before runtime or filesystem resolution."""
+    monkeypatch.setattr(optimize_v8, "_backtests_root", lambda: pytest.fail("unvalidated request"))
+    with pytest.raises(HTTPException) as raised:
+        optimize_v8.config_backtest_counts(body, None)
+    assert raised.value.status_code == status
+
+
+def test_config_count_batch_auth_and_statuses(optimize_v8_roots, monkeypatch):
+    """The POST route requires auth, allows sixteen names, and returns honest zero/unknown values."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    for index in range(16):
+        _write_list_config(configs, root, f"config-{index}", count=index)
+    app = FastAPI()
+    app.include_router(optimize_v8.router)
+
+    async def request_counts():
+        """Exercise auth dependency and JSON HTTP boundary offline."""
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            denied = await client.post("/configs/backtest-counts", json={"names": ["config-0"]})
+            assert denied.status_code in (401, 403)
+            app.dependency_overrides[optimize_v8.require_auth] = lambda: None
+            reply = await client.post("/configs/backtest-counts", json={"names": [f"config-{i}" for i in range(16)]})
+            assert reply.status_code == 200
+            rows = reply.json()["configs"]
+            assert [row["backtest_count"] for row in rows] == list(range(16))
+            assert all(row["backtest_count_status"] == "known" for row in rows)
+    asyncio.run(request_counts())
+    missing = optimize_v8.config_backtest_counts({"names": ["missing"]}, None)["configs"][0]
+    assert missing["backtest_count"] is None and missing["backtest_count_status"] == "unknown"
+
+
+@pytest.mark.parametrize("link_kind", ["config", "config-directory", "backtest", "root", "nested", "analysis"])
+def test_config_count_symlinks_never_followed(optimize_v8_roots, link_kind):
+    """Symlinked configs/managed paths are unknown; links inside runs cannot inflate counts."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=1)
+    outside = configs.parent / "outside"
+    outside.mkdir()
+    (outside / "analysis.json").write_text("{}")
+    if link_kind == "config":
+        path = configs / "owned" / "optimize.json"
+        target = outside / "optimize.json"
+        path.rename(target)
+        path.symlink_to(target)
+    elif link_kind == "config-directory":
+        path = configs / "owned"
+        target = outside / "owned"
+        path.rename(target)
+        path.symlink_to(target, target_is_directory=True)
+    elif link_kind == "backtest":
+        path = root / "owned"
+        target = outside / "owned"
+        path.rename(target)
+        path.symlink_to(target, target_is_directory=True)
+    elif link_kind == "root":
+        target = root.with_name("outside-root")
+        root.rename(target)
+        root.symlink_to(target, target_is_directory=True)
+    elif link_kind == "nested":
+        (root / "owned" / "linked").symlink_to(outside, target_is_directory=True)
+    else:
+        (root / "owned" / "analysis.json").symlink_to(outside / "analysis.json")
+    row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+    expected = 1 if link_kind in ("nested", "analysis") else None
+    assert row["backtest_count"] == expected
+    assert row["backtest_count_status"] == ("known" if expected is not None else "unknown")
+
+
+@pytest.mark.parametrize("budget", ["time", "entries"])
+def test_config_count_scan_budget_never_caches_partial_count(optimize_v8_roots, monkeypatch, budget):
+    """A bounded scan returns unknown, and a later warm-filesystem retry can complete."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=2)
+    with monkeypatch.context() as limited:
+        if budget == "time":
+            clock = iter([0.0, 0.02, 0.2])
+            limited.setattr(optimize_v8.time, "monotonic", lambda: next(clock, 0.2))
+        else:
+            limited.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_MAX_ENTRIES", 2)
+        row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+        assert row["backtest_count"] is None and row["backtest_count_status"] == "unknown"
+        assert not optimize_v8._backtest_count_cache
+    row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+    assert row["backtest_count"] == 2 and row["backtest_count_status"] == "known"
+
+
+def test_config_summary_external_edits_actions_and_count_ttl(optimize_v8_roots):
+    """Identity validation sees replacement, nested count changes, saves, duplicates and deletion."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    payload = _write_list_config(configs, root, "owned", count=1)
+
+    def rows():
+        """Read through the UI fast mode."""
+        return optimize_v8.list_configs(None, False, False)["configs"]
+
+    assert rows()[0]["strategy"] == "ema_anchor"
+    path = configs / "owned" / "optimize.json"
+    original = path.stat()
+    payload["live"]["strategy_kind"] = "trailing_martingale"
+    path.write_text(json.dumps(payload))
+    os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert rows()[0]["strategy"] == "trailing_martingale"
+    payload["live"]["strategy_kind"] = "ema_anchor"
+    replacement = path.with_suffix(".tmp")
+    replacement.write_text(json.dumps(payload))
+    os.replace(replacement, path)
+    assert rows()[0]["strategy"] == "ema_anchor"
+    assert optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]["backtest_count"] == 1
+    nested = root / "owned" / "run-0" / "new"
+    nested.mkdir()
+    (nested / "analysis.json").write_text("{}")
+    for entry in optimize_v8._backtest_count_cache.values():
+        entry["loaded_at"] -= 31
+    assert optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]["backtest_count"] == 2
+    optimize_v8.save_config("owned", _full_pb8_config(), None)
+    assert rows()[0]["strategy"] == "ema_anchor"
+    optimize_v8.duplicate_config("owned", {"new_name": "copy"}, None)
+    assert {row["name"] for row in rows()} == {"owned", "copy"}
+    optimize_v8.delete_config("copy", None)
+    assert [row["name"] for row in rows()] == ["owned"]
+    # Imported configs are persisted by the same save boundary.
+    optimize_v8.save_config("imported", _full_pb8_config(), None)
+    assert {row["name"] for row in rows()} == {"owned", "imported"}
+
+
+def test_config_list_default_and_internal_callers_remain_compatible(optimize_v8_roots, monkeypatch, tmp_path):
+    """Default API, Vast, AI capability and Loop options retain names/counts and response shapes."""
+    from api import vast, loop_optimizer_v8
+    from ai_capabilities import AICapabilityService
+    import vast_queue
+    import vast_credentials
+
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=1)
+    monkeypatch.setattr(optimize_v8, "_list_results", lambda: [])
+    default = optimize_v8.list_configs(None)
+    assert set(default) == {"configs"}
+    assert default["configs"][0]["backtest_count"] == 1
+    assert vast.configs(None) == default
+    service = AICapabilityService(tmp_path / "capabilities")
+    ai = service._list_optimizer_configs({"version": "v8"})
+    assert ai["configs"][0]["name"] == "owned"
+    assert ai["configs"][0]["backtest_count"] == 1
+    monkeypatch.setattr(vast_queue, "CloudQueue", lambda: SimpleNamespace(root=tmp_path / "cloud", read=lambda: {}))
+    monkeypatch.setattr(vast_credentials, "VastCredentialStore", lambda _root: SimpleNamespace(metadata=lambda: {"configured": False}))
+    response = asyncio.run(loop_optimizer_v8.options(config_name="", session=None, list_only=True))
+    assert json.loads(response.body)["configs"] == ["owned"]
+
+
+def test_config_list_runtime_failure_preserves_rows_and_resolves_once(optimize_v8_roots, monkeypatch):
+    """Unavailable count runtime cannot remove otherwise usable summaries or retry per row."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    for index in range(3):
+        _write_list_config(configs, root, f"config-{index}")
+    calls = []
+
+    def unavailable():
+        """Simulate a failed runtime inspection in an isolated request."""
+        calls.append(True)
+        raise OSError("test runtime unavailable")
+
+    monkeypatch.setattr(optimize_v8, "_backtests_root", unavailable)
+    monkeypatch.setattr(optimize_v8, "_log", lambda *args, **kwargs: None)
+    rows = optimize_v8.list_configs(None, include_result_summary=False)["configs"]
+    assert len(rows) == 3 and calls == [True]
+    assert all(row["backtest_count_status"] == "unknown" for row in rows)
+
+
+def test_config_count_resumes_190_slow_scans_without_partial_counts(optimize_v8_roots, monkeypatch):
+    """A fixed per-request budget makes progress for all 190 independently."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    for index in range(190):
+        _write_list_config(configs, root, f"slow-{index:03d}", count=1)
+
+    class Loop:
+        """Record timers without starting a worker or touching the real event loop."""
+        def call_soon_threadsafe(self, callback, *args):
+            callback(*args)
+
+        def call_later(self, _delay, _callback, *_args):
+            return SimpleNamespace(cancel=lambda: None)
+
+    clock = [0.0]
+
+    def monotonic():
+        """Make each filesystem step consume part of the fixed scan budget."""
+        clock[0] += 0.03
+        return clock[0]
+
+    monkeypatch.setattr(optimize_v8, "_backtest_count_scan_loop", Loop())
+    monkeypatch.setattr(optimize_v8.time, "monotonic", monotonic)
+    names = [f"slow-{index:03d}" for index in range(190)]
+    try:
+        for name in names:
+            row = optimize_v8.config_backtest_counts({"names": [name]}, None)["configs"][0]
+            assert row == {"name": name, "backtest_count": None, "backtest_count_status": "pending"}
+        assert len(optimize_v8._backtest_count_scans) == 190
+        for name in names:
+            for _ in range(12):
+                row = optimize_v8.config_backtest_counts({"names": [name]}, None)["configs"][0]
+                if row["backtest_count_status"] == "known":
+                    break
+                assert row["backtest_count"] is None and row["backtest_count_status"] == "pending"
+            assert row["backtest_count"] == 1 and row["backtest_count_status"] == "known"
+        assert not optimize_v8._backtest_count_scans
+    finally:
+        optimize_v8._shutdown_backtest_scans()
+
+
+def test_config_count_continuation_invalidates_nested_changes_and_cleans_up(optimize_v8_roots, monkeypatch):
+    """Changed descendants never publish a partial count; expiry closes the iterator."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=2)
+
+    class Loop:
+        """Provide cancellable timers under deterministic test control."""
+        def call_soon_threadsafe(self, callback, *args):
+            callback(*args)
+
+        def call_later(self, _delay, _callback, *_args):
+            return SimpleNamespace(cancel=lambda: None)
+
+    clock = [0.0]
+
+    def monotonic():
+        """Advance enough to force a continuation before completion."""
+        clock[0] += 0.03
+        return clock[0]
+
+    monkeypatch.setattr(optimize_v8, "_backtest_count_scan_loop", Loop())
+    monkeypatch.setattr(optimize_v8.time, "monotonic", monotonic)
+    try:
+        first = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+        assert first["backtest_count_status"] == "pending"
+        scan = next(iter(optimize_v8._backtest_count_scans.values()))
+        while len(scan["directories"]) < 2:
+            assert optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]["backtest_count_status"] == "pending"
+        directory = scan["directories"][1][0]
+        (directory / "changed.txt").write_text("test", encoding="utf-8")
+        for _ in range(20):
+            row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+            if row["backtest_count_status"] != "pending":
+                break
+        assert row["backtest_count_status"] == "unknown" and row["backtest_count"] is None
+        assert not optimize_v8._backtest_count_cache
+        row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+        assert row["backtest_count_status"] == "pending"
+        key, scan = next(iter(optimize_v8._backtest_count_scans.items()))
+        iterator = scan["iterator"]
+        clock[0] += optimize_v8._BACKTEST_COUNT_SCAN_IDLE_SECONDS + 1
+        optimize_v8._expire_backtest_scan(key, scan)
+        assert not optimize_v8._backtest_count_scans
+        assert scan["iterator"] is None
+        if iterator is not None:
+            assert list(iterator) == []
+        row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+        assert row["backtest_count_status"] == "pending"
+        key, scan = next(iter(optimize_v8._backtest_count_scans.items()))
+        clock[0] += optimize_v8._BACKTEST_COUNT_SCAN_MAX_AGE_SECONDS + 1
+        optimize_v8._expire_backtest_scan(key, scan)
+        expired = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+        assert expired["backtest_count_status"] == "unknown" and expired["backtest_count"] is None
+        assert not optimize_v8._backtest_count_scans
+    finally:
+        optimize_v8._shutdown_backtest_scans()
+
+
+def test_config_count_identity_changes_cancel_timers_and_shutdown(optimize_v8_roots, monkeypatch):
+    """Replacing a config repeatedly cancels every old timer and shutdown closes the last scan."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=2)
+    timers = []
+
+    class Timer:
+        """Observe cleanup of one scheduled expiry."""
+        cancelled = False
+
+        def cancel(self):
+            """Record cancellation."""
+            self.cancelled = True
+
+    class Loop:
+        """Run timer registration synchronously for deterministic lifecycle checks."""
+        def call_soon_threadsafe(self, callback, *args):
+            callback(*args)
+
+        def call_later(self, _delay, _callback, *_args):
+            timer = Timer()
+            timers.append(timer)
+            return timer
+
+    clock = [0.0]
+
+    def monotonic():
+        """Yield after a small amount of simulated scan work."""
+        clock[0] += 0.03
+        return clock[0]
+
+    monkeypatch.setattr(optimize_v8, "_backtest_count_scan_loop", Loop())
+    monkeypatch.setattr(optimize_v8.time, "monotonic", monotonic)
+    path = configs / "owned" / "optimize.json"
+    try:
+        for index in range(30):
+            row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+            assert row["backtest_count_status"] == "pending"
+            assert len(optimize_v8._backtest_count_scans) == 1
+            assert all(timer.cancelled for timer in timers[:-1])
+            original = path.stat()
+            os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns + index + 1))
+        scan = next(iter(optimize_v8._backtest_count_scans.values()))
+        optimize_v8._shutdown_backtest_scans()
+        assert not optimize_v8._backtest_count_scans
+        assert all(timer.cancelled for timer in timers)
+        assert scan["iterator"] is None
+    finally:
+        optimize_v8._shutdown_backtest_scans()
+
+
+def test_config_count_does_not_open_directory_replaced_by_symlink(optimize_v8_roots, monkeypatch, tmp_path):
+    """A symlink introduced after path validation is rejected by descriptor-based opening."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=1)
+    original_open = optimize_v8._open_backtest_scan_directory
+    outside = tmp_path / "outside-run"
+    swapped = []
+
+    def swap_before_open(scan_root, directory):
+        """Replace the managed child immediately before its descriptor is opened."""
+        if directory.name == "run-0" and not swapped:
+            directory.rename(outside)
+            directory.symlink_to(outside, target_is_directory=True)
+            swapped.append(True)
+        return original_open(scan_root, directory)
+
+    monkeypatch.setattr(optimize_v8, "_open_backtest_scan_directory", swap_before_open)
+    monkeypatch.setattr(optimize_v8, "_log", lambda *args, **kwargs: None)
+    row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+    assert swapped and row["backtest_count_status"] == "unknown"
+    assert row["backtest_count"] is None and not optimize_v8._backtest_count_scans
+
+
+def test_config_count_batch_runtime_error_returns_unknown(optimize_v8_roots, monkeypatch):
+    """An unavailable runtime keeps all batch rows and reports unknown counts."""
+    monkeypatch.setattr(optimize_v8, "_backtests_root", lambda: (_ for _ in ()).throw(OSError("unavailable")))
+    logged = []
+    monkeypatch.setattr(optimize_v8, "_log", lambda *args, **kwargs: logged.append((args, kwargs)))
+    rows = optimize_v8.config_backtest_counts({"names": ["one", "two"]}, None)["configs"]
+    assert [row["backtest_count_status"] for row in rows] == ["unknown", "unknown"]
+    assert logged
+
+
+def test_config_count_shutdown_continues_after_close_failure(optimize_v8_roots, monkeypatch):
+    """One scan cleanup failure cannot prevent the remaining scans from closing."""
+    closed = []
+    logged = []
+    scan_a = {"lock": threading.Lock(), "timer": None, "cancelled": False, "name": "a"}
+    scan_b = {"lock": threading.Lock(), "timer": None, "cancelled": False, "name": "b"}
+    optimize_v8._backtest_count_scans.update(a=scan_a, b=scan_b)
+
+    def close(scan):
+        """Fail the first close and record both cleanup attempts."""
+        closed.append(scan["name"])
+        if scan["name"] == "a":
+            raise OSError("isolated close failure")
+
+    monkeypatch.setattr(optimize_v8, "_close_backtest_scan", close)
+    monkeypatch.setattr(optimize_v8, "_log", lambda *args, **kwargs: logged.append((args, kwargs)))
+    optimize_v8._shutdown_backtest_scans()
+    assert closed == ["a", "b"] and logged
+    assert not optimize_v8._backtest_count_scans
+
+
+def test_config_count_real_loop_expires_worker_scan(optimize_v8_roots, monkeypatch):
+    """The API event loop closes idle descriptors created by a request thread."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=2)
+    monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_SECONDS", 0.0)
+    monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_IDLE_SECONDS", 0.02)
+
+    async def check():
+        """Exercise timer scheduling from a real worker thread."""
+        monkeypatch.setattr(optimize_v8, "_backtest_count_scan_loop", asyncio.get_running_loop())
+        try:
+            row = await asyncio.to_thread(optimize_v8.config_backtest_counts, {"names": ["owned"]}, None)
+            assert row["configs"][0]["backtest_count_status"] == "pending"
+            scan = next(iter(optimize_v8._backtest_count_scans.values()))
+            assert scan["iterator"] is not None
+            await asyncio.sleep(0.1)
+            assert not optimize_v8._backtest_count_scans
+            assert scan["iterator"] is None and "directory_fd" not in scan
+        finally:
+            await asyncio.to_thread(optimize_v8._shutdown_backtest_scans)
+
+    asyncio.run(check())
+
+
+def test_config_count_unavailable_safe_directory_api_is_unknown(optimize_v8_roots, monkeypatch):
+    """A platform without secure descriptor APIs never follows an unsafe fallback path."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=1)
+    monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SAFE_SCANDIR_AVAILABLE", False)
+    logged = []
+    monkeypatch.setattr(optimize_v8, "_log", lambda *args, **kwargs: logged.append((args, kwargs)))
+    row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+    assert row["backtest_count_status"] == "unknown" and row["backtest_count"] is None
+    assert logged and not optimize_v8._backtest_count_scans
+
+
+def test_config_count_close_failure_releases_scan_lock(optimize_v8_roots, monkeypatch):
+    """A failure during iterator cleanup cannot strand its lock."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=1)
+    monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_MAX_ENTRIES", 0)
+    original_close = optimize_v8._close_backtest_scan
+    seen = []
+
+    def fail_once(scan):
+        """Close the resource, then simulate an OS cleanup failure once."""
+        seen.append(scan)
+        original_close(scan)
+        if len(seen) == 1:
+            raise OSError("isolated close failure")
+
+    monkeypatch.setattr(optimize_v8, "_close_backtest_scan", fail_once)
+    monkeypatch.setattr(optimize_v8, "_log", lambda *args, **kwargs: None)
+    row = optimize_v8.config_backtest_counts({"names": ["owned"]}, None)["configs"][0]
+    assert row["backtest_count_status"] == "unknown" and seen
+    assert seen[0]["lock"].acquire(blocking=False)
+    seen[0]["lock"].release()
+    assert not optimize_v8._backtest_count_scans
+
+
+def test_config_count_shutdown_waits_for_pre_registration_request(optimize_v8_roots, monkeypatch):
+    """Shutdown rejects a request paused before registration and waits for its exit."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=1)
+    target = root / "owned"
+    original_identity = optimize_v8._file_identity
+    entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
+    opened = []
+    result = []
+
+    def blocked_identity(path):
+        """Pause the request before it registers any scan."""
+        if path == target and not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+        return original_identity(path)
+
+    monkeypatch.setattr(optimize_v8, "_file_identity", blocked_identity)
+    monkeypatch.setattr(optimize_v8, "_open_backtest_scan_directory", lambda *_: opened.append(True))
+    config = {"backtest": {"base_dir": "backtests/pbgui/owned"}}
+    request = threading.Thread(target=lambda: result.append(optimize_v8._managed_backtest_count_status("owned", config, root)))
+    shutdown = threading.Thread(target=lambda: (optimize_v8._shutdown_backtest_scans(), stopped.set()))
+    try:
+        request.start()
+        assert entered.wait(5)
+        shutdown.start()
+        with optimize_v8._backtest_count_scans_condition:
+            assert optimize_v8._backtest_count_scans_condition.wait_for(
+                lambda: not optimize_v8._backtest_count_scans_accepting, timeout=5,
+            )
+        assert not stopped.is_set()
+        release.set()
+        request.join(5)
+        shutdown.join(5)
+        assert not request.is_alive() and not shutdown.is_alive() and stopped.is_set()
+        assert result == [("unknown", None)] and not opened
+        assert not optimize_v8._backtest_count_scans
+        assert optimize_v8._managed_backtest_count_status("owned", config, root) == ("unknown", None)
+    finally:
+        release.set()
+        request.join(5)
+        if shutdown.ident is not None:
+            shutdown.join(5)
+
+
+def test_config_count_shutdown_waits_for_expired_inflight_scan(optimize_v8_roots, monkeypatch):
+    """An expired scan removed from the registry still belongs to its request until cleanup."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=1)
+    original_open = optimize_v8._open_backtest_scan_directory
+    opened, release, stopped = threading.Event(), threading.Event(), threading.Event()
+    result = []
+
+    def blocked_open(scan_root, directory):
+        """Pause with a real managed directory descriptor held by the request."""
+        descriptor = original_open(scan_root, directory)
+        opened.set()
+        assert release.wait(5)
+        return descriptor
+
+    monkeypatch.setattr(optimize_v8, "_open_backtest_scan_directory", blocked_open)
+    config = {"backtest": {"base_dir": "backtests/pbgui/owned"}}
+    request = threading.Thread(target=lambda: result.append(optimize_v8._managed_backtest_count_status("owned", config, root)))
+    shutdown = threading.Thread(target=lambda: (optimize_v8._shutdown_backtest_scans(), stopped.set()))
+    try:
+        request.start()
+        assert opened.wait(5)
+        key, scan = next(iter(optimize_v8._backtest_count_scans.items()))
+        scan["touched"] -= optimize_v8._BACKTEST_COUNT_SCAN_IDLE_SECONDS + 1
+        optimize_v8._expire_backtest_scan(key, scan)
+        assert not optimize_v8._backtest_count_scans
+        shutdown.start()
+        with optimize_v8._backtest_count_scans_condition:
+            assert optimize_v8._backtest_count_scans_condition.wait_for(
+                lambda: not optimize_v8._backtest_count_scans_accepting, timeout=5,
+            )
+        assert not stopped.is_set()
+        release.set()
+        request.join(5)
+        shutdown.join(5)
+        assert not request.is_alive() and not shutdown.is_alive() and stopped.is_set()
+        assert result == [("unknown", None)] and scan["iterator"] is None
+        assert "directory_fd" not in scan and not optimize_v8._backtest_count_scans
+    finally:
+        release.set()
+        request.join(5)
+        if shutdown.ident is not None:
+            shutdown.join(5)
+
+
+@pytest.mark.parametrize("age,expected", [(29, "known"), (31, "unknown")])
+def test_config_count_verification_age_controls_publication(optimize_v8_roots, monkeypatch, age, expected):
+    """A count cannot gain a fresh cache lifetime after a long verification."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=2)
+
+    class Loop:
+        """Keep continuation state without creating a background task in this test."""
+        def call_soon_threadsafe(self, _callback, *_args):
+            pass
+
+    clock = [100.0]
+    monkeypatch.setattr(optimize_v8, "_backtest_count_scan_loop", Loop())
+    monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_SECONDS", 0.0)
+    monkeypatch.setattr(optimize_v8.time, "monotonic", lambda: clock[0])
+    config = {"backtest": {"base_dir": "backtests/pbgui/owned"}}
+    try:
+        started = None
+        row = None
+        for _ in range(50):
+            status, count = optimize_v8._managed_backtest_count_status("owned", config, root)
+            scan = optimize_v8._backtest_count_scans.get(str(root / "owned"))
+            if started is None and scan and scan["verify_index"] is not None:
+                started = scan["verify_started"]
+                clock[0] += age
+            if status != "pending":
+                row = (status, count)
+                break
+        assert started == 100.0 and row == (expected, 2 if expected == "known" else None)
+        if expected == "known":
+            assert optimize_v8._backtest_count_cache[str(root / "owned")]["loaded_at"] == started
+        else:
+            assert not optimize_v8._backtest_count_cache
+    finally:
+        optimize_v8._shutdown_backtest_scans()
+
+
+def test_config_count_failed_entry_cannot_be_resumed_by_parallel_request(optimize_v8_roots, monkeypatch):
+    """Discard a consumed, failed entry before another request can publish a partial count."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    config = _write_list_config(configs, root, "owned", count=0)
+    (root / "owned" / "analysis.json").write_text("{}", encoding="utf-8")
+    original_scandir = os.scandir
+    failed, logging, release = threading.Event(), threading.Event(), threading.Event()
+    results = []
+
+    class FailingIterator:
+        """Consume one real entry, then fail its metadata check exactly once."""
+        def __init__(self, descriptor):
+            self.iterator = original_scandir(descriptor)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            entry = next(self.iterator)
+            if not failed.is_set():
+                failed.set()
+
+                def fail_stat(**_kwargs):
+                    """Model a transient filesystem error after next() advanced the cursor."""
+                    raise OSError("isolated entry stat failure")
+
+                return SimpleNamespace(name=entry.name, is_symlink=entry.is_symlink,
+                                       is_dir=entry.is_dir, is_file=fail_stat)
+            return entry
+
+        def close(self):
+            """Release the underlying real directory iterator."""
+            self.iterator.close()
+
+    def block_error_log(*_args, **_kwargs):
+        """Allow the second request to run before the first error handler finishes."""
+        logging.set()
+        assert release.wait(5)
+
+    monkeypatch.setattr(optimize_v8.os, "scandir", FailingIterator)
+    monkeypatch.setattr(optimize_v8, "_log", block_error_log)
+    request = threading.Thread(target=lambda: results.append(
+        optimize_v8._managed_backtest_count_status("owned", config, root)))
+    try:
+        request.start()
+        assert logging.wait(5)
+        # A fresh scan must include the entry consumed by the failed cursor.
+        assert optimize_v8._managed_backtest_count_status("owned", config, root) == ("known", 1)
+        assert next(iter(optimize_v8._backtest_count_cache.values()))["count"] == 1
+    finally:
+        release.set()
+        request.join(5)
+    assert not request.is_alive() and results == [("unknown", None)]
+    assert not optimize_v8._backtest_count_scans
+
+
+def test_config_count_delayed_filesystem_call_resumes_without_partial_value(optimize_v8_roots, monkeypatch):
+    """An individually slow filesystem call yields pending, then completes on later requests."""
+    import time
+
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    _write_list_config(configs, root, "owned", count=2)
+    original_identity = optimize_v8._descriptor_identity
+    delayed = []
+
+    def slow_first_identity(descriptor):
+        """Delay one real descriptor inspection beyond the cooperative step budget."""
+        identity = original_identity(descriptor)
+        if not delayed:
+            delayed.append(True)
+            time.sleep(0.02)
+        return identity
+
+    monkeypatch.setattr(optimize_v8, "_descriptor_identity", slow_first_identity)
+    monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_SECONDS", 0.005)
+
+    async def check():
+        """Own the continuation timers on a real event loop and drain them on exit."""
+        monkeypatch.setattr(optimize_v8, "_backtest_count_scan_loop", asyncio.get_running_loop())
+        try:
+            reply = await asyncio.to_thread(optimize_v8.config_backtest_counts, {"names": ["owned"]}, None)
+            assert delayed and reply["configs"][0]["backtest_count_status"] == "pending"
+            assert reply["configs"][0]["backtest_count"] is None
+            assert not optimize_v8._backtest_count_cache
+            for _ in range(50):
+                reply = await asyncio.to_thread(optimize_v8.config_backtest_counts, {"names": ["owned"]}, None)
+                row = reply["configs"][0]
+                if row["backtest_count_status"] == "known":
+                    break
+                assert row["backtest_count_status"] == "pending" and row["backtest_count"] is None
+            assert row["backtest_count_status"] == "known" and row["backtest_count"] == 2
+            assert not optimize_v8._backtest_count_scans
+        finally:
+            await asyncio.to_thread(optimize_v8._shutdown_backtest_scans)
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("caller", ["helper", "default", "vast", "ai", "loop"])
+@pytest.mark.parametrize("api_loop", [False, True])
+def test_config_count_slow_scan_preserves_synchronous_callers(
+    optimize_v8_roots, monkeypatch, tmp_path, caller, api_loop,
+):
+    """Legacy callers wait for a complete count beyond one asynchronous scan step."""
+    from api import vast, loop_optimizer_v8
+    from ai_capabilities import AICapabilityService
+    import vast_queue
+    import vast_credentials
+
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    config = _write_list_config(configs, root, "owned", count=2)
+    original_identity = optimize_v8._descriptor_identity
+    original_count = optimize_v8._managed_backtest_count
+    clock, counts, root_calls = [100.0], [], []
+
+    def delayed_identity(descriptor):
+        """Model a directory access exceeding 100 ms without a timing assertion."""
+        identity = original_identity(descriptor)
+        clock[0] += 0.2
+        return identity
+
+    def record_count(*args, **kwargs):
+        """Observe counts even for callers that only expose configuration names."""
+        count = original_count(*args, **kwargs)
+        counts.append(count)
+        return count
+
+    monkeypatch.setattr(optimize_v8, "_descriptor_identity", delayed_identity)
+    monkeypatch.setattr(optimize_v8.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(optimize_v8, "_managed_backtest_count", record_count)
+    monkeypatch.setattr(optimize_v8, "_backtests_root", lambda: root_calls.append(True) or root)
+    monkeypatch.setattr(optimize_v8, "_list_results", lambda: [])
+    if api_loop:
+        monkeypatch.setattr(optimize_v8, "_backtest_count_scan_loop", SimpleNamespace(
+            call_soon_threadsafe=lambda *_args: None,
+        ))
+    if caller == "helper":
+        assert optimize_v8._managed_backtest_count("owned", config) == 2
+    elif caller in ("default", "vast"):
+        response = optimize_v8.list_configs(None) if caller == "default" else vast.configs(None)
+        assert set(response) == {"configs"}
+        assert response["configs"][0]["backtest_count"] == 2
+        assert response["configs"][0]["backtest_count_status"] == "known"
+    elif caller == "ai":
+        service = AICapabilityService(tmp_path / "capabilities")
+        response = service._list_optimizer_configs({"version": "v8"})
+        assert response["configs"][0]["backtest_count"] == 2
+    else:
+        monkeypatch.setattr(vast_queue, "CloudQueue", lambda: SimpleNamespace(root=tmp_path / "cloud", read=lambda: {}))
+        monkeypatch.setattr(vast_credentials, "VastCredentialStore", lambda _root: SimpleNamespace(metadata=lambda: {"configured": False}))
+        response = asyncio.run(loop_optimizer_v8.options(config_name="", session=None, list_only=True))
+        assert json.loads(response.body)["configs"] == ["owned"]
+    assert counts == [2] and len(root_calls) == 1
+    assert clock[0] > 100.1
+    assert not optimize_v8._backtest_count_scans
+
+
+@pytest.mark.parametrize("outcome", ["complete", "error", "shutdown"])
+def test_config_count_synchronous_waiter_revalidates_after_shared_scan(
+    optimize_v8_roots, monkeypatch, outcome,
+):
+    """A legacy waiter uses a verified count, retries a failed cursor, or exits on shutdown."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    config = _write_list_config(configs, root, "owned", count=2)
+    original_identity = optimize_v8._descriptor_identity
+    entered, waiting, release = threading.Event(), threading.Event(), threading.Event()
+    first_result, second_result, errors = [], [], []
+    monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_SECONDS", 30.0)
+    monkeypatch.setattr(optimize_v8, "_log", lambda *_args, **_kwargs: None)
+
+    def block_first_identity(descriptor):
+        """Pause only the first scan while it owns the descriptor and cursor lock."""
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+            if outcome == "error":
+                raise OSError("isolated first-request failure")
+        return original_identity(descriptor)
+
+    def request_first():
+        """Capture any worker failure instead of hiding it in a thread warning."""
+        try:
+            first_result.append(optimize_v8._managed_backtest_count_status("owned", config, root))
+        except Exception as exc:
+            errors.append(exc)
+
+    def request_second():
+        """Invoke the synchronous interface against the already registered cursor."""
+        try:
+            second_result.append(optimize_v8._managed_backtest_count("owned", config, root))
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(optimize_v8, "_descriptor_identity", block_first_identity)
+    first = threading.Thread(target=request_first)
+    second = threading.Thread(target=request_second)
+    shutdown = threading.Thread(target=optimize_v8._shutdown_backtest_scans)
+    try:
+        first.start()
+        assert entered.wait(5)
+        scan = next(iter(optimize_v8._backtest_count_scans.values()))
+        original_lock = scan["lock"]
+
+        class ObservedLock:
+            """Observe the actual bounded wait on the same cursor lock."""
+            def acquire(self, blocking=True, timeout=-1):
+                if timeout != -1:
+                    waiting.set()
+                return original_lock.acquire(blocking, timeout)
+
+            def release(self):
+                """Release the real shared lock."""
+                original_lock.release()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *_args):
+                self.release()
+
+        scan["lock"] = ObservedLock()
+        second.start()
+        assert waiting.wait(5) and second.is_alive()
+        if outcome == "shutdown":
+            shutdown.start()
+            with optimize_v8._backtest_count_scans_condition:
+                assert optimize_v8._backtest_count_scans_condition.wait_for(
+                    lambda: not optimize_v8._backtest_count_scans_accepting, timeout=5,
+                )
+        release.set()
+        first.join(5)
+        second.join(5)
+        if shutdown.ident is not None:
+            shutdown.join(5)
+        assert not first.is_alive() and not second.is_alive() and not errors
+        assert first_result == [("known", 2) if outcome == "complete" else ("unknown", None)]
+        assert second_result == [None if outcome == "shutdown" else 2]
+        assert not optimize_v8._backtest_count_scans
+        assert optimize_v8._backtest_count_active_requests == 0
+        if outcome == "shutdown":
+            assert not shutdown.is_alive()
+    finally:
+        release.set()
+        first.join(5)
+        if second.ident is not None:
+            second.join(5)
+        if shutdown.ident is not None:
+            shutdown.join(5)
+
+
+@pytest.mark.parametrize("limit", ["entries", "paths", "lifetime"])
+def test_config_count_synchronous_completion_keeps_safety_limits(optimize_v8_roots, monkeypatch, limit):
+    """Synchronous compatibility cannot bypass bounded traversal or publish a partial count."""
+    configs, *_ = optimize_v8_roots
+    root = optimize_v8._backtests_root()
+    config = _write_list_config(configs, root, "owned", count=2)
+    if limit == "entries":
+        monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_MAX_ENTRIES", 0)
+    elif limit == "paths":
+        monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_MAX_PATH_BYTES", 1)
+    else:
+        clock = [100.0]
+        original_identity = optimize_v8._descriptor_identity
+
+        def delayed_identity(descriptor):
+            """Exceed the complete-request lifetime during one filesystem operation."""
+            identity = original_identity(descriptor)
+            clock[0] += 1.0
+            return identity
+
+        monkeypatch.setattr(optimize_v8.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(optimize_v8, "_descriptor_identity", delayed_identity)
+        monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_MAX_AGE_SECONDS", 0.3)
+    assert optimize_v8._managed_backtest_count("owned", config, root) is None
+    assert not optimize_v8._backtest_count_cache and not optimize_v8._backtest_count_scans

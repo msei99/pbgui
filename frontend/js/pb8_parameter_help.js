@@ -225,8 +225,8 @@
     function show(event) {
       if (disposed || !event.target.closest || tooltip.contains(event.target)) return;
       // Editing a value must never open its label's documentation.
-      if (event.type === 'focusin' || (event.target.matches &&
-          event.target.matches('input, select, textarea, button, [contenteditable="true"]'))) {
+      if (event.target.matches &&
+          event.target.matches('input, select, textarea, button, [contenteditable="true"]')) {
         hide();
         return;
       }
@@ -235,6 +235,11 @@
       // Context-specific PBGui help takes precedence over upstream parameter docs.
       if (target.hasAttribute('data-tip-context')) { hide(); return; }
       var help = resolveHelp(entries, fieldFor(target), editor);
+      // Focusable label help can also describe PBGui-specific defaults before
+      // native parameter documentation has loaded. Value controls stay quiet.
+      if (!help && event.type === 'focusin' && target.tabIndex >= 0 && target.getAttribute('data-tip')) {
+        help = {text: target.getAttribute('data-tip')};
+      }
       if (!help) {
         if (isPlaceholder(target.getAttribute('data-tip'))) target.removeAttribute('data-tip');
         return;
@@ -242,7 +247,7 @@
       clearTimeout(hideTimer);
       var text = plainText(help.text);
       target.setAttribute('data-tip', text);
-      tooltip.textContent = text + '\n\nPassivbot · docs/' + help.source;
+      tooltip.textContent = text + (help.source ? '\n\nPassivbot · docs/' + help.source : '');
       active = target;
       tooltip.hidden = false;
       var legacy = document.getElementById('data-tip-tooltip');
@@ -260,7 +265,12 @@
       hideTimer = setTimeout(hide, 150);
     }
 
-    function escape(event) { if (event.key === 'Escape') hide(); }
+    function escape(event) {
+      if (event.key !== 'Escape' || tooltip.hidden) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      hide();
+    }
     function hold() { clearTimeout(hideTimer); }
     tooltip.addEventListener('mouseenter', hold);
     tooltip.addEventListener('mouseleave', leave);
@@ -269,7 +279,7 @@
     document.addEventListener('mouseout', leave);
     document.addEventListener('focusout', leave);
     document.addEventListener('mousemove', position);
-    document.addEventListener('keydown', escape);
+    document.addEventListener('keydown', escape, true);
 
     var timeout = setTimeout(function() { controller.abort(); }, 10000);
     fetch(match[1] + '/api/v8/parameter-help', {credentials: 'same-origin', signal: controller.signal})
@@ -292,7 +302,7 @@
       document.removeEventListener('mouseout', leave);
       document.removeEventListener('focusout', leave);
       document.removeEventListener('mousemove', position);
-      document.removeEventListener('keydown', escape);
+      document.removeEventListener('keydown', escape, true);
     }, {once: true});
     return true;
   }

@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import platform
+import re
 import signal
 import subprocess
 import sys
@@ -63,6 +64,79 @@ class PB8OhlcvBusyError(PB8OhlcvUnavailableError):
 
 class PB8OhlcvUnsupportedError(PB8OhlcvError):
     """Raised when PB8 has no safe native preparation path for a request."""
+
+
+_START_DATE_HSL_RESTART_CHOICES = {
+    scope + ".restart_after_red_policy requires an explicit choice of always or never; threshold is removed": (
+        "HSL restart policy unresolved: " + scope + ".restart_after_red_policy. "
+        + ("For an existing portfolio HSL configuration, " if scope == "bot.hsl" else "")
+        + "Review always or never in Bounds & Overrides > "
+        + {"bot.long.hsl": "Long", "bot.short.hsl": "Short", "bot.hsl": "Portfolio"}[scope]
+        + " HSL restart after RED. "
+        + ("Otherwise complete the portfolio HSL configuration first. " if scope == "bot.hsl" else "")
+        + "Unresolved policies default to always in the form."
+    )
+    for scope in ("bot.long.hsl", "bot.short.hsl", "bot.hsl")
+}
+
+
+def safe_start_date_error(exc: Exception) -> str:
+    """Expose only known constant diagnostics, never arbitrary PB8 exception text."""
+    detail = str(exc).strip()
+    if detail in _START_DATE_HSL_RESTART_CHOICES:
+        return _START_DATE_HSL_RESTART_CHOICES[detail]
+    if detail in _START_DATE_HSL_RESTART_CHOICES.values():
+        return detail
+    safe_messages = {
+        "config must be an object",
+        "backtest.exchanges is empty",
+        "backtest.offline must be a boolean",
+        "The installed PB8 runtime does not support backtest.offline",
+        "OHLCV start-date lookup requires explicitly selected approved coins",
+        "Select at least one approved coin before looking up an OHLCV start date",
+        "PB8 OHLCV start-date lookup capacity is busy",
+        "PB8 is being installed or updated. Retry the OHLCV operation when the update finishes.",
+        "PB8 OHLCV start-date lookup timed out before helper launch",
+        f"PB8 OHLCV start-date lookup timed out after {_START_DATE_TIMEOUT_SECONDS:g} seconds",
+        "PB8 OHLCV start-date helper rejected its request",
+        "PB8 OHLCV start-date helper response exceeds the size limit",
+        "PB8 OHLCV start-date helper progress exceeds the size limit",
+        "PB8 OHLCV start-date helper pipes are unavailable",
+        "PB8 OHLCV start-date helper returned an invalid response",
+        "PB8 OHLCV start-date helper returned no recommendations",
+    }
+    if detail in safe_messages or re.fullmatch(
+        r"OHLCV start-date lookup expands to [0-9]{1,8} exchange/coin pairs; maximum is [0-9]{1,8}", detail
+    ):
+        return detail
+    return "PB8 OHLCV start-date lookup failed. Check the configuration and PB8 runtime, then retry."
+
+
+_START_DATE_ERROR_STAGES = {
+    "configuration": "Check the selected coins, dates and strategy configuration.",
+    "warmup": "Check the strategy and EMA warmup settings.",
+    "market_resolution": "Check the selected exchanges, coins and public market connectivity.",
+    "runtime": "Check that the configured PB8 runtime is ready and compatible.",
+    "helper": "Retry after checking PB8 helper compatibility and local data access.",
+}
+_START_DATE_ERROR_CATEGORIES = {"invalid_input", "timeout", "unavailable", "failure"}
+
+
+def _start_date_error_context(stage, category, exc: Exception) -> tuple[str, str]:
+    """Accept fixed codes only, including when a helper response is malformed."""
+    if not isinstance(stage, str) or stage not in _START_DATE_ERROR_STAGES:
+        stage = "helper"
+    if not isinstance(category, str) or category not in _START_DATE_ERROR_CATEGORIES:
+        category = (
+            "timeout" if isinstance(exc, TimeoutError) or str(exc) in {
+                "PB8 OHLCV start-date lookup timed out before helper launch",
+                f"PB8 OHLCV start-date lookup timed out after {_START_DATE_TIMEOUT_SECONDS:g} seconds",
+            }
+            else "invalid_input" if isinstance(exc, (TypeError, ValueError, KeyError))
+            else "unavailable" if isinstance(exc, (ImportError, OSError, PB8OhlcvUnavailableError))
+            else "failure"
+        )
+    return stage, category
 
 
 def _utc_ms() -> int:
@@ -220,6 +294,8 @@ def _public_start_date_job(job: dict[str, Any]) -> dict[str, Any]:
                 "progress",
                 "result",
                 "error",
+                "error_stage",
+                "error_category",
             )
         }
     )
@@ -404,6 +480,7 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
     """Run one PB8 start-date helper and publish its streamed pair progress."""
     runtime_lease = None
     process = None
+    error_stage, error_category = "runtime", None
     with _START_DATE_LOCK:
         deadline = (_START_DATE_JOBS.get(job_id) or {}).get(
             "_deadline", time.monotonic() + _START_DATE_TIMEOUT_SECONDS
@@ -411,6 +488,7 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
     try:
         runtime_lease = _acquire_runtime_lease()
         status = _runtime()
+        error_stage = "configuration"
         config, _source_dir, _catalog = resolve_pb8_ohlcv_paths(raw_config, status)
         helper = Path(__file__).resolve().with_name("pb8_ohlcv_runtime_helper.py")
         request = {
@@ -418,6 +496,7 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
             "config": config,
             "include_start_date_options": True,
         }
+        error_stage = "helper"
         with _START_DATE_LOCK:
             job = _START_DATE_JOBS.get(job_id)
             if not job:
@@ -460,6 +539,9 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
         except json.JSONDecodeError as exc:
             raise PB8OhlcvError("PB8 OHLCV start-date helper returned an invalid response") from exc
         if returncode != 0 or not response.get("ok"):
+            error_stage, error_category = _start_date_error_context(
+                response.get("error_stage"), response.get("error_category"), PB8OhlcvError()
+            )
             raise PB8OhlcvError(str(response.get("detail") or "PB8 OHLCV start-date lookup failed")[:1000])
         result = response.get("result")
         if not isinstance(result, dict) or not isinstance(result.get("start_date_options"), dict):
@@ -480,7 +562,9 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
                     error=None,
                 )
     except Exception as exc:
-        detail = str(exc).strip() or exc.__class__.__name__
+        error_stage, error_category = _start_date_error_context(error_stage, error_category, exc)
+        detail = (f"[{error_stage}/{error_category}] {safe_start_date_error(exc)} "
+                  + _START_DATE_ERROR_STAGES[error_stage])
         _log(SERVICE, f"PB8 OHLCV start-date job failed: {detail}", level="WARNING")
         with _START_DATE_LOCK:
             job = _START_DATE_JOBS.get(job_id)
@@ -488,7 +572,8 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
                 if job.get("stop_requested"):
                     job.update(status="stopped", finished_at=_utc_ms(), result=None, error=None)
                 else:
-                    job.update(status="error", finished_at=_utc_ms(), result=None, error=detail[:1000])
+                    job.update(status="error", finished_at=_utc_ms(), result=None, error=detail[:1000],
+                               error_stage=error_stage, error_category=error_category)
     finally:
         if process is not None and process.poll() is None:
             _terminate_start_date_process(process)
@@ -538,6 +623,8 @@ def start_pb8_ohlcv_start_date_job(raw_config: dict[str, Any]) -> dict[str, Any]
             },
             "result": None,
             "error": None,
+            "error_stage": None,
+            "error_category": None,
         }
         thread = threading.Thread(
             target=_run_start_date_job,

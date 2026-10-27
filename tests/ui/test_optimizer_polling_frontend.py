@@ -266,3 +266,320 @@ def test_settings_failed_save_and_disposed_responses_preserve_drafts():
   assert.equal(requests.length,6);assert.equal(timers.size,0);
 })().catch(fail);
 ''')
+
+
+def _config_harness():
+    """Run actual list/count ownership with controlled requests and time."""
+    functions = _functions('frontend/v7_optimize.html', [
+        'configCountValue', 'configCountText', 'cancelConfigRequests', 'configCountsVisible',
+        'loadConfigCounts', 'loadConfigs', 'scheduleOptimizeConfigs', 'removeConfigsFromState',
+        'configNavigationKey', 'persistConfigNavigation', 'restoreConfigNavigation',
+        'getConfigSortValue', 'sortConfigs',
+    ])
+    return r'''
+const assert=require('node:assert/strict');
+const optimizeEditorAdapter={isV8:true};
+const document={visibilityState:'visible'};
+const state={panel:'configs',configGeneration:0,configs:[],selectedConfigs:new Set(),
+ configRequest:null,configCountRequest:null,configsDisposed:false,configsLoadedOnce:false,
+ configPollTimer:null,configSearch:'',configSortKey:'backtest_count',configSortDir:'asc',configPollError:''};
+let sequence=0, renders=0;
+const timers=new Map(), intervals=new Map(), storage=new Map(), requests=[];
+const window={setTimeout(fn,ms){assert.ok(ms===10000 || ms===2000);const id=++sequence;timers.set(id,()=>{timers.delete(id);fn();});return id;},
+ clearTimeout(id){timers.delete(id);},setInterval(fn,ms){assert.equal(ms,30000);intervals.set(++sequence,fn);return sequence;},
+ clearInterval(id){intervals.delete(id);},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)}};
+const input={value:'',focus:true};const el=()=>input;
+const renderConfigs=()=>renders++;
+const apiFetch=(path,opts={})=>new Promise((resolve,reject)=>requests.push({path,opts,resolve,reject}));
+const compareSortValues=(a,b,dir)=>(a===b?0:a<b?-1:1)*(dir==='desc'?-1:1);
+const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
+const pending=name=>({name,backtest_count:null,backtest_count_status:'pending'});
+const known=(name,n)=>({name,backtest_count:n,backtest_count_status:'known'});
+const fail=e=>{console.error(e);process.exitCode=1;};
+''' + functions + '\n'
+
+
+def test_config_counts_status_sort_and_navigation():
+    """Unknowns sort last in both directions, zero stays known, and PB7/PB8 storage is separate."""
+    _node(_config_harness() + r'''
+assert.equal(configCountText(pending('p')),'…');
+assert.equal(configCountText({name:'u',backtest_count_status:'unknown'}),'—');
+assert.equal(configCountText(known('zero',0)),'0');
+assert.equal(configCountValue({backtest_count:null}),null);
+const rows=[pending('p'),known('two',2),known('zero',0),{name:'u',backtest_count:null,backtest_count_status:'unknown'}];
+assert.deepEqual(sortConfigs(rows).map(x=>x.name),['zero','two','p','u']);
+state.configSortDir='desc';assert.deepEqual(sortConfigs(rows).map(x=>x.name),['two','zero','p','u']);
+state.configSearch='two';state.selectedConfigs.add('two');persistConfigNavigation();
+const key=configNavigationKey();state.configSearch='';state.selectedConfigs.clear();restoreConfigNavigation();
+assert.equal(state.configSearch,'two');assert.equal(input.value,'two');assert.ok(state.selectedConfigs.has('two'));
+optimizeEditorAdapter.isV8=false;assert.notEqual(configNavigationKey(),key);
+''')
+
+
+def test_config_list_coalesces_batches_and_rejects_deleted_or_stale_responses():
+    """Usable rows precede counts; list/count generations cannot revive deleted configurations."""
+    _node(_config_harness() + r'''
+(async()=>{
+ const first=loadConfigs(), same=loadConfigs();assert.equal(first,same);assert.equal(requests.length,1);
+ assert.match(requests[0].path,/include_result_summary=false&include_backtest_counts=false/);
+ requests[0].resolve({configs:Array.from({length:190},(_,i)=>pending('config-'+i))});await first;
+ assert.equal(state.configs.length,190);assert.equal(renders,1);assert.equal(requests.length,2);
+ assert.equal(JSON.parse(requests[1].opts.body).names.length,16);
+ let batches=0;
+ while(state.configCountRequest){
+  const req=requests.at(-1);const names=JSON.parse(req.opts.body).names;assert.ok(names.length<=16);
+  assert.equal(req.path,'/configs/backtest-counts');
+  req.resolve({configs:names.map(n=>known(n,0))});batches++;await flush();
+ }
+ assert.equal(batches,12);assert.ok(state.configs.every(c=>c.backtest_count===0));assert.equal(timers.size,0);
+ const stale=loadConfigs();const oldList=requests.at(-1);
+ const newer=loadConfigs(true);assert.equal(oldList.opts.signal.aborted,true);
+ requests.at(-1).resolve({configs:[pending('new')]});await newer;
+ const oldCount=requests.at(-1);removeConfigsFromState(['new']);
+ oldList.resolve({configs:[pending('deleted')]});await stale;
+ oldCount.resolve({configs:[known('new',99)]});await flush();
+ assert.equal(state.configs.length,0);assert.equal(timers.size,0);
+ const deleted=loadConfigs();const deletedList=requests.at(-1);removeConfigsFromState(['deleted']);
+ deletedList.resolve({configs:[pending('deleted')]});await deleted;assert.equal(state.configs.length,0);
+})().catch(fail);
+''')
+
+
+def test_config_poll_resumes_incomplete_count_pass_after_list_changes():
+    """Polls refresh metadata, resume unfinished counts, and reject interrupted responses."""
+    _node(_config_harness() + r'''
+(async()=>{
+ scheduleOptimizeConfigs(true);
+ const first=state.configRequest.promise;
+ const rows=Array.from({length:190},(_,i)=>({...pending('config-'+i),modified:'v1'}));
+ requests[0].resolve({configs:rows});
+ await first;
+ const batch1=requests.at(-1);
+ batch1.resolve({configs:JSON.parse(batch1.opts.body).names.map(name=>known(name,1))});
+ await flush();
+ const interrupted=requests.at(-1);
+ Array.from(intervals.values())[0]();
+ assert.equal(interrupted.opts.signal.aborted,true);
+ const nextList=requests.at(-1);assert.match(nextList.path,/\/configs\?/);
+ const changed=rows.filter(cfg=>cfg.name!=='config-1').map(cfg=>({...pending(cfg.name),modified:cfg.modified}));
+ changed[0].modified='v2';
+ delete changed[1].modified;
+ changed.push({...pending('new'),modified:'v1'});
+ nextList.resolve({configs:changed});await flush();
+ assert.equal(state.configCountProgress.completed.has('config-1'),false);
+ const resumed=requests.at(-1);
+ assert.deepEqual(JSON.parse(resumed.opts.body).names.slice(0,3),['config-0','config-2','config-16']);
+ assert.equal(state.configs.find(cfg=>cfg.name==='config-3').backtest_count,1);
+ interrupted.resolve({configs:[known('config-16',999)]});await flush();
+ assert.notEqual(state.configs.find(cfg=>cfg.name==='config-16').backtest_count,999);
+ let batches=0;
+ while(state.configCountRequest){
+  const req=requests.at(-1);
+  const names=JSON.parse(req.opts.body).names;
+  req.resolve({configs:names.map(name=>known(name,1))});
+  await flush();batches++;
+ }
+ assert.equal(batches,12);assert.ok(state.configs.every(cfg=>cfg.backtest_count===1));
+ assert.equal(state.configCountProgress,null);
+ Array.from(intervals.values())[0]();
+ const fresh=requests.at(-1);fresh.resolve({configs:changed.map(cfg=>({...pending(cfg.name),modified:cfg.modified}))});
+ await flush();assert.equal(JSON.parse(requests.at(-1).opts.body).names[0],'config-0');
+ const active=requests.at(-1);document.visibilityState='hidden';scheduleOptimizeConfigs(false);
+ assert.equal(active.opts.signal.aborted,true);assert.equal(state.configCountProgress,null);
+})().catch(fail);
+''')
+
+
+def test_config_count_timeout_advances_to_later_batches():
+    """A timed-out batch becomes unknown and does not starve subsequent names."""
+    _node(_config_harness() + r'''
+(async()=>{
+ state.configs=Array.from({length:33},(_,i)=>({...known('config-'+i,9),modified:'v1'}));
+ const first=loadConfigs();
+ requests[0].resolve({configs:Array.from({length:33},(_,i)=>({...pending('config-'+i),modified:'v1'}))});
+ await first;
+ const slow=requests.at(-1);
+ Array.from(timers.values())[0]();assert.equal(slow.opts.signal.aborted,true);
+ const error=new Error('timeout');error.name='AbortError';slow.reject(error);await flush();
+ assert.ok(state.configs.slice(0,16).every(cfg=>cfg.backtest_count_status==='unknown'));
+ const second=requests.at(-1);
+ assert.equal(JSON.parse(second.opts.body).names[0],'config-16');
+ second.resolve({configs:JSON.parse(second.opts.body).names.map(name=>known(name,2))});await flush();
+ const last=requests.at(-1);last.resolve({configs:JSON.parse(last.opts.body).names.map(name=>known(name,2))});await flush();
+ assert.equal(state.configs[32].backtest_count,2);assert.equal(state.configCountProgress,null);
+})().catch(fail);
+''')
+
+
+def test_pending_count_scans_retry_fairly_for_190_configs():
+    """All scans make progress in bounded batches without evicting active cache entries."""
+    _node(_config_harness() + r'''
+(async()=>{
+ scheduleOptimizeConfigs(true);
+ state.configs=[{...known('config-0',0),modified:'v1'}];
+ const first=state.configRequest.promise;
+ const rows=Array.from({length:190},(_,i)=>({...pending('config-'+i),modified:'v1'}));
+ requests[0].resolve({configs:rows});await first;
+ const active=new Map(), capacity=256;
+ let batches=0;
+ while(state.configCountRequest){
+  const req=requests.at(-1), names=JSON.parse(req.opts.body).names;
+  assert.ok(names.length<=16);
+  const results=names.map(name=>{
+   if(!active.has(name)){assert.ok(active.size<capacity);active.set(name,0);}
+   active.set(name,active.get(name)+1);
+   return active.get(name)<3 ? pending(name) : known(name,1);
+  });
+  req.resolve({configs:results});await flush();batches++;
+  if(batches===1){
+   const interrupted=requests.at(-1);
+   Array.from(intervals.values())[0]();assert.equal(interrupted.opts.signal.aborted,true);
+   requests.at(-1).resolve({configs:rows.map(cfg=>({...pending(cfg.name),modified:cfg.modified}))});await flush();
+   assert.equal(JSON.parse(requests.at(-1).opts.body).names[0],'config-16');
+   interrupted.resolve({configs:[known('config-16',999)]});await flush();
+  }
+ }
+ assert.equal(batches,12);assert.equal(active.size,190);
+ assert.equal(configCountText(state.configs[0]),'0');
+ assert.equal(configCountText(state.configs[1]),'…');
+ for(let round=2;round<=3;round++){
+  assert.ok(state.configCountRetryTimer);assert.equal(timers.size,1);
+  Array.from(timers.values())[0]();await flush();let roundBatches=0;
+  while(state.configCountRequest){
+   const req=requests.at(-1), names=JSON.parse(req.opts.body).names;
+   assert.ok(names.length<=16);
+   req.resolve({configs:names.map(name=>{
+    active.set(name,active.get(name)+1);
+    return active.get(name)<3 ? pending(name) : known(name,1);
+   })});await flush();roundBatches++;
+  }
+  assert.equal(roundBatches,12);
+ }
+ assert.ok(state.configs.every(cfg=>cfg.backtest_count===1));
+ assert.equal(state.configCountProgress,null);assert.equal(timers.size,0);
+})().catch(fail);
+''')
+
+
+def test_pending_count_retry_cancelled_on_navigation():
+    """A delayed retry cannot revive count requests after leaving the Configs panel."""
+    _node(_config_harness() + r'''
+(async()=>{
+ scheduleOptimizeConfigs(true);
+ requests[0].resolve({configs:[{...pending('slow'),modified:'v1'}]});await flush();
+ requests.at(-1).resolve({configs:[pending('slow')]});await flush();
+ assert.equal(configCountText(state.configs[0]),'…');
+ assert.ok(state.configCountRetryTimer);const retry=Array.from(timers.values())[0];
+ const before=requests.length;state.panel='queue';scheduleOptimizeConfigs(false);
+ assert.equal(timers.size,0);assert.equal(state.configCountRetryTimer,null);
+ retry();await flush();assert.equal(requests.length,before);
+})().catch(fail);
+''')
+
+
+def test_config_progress_rechecks_a_deleted_and_reintroduced_name():
+    """A name absent from one list cannot reuse progress if it reappears later."""
+    _node(_config_harness() + r'''
+(async()=>{
+ scheduleOptimizeConfigs(true);
+ const first=state.configRequest.promise;
+ const rows=Array.from({length:33},(_,i)=>({...pending('config-'+i),modified:'v1'}));
+ requests[0].resolve({configs:rows});await first;
+ const done=requests.at(-1);
+ done.resolve({configs:JSON.parse(done.opts.body).names.map(name=>known(name,1))});await flush();
+ Array.from(intervals.values())[0]();
+ requests.at(-1).resolve({configs:rows.filter(cfg=>cfg.name!=='config-0').map(cfg=>({...pending(cfg.name),modified:cfg.modified}))});await flush();
+ assert.equal(state.configCountProgress.completed.has('config-0'),false);
+ const interrupted=requests.at(-1);
+ Array.from(intervals.values())[0]();assert.equal(interrupted.opts.signal.aborted,true);
+ requests.at(-1).resolve({configs:rows.map(cfg=>({...pending(cfg.name),modified:cfg.modified}))});await flush();
+ const resumed=requests.at(-1);
+ assert.ok(JSON.parse(resumed.opts.body).names.includes('config-0'));
+ interrupted.resolve({configs:[known('config-0',99)]});await flush();
+ assert.equal(state.configs.find(cfg=>cfg.name==='config-0').backtest_count_status,'pending');
+ cancelConfigRequests();
+})().catch(fail);
+''')
+
+
+def test_config_refresh_preserves_known_counts_and_sort_order_until_replaced():
+    """Unchanged rows keep their displayed counts and order through every refresh batch."""
+    _node(_config_harness() + r'''
+(async()=>{
+ const initial=Array.from({length:190},(_,i)=>({
+  ...known('config-'+String(i).padStart(3,'0'),189-i),modified:'2025-01-01T00:00:00'
+ }));
+ state.configs=initial;
+ const sorted=()=>sortConfigs(state.configs).map(cfg=>[cfg.name,configCountText(cfg)]);
+ const original=sorted();
+ const refreshed=loadConfigs();
+ requests.at(-1).resolve({configs:initial.map(cfg=>({...pending(cfg.name),modified:cfg.modified}))});
+ await refreshed;
+ assert.deepEqual(sorted(),original);
+ let batches=0;
+ while(state.configCountRequest){
+  const req=requests.at(-1);const names=JSON.parse(req.opts.body).names;
+  req.resolve({configs:names.map(name=>known(name,initial.find(cfg=>cfg.name===name).backtest_count))});
+  await flush();batches++;
+  assert.deepEqual(sorted(),original);
+ }
+ assert.equal(batches,12);
+ state.configs.push(known('missing-modified',4));
+ const changed=loadConfigs();
+ requests.at(-1).resolve({configs:[
+  {...pending(initial[0].name),modified:initial[0].modified},
+  {...pending(initial[1].name),modified:'2025-01-02T00:00:00'},
+  {...pending('new'),modified:'2025-01-01T00:00:00'},
+  pending('missing-modified')
+ ]});
+ await changed;
+ assert.equal(configCountText(state.configs[0]),'189');
+ assert.equal(configCountText(state.configs[1]),'…');
+ assert.equal(configCountText(state.configs[2]),'…');
+ assert.equal(configCountText(state.configs[3]),'…');
+ requests.at(-1).resolve({configs:[known(initial[0].name,0),known(initial[1].name,2),known('new',1),known('missing-modified',4)]});
+ await flush();
+ assert.deepEqual(sorted(),[[initial[0].name,'0'],['new','1'],[initial[1].name,'2'],['missing-modified','4']]);
+})().catch(fail);
+''')
+
+
+def test_config_polling_visibility_timeout_cleanup_and_pb7_compatibility():
+    """Polling stays single-owner, aborts on leave/deadline, recovers and never sends PB8 batches for PB7."""
+    _node(_config_harness() + r'''
+(async()=>{
+ scheduleOptimizeConfigs(true);assert.equal(intervals.size,1);assert.equal(requests.length,1);
+ const req=requests[0];const task=state.configRequest.promise;
+ Array.from(intervals.values())[0]();assert.equal(requests.length,1);
+ document.visibilityState='hidden';scheduleOptimizeConfigs(false);
+ assert.equal(req.opts.signal.aborted,true);assert.equal(timers.size,0);assert.equal(intervals.size,0);
+ req.resolve({configs:[pending('old')]});await task;assert.equal(renders,0);
+ document.visibilityState='visible';scheduleOptimizeConfigs(true);
+ requests.at(-1).resolve({configs:[pending('current')]});await flush();
+ const count=requests.at(-1);Array.from(timers.values())[0]();assert.equal(count.opts.signal.aborted,true);
+ const error=new Error('aborted');error.name='AbortError';count.reject(error);await flush();
+ assert.equal(state.configs[0].backtest_count_status,'unknown');assert.equal(timers.size,0);
+ Array.from(intervals.values())[0]();requests.at(-1).resolve({configs:[pending('current')]});await flush();
+ requests.at(-1).resolve({configs:[known('current',3)]});await flush();assert.equal(state.configs[0].backtest_count,3);
+ state.configsDisposed=true;cancelConfigRequests();scheduleOptimizeConfigs(false);
+ assert.equal(intervals.size,0);assert.equal(timers.size,0);
+ state.configsDisposed=false;optimizeEditorAdapter.isV8=false;
+ const pb7=loadConfigs();assert.equal(requests.at(-1).path,'/configs');
+ const n=requests.length;requests.at(-1).resolve({configs:[{name:'pb7',backtest_count:7}]});await pb7;
+ assert.equal(requests.length,n);assert.equal(state.configs[0].backtest_count,7);
+})().catch(fail);
+''')
+
+
+def test_config_restored_selection_is_pruned_only_after_success():
+    """Initial placeholders and failures retain restored selection; successful snapshots prune it."""
+    functions = _functions('frontend/v7_optimize.html', ['updateConfigSelectionUi', 'pruneSelectionSet'])
+    _node(_config_harness() + functions + r'''
+const filterConfigs=()=>state.configs;
+state.selectedConfigs=new Set(['saved','removed']);
+updateConfigSelectionUi([]);
+assert.deepEqual([...state.selectedConfigs],['saved','removed']);
+state.configs=[pending('saved')];state.configsLoadedOnce=true;
+updateConfigSelectionUi(state.configs);
+assert.deepEqual([...state.selectedConfigs],['saved']);
+''')

@@ -13,7 +13,7 @@ from api.page_templates import render_page_urls
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize('version,width', [('v7', 1280), ('v8', 700)])
+@pytest.mark.parametrize('version,width', [('v7', 1280), ('v8', 700), ('v8', 1280)])
 def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
     """Use real menus/templates/assets without contacting PBGui or launching jobs."""
     playwright = pytest.importorskip('playwright.sync_api')
@@ -28,6 +28,10 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
     for name, value in values.items():
         html = html.replace('%%' + name + '%%', value)
     queue = [{'filename': 'job', 'name': 'Test job', 'status': 'running', 'exchange': 'binance', 'created': '2026-01-01'}]
+    configs = [{'name': f'config-{i:03d}', 'exchange': ['binance'], 'strategy': 'ema_anchor',
+                'modified': '2026-01-01', 'backtest_count': None if version == 'v8' else 0,
+                'backtest_count_status': 'pending' if version == 'v8' else 'known'} for i in range(190)]
+    count_value = {'config-000': 0}
     requests, errors = [], []
 
     with playwright.sync_playwright() as pw:
@@ -41,8 +45,16 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
           const originalInterval=window.setInterval;
           window.setInterval=function(fn,ms){
             if(ms===8000)window.testOptimizerResultsTick=fn;
+            if(ms===30000)window.testConfigTick=fn;
             if(ms===10000)window.testAlertsTick=fn;
             return originalInterval(fn,ms);
+          };
+          window.testDelayCounts=true;window.testReleaseCounts=[];
+          const originalFetch=window.fetch;
+          window.fetch=function(url,opts){
+            if(String(url).endsWith('/configs/backtest-counts') && window.testDelayCounts)
+              return new Promise(resolve=>testReleaseCounts.push(()=>resolve(originalFetch(url,opts))));
+            return originalFetch(url,opts);
           };
           window.WebSocket=class {
             constructor(url){this.url=url;window.testSocket=this;setTimeout(()=>this.onopen&&this.onopen(),0);}
@@ -67,8 +79,17 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
                 route.fulfill(json={'items': queue})
             elif path.endswith('/results'):
                 route.fulfill(json={'results': []})
+            elif path.endswith('/configs/backtest-counts'):
+                names = route.request.post_data_json['names']
+                assert 1 <= len(names) <= 16
+                route.fulfill(json={'configs': [{'name': name,
+                    'backtest_count': None if name == 'config-189' else count_value.get(name, 12),
+                    'backtest_count_status': 'unknown' if name == 'config-189' else 'known'} for name in names]})
             elif path.endswith('/configs'):
-                route.fulfill(json={'configs': []})
+                route.fulfill(json={'configs': configs})
+            elif '/configs/config-' in path:
+                route.fulfill(json={'config': {'backtest': {'exchanges': ['binance']}, 'live': {'strategy_kind': 'ema_anchor'},
+                                               'bot': {'long': {}, 'short': {}}, 'optimize': {}, 'pbgui': {}}, 'param_status': {}})
             elif path.endswith('/settings'):
                 route.fulfill(json={'autostart': False, 'cpu': 1, 'cpu_max': 16,
                                     'host_cpu_count': 16, 'cpu_override': False,
@@ -100,6 +121,58 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
                 assert page.locator('#sidebar').bounding_box()['width'] == expected
                 assert page.evaluate('''() => Array.from(document.querySelectorAll('#sidebar-toolbar button')).every(
                   node=>node.scrollWidth<=node.clientWidth)''')
+        page.locator('[data-panel="configs"]').click()
+        page.wait_for_function('state.configs.length===190 && !state.configRequest')
+        if version == 'v8':
+            assert page.locator('#configs-tbody .config-backtest-count').first.text_content() == '…'
+            page.locator('#config-search').fill('config-00')
+            page.locator('#configs-tbody tr[data-name="config-000"]').click()
+            page.locator('#config-search').focus()
+            page.evaluate("window.testRow=document.querySelector('#configs-tbody tr[data-name=\"config-000\"]');")
+            start = page.locator('tr[data-name="config-001"] td').first.bounding_box()
+            end = page.locator('tr[data-name="config-004"] td').first.bounding_box()
+            page.mouse.move(start['x'] + 10, start['y'] + 10)
+            page.mouse.down()
+            page.mouse.move(end['x'] + 10, end['y'] + 10, steps=5)
+            page.evaluate('testDelayCounts=false;testReleaseCounts.splice(0).forEach(fn=>fn());')
+            page.wait_for_function('state.configs.every(c=>c.backtest_count_status!=="pending")')
+            assert page.locator('tr[data-name="config-000"] .config-backtest-count').text_content() == '…'
+            page.mouse.up()
+            assert page.evaluate('[1,2,3,4].every(i=>state.selectedConfigs.has("config-00"+i))')
+            assert page.locator('tr[data-name="config-000"] .config-backtest-count').text_content() == '0'
+            assert page.evaluate("testRow===document.querySelector('#configs-tbody tr[data-name=\"config-000\"]')")
+            assert page.locator('#config-search').evaluate('(node)=>node===document.activeElement')
+            assert page.evaluate('state.selectedConfigs.has("config-000")')
+            page.locator('#config-search').fill('')
+            page.evaluate("el('configs-list-wrap').scrollTop=400;window.testScroll=el('configs-list-wrap').scrollTop;")
+            page.evaluate('renderConfigs()')
+            assert page.evaluate("el('configs-list-wrap').scrollTop===testScroll")
+            page.locator('#configs-thead [data-sort-key="backtest_count"]').click()
+            assert page.locator('#configs-tbody tr').last.get_attribute('data-name') == 'config-189'
+            page.locator('#configs-thead [data-sort-key="backtest_count"]').click()
+            assert page.locator('#configs-tbody tr').last.get_attribute('data-name') == 'config-189'
+            page.locator('#config-search').fill('config-00')
+            page.reload()
+            page.wait_for_function('!state.initialLoadPending && state.configs.length===190')
+            assert page.locator('#config-search').input_value() == 'config-00'
+            assert page.evaluate('state.selectedConfigs.has("config-000")')
+            assert page.evaluate('state.configSortKey') == 'backtest_count'
+            assert page.evaluate('state.configSortDir') == 'asc'
+            # A changed server snapshot is observed by the real automatic timer.
+            count_value['config-000'] = 3
+            configs[0]['strategy'] = 'trailing_martingale'
+            page.evaluate('testDelayCounts=false;testReleaseCounts.splice(0).forEach(fn=>fn());')
+            page.wait_for_function('!state.configCountRequest')
+            page.locator('tr[data-name="config-000"] .cfg-edit').click()
+            page.locator('#opted-name').fill('unsaved-test-name')
+            page.evaluate('testConfigTick()')
+            page.wait_for_function('!state.configRequest && !state.configCountRequest')
+            assert page.locator('#opted-name').input_value() == 'unsaved-test-name'
+            assert page.evaluate('state.configs.find(c=>c.name==="config-000").backtest_count') == 3
+            assert page.evaluate('state.configs.find(c=>c.name==="config-000").strategy') == 'trailing_martingale'
+            page.evaluate('closeEditor()')
+        else:
+            assert '/api/optimize-v7/configs/backtest-counts' not in requests
         page.locator('[data-panel="queue"]').click()
         page.evaluate('''() => {
           state.selectedQueue.add('job');
