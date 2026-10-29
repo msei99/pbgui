@@ -115,3 +115,47 @@ def test_native_helper_combines_optimizer_and_preload_warmup(monkeypatch):
     c = {'live': {'max_warmup_minutes': 0}, 'optimize': {'bounds': {'example': [1, 10]}}}
     assert _optimizer_warmup([c]) == {'minutes': [15000]}
     assert seen == [c]
+
+
+@pytest.mark.parametrize('suffix', ['', 'T00:00:00', ' 00:00:00', 'T23:59:59.123Z'])
+def test_datetime_suite_dates_match_date_only_envelope(config, warmup, suffix):
+    """Legacy datetime fields retain the base/scenario envelope and warmup rounding."""
+    config['backtest'].update(suite_enabled=True, scenarios=[
+        {'label': 'earlier', 'start_date': '2025-12-01', 'end_date': '2025-12-10'},
+        {'label': 'later', 'start_date': '2026-10-01', 'end_date': '2026-10-31'}])
+    warmup[0][:] = [0, 1440, 2881]
+    for section in [config['backtest'], *config['backtest']['scenarios']]:
+        for field in ('start_date', 'end_date'):
+            section[field] += suffix
+    before = copy.deepcopy(config)
+    contexts, _, errors = scenario_plan(config)
+    assert not errors
+    assert history_window(config, contexts) == ('2025-11-28', '2026-10-31')
+    assert config == before
+
+
+@pytest.mark.parametrize('value', ['2026-01-01Tbroken', '2026-01-01 25:00:00'])
+def test_invalid_datetime_fails_before_warmup(config, warmup, value):
+    """Malformed datetime suffixes remain errors instead of being silently truncated."""
+    config['backtest']['start_date'] = value
+    with pytest.raises(ValueError, match='valid start_date and end_date'):
+        history_window(config, [])
+    assert not warmup[1]
+
+
+@pytest.mark.parametrize('suffix', ['T00:00:00', ' 00:00:00'])
+def test_integrity_windows_accept_legacy_datetime_dates(config, warmup, suffix):
+    """The following integrity check must accept the same dates as the shard envelope."""
+    from vast_history import integrity_requirements
+
+    config['backtest']['gap_tolerance_ohlcvs_minutes'] = 0
+    config['live']['minimum_coin_age_days'] = 0
+    config['backtest'].update(suite_enabled=True, scenarios=[
+        {'label': 'train', 'start_date': '2026-02-01', 'end_date': '2026-03-01'}])
+    contexts, _, _ = scenario_plan(config)
+    expected = integrity_requirements(config, contexts)
+    for section in [config['backtest'], *config['backtest']['scenarios']]:
+        for field in ('start_date', 'end_date'):
+            section[field] += suffix
+    contexts, _, _ = scenario_plan(config)
+    assert integrity_requirements(config, contexts) == expected
