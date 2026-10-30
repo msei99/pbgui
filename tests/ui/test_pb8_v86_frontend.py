@@ -1,13 +1,14 @@
 """Executable contracts for the shared PB8 8.6 controls and HSL observations."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
 import json
-import subprocess
 import textwrap
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import sync_playwright
+from browser_driver import sync_browser
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,14 +16,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _node(script):
     """Run browser-independent JavaScript against the actual shared modules."""
-    result = subprocess.run(["node", "-e", textwrap.dedent(script)], cwd=ROOT, capture_output=True, text=True, timeout=20)
+    result = run_javascript(["-e", textwrap.dedent(script)], cwd=ROOT, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr or result.stdout
 
 
 def test_current_optimizer_metadata_does_not_reintroduce_retired_hsl_parameters():
     """Current defaults keep explicit two-policy HSL and adaptive optimizer bounds."""
     _node("""
-      const assert = require('node:assert/strict'); const fs = require('node:fs'); global.window = {};
+      const assert = browserAssert; const fs = testSources; global.window = {};
       eval(fs.readFileSync('frontend/js/optimize_editor_adapter.js', 'utf8'));
       const adapter = window.PBGuiOptimizeEditorAdapter.create('v8', {});
       const metadata = adapter.normalizeMetadata({template: {config_version:'v8.6.0', bot: {
@@ -44,7 +45,7 @@ def test_current_optimizer_metadata_does_not_reintroduce_retired_hsl_parameters(
 def test_native_report_preserves_per_coin_signals_and_transition_sequence():
     """The chart uses native values, including equal-timestamp fill transitions."""
     _node("""
-      const assert=require('node:assert/strict'); const fs=require('node:fs');global.window={};
+      const assert=browserAssert; const fs=testSources;global.window={};
       eval(fs.readFileSync('frontend/js/pb8_hsl_report.js','utf8'));
       const report={schema_version:1,engine:'hsl',mode:'coin',detailed:true,coins:['HYPE'],
         scopes:[{side:0,coin:0,policy:{red_threshold:.2}}],
@@ -62,7 +63,7 @@ def test_native_report_preserves_per_coin_signals_and_transition_sequence():
 def test_cooldown_override_parser_accepts_null_and_finite_numbers():
     """Sparse nullable ceilings stay typed rather than becoming string values."""
     _node("""
-      const assert=require('node:assert/strict');const fs=require('node:fs');
+      const assert=browserAssert;const fs=testSources;
       eval(fs.readFileSync('frontend/js/coin_overrides_editor.js','utf8'));
       const metadata={type:'number_or_null',default:null};
       assert.equal(_covParseParamValue('null',metadata,'entry_cooldown.max_duration_minutes'),null);
@@ -78,7 +79,7 @@ def test_existing_json_highlighter_marks_only_changed_hsl_lines(page_name):
     source = (ROOT / f'frontend/v7_{page_name}.html').read_text()
     start = source.index('function _applyBotJsonHighlight(')
     function = source[start:source.index('\n}', start) + 2]
-    with sync_playwright() as pw:
+    with sync_browser() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page()
         page.set_content('<div><textarea id="side" rows="12"></textarea></div>')
@@ -136,7 +137,7 @@ def test_raw_and_structured_migration_marks_use_exact_paths_and_preserve_edits(p
     overlay_id = 'opted-raw-json-highlight' if page_name == 'optimize' else 'cfg-raw-json-highlight'
     root_id = 'main-content' if page_name == 'edit' else 'configs-editor'
     status_name = {'edit':'paramStatus','backtest':'_cfgBotParamStatus','optimize':'_optBotParamStatus'}[page_name]
-    with sync_playwright() as pw:
+    with sync_browser() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page()
         page.set_content(f'''<main id="{root_id}">
@@ -244,7 +245,7 @@ def test_real_pb8_run_editor_loads_current_fields_without_retired_controls(width
               'pbgui':{'version':2,'enabled_on':'disabled'}}
     if migrated:
         side['hsl']['restart_after_red_policy'] = None
-    with sync_playwright() as pw:
+    with sync_browser() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page(viewport={'width':width,'height':900})
         errors = []
@@ -336,7 +337,7 @@ def test_optimizer_adjustment_notice_in_real_page_preserves_edits_and_navigation
     for key, value in replacements.items():
         source = source.replace('%%' + key + '%%', value)
     mutations = []
-    with sync_playwright() as pw:
+    with sync_browser() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page(viewport={'width':1600, 'height':900})
         errors = []

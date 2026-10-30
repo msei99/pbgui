@@ -1,6 +1,7 @@
 """Queue validation must not be cancelled by a later background draft check."""
+
+from javascript_checks import run_javascript
 from pathlib import Path
-import subprocess
 
 
 def test_save_and_queue_failure_waits_for_acknowledgement_without_saving():
@@ -9,7 +10,7 @@ def test_save_and_queue_failure_waits_for_acknowledgement_without_saving():
     start = source.index('async function saveEditor(andQueue) {')
     end = source.index('\nasync function saveAndQueue()', start)
     code = r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const draft={pbgui:{execution:'vast'}};
 let state={editorSaving:false},dialog,dismiss,calls=[],failure=null;
 const setOptimizeEditorSaving=value=>{state.editorSaving=value};
@@ -51,7 +52,7 @@ const window={
  assert.equal(calls.filter(row=>row[0]==='save').length,1);
 })();
 '''
-    result = subprocess.run(['node', '-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
 
@@ -61,7 +62,7 @@ def test_queue_validation_survives_background_generation_without_repainting():
     start = source.index('  async function validateEditorConfig(')
     end = source.index('\n  function scheduleValidation', start)
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 let validationGeneration=0,validationTimer=null,cloudMetrics=null,disposed=false,resolve,reject,paint=0,sizingSubmitted=false;
 const refreshGpuRecommendation=async()=>{};
 const manualGpuErrors=()=>[];
@@ -80,7 +81,7 @@ const request=()=>new Promise((a,b)=>{resolve=a;reject=b});
  await assert.rejects(failed,/Service unavailable/);
 })();
 '''
-    result = subprocess.run(['node', '-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
 
@@ -90,7 +91,7 @@ def test_direction_hints_are_nonblocking_and_not_marked_as_errors():
     start = source.index('  function showValidation(')
     end = source.index('\n  function manualGpuErrors', start)
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 class Node {
  constructor(){this.children=[];this.dataset={};this.classes=new Set();this.hidden=true;this.attributes={};
   this.classList={add:name=>this.classes.add(name),remove:name=>this.classes.delete(name),toggle:(name,on)=>on?this.classes.add(name):this.classes.delete(name)};}
@@ -132,5 +133,5 @@ assert.equal(box.hidden,true);
 assert(!positions.classes.has('cloud-invalid'));
 assert.equal(positions.attributes['aria-invalid'],undefined);
 '''
-    result = subprocess.run(['node', '-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr

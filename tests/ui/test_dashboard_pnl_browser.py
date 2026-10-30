@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -41,7 +41,7 @@ def test_pnl_gaps_mode_changes_and_live_updates(editing):
     errors, sockets, queries, asset_versions = [], [], [], []
     pending = {}
     revision = 0
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.set_default_timeout(10000)

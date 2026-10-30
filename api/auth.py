@@ -666,7 +666,9 @@ def require_same_origin(connection: Request | WebSocket, *, require_origin: bool
     if len(headers.getlist("host")) == 1 and all(len(headers.getlist(name)) <= 1 for name in single_headers):
         try:
             scheme = {"ws": "http", "wss": "https"}.get(connection.url.scheme, connection.url.scheme)
-            target = _parsed_origin(f"{scheme}://{connection.url.netloc}")
+            # Validate the preserved ASGI Host itself. Framework URL objects
+            # may normalize or reconstruct netloc and hide malformed headers.
+            target = _parsed_origin(f"{scheme}://{headers['host']}")
         except ValueError:
             target = None
         site = headers.get("sec-fetch-site")

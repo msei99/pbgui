@@ -130,4 +130,6 @@ Coin Data reads and writes under:
 - Check whether symbols are newly listed or use exchange-specific naming variants
 - If CMC updates are unavailable, confirm the PBCoinData Pool has an active local key; updates resume automatically
 
+The selected coin's detail card opens at its fitted size during the same selection, including in long lists.
+
 Reset Filters also clears the HIP-3 DEX selector. Escape closes the selected coin details card. The status line remains visible during background work and reports partial results or errors.

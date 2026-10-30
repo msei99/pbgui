@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -20,7 +20,7 @@ def detail_manager(request):
         html = html.replace('%%' + key + '%%', value)
     html = html.replace('/app/', prefix + '/app/')
     fixture = {'prefix': prefix, 'mode': 'success', 'pending': [], 'posts': [], 'gets': []}
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         context = browser.new_context(viewport={'width': 1450, 'height': 1000})
         page = context.new_page()
@@ -253,7 +253,7 @@ def manager(request):
                        'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test'}.items():
         html = html.replace('%%' + key + '%%', value)
     html = html.replace('/app/', '/prefix/app/')
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         context = browser.new_context(viewport={'width': 1450, 'height': 1000})
         page = context.new_page()

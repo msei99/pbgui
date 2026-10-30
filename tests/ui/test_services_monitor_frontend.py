@@ -1,10 +1,10 @@
 """Behavioral regressions for Services Monitor status and worker requests."""
 
+from javascript_checks import run_javascript
+
 import json
 import re
 from pathlib import Path
-import shutil
-import subprocess
 
 import pytest
 
@@ -61,13 +61,10 @@ def _extract_window_function(source: str, name: str) -> str:
 
 
 def _run_node(script: str) -> None:
-    """Run isolated JavaScript assertions when Node is available."""
+    """Run isolated JavaScript assertions when the browser is available."""
 
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for the isolated frontend request test")
-    result = subprocess.run(
-        [node, "-e", script],
+    result = run_javascript(
+        ["-e", script],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -90,7 +87,7 @@ def test_worker_status_poll_discards_out_of_order_response() -> None:
         )
     )
     script = """
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const window = {};
 const API_BASE = '/api/services';
 var _workersGeneration = 0;
@@ -121,7 +118,7 @@ function response(data) { return {ok:true,status:200,json:() => Promise.resolve(
   await older;
   assert.equal(_workers.counts.running, 1);
   assert.deepEqual(rendered, [1]);
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 """
 
     _run_node(script)
@@ -140,7 +137,7 @@ def test_worker_action_suppresses_duplicate_request_while_pending() -> None:
         )
     )
     script = """
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const alerts = [];
 const window = {PBGuiDialogs:{alert: options => alerts.push(options)}};
 const API_BASE = '/api/services';
@@ -175,7 +172,7 @@ window.fetchWorkers = function () { refreshes++; return Promise.resolve(); };
   assert.equal(refreshes, 1);
   assert.equal(_workerActionPending['worker-1'], undefined);
   assert.equal(alerts.length, 0);
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 """
 
     _run_node(script)
@@ -208,7 +205,7 @@ def test_worker_action_reports_request_errors(response_script: str, expected_det
         )
     )
     script = """
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const alerts = [];
 const window = {PBGuiDialogs:{alert: options => alerts.push(options)}};
 const API_BASE = '/api/services';
@@ -234,7 +231,7 @@ window.fetchWorkers = function () { refreshes++; return Promise.resolve(); };
   assert.equal(alerts[0].level, 'error');
   assert.equal(refreshes, 1);
   assert.equal(_workerActionPending['worker-1'], undefined);
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 """.replace("EXPECTED_DETAIL", json.dumps(expected_detail))
 
     _run_node(script)
@@ -248,7 +245,7 @@ def test_settings_load_retries_after_http_failure_and_blocks_duplicate_requests(
         _extract_function(source, name) for name in ('getSettingsDraft', 'releaseSettingsDraft', 'loadSettings')
     )
     script = """
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const API_BASE = '/api/services';
 var _settingsLoaded = {};
 var _settingsLoading = {};
@@ -277,7 +274,7 @@ function applySettings(service, data) { applied.push([service, data]); }
   assert.equal(_settingsLoaded['api-server'], true);
   assert.equal(_settingsLoading['api-server'], undefined);
   assert.deepEqual(applied, [['api-server', {host:'127.0.0.1'}]]);
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 """
 
     _run_node(script)
@@ -290,7 +287,7 @@ def test_api_restart_updates_the_clicked_compact_button() -> None:
     render_code = _extract_function(source, "renderServiceButtons")
     restart_code = _extract_window_function(source, "restartApiServer")
     script = """
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const window = {};
 const API_BASE = '/api/services';
 var _serviceActionPending = {};
@@ -314,7 +311,7 @@ function _resultPopup() { throw new Error('restart should not fail'); }
   await restart;
   assert.equal(button.disabled, false);
   assert.equal(button.innerHTML, '&#8635; Restart');
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 """
 
     _run_node(script)
@@ -327,7 +324,7 @@ def test_escape_closes_visible_services_dialog_without_backdrop_dismissal() -> N
     end = source.index("\n  });", start) + len("\n  });")
     handler = source[start:end]
     script = """
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const events = {};
 const modal = hidden => ({hidden});
 const key = modal(false), authority = modal(true);
@@ -366,7 +363,7 @@ def test_overview_renders_while_status_request_is_pending() -> None:
     source = PAGE.read_text(encoding="utf-8")
     code = _extract_function(source, "renderOverviewCards")
     script = """
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const grid = {innerHTML: ''};
 const document = {getElementById: (id) => id === 'overview-grid' ? grid : null};
 const SERVICES = [{id: 'pbrun', label: 'PBRun'}];
@@ -406,7 +403,7 @@ def _service_status_harness() -> str:
     visibility_start = source.index("  document.addEventListener('visibilitychange'")
     visibility_end = source.index("\n  });", visibility_start) + 6
     return r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const API_BASE = '/api/services';
 const window = {fetchWorkers: () => { workerFetches++; }};
 const esc = value => String(value);
@@ -483,7 +480,7 @@ def test_coindata_readiness_status_and_controls() -> None:
     code = '\n'.join(_extract_function(source, name) for name in (
         'serviceSkipped', 'serviceStatusClass', 'serviceStatusText',
         'serviceActionProgressText', 'renderServiceButtons'))
-    _run_node("const assert = require('node:assert/strict');\n"
+    _run_node("const assert = browserAssert;\n"
               "let _statusRequestState='ready', _serviceActionPending={};\n" + code + r"""
 const svc = {id:'pbcoindata'};
 for (const expected of [true,false]) {
@@ -529,7 +526,7 @@ assert.equal(serviceStatusText({running:false, expected:false}, 'pbdata'), 'Skip
     updateStatusUI();
     assert.ok(elements['sl-pbcoindata'].textContent.startsWith({unknown:'Unknown',running:'Running',failed:'Failed',stopping:'Stopping'}[actual]));
   }
-})().catch(error => { console.error(error); process.exitCode=1; });
+})().catch(error => { console.error(error); testResult.exitCode=1; });
 """)
 
 
@@ -556,7 +553,7 @@ def test_service_status_failure_and_automatic_recovery(after_success: bool, fail
   assert.equal(_statusInFlight, false);
   runPollTimer(); requests.at(-1).resolve(response(healthy)); await settle();
   assertRecovered(); assert.ok(timers.has(_statusTimer));
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 """
     _run_node(script)
 
@@ -580,7 +577,7 @@ def test_service_status_queued_poll_and_visibility_resume() -> None:
   requests[3].resolve(response(healthy)); await settle(); assertRecovered();
   runPollTimer(); assert.equal(requests.length, 5);
   requests[4].resolve(response(healthy)); await settle(); assertRecovered();
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 """)
 
 
@@ -605,7 +602,7 @@ function _resultPopup() { throw new Error('Unexpected action failure'); }
   assert.equal(requests.length, 4); assertUnknown('unavailable');
   updateStatusUI = originalUpdate;
   requests[3].resolve(response(healthy)); await settle(); assertRecovered();
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 """)
 
 
@@ -621,7 +618,7 @@ def test_alert_threshold_links_use_kind_specific_allowlist(kind, key, field):
     source = (ROOT / 'frontend/pbgui_nav.js').read_text()
     code = _extract_function(source, 'alertThresholdLinks')
     _run_node("""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 function _getAppBase() { return '/mounted'; }
 function escAttr(text) { return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
 """ + code + "\nconst item = " + json.dumps({'kind': kind, 'triggered_thresholds': [key]}) + ";\n" + """
@@ -642,7 +639,7 @@ def test_settings_request_timeout_abort_stale_response_and_edits():
         _extract_function(source, name) for name in ('getSettingsDraft', 'releaseSettingsDraft', 'loadSettings')
     )
     _run_node("""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const API_BASE = '/mounted/api/services';
 var _settingsLoaded = {}, _settingsLoading = {}, _settingsFieldTarget = {};
 const requests = [], applied = [], timers = new Map(), listeners = {};
@@ -694,7 +691,7 @@ function response(host) {return {ok:true,json:()=>Promise.resolve({host})};}
   await Promise.resolve(); await Promise.resolve();
   assert.deepEqual(applied,['server.local']);
   assert.equal(timers.size,0);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """)
 
 
@@ -705,7 +702,7 @@ def test_settings_same_page_hash_navigation_and_missing_field(missing):
     code = '\n'.join(_extract_function(source, name) for name in
                      ('settingsTargetNotice', 'focusSettingsTarget', 'restoreFromHash'))
     _run_node("""
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 var _settingsLoaded={}, _settingsFieldTarget=null, _settingsNavigationGeneration=0;
 var MONITOR_THRESHOLD_FIELDS=['mem_error_v7','cpu_error_v7'];
 const notices=[], focused=[];
@@ -760,7 +757,7 @@ def test_settings_draft_survives_failed_load_retry_and_unload(failure):
     start = source.index("  window.addEventListener('pagehide', function (event) {")
     unload = source[start:source.index('\n  });', start) + 6]
     _run_node("""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const API_BASE = '/api/services';
 var _settingsLoaded = {}, _settingsLoading = {}, _settingsDrafts = Object.create(null);
 var _settingsFieldTarget = {}, _settingsNavigationGeneration = 0;
@@ -821,7 +818,7 @@ function response(host) {return {ok:true,json:()=>Promise.resolve({host,auto_res
   requests[2].resolve(response('too-late.local'));
   await Promise.resolve();await Promise.resolve();
   assert.equal(applied,1);assert.equal(host.value,'unloaded.local');
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """)
 
 
@@ -838,7 +835,7 @@ def test_settings_cached_return_preserves_draft_and_navigation(state, edited):
         start = source.index("  window.addEventListener('" + event + "', function (event) {")
         lifecycle.append(source[start:source.index('\n  });', start) + 6])
     _run_node("""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const API_BASE='/api/services';
 var _settingsLoaded={}, _settingsLoading={}, _settingsDrafts=Object.create(null);
 var _settingsNavigationGeneration=7, _settingsFieldTarget={field:'mem_error_v7',generation:7};
@@ -915,7 +912,7 @@ async function settle(){for(let i=0;i<20;i++)await Promise.resolve();}
  events.pagehide({persisted:false});await settle();
  assert.equal(abandoned.edits.size,0);assert.equal(listeners.size,0);
  assert.equal(Object.keys(_settingsDrafts).length,0);assert.equal(timers.size,0);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """)
 
 
@@ -936,10 +933,10 @@ def _cmc_harness() -> str:
     lifecycle_start = source.index("  document.addEventListener('visibilitychange'", source.index("  window.loadCmcPool ="))
     lifecycle = source[lifecycle_start:source.index("  window.selectCmcKey =", lifecycle_start)]
     return r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const API_BASE = '/api/services';
 let completed = false;
-process.on('beforeExit', () => assert.equal(completed, true, 'The asynchronous scenario must finish'));
+afterFixture(() => assert.equal(completed, true, 'The asynchronous scenario must finish'));
 const timers = new Map(); let timerId = 0;
 function setTimeout(fn, delay) { timers.set(++timerId, {fn, delay}); return timerId; }
 function clearTimeout(id) { timers.delete(id); }
@@ -1028,7 +1025,7 @@ def test_cmc_delete_is_locked_through_dialog_mutation_and_fresh_snapshot(change_
   assert.equal(timerCount(5000), 1);
   assert.equal(timerCount(15000), 0);
   assert.equal(dialogs.length, 1);
-})().then(() => {completed=true;}).catch(error => {console.error(error);process.exitCode=1;});
+})().then(() => {completed=true;}).catch(error => {console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1056,7 +1053,7 @@ def test_cmc_delete_unlocks_after_cancel_or_failure(failure):
   const retry = window.deleteSelectedCmcKey();
   assert.equal(dialogs.length, 2);
   dialogs[1].resolve(false); await retry;
-})().then(() => {completed=true;}).catch(error => {console.error(error);process.exitCode=1;});
+})().then(() => {completed=true;}).catch(error => {console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1078,7 +1075,7 @@ def test_cmc_delete_respects_shared_toggle_lock_before_and_after_confirmation():
   replyPool(1); await drain();
   assert.equal(element('cmc-delete-btn').disabled, false);
   assert.equal(timerCount(5000), 1);
-})().then(() => {completed=true;}).catch(error => {console.error(error);process.exitCode=1;});
+})().then(() => {completed=true;}).catch(error => {console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1113,7 +1110,7 @@ def test_cmc_refresh_coalesces_and_preserves_editing_selection_and_scroll():
   fire(5000); replyPool(4, [{id:'b'}]); await drain();
   assert.equal(_selectedCmcKeyId, '');
   assert.equal(element('cmc-pool-message').textContent, 'The selected CMC key is no longer available.');
-})().then(() => {completed=true;}).catch(error => {console.error(error);process.exitCode=1;});
+})().then(() => {completed=true;}).catch(error => {console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1138,7 +1135,7 @@ def test_cmc_read_failure_cleans_up_and_recovers(failure):
   // Completion of an obsolete read must not overwrite recovered state.
   replyPool(0, []); await drain();
   assert.equal(_cmcPool.keys.length, 2);
-})().then(() => {completed=true;}).catch(error => {console.error(error);process.exitCode=1;});
+})().then(() => {completed=true;}).catch(error => {console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1167,7 +1164,7 @@ def test_cmc_lifecycle_invalidates_reads_without_resetting_new_controllers(leave
   replyPool(2); await drain();
   assert.equal(_cmcPool.keys.length, 2);
   assert.equal(timerCount(5000), 1);
-})().then(() => {completed=true;}).catch(error => {console.error(error);process.exitCode=1;});
+})().then(() => {completed=true;}).catch(error => {console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1188,7 +1185,7 @@ def test_cmc_hidden_delete_is_not_cancelled_or_retried_and_refreshes_on_return()
   replyPool(1, [{id:'b'}]); await drain();
   assert.equal(_cmcPool.keys.length, 1);
   assert.equal(timerCount(5000), 1);
-})().then(() => {completed=true;}).catch(error => {console.error(error);process.exitCode=1;});
+})().then(() => {completed=true;}).catch(error => {console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1227,7 +1224,7 @@ def test_cmc_delete_snapshot_failure_unlocks_and_polling_recovers():
   assert.equal(requests.filter(r => r.options.method === 'DELETE').length, 1);
   assert.equal(_cmcPool.keys.length, 1);
   assert.equal(timerCount(5000), 1);
-})().then(() => {completed=true;}).catch(error => {console.error(error);process.exitCode=1;});
+})().then(() => {completed=true;}).catch(error => {console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1249,7 +1246,7 @@ def test_cmc_repeated_fresh_requests_share_one_queued_snapshot():
   assert.equal(settled, true);
   assert.equal(requests.length, 4);
   assert.equal(timerCount(5000), 1);
-})().then(() => {completed=true;}).catch(error => {console.error(error);process.exitCode=1;});
+})().then(() => {completed=true;}).catch(error => {console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1300,7 +1297,7 @@ def test_cmc_delete_snapshot_waits_for_intervening_mutation(outcome, order):
   assert.equal(requests.filter(r=>r.options.method==='POST').length, 1);
   assert.equal(timerCount(5000), 1);
   assert.equal(timerCount(15000), 0);
-})().then(()=>{completed=true;}).catch(error=>{console.error(error);process.exitCode=1;});
+})().then(()=>{completed=true;}).catch(error=>{console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1351,7 +1348,7 @@ def test_cmc_deferred_snapshot_cleanup_preserves_resumed_owner(phase):
   assert.equal(timerCount(15000), 0);
   assert.equal(requests.filter(r=>r.options.method==='DELETE').length, 1);
   assert.equal(requests.filter(r=>r.options.method==='POST').length, 1);
-})().then(()=>{completed=true;}).catch(error=>{console.error(error);process.exitCode=1;});
+})().then(()=>{completed=true;}).catch(error=>{console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1374,7 +1371,7 @@ def test_cmc_fresh_snapshot_waits_for_shared_lock_without_existing_read():
   assert.equal(settled, true);
   assert.equal(requests.length, 3);
   assert.equal(timerCount(5000), 1);
-})().then(()=>{completed=true;}).catch(error=>{console.error(error);process.exitCode=1;});
+})().then(()=>{completed=true;}).catch(error=>{console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1410,7 +1407,7 @@ def test_cmc_newer_mutation_keeps_snapshot_waiters_until_newer_read():
   assert.equal(requests.filter(r=>r.options.method==='DELETE').length, 1);
   assert.equal(requests.filter(r=>r.options.method==='POST').length, 2);
   assert.equal(timerCount(5000), 1);
-})().then(()=>{completed=true;}).catch(error=>{console.error(error);process.exitCode=1;});
+})().then(()=>{completed=true;}).catch(error=>{console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1430,7 +1427,7 @@ def test_cmc_newer_mutation_keeps_snapshot_waiters_until_newer_read():
 )
 def test_cmc_cancel_restores_focus_without_overriding_new_context(dismiss, focus_case):
     """Actual dialog dismissal restores the enabled trigger without stealing newer focus."""
-    playwright = pytest.importorskip("playwright.sync_api")
+    browser_api = __import__('browser_driver')
     source = PAGE.read_text(encoding="utf-8")
     state = source[source.index("  var _cmcPool ="):source.index("  function esc(")]
     functions = "\n".join(
@@ -1441,12 +1438,12 @@ def test_cmc_cancel_restores_focus_without_overriding_new_context(dismiss, focus
 var _currentPanelId = 'pbcoindata';
 _cmcPool = {keys:[{id:'a',label:'Test A'}]};
 _selectedCmcKeyId = 'a';
-function scheduleCmcRefresh() {} // Polling is covered by the deterministic Node tests.
+function scheduleCmcRefresh() {} // Polling is covered by the deterministic browser fixtures.
 window.requests = [];
 window.fetch = function () { window.requests.push('unexpected request'); return Promise.reject(new Error('No HTTP expected')); };
 updateCmcButtons();
 """
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         try:
             page = browser.new_page()
@@ -1466,8 +1463,8 @@ updateCmcButtons();
             else:
                 page.locator("#cmc-delete-btn").focus()
                 page.keyboard.press("Enter")
-            playwright.expect(page.locator("#pbgui-dialog-ovl")).to_be_visible()
-            playwright.expect(page.locator("#cmc-delete-btn")).to_be_disabled()
+            browser_api.expect(page.locator("#pbgui-dialog-ovl")).to_be_visible()
+            browser_api.expect(page.locator("#cmc-delete-btn")).to_be_disabled()
 
             close = (
                 "document.getElementById('pbgui-dialog-cancel').click();"
@@ -1497,14 +1494,14 @@ updateCmcButtons();
                 assert focus == "other-input"
             elif focus_case == "new_dialog":
                 assert focus == "pbgui-dialog-accept"
-                playwright.expect(page.locator("#pbgui-dialog-ovl")).to_be_visible()
-                playwright.expect(page.locator("#pbgui-dialog-title")).to_have_text("New decision")
+                browser_api.expect(page.locator("#pbgui-dialog-ovl")).to_be_visible()
+                browser_api.expect(page.locator("#pbgui-dialog-title")).to_have_text("New decision")
             else:
                 assert focus == "BODY"
             if focus_case != "new_dialog":
-                playwright.expect(page.locator("#pbgui-dialog-ovl")).to_be_hidden()
+                browser_api.expect(page.locator("#pbgui-dialog-ovl")).to_be_hidden()
             if focus_case not in ("disabled_trigger", "removed_trigger"):
-                playwright.expect(page.locator("#cmc-delete-btn")).to_be_enabled()
+                browser_api.expect(page.locator("#cmc-delete-btn")).to_be_enabled()
             assert page.locator("#other-input").input_value() == "unsaved draft"
             assert page.evaluate("window.requests") == []
             assert errors == []
@@ -1566,7 +1563,7 @@ def test_cmc_known_deleted_cache_row_stays_blocked_on_return(leave, leave_point,
   window.selectCmcKey('b');assert.equal(element('cmc-delete-btn').disabled,false);
   assert.equal(requests.filter(request=>request.options.method==='DELETE').length,1);
   assert.equal(timerCount(5000),1);assert.equal(timerCount(15000),0);
-})().then(()=>{completed=true;}).catch(error=>{console.error(error);process.exitCode=1;});
+})().then(()=>{completed=true;}).catch(error=>{console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1596,7 +1593,7 @@ def test_cmc_known_deleted_row_requires_successful_current_snapshot(failure, cur
   assert.equal(element('cmc-delete-btn').disabled,!settings.containsKey);
   assert.equal(requests.filter(request=>request.options.method==='DELETE').length,1);
   assert.equal(timerCount(5000),1);assert.equal(timerCount(15000),0);
-})().then(()=>{completed=true;}).catch(error=>{console.error(error);process.exitCode=1;});
+})().then(()=>{completed=true;}).catch(error=>{console.error(error);testResult.exitCode=1;});
 """)
 
 
@@ -1638,7 +1635,7 @@ def test_cmc_real_menu_return_does_not_restore_deleted_cached_action(prefix, lea
     import mimetypes
     from urllib.parse import urlparse
 
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     html = _render_cmc_services_page(prefix, monkeypatch)
     pool = {'ready': True, 'health': 'ok', 'keys': [
         {'id': 'qa-alpha', 'label': 'qa-alpha', 'active': True},
@@ -1647,7 +1644,7 @@ def test_cmc_real_menu_return_does_not_restore_deleted_cached_action(prefix, lea
     services = ('pbcluster', 'pbrun', 'pbdata', 'pbcoindata', 'monitor-agent', 'vps-monitor', 'api-server')
     deletes, reads, errors, unexpected = [], [], [], []
     hold_reads = False
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={'width': 1450, 'height': 1000})
@@ -1721,7 +1718,7 @@ window.WebSocket=class {
             page.locator('.sb-btn[data-panel="pbcoindata"]').click()
             page.locator('.tab-btn[data-svc="pbcoindata"][data-tab="pool"]').click()
             alpha = page.locator('#cmc-pool-body [data-key-id="qa-alpha"]')
-            playwright.expect(alpha).to_be_visible()
+            browser_api.expect(alpha).to_be_visible()
             hold_reads = True
             alpha.click()
             page.locator('#cmc-delete-btn').click()
@@ -1732,28 +1729,28 @@ window.WebSocket=class {
             if leave_point == 'mutation':
                 page.locator('.sb-btn[data-panel="overview"]').click()
             deletes[0].fulfill(json={'ok': True})
-            playwright.expect(alpha.locator('.cmc-state')).to_have_text('deleted')
+            browser_api.expect(alpha.locator('.cmc-state')).to_have_text('deleted')
             if leave_point == 'snapshot':
                 wait_routes(reads, 1)
                 page.locator('.sb-btn[data-panel="overview"]').click()
             page.locator('.sb-btn[data-panel="pbcoindata"]').click()
             wait_routes(reads, 2 if leave_point == 'snapshot' else 1)
-            playwright.expect(alpha).to_have_attribute('data-cmc-deleted', 'true')
+            browser_api.expect(alpha).to_have_attribute('data-cmc-deleted', 'true')
             alpha.click()
             if other_selected:
-                playwright.expect(page.locator('#cmc-pool-body tr.selected')).to_have_attribute('data-key-id', 'qa-beta')
-                playwright.expect(page.locator('#cmc-delete-btn')).to_be_enabled()
+                browser_api.expect(page.locator('#cmc-pool-body tr.selected')).to_have_attribute('data-key-id', 'qa-beta')
+                browser_api.expect(page.locator('#cmc-delete-btn')).to_be_enabled()
             else:
-                playwright.expect(page.locator('#cmc-pool-body tr.selected')).to_have_count(0)
-                playwright.expect(page.locator('#cmc-delete-btn')).to_be_disabled()
+                browser_api.expect(page.locator('#cmc-pool-body tr.selected')).to_have_count(0)
+                browser_api.expect(page.locator('#cmc-delete-btn')).to_be_disabled()
             reads[-1].fulfill(json={**pool, 'keys': [pool['keys'][1]]})
-            playwright.expect(alpha).to_have_count(0)
+            browser_api.expect(alpha).to_have_count(0)
             page.locator('#cmc-pool-body [data-key-id="qa-beta"]').click()
             trigger = page.locator('#cmc-delete-btn')
             trigger.focus()
             trigger.press('Enter')
             page.keyboard.press('Escape')
-            playwright.expect(trigger).to_be_focused()
+            browser_api.expect(trigger).to_be_focused()
             assert len(deletes) == 1
             assert not errors, errors
             assert not unexpected, unexpected
@@ -1770,7 +1767,7 @@ def _settings_save_script(prefix: str = '/mounted') -> str:
     callers = '\n'.join(_extract_window_function(source, name) for name in (
         'saveCoinDataSettings', 'savePBDataSettings', 'saveApiServerSettings'))
     return 'const API_BASE = ' + json.dumps(prefix + '/api/services') + ';\n' + r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const events = {}, requests = [], timers = new Map(), inline = [], reloads = [], logs = [];
 let timerId = 0;
 const window = {addEventListener:(name, fn)=>events[name]=fn};
@@ -1848,7 +1845,7 @@ def test_settings_save_all_callers_confirm_success(caller, svc, apply_message):
   const close=host.children[0].children[1];
   assert.equal(close.type,'button');assert.match(close.attrs['aria-label'],/^Close .* save result$/);
   close.listeners.click();assert.equal(host.hidden,true);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """)
 
 
@@ -1877,7 +1874,7 @@ def test_settings_save_errors_remain_visible_across_panels_without_inline(svc, f
   assert.equal(inline.length,0);assert.deepEqual(reloads,[]);assert.equal(logs.length,1);
   assert.equal(fields.draft.value,'unsaved draft');
   assert.equal(host.children.length,1); // No timer dismisses errors.
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """.replace('FAILURE', failure).replace('EXPECTED', json.dumps(expected)))
 
 
@@ -1909,7 +1906,7 @@ def test_settings_save_deadline_releases_lock_and_rejects_late_results(phase):
   assert.equal(host.children.length,2);assert.deepEqual(reloads,['new']);
   assert.equal(host.children[1].attrs.role,'alert');
   assert.equal(timers.size,0);assert.equal(settingsPostJobs.size,0);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """)
 
 
@@ -1930,7 +1927,7 @@ def test_settings_save_overlapping_services_preserve_independent_errors():
   host.children[0].children[1].listeners.click();assert.equal(host.hidden,false);
   assert.equal(host.children[1].attrs.role,'alert');
   assert.equal(pendingSettingsPosts.size,0);assert.equal(timers.size,0);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """)
 
 
@@ -1986,7 +1983,7 @@ def test_settings_save_pagehide_cleans_captured_button_and_cached_return(persist
   requests[1].resolve(response());await second;
   assert.deepEqual(reloads,['new']);assert.equal(host.children.length,3);
   assert.equal(buttons['api-server'].disabled,false);assert.equal(timers.size,0);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """)
 
 
@@ -2007,7 +2004,7 @@ def test_settings_save_cleanup_preserves_settings_load_button_lock(cleanup, load
   await saving;
   assert.equal(buttons.pbcoindata.disabled,true);
   assert.equal(pendingSettingsPosts.size,0);assert.equal(timers.size,0);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """)
 
 
@@ -2049,7 +2046,7 @@ def test_settings_save_completed_result_is_not_reclassified_on_return(prefix, pe
   assert.equal(pendingUnconfirmedSaves.length,0);assert.equal(pendingSettingsPosts.size,0);
   assert.equal(settingsPostJobs.size,0);assert.equal(timers.size,0);
   assert.equal(buttons['api-server'].disabled,false);assert.equal(requests.length,1);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 """)
 
 
@@ -2061,11 +2058,11 @@ def test_settings_save_real_menu_simulated_lifecycle_feedback(prefix, persisted,
     import mimetypes
     from urllib.parse import urlparse
 
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     html = _render_cmc_services_page(prefix, monkeypatch)
     writes, errors, unexpected = [], [], []
     services = ('pbcluster', 'pbrun', 'pbdata', 'pbcoindata', 'monitor-agent', 'vps-monitor', 'api-server')
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={'width': 1450, 'height': 1000})
@@ -2136,10 +2133,10 @@ window.WebSocket=class {
             page.locator('.tab-btn[data-svc="pbcoindata"][data-tab="settings"]').click()
             field = page.locator('#coindata-fetch-interval')
             save = page.locator('#pbcoindata-tab-settings .form-btn.save')
-            playwright.expect(field).to_have_value('24')
+            browser_api.expect(field).to_have_value('24')
             field.fill('12')
             save.click()
-            playwright.expect(save).to_be_disabled()
+            browser_api.expect(save).to_be_disabled()
             for _ in range(100):
                 if writes:
                     break
@@ -2152,8 +2149,8 @@ window.WebSocket=class {
                     writes[0].fulfill(json={'ok': True, 'apply': {'message': 'Synthetic settings confirmed'}})
                 else:
                     writes[0].fulfill(status=422, json={'detail': 'Synthetic settings rejected'})
-                playwright.expect(results).to_contain_text('Synthetic settings')
-                playwright.expect(save).to_be_enabled()
+                browser_api.expect(results).to_contain_text('Synthetic settings')
+                browser_api.expect(save).to_be_enabled()
             field.fill('17')
             page.locator('.tab-btn[data-svc="pbcoindata"][data-tab="pool"]').click()
             page.get_by_role('button', name='Add Key', exact=True).click()
@@ -2162,23 +2159,23 @@ window.WebSocket=class {
             page.evaluate("persisted => { window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted})); window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted})); }", persisted)
             if outcome == 'pending':
                 writes[0].abort('aborted')
-                playwright.expect(results.locator('[role="alert"]')).to_contain_text('PBCoinData: Save unconfirmed.')
-                playwright.expect(results).to_contain_text('The server may have saved the settings.')
+                browser_api.expect(results.locator('[role="alert"]')).to_contain_text('PBCoinData: Save unconfirmed.')
+                browser_api.expect(results).to_contain_text('The server may have saved the settings.')
             else:
-                playwright.expect(results).not_to_contain_text('Save unconfirmed')
-            playwright.expect(results.locator('.settings-save-result')).to_have_count(1)
-            playwright.expect(save).to_be_enabled()
-            playwright.expect(field).to_have_value('17')
-            playwright.expect(page.locator('#cmc-key-modal')).to_be_visible()
-            playwright.expect(label).to_have_value('Unsaved synthetic draft')
-            playwright.expect(label).to_be_focused()
+                browser_api.expect(results).not_to_contain_text('Save unconfirmed')
+            browser_api.expect(results.locator('.settings-save-result')).to_have_count(1)
+            browser_api.expect(save).to_be_enabled()
+            browser_api.expect(field).to_have_value('17')
+            browser_api.expect(page.locator('#cmc-key-modal')).to_be_visible()
+            browser_api.expect(label).to_have_value('Unsaved synthetic draft')
+            browser_api.expect(label).to_be_focused()
             page.locator('#cmc-key-modal').get_by_role('button', name='Cancel', exact=True).click()
             page.locator('.tab-btn[data-svc="pbcoindata"][data-tab="settings"]').click()
-            playwright.expect(results).to_be_visible()
+            browser_api.expect(results).to_be_visible()
             page.evaluate("persisted => window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted}))", persisted)
-            playwright.expect(results.locator('.settings-save-result')).to_have_count(1)
+            browser_api.expect(results.locator('.settings-save-result')).to_have_count(1)
             page.clock.run_for(16000)
-            playwright.expect(results.locator('.settings-save-result')).to_have_count(1)
+            browser_api.expect(results.locator('.settings-save-result')).to_have_count(1)
             assert len(writes) == 1
             assert not errors, errors
             assert not unexpected, unexpected

@@ -18,7 +18,7 @@ PAGE_PATH = PREFIX + '/api/logging/main_page'
 def logging_page():
     """Block writes and external traffic; close every browser resource even on failure."""
     __tracebackhide__ = True
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     html = render_page_urls(Request({'type': 'http', 'root_path': PREFIX}),
                             (ROOT / 'frontend/logging_monitor.html').read_text(), '/api/logging')
     for marker, value in {'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test'}.items():
@@ -27,7 +27,7 @@ def logging_page():
                'posts': [], 'notifications': [], 'post_status': 200, 'hold_posts': False, 'held_posts': [],
                'post_data': {'success': True, 'apply': {'message': 'Applies on next log write'}}}
     errors, blocked, held, calls = [], [], [], []
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         context = None
         try:
@@ -118,7 +118,7 @@ def logging_page():
                     route.abort()
 
             context.route('**/*', respond)
-            yield page, playwright.expect, control, held, rotation_response, calls
+            yield page, browser_api.expect, control, held, rotation_response, calls
             assert not errors, errors
             assert not blocked, blocked
         finally:

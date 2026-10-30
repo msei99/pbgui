@@ -1,7 +1,8 @@
 """Exchange switching preserves unsaved Market Data settings until confirmed."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -13,7 +14,7 @@ def test_exchange_switch_confirmation(mode):
     start = source.index('      var contextExchangeRequestId = 0;')
     end = source.index('      function renderSettingsPayload()', start)
     script = 'const mode = %r;\n' % mode + source[start:end] + r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const uiState = {contextExchange:'binance'}, settingsState = {isDirty:mode !== 'clean'};
 const selector = {value:'bybit'}, loaded = [], stored = [], confirmations = [];
 const document = {getElementById:id=>id === 'page-exchange' ? selector : {classList:{contains:()=>false}}};
@@ -45,9 +46,9 @@ function syncInventorySubsectionVisibility() {}
  assert.equal(uiState.contextExchange,expected); assert.equal(selector.value,expected);
  assert.deepEqual(loaded,expected === 'binance' ? [] : [expected]);
  assert.equal(settingsState.isDirty,expected === 'binance');
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 '''
-    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True, timeout=10)
+    run_javascript(['-e', script], check=True, capture_output=True, text=True, timeout=10)
 
 
 @pytest.mark.parametrize('stale_failure', [False, True])

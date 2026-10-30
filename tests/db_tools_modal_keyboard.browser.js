@@ -1,9 +1,9 @@
 /* Offline keyboard regression for the DB Tools confirmation dialog. */
 'use strict';
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const assert = browserAssert;
+const fs = testSources;
+const path = sourcePath;
+const vm = browserScope;
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'db_tools.html'), 'utf8');
 const start = source.indexOf('    function confirmModal(');
@@ -57,4 +57,4 @@ vm.runInContext(source.slice(start, end), context);
     nodes['confirm-ok'].onclick();
     assert.equal(await confirmed, true);
     assert.equal(listeners.size, 0);
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });

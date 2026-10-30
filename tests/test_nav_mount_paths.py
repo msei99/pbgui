@@ -1,6 +1,7 @@
-"""Offline behavior checks for mount-aware shared navigation in a Node VM."""
+"""Offline behavior checks for mount-aware shared navigation in a browser scope."""
 
-import subprocess
+from javascript_checks import run_javascript
+
 from pathlib import Path
 
 import pytest
@@ -16,8 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize("origin", ["http://example.test:8080", "https://example.test", "http://[::1]:8080", "https://[2001:db8::1]:8443"])
 def test_shared_nav_mount_behavior(prefix: str, origin: str) -> None:
     """Exercise real nav startup, handlers and URL boundaries without browser I/O."""
-    result = subprocess.run(
-        ["node", str(ROOT / "tests" / "nav_mount_paths.cjs"), prefix, origin],
+    result = run_javascript(
+        [str(ROOT / "tests" / "nav_mount_paths.browser.js"), prefix, origin],
         cwd=ROOT,
         capture_output=True,
         text=True,

@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import copy
 from collections import OrderedDict
+import fcntl
 import math
+import os
 import re
 import sys
 import threading
@@ -41,7 +43,7 @@ _DISPLAY_FIELDS = frozenset({
     'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover',
     'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview',
     'ai_preview', 'control_generation', 'gpu_replacements', 'gpu_replacement_id',
-    'initial_config', 'initial_overrides', 'interrupted_ai', 'settings', 'fingerprint',
+    'initial_config', 'initial_overrides', 'interrupted_ai', 'pending_ai', 'settings', 'fingerprint',
     'jobs', 'observations', 'observer_jobs', 'observer_enabled', 'observer_holdouts',
     'training_exclusions', 'holdouts', 'final_holdout_policy', 'final_validation_status',
     'comparison', 'baseline', 'final_validation', 'best', 'bootstrap_jev_answers', 'jev_answers',
@@ -465,7 +467,7 @@ def projection(row):
         'gpu_replacement': _replacement_projection(row),
         'initial_snapshot_digest': digest({'config': row['initial_config'], 'overrides': row['initial_overrides']}),
         'name': row['settings'].get('loop_name') or row['settings']['config_name'],
-        'has_interrupted_ai': bool(row.get('interrupted_ai')),
+        'has_interrupted_ai': bool(row.get('interrupted_ai') or (row['status'] == 'paused' and row.get('pending_ai'))),
         'definition_name': row['settings'].get('definition_name'),
         'settings': row['settings'], 'fingerprint': row['fingerprint'], 'cycles': _cycle_reports(row),
         'observer_enabled':bool(row.get('observer_enabled')), 'observer_jobs':_observer_reports(row),
@@ -1353,7 +1355,7 @@ async def _loop_action_owned(owner, loop_id, body):
                     raise ValueError('Resume GPU replacement with its unchanged Loop settings')
                 row = await asyncio.to_thread(_controller.action, owner, loop_id, 'resume')
                 return JSONResponse(projection(row), headers={'Cache-Control': 'no-store'})
-            if waiting.get('interrupted_ai') and not body.acknowledge_interrupted:
+            if (waiting.get('interrupted_ai') or waiting.get('pending_ai')) and not body.acknowledge_interrupted:
                 raise LoopAIPause('evidence_recovery', 'Review the interrupted model request before authorizing another attempt')
             selection = body.selection or {}
             if not set(selection) <= {'provider','model','profile','effort','service_tier'}:
@@ -1390,12 +1392,28 @@ async def _loop_action_owned(owner, loop_id, body):
                         if ledger['round'] == current['round'] and ledger['stage'] == current['phase']:
                             limit = current['settings'].get('decision_timeout_seconds')
                             ledger['deadline'] = min(current['deadline'] - 60, time.time() + limit) if limit else current['deadline'] - 60
-                if current.get('interrupted_ai'):
-                    current.setdefault('interrupted_ai_audit', []).append(current.pop('interrupted_ai'))
+                audit = current.setdefault('interrupted_ai_audit', [])
+                for key in ('interrupted_ai', 'pending_ai'):
+                    interrupted = current.pop(key, None)
+                    if interrupted and not any(item.get('id') == interrupted.get('id') for item in audit):
+                        audit.append(interrupted)
+                current['pending_ai'] = None
                 current.pop('ai_pause', None)
                 current.update(status='finishing' if current['phase'] == 'holdout' else 'running',
                                control_generation=current['control_generation'] + 1, last_error=None)
-            row = await asyncio.to_thread(_controller.store.update, owner, loop_id, resume)
+            def apply_resume():
+                """Wait for the old controller step to leave before retiring its reservation."""
+                path = _controller.store.path(owner, loop_id).with_suffix('.controller')
+                fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+                try:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError as exc:
+                        raise LoopAIPause('evidence_recovery', 'The previous Loop step is still stopping. Wait for it to finish before resuming.') from exc
+                    return _controller.store.update(owner, loop_id, resume)
+                finally:
+                    os.close(fd)
+            row = await asyncio.to_thread(apply_resume)
         else:
             row = await asyncio.to_thread(_controller.action, owner, loop_id, body.action)
         return JSONResponse(projection(row), headers={'Cache-Control': 'no-store'})

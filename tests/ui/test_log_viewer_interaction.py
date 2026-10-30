@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture
 def log_interaction_page(request):
     """Run all API Keys scripts with inert API responses and an isolated socket."""
-    playwright = pytest.importorskip("playwright.sync_api")
+    browser_api = __import__('browser_driver')
     requested_size = 50000 if "50000" in request.node.name else 10000
     state_profile = "large_periodic_state" in request.node.name
     if request.node.get_closest_marker("local_runtime"):
@@ -43,10 +43,10 @@ def log_interaction_page(request):
             for visible_index in range(max(0, index - 5), min(len(lines), index + 6)):
                 visible[visible_index] = True
     block_count = sum(value and (index == 0 or not visible[index - 1]) for index, value in enumerate(visible))
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         try:
             browser = runner.chromium.launch(headless=True)
-        except playwright.Error as error:
+        except browser_api.Error as error:
             if "Executable doesn't exist" in str(error):
                 pytest.skip("Offline Chromium installation is required")
             raise

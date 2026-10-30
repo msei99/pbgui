@@ -1,8 +1,9 @@
 """Offline source contracts and executable polling tests for Transfers."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
 import json
-import subprocess
 
 import pytest
 
@@ -105,9 +106,9 @@ def test_transfers_navigation_and_profit_sweep_handoff_are_registered() -> None:
 # Execute the actual page script, including renderers and action handlers. Only
 # browser primitives, time and fetch are replaced; no production data is read.
 _NODE_HARNESS = r"""
-const assert = require('node:assert/strict');
-const vm = require('node:vm');
-const fs = require('node:fs');
+const assert = browserAssert;
+const vm = browserScope;
+const fs = testSources;
 let now = Date.UTC(2026, 0, 1), origin = now, random = 0;
 let timers = new Map(), timerId = 0, calls = [], handler;
 const documentListeners = new Map(), windowListeners = new Map(), nodes = new Map();
@@ -172,10 +173,10 @@ function exit(){windowListeners.get('pagehide')();}
 
 
 def _run_page(code: str) -> None:
-    """Run the real page with fake time, DOM and fetch in an offline Node VM."""
-    result = subprocess.run(
-        ["node", "-e", _NODE_HARNESS + "\n(async()=>{\n" + code +
-         "\nconsole.log('TRANSFERS_TEST_COMPLETE');})().catch(error=>{console.error(error);process.exitCode=1});"],
+    """Run the real page with fake time, DOM and fetch in an offline browser scope."""
+    result = run_javascript(
+        ["-e", _NODE_HARNESS + "\n(async()=>{\n" + code +
+         "\nconsole.log('TRANSFERS_TEST_COMPLETE');})().catch(error=>{console.error(error);testResult.exitCode=1});"],
         input=PAGE.read_text(encoding="utf-8"), text=True, capture_output=True,
         timeout=20, cwd=ROOT,
     )
@@ -435,7 +436,7 @@ def test_transfers_real_menu_browser_backoff_and_state(width: int, prefix: str) 
     from datetime import datetime, timezone
     from urllib.parse import urlparse
 
-    playwright = pytest.importorskip("playwright.sync_api")
+    browser_api = __import__('browser_driver')
     source = PAGE.read_text(encoding="utf-8")
     for key, value in {"API_BASE": prefix + "/api/profit-sweep", "BASE_PREFIX": prefix,
                        "VERSION": "test", "SERIAL": "1", "NAV_HASH": "test"}.items():
@@ -446,7 +447,7 @@ def test_transfers_real_menu_browser_backoff_and_state(width: int, prefix: str) 
     routes = [{"id": route, "asset": "USDC", "source": "Perps", "destination": "Spot",
                "minimum_amount": "1", "max_transferable": "100", "source_balance": "100", "destination_balance": "0"}
               for route in ("perp_to_spot", "spot_to_perp")]
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": width, "height": 900})
         page.clock.install(time=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -490,29 +491,29 @@ def test_transfers_real_menu_browser_backoff_and_state(width: int, prefix: str) 
         page.goto("http://transfers.test" + prefix + "/app/start.html")
         page.locator('.nav-group-btn[data-group="system"]').click()
         page.locator('[data-page="system_transfers"]').click()
-        playwright.expect(page).to_have_url("http://transfers.test" + prefix + "/api/profit-sweep/transfers/main_page")
-        playwright.expect(page.locator("#route-select option")).to_have_count(2)
+        browser_api.expect(page).to_have_url("http://transfers.test" + prefix + "/api/profit-sweep/transfers/main_page")
+        browser_api.expect(page.locator("#route-select option")).to_have_count(2)
         page.locator("#amount").fill("7.25")
         page.locator("#route-select").select_option("spot_to_perp")
         mode["offline"] = True
         page.clock.run_for(5000)
-        playwright.expect(page.locator("#status")).to_contain_text("Next automatic attempt")
-        playwright.expect(page.locator("#submit")).to_be_disabled()
-        playwright.expect(page.locator("#history")).to_contain_text("Reconcile")
+        browser_api.expect(page.locator("#status")).to_contain_text("Next automatic attempt")
+        browser_api.expect(page.locator("#submit")).to_be_disabled()
+        browser_api.expect(page.locator("#history")).to_contain_text("Reconcile")
         preview_count = sum("/preview/" in path for path in requests)
         history_count = sum("/operations/" in path for path in requests)
         page.clock.run_for(5000)
-        playwright.expect(page.locator("#status")).to_contain_text("Balances unavailable")
+        browser_api.expect(page.locator("#status")).to_contain_text("Balances unavailable")
         assert sum("/preview/" in path for path in requests) == preview_count
         assert sum("/operations/" in path for path in requests) > history_count
         page.clock.run_for(5000)
-        playwright.expect(page.locator("#status")).to_contain_text("Next automatic attempt")
+        browser_api.expect(page.locator("#status")).to_contain_text("Next automatic attempt")
         assert sum("/preview/" in path for path in requests) == preview_count + 1
         mode["offline"] = False
         page.clock.run_for(20000)
-        playwright.expect(page.locator("#submit")).to_be_enabled()
-        playwright.expect(page.locator("#amount")).to_have_value("7.25")
-        playwright.expect(page.locator("#route-select")).to_have_value("spot_to_perp")
+        browser_api.expect(page.locator("#submit")).to_be_enabled()
+        browser_api.expect(page.locator("#amount")).to_have_value("7.25")
+        browser_api.expect(page.locator("#route-select")).to_have_value("spot_to_perp")
         if width > 760:
             assert page.locator("#sidebar").bounding_box()["width"] == 240
             for key, expected in (("Home", 160), ("End", 420)):
@@ -522,10 +523,10 @@ def test_transfers_real_menu_browser_backoff_and_state(width: int, prefix: str) 
         assert page.locator("#sidebar-inner").evaluate("node=>node.scrollWidth<=node.clientWidth")
         destination = page.url
         page.locator("#pbgui-guide-btn").click()
-        playwright.expect(page.locator("#pbgui-shared-help-ovl")).to_be_visible()
+        browser_api.expect(page.locator("#pbgui-shared-help-ovl")).to_be_visible()
         assert page.url == destination
         for language in ("en", "de"):
-            playwright.expect(page.locator("#pbgui-shared-help-lang-" + language)).to_be_visible()
+            browser_api.expect(page.locator("#pbgui-shared-help-lang-" + language)).to_be_visible()
         page.locator("#pbgui-shared-help-close").click()
         assert not errors
         browser.close()

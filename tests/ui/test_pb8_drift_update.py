@@ -9,7 +9,7 @@ def test_drift_settings_round_trip_null_zero_validation_and_older_runtime():
         'collectOptimizeGpuSettings', 'populateOptimizeGpuSettings', 'resetOptimizeGpuSettings',
         'parseOptimizeGpuFractions', 'optimizeGpuEditorSettings', 'normalizeOptimizeBackendValue',
     )) + r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const optimizeEditorAdapter={isV8:true},state={settings:{}};
 let defaults={drift_halt:0.6,drift_rank_halt:null,drift_objective_tolerance:0.000001};
 const optimizeGpuDefaults=()=>defaults,deepClone=structuredClone;

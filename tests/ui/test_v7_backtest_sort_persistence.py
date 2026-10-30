@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from javascript_checks import run_javascript
+
 import json
 import re
-import subprocess
 import textwrap
 from pathlib import Path
 
@@ -114,7 +115,7 @@ def test_backtest_sort_state_validates_restores_and_persists() -> None:
     assert source.index("applyBacktestSortState(initialViewState.sorts);") < source.index("initializeBacktestPageFromUrl(initialBacktestUrl)", source.index("var initialViewState"))
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const BACKTEST_VIEW_STATE_KEY = 'pbgui:v7_backtest:view_state';
         {constants}
         let sortCol = 'modified', sortAsc = false;
@@ -188,5 +189,5 @@ def test_backtest_sort_state_validates_restores_and_persists() -> None:
         assert.deepEqual(oldState.sorts, BACKTEST_SORT_DEFAULTS);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout

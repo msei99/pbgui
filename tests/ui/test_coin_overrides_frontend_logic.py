@@ -1,7 +1,8 @@
 """Executable contracts for the shared PB7/PB8 Coin Overrides editor."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 import textwrap
 
 
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def _run_node(script: str) -> None:
     """Run one isolated Node contract and surface assertion output."""
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -20,8 +21,8 @@ def test_async_v7_parameter_metadata_rerenders_open_editor_and_reports_failures(
 
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         function esc(value) {
           return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
@@ -64,7 +65,7 @@ def test_async_v7_parameter_metadata_rerenders_open_editor_and_reports_failures(
           assert.match(_covEditHtml('DOGE'), /Override parameters unavailable: PB7 metadata failed/);
         }).catch(function(error) {
           console.error(error);
-          process.exitCode = 1;
+          testResult.exitCode = 1;
         });
         """
     )
@@ -76,8 +77,8 @@ def test_pb8_context_suppresses_stale_metadata_and_preserves_override_file_conte
 
     script = textwrap.dedent(
         r"""
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         function esc(value) { return String(value); }
         function toast() {}
         eval(fs.readFileSync('frontend/js/coin_overrides_editor.js', 'utf8'));
@@ -115,7 +116,7 @@ def test_pb8_context_suppresses_stale_metadata_and_preserves_override_file_conte
           assert.equal(_covState.pendingConfigFileWrites.BTC.config.bot.long.risk.entry_cooldown_minutes, 8);
         }).catch(function(error) {
           console.error(error);
-          process.exitCode = 1;
+          testResult.exitCode = 1;
         });
         """
     )
@@ -127,8 +128,8 @@ def test_removing_another_coin_preserves_the_active_edit_draft() -> None:
 
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         function toast() {}
         eval(fs.readFileSync('frontend/js/coin_overrides_editor.js', 'utf8'));
         let renders = 0;

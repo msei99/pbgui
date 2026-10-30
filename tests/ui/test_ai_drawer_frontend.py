@@ -1,8 +1,9 @@
 """Static security and lifecycle contracts for the global AI drawer."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
 import json
-import subprocess
 
 import pytest
 
@@ -28,10 +29,10 @@ def test_lost_host_approval_uses_only_owned_status_get(outcome):
 
 
 def _run_host_resolution(result, lost):
-    """Execute the production function in Node with bounded fake DOM/API dependencies."""
+    """Execute the production function in the browser with bounded fake DOM/API dependencies."""
     function = 'async function resolveProposal' + DRAWER.split('async function resolveProposal', 1)[1].split('\n  async function newConversation', 1)[0]
     script = '''
-    const assert = require('node:assert/strict');
+    const assert = browserAssert;
     const result = RESULT, lost = LOST;
     const requests = [], messages = [], events = [];
     const state = {current:'chat', resolvingProposalIds:new Set()};
@@ -67,9 +68,9 @@ def _run_host_resolution(result, lost):
         assert.ok(!messages.some(x=>x.text.includes('Approved action completed')));
         assert.equal(events.length,0);
       }
-    })().catch(error=>{console.error(error);process.exitCode=1;});
+    })().catch(error=>{console.error(error);testResult.exitCode=1;});
     '''.replace('RESULT', json.dumps(result)).replace('LOST', str(lost).lower()).replace('FUNCTION', function)
-    completed = subprocess.run(['node', '-e', script], cwd=ROOT, text=True, capture_output=True, check=False, timeout=10)
+    completed = run_javascript(['-e', script], cwd=ROOT, text=True, capture_output=True, check=False, timeout=10)
     assert completed.returncode == 0, completed.stderr
 
 

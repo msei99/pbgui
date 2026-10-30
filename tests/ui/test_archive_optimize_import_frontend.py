@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from javascript_checks import run_javascript
+
 import re
-import subprocess
 import textwrap
 from pathlib import Path
 
@@ -66,7 +67,7 @@ def test_archive_rebacktest_uses_archived_defaults_and_explicit_boolean() -> Non
 
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {normalize}
         {comparator}
         assert.equal(archiveConfigUsesPbguiMarketData(
@@ -80,8 +81,8 @@ def test_archive_rebacktest_uses_archived_defaults_and_explicit_boolean() -> Non
         ), false);
         """
     )
-    completed = subprocess.run(
-        ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False
+    completed = run_javascript(
+        ["-e", script], cwd=ROOT, text=True, capture_output=True, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
 

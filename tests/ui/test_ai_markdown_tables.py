@@ -2,7 +2,7 @@
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture(scope='module')
 def renderer():
     """Load only the exact local production assets; perform no external requests."""
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page()
         page.route('**/*', lambda route: route.abort())

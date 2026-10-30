@@ -1,11 +1,11 @@
 """Browser regression for overwrite typing in optimizer ISO date fields."""
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from browser_driver import sync_browser
 
 
 def test_date_digits_overwrite_and_selection_remains_editable():
     """Typing skips separators, never appends a fifth year digit, and allows replacement."""
-    with sync_playwright() as pw:
+    with sync_browser() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page()
         page.set_content('<input data-date-overwrite value="2026-10-10"><input id="other">')

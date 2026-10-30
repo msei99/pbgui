@@ -1,8 +1,9 @@
-"""Offline Node-backed dashboard lifecycle and same-origin security regressions."""
+"""Offline browser-backed dashboard lifecycle and same-origin security regressions."""
+
+from javascript_checks import run_javascript
 
 import json
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -64,9 +65,9 @@ def test_dashboard_main_page_list_route(monkeypatch, tmp_path, root_path, names,
 @pytest.mark.parametrize("case", ["creation", "templates", "cancel", "resize", "charts", "cards", "ppl", "emptyOrders", "messages", "assets", "candles", "manageModal"])
 def test_dashboard_frontend_regressions(case: str) -> None:
     """Execute the real frontend handlers against isolated DOM and HTTP doubles."""
-    script = Path(__file__).with_name("dashboard_frontend_regressions.cjs")
-    result = subprocess.run(
-        ["node", str(script), case], capture_output=True, text=True, timeout=30
+    script = Path(__file__).with_name("dashboard_frontend_regressions.browser.js")
+    result = run_javascript(
+        [str(script), case], capture_output=True, text=True, timeout=30
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -74,9 +75,9 @@ def test_dashboard_frontend_regressions(case: str) -> None:
 @pytest.mark.parametrize("case", ["helpTopicLegacy", "helpTopicShared", "helpTopicGenerations", "helpIndexShared"])
 def test_dashboard_help_regressions(case: str) -> None:
     """Exercise legacy and shared Guide requests without unrelated dashboard tests."""
-    script = Path(__file__).with_name("dashboard_frontend_regressions.cjs")
-    result = subprocess.run(
-        ["node", str(script), case], capture_output=True, text=True, timeout=30
+    script = Path(__file__).with_name("dashboard_frontend_regressions.browser.js")
+    result = run_javascript(
+        [str(script), case], capture_output=True, text=True, timeout=30
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -114,9 +115,9 @@ def test_dashboard_page_ignores_api_base(monkeypatch, tmp_path, page, api_base, 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert "evil.test" not in response.text
-    script = Path(__file__).with_name("dashboard_frontend_regressions.cjs")
-    result = subprocess.run(
-        ["node", str(script), "page"],
+    script = Path(__file__).with_name("dashboard_frontend_regressions.browser.js")
+    result = run_javascript(
+        [str(script), "page"],
         input=json.dumps({"html": response.text, "page": page, "prefix": root_path}),
         capture_output=True, text=True, timeout=30,
     )
@@ -136,8 +137,8 @@ def test_dashboard_mount_path_normalized(root_path, prefix):
         Request({"type": "http", "root_path": root_path}), name="", api_base="//evil.test",
         view_only=False, standalone=False, session=object(),
     )
-    result = subprocess.run(
-        ["node", str(Path(__file__).with_name("dashboard_frontend_regressions.cjs")), "page"],
+    result = run_javascript(
+        [str(Path(__file__).with_name("dashboard_frontend_regressions.browser.js")), "page"],
         input=json.dumps({"html": response.body.decode(), "page": "editor_page", "prefix": prefix}),
         capture_output=True, text=True, timeout=30,
     )

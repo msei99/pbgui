@@ -1,7 +1,8 @@
-"""Node checks for the PB8 editor's explicit Vast GPU sizing controls."""
+"""Browser checks for the PB8 editor's explicit Vast GPU sizing controls."""
+
+from javascript_checks import run_javascript
 
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -12,7 +13,7 @@ def test_auto_gpu_fields_are_optional_for_vast_queue():
     start = source.index('  function manualGpuErrors(')
     end = source.index('\n  function renderGpuRecommendation', start)
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 const auto={pbgui:{execution:'vast'},optimize:{backend:'gpu',gpu:{
  auto_lean_parallelism:true,population_size:null,batch_size:null,max_dispatch_candidate_bars:null}}};
 assert.deepEqual(manualGpuErrors(auto),[]);
@@ -23,7 +24,7 @@ assert.deepEqual(manualGpuErrors(auto).map(e=>e.path),['optimize.backend']);
 auto.pbgui.execution='local';
 assert.deepEqual(manualGpuErrors(auto),[]);
 '''
-    result = subprocess.run(['node', '-e', source[start:end] + code],
+    result = run_javascript(['-e', source[start:end] + code],
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
@@ -34,7 +35,7 @@ def test_measured_button_applies_explicit_triple_only_for_selected_offer():
     start = source.index('  function applyMeasuredGpuRecommendation(')
     end = source.index('\n  document.addEventListener', start)
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 let selectedOffer={id:123},syncs=0,validations=0;
 const values={'opted-gpu-auto-lean':{checked:true}};
 for(const id of ['opted-gpu-population-size','opted-gpu-batch-size','opted-gpu-max-dispatch-bars']) values[id]={value:''};
@@ -53,7 +54,7 @@ assert.equal(values['opted-gpu-max-dispatch-bars'].value,'130170880000');
 assert.equal(values['opted-gpu-auto-lean'].checked,false);
 assert.equal(syncs,1);assert.equal(validations,1);
 '''
-    result = subprocess.run(['node', '-e', source[start:end] + code],
+    result = run_javascript(['-e', source[start:end] + code],
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
@@ -78,7 +79,7 @@ def test_auto_gpu_sizing_passes_queue_validation():
     manual = source[source.index('  function manualGpuErrors('):source.index('\n  function renderGpuRecommendation', source.index('  function manualGpuErrors('))]
     validate = source[source.index('  async function validateEditorConfig('):source.index('\n  function scheduleValidation', source.index('  async function validateEditorConfig('))]
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 let validationGeneration=0,validationTimer=null,cloudMetrics=null,disposed=false,requests=0;
 const paints=[];
 const clearTimeout=()=>{},setQueueBlocked=()=>{},showValidation=(errors)=>paints.push(errors.map(error=>error.path));
@@ -94,9 +95,9 @@ const config={pbgui:{execution:'vast'},optimize:{backend:'gpu',gpu:{
  assert.equal(config.optimize.gpu.population_size,null);
  assert.equal(config.optimize.gpu.batch_size,null);
  assert.equal(config.optimize.gpu.max_dispatch_candidate_bars,null);
-})().catch(error=>{console.error(error);process.exitCode=1});
+})().catch(error=>{console.error(error);testResult.exitCode=1});
 '''
-    result = subprocess.run(['node', '-e', manual + '\n' + validate + code],
+    result = run_javascript(['-e', manual + '\n' + validate + code],
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
@@ -107,7 +108,7 @@ def test_gpu_auto_stepper_reaches_blank_from_one():
     start = page.index('function stepNullablePositiveInteger(')
     end = page.index('\nfunction fieldOptimizeCpuCount2(', start)
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 const inputs={gpu:{value:'2'}, batch:{value:''}};
 const el=id=>inputs[id];
 const esc=value=>String(value);
@@ -125,17 +126,17 @@ assert(nullable.includes("stepNullablePositiveInteger('gpu', -1)"));
 assert(nullable.includes("stepNullablePositiveInteger('gpu', 1)"));
 assert(!ordinary.includes('stepNullablePositiveInteger'));
 '''
-    result = subprocess.run(['node', '-e', page[start:end] + code],
+    result = run_javascript(['-e', page[start:end] + code],
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
 def test_queued_job_gpu_preview_uses_billions_and_keeps_exact_override():
     """A card preview exposes each job's Auto values and stores exact custom bars."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = Path('frontend/js/vast.js').read_text()
     start = source.index('  const offerJobSelections = new Map()')
     end = source.index('  function setRentalGpuFieldMode(', start)
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()

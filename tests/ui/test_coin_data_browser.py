@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 from fastapi import HTTPException
 from api.coin_data import _select_quotes
 
@@ -41,8 +41,8 @@ def snapshot(exchange="bybit", market_cap=0, row_count=2):
 @contextmanager
 def _coin_browser(fake_clock=True):
     """Serve actual HTML/assets and synthetic API responses without any real PBGui."""
-    with sync_playwright() as driver, ExitStack() as cleanup:
-        browser = driver.chromium.launch()
+    with sync_browser() as driver, ExitStack() as cleanup:
+        browser = driver.chromium.launch(software_rendering=fake_clock)
         cleanup.callback(browser.close)
         context = browser.new_context(viewport={"width": 1280, "height": 850})
         cleanup.callback(context.close)

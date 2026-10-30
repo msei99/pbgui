@@ -1,5 +1,7 @@
 """Offline dashboard regressions for gross exposure and historical position rows."""
 
+from javascript_checks import run_javascript
+
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -100,5 +102,5 @@ def test_dashboard_chart_regressions():
     import subprocess
     from pathlib import Path
 
-    script = Path(__file__).with_name("dashboard_issue_378.cjs")
-    subprocess.run(["node", str(script)], check=True, capture_output=True, text=True, timeout=30)
+    script = Path(__file__).with_name("dashboard_issue_378.browser.js")
+    run_javascript([str(script)], check=True, capture_output=True, text=True, timeout=30)

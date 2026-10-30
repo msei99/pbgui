@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,7 +39,7 @@ def test_reviewed_holdout_dates_survive_edit_focus_reload_and_send(width):
                        'BACKTEST_VERSION':'v8','OPTIMIZE_NAV_TITLE':'PB8 Optimize','OPTIMIZE_NAV_CURRENT':'v8_optimize'}.items():
         source = source.replace('%%'+key+'%%', value)
     errors = []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width':width,'height':900})
         page.set_default_timeout(7000)
@@ -146,7 +146,7 @@ def automatic_lookup_page():
                        'BACKTEST_VERSION':'v8','OPTIMIZE_NAV_TITLE':'PB8 Optimize','OPTIMIZE_NAV_CURRENT':'v8_optimize'}.items():
         source = source.replace('%%'+key+'%%', value)
     state = {'jobs': [], 'stops': [], 'polls': [], 'errors': [], 'market_routes': [], 'hold_markets': False}
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width':1400,'height':900})
         page.set_default_timeout(5000)

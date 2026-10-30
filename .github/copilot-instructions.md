@@ -23,6 +23,8 @@ Failure to do steps 1–2 is a bug, not an oversight.
 
 ## Project conventions
 
+- **Required project-wide stack:** Python, FastAPI and browser Vanilla JS; see [docs/architecture.md](../docs/architecture.md). Do not add Node.js, npm packages or JavaScript server/build/test runtimes. Use the existing PBGui Python environment and compatible Python packages. Treat existing Node-based tooling as migration work, not permission to add more.
+
 - FastAPI UI routes live under `api/`; pure helpers live in `pbgui_purefunc.py`.
 - Exchange operations (CCXT, market fetch, symbol info) belong in `Exchange.py`.
 - Database operations belong in `Database.py`.

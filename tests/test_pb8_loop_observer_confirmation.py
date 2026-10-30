@@ -1,8 +1,9 @@
 """Training completion is independent of isolated background report results."""
+
+from javascript_checks import run_javascript
 import asyncio
 import copy
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -131,7 +132,7 @@ def test_final_evidence_never_enters_future_model_knowledge(record):
 def test_actual_result_renderer_distinguishes_checked_and_numeric_targets():
     """Render native final evidence without claiming targetless goals were achieved."""
     script = r"""
-const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const assert=browserAssert,fs=testSources,vm=browserScope;
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
 const body=source.match(/  function resultSummary\([\s\S]*?\n  \}/)[0];
 let rendered;
@@ -151,6 +152,6 @@ assert.ok(!rendered.some(item=>item[0]==='Final confirmation'));
 assert.equal(outcome('unconfirmed','observer_holdout',true),'Unconfirmed — inspect holdout goals');
 assert.equal(outcome('completed',undefined,true),'Confirmed');
 """
-    result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+    result = run_javascript(['-e', script], cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr

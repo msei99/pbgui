@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -18,7 +18,7 @@ def test_openrouter_drawer_updates_claude_inventory_without_losing_state(prefix)
     selection = {'provider': 'openrouter', 'model': model, 'profile': 'default',
                  'effort': '', 'service_tier': ''}
     preferences = {'selection': selection}
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page()
         page.set_default_timeout(7000)
@@ -115,7 +115,7 @@ def test_gpt_selection_survives_navigation_reload_and_old_deepseek_chat(unavaila
     writes, errors = [], []
     profile = 'b' * 32
     conversation_id = 'a' * 32
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page()
         page.set_default_timeout(7000)

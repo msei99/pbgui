@@ -1,7 +1,8 @@
 """Frontend contracts for secure Market Data Tiingo credential updates."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 import textwrap
 from types import SimpleNamespace
 from urllib.parse import urlparse
@@ -49,7 +50,7 @@ def _run_settings_js(names, script):
     source = PAGE.read_text(encoding="utf-8")
     functions = "\n".join(_extract_function(source, name) for name in names)
     prelude = r"""
-    const assert = require('node:assert/strict');
+    const assert = browserAssert;
     const elements = new Map();
     const document = {hidden: false, activeElement: null, getElementById(id) {
       if (!elements.has(id)) elements.set(id, {value: '', textContent: '', hidden: false, dataset: {},
@@ -85,8 +86,8 @@ def _run_settings_js(names, script):
     function payload(exchange='okx', coins=['BTC']) { return {exchange, coin_options: coins, enabled_coins: ['BTC'], missing_saved_coins: [], coin_data_available: true,
       auto_enable_new_coins: false, settings: {interval_seconds: 99, aws_secret_access_key: 'server-old-secret'}}; }
     """
-    program = prelude + "\n" + functions + "\n(async () => {\n" + script + "\n})().catch(error => { console.error(error); process.exit(1); });"
-    subprocess.run(["node", "-e", program], cwd=ROOT, check=True, capture_output=True, text=True)
+    program = prelude + "\n" + functions + "\n(async () => {\n" + script + "\n})().catch(error => { console.error(error); finishTest(1); });"
+    run_javascript(["-e", program], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_settings_wrapper_errors_timeout_and_authentication():
@@ -338,9 +339,9 @@ def test_settings_availability_changes_do_not_dirty_or_rebase_form(auto):
 @pytest.fixture
 def market_settings_browser():
     """Intercept the real menu/page/assets with synthetic settings and no live server."""
-    from playwright.sync_api import sync_playwright
+    from browser_driver import sync_browser
 
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.set_default_timeout(5000)
@@ -435,7 +436,7 @@ def market_settings_browser():
 
 def _open_market_settings(state):
     """Use the production Information → Market Data menu destination."""
-    from playwright.sync_api import expect
+    from browser_driver import expect
 
     page = state.page
     page.locator('.nav-group-btn[data-group="information"]').click()
@@ -454,7 +455,7 @@ def _advance_settings_poll(page):
 
 def test_settings_real_menu_sync_drafts_errors_and_reload(market_settings_browser):
     """Automatic updates preserve actual controls, focus, selected missing coins and navigation."""
-    from playwright.sync_api import expect
+    from browser_driver import expect
 
     state, page = market_settings_browser, market_settings_browser.page
     _open_market_settings(state)
@@ -509,7 +510,7 @@ def test_settings_real_menu_sync_drafts_errors_and_reload(market_settings_browse
 
 def test_settings_delayed_save_exchange_switch_owns_next_save(market_settings_browser):
     """The real Exchange selector cannot leave an old editable form after a delayed POST."""
-    from playwright.sync_api import expect
+    from browser_driver import expect
 
     state, page = market_settings_browser, market_settings_browser.page
     _open_market_settings(state)
@@ -549,7 +550,7 @@ def test_settings_delayed_save_exchange_switch_owns_next_save(market_settings_br
 
 def test_settings_auto_enable_sync_and_reverted_edit_stay_clean(market_settings_browser):
     """Actual auto-selection updates cannot invent a draft or a discard prompt."""
-    from playwright.sync_api import expect
+    from browser_driver import expect
 
     state, page = market_settings_browser, market_settings_browser.page
     _open_market_settings(state)
@@ -572,7 +573,7 @@ def test_settings_auto_enable_sync_and_reverted_edit_stay_clean(market_settings_
 
 def test_settings_real_menu_guide_sidebar_and_pending_reads(market_settings_browser):
     """Guide, shared widths, returning to Settings and late responses retain their context."""
-    from playwright.sync_api import expect
+    from browser_driver import expect
 
     state, page = market_settings_browser, market_settings_browser.page
     _open_market_settings(state)
@@ -635,7 +636,7 @@ def test_tiingo_token_save_reuses_profile_and_clears_secret_input() -> None:
     function = _extract_function(source, "saveTiingoToken")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const input = {{value: 'new-vault-token', type: 'password', disabled: false, dataset: {{}}}};
         const button = {{disabled: false}};
         const document = {{getElementById(id) {{
@@ -686,11 +687,11 @@ def test_tiingo_token_save_reuses_profile_and_clears_secret_input() -> None:
           assert.deepEqual(toasts, [{{
             message: 'Tiingo token saved to the credential vault.', level: 'success'
           }}]);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_tiingo_token_reveal_is_explicit_and_clears_when_hidden() -> None:
@@ -700,7 +701,7 @@ def test_tiingo_token_reveal_is_explicit_and_clears_when_hidden() -> None:
     toggle_function = _extract_function(source, "toggleTiingoTokenVisible")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const button = {{
           disabled: false,
           textContent: '',
@@ -740,8 +741,8 @@ def test_tiingo_token_reveal_is_explicit_and_clears_when_hidden() -> None:
           assert.equal(input.type, 'password');
           assert.equal(input.dataset.revealed, undefined);
           assert.deepEqual(toasts, []);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)

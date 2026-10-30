@@ -1,7 +1,8 @@
 """Backtest Add to Run must navigate only after successful draft creation."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -19,7 +20,7 @@ def test_add_to_run_draft_response(flow, response):
     script = 'const flow = %r, response = %r;\n' % (flow, response)
     script += '\n'.join(functions)
     script += r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const API_BASE = '/api/backtest-v7';
 const window = {location:{href:'backtest'}};
 const notices = [];
@@ -56,6 +57,6 @@ async function fetch(url, opts) {
   const expected = response.startsWith('http') ? 'Draft rejected' : response === 'html' ? 'upstream unavailable' : response === 'network' ? 'offline' : 'no draft ID';
   assert.ok(notices[0][0].includes(expected));
  }
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 '''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True,timeout=10)
+    run_javascript(['-e',script],check=True,capture_output=True,text=True,timeout=10)

@@ -1,6 +1,8 @@
 """Offline named AI Loop config, source, queue and immutable history contracts."""
 from __future__ import annotations
 
+from javascript_checks import run_javascript
+
 import asyncio
 import copy
 import fcntl
@@ -574,7 +576,7 @@ def test_queue_double_click_and_late_response_preserve_new_navigation():
     import subprocess
     from pathlib import Path
     script=r"""
-const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const assert=browserAssert,fs=testSources,vm=browserScope;
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
 const body=source.match(/  async function queueDefinitions\([\s\S]*?\n  \}/)[0];
 let releaseSelection,releaseQueue,requests=0,polls=0;
@@ -593,9 +595,9 @@ vm.runInContext(body,context);
  context.state.navigationSeq=2;context.selected='new-selection';releaseQueue({id:'a'.repeat(32)});
  await Promise.all([first,duplicate]);assert.equal(requests,1);assert.equal(context.queueing,false);
  assert.equal(context.selected,'new-selection');assert.equal(polls,1);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    result=subprocess.run(['node','-e',script],cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,timeout=10)
+    result=run_javascript(['-e',script],cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,timeout=10)
     assert result.returncode==0,result.stdout+result.stderr
 
 
@@ -768,7 +770,7 @@ def test_changes_comparison_reuses_requests_and_rejects_stale_responses():
     import subprocess
     from pathlib import Path
     script = r"""
-const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const assert=browserAssert,fs=testSources,vm=browserScope;
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
 class Node {
  constructor(tag,text){this.tag=tag;this.textContent=text;this.children=[];this.dataset={};this.value='';this.scrollTop=123;this.classList={contains:()=>true,toggle(){}};}
@@ -827,8 +829,8 @@ const update=()=>context.updateReport();
  context.reportView='cycle';context.reportTab='changes';update();assert.equal(pending.length,10);
  const closed=context.diffState;context.resetDiff();context.reportView='';await reply(9,'after-close');
  assert.equal(closed.status,'pending');assert.equal(context.diffState,null);
-}finally{context.resetDiff();}})().catch(error=>{console.error(error);process.exitCode=1;});
+}finally{context.resetDiff();}})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+    result = run_javascript(['-e', script], cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr

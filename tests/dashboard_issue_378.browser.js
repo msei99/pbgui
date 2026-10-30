@@ -1,9 +1,9 @@
 /* Offline chart regressions for dashboard issue #378. */
 'use strict';
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const assert = browserAssert;
+const fs = testSources;
+const path = sourcePath;
+const vm = browserScope;
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'dashboard_render.js'), 'utf8');
 const window = {};

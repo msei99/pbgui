@@ -1,7 +1,8 @@
 """Static contracts for explicitly registered, non-sensitive AI page context."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 import textwrap
 
 
@@ -90,7 +91,7 @@ def test_ai_page_navigation_is_attempted_only_once_per_pending_action() -> None:
     functions = NAV.split("var _aiActionNavigationStorageKey", 1)[1].split("function aiControlVisible", 1)[0]
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const stored = new Map();
         const assigned = [];
         const window = {{
@@ -122,7 +123,7 @@ def test_ai_page_navigation_is_attempted_only_once_per_pending_action() -> None:
         assert.equal(stored.has('pbgui.ai.pending-navigation'), false);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 

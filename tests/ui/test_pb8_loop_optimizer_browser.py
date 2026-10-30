@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize('viewport_width,sidebar_width', [(1200, 160), (1200, 420), (720, 160)])
 def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_width):
     """Real menu, explicit review, automatic state updates and preserved navigation with fixture-only rentals."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
     for key, value in {'API_BASE':'/api/optimize-v8','OPTIMIZE_VERSION':'v8','VERSION':'test',
             'SERIAL':'1','NAV_HASH':'test','BASE_PREFIX':'','LIMITS_META':'{}',
@@ -27,7 +27,7 @@ def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_wi
         price_hour_usd=.08, maximum_deadline=2000010000, can_extend=True, can_edit_budget=True)
     mutations, errors = [], []
     workers = []
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={'width':viewport_width,'height':900})
@@ -81,54 +81,54 @@ def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_wi
             page.get_by_role('textbox', name='Search AI Loops queue').fill('Isolated')
             main = '#loops-queue-table tr[data-key="'+loop_id+'"]'
             page.locator(main+' td').nth(2).click()
-            playwright.expect(page.locator(main)).to_have_class('selected')
+            browser_api.expect(page.locator(main)).to_have_class('selected')
             page.locator('#loop-rental-minutes').fill('17')
             replace = page.locator('#loop-rental-replace')
-            playwright.expect(replace).to_be_enabled()
+            browser_api.expect(replace).to_be_enabled()
             replace.click()
-            playwright.expect(page.locator('#pbgui-dialog-title')).to_have_text('Replace GPU and continue loop?')
+            browser_api.expect(page.locator('#pbgui-dialog-title')).to_have_text('Replace GPU and continue loop?')
             message = page.locator('#pbgui-dialog-message').text_content()
             assert all(text in message for text in ('1/4','in-flight work is lost','$1.5000','101','Deadline:'))
             page.mouse.click(2,2)
-            playwright.expect(page.locator('#pbgui-dialog-ovl')).to_have_class('visible')
+            browser_api.expect(page.locator('#pbgui-dialog-ovl')).to_have_class('visible')
             page.locator('#pbgui-dialog-cancel').click()
             assert not mutations
             replace.click()
             page.locator('#pbgui-dialog-accept').click()
-            playwright.expect(page.locator('#loop-rental-status')).to_contain_text('Waiting for confirmed provider deletion')
-            playwright.expect(replace).to_be_disabled()
+            browser_api.expect(page.locator('#loop-rental-status')).to_contain_text('Waiting for confirmed provider deletion')
+            browser_api.expect(replace).to_be_disabled()
             assert len(mutations) == 1 and mutations[0]['authorization'] is True
             assert mutations[0]['worker_id'] == worker_id
-            playwright.expect(page.locator('#loop-rental-minutes')).to_have_value('17')
-            playwright.expect(page.locator(main)).to_have_class('selected')
+            browser_api.expect(page.locator('#loop-rental-minutes')).to_have_value('17')
+            browser_api.expect(page.locator(main)).to_have_class('selected')
             if viewport_width > 760:
                 assert abs(page.locator('#sidebar').bounding_box()['width'] - sidebar_width) < 2
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             before = page.url
             page.reload()
-            playwright.expect(page.locator('#loop-rental-status')).to_contain_text('Waiting for confirmed provider deletion')
+            browser_api.expect(page.locator('#loop-rental-status')).to_contain_text('Waiting for confirmed provider deletion')
             assert page.url == before
-            playwright.expect(page.get_by_role('textbox', name='Search AI Loops queue')).to_have_value('Isolated')
-            playwright.expect(page.locator('#loop-rental-minutes')).to_have_value('17')
-            playwright.expect(page.locator(main)).to_have_class('selected')
+            browser_api.expect(page.get_by_role('textbox', name='Search AI Loops queue')).to_have_value('Isolated')
+            browser_api.expect(page.locator('#loop-rental-minutes')).to_have_value('17')
+            browser_api.expect(page.locator(main)).to_have_class('selected')
             page.locator('#pbgui-guide-btn').click()
             page.wait_for_selector('#pbgui-shared-help-ovl.visible')
             assert page.url == before
             page.locator('#pbgui-shared-help-close').click()
             run['gpu_replacement'].update(step='capacity', reason='Optimizer attempt allowance exhausted')
-            playwright.expect(page.locator('#loop-rental-status')).to_contain_text('Optimizer attempt allowance exhausted')
+            browser_api.expect(page.locator('#loop-rental-status')).to_contain_text('Optimizer attempt allowance exhausted')
             assert len(mutations) == 1 and not errors
             workers.append(dict(id=worker_id, loop_id=loop_id, loop_owner='fixture', kind='worker',
                 status='running', rental_state='active', instance_id=11, deadline=2000007200,
                 budget_usd=2, price_hour_usd=.08, gpu_name='Fixture GPU', host_machine_id=101))
             page.locator('.sb-section[data-panel="queue"]').click()
             native_replace = page.get_by_role('button', name='Replace GPU and continue loop', exact=True)
-            playwright.expect(native_replace).to_be_visible()
+            browser_api.expect(native_replace).to_be_visible()
             native_replace.click()
-            playwright.expect(page.locator('#pbgui-dialog-title')).to_have_text('Replace GPU and continue loop?')
+            browser_api.expect(page.locator('#pbgui-dialog-title')).to_have_text('Replace GPU and continue loop?')
             page.locator('#pbgui-dialog-cancel').click()
             page.get_by_role('button', name='End rental', exact=True).click()
-            playwright.expect(page.locator('#pbgui-dialog-message')).to_contain_text('The Loop can fail')
+            browser_api.expect(page.locator('#pbgui-dialog-message')).to_contain_text('The Loop can fail')
             page.locator('#pbgui-dialog-cancel').click()
             assert len(mutations) == 1 and not errors
         finally:
@@ -137,7 +137,7 @@ def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_wi
 
 def test_pb8_observer_progress_columns_and_automatic_updates():
     """Real menu/shell with isolated asymmetric reports, reload and failure states."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
     observer_asset = re.search(r'<script\s+src="(/app/js/pb8_loop_optimizer\.js\?v=\d+)"', source)
     assert observer_asset, 'The optimizer page must include the versioned observer script'
@@ -161,8 +161,8 @@ def test_pb8_observer_progress_columns_and_automatic_updates():
                 'report_done':index<terminal,'simulation_complete':kind=='observer_full_range' and index<terminal,
                 'metrics':{'gain':7,'drawdown':.1}})
     requests, errors = [], []
-    with playwright.sync_playwright() as driver:
-        # Use Playwright's normal browser/action deadlines. The approved ten-second
+    with browser_api.sync_browser() as driver:
+        # Use the normal browser/action deadlines. The approved ten-second
         # limit applies to new Node helper subprocesses, not to browser startup.
         browser = driver.chromium.launch(headless=True)
         try:
@@ -209,7 +209,7 @@ def test_pb8_observer_progress_columns_and_automatic_updates():
                 for selector in (main,cycle):
                     try:
                         page.wait_for_function("([selector,holdout,full])=>{const row=document.querySelector(selector);return row&&row.cells[9].textContent.includes(holdout)&&row.cells[10].textContent.includes(full);}",arg=[selector,holdout,full])
-                    except playwright.TimeoutError:
+                    except browser_api.TimeoutError:
                         cells = page.locator(selector+' td').all_text_contents()
                         message = page.locator('#loops-queue-message').text_content()
                         pytest.fail(f'Report cells did not reach {holdout!r} / {full!r}; '
@@ -254,7 +254,7 @@ def test_pb8_observer_progress_columns_and_automatic_updates():
 
 def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capability_only=False):
     """Exercise real menu navigation, dynamic settings and preserved draft inputs."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
     replacements = {'API_BASE': '/api/optimize-v8', 'OPTIMIZE_VERSION': 'v8', 'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test', 'BASE_PREFIX':'', 'LIMITS_META':'{}', 'BACKTEST_VERSION':'v8', 'OPTIMIZE_NAV_TITLE':'PB8 Optimize', 'OPTIMIZE_NAV_CURRENT':'v8_optimize'}
     for key, value in replacements.items():
@@ -278,7 +278,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
     from api.vast import RentalPreferences
     rental_preferences = RentalPreferences(hours=12, budget=5, max_rentals=3, idle_seconds=300).model_dump()
     options = {'configs':['fixture','alternative'], 'providers': {'chatgpt': {'connected':True}}, 'profiles':[{'id':'default','name':'Default'}], 'gpu_available':True,'gpu_reason':'', 'vast_connected':True, 'vast':{'hours':12,'gpu_name':'RTX 3060','budget':5,'max_rentals':3}, 'presets':['gain','drawdown','uptrend']}
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width':viewport_width,'height':900})
         page.on('pageerror', lambda exc: errors.append(str(exc)))
@@ -952,8 +952,10 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
         assert page.locator('#loop-report-dialog .pbg-window-resize').count()==8
         # Exercise the real shared resize and title-bar handlers, not synthetic CSS.
         before=page.locator('#loop-report-dialog').bounding_box()
-        page.mouse.move(before['x']+before['width']-3,before['y']+before['height']-3)
-        page.mouse.down();page.mouse.move(before['x']+before['width']-63,before['y']+before['height']-23,steps=5);page.mouse.up()
+        handle=page.locator('#loop-report-dialog .pbg-window-resize-se').bounding_box()
+        x,y=handle['x']+handle['width']/2,handle['y']+handle['height']/2
+        page.mouse.move(x,y)
+        page.mouse.down();page.mouse.move(x-60,y-20,steps=5);page.mouse.up()
         resized=page.locator('#loop-report-dialog').bounding_box()
         assert resized['width']==pytest.approx(before['width']-60,abs=1)
         assert resized['height']<=before['height']-15
@@ -1428,7 +1430,7 @@ def test_pb8_unverified_model_is_visible_before_start(viewport_width):
 def loop_sort_browser():
     """Serve the real shell, all assets and mutable synthetic records with no network access."""
     __tracebackhide__ = True
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
     for key, value in {'API_BASE':'/api/optimize-v8','OPTIMIZE_VERSION':'v8','VERSION':'test',
             'SERIAL':'1','NAV_HASH':'test','BASE_PREFIX':'','LIMITS_META':'{}','BACKTEST_VERSION':'v8',
@@ -1462,7 +1464,7 @@ def loop_sort_browser():
                     ended_at=1300+round_number*100,simulation_complete=True,selected_for_full_range=True,
                     metrics={'gain':number,'drawdown':number/100}))
             runs.append(run)
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={'width':1200,'height':900})
@@ -1685,7 +1687,7 @@ def test_loop_duration_auto_sort_focus_selection_and_reload(loop_sort_browser):
 def test_loop_config_actions_wait_for_loaded_selection(loop_sort_browser, first_read):
     """Keep restored selection while disabling actions during a delayed or failed first list read."""
     __tracebackhide__ = True
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     page, definitions, _, _ = loop_sort_browser
     page.locator('.sb-section[data-panel="loops-config"]').click()
     selected = '#loop-config-list tr[data-selection="Config 2"]'
@@ -1706,9 +1708,9 @@ def test_loop_config_actions_wait_for_loaded_selection(loop_sort_browser, first_
         page.route('**/api/optimize-v8/loops/configs', hold_definitions)
         page.reload(wait_until='domcontentloaded')
         controls = [page.locator('#loop-'+name+'-config') for name in ('edit','duplicate','queue','delete')]
-        playwright.expect(controls[0]).to_be_visible()
+        browser_api.expect(controls[0]).to_be_visible()
         for control in controls:
-            playwright.expect(control).to_be_disabled()
+            browser_api.expect(control).to_be_disabled()
         assert page.evaluate("JSON.parse(localStorage.getItem('pbgui.pb8.loops.workflow')).config_selection")==['Config 2']
         assert state['pending']
         # Programmatic dispatch must also be harmless if a previously scheduled callback runs.
@@ -1724,9 +1726,9 @@ def test_loop_config_actions_wait_for_loaded_selection(loop_sort_browser, first_
             else:
                 initial.fulfill(status=503, json={'detail':'Isolated definition list unavailable'})
                 message = 'Isolated definition list unavailable'
-            playwright.expect(page.locator('#loop-message')).to_contain_text(message)
+            browser_api.expect(page.locator('#loop-message')).to_contain_text(message)
             for control in controls:
-                playwright.expect(control).to_be_disabled()
+                browser_api.expect(control).to_be_disabled()
             assert page.evaluate("JSON.parse(localStorage.getItem('pbgui.pb8.loops.workflow')).config_selection")==['Config 2']
             state['hold'] = False
             if first_read=='http':
@@ -1739,12 +1741,12 @@ def test_loop_config_actions_wait_for_loaded_selection(loop_sort_browser, first_
             initial.fulfill(json={'configs':definitions})
         while state['pending']:
             state['pending'].pop(0).fulfill(json={'configs':definitions})
-        playwright.expect(page.locator(selected)).to_have_class(re.compile(r'\bselected\b'))
+        browser_api.expect(page.locator(selected)).to_have_class(re.compile(r'\bselected\b'))
         for control in controls:
-            playwright.expect(control).to_be_enabled()
+            browser_api.expect(control).to_be_enabled()
         assert search.input_value()=='Config 2'
         assert page.locator('#loop-config-list th[aria-sort="ascending"] [data-sort="name"]').count()==1
-        playwright.expect(page.locator('#loop-message')).to_be_empty()
+        browser_api.expect(page.locator('#loop-message')).to_be_empty()
     finally:
         state['hold'] = False
         page.unroute('**/api/optimize-v8/loops/configs', hold_definitions)

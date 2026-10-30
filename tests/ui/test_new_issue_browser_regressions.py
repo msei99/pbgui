@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,8 +32,8 @@ def test_ai_chat_disconnected_profile_has_actionable_notice(connected_provider):
         html = html.replace('%%' + marker + '%%', value)
     model_requests = []
     errors = []
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+    with sync_browser() as browser_api:
+        browser = browser_api.chromium.launch(headless=True)
         page = browser.new_page()
         page.on('pageerror', lambda error: errors.append(str(error)))
 
@@ -85,8 +85,8 @@ def test_transfer_history_survives_preview_failure_and_recovers(history_failure)
     preview = {'user': 'alice', 'asset': 'USDT', 'routes': [
         {'id': 'perp_to_spot', 'source': 'Perps', 'destination': 'Spot', 'asset': 'USDT',
          'minimum_amount': 1, 'source_balance': 100, 'destination_balance': 0, 'max_transferable': 100}]}
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+    with sync_browser() as browser_api:
+        browser = browser_api.chromium.launch(headless=True)
         page = browser.new_page()
         page.clock.install()
         page.on('pageerror', lambda error: errors.append(str(error)))

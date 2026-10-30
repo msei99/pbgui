@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,7 +29,7 @@ def test_english_drafting_review_apply_errors_and_stale_results(kind, width, pre
     html = (ROOT/'frontend/support_debug.html').read_text().replace('"%%API_BASE%%"',json.dumps(prefix+'/api/debug')).replace('"%%BASE_PREFIX%%"',json.dumps(prefix)).replace('%%NAV_HASH%%','test')
     posts, errors = [], []
     outcome = {'status':200}
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width':width,'height':850})
         page.on('pageerror',lambda error: errors.append(str(error)))

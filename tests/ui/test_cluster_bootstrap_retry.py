@@ -1,8 +1,9 @@
 """Execute bootstrap submission recovery with mocked requests and DOM controls."""
 
+from javascript_checks import run_javascript
+
 import json
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -14,7 +15,7 @@ def test_bootstrap_controls_recover_from_current_plan(scenario):
     apply = "function runBootstrapApply" + html.split("function runBootstrapApply", 1)[1].split("function nodeLabel", 1)[0]
     render = "function renderBootstrap" + html.split("function renderBootstrap", 1)[1].split("        if (!table) return;", 1)[0] + "}"
     script = r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const btn = {disabled: false, textContent: 'Apply Bootstrap', style: {}};
 const document = {getElementById: id => id === 'bootstrap-apply-btn' ? btn : null};
 let lastBootstrapPlan = {generation: 1, counts: {add: 1}};
@@ -42,6 +43,6 @@ function fetchJson() { calls++; return new Promise((resolve, reject) => { reject
     await retry;
     assert.equal(btn.disabled, false);
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 """
-    subprocess.run(["node", "-e", "const scenario = " + json.dumps(scenario) + ";\n" + script], check=True, capture_output=True, text=True, timeout=10)
+    run_javascript(["-e", "const scenario = " + json.dumps(scenario) + ";\n" + script], check=True, capture_output=True, text=True, timeout=10)

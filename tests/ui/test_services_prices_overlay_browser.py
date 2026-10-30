@@ -10,11 +10,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_prices_preserve_dom_selection_and_pause_hidden_tab():
     """Age/data ticks retain nodes and selection; hiding/closing invalidates pending work."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/services_monitor.html').read_text()
     start = source.index('  (function () {', source.index('/* ── Prices Overlay'))
     end = source.index('  }());', start) + len('  }());')
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page()
         page.set_content('''<div id="prices-overlay"><div id="prices-overlay-title"></div>

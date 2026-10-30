@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from javascript_checks import run_javascript
+
 import inspect
-import subprocess
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,7 +58,7 @@ def test_agent_renderer_shows_states_source_remediation_and_escapes() -> None:
     functions = "\n\n".join(_extract_function(source, name) for name in names)
     script = textwrap.dedent(
         fr"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const store = {{ hostname: 'bad-host' }};
         function runMasterWithLog() {{}}
         function runVpsWithLog() {{}}
@@ -101,7 +102,7 @@ def test_agent_renderer_shows_states_source_remediation_and_escapes() -> None:
         assert.equal(effectiveAgentAge({{age: 4, checked_at: 95}}, 100), 9);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -148,7 +149,7 @@ def test_pb8_versions_render_in_overview_and_host_details() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const store = {{hostname: 'manibot01'}};
         function formatLatency() {{ return null; }}
         function computeUptime() {{ return null; }}
@@ -168,7 +169,7 @@ def test_pb8_versions_render_in_overview_and_host_details() -> None:
         assert.ok(html.includes("data-role='pb8-branch'>master (abcdef0) -&gt; v8.1.3 (1234567)"));
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -198,7 +199,7 @@ def test_linux_update_counts_open_escaped_package_details() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           alertModalTitle: {{textContent: ''}},
           alertModalBody: {{className: '', innerHTML: '', scrollTop: 0}},
@@ -227,7 +228,7 @@ def test_linux_update_counts_open_escaped_package_details() -> None:
         assert.match(nodes.alertModalBody.innerHTML, /Stale cache:/);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -266,7 +267,7 @@ def test_manager_renderers_keep_host_and_bot_payloads_out_of_inline_code() -> No
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const attack = `bad');globalThis.PWNED=1;//<img src=x onerror=1>`;
         const store = {{ overviewSort: {{field: 'name', dir: 'asc'}}, hostname: attack }};
         const OVERVIEW_COLUMNS = [{{key: 'name', label: 'Name', sortable: false, getValue: r => r.name}}];
@@ -312,7 +313,7 @@ def test_manager_renderers_keep_host_and_bot_payloads_out_of_inline_code() -> No
         assert.match(body, /&#39;/);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
     assert "${js(selectedHost)}" not in source

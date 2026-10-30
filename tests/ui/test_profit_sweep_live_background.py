@@ -1,22 +1,19 @@
 """Offline behavioral checks for independent Live activation across sidebar navigation."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import shutil
-import subprocess
 
 import pytest
 
 
 def test_live_activation_survives_account_changes_and_reconciles_failures():
     """Defer saves and activation responses while selecting and activating other accounts."""
-    node = shutil.which('node')
-    if node is None:
-        pytest.skip('Node is required')
     source = (Path(__file__).resolve().parents[2] / 'frontend/profit_sweep.html').read_text()
     action = 'async function enableLive()' + source.split('async function enableLive()', 1)[1].split('async function reconcileIntent', 1)[0]
     load = 'async function loadPolicyForAccount' + source.split('async function loadPolicyForAccount', 1)[1].split('async function loadIntentsForAccount', 1)[0]
     script = r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const liveActivations = new Map(), livePolicyRevisions = new Map();
 const state = {selectedUser:'alice',accountGeneration:1,record:record('dry'),users:[{name:'alice'},{name:'bob'}]};
 function record(mode) {return {policy:{operating_mode:mode},generation:1,policy_fingerprint:'fp',live_state:{sweep_due:'2'}};}
@@ -61,7 +58,7 @@ __LOAD__
  assert.equal(state.record.policy.operating_mode,'live');
  assert.equal(state.users[1].operating_mode,'live');
  assert(!liveActivations.has('bob'));
-})().catch(e=>{console.error(e);process.exit(1);});
+})().catch(e=>{console.error(e);finishTest(1);});
 '''.replace('__ACTION__', action).replace('__LOAD__', load)
-    result = subprocess.run([node, '-e', script], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', script], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr

@@ -1,7 +1,8 @@
 """Regression tests for legacy sync removal and frontend rendering safety."""
 
+from javascript_checks import run_javascript
+
 import asyncio
-import subprocess
 import textwrap
 from pathlib import Path
 
@@ -48,7 +49,7 @@ def _extract_js_function(source: str, name: str) -> str:
 
 
 def _run_frontend_node(relative_path: str, function_names: list[str], bootstrap: str, assertions: str) -> None:
-    """Run Node assertions against selected inline frontend functions."""
+    """Run browser assertions against selected inline frontend functions."""
     source = _read(relative_path)
     functions = "\n\n".join(_extract_js_function(source, name) for name in function_names)
     if relative_path == "frontend/api_keys_editor.html" and any(
@@ -67,7 +68,7 @@ def _run_frontend_node(relative_path: str, function_names: list[str], bootstrap:
         """
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         function encodeText(value) {{
           return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }}
@@ -76,7 +77,7 @@ def _run_frontend_node(relative_path: str, function_names: list[str], bootstrap:
         {assertions}
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -376,7 +377,7 @@ def test_api_key_edit_loads_ignore_stale_edit_create_back_and_hash_results() -> 
           pending.get('/grace').resolve({ name: 'grace' });
           await grace;
           assert.deepEqual(rendered, []);
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
     """
     _run_frontend_node(
         "frontend/api_keys_editor.html",
@@ -462,7 +463,7 @@ def test_api_key_save_is_one_combined_put_and_duplicate_calls_are_suppressed() -
           assert.equal('bob' in hlExpiryData, false);
           assert.equal('alice' in bybitExpiryData, false);
           assert.equal('bob' in bybitExpiryData, false);
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
     """
     _run_frontend_node(
         "frontend/api_keys_editor.html",
@@ -524,7 +525,7 @@ def test_api_key_rename_requires_capability_and_validates_canonical_response() -
           assert.equal(calls[1][0], '/alice');
           assert.equal(calls[1][1].method, 'PUT');
           assert.match(messages.pop(), /different canonical username/i);
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
     """
     _run_frontend_node(
         "frontend/api_keys_editor.html",
@@ -583,7 +584,7 @@ def test_api_key_account_generation_guards_test_and_expiry_results() -> None:
           assert.equal(fields.btnBybitExpiryInline.textContent, '↻ Check Expiry + IPs');
           assert.equal(fields.btnTest.disabled, false);
           assert.equal(fields.btnTest.textContent, 'Test Connection');
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
     """
     _run_frontend_node(
         "frontend/api_keys_editor.html",
@@ -642,7 +643,7 @@ def test_api_key_stale_global_expiry_requests_restore_only_their_button() -> Non
           await bybit;
           assert.equal(fields.btnBybitExpiry.disabled, false);
           assert.equal(fields.btnBybitExpiry.textContent, 'Bybit Expiry Check');
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
     """
     _run_frontend_node(
         "frontend/api_keys_editor.html",
@@ -745,7 +746,7 @@ def test_api_key_successive_same_user_saves_discard_old_background_expiry() -> N
           backgrounds[1]({ status: 'ok', valid_until: 2 });
           await new Promise(function(resolve) { setImmediate(resolve); });
           assert.equal(hlExpiryData.alice.valid_until, 2);
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
     """
     _run_frontend_node(
         "frontend/api_keys_editor.html",
@@ -795,7 +796,7 @@ def test_hl_expiry_preview_sends_unsaved_key_only_in_post_body() -> None:
           assert.equal(calls[0][1].signal.token, 1);
           assert.equal(calls[1][0], '/alice%20name/hl-expiry');
           assert.equal(calls[1][1].signal.token, 1);
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
     """
     _run_frontend_node(
         "frontend/api_keys_editor.html",
@@ -939,7 +940,7 @@ def test_jobs_monitor_run_and_cancel_actions_reject_duplicate_requests() -> None
           assert.equal(requests.filter(url => url.endsWith('/jobs/cancel')).length, 1);
           assert.equal(cancellingJobIds.has('running/job'), true);
           assert.equal(refreshCount, 2);
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
     """
     _run_frontend_node(
         "frontend/jobs_monitor.html",
@@ -975,7 +976,7 @@ def test_jobs_monitor_bulk_delete_locks_and_refreshes_before_notice() -> None:
           assert.equal(button.disabled, false);
           assert.equal(button.textContent, 'Delete All Done Jobs');
           assert.equal(bulkDeleteStates.size, 0);
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
     """
     _run_frontend_node(
         "frontend/jobs_monitor.html",

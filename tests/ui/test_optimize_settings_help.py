@@ -1,6 +1,7 @@
 """Contextual Optimize help links preserve explicit topic anchors."""
 
-import subprocess
+from javascript_checks import run_javascript
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,7 +13,7 @@ def test_settings_help_targets_local_or_vast_setup_without_changing_explicit_hel
     start = page.index('  window._openOptimizeHelp = function(anchor) {')
     end = page.index('\n  };', start) + len('\n  };')
     script = '''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const calls = [];
 const window = {PBGuiSharedHelp:{open:(...args)=>calls.push(args)}};
 const state = {panel:'settings'};
@@ -36,7 +37,7 @@ state.panel = 'configs';
 window._openOptimizeHelp();
 assert.deepEqual(calls.pop(), ['36_pbv7_optimize', {anchor:''}]);
 '''
-    result = subprocess.run(['node'], input=script, text=True, capture_output=True, check=False)
+    result = run_javascript([], input=script, text=True, capture_output=True, check=False)
     assert result.returncode == 0, result.stderr
     for language in ('help', 'help_de'):
         for topic in ('36_pbv7_optimize', '48_vast_gpu'):

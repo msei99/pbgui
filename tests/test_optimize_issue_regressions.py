@@ -1,10 +1,11 @@
 """Offline regressions for optimize, Pareto, AI and rebacktest issue fixes."""
 
+from javascript_checks import run_javascript
+
 import asyncio
 import copy
 import json
 import re
-import subprocess
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -239,7 +240,7 @@ def test_multiexchange_rebacktest_queue_names_are_distinct(mode):
     functions = "\n".join(re.search(r"^function " + name + r"\(.*?^}", source, re.M | re.S).group()
                           for name in ("showInitialBacktestQueueDraftModal", "getQueueDraftItemExchanges", "rebacktestSelected"))
     script = r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const mode = MODE;
 const queued = [], errors = [];
 const cfg = {backtest: {exchanges: ['binance', 'bybit'], start_date:'2020-01-01', end_date:'2021-01-01'}};
@@ -277,5 +278,5 @@ setImmediate(() => {
   assert.equal(JSON.stringify(cfg), original);
 });
 """.replace("MODE", json.dumps(mode)).replace("FUNCTIONS", functions)
-    completed = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10, check=False)
+    completed = run_javascript(["-e", script], capture_output=True, text=True, timeout=10, check=False)
     assert completed.returncode == 0, completed.stderr

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize('initial_error', [False, True])
 def test_loop_overview_renders_before_blocked_configs_and_details(prefix, initial_error):
     """A restored report and its list stay usable while independent reads remain pending."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
     values = {'API_BASE':prefix+'/api/optimize-v8', 'OPTIMIZE_VERSION':'v8', 'VERSION':'test',
               'SERIAL':'1', 'NAV_HASH':'test', 'BASE_PREFIX':prefix, 'LIMITS_META':'{}',
@@ -32,7 +32,7 @@ def test_loop_overview_renders_before_blocked_configs_and_details(prefix, initia
     summaries = [{**row, 'summary_only':True, 'jobs':[], 'history':[], 'observer_jobs':[], 'cycles':[],
                   'best':None, 'deletable':False} for row in full.values()]
     held_details, held_configs, errors, scans, native_reads = [], [], [], [], []
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width':1200, 'height':900})
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -111,7 +111,7 @@ def test_loop_overview_renders_before_blocked_configs_and_details(prefix, initia
     ('queue',1,False,False), ('queue',0,False,False), ('queue',3,True,False), ('queue',3,False,True)])
 def test_loop_result_handoff_overrides_stored_panel_and_preserves_return(stored_panel, result_count, missing_equity, expired_snapshot):
     """An explicit result link wins on arrival; later navigation wins on reload."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_backtest.html').read_text()
     replacements = {'API_BASE':'/api/backtest-v8', 'BACKTEST_VERSION':'v8',
                     'BACKTEST_LABEL':'PB8', 'BASE_PREFIX':'', 'VERSION':'test',
@@ -122,7 +122,7 @@ def test_loop_result_handoff_overrides_stored_panel_and_preserves_return(stored_
     expired_once = []
     curve_count=result_count-(1 if missing_equity else 0)
     context = '/api/optimize-v8/main_page?loop_id='+'a'*32+'&loop_view=cycle&loop_cycle=4&loop_tab=performance#loops-results'
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width':1200,'height':900})
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -212,7 +212,7 @@ def test_loop_result_handoff_overrides_stored_panel_and_preserves_return(stored_
 @pytest.mark.parametrize('kind,prefix', [('observer_holdout',''),('observer_full_range',''),('observer_holdout','/nested')])
 def test_all_loop_evaluations_compare_native_results_and_restore(kind, prefix):
     """Compare every complete candidate, preserve selection and restore the Loop context."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_backtest.html').read_text()
     for key,value in {'API_BASE':prefix+'/api/backtest-v8','BACKTEST_VERSION':'v8','BACKTEST_LABEL':'PB8',
                       'BASE_PREFIX':prefix,'VERSION':'test','SERIAL':'1','NAV_HASH':'test'}.items():
@@ -225,7 +225,7 @@ def test_all_loop_evaluations_compare_native_results_and_restore(kind, prefix):
              dict(jobs[0],name='incomplete',simulation_complete=False),dict(jobs[0],name='failed',status='failed')]
     errors,requested,equity=[],[],[]
     context=prefix+'/api/optimize-v8/main_page?loop_id='+run_id+'&loop_view=run&loop_tab=performance#loops-results'
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser=driver.chromium.launch(headless=True)
         page=browser.new_page(viewport={'width':1200,'height':900})
         page.on('pageerror',lambda error:errors.append(str(error)))
@@ -330,7 +330,7 @@ def test_all_loop_evaluations_compare_native_results_and_restore(kind, prefix):
 @pytest.mark.parametrize('kind,prefix,ended', [('observer_holdout','',False),('observer_full_range','/nested',True)])
 def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix,ended):
     """Real menu, delayed options/rental, rerender click lock, BFCache lifecycle and cold return."""
-    playwright=pytest.importorskip('playwright.sync_api')
+    browser_api=__import__('browser_driver')
     optimize=(ROOT/'frontend/v7_optimize.html').read_text()
     backtest=(ROOT/'frontend/v7_backtest.html').read_text()
     values={'API_BASE':prefix+'/api/optimize-v8','OPTIMIZE_VERSION':'v8','VERSION':'test',
@@ -348,12 +348,17 @@ def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix
         'jobs':[],'history':[],'observer_jobs':jobs,'observer_enabled':True,
         'cycles':[{'round':1,'status':'validated','ai_evaluated':True,'goals':[],'backtests':0,'completed_backtests':0}]}
     loops=[run];held_targets=[];held_options=[];held_rentals=[];errors=[];target_count=[];target_timings=[]
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         # This part deliberately exercises full navigation; persisted lifecycle is simulated separately below.
         browser=driver.chromium.launch(headless=True,args=['--disable-features=BackForwardCache'])
         page=browser.new_page(viewport={'width':1200,'height':900})
         page.set_default_timeout(7000)
-        page.add_init_script("window.addEventListener('pagehide',()=>console.info('loop-target-timing:'+JSON.stringify(performance.getEntriesByName('pbgui.loop.target').map(x=>x.duration))))")
+        # Capture the actual measure before document teardown can discard console events.
+        page.add_init_script("""(() => {const measure=performance.measure.bind(performance);
+            performance.measure=(...args)=>{const value=measure(...args);
+                if(args[0]==='pbgui.loop.target')console.info('loop-target-timing:'+JSON.stringify(
+                    performance.getEntriesByName('pbgui.loop.target').map(x=>x.duration)));
+                return value;};})();""")
         page.on('console',lambda message:target_timings.extend(json.loads(message.text.removeprefix('loop-target-timing:'))) if message.text.startswith('loop-target-timing:') else None)
         page.on('pageerror',lambda error:errors.append(str(error)))
         def respond(route):
@@ -417,7 +422,7 @@ def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix
         page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));")
         page.wait_for_function("document.querySelector('#loop-report-body [data-loop-result]')?.disabled===false")
         page.locator('#loop-report-body').evaluate('node=>node.scrollTop=180')
-        # Use dispatch_event so Playwright does not scroll the fixture report to the first row.
+        # Use dispatch_event so native pointer input does not scroll the fixture report to the first row.
         page.locator('#loop-report-body [data-loop-result]').first.dispatch_event('click')
         page.wait_for_function("document.querySelector('#loop-report-body [aria-busy=true]')!==null")
         page.wait_for_function('true')
@@ -441,14 +446,14 @@ def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix
         assert page.locator(parent).evaluate("node=>node.classList.contains('selected')")
         try:
             page.wait_for_function('(top)=>document.querySelector("#loop-report-body").scrollTop===top',arg=scroll,timeout=2000)
-        except playwright.TimeoutError:
+        except browser_api.TimeoutError:
             pytest.fail('Scroll restoration: '+str(page.evaluate("({url:location.href,actual:document.querySelector('#loop-report-body').scrollTop,saved:sessionStorage.getItem('pbgui.loop.scroll')})"))+' expected='+str(scroll))
         print('Isolated cold return to Loop report (ms):',page.evaluate("performance.getEntriesByName('pbgui.loop.return-report').map(x=>x.duration)"))
         page.reload()
         page.wait_for_function("document.querySelector('#loop-report-tab-performance')?.getAttribute('aria-selected')==='true'")
         try:
             page.wait_for_function('(top)=>document.querySelector("#loop-report-body").scrollTop===top',arg=scroll,timeout=2000)
-        except playwright.TimeoutError:
+        except browser_api.TimeoutError:
             pytest.fail('Scroll restoration: '+str(page.evaluate("({url:location.href,actual:document.querySelector('#loop-report-body').scrollTop,saved:sessionStorage.getItem('pbgui.loop.scroll')})"))+' expected='+str(scroll))
         timings=page.evaluate("performance.getEntriesByType('measure').filter(x=>x.name==='pbgui.loop.return-report').map(x=>x.duration)")
         assert timings and timings[0]>=0
@@ -475,13 +480,13 @@ def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix
 @pytest.mark.parametrize('version', ['v7','v8'])
 def test_ordinary_backtest_startup_and_later_panel_navigation(version):
     """The shared template keeps ordinary PB7/PB8 panels and lazy configs/archive requests usable."""
-    playwright=pytest.importorskip('playwright.sync_api')
+    browser_api=__import__('browser_driver')
     source=(ROOT/'frontend/v7_backtest.html').read_text()
     for key,value in {'API_BASE':'/api/backtest-'+version,'BACKTEST_VERSION':version,'BACKTEST_LABEL':'PB'+version[1:],
         'BASE_PREFIX':'','VERSION':'test','SERIAL':'1','NAV_HASH':'test'}.items():
         source=source.replace('%%'+key+'%%',value)
     requests=[];errors=[]
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser=driver.chromium.launch(headless=True)
         page=browser.new_page(viewport={'width':1200,'height':900})
         page.on('pageerror',lambda error:errors.append(str(error)))

@@ -1,7 +1,8 @@
 """Run-editor must surface failed instance config loads and block saving empty configs."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -24,7 +25,7 @@ def test_config_load_failure_is_reported_and_blocks_blank_form(failure):
     script = 'const failure = %r;\n' % failure
     script += 'async function loadExistingConfig() {\n' + branch.rstrip() + '\n'
     script += r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 let cfg = {pbgui: {kept: true}}, paramStatus = {kept: true}, draftOverrideConfigs = {kept: true};
 let renders = 0, throws = '';
 const document = {getElementById: () => null};
@@ -61,9 +62,9 @@ const apiFetch = async () => {
     assert.deepEqual(paramStatus, {kept: true});
     assert.equal(renders, 0);
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 '''
-    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True, timeout=10)
+    run_javascript(['-e', script], check=True, capture_output=True, text=True, timeout=10)
 
 
 @pytest.mark.parametrize('blocked', [True, False])
@@ -73,7 +74,7 @@ def test_save_blocked_after_failed_config_load(blocked):
     script = 'const blocked = %s;\n' % ('true' if blocked else 'false')
     script += fn
     script += r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 let _configLoadFailed = blocked;
 let _editorInitPromise = null, _symbolsAndTagsLoadPromise = Promise.resolve();
 let toasts = [], rawChecked = 0, btnDisabled = null;
@@ -89,6 +90,6 @@ function ensureRawJsonValidForSave() { rawChecked++; return false; }
     assert.equal(rawChecked, 1);
     assert.equal(toasts.length, 0);
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });
 '''
-    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True, timeout=10)
+    run_javascript(['-e', script], check=True, capture_output=True, text=True, timeout=10)

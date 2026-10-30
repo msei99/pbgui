@@ -1,9 +1,10 @@
-"""Static and Node-backed VPS Monitor agent frontend regressions."""
+"""Static and browser-backed VPS Monitor agent frontend regressions."""
 
 from __future__ import annotations
 
+from javascript_checks import run_javascript
+
 import re
-import subprocess
 import textwrap
 from pathlib import Path
 
@@ -20,7 +21,7 @@ def test_coindata_lifecycle_displays_actual_state_and_manual_actions() -> None:
     renderer = _extract_function(source, "renderServices")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const container = {{innerHTML: ''}};
         const document = {{getElementById: () => container}};
         function esc(value) {{ return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }}
@@ -52,7 +53,7 @@ def test_coindata_lifecycle_displays_actual_state_and_manual_actions() -> None:
         assert.equal(svcCompactToggled.test, true);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
 
 
@@ -87,7 +88,7 @@ def _extract_function(source: str, name: str) -> str:
 
 
 def _run_agent_assertions(assertions: str) -> None:
-    """Execute the monitor-agent classifiers and renderer in Node."""
+    """Execute the monitor-agent classifiers and renderer in the browser."""
     source = HTML_PATH.read_text(encoding="utf-8")
     names = [
         "telemetryLastUpdate",
@@ -102,7 +103,7 @@ def _run_agent_assertions(assertions: str) -> None:
     functions = "\n\n".join(_extract_function(source, name) for name in names)
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const TELEMETRY_STALE_SECONDS = 15;
         const MONITOR_AGENT_COLLECTOR_STALE_SECONDS = 30;
         const MONITOR_AGENT_REQUIRED_FILES = [
@@ -118,15 +119,15 @@ def _run_agent_assertions(assertions: str) -> None:
         {assertions}
         """
     )
-    result = subprocess.run(
-        ["node", "-e", script],
+    result = run_javascript(
+        ["-e", script],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 0, (
-        "Node-backed VPS Monitor regression failed\n"
+        "browser-backed VPS Monitor regression failed\n"
         f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
 
@@ -194,7 +195,7 @@ def test_disconnected_actions_and_history_clear_pending_states() -> None:
     functions = "\n\n".join(_extract_function(source, name) for name in names)
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const WebSocket = {{OPEN: 1}};
         const timers = new Map();
         let nextTimer = 0;
@@ -295,7 +296,7 @@ def test_disconnected_actions_and_history_clear_pending_states() -> None:
         assert.equal(duplicateTwo.disabled, true, 'one response restores only one same-named runtime action');
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     assert "resetPendingMonitorActions('Connection lost. Reconnect and try again.')" in _extract_function(source, "connect")
 
@@ -361,7 +362,7 @@ def test_host_and_bot_action_markup_escapes_xss_payloads() -> None:
     ])
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {functions}
         const attack = `bad\"' onclick='globalThis.PWNED=1'><img src=x onerror=1>`;
         const actions = renderInstanceActions({{host: attack, name: attack, pbVersion: attack}});
@@ -377,9 +378,9 @@ def test_host_and_bot_action_markup_escapes_xss_payloads() -> None:
         assert.match(restart, /data-monitor-action="restart-service"/);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, (
-        f"Node-backed XSS regression failed\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        f"browser-backed XSS regression failed\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
 
 
@@ -405,7 +406,7 @@ def test_pb8_instance_rows_preserve_runtime_and_freshness() -> None:
     ])
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const MONITOR_AGENT_COLLECTOR_STALE_SECONDS = 30;
         {functions}
         const fresh = {{snapshot_generated_at: 95, snapshot_checked_at: 96}};
@@ -436,7 +437,7 @@ def test_pb8_instance_rows_preserve_runtime_and_freshness() -> None:
         assert.equal(rows.some(row => row.name === 'unknown'), false);
         """
     )
-    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr or result.stdout
 
 

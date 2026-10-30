@@ -7,11 +7,11 @@ import pytest
 
 def test_inventory_warning_repair_and_stale_poll_preserve_context():
     """Only the latest poll changes the warning; healthy selection and drafts survive."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = Path('frontend/js/vast.js').read_text()
     function = source[source.index('  async function refreshJobs(preferred,'):
                       source.index('  async function pollJobs()')]
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()

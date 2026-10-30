@@ -2742,7 +2742,12 @@
       card.style.transform = '';
     }
 
-    function fitSelectedCardToContent() {
+    function selectedCardMinimumSize(card) {
+      var style = window.getComputedStyle(card);
+      return { width: parseFloat(style.minWidth) || 520, height: parseFloat(style.minHeight) || 280 };
+    }
+
+    function fitSelectedCardToContent(minimum) {
       var card = document.getElementById('selected-card');
       var grid = document.getElementById('selected-grid');
       var head = card.querySelector('.details-head');
@@ -2750,8 +2755,12 @@
       if (window.innerWidth <= 980) return;
       if (card.dataset.layoutMode === 'manual') return;
 
-      var minWidth = parseFloat(window.getComputedStyle(card).minWidth) || 520;
-      var minHeight = parseFloat(window.getComputedStyle(card).minHeight) || 280;
+      // requestAnimationFrame supplies a timestamp, not premeasured dimensions.
+      if (!minimum || !Number.isFinite(minimum.width) || !Number.isFinite(minimum.height)) {
+        minimum = selectedCardMinimumSize(card);
+      }
+      var minWidth = minimum.width;
+      var minHeight = minimum.height;
       var maxWidth = Math.max(minWidth, Math.min(window.innerWidth - 16, 1120));
       var maxHeight = Math.max(minHeight, window.innerHeight - 88);
       var widthCandidates = [640, 760, 900, maxWidth]
@@ -2795,6 +2804,9 @@
         return;
       }
 
+      // Read CSS constraints before inserting the newly visible card's content,
+      // so fitting does not first lay it out at its old default dimensions.
+      var minimum = fitImmediately ? selectedCardMinimumSize(card) : null;
       card.classList.add('visible');
       document.getElementById('selected-title').textContent = row.coin || row.symbol || row.ccxt_symbol || 'Selected symbol';
 
@@ -2835,7 +2847,7 @@
         grid.innerHTML += '<div class="notice-box"><strong>Notice</strong><br>' + escapeHtml(row.notice) + '</div>';
       }
 
-      if (fitImmediately) fitSelectedCardToContent();
+      if (fitImmediately) fitSelectedCardToContent(minimum);
       else requestAnimationFrame(fitSelectedCardToContent);
     }
 

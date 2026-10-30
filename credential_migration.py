@@ -2791,7 +2791,12 @@ def _argv_path_is_below(argument: Any, root: Path) -> bool:
     text = str(argument or "").strip()
     if not text or "\x00" in text:
         return False
-    candidate = Path(text).expanduser()
+    try:
+        candidate = Path(text).expanduser()
+    except RuntimeError:
+        # Process arguments may contain literal tildes (for example browser
+        # resolver rules), not paths with a resolvable user home directory.
+        return False
     if not candidate.is_absolute():
         return False
     candidate = _lexical_absolute(candidate)

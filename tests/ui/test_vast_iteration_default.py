@@ -1,6 +1,7 @@
 """New Vast defaults preserve existing configurations and deliberate edits."""
 
-import subprocess
+from javascript_checks import run_javascript
+
 from pathlib import Path
 
 
@@ -12,7 +13,7 @@ def test_new_vast_iteration_default_preserves_explicit_values():
     new_config = page[page.index('async function openNewConfig() {'):page.index('\nasync function openConfigEditor')]
     update = cloud[cloud.index('    updateEditor: function () {'):cloud.index('    closeEditor:')]
     script = '''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 let fields, input, backendRow;
 const state = {};
 const optimizeEditorAdapter = {isV8:true};
@@ -55,7 +56,7 @@ function scheduleValidation() {}
   fields['opted-execution'].value = 'vast';
   controller.updateEditor();
   assert.equal(fields['opted-iters'].value, '200000');
-})().catch(error => {console.error(error); process.exit(1);});
+})().catch(error => {console.error(error); finishTest(1);});
 '''
-    result = subprocess.run(['node'], input=script, text=True, capture_output=True)
+    result = run_javascript([], input=script, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr

@@ -1,8 +1,9 @@
 """PB8 Optimize stop deadlines release controls despite stalled backend work."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
 import re
-import subprocess
 
 import pytest
 
@@ -18,7 +19,7 @@ def test_start_date_stop_deadline(scenario):
         functions.append(source[start:end+2])
     script = 'const scenario = %r;\n' % scenario + '\n'.join(functions)
     script += r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 let timers = new Map(), next = 0, requests = 0, pendingResolve;
 const window = {setTimeout:(fn,ms)=>{timers.set(++next,{fn,ms});return next;}, clearTimeout:id=>timers.delete(id)};
 let _optOhlcvStartDateRun = {jobId:'old'}, _optOhlcvStartDatePollTimer = null;
@@ -58,6 +59,6 @@ function apiFetch() { requests++; return new Promise(resolve=>pendingResolve=res
   pendingResolve({status:'completed'}); await stopping;
   assert.equal(_optOhlcvStartDateRun,newer); assert.equal(rendered,before);
  }
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 '''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True,timeout=10)
+    run_javascript(['-e',script],check=True,capture_output=True,text=True,timeout=10)

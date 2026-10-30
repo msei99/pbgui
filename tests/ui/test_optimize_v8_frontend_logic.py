@@ -1,7 +1,8 @@
 """Static and executable frontend contracts for the shared PB7/PB8 Optimize page."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 import textwrap
 
 
@@ -12,7 +13,7 @@ def test_hsl_restart_normalization_preserves_effective_scopes() -> None:
     """Import effective overrides without creating HSL objects or changing activation."""
     adapter = (ROOT / 'frontend/js/optimize_editor_adapter.js').read_text()
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{}};
         {adapter}
         const v8 = window.PBGuiOptimizeEditorAdapter.create('v8');
@@ -84,7 +85,7 @@ def test_hsl_checkbox_and_json_share_one_value_across_modes() -> None:
         'updateOptimizeHslBudgetScalingValidation',
     ))
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{}};
         {adapter}
         const optimizeEditorAdapter = window.PBGuiOptimizeEditorAdapter.create('v8');
@@ -144,7 +145,7 @@ def test_cpu_input_enforces_host_limit_and_backend_specific_auto() -> None:
         'collectOptimizeCpuCount', 'normalizeOptimizeCpuCount', 'normalizeOptimizePositiveInteger',
     ))
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const optimizeEditorAdapter={{isV8:true}};
         const nodes={{'opted-n-cpus':{{value:'1'}},'opted-opt-backend':{{value:'pymoo'}}}};
         const el=id=>nodes[id];
@@ -196,7 +197,7 @@ def test_pb8_worker_auto_values_round_trip_without_zero_coercion() -> None:
         'collectOptimizeGpuSettings', 'normalizeOptimizeCpuCount', 'normalizeOptimizePositiveInteger',
     ))
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const optimizeEditorAdapter = {{isV8:true}};
         const nodes = {{'opted-gpu-auto-lean':{{checked:false}},'opted-gpu-halving-enabled':{{checked:false}}}};
         const el = id => nodes[id] || null;
@@ -231,7 +232,7 @@ def test_pb8_coin_budget_controls_preserve_effective_fixed_values_and_validate_m
     """No silent mode reset, numeric bounds, unknown runtime injection or double values."""
     adapter = (ROOT / 'frontend/js/optimize_editor_adapter.js').read_text()
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{}};
         {adapter}
         const v8 = window.PBGuiOptimizeEditorAdapter.create('v8');
@@ -267,7 +268,7 @@ def test_gpu_runtime_labels_and_native_alias_choices() -> None:
         "optimizeGpuRuntimeLabel", "optimizeGpuMetricSet", "metricAvailableForCurrentBackend",
     ))
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let backend = 'gpu';
         const el = () => ({{value: backend}});
         const normalizeOptimizeBackendValue = x => x;
@@ -299,7 +300,7 @@ def test_pb84_mutation_controls_round_trip_auto_explicit_and_legacy_values() -> 
     )
     functions = "\n".join(_page_function(page, name) for name in names)
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const optimizeEditorAdapter = {{isV8: true}};
         let defaults = {{mutation_prob: 'auto', mutation_prob_per_variable: 'auto'}};
         const optimizePymooSharedDefaults = () => defaults;
@@ -364,7 +365,7 @@ def test_sweep_apply_sets_balanced_high_risk_scoring_preset() -> None:
     function_source = _page_function(page, "applyOptimizeSweepPreset")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'opted-starting-balance': {{value: '100000'}},
           'opted-objective-scenario-mode': {{value: 'named'}},
@@ -410,7 +411,7 @@ def test_rolling_and_walk_forward_apply_the_sweep_scoring_and_limits_defaults() 
     function_source = _page_function(page, "applyOptimizeSweepPreset")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'opted-starting-balance': {{value: '100000'}},
           'opted-objective-scenario-mode': {{value: 'named'}},
@@ -458,7 +459,7 @@ def test_sweep_apply_sizes_long_positions_to_coins_and_sets_twe_range() -> None:
     function_source = _page_function(page, "applyOptimizeSweepLongBoundsPreset")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const inputs = {{
           'opted-long-npos': {{value: '7'}},
           'opted-long-twe': {{value: '1.5'}}
@@ -518,7 +519,7 @@ def test_sweep_apply_mirrors_approved_coins_without_enabling_short() -> None:
     function_source = _page_function(page, "applyOptimizeSweepCoinSymmetry")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const values = {{
           'ms-opt-app-long': ['HYPE/USDC:USDC'],
           'ms-opt-app-short': [],
@@ -590,7 +591,7 @@ def test_ohlcv_start_lookup_rejects_last_valid_config_fallback() -> None:
     function_source = _page_function(page, "optimizeOhlcvLookupConfig")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {function_source}
         assert.deepEqual(optimizeOhlcvLookupConfig({{backtest: {{start_date: '2020-01-01'}}}}), {{backtest: {{start_date: '2020-01-01'}}}});
         assert.throws(
@@ -608,7 +609,7 @@ def test_ohlcv_start_progress_renders_real_pair_count() -> None:
     function_source = _page_function(page, "renderOptimizeStartDateProgress")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'opted-ohlcv-start-progress': {{style: {{}}}},
           'opted-ohlcv-start-progress-fill': {{style: {{}}}},
@@ -637,7 +638,7 @@ def test_optimize_start_date_normalization_strips_iso_time() -> None:
     function_source = _page_function(page, "normalizeOptimizeDateOnlyValue")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {function_source}
         assert.equal(normalizeOptimizeDateOnlyValue('2024-12-31T00:00:00'), '2024-12-31');
         assert.equal(normalizeOptimizeDateOnlyValue('2024-12-31 12:30:00'), '2024-12-31');
@@ -653,7 +654,7 @@ def test_late_symbol_load_preserves_first_approved_coin_clear() -> None:
     function_source = _page_function(page, "loadOptSymbols")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let resolveCoins;
         const selected = {{
           'ms-opt-exchanges': ['binance'],
@@ -707,7 +708,7 @@ def test_late_symbol_load_preserves_first_approved_coin_clear() -> None:
           assert.deepEqual(selected['ms-opt-app-short'], []);
           assert.equal(_optStructuredEditorSyncing, false);
           assert.deepEqual(synchronizedSelections, [{{long: [], short: []}}]);
-        }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
+        }})().catch(error => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -722,7 +723,7 @@ def test_sweep_holdout_button_builds_standalone_backtest_config() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const deepClone = value => JSON.parse(JSON.stringify(value));
         {function_source}
         const source = {{
@@ -779,7 +780,7 @@ def test_pb8_multi_pareto_backtest_preserves_dates_and_exchange_groups() -> None
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const deepClone = value => JSON.parse(JSON.stringify(value));
         const state = {{
           selectedParetos: new Set(['/a.json', '/b.json']),
@@ -811,7 +812,7 @@ def test_pb8_multi_pareto_backtest_preserves_dates_and_exchange_groups() -> None
           assert.deepEqual(queued.map(item => item.config.backtest.exchanges), [['binance', 'bybit'], ['hyperliquid']]);
           assert.equal(queued.every(item => item.preserve_timerange === true), true);
           assert.equal(queued.every(item => item.preserve_exchanges === true), true);
-        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        }}).catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -830,7 +831,7 @@ def test_sweep_holdout_both_mode_queues_holdout_and_continuous_jobs() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const deepClone = value => JSON.parse(JSON.stringify(value));
         const state = {{
           selectedParetos: new Set(['/candidate.json']),
@@ -874,7 +875,7 @@ def test_sweep_holdout_both_mode_queues_holdout_and_continuous_jobs() -> None:
           assert.equal(groups[0].id, groups[1].id);
           assert.equal(groups[0].label, 'candidate');
           assert.deepEqual(groups.map(group => group.item), ['holdout_01', 'full_timerange']);
-        }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        }}).catch(error => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -894,7 +895,7 @@ def test_all_timeranges_validation_queues_training_holdout_and_full_jobs() -> No
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const deepClone = value => JSON.parse(JSON.stringify(value));
         const state = {{
           selectedParetos: new Set(['/candidate.json']), paretoSweepEnabled: true,
@@ -936,7 +937,7 @@ def test_all_timeranges_validation_queues_training_holdout_and_full_jobs() -> No
           assert.deepEqual(queued.map(item => item.config.pbgui.backtest_result_group.item), [
             'train_01', 'train_02', 'holdout_01', 'full_timerange'
           ]);
-        }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        }}).catch(error => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -956,7 +957,7 @@ def test_all_timeranges_without_sweep_plan_queues_training_and_full_jobs() -> No
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const deepClone = value => JSON.parse(JSON.stringify(value));
         const state = {{
           selectedParetos: new Set(['/candidate.json']), paretoSweepEnabled: false,
@@ -986,7 +987,7 @@ def test_all_timeranges_without_sweep_plan_queues_training_and_full_jobs() -> No
             'candidate_train_01', 'candidate_train_02', 'candidate_full_timerange'
           ]);
           assert.match(warning, /queued Training and Full timerange only/);
-        }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        }}).catch(error => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -999,7 +1000,7 @@ def test_all_timeranges_button_stays_enabled_without_sweep_plan() -> None:
     function_source = _page_function(page, "updateParetoSelectionUi")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const controls = {{
           'pareto-selection-summary': {{}},
           'btn-open-pareto-explorer-paretos': {{}},
@@ -1040,7 +1041,7 @@ def test_full_timerange_validation_works_without_sweep_holdouts() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const deepClone = value => JSON.parse(JSON.stringify(value));
         const state = {{
           selectedParetos: new Set(['/candidate.json']), paretoSweepEnabled: false,
@@ -1063,7 +1064,7 @@ def test_full_timerange_validation_works_without_sweep_holdouts() -> None:
           assert.equal(queued[0].name, 'candidate_full_timerange');
           assert.equal(queued[0].config.backtest.start_date, '2024-01-01');
           assert.equal(queued[0].config.pbgui.backtest_result_group.kind, 'optimize_validate');
-        }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        }}).catch(error => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -1082,7 +1083,7 @@ def test_pareto_result_selection_restores_after_reload_without_storing_paths() -
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const values = new Map();
         const window = {{sessionStorage: {{
           getItem(key) {{ return values.has(key) ? values.get(key) : null; }},
@@ -1111,7 +1112,7 @@ def test_pareto_result_selection_restores_after_reload_without_storing_paths() -
         }}).then(restored => {{
           assert.equal(restored, false);
           assert.equal(values.has('pbgui.optimize.selected-result.v8'), false);
-        }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        }}).catch(error => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -1132,7 +1133,7 @@ def test_sidebar_pareto_restore_waits_for_results_and_runs_once() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const values = new Map([['pbgui.optimize.selected-result.v8', JSON.stringify({{version: 'v8', result: 'result-1'}})]]);
         const window = {{sessionStorage: {{
           getItem(key) {{ return values.has(key) ? values.get(key) : null; }},
@@ -1166,7 +1167,7 @@ def test_sidebar_pareto_restore_waits_for_results_and_runs_once() -> None:
           assert.equal(paretoLoads, 1);
           assert.equal(await restoreSelectedOptimizeResultWhenReady(), false);
           assert.equal(paretoLoads, 1);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -1179,8 +1180,8 @@ def test_suite_generator_applies_training_only_and_invalidates_stale_provenance(
     script = textwrap.dedent(
         """
         (async () => {
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
         _suiteRender = () => {};
         toast = () => {};
@@ -1218,7 +1219,7 @@ def test_suite_generator_applies_training_only_and_invalidates_stale_provenance(
         });
         await _suiteApplyScenarioPreview();
         assert.deepEqual(_suiteState.scenarios, [{label: 'keep_current'}]);
-        })().catch(error => { console.error(error); process.exitCode = 1; });
+        })().catch(error => { console.error(error); testResult.exitCode = 1; });
         """
     )
     _run_node(script)
@@ -1229,8 +1230,8 @@ def test_suite_scenario_actions_preserve_the_active_form_draft() -> None:
 
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         const fields = {
           'suite-sc-label': {value: 'edited_base'},
           'suite-sc-start': {value: '2024-01-01'},
@@ -1274,8 +1275,8 @@ def test_sweep_generator_aligns_stride_with_window_and_cooldown() -> None:
     """Sweep windows must contain a real no-trading gap before the next cycle."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         const fields = {
           'suite-generator-template': {value: 'sweep_cycles'},
           'suite-generator-window': {value: '90'},
@@ -1300,8 +1301,8 @@ def test_scenario_recalculate_fits_rolling_walk_forward_and_zero_ranges() -> Non
 
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         const fields = {
           'suite-generator-template': {value: 'rolling_windows'},
           'suite-generator-window': {value: '60'},
@@ -1343,8 +1344,8 @@ def test_scenario_template_switch_updates_automatic_field_modes_immediately() ->
 
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         const holdout = {style: {display: ''}};
         const stride = {value: '30', readOnly: false};
         const training = {value: '4', readOnly: false};
@@ -1386,8 +1387,8 @@ def test_scenario_generator_generate_uses_current_base_dates() -> None:
     """Generate must fit current dates and display the returned windows in one action."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         const fields = {
           'suite-generator-template': {value: 'sweep_cycles'},
           'suite-generator-window': {value: '90'},
@@ -1441,8 +1442,8 @@ def test_sweep_generator_repairs_missing_or_invalid_template_specific_defaults()
     """Switching from another template must not submit empty Sweep fields as numeric zero."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         global.esc = value => String(value == null ? '' : value);
         eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
         _suiteState.getScenarioContext = () => ({
@@ -1475,8 +1476,8 @@ def test_suite_render_preserves_open_expander_while_disabled() -> None:
     """Preview and Recalculate renders must not collapse a manually opened generator."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         const container = {innerHTML: ''};
         const existing = {classList: {contains: name => name === 'open'}};
         global.document = {
@@ -1499,8 +1500,8 @@ def test_pb8_suite_aggregate_renders_median_and_std_without_changing_pb7() -> No
     """The shared reducer UI must display every PB8 method while PB7 stays compatible."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
         global.esc = value => String(value);
         _suiteState.aggregateMetrics = ['gain_strategy_eq'];
@@ -1536,7 +1537,7 @@ def _page_function(page: str, name: str) -> str:
 
 def _run_node(script: str) -> None:
     """Run one isolated Node contract and surface its assertion output."""
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1652,7 +1653,7 @@ def test_optional_staged_history_controls_do_not_look_like_vast_gpu_sizing() -> 
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
     function = _page_function(page, "updateOptimizeGpuHalvingFields")
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = Object.fromEntries([
           'opted-gpu-halving-heading', 'opted-gpu-halving-mobile-heading',
           'opted-gpu-halving-switch', 'opted-gpu-halving-fields',
@@ -1711,7 +1712,7 @@ def test_pareto_backtests_keep_the_scenario_selected_for_each_candidate() -> Non
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const state = {{
           selectedParetos: new Set(['/a.json']),
           selectedParetoScenarios: new Map(),
@@ -1772,8 +1773,8 @@ def test_adapter_preserves_v7_and_round_trips_nested_v8_paths() -> None:
     """The adapter must leave PB7 flat values alone and map PB8 nested bot and bound paths."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         global.window = {};
         eval(fs.readFileSync('frontend/js/optimize_editor_adapter.js', 'utf8'));
 
@@ -1937,7 +1938,7 @@ def test_adapter_preserves_v7_and_round_trips_nested_v8_paths() -> None:
         });
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1970,7 +1971,7 @@ def test_pb8_metadata_failure_shows_persistent_update_warning() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{setTimeout, clearTimeout}};
         function syncQueueSettingsModalFields() {{}}
         const detail = {{textContent: ''}};
@@ -1986,7 +1987,7 @@ def test_pb8_metadata_failure_shows_persistent_update_warning() -> None:
         loadSettings().then(() => {{
           assert.equal(detail.textContent, 'Run Update PB8.');
           assert.equal(classes.has('pb8-runtime-warning-visible'), true);
-        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        }}).catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
 
@@ -2002,7 +2003,7 @@ def test_initial_configs_load_does_not_wait_for_settings_metadata() -> None:
     init_function = _page_function(page, "init").split("\n\ninit().catch", 1)[0]
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let resolveSettings;
         let calls = [];
         const el = () => ({{hidden: true}});
@@ -2035,7 +2036,7 @@ def test_initial_configs_load_does_not_wait_for_settings_metadata() -> None:
           resolveSettings();
           await pending;
           assert.deepEqual(calls, ['metadata', 'settings', 'configs', 'queue', 'results', 'draft', 'open']);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
 
@@ -2049,7 +2050,7 @@ def test_migration_preview_hides_config_list_while_metadata_loads() -> None:
     function = _page_function(page, "showMigrationDraftLoadingState")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'configs-editor': {{style: {{}}, innerHTML: ''}},
           'configs-toolbar': {{style: {{}}}},
@@ -2108,7 +2109,7 @@ def test_saving_a_queue_opened_config_refreshes_that_queue_snapshot() -> None:
     save_source = _page_function(page, "saveEditor")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const requests = [];
         const state = {{editorQueueFilename: '', editorReturnPanel: 'configs'}};
         async function apiFetch(path, options) {{
@@ -2135,7 +2136,7 @@ def test_saving_a_queue_opened_config_refreshes_that_queue_snapshot() -> None:
           assert.equal(requests[1].path, '/queue/queue-job/repair-config');
           assert.equal(requests[1].options.method, 'POST');
           assert.deepEqual(JSON.parse(requests[1].options.body), {{name: 'queued-config'}});
-        }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+        }})().catch((error) => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -2150,7 +2151,7 @@ def test_v8_save_and_queue_with_new_name_does_not_rebind_opened_job() -> None:
     save_source = _page_function(page, "setOptimizeEditorSaving") + _page_function(page, "saveEditor")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const requests = [];
         const state = {{
           editorQueueFilename: 'job-030',
@@ -2187,7 +2188,7 @@ def test_v8_save_and_queue_with_new_name_does_not_rebind_opened_job() -> None:
             '/queue'
           ]);
           assert.deepEqual(JSON.parse(requests[1].options.body), {{name: 'HYPE_trailing_035'}});
-        }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+        }})().catch((error) => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -2199,7 +2200,7 @@ def test_home_returns_queue_opened_editor_to_queue() -> None:
     close_source = _page_function(page, "closeEditor")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'configs-editor': {{style: {{display: 'block'}}, innerHTML: 'editor'}},
           'configs-toolbar': {{style: {{display: 'none'}}}},
@@ -2308,7 +2309,7 @@ def test_pb8_runtime_metadata_preserves_hsl_enable_controls() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const optimizeEditorAdapter = {{
           metadataPath: '/metadata',
           isV8: true,
@@ -2337,7 +2338,7 @@ def test_pb8_runtime_metadata_preserves_hsl_enable_controls() -> None:
             'bot.long.hsl.restart_after_red_policy',
             'bot.short.hsl.restart_after_red_policy'
           ]);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -2372,7 +2373,7 @@ def test_pb8_hsl_controls_write_bot_config_and_not_runtime_overrides() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const fields = [
           {{key: 'bot.long.hsl.enabled', side: 'long', storage: 'bot_hsl', botKey: 'enabled', type: 'boolean'}},
           {{key: 'bot.long.hsl.no_restart_drawdown_threshold', side: 'long', storage: 'bot_hsl', botKey: 'no_restart_drawdown_threshold', type: 'number'}},
@@ -2425,8 +2426,8 @@ def test_pb8_default_bounds_do_not_limit_slider_minima() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         global.window = {{}};
         eval(fs.readFileSync('frontend/js/optimize_editor_adapter.js', 'utf8'));
         const optimizeEditorAdapter = window.PBGuiOptimizeEditorAdapter.create('v8', {{}});
@@ -2476,8 +2477,8 @@ def test_pb8_invalid_optimize_endpoints_are_clamped_even_with_runtime_metadata()
         "optimizeBoundNumbersMatch", "constrainOptimizeBoundEntry",
     ))
     script = textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         global.window = {{}};
         eval(fs.readFileSync('frontend/js/optimize_editor_adapter.js', 'utf8'));
         const optimizeEditorAdapter = window.PBGuiOptimizeEditorAdapter.create('v8', {{}});
@@ -2514,7 +2515,7 @@ def test_pb7_imported_position_bounds_require_positive_counts() -> None:
         "getOptimizeBoundRequiredMin", "getOptimizeBoundRequiredMax",
     ))
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const optimizeEditorAdapter = {{isV8:false}};
         const getOptimizeBoundSuffix = key => key.replace(/^(long|short)_/, '');
         const getOptimizeBoundGroup = key => key.startsWith('long_') ? 'long' : 'short';
@@ -2540,7 +2541,7 @@ def test_pb8_forager_ema_span_sliders_require_positive_values() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const optimizeEditorAdapter = {{isV8: true}};
         const OPT_HSL_RED_THRESHOLD_MIN = 0.000001;
         function getOptimizeBoundGroup() {{ return 'long'; }}
@@ -2594,7 +2595,7 @@ def test_optimize_migration_error_is_compact_and_actionable() -> None:
     show_error = _page_function(page, "showOptimizeMigrationError")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let dialog = null;
         const window = {{}};
         window.PBGuiDialogs = {{}};
@@ -2615,7 +2616,7 @@ def test_optimize_migration_error_is_compact_and_actionable() -> None:
           assert.match(dialog.detail, /Review changed optimizer behavior/);
           assert.doesNotMatch(dialog.detail, /moved\\.299/);
           assert.ok(dialog.detail.length < 1000);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -2659,7 +2660,7 @@ def test_multi_strategy_dom_switching_and_save_preserve_every_custom_block() -> 
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         function deepClone(value) {{ return JSON.parse(JSON.stringify(value == null ? {{}} : value)); }}
         function prettyJson(value) {{ return JSON.stringify(value, null, 2); }}
         function scheduleStructuredEditorSync() {{}}
@@ -2765,7 +2766,7 @@ def test_seed_runtime_unknown_overrides_and_pymoo_auto_execute_page_logic() -> N
     functions = "\n".join(_page_function(page, name) for name in names)
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         function deepClone(value) {{ return JSON.parse(JSON.stringify(value == null ? {{}} : value)); }}
         function cloneJsonValue(value) {{ return value === undefined ? undefined : deepClone(value); }}
         function ensureObjectSection(root, key) {{ if (!root[key] || typeof root[key] !== 'object') root[key] = {{}}; return root[key]; }}
@@ -2806,7 +2807,7 @@ def test_request_generations_reject_stale_http_without_discarding_results_after_
     functions = "\n".join(_page_function(page, name) for name in ("queueSettingsFields", "validateQueueSettings", "loadSettings", "loadQueue", "loadResults"))
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{setTimeout, clearTimeout}};
         const deferred = [];
         function apiFetch(path) {{ return new Promise((resolve) => deferred.push({{path, resolve}})); }}
@@ -2866,7 +2867,7 @@ def test_request_generations_reject_stale_http_without_discarding_results_after_
             await navigated;
             assert.equal(state.results[0].path, 'stale-navigation');
             assert.equal(state.resultsLoading, false);
-        }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+        }})().catch((error) => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -2891,7 +2892,7 @@ def test_switching_result_sets_clears_stale_paretos_before_loading() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const deferred = [];
         function apiFetch(path) {{ return new Promise((resolve) => deferred.push({{path, resolve}})); }}
         function normalizeParetoStatistic(value) {{ return value || 'mean'; }}
@@ -2933,7 +2934,7 @@ def test_switching_result_sets_clears_stale_paretos_before_loading() -> None:
           assert.equal(state.selectedResultPath, '/new-b');
           assert.deepEqual(state.paretos.map((item) => item.path), ['/new-b/current.json']);
           assert.deepEqual(renders.at(-1), ['/new-b/current.json']);
-        }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+        }})().catch((error) => {{ console.error(error); testResult.exitCode = 1; }});
         """
     )
     _run_node(script)
@@ -2943,8 +2944,8 @@ def test_installed_override_helpers_and_backend_result_flags_are_visible() -> No
     """Every installed helper renders and PB8 result controls use explicit backend capabilities."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         global.window = {};
         eval(fs.readFileSync('frontend/js/optimize_editor_adapter.js', 'utf8'));
         const adapter = window.PBGuiOptimizeEditorAdapter.create('v8');
@@ -2975,7 +2976,7 @@ def test_optimizer_overrides_are_filtered_for_the_active_strategy() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {functions}
         const overrides = ['lossless_close_trailing', 'forward_tp_grid', 'mirror_short_from_long'];
         assert.deepEqual(filterOptimizeEnableOverridesForStrategy(overrides, 'ema_anchor'), ['mirror_short_from_long']);
@@ -2998,7 +2999,7 @@ def test_v8_results_show_and_sort_strategy_without_changing_v7_columns() -> None
     assert "escapeHtml(result.strategy || '-')" in page
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const state = {{resultSortKey: 'strategy', resultSortDir: 'asc'}};
         {functions}
         assert.equal(resultHeaderLabel('strategy'), 'Strategy');
@@ -3031,7 +3032,7 @@ def test_pareto_contract_enables_backend_advertised_median_and_scenario() -> Non
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const PARETO_STAT_OPTIONS = ['mean', 'min', 'max', 'std'];
         const PARETO_SUMMARY_ORDER = ['adg', 'gain', 'drawdown_worst'];
         const PARETO_COLUMNS_STORAGE_KEY = 'test';
@@ -3068,7 +3069,7 @@ def test_pareto_gain_order_and_numeric_sort_are_stable() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const PARETO_SUMMARY_ORDER = ['adg', 'gain', 'drawdown_worst'];
         const state = {{paretoSortKey: 'name', paretoSortDir: 'asc'}};
         let renders = 0;
@@ -3111,7 +3112,7 @@ def test_pareto_metric_columns_are_configurable_and_never_empty() -> None:
     assert 'id="pareto-columns-all"' in page
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const PARETO_SUMMARY_ORDER = ['adg', 'gain', 'drawdown_worst', 'sharpe_ratio'];
         const PARETO_COLUMNS_STORAGE_KEY = 'test';
         const state = {{
@@ -3157,7 +3158,7 @@ def test_pareto_fallback_statistics_include_median_and_render_commits_once() -> 
     function = _page_function(page, "renderParetos")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let commits = 0;
         let rendered = '';
         const tbody = {{
@@ -3206,7 +3207,7 @@ def test_sidebar_result_actions_follow_backend_capabilities() -> None:
     function = _page_function(page, "updateResultSelectionUi")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const ids = [
           'result-selection-summary', 'btn-open-result-paretos', 'btn-open-pareto-explorer-results',
           'btn-open-result-pareto-dash', 'btn-open-result-3d', 'btn-continue-result',
@@ -3265,7 +3266,7 @@ def test_pb8_scenario_bases_round_trip_without_changing_pb7_entries() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const optimizeEditorAdapter = {{isV8: true}};
         const limitsMeta = {{
           type_options: ['all'], stat_options: ['', 'mean', 'min', 'max', 'std', 'median'],
@@ -3377,7 +3378,7 @@ def test_optimize_apply_filters_updates_both_sides_across_exchanges() -> None:
     assert 'id="opted-sidebar-apply-filters-btn"' in page
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const button = {{disabled: false}};
         const nodes = {{
           'opted-sidebar-apply-filters-btn': button,
@@ -3415,7 +3416,7 @@ def test_optimize_apply_filters_updates_both_sides_across_exchanges() -> None:
           assert.equal(messages.at(-1).level, 'info');
           assert.match(messages.at(-1).message, /1 unavailable PB8 symbols skipped/);
           assert.equal(button.disabled, false);
-        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        }}).catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -3426,7 +3427,7 @@ def test_cloud_scenario_apply_preserves_objectives_after_adg_fix():
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
     function_source = _page_function(page, "applyOptimizeSweepPreset")
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const el = id => id === 'opted-execution' ? {{value:'vast'}} : null;
         let scoring = [{{metric:'adg_strategy_eq',goal:'max',scenario:null,aggregate:'median'}},
                        {{metric:'drawdown_worst_strategy_eq',goal:'min'}}];
@@ -3461,8 +3462,8 @@ def test_cloud_scenario_apply_preserves_objectives_after_adg_fix():
 def test_scenario_generator_saved_settings_roundtrip_and_legacy_restore() -> None:
     """Restore applied templates and persist unapplied inputs without changing provenance."""
     _run_node(textwrap.dedent("""
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
         _suiteRender = () => {};
         let fields = {};
@@ -3517,7 +3518,7 @@ def test_pareto_explorer_accepts_same_origin_api_root() -> None:
     page = (ROOT / 'frontend/v7_optimize.html').read_text(encoding='utf-8')
     function = _page_function(page, 'openFastApiParetoExplorer')
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let API_BASE;
         const optimizeEditorAdapter = {{supportsParetoExplorer:true, version:'v8'}};
         const window = {{location:{{href:''}}}};
@@ -3548,7 +3549,7 @@ def test_editor_url_restores_config_and_queue_after_refresh():
     functions = '\n'.join(_page_function(page, name) for name in (
         'optimizeDraftStorageKey', 'updateOptimizeEditorUrl', 'handleOpenConfigParam')).split('/* ── data-tip')[0]
     _run_node("""
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const window={location:{href:'http://localhost/app/optimize?keep=yes#configs',pathname:'/app/optimize'},
  sessionStorage:{getItem:()=>null}};
 const optimizeEditorAdapter={isV8:false};
@@ -3572,7 +3573,7 @@ assert.equal(new URL(window.location.href).searchParams.has('open_config'),false
 updateOptimizeEditorUrl(null,null);
 assert.equal(new URL(window.location.href).searchParams.has('open_queue_config'),false);
 }
-})().catch(e=>{console.error(e);process.exit(1);});
+})().catch(e=>{console.error(e);finishTest(1);});
 """)
 
 
@@ -3581,7 +3582,7 @@ def test_refresh_restores_editor_before_background_lists_finish():
     page=(ROOT/'frontend/v7_optimize.html').read_text()
     source=_page_function(page,'init').split('\n\ninit().catch',1)[0]
     _run_node("""
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const window={location:{href:'http://localhost/main?open_config=ETH#configs'}};
 const location={hash:'#configs'},PANEL_META={},state={};
 const document={documentElement:{classList:{remove(){}}}};
@@ -3600,7 +3601,7 @@ const pending=init();
 await new Promise(resolve=>setImmediate(resolve));
 assert.equal(opened,true);
 finishResults();await pending;
-})().catch(e=>{console.error(e);process.exit(1);});
+})().catch(e=>{console.error(e);finishTest(1);});
 """)
     assert page.index("classList.add('restoring-optimize-editor')") < page.index('<body')
 
@@ -3611,8 +3612,8 @@ def test_graphical_sweep_apply_restores_only_three_scoring_defaults():
     preset = '\n'.join(_page_function(page, name) for name in ('applyOptimizeSweepCoinSymmetry', 'applyOptimizeSweepPreset'))
     script = """
     (async () => {
-      const assert = require('node:assert/strict');
-      const fs = require('node:fs');
+      const assert = browserAssert;
+      const fs = testSources;
       eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
       _suiteRender = () => {};
       _suiteNotifyStructuredSync = () => {};
@@ -3649,7 +3650,7 @@ def test_graphical_sweep_apply_restores_only_three_scoring_defaults():
             {metric:'drawdown_worst_strategy_eq',goal:'min'}]);
         }
       }
-    })().catch(error=>{console.error(error);process.exit(1);});
+    })().catch(error=>{console.error(error);finishTest(1);});
     """
     _run_node(script)
 
@@ -3660,7 +3661,7 @@ def test_save_actions_report_failures_and_allow_retry():
     source = _page_function(page, 'setOptimizeEditorSaving') + _page_function(page, 'saveEditor')
     script = """
     (async () => {
-      const assert = require('node:assert/strict');
+      const assert = browserAssert;
       const state = {};
       const el = () => null;
       const optimizeEditorAdapter = {isV8:true};
@@ -3716,7 +3717,7 @@ def test_save_actions_report_failures_and_allow_retry():
       }
       assert(statuses.includes('Saving…'));
       assert(statuses.includes('Saving and queueing…'));
-    })().catch(error=>{console.error(error);process.exit(1);});
+    })().catch(error=>{console.error(error);finishTest(1);});
     """
     _run_node(script)
 
@@ -3728,7 +3729,7 @@ def test_unsaved_editor_refresh_round_trip():
         'optimizeDraftStorageKey', 'storeOptimizeDraft', 'captureOptimizeDraftForRefresh',
         'updateOptimizeEditorUrl', 'openEditorWithConfig', 'handleOpenConfigParam')).split('/* ── data-tip')[0]
     _run_node("""
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const storage=new Map();
 const listeners={};
 const window={addEventListener:(name,fn)=>{listeners[name]=fn;},location:{href:'http://localhost/main#configs',pathname:'/main'},
@@ -3760,7 +3761,7 @@ assert.equal(storage.size,0);
 assert.match(status,/recovery unavailable/);
 updateOptimizeEditorUrl('Saved',null);
 assert.equal(new URL(window.location.href).searchParams.has('open_draft'),false);
-})().catch(e=>{console.error(e);process.exit(1);});
+})().catch(e=>{console.error(e);finishTest(1);});
 """)
     assert "removeItem(optimizeDraftStorageKey())" in _page_function(page, 'closeEditor')
 
@@ -3772,7 +3773,7 @@ def test_cpu_pareto_population_cannot_override_gpu_auto_and_legacy_gpu_stays_vis
         'optimizeGpuEditorSettings', 'collectOptimizeGpuSettings', 'collectOptimizeCpuCount',
     ))
     _run_node(textwrap.dedent(f"""
-        const assert=require('node:assert/strict');
+        const assert=browserAssert;
         const optimizeEditorAdapter={{isV8:true}};
         const deepClone=value=>JSON.parse(JSON.stringify(value));
         const normalizeOptimizeBackendValue=value=>value;
@@ -3838,7 +3839,7 @@ def test_local_cpu_preference_survives_cloud_save_reopen_and_return() -> None:
         'optimizeLocalCpuValue', 'collectOptimizeCpuSettings', 'collectOptimizeCpuCount',
     ))
     _run_node(textwrap.dedent(f"""
-        const assert=require('node:assert/strict');
+        const assert=browserAssert;
         const optimizeEditorAdapter={{isV8:true}};
         const node={{value:'local'}};
         const el=id=>id==='opted-execution'?node:null;
@@ -3894,7 +3895,7 @@ def test_local_convergence_controls_round_trip_and_pb7_isolation():
     source = '\n'.join(_page_function(page, name) for name in (
         'renderLocalConvergenceControls', 'collectLocalConvergence', 'renderLocalConvergence'))
     _run_node("""
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const optimizeEditorAdapter={isV8:true};
 const ensureObjectSection=(obj,key)=>obj[key]||(obj[key]={});
 const nodes={}; const el=id=>nodes[id];
@@ -3933,7 +3934,7 @@ def test_start_lookup_signature_tracks_effective_config() -> None:
     page = (ROOT / 'frontend/v7_optimize.html').read_text()
     function = _page_function(page, 'optimizeOhlcvStartLookupSignature')
     _run_node(textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {function}
         const config = {{backtest:{{start_date:'2021-04-20',end_date:'2026-07-21',exchanges:['binance','bybit'],ohlcv_source_dir:'source',coin_sources:{{HYPE:'source'}}}},
           live:{{approved_coins:{{long:['HYPE'],short:[]}},ignored_coins:{{long:[],short:[]}},minimum_coin_age_days:0}},
@@ -3959,7 +3960,7 @@ def _start_lookup_sync_harness(page: str) -> str:
         'reconcileOptimizeEditorSync', 'scheduleOptimizeEditorReconciliation',
         'scheduleRawJsonEditorSync', 'scheduleStructuredEditorSync', 'collectOptimizeStartLookupConfig'))
     return """
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const window={};
 """ + adapter + """
 let optimizeEditorAdapter=window.PBGuiOptimizeEditorAdapter.create('v8');
@@ -4008,7 +4009,7 @@ def test_start_lookup_flushes_raw_and_rejects_invalid_or_busy_edits() -> None:
  structured.start_date='2024-04-04';scheduleStructuredEditorSync();
  assert.equal(raw.value,'{');assert.match(status.textContent,/Raw JSON is invalid/);
  await assert.rejects(collectOptimizeStartLookupConfig(),/Raw JSON is invalid/);
-})().catch(e=>{console.error(e);process.exit(1)});
+})().catch(e=>{console.error(e);finishTest(1)});
 """)
 
 
@@ -4024,7 +4025,7 @@ def test_start_lookup_keeps_invalid_bot_json_when_raw_sync_is_pending() -> None:
  bot.value='{"ema":3}';scheduleStructuredEditorSync();
  assert.equal(JSON.parse(raw.value).bot.long.ema,3);assert.equal((await collectOptimizeStartLookupConfig()).bot.long.ema,3);
  assert.equal(bot.value,'{"ema":3}');assert.equal(status.textContent,'');
-})().catch(e=>{console.error(e);process.exit(1)});
+})().catch(e=>{console.error(e);finishTest(1)});
 """)
 
 
@@ -4039,7 +4040,7 @@ def test_pb7_editor_sync_retains_existing_debounce() -> None:
  assert.equal(applied,0);assert.equal(JSON.parse(raw.value).backtest.start_date,'2021-04-20');
  await new Promise(r=>setTimeout(r,320));
  assert.equal(applied,1);assert.equal(JSON.parse(raw.value).backtest.start_date,'2022-02-02');
-})().catch(e=>{console.error(e);process.exit(1)});
+})().catch(e=>{console.error(e);finishTest(1)});
 """)
 
 
@@ -4048,7 +4049,7 @@ def test_readiness_waits_for_editor_reconciliation_and_rejects_conflicts() -> No
     page = (ROOT / 'frontend/v7_optimize.html').read_text()
     function = _page_function(page, 'getOptimizeOhlcvPreflightPayload')
     _run_node(textwrap.dedent(f"""
-        const assert=require('node:assert/strict');
+        const assert=browserAssert;
         const state={{editorLastConfig:{{backtest:{{start_date:'2021-04-20'}}}}}};
         const deepClone=x=>structuredClone(x);
         let conflict=false, reconciled=false, collected=0;
@@ -4068,7 +4069,7 @@ def test_readiness_waits_for_editor_reconciliation_and_rejects_conflicts() -> No
           conflict=true;reconciled=false;
           await assert.rejects(getOptimizeOhlcvPreflightPayload(),/conflicting edits/);
           assert.equal(collected,1);
-        }})().catch(e=>{{console.error(e);process.exit(1);}});
+        }})().catch(e=>{{console.error(e);finishTest(1);}});
     """))
 
 
@@ -4077,7 +4078,7 @@ def test_start_lookup_status_is_bounded_and_text_only() -> None:
     page = (ROOT / 'frontend/v7_optimize.html').read_text()
     function = _page_function(page, 'setOptimizeStartDateStatus')
     _run_node(textwrap.dedent(f"""
-        const assert=require('node:assert/strict');
+        const assert=browserAssert;
         const status={{textContent:'',style:{{}}}}; const el=()=>status;
         {function}
         setOptimizeStartDateStatus('<img onerror=x>'+ 'a'.repeat(600),'error');
@@ -4093,7 +4094,7 @@ def test_start_lookup_applies_or_rejects_and_retry_replaces_status() -> None:
     functions = '\n'.join(_page_function(page, name) for name in (
         'optimizeOhlcvStartLookupSignature', 'applyOptimizeStartDateResult', 'setOptimizeStartDateStatus'))
     _run_node(textwrap.dedent(f"""
-        const assert=require('node:assert/strict');
+        const assert=browserAssert;
         let config={{backtest:{{start_date:'2021-04-20'}},pbgui:{{tags:['a']}}}};
         const input={{value:'2021-04-20',dataset:{{}}}}, status={{textContent:'',style:{{}}}};
         const el=id=>id==='opted-start-date'?input:status;
@@ -4118,7 +4119,7 @@ def test_start_lookup_applies_or_rejects_and_retry_replaces_status() -> None:
           options.earliest={{available:true,start_date:'2026-01-01'}};
           await applyOptimizeStartDateResult(run,{{result:{{start_date_options:options}}}});
           assert.equal(input.value,'2026-01-01'); assert.match(status.textContent,/succeeded/);
-        }})().catch(e=>{{console.error(e);process.exit(1);}});
+        }})().catch(e=>{{console.error(e);finishTest(1);}});
     """))
 
 
@@ -4128,7 +4129,7 @@ def test_start_lookup_late_post_is_stopped_after_timeout() -> None:
     functions = '\n'.join(_page_function(page, name) for name in (
         'setOptimizeStartDateFromOhlcv', 'optimizeStartDateRequestDeadline'))
     _run_node(textwrap.dedent(f"""
-        const assert=require('node:assert/strict');
+        const assert=browserAssert;
         let timers=new Map(), seq=0, resolvePost, deleted=[], status='';
         const window={{setTimeout(fn){{timers.set(++seq,fn);return seq;}},clearTimeout(id){{timers.delete(id);}}}};
         let _optOhlcvStartDateRun=null, _optOhlcvStartDateRequestId=0;
@@ -4148,7 +4149,7 @@ def test_start_lookup_late_post_is_stopped_after_timeout() -> None:
           assert.match(status,/timed out/); assert.equal(_optOhlcvStartDateRun,null);
           resolvePost({{job_id:'late'}}); await Promise.resolve(); await Promise.resolve();
           assert.deepEqual(deleted,['/ohlcv-start-dates/late']);
-        }})().catch(e=>{{console.error(e);process.exit(1);}});
+        }})().catch(e=>{{console.error(e);finishTest(1);}});
     """))
 
 
@@ -4159,7 +4160,7 @@ def test_long_only_selection_survives_async_symbol_rebuild() -> None:
         'loadOptSymbols', 'optRebuildMs', 'collectApprovedCoinsFromMs', 'optimizeOhlcvStartLookupSignature',
         'mergeOptimizeEditorChanges'))
     _run_node(textwrap.dedent(f"""
-        const assert=require('node:assert/strict');
+        const assert=browserAssert;
         let resolveCoins, _optSymbolsLoadSeq=0, _optMarketStatusVerified=false, _optMarketLabels={{}}, _optStructuredEditorSyncing=false;
         const selected={{'ms-opt-exchanges':['binance','bybit']}};
         const _optMsController={{rebuild:(id,options,values)=>selected[id]=values.slice(),applyCoinStatus:()=>{{}}}};
@@ -4180,7 +4181,7 @@ def test_long_only_selection_survives_async_symbol_rebuild() -> None:
           assert.equal(optimizeOhlcvStartLookupSignature(after),sig);
           const incoming=structuredClone(config);incoming.backtest.starting_balance=2345;
           assert.deepEqual(mergeOptimizeEditorChanges(config,after,config,incoming),incoming);
-        }})().catch(e=>{{console.error(e);process.exit(1);}});
+        }})().catch(e=>{{console.error(e);finishTest(1);}});
     """))
 
 

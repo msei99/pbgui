@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,7 +26,7 @@ def test_universal_debug_menu_preview_download_and_restore(width, prefix, tmp_pa
     attachments = []
     from support_debug_crypto import encrypt_report
     encrypted_zip = encrypt_report(json.dumps(dict(report, format='pbgui-support-debug-v1')))
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width':width,'height':850}, accept_downloads=True)
         page.on('pageerror',lambda e: errors.append(str(e)))
@@ -230,7 +230,7 @@ def test_failed_loop_debug_entry_keeps_owned_context():
            'fingerprint':{'pb8':'fixture','data_status':'verified_files'},'reason':'No exact validation',
            'last_error':'Exact comparison required','validation_count':0,'ai_calls':0,'best':None}
     errors = []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page()
         page.on('pageerror',lambda e: errors.append(str(e)))
@@ -274,7 +274,7 @@ def test_failed_loop_debug_entry_keeps_owned_context():
         assert page.evaluate('window.reportedLoop.loop_id') == identifier
         assert page.evaluate('window.reportedLoop.message') == 'No exact validation'
         page.locator('#loop-debug-export').click()
-        page.wait_for_url('**/api/debug/main_page?loop_id='+identifier)
+        page.wait_for_url('**/api/debug/main_page?loop_id='+identifier+'#summary')
         expect(page.locator('#debug-context')).to_have_text('Selected Loop: '+identifier[:8])
         assert not errors
         browser.close()

@@ -1,7 +1,8 @@
 """Exercise real frontend handlers against delayed requests and failure responses."""
+
+from javascript_checks import run_javascript
 import json
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ def function(page, name):
 
 def run_js(code):
     """Run deterministic JavaScript with no browser network or production state."""
-    result = subprocess.run(['node', '-e', "const assert = require('assert');\n" + code], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', "const assert = browserAssert;\n" + code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
 
@@ -40,7 +41,7 @@ const fetch=()=>{requests++;return new Promise(r=>release=r)};
  release({ok:false,status:502,statusText:'Bad Gateway',json:async()=>{throw Error('HTML')}});
  await Promise.all([first,second]);
  assert(notices[0].includes('502'));assert.equal(pendingJobActions.size,0);
-})().catch(e=>{console.error(e);process.exitCode=1});
+})().catch(e=>{console.error(e);testResult.exitCode=1});
 '''.replace('ACTION', action))
 
 
@@ -53,7 +54,7 @@ const document={getElementById:()=>input}, API_ORIGIN='', setBanner=()=>{}, redi
 const fetchJson=()=>{requests++;return new Promise((r,j)=>reject=j)};
 (async()=>{const event={preventDefault(){}};const a=submitLogin(event),b=submitLogin(event);
 assert.equal(requests,1);assert(input.disabled);reject(Error('Denied'));await Promise.all([a,b]);assert(!input.disabled);assert(!loginSubmitting);
-})().catch(e=>{console.error(e);process.exitCode=1});
+})().catch(e=>{console.error(e);testResult.exitCode=1});
 ''')
 
 
@@ -63,7 +64,7 @@ def test_setup_save_single_request_and_unlock():
 let requests=0,reject;const button={disabled:false,value:'fixture'};
 const document={getElementById:()=>button},API_ORIGIN='',authHeaders=()=>({}),render=()=>{},setBanner=()=>{},focusSection=()=>{};
 const fetchJson=()=>{requests++;return new Promise((r,j)=>reject=j)};
-(async()=>{const a=saveSetup(),b=saveSetup();assert.equal(requests,1);assert(button.disabled);reject(Error('Failed'));await Promise.all([a,b]);assert(!button.disabled);})().catch(e=>{console.error(e);process.exitCode=1});
+(async()=>{const a=saveSetup(),b=saveSetup();assert.equal(requests,1);assert(button.disabled);reject(Error('Failed'));await Promise.all([a,b]);assert(!button.disabled);})().catch(e=>{console.error(e);testResult.exitCode=1});
 ''')
 
 
@@ -79,7 +80,7 @@ const showConfirmDialog=()=>new Promise(r=>confirm=r),loadInventoryPanel=async()
 const fetchJson=(url,options)=>{requests.push([url,JSON.parse(options.body)]);return new Promise(r=>finish=r)};
 (async()=>{const a=ACTION(),b=ACTION();assert(inventoryMutationPending);uiState.contextExchange='binance';view='other';confirm(true);await Promise.resolve();
 assert.equal(requests.length,1);assert(requests[0][0].includes('/bybit/'));assert.equal(requests[0][1].view,'ohlcv');finish({success:true});await Promise.all([a,b]);assert(!inventoryMutationPending);
-})().catch(e=>{console.error(e);process.exitCode=1});
+})().catch(e=>{console.error(e);testResult.exitCode=1});
 '''.replace('ACTION', action))
 
 
@@ -92,7 +93,7 @@ const document={getElementById:id=>id.endsWith('-tab-settings')?null:({previousE
 const fetch=()=>{requests++;return new Promise(r=>release=r)};
 (async()=>{const a=_post('/settings/pbdata',{},'save'),b=_post('/settings/pbdata',{},'save');assert.equal(requests,1);assert(button.disabled);
 release({ok:false,status:422,json:async()=>({detail:[{loc:['body','port'],msg:'Invalid integer'}]})});await Promise.all([a,b]);assert(message.includes('port: Invalid integer'));assert(!button.disabled);
-})().catch(e=>{console.error(e);process.exitCode=1});
+})().catch(e=>{console.error(e);testResult.exitCode=1});
 ''')
 
 
@@ -101,7 +102,7 @@ def test_heatmap_queue_errors_preserve_reason(status,payload,expected):
     """Malformed and failed queue responses never read an absent job identifier."""
     run_js(function('gap_heatmap','readQueueResponse') + f'''
 (async()=>{{const response={{ok:{str(status==200).lower()},status:{status},json:async()=>{{const value={json.dumps(payload)};if(value===null)throw Error('HTML');return value;}}}};
-await assert.rejects(readQueueResponse(response),new RegExp({json.dumps(expected)}));}})().catch(e=>{{console.error(e);process.exitCode=1}});
+await assert.rejects(readQueueResponse(response),new RegExp({json.dumps(expected)}));}})().catch(e=>{{console.error(e);testResult.exitCode=1}});
 ''')
 
 
@@ -110,7 +111,7 @@ def test_delete_ai_chat_stops_polling_and_unlocks_composer():
     run_js(function('js/ai_drawer.js','deleteConversation') + '''
 const state={current:'old',retryMessages:{old:'x'},retryImages:{},busy:true,requestGeneration:1,sendGeneration:0};let stopped=0;
 const confirmAction=async()=>true,api=async()=>{},stopPoll=()=>stopped++,clearChatImages=()=>{},loadConversations=async()=>{},setStatus=()=>{},setBusy=value=>state.busy=value;
-(async()=>{await deleteConversation();assert.equal(stopped,1);assert(!state.busy);assert.equal(state.current,'');assert.equal(state.requestGeneration,2);assert.equal(state.sendGeneration,1);})().catch(e=>{console.error(e);process.exitCode=1});
+(async()=>{await deleteConversation();assert.equal(stopped,1);assert(!state.busy);assert.equal(state.current,'');assert.equal(state.requestGeneration,2);assert.equal(state.sendGeneration,1);})().catch(e=>{console.error(e);testResult.exitCode=1});
 ''')
 
 
@@ -120,7 +121,7 @@ def test_approval_cancel_preserves_other_proposal_cards():
 const state={current:'chat',resolvingProposalIds:new Set()};let confirm,clears=0;
 const confirmAction=()=>new Promise(r=>confirm=r),proposalActionLabel=()=>'',reconcileProposals=async()=>{},renderProposals=()=>clears++;
 const button={disabled:false},card={hidden:false,querySelectorAll:()=>[button]};
-(async()=>{const task=resolveProposal({proposal_id:'a',preview:{action:'save_vast_preferences'}},true,card);assert.equal(clears,0);confirm(false);await task;assert(!card.hidden);assert(!button.disabled);assert(!state.resolvingProposalIds.has('a'));})().catch(e=>{console.error(e);process.exitCode=1});
+(async()=>{const task=resolveProposal({proposal_id:'a',preview:{action:'save_vast_preferences'}},true,card);assert.equal(clears,0);confirm(false);await task;assert(!card.hidden);assert(!button.disabled);assert(!state.resolvingProposalIds.has('a'));})().catch(e=>{console.error(e);testResult.exitCode=1});
 ''')
 
 
@@ -130,7 +131,7 @@ def test_hl_cancel_updates_running_lists_and_deduplicates():
 const pendingJobActions=new Set(),currentTab={dl:'running',build:'running'};let release,requests=0,reloaded=[];
 const setJobActionBusy=()=>{},API_BASE='',authOptions=x=>x,loadRunning=async ns=>reloaded.push(ns);
 const fetch=()=>{requests++;return new Promise(r=>release=r)};
-(async()=>{const a=cancelJob('j'),b=cancelJob('j');assert.equal(requests,1);release({ok:true});await Promise.all([a,b]);assert.deepEqual(reloaded,['dl','build']);assert.equal(pendingJobActions.size,0);})().catch(e=>{console.error(e);process.exitCode=1});
+(async()=>{const a=cancelJob('j'),b=cancelJob('j');assert.equal(requests,1);release({ok:true});await Promise.all([a,b]);assert.deepEqual(reloaded,['dl','build']);assert.equal(pendingJobActions.size,0);})().catch(e=>{console.error(e);testResult.exitCode=1});
 ''')
 
 
@@ -143,5 +144,5 @@ def test_db_delete_locks_and_uses_confirmed_job():
 const button={disabled:false};const el=()=>button;let syncDeletePending=false,confirm,requests=[];
 const state={syncJobId:'old'},setStatus=()=>{},confirmModal=()=>new Promise(r=>confirm=r),apiFetch=async url=>requests.push(url),closeSyncEditor=()=>{},loadSyncJobs=async()=>{};
 '''+source[start:end]+'''
-(async()=>{const a=button.onclick(),b=button.onclick();assert(button.disabled);state.syncJobId='new';confirm(true);await Promise.all([a,b]);assert.deepEqual(requests,['/sync/jobs/old']);assert.equal(state.syncJobId,'new');assert(!button.disabled);})().catch(e=>{console.error(e);process.exitCode=1});
+(async()=>{const a=button.onclick(),b=button.onclick();assert(button.disabled);state.syncJobId='new';confirm(true);await Promise.all([a,b]);assert.deepEqual(requests,['/sync/jobs/old']);assert.equal(state.syncJobId,'new');assert(!button.disabled);})().catch(e=>{console.error(e);testResult.exitCode=1});
 ''')

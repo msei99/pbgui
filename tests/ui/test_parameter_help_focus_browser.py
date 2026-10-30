@@ -1,11 +1,11 @@
 """PB8 documentation appears over labels, never over the editable date field."""
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from browser_driver import sync_browser
 
 
 def test_date_input_focus_does_not_open_parameter_help():
     """Pointer editing and keyboard focus stay clear while label hover still works."""
-    with sync_playwright() as pw:
+    with sync_browser() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page()
         page.route('**/api/optimize-v8/parameter-help', lambda route: route.fulfill(json={}))

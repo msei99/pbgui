@@ -98,6 +98,10 @@ def test_installed_sdk_routes_native_mcp_tool_without_real_account(tmp_path, mon
             env = original(owner)
             env.update(CLAUDE_CODE_OAUTH_TOKEN='synthetic-not-a-real-token',
                        ANTHROPIC_BASE_URL=f'http://127.0.0.1:{server.server_port}')
+            if output_kind == 'text':
+                # Neither the Python worker nor the bundled native client may
+                # depend on a Node executable hidden elsewhere on this host.
+                env['PATH'] = str(tmp_path / 'no-executables')
             return env
 
         monkeypatch.setattr(runtime, 'environment', environment)

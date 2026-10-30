@@ -1,9 +1,9 @@
 """Offline source contracts for the Profit Sweep frontend."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
 import json
-import shutil
-import subprocess
 
 import pytest
 
@@ -39,13 +39,10 @@ def test_test_transfer_recovery_and_retry_are_explicit_and_generation_safe() -> 
 def test_test_reconciliation_ignores_stale_completion_and_auth_failure() -> None:
     """Execute the UI action with deferred responses, account changes, and lost authentication."""
 
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for the isolated frontend action test")
     source = _source()
     action = "async function reconcileTestTransfer(operation)" + source.split("async function reconcileTestTransfer(operation)", 1)[1].split("function scheduleAutomaticPreview", 1)[0]
     script = r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const state = {selectedUser:'alice', accountGeneration:1, testActionPending:false, users:[{name:'alice'}], accountController:new AbortController()};
 let resolveRequest, rejectRequest, refreshes = 0, messages = [];
 function requestJson(path, options) {
@@ -77,22 +74,19 @@ eval(ACTION);
   assert.equal(messages.at(-1), 'Authentication required');
   assert.equal(refreshes, 0);
   assert.equal(state.testActionPending, false);
-})().catch(error => {console.error(error); process.exitCode=1;});
+})().catch(error => {console.error(error); testResult.exitCode=1;});
 """.replace("ACTION", json.dumps(action))
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15, check=False)
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=15, check=False)
     assert result.returncode == 0, result.stderr
 
 
 def test_historical_and_vault_return_confirmations_use_projected_route_labels() -> None:
     """Run the real modal action with historical Spot and normal Vault return projections."""
 
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for the isolated frontend action test")
     source = _source()
     action = "async function transferTestBack(operation)" + source.split("async function transferTestBack(operation)", 1)[1].split("async function reconcileTestTransfer", 1)[0]
     script = r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const state = {selectedUser:'vault', accountGeneration:1, testActionPending:false, pendingTestBack:null, users:[{name:'vault',is_vault:true}]};
 let dialogs = [], messages = [];
 const window = {crypto:{randomUUID:()=> 'fixture-id'}, PBGuiDialogs:{confirm:async options=> {dialogs.push(options); return false;}}};
@@ -110,9 +104,9 @@ eval(ACTION);
   await transferTestBack(operation);
   assert.equal(dialogs.length,2);
   assert.equal(messages.at(-1),'Reload the test history to review the exact return route.');
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """.replace("ACTION", json.dumps(action))
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15, check=False)
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=15, check=False)
     assert result.returncode == 0, result.stderr
 
 
@@ -581,15 +575,12 @@ def test_intent_refresh_preserves_policy_drafts_and_unsaved_policy_actions_are_d
 def test_automatic_account_data_update_renders_new_intent_without_losing_draft() -> None:
     """Apply background intent changes while a policy draft stays editable."""
 
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for the isolated frontend update test")
     source = _source()
     action = "async function refreshSelectedAccountData()" + source.split(
         "async function refreshSelectedAccountData()", 1
     )[1].split("function showTab", 1)[0]
     script = r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const state = {
   selectedUser:'bybit_CPT2', accountGeneration:1, accountDataRefreshGeneration:null,
   accountController:new AbortController(), policyBaseline:'saved',
@@ -632,24 +623,21 @@ eval(ACTION);
   assert.equal(rendered.selected, 0);
   assert.equal(state.record.policy_fingerprint, 'old');
   assert.equal(state.accountDataRefreshGeneration, null);
-})().catch(error => {console.error(error); process.exitCode=1;});
+})().catch(error => {console.error(error); testResult.exitCode=1;});
 """.replace("ACTION", json.dumps(action))
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15, check=False)
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=15, check=False)
     assert result.returncode == 0, result.stderr
 
 
 def test_intent_requests_ignore_late_responses() -> None:
     """A slower prior intent response cannot erase a newer transfer row."""
 
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for the isolated frontend race test")
     source = _source()
     action = "async function loadIntentsForAccount" + source.split(
         "async function loadIntentsForAccount", 1
     )[1].split("async function loadTestTransfersForAccount", 1)[0]
     script = r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const state = {selectedUser:'bybit_CPT2', accountGeneration:1, intentsRequestId:0, intents:[]};
 const pending = [];
 function requestJson() {
@@ -673,7 +661,7 @@ eval(ACTION);
   pending[2]({intents:[]});
   await switched;
   assert.deepEqual(state.intents.map(item => item.operation_id), ['confirmed-new']);
-})().catch(error => {console.error(error); process.exitCode=1;});
+})().catch(error => {console.error(error); testResult.exitCode=1;});
 """.replace("ACTION", json.dumps(action))
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15, check=False)
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=15, check=False)
     assert result.returncode == 0, result.stderr

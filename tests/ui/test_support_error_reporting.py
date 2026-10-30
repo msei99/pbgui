@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 import pytest
-from playwright.sync_api import sync_playwright, expect
+from browser_driver import sync_browser, expect
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -22,7 +22,7 @@ def test_error_dialog_handoff_selection_and_private_context(width):
     html = (ROOT/'frontend/support_debug.html').read_text().replace('"%%API_BASE%%"','"/mounted/api/debug"').replace('"%%BASE_PREFIX%%"','"/mounted"').replace('%%NAV_HASH%%','test')
     html = html.replace('src="/app/', 'src="/mounted/app/').replace('href="/app/', 'href="/mounted/app/')
     contexts, collections, attachments, errors = [], [], [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width':width,'height':850})
         page.on('pageerror',lambda error: errors.append(str(error)))

@@ -2,7 +2,7 @@
 from pathlib import Path
 from urllib.parse import urlparse
 
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,7 +19,7 @@ def editor():
                 for i, name in enumerate(('vault-a', 'vault-b', 'main'), 1)]
     state = {'accounts': accounts, 'token': 'preview-1', 'conflict': False, 'unavailable': False}
     writes, reads, errors = [], [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width': 1280, 'height': 900})
         page.clock.install()

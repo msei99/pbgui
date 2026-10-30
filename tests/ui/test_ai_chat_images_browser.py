@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 import base64
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1kAAAAASUVORK5CYII=')
@@ -18,7 +18,7 @@ def test_paste_drop_and_send_images_without_upload_button(width, prefix, fresh):
     sent, errors, messages = [], [], []
     fail = True
     created = not fresh
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': width, 'height': 900})
         page.set_default_timeout(5000)

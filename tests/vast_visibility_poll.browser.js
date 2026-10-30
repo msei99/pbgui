@@ -1,9 +1,9 @@
 /* Offline regression for Vast jobs polling when the browser tab is hidden. */
 'use strict';
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const assert = browserAssert;
+const fs = testSources;
+const path = sourcePath;
+const vm = browserScope;
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'js', 'vast.js'), 'utf8');
 const start = source.indexOf('  async function refreshJobs(');
@@ -111,4 +111,4 @@ const activeTimers = () => timers.filter(timer => !timer.cleared);
     await vm.runInContext('refreshJobs()', context);
     assert.equal(activeTimers().length, 1);
     assert.equal(activeTimers()[0].delay, 10000);
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });

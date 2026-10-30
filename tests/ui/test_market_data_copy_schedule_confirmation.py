@@ -1,8 +1,9 @@
 """Copy Data schedule deletion requires confirmation of a displayed schedule."""
 
+from javascript_checks import run_javascript
+
 import json
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -26,7 +27,7 @@ def test_schedule_delete_confirmation_lifecycle(mode):
     deletion = _excerpt(source, '      async function deleteCopyDataSchedule(',
                         '      function resetCopyDataDryRunSummary(')
     script = 'const mode = ' + json.dumps(mode) + ';\n' + deletion + r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const id = 'schedule / &';
 const schedule = {id, name:'Production Hourly Sync',target:'user@remote-vps',interval_hours:1};
 if (mode === 'fallback') {delete schedule.name;delete schedule.target;delete schedule.interval_hours;}
@@ -95,15 +96,15 @@ const tick = async()=>{await Promise.resolve();await Promise.resolve();};
    const count=confirmations.length;const retry=deleteCopyDataSchedule(id);
    assert.equal(confirmations.length,count+1);confirmations[count].resolve(false);await retry;
  }
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 '''
-    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True, timeout=10)
+    run_javascript(['-e', script], check=True, capture_output=True, text=True, timeout=10)
 
 
 @pytest.mark.parametrize('viewport', [{'width':1200,'height':800}, {'width':375,'height':667}])
 def test_rendered_schedule_delete_uses_existing_dialog(viewport):
     """Click real rendered actions and measure the existing modal with isolated data."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/market_data_main.html').read_text()
     css = _excerpt(source, '<style>', '</style>') + '</style>'
     modal = _excerpt(source, '  <div id="confirm-ovl"', '  <div id="page-body">')
@@ -131,7 +132,7 @@ def test_rendered_schedule_delete_uses_existing_dialog(viewport):
       async function fetchCopyDataScheduleJson(path,options) {requests.push({path,options});return {success:true};}
       async function loadCopyDataSchedules(showErrors) {loads.push(showErrors);}
     '''
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport=viewport)
         page.route('**/*', lambda route: route.abort())
@@ -142,7 +143,7 @@ def test_rendered_schedule_delete_uses_existing_dialog(viewport):
         assert page.evaluate('actions') == [['run','example-schedule'],['edit','example-schedule']]
         for dismissal in ('cancel', 'close', 'escape'):
             page.locator('[data-copy-schedule-action="delete"]').click()
-            playwright.expect(page.locator('#confirm-ovl')).to_have_class('visible')
+            browser_api.expect(page.locator('#confirm-ovl')).to_have_class('visible')
             assert page.evaluate('requests.length') == 0
             box = page.locator('#confirm-ovl .ovl-panel').bounding_box()
             assert abs(box['x'] + box['width']/2 - viewport['width']/2) <= 1
@@ -151,21 +152,21 @@ def test_rendered_schedule_delete_uses_existing_dialog(viewport):
             assert box['x'] + box['width'] <= viewport['width']
             assert box['y'] + box['height'] <= viewport['height']
             assert page.locator('.confirm-body').evaluate('(el)=>el.scrollWidth <= el.clientWidth')
-            playwright.expect(page.locator('#btn-confirm-accept')).to_be_visible()
-            playwright.expect(page.locator('#btn-confirm-cancel')).to_be_visible()
+            browser_api.expect(page.locator('#btn-confirm-accept')).to_be_visible()
+            browser_api.expect(page.locator('#btn-confirm-cancel')).to_be_visible()
             page.mouse.click(2, 2)
-            playwright.expect(page.locator('#confirm-ovl')).to_have_class('visible')
+            browser_api.expect(page.locator('#confirm-ovl')).to_have_class('visible')
             if dismissal == 'escape':
                 page.keyboard.press('Escape')
             else:
                 page.locator('#btn-confirm-cancel' if dismissal == 'cancel' else '#confirm-close').click()
-            playwright.expect(page.locator('#confirm-ovl')).not_to_have_class('visible')
+            browser_api.expect(page.locator('#confirm-ovl')).not_to_have_class('visible')
             assert page.evaluate('requests.length') == 0
             assert page.evaluate('copyDataScheduleState.deletePending') is False
         # Untrusted metadata must remain text in the real dialog, not markup.
         page.evaluate('copyDataScheduleState.schedules[0].name = \'<img src=x onerror="throw 1">\';')
         page.locator('[data-copy-schedule-action="delete"]').click()
-        playwright.expect(page.locator('#confirm-message')).to_have_text('Delete recurring Copy Data schedule "<img src=x onerror="throw 1">"?')
+        browser_api.expect(page.locator('#confirm-message')).to_have_text('Delete recurring Copy Data schedule "<img src=x onerror="throw 1">"?')
         assert page.locator('#confirm-message img').count() == 0
         page.locator('#btn-confirm-accept').click()
         page.wait_for_function('!copyDataScheduleState.deletePending')

@@ -1,7 +1,8 @@
 """Executable visibility, request ownership and queue update regression tests."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,7 +24,7 @@ def _functions(path, names, indent=''):
 
 def _node(code):
     """Run browser logic with deterministic mocked requests and timers."""
-    result = subprocess.run(['node', '-e', code], cwd=ROOT, text=True, capture_output=True)
+    result = run_javascript(['-e', code], cwd=ROOT, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
 
 
@@ -31,7 +32,7 @@ def test_nav_alerts_pause_guard_overlap_and_reject_stale_responses():
     """Hide/show and failed requests preserve a single current request owner."""
     functions = _functions('frontend/pbgui_nav.js', ['fetchAlerts', 'scheduleAlerts', 'stopAlerts'], '  ')
     _node(r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 let _alertsRequest=null, _alertsGeneration=0, _alertsTimer=null, _alertsStarted=false, _navAlerts={};
 let renders=0, nextTimer=0, timers=new Map(), requests=[];
 const document={visibilityState:'visible', getElementById:()=>null};
@@ -57,7 +58,7 @@ const fetch=(url, options)=>new Promise((resolve,reject)=>requests.push({url,opt
   assert.equal(_alertsRequest,null);
   const retry=fetchAlerts(); requests[3].resolve({ok:false}); await retry;
   assert.equal(_alertsRequest,null); stopAlerts(); assert.equal(timers.size,0);
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch(e=>{console.error(e);testResult.exitCode=1;});
 ''')
 
 
@@ -88,7 +89,7 @@ def test_live_results_advance_without_queue_changes_and_pause_in_background():
         'refreshLiveResultsDuringRun', 'scheduleOptimizeLiveResults', 'hasActiveOptimizeRuns',
     ])
     _node(r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const document={visibilityState:'visible'};
 const state={panel:'results',queue:[{status:'running'}],livePanelRefreshTimer:null,livePanelRefreshInFlight:false};
 let callback=null, requests=0, release=null, intervals=new Set();
@@ -107,7 +108,7 @@ const handleError=e=>{throw e;};
   document.visibilityState='visible';state.queue=[];scheduleOptimizeLiveResults();await refreshLiveResultsDuringRun();
   assert.equal(requests,2);
   const final=refreshLiveResultsDuringRun(true);assert.equal(requests,3);release();await final;
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch(e=>{console.error(e);testResult.exitCode=1;});
 ''')
 
 
@@ -120,7 +121,7 @@ def _settings_harness():
         'applyOptimizeQueueUpdate', 'hasActiveOptimizeRuns',
     ])
     return r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const nodes=new Proxy({}, {get(obj,key){return obj[key] ||= {value:'', checked:false, disabled:false,
   textContent:'', hidden:false, classList:{contains:()=>state.panel==='settings'}};}});
 const el=id=>nodes[id]; const document={visibilityState:'visible'};
@@ -142,7 +143,7 @@ const handleError=e=>{throw e;};
 const saved=(extra={})=>Object.assign({cpu:8,cpu_max:16,host_cpu_count:16,autostart:false,
   cpu_override:false,use_pbgui_market_data:false},extra);
 function setPanel(panel){state.navigationSeq++;state.panel=panel;if(panel==='settings')loadSettings();}
-function fail(e){console.error(e);process.exitCode=1;}
+function fail(e){console.error(e);testResult.exitCode=1;}
 ''' + functions + '\n'
 
 
@@ -277,7 +278,7 @@ def _config_harness():
         'getConfigSortValue', 'sortConfigs',
     ])
     return r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const optimizeEditorAdapter={isV8:true};
 const document={visibilityState:'visible'};
 const state={panel:'configs',configGeneration:0,configs:[],selectedConfigs:new Set(),
@@ -295,7 +296,7 @@ const compareSortValues=(a,b,dir)=>(a===b?0:a<b?-1:1)*(dir==='desc'?-1:1);
 const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
 const pending=name=>({name,backtest_count:null,backtest_count_status:'pending'});
 const known=(name,n)=>({name,backtest_count:n,backtest_count_status:'known'});
-const fail=e=>{console.error(e);process.exitCode=1;};
+const fail=e=>{console.error(e);testResult.exitCode=1;};
 ''' + functions + '\n'
 
 

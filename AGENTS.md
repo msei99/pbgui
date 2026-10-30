@@ -27,6 +27,7 @@ Before creating or modifying pages, top navigation, sidebars, main views, or pag
 ## Project Architecture
 
 ### Stack
+- **Project-wide stack policy**: [docs/architecture.md](docs/architecture.md) is mandatory. Use Python/FastAPI and browser Vanilla JS only; no Node.js/npm dependencies in application, installation, build or project-owned test tooling. Existing legacy tooling deviations must be reported explicitly rather than treated as exceptions or copied into new code.
 - **Backend**: FastAPI. All new features as FastAPI routes.
 - **Frontend**: Vanilla JS + HTML (no React, Vue, jQuery). Served via FastAPI `/app/` static mount.
 - **CSS**: Custom dark theme, CSS variables per page (`:root`), no Tailwind/Bootstrap.
@@ -186,49 +187,10 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - Use `@pytest.mark.parametrize` for multiple cases.
 - Module/class/function docstrings required.
 
-<!-- gitnexus:start -->
-# GitNexus — Code Intelligence
+## Python-only change analysis
 
-This project is indexed by GitNexus as **pbgui** (22089 symbols, 123344 relationships, 1555 execution flows).
-
-> Index stale? Run `node .gitnexus/run.cjs analyze --index-only` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? Bootstrap with `npx`, `bunx`, or `pnpm dlx` — e.g. `bunx gitnexus@latest analyze` (npm 11 npx crash; #1939).
-
-## Always Do
-
-- **MUST run impact analysis before editing.** Use `impact({target: "symbolName", direction: "upstream"})` (MCP) or `node .gitnexus/run.cjs impact "symbolName" --direction upstream --repo .` (CLI fallback); report callers, processes, and risk. Never substitute grep for graph analysis.
-  - **Frequency exception (cost control):** run impact analysis ONCE per task, covering all symbols the task will touch. Re-run it only when the task scope changes or an edit reaches a different subsystem than analyzed. Do not re-run it after every single file edit within the same analyzed scope.
-- **MUST analyze graph changes before committing.** Use `detect_changes({scope: "all"})` (MCP) or `node .gitnexus/run.cjs detect-changes --scope all --repo .` (CLI fallback). `partial: true` or `truncated: true` is not a clean check — a zero means unseen, not unaffected; re-run it. For regression review: `detect_changes({scope: "compare", base_ref: "main"})` or `node .gitnexus/run.cjs detect-changes --scope compare --base-ref "main" --repo .`.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- **MUST treat `risk: UNKNOWN` as unresolved, not as low.** An empty caller set is not evidence the symbol is unused — it can also mean the callers are not resolvable by the index (plain-object property access, dynamic dispatch, cross-language calls). `impact` pairs `UNKNOWN` with a `riskNote` saying so. Confirm with a text search before treating the symbol as safe to change or delete; do not proceed on the strength of a zero.
-- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
-- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
-
-## Never Do
-
-- NEVER edit a function, class, or method before MCP/CLI impact analysis (once per task scope is sufficient — see the frequency exception above).
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis, and never read `UNKNOWN` as an all-clear — it means the walk could not answer, which is the one verdict that requires confirming by other means.
-- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
-- NEVER commit before MCP/CLI graph change analysis.
-
-## Resources
-
-| Resource | Use for |
-| --- | --- |
-| `gitnexus://repo/pbgui/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/pbgui/clusters` | All functional areas |
-| `gitnexus://repo/pbgui/processes` | All execution flows |
-| `gitnexus://repo/pbgui/process/{name}` | Step-by-step execution trace |
-
-## CLI
-
-| Task | Read this skill file |
-| --- | --- |
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus-cli/SKILL.md` |
-
-<!-- gitnexus:end -->
+- Before editing, run `python tools/code_impact.py SYMBOL --repo .` once for the affected scope and review actual callers/imports. It builds a fresh AST inventory without executing project modules or requiring a separate index/runtime.
+- Treat `UNKNOWN`, unresolved dynamic receivers and ambiguous names as requiring source inspection. An empty caller list never proves code is unused.
+- Warn before changes with HIGH or CRITICAL impact. Review authentication, persistence, concurrency and background ownership boundaries explicitly.
+- Before committing, run `python tools/code_impact.py --changed --repo .` and review changed Python definitions plus the changed browser JavaScript and its focused tests. This inventory is conservative and does not claim cross-language call resolution.
+- Do not add a JavaScript-based code indexer, package bootstrap or automation server to the project. Browser tests use the direct Python driver documented in `tests/README.md`.

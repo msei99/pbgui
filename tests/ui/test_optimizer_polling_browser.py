@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize('version,width', [('v7', 1280), ('v8', 700), ('v8', 1280)])
 def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
     """Use real menus/templates/assets without contacting PBGui or launching jobs."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     prefix = '/mounted'
     route_path = prefix + '/api/optimize-' + version + '/main_page'
     request = Request({'type': 'http', 'scheme': 'http', 'server': ('optimizer.test', 80),
@@ -34,7 +34,7 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
     count_value = {'config-000': 0}
     requests, errors = [], []
 
-    with playwright.sync_playwright() as pw:
+    with browser_api.sync_browser() as pw:
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width': width, 'height': 900})
         page.set_default_timeout(5000)
@@ -201,7 +201,7 @@ def test_optimizer_menu_push_dedup_visibility_and_guide(version, width):
         assert page.url.endswith(route_path + '#queue')
         destination = page.url
         page.locator('#pbgui-guide-btn').click()
-        playwright.expect(page.locator('#pbgui-shared-help-ovl')).to_have_class('visible')
+        browser_api.expect(page.locator('#pbgui-shared-help-ovl')).to_have_class('visible')
         assert page.url == destination
         assert not errors, errors
         browser.close()

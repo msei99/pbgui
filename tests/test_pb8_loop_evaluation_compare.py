@@ -1,6 +1,7 @@
 """Offline request ownership and stale navigation checks for Loop comparisons."""
+
+from javascript_checks import run_javascript
 from pathlib import Path
-import subprocess
 
 
 def test_observer_summary_typed_progress_and_legacy_fallback():
@@ -9,7 +10,7 @@ def test_observer_summary_typed_progress_and_legacy_fallback():
     source = (root / 'frontend/js/pb8_loop_optimizer.js').read_text()
     helpers = source[source.index('  function observerProgress('):source.index('  function overviewValue(')]
     script = r"""
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 function numeric(value){return String(value);}
 """ + helpers + r"""
 const run={observer_enabled:true,observer_jobs:[],observer_selections:[{round:0,status:'waiting',completed:2,expected:99}]};
@@ -35,7 +36,7 @@ assert.equal(observerSummary(run,0,'observer_full_range'),'7 × / 10 %');
 run.observer_summaries[1]={round:0,kind:'observer_full_range',status:'unavailable',terminal:5,expected:5,successful:3,report_failed:2};
 assert.match(observerSummary(run,0,'observer_full_range'),/No complete Full Time Range · 5\/5 terminal · 3 complete · 2 report errors/);
 """
-    result = subprocess.run(['node', '-e', script], cwd=root, capture_output=True, text=True, timeout=10)
+    result = run_javascript(['-e', script], cwd=root, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -45,7 +46,7 @@ def test_loop_comparison_ignores_stale_owner_and_result_responses():
     source=(root/'frontend/v7_backtest.html').read_text()
     body=source[source.index('var backtestReads='):source.index("window.addEventListener('pagehide'",source.index('var backtestReads='))]+source[source.index('var _loopEvaluationComparison ='):source.index('async function openLoopResultComparison(')]
     script=r"""
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 let location={href:'http://pbgui.test/nested/api/backtest-v8/main_page?panel=results&result_loop='+'a'.repeat(32)+'&result_evaluation=observer_holdout&result_compare=1'};
 let window={location,addEventListener(){}},backtestEditorAdapter={isV8:true},API_BASE='/nested/api/backtest-v8';
 let _resultsLoadGeneration=0,_resultsEmptyRetryTimer=null,currentPanel='results',results=['old'];
@@ -66,9 +67,9 @@ function toast(){throw Error('stale error shown');}
  for(const value of ['../secrets','a'.repeat(31)]){let url=new URL(location.href);url.searchParams.set('result_loop',value);assert.equal(loopEvaluationSelection(url),null);}
  let url=new URL(location.href);url.searchParams.set('result_evaluation','optimizer');assert.equal(loopEvaluationSelection(url),null);
  backtestEditorAdapter.isV8=false;assert.equal(loopEvaluationSelection(),null);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    completed=subprocess.run(['node','-e',script],cwd=root,capture_output=True,text=True,timeout=10)
+    completed=run_javascript(['-e',script],cwd=root,capture_output=True,text=True,timeout=10)
     assert completed.returncode==0,completed.stdout+completed.stderr
 
 
@@ -78,7 +79,7 @@ def test_comparison_link_preserves_mount_and_current_loop_context():
     source=(root/'frontend/js/pb8_loop_optimizer.js').read_text()
     body=source[source.index('  function leaveForBacktest('):source.index('  function cancelResultTarget(')]+source[source.index('  function hasEvaluationResults('):source.index('  function backtestButton(')]
     script=r"""
-const assert=require('node:assert/strict');let assigned='';
+const assert=browserAssert;let assigned='';
 let location={href:'http://pbgui.test/nested/api/optimize-v8/main_page?loop_id='+'a'.repeat(32)+'&loop_view=run&loop_tab=performance#loops-results',assign:value=>assigned=value};
 let history={length:2},sessionStorage={setItem(){}};function saveLoopScroll(){}
 let state={panel:'loops-results'};function select(id){assert.equal(id,'a'.repeat(32));}
@@ -91,7 +92,7 @@ assert.equal(url.searchParams.get('loop_return'),new URL(location.href).pathname
 assigned='';openEvaluationComparison(run,'observer_full_range');assert.equal(assigned,'');
 run.observer_jobs[0].simulation_complete=false;assert.equal(hasEvaluationResults(run,'observer_holdout'),false);
 """
-    completed=subprocess.run(['node','-e',script],cwd=root,capture_output=True,text=True,timeout=10)
+    completed=run_javascript(['-e',script],cwd=root,capture_output=True,text=True,timeout=10)
     assert completed.returncode==0,completed.stdout+completed.stderr
 
 
@@ -101,7 +102,7 @@ def test_all_49_holdouts_load_with_bounded_requests_and_no_reopen_after_close():
     source=(root/'frontend/v7_backtest.html').read_text()
     body=source[source.index('var backtestReads='):source.index("window.addEventListener('pagehide'",source.index('var backtestReads='))]+source[source.index('var _loopEvaluationComparison ='):source.index('async function openLoopResultComparison(')]
     script=r"""
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 let window={location:{href:'http://pbgui.test/api/backtest-v8/main_page?panel=results&result_loop='+'a'.repeat(32)+'&result_evaluation=observer_holdout&result_compare=1'},addEventListener(){}};
 let backtestEditorAdapter={isV8:true},API_BASE='/api/backtest-v8',RESULTS_PAGE_SIZE=100;
 let _resultsLoadGeneration=0,_resultsEmptyRetryTimer=null,currentPanel='results',results=[],selected=[];
@@ -140,7 +141,7 @@ async function _compareResultPaths(paths,items,area,id,current){plotted=paths.le
  assert.deepEqual(selected,['job_5/result']);
  let url=new URL(window.location.href);url.searchParams.delete('result_compare');window.location.href=url.href;
  assert.equal(chartCurrent(),false);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    completed=subprocess.run(['node','-e',script],cwd=root,capture_output=True,text=True,timeout=10)
+    completed=run_javascript(['-e',script],cwd=root,capture_output=True,text=True,timeout=10)
     assert completed.returncode==0,completed.stdout+completed.stderr

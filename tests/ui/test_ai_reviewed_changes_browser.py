@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import sync_playwright, expect
+from browser_driver import sync_browser, expect
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,7 +31,7 @@ def review_page(request):
             proposal['preview'].update(action='run_ai_loop', effect='Start the saved Loop within the reviewed limits.')
     pending = [proposal]
     calls, errors = [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': 1450, 'height': 1000})
         page.set_default_timeout(5000)

@@ -1,6 +1,8 @@
 """Offline autonomous PB8 loop policy, budgeting, ownership and recovery contracts."""
 from __future__ import annotations
 
+from javascript_checks import run_javascript
+
 import asyncio
 import copy
 import json
@@ -1570,7 +1572,7 @@ def test_overlapping_progress_watches_have_one_timer():
     """Share initial work, render before rental, reject stale replies and retain action updates."""
     import subprocess
     script = r"""
-const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const assert=browserAssert,fs=testSources,vm=browserScope;
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
 const body=source.slice(source.indexOf('  function settleInitialView('),source.indexOf('  function navigationTiming('))+source.slice(source.indexOf('  function cancelRentalRead('),source.indexOf('  function mount()'));
 const pending=[],rentals=[],timers=new Map(),order=[];let count=0;
@@ -1607,9 +1609,9 @@ function reply(){assert.equal(pending.length,2);pending.splice(0).forEach(item=>
  assert.equal(timers.size,0,'shutdown cannot revive timer');
  // A BFCache restart can finish cancelled old work and start a new cycle.
  context.stopped=false;const resumed=context.watch();reply();await resumed;assert.equal(timers.size,1);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    result = subprocess.run(['node','-e',script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=10)
+    result = run_javascript(['-e',script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -1617,7 +1619,7 @@ def test_slow_rental_reads_survive_regular_polls():
     """Five-second reads finish across three-second polls; context changes and suspension cancel them."""
     import subprocess
     script = r"""
-const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const assert=browserAssert,fs=testSources,vm=browserScope;
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
 const body=source.slice(source.indexOf('  function settleInitialView('),source.indexOf('  function navigationTiming('))+source.slice(source.indexOf('  function cancelRentalRead('),source.indexOf('  function mount()'));
 let clock=0,next=0,rentalRequests=0,aborted=0,rentalRenders=0,loopRenders=0;
@@ -1654,9 +1656,9 @@ async function advance(ms){const end=clock+ms;while(true){const entry=[...timers
  context.state.panel='loops-queue';await context.poll(false);
  context.stopped=true;context.watchGeneration++;context.clearTimeout(context.timer);context.cancelRentalRead();assert.equal(aborted,3);
  context.stopped=false;await context.watch();await advance(5000);assert.equal(rentalRenders,3,'resumed lifecycle starts a fresh read');assert.equal(snapshots.has('other'),true);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    result = subprocess.run(['node','-e',script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=10)
+    result = run_javascript(['-e',script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -2588,7 +2590,7 @@ def test_loop_table_sort_raw_values_and_immutable_groups():
     """Exercise production comparators, every column, fallback dates and immutable semantic references."""
     import subprocess
     script = r"""
-const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const assert=browserAssert,fs=testSources,vm=browserScope;
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
 function fn(name){const start=source.indexOf('  function '+name+'(');return source.slice(start,source.indexOf('\n  function ',start+1));}
 const context=vm.createContext({Intl,Date,workflow:{},selectedObserver:(run,round,kind)=>(run.observer_jobs||[]).find(job=>job.round===round&&job.kind===kind)});
@@ -2652,7 +2654,7 @@ equal(runSortValue(small,small.cycles,small.cycles[0],null,'Loop 1','selection')
 equal(runSortValue(small,small.cycles,{...small.cycles[0],ai_evaluated:true,winner_candidate_id:'ten'},null,'Loop 1','selection'),'ten');
 `,context);
 """
-    result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+    result = run_javascript(['-e', script], cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -2661,7 +2663,7 @@ def test_loop_config_action_handlers_reject_unavailable_targets():
     """Validate action targets independently of button state and recheck after asynchronous confirmation."""
     import subprocess
     script = r"""
-const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const assert=browserAssert,fs=testSources,vm=browserScope;
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
 function fn(name){const start=source.indexOf('  '+(name==='knownDefinitions'?'function ':'async function ')+name+'(');const rest=source.slice(start);return rest.slice(0,rest.search(/\n  (?:async )?function /));}
 const events=[];
@@ -2689,8 +2691,8 @@ vm.runInContext(['knownDefinitions','openDefinition','queueDefinitions','deleteD
  context.definitions=[{name:'saved'}];context.definitionsLoaded=false;
  await context.queueDefinitions(['saved']);assert.deepEqual(events,['ai','/configs/saved/queue','poll']);
  assert.equal(context.queueing,false);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+    result = run_javascript(['-e', script], cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr

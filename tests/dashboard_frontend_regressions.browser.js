@@ -1,9 +1,9 @@
 /* Offline dashboard regressions. Only versioned frontend source is read. */
 'use strict';
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const assert = browserAssert;
+const fs = testSources;
+const path = sourcePath;
+const vm = browserScope;
 const source = name => fs.readFileSync(path.join(__dirname, '..', 'frontend', name), 'utf8');
 const tick = () => new Promise(setImmediate);
 const location = {origin: 'https://pbgui.test:8443', protocol: 'https:', host: 'pbgui.test:8443'};
@@ -456,8 +456,8 @@ async function resize() {
 
 
 async function pnl() {
-    const mode = process.argv[3];
-    const scenario = process.argv[4];
+    const mode = testArguments[3];
+    const scenario = testArguments[4];
     const cumulative = mode === 'Cumulative' || mode === 'line';
     const invalid = [null, undefined, NaN, Infinity, -Infinity, '', '  ', true, false, 'bad', {}, [], 'Infinity', 'NaN'];
     const cases = {
@@ -1555,7 +1555,7 @@ async function manageModal() {
 }
 
 ({creation, templates, cancel, resize, charts, cards, pnl, ppl, emptyOrders, messages, assets, candles, page, manageModal,
-    helpTopicLegacy, helpTopicShared, helpTopicGenerations, helpIndexShared})[process.argv[2]]().catch(error => {
+    helpTopicLegacy, helpTopicShared, helpTopicGenerations, helpIndexShared})[testArguments[2]]().catch(error => {
     console.error(error);
-    process.exitCode = 1;
+    testResult.exitCode = 1;
 });

@@ -1,8 +1,8 @@
 """Offline JavaScript regressions for overview request ownership and authentication."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import shutil
-import subprocess
 
 import pytest
 
@@ -10,12 +10,9 @@ import pytest
 @pytest.mark.parametrize("ending", ["switch", "auth", "success", "failure"])
 def test_overview_ignores_stale_responses_and_stops_after_auth_loss(ending):
     """Execute the actual overview controller with deferred, isolated requests."""
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("Node is required for the isolated frontend regression")
     source = (Path(__file__).resolve().parents[2] / "frontend/js/profit_sweep_overview.js").read_text()
     code = r"""
-const assert = require('assert');
+const assert = browserAssert;
 const elements = {};
 let clears = 0, renders = 0, pending, timerId = 0;
 const timers = new Map();
@@ -41,20 +38,17 @@ global.window = {setTimeout(fn, delay) {timers.set(++timerId,{fn,delay}); return
  if (ENDING === 'success') {assert.equal(overview.rows[0].name,'fresh');assert.equal(renders,1);assert.equal(timers.size,1);}
  if (ENDING === 'failure') {assert.equal(overview.rows[0].stale,true);assert.equal(renders,1);assert.equal(timers.size,1);}
  overview.destroy();assert.equal(timers.size,0);
-})().catch(error=>{console.error(error);process.exit(1);});
+})().catch(error=>{console.error(error);finishTest(1);});
 """
-    result = subprocess.run([node, "-e", "const ENDING=" + repr(ending) + ";\n" + code], capture_output=True, text=True, timeout=10)
+    result = run_javascript(["-e", "const ENDING=" + repr(ending) + ";\n" + code], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_summary_groups_currency_simulation_unique_targets_and_missing_values():
     """Execute exact totals without combining assets, simulations, or duplicate wallets."""
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("Node is required for the isolated frontend regression")
     source = (Path(__file__).resolve().parents[2] / "frontend/js/profit_sweep_overview.js").read_text()
     code = "global.window={};\n" + source + r"""
-const assert=require('assert');
+const assert=browserAssert;
 const sum=window.ProfitSweepOverview.summaryGroups;
 const rows=[
  {asset:'USDT',mode:'live',balance:'0.105',swept:'2',target_key:'shared',target_balance:'7',updated_at:10},
@@ -73,5 +67,5 @@ const target=sum(rows,'target_balance').find(x=>x.label==='USDT');
 assert.equal(target.amount,'8.00');assert.equal(target.missing,1);
 assert.equal(sum([{asset:'USDC',mode:'live',balance:'-0.005'}],'balance')[0].amount,'-0.01');
 """
-    result = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=10)
+    result = run_javascript(["-e", code], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize('prefix', ['', '/nested'])
 def test_instruction_editor_mount_and_stale_response(prefix):
     """Changing versions rejects delayed old text and polling preserves a dirty editor."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     custom_id = 'a' * 32
     versions = {'default':{'id':'default','name':'PBGui default','text':'Default text','digest':'0','created_at':None},
                 custom_id:{'id':custom_id,'name':'Custom','text':'Custom text','digest':'1','created_at':1}}
@@ -22,7 +22,7 @@ def test_instruction_editor_mount_and_stale_response(prefix):
     window.selectPanel=function(panel){state.panel=panel;location.hash=panel;PBGuiLoopInstructions.refresh();};</script>
     <script src="''' + prefix + '''/app/js/pb8_loop_instructions.js"></script>
     <script>PBGuiLoopInstructions.mount("''' + base + '''");PBGuiLoopInstructions.refresh();</script>'''
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page()
         page.on('pageerror', lambda exc: errors.append(str(exc)))

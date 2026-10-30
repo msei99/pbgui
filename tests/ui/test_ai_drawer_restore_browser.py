@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 import time
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -21,7 +21,7 @@ def test_existing_conversation_survives_open_reopen_and_poll(busy,provider):
     started_at = time.time() - 65
     requests = []
     errors = []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page()
         page.set_default_timeout(5000)
@@ -160,7 +160,7 @@ def test_disconnected_claude_history_restores_without_starting_turns(prefix):
     selection = {'provider':'claude-code','model':model,'profile':'default','effort':'','service_tier':''}
     preferences = {'selection':selection}
     requests, errors = [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser=driver.chromium.launch()
         page=browser.new_page()
         page.clock.install()

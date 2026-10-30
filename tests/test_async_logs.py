@@ -160,18 +160,18 @@ def test_native_bot_log_stream_follows_replaced_symlink(tmp_path):
             stdout=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
-        assert process.stdout is not None
+        assert testOutput is not None
         try:
             await asyncio.sleep(1.2)
             with old_log.open("a", encoding="utf-8") as handle:
                 handle.write("old live\n")
                 handle.flush()
-            assert (await asyncio.wait_for(process.stdout.readline(), 3)).decode().strip() == "old live"
+            assert (await asyncio.wait_for(testOutput.readline(), 3)).decode().strip() == "old live"
 
             new_log.write_text("new startup\n", encoding="utf-8")
             replacement.symlink_to(new_log)
             replacement.replace(alias)
-            assert (await asyncio.wait_for(process.stdout.readline(), 3)).decode().strip() == "new startup"
+            assert (await asyncio.wait_for(testOutput.readline(), 3)).decode().strip() == "new startup"
         finally:
             if process.returncode is None:
                 os.killpg(process.pid, signal.SIGTERM)

@@ -1,7 +1,8 @@
 """Cancel drains dashboard draft writes before deleting the draft and closing."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -13,7 +14,7 @@ def test_cancel_orders_pending_writes_and_delete(failure):
     sync=source[source.index('  function scheduleSync()'):source.index('  function markViewDirty()')]
     cancel=source[source.index('  async function doCancel()'):source.index('  /* ── Listen for messages from parent')]
     script='const failure=%s;\n' % str(failure).lower()+sync+cancel+r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 let cancelling=false,syncInFlight=Promise.resolve(),syncTimer=null,state={draft:'changed'},ORIG_NAME='saved';
 const requests=[],messages=[],statuses=[];
 const window={parent:{postMessage:message=>messages.push(message)}},location={origin:'http://local'};
@@ -29,6 +30,6 @@ async function flush(){await new Promise(resolve=>setImmediate(resolve));}
  requests[1].resolve({ok:!failure});await cancel;
  assert.equal(messages.length,failure?0:1);assert.equal(cancelling,!failure);
  if(failure){assert.match(statuses.at(-1),/Could not discard/);}
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 '''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True,timeout=10)
+    run_javascript(['-e',script],check=True,capture_output=True,text=True,timeout=10)

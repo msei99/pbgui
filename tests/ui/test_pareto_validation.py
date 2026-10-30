@@ -1,13 +1,14 @@
 """Executable validation-draft contracts without runtime data or network access."""
+
+from javascript_checks import run_javascript
 from pathlib import Path
-import subprocess
 
 
 def test_validation_periods_overrides_and_source_immutability():
     """All modes preserve overrides and dates while producing standalone grouped jobs."""
     source = Path('frontend/js/pareto_validation.js').read_text()
     script = "const window={};\n" + source + r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const config={backtest:{start_date:'2020-01-01',end_date:'2025-01-01',exchanges:['bybit'],suite_enabled:true,scenarios:[{label:'train',start_date:'2020-01-01',end_date:'2021-01-01'}]},bot:{long:{}},pbgui:{scenario_template:{template:'sweep_cycles'}}};
 const detail={full_config:config,validation_holdouts:[{label:'holdout',start_date:'2024-01-01',end_date:'2025-01-01'}],override_configs:{'ETH.json':{bot:{long:{x:1}}}}};
 const before=JSON.stringify(detail);
@@ -32,7 +33,7 @@ assert.throws(()=>window.PBGuiParetoValidation.buildItems({...detail,validation_
 assert.throws(()=>window.PBGuiParetoValidation.buildItems({...detail,override_error:'missing'},'full_timerange','c','g'),/Override/);
 assert.throws(()=>window.PBGuiParetoValidation.buildItems(detail,'invalid','c','g'),/mode/);
 '''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+    run_javascript(['-e',script],check=True,capture_output=True,text=True)
 
 
 def test_explorer_help_belongs_to_labels():

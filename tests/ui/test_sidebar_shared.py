@@ -17,8 +17,8 @@ SIDEBAR_PAGES = sorted(
 @pytest.fixture(scope='module')
 def browser():
     """Launch an isolated browser; every resource request is intercepted below."""
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as driver:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as driver:
         instance = driver.chromium.launch(headless=True)
         yield instance
         instance.close()

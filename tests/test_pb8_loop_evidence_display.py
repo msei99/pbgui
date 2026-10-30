@@ -1,8 +1,8 @@
 """Exact liquidation flags and measurable overview rows retain their meaning."""
+
+from javascript_checks import run_javascript
 import json
 from pathlib import Path
-import shutil
-import subprocess
 
 import pytest
 
@@ -47,9 +47,6 @@ def test_missing_goal_retains_requested_metric_name():
 
 def test_overview_hides_instruction_rows_but_keeps_missing_requirements():
     """Execute the actual overview renderer with minimal DOM boundary doubles."""
-    node = shutil.which('node')
-    if not node:
-        pytest.skip('Node is unavailable')
     source = (Path(__file__).resolve().parents[1] / 'frontend/js/pb8_loop_optimizer.js').read_text()
     function = source[source.index('  function overviewGoals('):source.index('  function overviewObserver(')]
     program = r'''
@@ -66,5 +63,5 @@ def test_overview_hides_instruction_rows_but_keeps_missing_requirements():
     ],{goals:[]},false);
     console.log(JSON.stringify(cell.children.map(row=>row.children[0].textContent)));
     '''
-    result = subprocess.run([node, '-e', program], capture_output=True, text=True, check=True, timeout=10)
+    result = run_javascript(['-e', program], capture_output=True, text=True, check=True, timeout=10)
     assert json.loads(result.stdout) == ['Liquidated —', 'Fit error 0.01', 'Gain 2']

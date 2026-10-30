@@ -284,8 +284,8 @@ def test_worker_preparation_finishes_without_stdin_eof(sync_transfer):
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         env={**os.environ, 'PBGUI_WORKDIR': str(root)})
     try:
-        process.stdin.write(len(metadata).to_bytes(8, 'big') + metadata)
-        process.stdin.flush()
+        testInput.write(len(metadata).to_bytes(8, 'big') + metadata)
+        testInput.flush()
         # Deliberately keep stdin open: the previous read-until-EOF implementation hangs here.
         assert process.wait(timeout=5) == 0
         assert (root / 'incoming/optimize.json').read_text() == (source / 'optimize.json').read_text()
@@ -293,9 +293,9 @@ def test_worker_preparation_finishes_without_stdin_eof(sync_transfer):
         if process.poll() is None:
             process.kill()
         process.wait()
-        process.stdin.close()
-        process.stdout.close()
-        process.stderr.close()
+        testInput.close()
+        testOutput.close()
+        testErrors.close()
 
 
 @pytest.mark.parametrize('framed', [b'', b'123', (0).to_bytes(8, 'big'),

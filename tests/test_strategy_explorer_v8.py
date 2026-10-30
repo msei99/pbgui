@@ -1135,10 +1135,10 @@ def test_helper_cleanup_releases_every_resource_on_errors(cached_runtime, monkey
             if failure == "pipes":
                 raise OSError("synthetic pipe error")
 
-    output = process.stdout
-    process.stdin = Pipe()
-    process.stdout = Pipe()
-    process.stderr = Pipe()
+    output = testOutput
+    testInput = Pipe()
+    testOutput = Pipe()
+    testErrors = Pipe()
 
     def communicate(**kwargs):
         """Keep the synthetic response separate from the three owned pipe handles."""

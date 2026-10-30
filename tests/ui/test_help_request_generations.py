@@ -1,7 +1,8 @@
 """Help keeps the most recent topic and language despite delayed responses."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -18,7 +19,7 @@ def _guide_loader_script(loader):
     production = source[start:end]
     assert 'function loadTopic(' in production and 'function loadHelpIndex(' in production
     return 'const loader=%r;\n' % loader + r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const requests=[],errors=[],events=[];
 class Element {
  constructor(){this.children=[];this.value='';this.scrollTop=0;this.attrs={};}
@@ -97,9 +98,9 @@ def test_guide_failures_log_then_alert_and_recover(loader, area, kind):
  assert.equal(helpContent.innerHTML,'<p>Recovered</p>');
  assert.equal(helpContent.children.length,0,'success replaces the alert');
  assert.equal(errors.length,1);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 '''
-    result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+    result = run_javascript(['-e', script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -139,9 +140,9 @@ def test_guide_ignores_superseded_responses(loader, area, stale):
  if(area==='index'){
    assert.equal(topics()[0].file,'B');assert.equal(requests.length,4);
  }
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 '''
-    result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+    result = run_javascript(['-e', script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -158,9 +159,9 @@ def test_vps_cached_topic_invalidates_pending_request(stale):
  assert.equal(helpContent.scrollTop,123);
  assert.deepEqual(helpCache,{'EN:B':'<p>Cached B</p>'});
  assert.equal(errors.length,0);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 '''
-    result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+    result = run_javascript(['-e', script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -185,9 +186,9 @@ const helpLangEN=languageButton(),helpLangDE=languageButton();
  await fail(2,'network');
  assert.equal(helpContent.innerHTML,'<p>Latest B</p>');
  assert.equal(helpSel,1);assert.equal(errors.length,0);
-})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+})().catch(error=>{testErrors.write(error.stack);testResult.exitCode=1;});
 '''
-    result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+    result = run_javascript(['-e', script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -197,7 +198,7 @@ def test_out_of_order_help_responses(mode):
     topic = SOURCE[SOURCE.index('      function loadTopic('):SOURCE.index('      function openHelp(')]
     cache = SOURCE[SOURCE.index('      function ensureTopicCached('):SOURCE.index('      function renderGlobalResults(')]
     script = 'const mode=%r;\n' % mode + topic + cache + r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 let topicLoadGeneration=0,helpIndexGeneration=0,helpLang='EN',helpTopics=[{file:'A',title:'A'},{file:'B',title:'B'}];
 let helpSel=0,rawHtml=null,topicCache={},searchMarks=[],searchIndex=-1,helpLoaded=false,globalMode=false;
 const helpContent={innerHTML:''},helpTocList={innerHTML:''},helpSearchCount={},helpSearch={value:''};
@@ -231,6 +232,6 @@ async function flush(){await new Promise(resolve=>setImmediate(resolve));}
   assert.equal(helpContent.innerHTML,'Deutsch');assert.equal(helpTopics[0].file,'de');
   assert.equal(requests.length,4);
  }
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 '''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True,timeout=10)
+    run_javascript(['-e',script],check=True,capture_output=True,text=True,timeout=10)

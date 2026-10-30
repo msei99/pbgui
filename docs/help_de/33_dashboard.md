@@ -233,7 +233,7 @@ Einrichtung:
 Steuerung:
 - **Timeframe-Schaltflächen** (1m 5m 15m 30m 1h 2h 4h 6h 12h 1d 1w) — Kerzenauflösung ändern.
 - **Nach links scrollen** im Chart lädt ältere historische Kerzen.
-- Die Kerzenhistorie wird alle 30 Sekunden und beim Zurückkehren zur Seite automatisch mit der Börse abgeglichen. Verpasste Abschlusswerte werden korrigiert, ohne Zoom oder nachgeladene Historie zurückzusetzen.
+- Die Kerzenhistorie wird alle 30 Sekunden und beim Zurückkehren zur Seite automatisch mit der Börse abgeglichen. Verpasste Abschlusswerte werden korrigiert, ohne Zoom oder nachgeladene Historie zurückzusetzen. Snapshots erhalten den anfangs angepassten Bereich einschließlich seines exakten gebrochenen rechten Abstands.
 - Die Anfangsansicht reserviert Platz für die tatsächliche Breite der Beschriftungen Entry und Price, mit mindestens sechs Pixeln Abstand zur rechten Kante der neuesten Kerze. Mindestens acht freie Kerzenplätze bleiben das Ziel, soweit Chartbreite und Zoom dies erlauben. Schmale Charts zeigen anfangs gegebenenfalls weniger Historie, damit die neueste Kerze lesbar bleibt. Live-Updates und Snapshots folgen der neuesten Kerze mit gleicher Zoomspanne, soweit die minimale Kerzenbreite der Chartbibliothek dies bei Größenänderungen zulässt. Manuelles Verschieben und Zoomen bleibt bei Updates, nachgeladener Historie und Vollbildwechseln erhalten, auch wenn du Kerzen bewusst unter die Beschriftungen schiebst. Das automatische Folgen beginnt erst wieder, wenn die rechte Bereichsgrenze höchstens sechs Pixel von der aktuellen Latest-Position entfernt ist. Größenänderungen passen den Rand nur beim automatischen Folgen an. Ein Wechsel von **Timeframe** beginnt eine neue angepasste Anfangsansicht.
 
 ---

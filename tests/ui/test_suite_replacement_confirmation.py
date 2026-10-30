@@ -1,8 +1,9 @@
 """Suite replacements must not silently discard the active scenario draft."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
 import re
-import subprocess
 
 import pytest
 
@@ -22,7 +23,7 @@ def test_scenario_replacement_confirmation(action, decision):
     script = "const action = %r, decision = %r;\n" % (action, decision)
     script += '\n'.join(functions)
     script += r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const original = [{label:'original'}];
 const draft = {value:'unsaved draft'};
 const _suiteState = {scenarios:original, editIdx:decision === 'closed' ? -1 : 0,
@@ -52,6 +53,6 @@ function _suiteNotifyStructuredSync() { syncs++; }
   assert.equal(_suiteState.scenarios[0].label,decision === 'changed' ? 'newer' : 'original');
  }
  assert.equal(confirms,decision === 'closed' || decision === 'unavailable' ? 0 : 1);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 '''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True,timeout=10)
+    run_javascript(['-e',script],check=True,capture_output=True,text=True,timeout=10)

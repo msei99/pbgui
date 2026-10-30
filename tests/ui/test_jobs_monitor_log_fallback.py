@@ -1,9 +1,10 @@
 """Offline job-monitor regressions using real functions and synthetic responses."""
 
+from javascript_checks import run_javascript
+
 import ast
 import json
 import re
-import subprocess
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -45,9 +46,9 @@ def _page_functions(source, names):
 
 def _run_page_script(script):
     """Run JavaScript without a network; subprocess.run kills and waits on timeout."""
-    script = "const assert = require('node:assert/strict');\n(async () => {\n" + script
-    script += "\n})().catch(error => {console.error(error); process.exitCode=1;});"
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+    script = "const assert = browserAssert;\n(async () => {\n" + script
+    script += "\n})().catch(error => {console.error(error); testResult.exitCode=1;});"
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -210,7 +211,7 @@ assert.equal(nodes['integrity-job-monitor-frame'].writes,1);
 
 
 def run_functions(names, assertions):
-    """Execute page declarations in Node without page startup or network access."""
+    """Execute page declarations in the browser without page startup or network access."""
     source = SOURCE.read_text(encoding="utf-8")
     declarations = []
     for name in names:
@@ -218,10 +219,10 @@ def run_functions(names, assertions):
         assert match, name
         end = source.index("\n" + match[1] + "}", match.end()) + len(match[1]) + 2
         declarations.append(source[match.start():end])
-    script = "const assert = require('node:assert/strict');\n(async () => {\n"
+    script = "const assert = browserAssert;\n(async () => {\n"
     script += BOOTSTRAP + "\n".join(declarations) + "\n" + assertions
-    script += "\n})().catch(error => {console.error(error); process.exitCode=1;});"
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+    script += "\n})().catch(error => {console.error(error); testResult.exitCode=1;});"
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -349,7 +350,7 @@ def test_log_viewer_retains_its_500_line_request():
 @pytest.mark.parametrize("prefix", ["", "/proxy/pbgui"])
 def test_browser_log_fallback_and_details_with_synthetic_jobs(prefix):
     """Reach the embedded monitor through the real menu and exercise mocked updates."""
-    playwright = pytest.importorskip("playwright.sync_api")
+    browser_api = __import__('browser_driver')
     services_html = (SOURCE.parent / "services_monitor.html").read_text(encoding="utf-8")
     services_html = render_page_urls(Request({"type": "http", "root_path": prefix}), services_html, "/api/services")
     for marker, value in {"VERSION": "test",
@@ -362,7 +363,7 @@ def test_browser_log_fallback_and_details_with_synthetic_jobs(prefix):
     log_line = "2026-10-18 00:00:00 fixture-host segment done coin=BTC pages=2 rows=1 payload=1 KiB minutes_written=1"
     logs = [log_line] * 6001
     requests, errors = [], []
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1200, "height": 800})
         page.on("pageerror", lambda error: errors.append(str(error)))
@@ -431,7 +432,7 @@ def test_browser_log_fallback_and_details_with_synthetic_jobs(prefix):
         page.locator('button[data-panel="workers"]').click()
         page.locator(".worker-card", has_text="Market Data Queue").click()
         frame_element = page.locator("iframe.worker-monitor-frame")
-        playwright.expect(frame_element).to_be_visible()
+        browser_api.expect(frame_element).to_be_visible()
         assert frame_element.get_attribute("src") == prefix + "/app/jobs_monitor.html"
         page = frame_element.element_handle().content_frame()
         assert page is not None
@@ -439,32 +440,32 @@ def test_browser_log_fallback_and_details_with_synthetic_jobs(prefix):
         push_jobs = "jobs => window.fixtureSocket.onmessage({data:JSON.stringify({type:'jobs',data:jobs})})"
         page.evaluate(push_jobs, [fixture_job])
         card = page.locator("#jobs-running .downloader-details")
-        playwright.expect(card.locator("summary")).to_contain_text("Recent log excerpt")
+        browser_api.expect(card.locator("summary")).to_contain_text("Recent log excerpt")
         assert requests == [5000]
         card.locator("summary").click()
-        playwright.expect(card).to_have_attribute("open", "")
+        browser_api.expect(card).to_have_attribute("open", "")
         page.evaluate(push_jobs, [fixture_job])
-        playwright.expect(card).to_have_attribute("open", "")
-        playwright.expect(page.locator(".tab-btn.active")).to_have_text("Active")
+        browser_api.expect(card).to_have_attribute("open", "")
+        browser_api.expect(page.locator(".tab-btn.active")).to_have_text("Active")
 
         page.locator('#jobs-running [data-job-action="view"]').click()
         details = page.locator("#details-modal")
-        playwright.expect(details).to_have_class("modal active")
-        playwright.expect(details.locator(".downloader-details summary")).to_contain_text("Recent log excerpt")
-        playwright.expect(details.locator("#details-job-id")).to_have_text("fixture-job")
+        browser_api.expect(details).to_have_class("modal active")
+        browser_api.expect(details.locator(".downloader-details summary")).to_contain_text("Recent log excerpt")
+        browser_api.expect(details.locator("#details-job-id")).to_have_text("fixture-job")
         details.get_by_role("button", name="Close", exact=True).click()
 
         fixture_job["progress"] = {"last_result": {"host_results": [{"host": "fixture-host", "rows": 99}]}}
         page.evaluate(push_jobs, [fixture_job])
-        playwright.expect(card.locator("summary")).not_to_contain_text("Recent log excerpt")
-        playwright.expect(card.locator("summary")).to_contain_text("99 rows")
-        playwright.expect(card).to_have_attribute("open", "")
+        browser_api.expect(card.locator("summary")).not_to_contain_text("Recent log excerpt")
+        browser_api.expect(card.locator("summary")).to_contain_text("99 rows")
+        browser_api.expect(card).to_have_attribute("open", "")
         page.locator('#jobs-running [data-job-action="view"]').click()
-        playwright.expect(details.locator(".downloader-details summary")).to_contain_text("99 rows")
-        playwright.expect(details.locator(".downloader-details summary")).not_to_contain_text("Recent log excerpt")
+        browser_api.expect(details.locator(".downloader-details summary")).to_contain_text("99 rows")
+        browser_api.expect(details.locator(".downloader-details summary")).not_to_contain_text("Recent log excerpt")
         details.get_by_role("button", name="Close", exact=True).click()
         page.locator('#jobs-running [data-job-action="log"]').click()
-        playwright.expect(page.locator("#log-content")).to_contain_text("segment done")
+        browser_api.expect(page.locator("#log-content")).to_contain_text("segment done")
         assert requests[-1] == 500
         assert all(lines in {500, 5000} for lines in requests)
         assert not errors

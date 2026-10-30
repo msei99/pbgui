@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from javascript_checks import run_javascript
+
 import json
 import importlib.util
 from datetime import datetime
 from pathlib import Path
-import subprocess
 import textwrap
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -342,7 +343,7 @@ def test_coin_data_frontend_sort_is_deterministic_for_reversed_equal_values() ->
     functions = source[start:end]
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         var sortState = {{main: {{key: 'market_cap', dir: 'desc'}}}};
         {functions}
         const rows = [
@@ -374,8 +375,8 @@ def test_coin_data_frontend_sort_is_deterministic_for_reversed_equal_values() ->
         );
         """
     )
-    completed = subprocess.run(
-        ["node", "-e", script],
+    completed = run_javascript(
+        ["-e", script],
         text=True,
         capture_output=True,
         timeout=10,
@@ -396,7 +397,7 @@ def test_coin_data_frontend_keeps_null_metrics_unavailable_and_persists_quotes()
     state_url_end = source.index("\n    function applyServerState(", state_url_start)
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {source[format_start:format_end]}
         var filters = {{exchange: '', hip3_dex: '', market_cap: 0, vol_mcap: 10, tags: [], quotes: [], only_cpt: false}};
         var replacedUrl = '';
@@ -421,8 +422,8 @@ def test_coin_data_frontend_keeps_null_metrics_unavailable_and_persists_quotes()
         assert.equal(formatCompact(0), '0.00');
         """
     )
-    completed = subprocess.run(
-        ["node", "-e", script],
+    completed = run_javascript(
+        ["-e", script],
         text=True,
         capture_output=True,
         timeout=10,
@@ -843,7 +844,7 @@ def test_coin_data_frontend_summarizes_partial_jobs_without_applying_stale_state
     message = source[source.index("    function refreshJobMessage("):source.index("    function toggleButtonState(")]
     poll = source[source.index("    function pollRefreshJob("):source.index("    async function runAutomaticUpdate(")]
     script = r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 var autoGeneration=1, autoStopped=false, autoJobs={partial:{}}, autoStatus='', status;
 var autoResults=[],autoStatusLevel=false;
 function buildRefreshJobUrl(id){return id}
@@ -857,9 +858,9 @@ function requestJson(){return Promise.resolve({job:{status:'partial',state:{stal
  assert.equal(Object.keys(autoJobs).length,0);
  assert.match(status[0],/Failed: bitget/);
  assert.equal(status[1],'warning');
-})().catch(e=>{console.error(e);process.exitCode=1});
+})().catch(e=>{console.error(e);testResult.exitCode=1});
 """
-    result = subprocess.run(["node", "-e", script], text=True, capture_output=True, timeout=10)
+    result = run_javascript(["-e", script], text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -870,7 +871,7 @@ def test_coin_data_frontend_reports_partial_price_coverage() -> None:
     end = source.index("\n    function toggleButtonState(", start)
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {source[start:end]}
         const message = refreshJobMessage({{
           result_message: 'Refresh incomplete',
@@ -884,8 +885,8 @@ def test_coin_data_frontend_reports_partial_price_coverage() -> None:
         assert.ok(message.includes('Partial price coverage: hyperliquid 1/3.'));
         """
     )
-    completed = subprocess.run(
-        ["node", "-e", script],
+    completed = run_javascript(
+        ["-e", script],
         text=True,
         capture_output=True,
         timeout=10,
@@ -902,7 +903,7 @@ def test_coin_data_frontend_omits_quotes_until_selection_exists() -> None:
     end = source.index("\n    function updateBusyProgress(", start)
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         var filters = {{
           exchange: 'binance', market_cap: 0, vol_mcap: 10,
           tags: [], quotes: [], only_cpt: false
@@ -915,8 +916,8 @@ def test_coin_data_frontend_omits_quotes_until_selection_exists() -> None:
         assert.deepEqual(buildRefreshPayload().quotes, ['USDT']);
         """
     )
-    completed = subprocess.run(
-        ["node", "-e", script],
+    completed = run_javascript(
+        ["-e", script],
         text=True,
         capture_output=True,
         timeout=10,

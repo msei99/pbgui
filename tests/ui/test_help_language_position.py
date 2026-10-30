@@ -1,7 +1,8 @@
 """The guide language switch keeps the current topic and reading position."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,7 +13,7 @@ def test_translated_guide_restores_matching_paragraph() -> None:
     source = (ROOT / "frontend/js/shared_help_overlay.js").read_text()
     helpers = source[source.index("  function guideBlocks("):source.index("  window.PBGuiHelpPosition =")]
     script = helpers + r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 function content(tops, heights, scrollTop) {
   const box = {top: 100};
   const nodes = tops.map((top, index) => ({
@@ -31,7 +32,7 @@ const german = content([0, 50, 240, 300, 400], [25, 160, 25, 80, 100], 0);
 restoreGuidePosition(german, position);
 assert.ok(german.scrollTop >= 300 && german.scrollTop < 400, german.scrollTop);
 '''
-    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True, timeout=10)
+    run_javascript(["-e", script], check=True, capture_output=True, text=True, timeout=10)
 
 
 def test_guide_language_handlers_keep_selected_topic() -> None:

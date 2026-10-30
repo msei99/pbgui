@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import parse_qs,urlparse
 
 import pytest
-from playwright.sync_api import expect,sync_playwright
+from browser_driver import expect,sync_browser
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -15,7 +15,7 @@ def test_claude_setup_real_menu_connection_probe_and_navigation(prefix,width):
     requests,errors=[],[]
     selection={'provider':'claude-code','model':'claude-fixture','profile':'default','effort':'','service_tier':''}
     account={'connected':False,'login':False}
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser=driver.chromium.launch()
         page=browser.new_page(viewport={'width':width,'height':900})
         page.clock.install()
@@ -102,7 +102,7 @@ def test_setup_profiles_models_probe_github_and_restoration(prefix,width):
            'preferences':{'selection':{'provider':'chatgpt','profile':'default','model':'model-default','effort':'','service_tier':''},'jev_max_cost_usd':.01}}
     tests=[];mutations=[];requests=[];errors=[];permission_checks=[]
     held_saves=[];held_status=[]
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser=driver.chromium.launch()
         page=browser.new_page(viewport={'width':width,'height':900})
         page.clock.install()

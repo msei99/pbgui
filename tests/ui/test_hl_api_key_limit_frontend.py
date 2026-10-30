@@ -1,7 +1,8 @@
 """Hyperliquid account-limit display and purchase guards in the API-key editor."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 
 PAGE = Path(__file__).resolve().parents[2] / "frontend" / "api_keys_editor.html"
@@ -16,7 +17,7 @@ def test_hl_limit_uses_apostrophes_and_only_offers_confirmed_main_account_purcha
     end = source.index("    function showCreateForm()", start)
     functions = source[start:end]
     script = r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const nodes = new Map();
 const document = { getElementById(id) {
     if (!nodes.has(id)) nodes.set(id, {hidden: true, value: '', textContent: '', disabled: false, dataset: {}});
@@ -83,9 +84,9 @@ const fetch = async (url, options) => {
     assert.equal(element('hlRateLimitInlineValue').textContent, "Used 105 / Cap 6'100");
     await buyHlRequestCredits();
     assert.equal(posts.length, 1);
-})().catch(error => {console.error(error); process.exitCode = 1;});
+})().catch(error => {console.error(error); testResult.exitCode = 1;});
 """
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
 
 
@@ -99,13 +100,13 @@ def test_hl_limit_overview_and_vps_manager_use_apostrophe_counters() -> None:
     end = vps_manager.index("    function updateHlCreditCost()", start)
     vps_formatter = vps_manager[start:end]
     script = "\n".join([
-        "const assert = require('node:assert/strict');",
+        "const assert = browserAssert;",
         overview_formatter,
         vps_formatter,
         "assert.equal(formatRequestCount(2209548), \"2'209'548\");",
         "assert.equal(formatHlRequestCount(109510), \"109'510\");",
     ])
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert "nf.format(" not in overview
     assert "used.toLocaleString()" not in vps_manager[vps_manager.index("function renderHlRateLimitHistoryMeta"):vps_manager.index("function renderHlRateLimitHistoryChart")]

@@ -1,6 +1,7 @@
 """Save guard catches stale applied windows without changing workload estimates."""
+
+from javascript_checks import run_javascript
 from pathlib import Path
-import subprocess
 
 
 def test_saved_training_must_match_visual_windows_and_current_dates():
@@ -8,7 +9,7 @@ def test_saved_training_must_match_visual_windows_and_current_dates():
     source = Path('frontend/js/suite_editor.js').read_text()
     source = source[source.index('function suiteValidateAppliedWindows('):]
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 const context={start_date:'2026-01-01',end_date:'2026-09-18'};
 const suite={suite_enabled:true,scenario_generator:{windows:[
  {role:'training',start_date:'2026-01-06',end_date:'2026-02-06'},
@@ -21,5 +22,5 @@ assert.doesNotThrow(()=>suiteValidateAppliedWindows(suite,context));
 assert.throws(()=>suiteValidateAppliedWindows(suite,{...context,start_date:'2026-02-01'}),/outside/);
 suite.suite_enabled=false;assert.doesNotThrow(()=>suiteValidateAppliedWindows(suite,context));
 '''
-    result = subprocess.run(['node', '-e', source + code], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', source + code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr

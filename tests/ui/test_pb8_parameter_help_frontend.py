@@ -1,7 +1,8 @@
 """Executable shared tooltip resolution and safe text-rendering contracts."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -10,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_original_help_resolves_editor_fields_without_cross_scope_guesses() -> None:
     """Native fields share original help while PB7 stays inactive and ambiguous leaves stay unresolved."""
     source = (ROOT / "frontend/js/pb8_parameter_help.js").read_text()
-    script = "const assert = require('node:assert/strict'); const window = {}; const API_BASE = '/api/v7';\n" + source + r"""
+    script = "const assert = browserAssert; const window = {}; const API_BASE = '/api/v7';\n" + source + r"""
       const help = window.PBGuiPB8ParameterHelp;
       const entries = {
         'optimize.enable_overrides.couple_unstuck_ema_spans': {text: 'Original coupled EMA search.'},
@@ -39,7 +40,7 @@ def test_original_help_resolves_editor_fields_without_cross_scope_guesses() -> N
       assert.equal(help.plainText('Original **wording** with `code` and [reference](local.md).'), 'Original wording with code and reference.');
       assert.equal(help.plainText('<img src=x onerror=alert(1)>'), '<img src=x onerror=alert(1)>');
     """
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+    result = run_javascript(["-e", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "tooltip.textContent =" in source
     assert "innerHTML" not in source
@@ -57,7 +58,7 @@ def test_hover_uses_original_text_and_cleans_up_handlers_and_timers() -> None:
     """Exercise the actual hover listener, scroll handoff, stale-target guard, and page teardown."""
     source = (ROOT / "frontend/js/pb8_parameter_help.js").read_text()
     script = r"""
-      const assert = require('node:assert/strict');
+      const assert = browserAssert;
       const listeners = new Map();
       const windowListeners = new Map();
       const timers = new Map();
@@ -134,7 +135,7 @@ def test_hover_uses_original_text_and_cleans_up_handlers_and_timers() -> None:
         assert.equal(tip.removed, true);
         assert.equal(listeners.size, 0);
         assert.equal(timers.size, 0);
-      })().catch(error => {console.error(error); process.exitCode = 1;});
+      })().catch(error => {console.error(error); testResult.exitCode = 1;});
     """
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+    result = run_javascript(["-e", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

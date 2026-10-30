@@ -12,6 +12,19 @@ Install the application and test dependencies in a Python 3.12 environment:
 python -m pip install -r requirements-test.txt
 ```
 
+UI and Vanilla JS regression checks use a locally installed native Chromium
+browser, controlled directly by Python over the DevTools protocol. Set
+`PBGUI_TEST_BROWSER=/absolute/path/to/browser` when it is not discoverable as
+Brave, Chrome or Chromium. No browser or driver is downloaded during a test.
+Profiles, storage and process ownership are isolated from the user's browser.
+All unhandled requests are blocked; fixtures explicitly fulfil synthetic API
+responses. JavaScript assertions execute in the browser, never in a JavaScript
+server, package-manager runtime or automation driver.
+
+Functional checks default to software rendering. The
+real-time Coin Data benchmark explicitly uses normal browser rendering and the
+real clock; its existing latency budget remains unchanged.
+
 ## Default Tests
 
 ```bash

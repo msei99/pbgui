@@ -8,7 +8,7 @@ import pytest
 
 def test_explorer_accepts_next_validation_while_first_batch_is_pending():
     """Changing the selected result and mode cannot alter an earlier batch."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     root = Path(__file__).resolve().parents[2]
     source = (root / 'frontend/v7_pareto_explorer.html').read_text()
     handlers = source[source.index('  function runSelectedConfigBacktest()'):source.index('  function openSelectedStrategyExplorer()')]
@@ -49,7 +49,7 @@ def test_explorer_accepts_next_validation_while_first_batch_is_pending():
         else:
             route.fulfill(body=html, content_type='text/html')
 
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()
@@ -80,11 +80,11 @@ def test_explorer_accepts_next_validation_while_first_batch_is_pending():
 
 def test_full_scan_unavailable_until_binary_is_present():
     """Missing cloud binaries cannot trigger scans and availability follows result metadata."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     root = Path(__file__).resolve().parents[2]
     source = (root / 'frontend/v7_pareto_explorer.html').read_text()
     handlers = source[source.index('  function syncAllResultsAvailability()'):source.index('  function loadParetoOnlyFromSidebar()')]
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()

@@ -1,6 +1,7 @@
 """Exercise native Backtest deep-link navigation without loading runtime data."""
+
+from javascript_checks import run_javascript
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -11,7 +12,7 @@ def test_overview_merge_retains_details_and_rejects_obsolete_detail_reply():
     start = source.index('  function startDetail(')
     end = source.index('  async function pollCycle()', start)
     script = r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 let stopped=false,state={panel:'loops-results',navigationSeq:1},detailFlights=new Map(),detailActive=0;
 let rows=[{id:'a',view_revision:'new',updated_at:2,summary_only:false,_detail_revision:'old',
  settings:{execution:'cpu',max_rounds:50},jobs:[{operation:'kept'}],cycles:[{round:1}],deletable:true}];
@@ -27,9 +28,9 @@ function pumpDetails(){}function request(){return Promise.resolve({id:'a',view_r
  let before=rows[0];startDetail({id:'a',revision:'old',panel:'loops-results',navigation:1});
  await new Promise(resolve=>setImmediate(resolve));
  assert.equal(rows[0],before);assert.equal(renders,0);assert.equal(detailActive,0);assert.equal(detailFlights.size,0);
-})().catch(error=>{console.error(error);process.exit(1);});
+})().catch(error=>{console.error(error);finishTest(1);});
 '''
-    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=False)
+    completed = run_javascript(['-e', script], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
 
 
@@ -40,7 +41,7 @@ def test_loop_backtest_links_keep_filters_logs_and_newer_navigation():
     end = source.index('\nfunction getManagedBacktestBaseDir', start)
     function = source[start:end]
     script = '''
-const assert=require('node:assert/strict');let panels=[],filters=[],logs=[];
+const assert=browserAssert;let panels=[],filters=[],logs=[];
 let window={location:{href:''}},backtestEditorAdapter={isV8:true},_resultsLoadGeneration=0;
 function selectPanel(...args){panels.push(args);}
 async function loadResults(filter){filters.push(filter);}
@@ -59,9 +60,9 @@ function editConfig(){}
  window.location.href+='\\x23queue';await initializeBacktestPageFromUrl();
  assert.deepEqual(panels,[]);assert.deepEqual(filters,[]);
  backtestEditorAdapter.isV8=false;logs=[];await initializeBacktestPageFromUrl();assert.deepEqual(logs,[]);
-})().catch(error=>{console.error(error);process.exit(1);});
+})().catch(error=>{console.error(error);finishTest(1);});
 '''
-    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=False)
+    completed = run_javascript(['-e', script], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
 
 
@@ -71,7 +72,7 @@ def test_backtest_return_button_restores_loop_context_and_rejects_untrusted_dest
     start = source.index('function getBacktestLoopReturnUrl()')
     end = source.index('async function initializeBacktestPageFromUrl(', start)
     script = r'''
-const assert=require('node:assert/strict');let assigned='';
+const assert=browserAssert;let assigned='';
 let toolbar={hidden:true,style:{}},button={onclick:null};
 let document={getElementById:id=>id==='loop-return-toolbar'?toolbar:button};
 let window={location:{href:'',assign:value=>assigned=value}},backtestEditorAdapter={isV8:true};
@@ -87,7 +88,7 @@ for(const bad of ['https://evil.test'+context,'//evil.test'+context,context.repl
 }
 backtestEditorAdapter.isV8=false;arrive(context);assert.equal(toolbar.hidden,true);
 '''
-    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=False)
+    completed = run_javascript(['-e', script], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
 
 
@@ -97,7 +98,7 @@ def test_loop_results_link_carries_current_report_and_main_view():
     start = source.index('  function backtestButton(')
     end = source.index('  function canContinueRound(', start)
     script = r'''
-const assert=require('node:assert/strict');let handler,assigned='';
+const assert=browserAssert;let handler,assigned='';
 let location={origin:'http://pbgui.test',href:'http://pbgui.test/api/optimize-v8/main_page?loop_id='+ 'a'.repeat(32)+'&loop_view=cycle&loop_cycle=1&loop_tab=backtests#loops-results'};
 location.assign=value=>assigned=value;
 let resultsFlight=null,stopped=false;function navigationTiming(){};function leaveForBacktest(url){location.assign(url.href);}
@@ -111,9 +112,9 @@ backtestButton({}, {id:'a'.repeat(32)}, {log_available:true,operation:'b'.repeat
  await handler();let target=new URL(assigned);assert.equal(target.pathname,'/api/backtest-v8/main_page');assert.equal(target.searchParams.get('result_filter'),'specific backtest');assert.equal(target.searchParams.get('result_compare'),'1');assert.equal(target.searchParams.get('loop_return'),new URL(location.href).pathname+new URL(location.href).search+'#loops-results');
  assigned='';let resolve;request=()=>new Promise(done=>resolve=done);let pending=handler();state.navigationSeq++;resolve({name:'outdated'});await pending;assert.equal(assigned,'');
  let resolveBusy,calls=0;request=()=>{calls++;return new Promise(done=>resolveBusy=done);};let older=handler();await handler();assert.equal(calls,1);resolveBusy({name:'latest'});await older;assert.equal(new URL(assigned).searchParams.get('result_filter'),'latest');
-})().catch(error=>{console.error(error);process.exit(1);});
+})().catch(error=>{console.error(error);finishTest(1);});
 '''
-    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=False)
+    completed = run_javascript(['-e', script], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
 
 
@@ -123,7 +124,7 @@ def test_native_compare_does_not_reopen_after_handoff_is_obsolete():
     start = source.index('function _compareResultPaths(')
     end = source.index('function _resolveQueueComparePaths(', start)
     script = r'''
-const assert=require('node:assert/strict');let resolve,current=true,plots=0;
+const assert=browserAssert;let resolve,current=true,plots=0;
 let backtestReadEpoch=0,performance={now:()=>0};function backtestTiming(){};let _beCache={},backtestEditorAdapter={version:'v8'};
 function fetchCSV(){return new Promise(done=>resolve=done);}
 function normalizeBE(){return {time:['2020-01-01'],balance:[1000],equity:[1000]};}
@@ -136,9 +137,9 @@ let Plotly={newPlot:()=>plots++};
  current=false;area.style.display='none';area.innerHTML='';resolve({});
  assert.equal(await pending,false);assert.equal(plots,0);
  assert.equal(area.style.display,'none');assert.equal(area.innerHTML,'');
-})().catch(error=>{console.error(error);process.exit(1);});
+})().catch(error=>{console.error(error);finishTest(1);});
 '''
-    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=False)
+    completed = run_javascript(['-e', script], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
 
 
@@ -148,7 +149,7 @@ def test_loop_log_shortcut_opens_active_retry_after_cancelled_attempt():
     start = source.index('  function nativeLogButton(')
     end = source.index('  function ', start + 12)
     script = """
-const assert=require('assert');let control,opened;
+const assert=browserAssert;let control,opened;
 function button(cell,label,click){control={click};return control;}
 function openNativeLog(run,job){opened=job.operation;}
 """ + source[start:end] + """
@@ -163,7 +164,7 @@ assert.strictEqual(control.disabled,false);control.click();assert.strictEqual(op
 nativeLogButton({}, {}, [{status:'planned',log_available:false}]);
 assert.strictEqual(control.disabled,true);
 """
-    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+    run_javascript(['-e', script], check=True, capture_output=True, text=True)
 
 
 
@@ -172,7 +173,7 @@ def test_loop_read_timeouts_abort_and_release_resources():
     source = (Path(__file__).resolve().parents[1] / 'frontend/js/pb8_loop_optimizer.js').read_text()
     function = source[source.index('  async function request('):source.index('  function showMessages()')]
     script = r"""
-const assert=require('node:assert/strict');let timers=new Map(),next=0,readRequests=new Map(),base='/api/optimize-v8/loops';
+const assert=browserAssert;let timers=new Map(),next=0,readRequests=new Map(),base='/api/optimize-v8/loops';
 let stopped=false,timer,generation=0,watchGeneration=0;
 function setTimeout(fn,ms){timers.set(++next,{fn,ms});return next;}function clearTimeout(id){timers.delete(id);}
 let fetch=(url,opts)=>new Promise((resolve,reject)=>opts.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError'))));
@@ -186,9 +187,9 @@ function cancelLoopReads(){readRequests.forEach((path,controller)=>controller.ab
  assert.equal(timers.size,0);assert.equal(readRequests.size,0);
  fetch=async()=>({ok:true,json:async()=>({configs:[]})});assert.deepEqual(await request('/configs'),{configs:[]});
  assert.equal(readRequests.size,0);assert.equal(timers.size,0);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+    completed = run_javascript(['-e', script], capture_output=True, text=True, timeout=10)
     assert completed.returncode == 0, completed.stderr
 
 
@@ -197,7 +198,7 @@ def test_loop_history_return_requires_a_verified_adjacent_entry():
     source = (Path(__file__).resolve().parents[1] / 'frontend/v7_backtest.html').read_text()
     function = source[source.index('function getBacktestLoopReturnUrl()'):source.index('async function initializeBacktestPageFromUrl(')]
     script = r"""
-const assert=require('node:assert/strict');let backCalls=0,assigned='',stored;
+const assert=browserAssert;let backCalls=0,assigned='',stored;
 const from='http://pbgui.test/nested/api/optimize-v8/main_page?loop_id='+'a'.repeat(32)+'&loop_view=cycle&loop_cycle=3&loop_tab=performance#loops-queue';
 const target=new URL('http://pbgui.test/nested/api/backtest-v8/main_page?panel=results&result_filter=fixture');target.searchParams.set('loop_return',from);
 let button={},toolbar={style:{}},backtestEditorAdapter={isV8:true};
@@ -212,7 +213,7 @@ performance.getEntriesByType=()=>[{type:'reload'}];initializeBacktestLoopReturn(
 // An unrelated entry/referrer cannot authorize history.back().
 history.state=null;document.referrer='http://pbgui.test/other';initializeBacktestLoopReturn();button.onclick();assert.equal(backCalls,2);assert.equal(assigned,from);
 """
-    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+    completed = run_javascript(['-e', script], capture_output=True, text=True, timeout=10)
     assert completed.returncode == 0, completed.stderr
 
 
@@ -222,7 +223,7 @@ def test_backtest_read_deadlines_and_bfcache_cleanup():
     source=(Path(__file__).resolve().parents[1]/'frontend/v7_backtest.html').read_text()
     function=source[source.index('var backtestReads='):source.index('function apiFetchFrom(')]
     script=r"""
-const assert=require('node:assert/strict');let callbacks={},timers=new Map(),next=0,_resultsLoadGeneration=0,_resultsEmptyRetryTimer=null;
+const assert=browserAssert;let callbacks={},timers=new Map(),next=0,_resultsLoadGeneration=0,_resultsEmptyRetryTimer=null;
 let window={addEventListener:(name,fn)=>callbacks[name]=fn},currentPanel='results',loads=0;
 function setTimeout(fn,ms){timers.set(++next,{fn,ms});return next;}function clearTimeout(id){timers.delete(id);}
 function loadResults(){loads++;}function hasBacktestResultArrival(){return false;}
@@ -235,9 +236,9 @@ const pending=signal=>new Promise((resolve,reject)=>signal.addEventListener('abo
  let read=timedBacktestRead(pending);assert.equal([...timers.values()][0].ms,15000);callbacks.pagehide();await assert.rejects(read,{name:'AbortError'});
  assert.equal(timers.size,0);assert.equal(backtestReads.size,0);callbacks.pageshow({persisted:true});assert.equal(loads,1);
  assert.equal(await timedBacktestRead(async()=>42),42);assert.equal(timers.size,0);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    completed=subprocess.run(['node','-e',script],capture_output=True,text=True,timeout=10)
+    completed=run_javascript(['-e',script],capture_output=True,text=True,timeout=10)
     assert completed.returncode==0,completed.stderr
 
 
@@ -249,8 +250,8 @@ def test_compare_keeps_available_curves_when_one_equity_read_fails(version, fail
     source=(Path(__file__).resolve().parents[1]/'frontend/v7_backtest.html').read_text()
     function=source[source.index('function _compareResultPaths('):source.index('function _resolveQueueComparePaths(')]
     script=r"""
-const assert=require('node:assert/strict');let backtestReadEpoch=0,_beCache={},plots=[],warnings=[],current=true;
-const backtestEditorAdapter={version:process.argv[1]},failure=process.argv[2];
+const assert=browserAssert;let backtestReadEpoch=0,_beCache={},plots=[],warnings=[],current=true;
+const backtestEditorAdapter={version:testArguments[1]},failure=testArguments[2];
 function backtestTiming(){}
 function fetchCSV(path){return path==='healthy'?Promise.resolve({}):Promise.reject(new Error(failure));}
 function normalizeBE(){return {time:['2020-01-01'],equity:[1000],balance:[1000]};}
@@ -270,7 +271,7 @@ const Plotly={newPlot:(id,traces)=>{plots.push(traces);return Promise.resolve();
  current=false;warnings=[];area.textContent='newer view';
  assert.equal(await _compareResultPaths(['missing'],data,area,'chart',()=>current),false);
  assert.deepEqual(warnings,[]);assert.equal(area.textContent,'newer view');
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 """
-    completed=subprocess.run(['node','-e',script,version,failure],capture_output=True,text=True,timeout=10)
+    completed=run_javascript(['-e',script,version,failure],capture_output=True,text=True,timeout=10)
     assert completed.returncode==0,completed.stderr

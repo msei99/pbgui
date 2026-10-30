@@ -1,6 +1,7 @@
 """Deterministic restart UI regressions without restarting real services."""
+
+from javascript_checks import run_javascript
 from pathlib import Path
-import subprocess
 
 
 def test_restart_waits_for_new_instance_and_keeps_button_busy():
@@ -12,7 +13,7 @@ def test_restart_waits_for_new_instance_and_keeps_button_busy():
         end = source.index('\n  }', start) + 4
         functions.append(source[start:end])
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 let _restartInFlight=true,_restartStatus={},reloads=0,timers=[],requests=0;
 const nodes={};
 function node(){return {style:{},classList:{add(){},toggle(){}},setAttribute(){},getAttribute(){return ''},remove(){},appendChild(){},addEventListener(){}};}
@@ -39,7 +40,7 @@ const flush=()=>new Promise(r=>setImmediate(r));
   timers.shift()();await flush();assert.equal(reloads,1);
 })();
 '''
-    result = subprocess.run(['node', '-e', '\n'.join(functions) + code], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', '\n'.join(functions) + code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
 
@@ -52,7 +53,7 @@ def test_confirmed_restart_is_visible_during_delayed_request_and_sent_once():
         end = source.index('\n' + indent + '}', start) + len(indent) + 2
         block = source[start:end] + '\n' + block
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 let _restartInFlight=false,_restartConfirmPending=false,_restartStatus={api_instance_id:'old'};
 let click,confirm,reply,requests=0,overlays=[],errors=[],removed=0;
 const btn={getAttribute(){return ''},classList:{add(){},remove(){}},addEventListener(_,fn){click=fn}};
@@ -80,7 +81,7 @@ INSTALL
  assert.equal(errors.length,1);assert.equal(overlays.at(-1)[2],'old');
 })();
 '''.replace('INSTALL', block)
-    result = subprocess.run(['node', '-e', code], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
 
@@ -89,11 +90,11 @@ def test_restart_button_is_visible_in_complete_navigation_script():
     import json
     import pytest
 
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = Path('frontend/pbgui_nav.js').read_text()
     payload = {'needs_restart': True, 'api_restart_required': True,
                'restart_services': [{'service': 'PBApiServer', 'label': 'PBGui API Server'}]}
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page()
         requests = []
@@ -129,7 +130,7 @@ def test_restart_serial_change_restarts_stale_services_once():
     start = source.index('  function showRestartOverlay(')
     end = source.index('\n  }', start) + 4
     code = r'''
-const assert=require('assert');
+const assert=browserAssert;
 let timers=[],posts=0,reloads=0;
 const statusNode={};
 const node=()=>({style:{},remove(){},appendChild(){},addEventListener(){}});
@@ -164,5 +165,5 @@ async function tick(){timers.shift()();await flush()}
  assert.equal(posts,1);assert.match(statusNode.textContent,/could not be verified.*PBRun.*11 → 12/);
 })();
 '''
-    result = subprocess.run(['node', '-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr

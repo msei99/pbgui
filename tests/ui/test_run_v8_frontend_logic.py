@@ -1,9 +1,10 @@
 """Executable frontend contracts for PB8 Run strategy switching."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
 import json
 import re
-import subprocess
 import textwrap
 
 import pytest
@@ -80,7 +81,7 @@ def _exact_page_function(page: str, name: str) -> str:
 def _run_node(script: str) -> None:
     """Run one isolated Node contract and surface assertion output."""
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False, timeout=30)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False, timeout=30)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -95,7 +96,7 @@ def test_editor_draft_transitions_preserve_mount_and_payload(version, prefix, de
         "goBacktest", "strategyExplorerApiBase", "goStrategyExplorer",
     ))
     script = f"""
-    const assert = require('node:assert/strict');
+    const assert = browserAssert;
     const window = {{location: {{origin: 'https://browser.example', href: 'unchanged'}},
       PBGuiEditorShared: {{clearFixedValidationStatus() {{}}}}}};
     {adapter}
@@ -152,7 +153,7 @@ def test_editor_draft_transitions_preserve_mount_and_payload(version, prefix, de
       assert.equal(errors.length, 1);
       assert.match(errors[0], /HTTP 500/);
       assert.equal(window.location.href, 'editor-with-unsaved-draft');
-    }})().catch(error => {{console.error(error); process.exit(1);}});
+    }})().catch(error => {{console.error(error); finishTest(1);}});
     """
     _run_node(script)
 
@@ -274,7 +275,7 @@ def test_pb8_update_warning_only_uses_runtime_not_ready_hosts() -> None:
     render_warning = _page_function(page, "renderPb8UpdateWarning")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'pb8-update-warning': {{hidden: true}},
           'pb8-update-warning-hosts': {{textContent: ''}}
@@ -306,7 +307,7 @@ def test_pb8_runtime_and_config_errors_show_actionable_causes() -> None:
     render_warning = _page_function(page, "renderPb8UpdateWarning")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'pb8-update-warning': {{hidden: true}},
           'pb8-update-warning-hosts': {{textContent: ''}}
@@ -356,7 +357,7 @@ def test_run_apply_filters_is_a_button_and_pb8_dynamic_ignore_is_explicitly_unsu
     assert "delete result.pbgui.dynamic_ignore" in page
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const button = {{disabled: false}};
         const document = {{getElementById(id) {{ return id === 'btn-apply-filters' ? button : null; }}}};
         const allUsers = [{{name: 'user-a', exchange: 'bybit'}}];
@@ -385,7 +386,7 @@ def test_run_apply_filters_is_a_button_and_pb8_dynamic_ignore_is_explicitly_unsu
           assert.deepEqual(applied['ms-ignored-short'], ['DOGE']);
           assert.equal(messages.at(-1).level, 'info');
           assert.equal(button.disabled, false);
-        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        }}).catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -398,7 +399,7 @@ def test_run_list_adds_strategy_only_for_pb8() -> None:
     assert "if (runListAdapter.isV8) COLS.splice(2, 0, { key: 'strategy', label: 'Strategy' });" in page
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const STATUS_LABELS = {{disabled: 'disabled'}};
         const esc = (value) => String(value == null ? '' : value);
         let runListAdapter = {{isV8: true, supportsForcedModes: false, supportsConversion: false}};
@@ -428,7 +429,7 @@ def test_pb8_run_adapter_enables_existing_forced_mode_actions() -> None:
     execute = _page_function(page, "executeForcedMode")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{}};
         const document = {{querySelectorAll: () => [], getElementById: () => null}};
         {adapter}
@@ -472,7 +473,7 @@ def test_pb7_run_shows_normal_for_an_active_global_forced_mode() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{}};
         const document = {{querySelectorAll: () => [], getElementById: () => null}};
         {adapter}
@@ -499,7 +500,7 @@ def test_run_editor_preserves_configured_target_when_capability_is_unconfirmed()
     refresh_hosts = "async " + _page_function(page, "refreshHostCapabilities")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let allHosts = ['disabled', 'manibot01'];
         let hostCapabilitiesByName = {{}};
         const select = {{options: [], value: 'manibot62'}};
@@ -521,7 +522,7 @@ def test_run_editor_preserves_configured_target_when_capability_is_unconfirmed()
           await refreshHostCapabilities();
           assert.deepEqual(allHosts, ['disabled', 'manibot01', 'manibot62']);
           assert.equal(select.value, 'manibot62');
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -534,7 +535,7 @@ def test_run_editor_preserves_host_selected_during_capability_refresh() -> None:
     refresh_hosts = "async " + _page_function(page, "refreshHostCapabilities")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let allHosts = ['disabled'];
         let hostCapabilitiesByName = {{}};
         const select = {{options: [{{value: 'disabled'}}], value: 'disabled'}};
@@ -559,7 +560,7 @@ def test_run_editor_preserves_host_selected_during_capability_refresh() -> None:
           }});
           await pending;
           assert.equal(select.value, 'manibot51');
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -574,7 +575,7 @@ def test_run_editor_removes_schema_incompatible_pb8_target() -> None:
     assert "&config_schema=" in request_hosts
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let allHosts = ['disabled', 'old-vps'];
         let hostCapabilitiesByName = {{}};
         const select = {{options: [{{value: 'disabled'}}, {{value: 'old-vps'}}], value: 'old-vps'}};
@@ -600,7 +601,7 @@ def test_run_editor_removes_schema_incompatible_pb8_target() -> None:
           await refreshHostCapabilities();
           assert.deepEqual(allHosts, ['disabled', 'current-vps']);
           assert.equal(select.value, 'disabled');
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -614,7 +615,7 @@ def test_v7_forced_mode_aliases_select_the_visible_editor_options() -> None:
     config_mode = _page_function(page, "forcedModeConfigValue")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let runEditorAdapter = {{isV8: false}};
         {normalize_mode}
         {config_mode}
@@ -689,7 +690,7 @@ def test_new_pb8_draft_replaces_existing_user_with_versioned_confirmation() -> N
     save_source = _exact_page_function(page, "saveConfig")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const runEditorAdapter = {{isV8: true}};
         let mode = 'existing';
         let confirmed = true;
@@ -723,7 +724,7 @@ def test_new_pb8_draft_replaces_existing_user_with_versioned_confirmation() -> N
           mode = 'existing';
           confirmed = false;
           assert.equal(await resolveRunSaveTarget('hl_HYPErQuantum', true, 0, config), null);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -826,7 +827,7 @@ def test_collect_config_writes_every_managed_field_and_preserves_unknown_json() 
     }
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{}};
         const values = {json.dumps(values)};
         const raw = {json.dumps(raw)};
@@ -978,7 +979,7 @@ def test_populate_form_restores_every_runtime_field_into_its_control() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let cfg = {json.dumps(config)};
         const editorMetadata = {{strategies: ['alpha'], strategy_defaults: {{long: {{}}, short: {{}}}}}};
         const runEditorAdapter = {{
@@ -1082,7 +1083,7 @@ def test_run_strategy_switch_replaces_key_caches_edits_and_marks_runtime_default
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'f-strategy-kind': {{value: 'beta'}},
           'f-long-json': {{value: JSON.stringify({{risk: {{n_positions: 3}}, strategy: {{alpha: {{custom: 11}}}}}}), scrollTop: 4}},
@@ -1156,7 +1157,7 @@ def test_backup_renderer_shows_rollback_only_for_existing_pb8_instances() -> Non
     fetch_backups = _page_function(page, "fetchBackups")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'backup-content': {{className: '', innerHTML: '', textContent: '', onclick: null}},
           'backup-filter': {{value: ''}}
@@ -1200,7 +1201,7 @@ def test_backup_renderer_shows_rollback_only_for_existing_pb8_instances() -> Non
           const pb7 = await renderBackup(false, true, 'pb7-active');
           assert.match(pb7, /data-restore-name="pb7-active"/);
           assert.doesNotMatch(pb7, /data-rollback-name/);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
     _run_node(script)
@@ -1209,7 +1210,7 @@ def test_backup_renderer_shows_rollback_only_for_existing_pb8_instances() -> Non
 def test_pb8_logs_open_while_editor_load_is_pending_and_ignore_closed_lookup():
     """The viewer remains available independently of migration and late callbacks."""
     page = (ROOT / 'frontend/v7_edit.html').read_text()
-    script = "const assert=require('node:assert/strict');\n" + _exact_page_function(page, 'openLogPanel') + '\n' + _exact_page_function(page, 'closeLogPanel')
+    script = "const assert=browserAssert;\n" + _exact_page_function(page, 'openLogPanel') + '\n' + _exact_page_function(page, 'closeLogPanel')
     script += r'''
     const nodes = {};
     const document = {getElementById(id) {return nodes[id] ||= {style:{}, offsetWidth:240, classList:{add(){},remove(){}}};}};
@@ -1234,6 +1235,6 @@ def test_pb8_logs_open_while_editor_load_is_pending_and_ignore_closed_lookup():
       assert.equal(opens,1);
       assert.equal(chosenHost,'worker-a');
       closeLogPanel();
-    })().catch(error=>{console.error(error);process.exit(1);});
+    })().catch(error=>{console.error(error);finishTest(1);});
     '''
     _run_node(script)

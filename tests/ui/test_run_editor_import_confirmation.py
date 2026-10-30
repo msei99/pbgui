@@ -1,7 +1,8 @@
 """Run-editor imports must confirm before replacing unsaved form values."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -16,7 +17,7 @@ def test_import_preserves_draft_until_confirmed(runtime, decision):
     script = 'const runtime = %r, decision = %r;\n' % (runtime, decision)
     script += source[start:end+2]
     script += r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const original = {draft:'unsaved'};
 let cfg = original, paramStatus = {draft:true}, renders = 0, closed = 0, confirms = 0, failure = '';
 const nodes = {'import-json':{value:'import text'}, 'import-error':{}, 'import-user':{value:'alice'}};
@@ -53,6 +54,6 @@ function toast() {}
  assert.equal(confirms,decision === 'accept' || decision === 'cancel' ? 1 : 0);
  if (decision === 'unavailable') assert.match(failure,/Confirmation dialog unavailable/);
  if (decision === 'invalid') assert.equal(failure,'invalid config');
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 '''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True,timeout=10)
+    run_javascript(['-e',script],check=True,capture_output=True,text=True,timeout=10)

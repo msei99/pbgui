@@ -1,7 +1,8 @@
 """Restart confirmation distinguishes local Vast controllers from GPU rentals."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 
 NAV = Path(__file__).resolve().parents[2] / "frontend" / "pbgui_nav.js"
@@ -14,7 +15,7 @@ def test_vast_restart_context_reports_local_activity_without_hiding_stale_servic
     assert "visibleRestartServices(state, services)" in source
     helper = source[source.index("  function visibleRestartServices("):source.index("  function updateRestartButtonState(")]
     helper += source[source.index("    function vastRestartContext("):source.index("    /* Restart button */")]
-    script = "const assert = require('node:assert/strict');\n" + helper + r"""
+    script = "const assert = browserAssert;\n" + helper + r"""
 const services = [{service: 'VastPool', label: 'Vast GPU Pool'}];
 assert.deepEqual(visibleRestartServices({vast_activity: {state: 'idle'}}, services), []);
 assert.equal(visibleRestartServices({vast_activity: {state: 'active'}}, services).length, 1);
@@ -25,5 +26,5 @@ assert.match(vastRestartContext({vast_activity: {state: 'active'}}, services), /
 assert.match(vastRestartContext({vast_activity: {state: 'unknown'}}, services), /could not be verified/);
 assert.match(vastRestartContext({}, services), /not a GPU rental/);
 """
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr

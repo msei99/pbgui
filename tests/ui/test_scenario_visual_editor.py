@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize('width', [920, 1500])
 def test_drag_resize_split_and_apply(width):
     """Dragging at different viewport widths, undo and explicit holdout splitting work."""
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={'width': width, 'height': 1100})
@@ -56,8 +56,8 @@ def test_drag_resize_split_and_apply(width):
 
 def test_suite_visual_round_trip_preserves_scoring_and_holdouts():
     """Applying graphical windows saves metadata without invoking preset scoring reset."""
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()
@@ -83,8 +83,8 @@ def test_suite_visual_round_trip_preserves_scoring_and_holdouts():
 def test_full_suite_editor_apply_save_reload():
     """The real shared editor round-trips visual metadata and retains it on reducer edits."""
     from scenario_templates import generate_scenario_template
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={'width': 1400, 'height': 1100})
@@ -135,8 +135,8 @@ def test_full_suite_editor_apply_save_reload():
 def test_new_windows_use_settings_and_native_geometry(days, stride):
     """Window settings remain authoritative even at wide viewports and after zoom."""
     from datetime import date, timedelta
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={'width':1800,'height':1100})
@@ -161,16 +161,14 @@ def test_new_windows_use_settings_and_native_geometry(days, stride):
             assert added['end_date']==str(start+timedelta(days=stride+days-1))
             assert page.evaluate("Math.abs(document.querySelector('.scenario-canvas svg').viewBox.baseVal.width-document.querySelector('.scenario-canvas svg').clientWidth)<2")
             assert page.get_by_label('Window start', exact=True).count() == 0
-            if days==200:
-                page.screenshot(path='/tmp/pbgui-scenario-editor-corrected.png',full_page=True)
         finally:
             browser.close()
 
 
 def test_price_reference_prefers_optimizer_coin_and_keeps_gap_strip_small():
     """An alphabetical 0G source cannot replace ETH; missing history does not cover the chart."""
-    playwright=pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api=__import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser=runner.chromium.launch(headless=True)
         try:
             page=browser.new_page(viewport={'width':1600,'height':1100})
@@ -217,8 +215,8 @@ def test_price_reference_prefers_optimizer_coin_and_keeps_gap_strip_small():
 
 def test_reference_exchange_can_differ_from_optimizer_exchange():
     """A local Bybit HYPE chart can be chosen without adding Bybit to optimization."""
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()
@@ -256,8 +254,8 @@ def test_reference_exchange_can_differ_from_optimizer_exchange():
 
 def test_trash_click_drop_undo_and_connections():
     """Trash accepts captured pointer drops and connection markers respect inclusive dates."""
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={'width': 1500, 'height': 1100})
@@ -299,8 +297,8 @@ def test_trash_click_drop_undo_and_connections():
 
 def test_default_drawing_and_mouse_zoom():
     """Empty-space dragging creates windows without a mode button; zoom never edits dates."""
-    playwright=pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api=__import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser=runner.chromium.launch(headless=True)
         try:
             page=browser.new_page(viewport={'width':1500,'height':1100})
@@ -342,8 +340,8 @@ def _draw_window(page, role):
 
 def test_drag_between_roles_and_four_icons():
     """Vertical drops change roles without changing dates and remain undoable."""
-    playwright=pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api=__import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser=runner.chromium.launch(headless=True)
         try:
             page=browser.new_page(viewport={'width':1500,'height':1100})
@@ -382,8 +380,8 @@ def test_drag_between_roles_and_four_icons():
 
 def test_magnet_can_snap_and_be_disabled():
     """Snapping closes a small gap while disabling the magnet preserves the pointer dates."""
-    playwright=pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api=__import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser=runner.chromium.launch(headless=True)
         try:
             page=browser.new_page(viewport={'width':1500,'height':1100})
@@ -415,8 +413,8 @@ def test_magnet_can_snap_and_be_disabled():
 
 def test_holdout_drawing_splits_training_as_one_undoable_edit():
     """An interior holdout removes training dates immediately and Undo restores the full window."""
-    playwright=pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api=__import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser=runner.chromium.launch(headless=True)
         try:
             page=browser.new_page(viewport={'width':1500,'height':1100})
@@ -449,8 +447,8 @@ def test_holdout_drawing_splits_training_as_one_undoable_edit():
 @pytest.mark.parametrize('right_role',['training','holdout'])
 def test_shared_boundary_preserves_adjacency_and_outer_dates(right_role):
     """Moving the shared grip resizes both windows and undoes as one edit, across roles too."""
-    playwright=pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api=__import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser=runner.chromium.launch(headless=True)
         try:
             page=browser.new_page(viewport={'width':1500,'height':1100})
@@ -484,8 +482,8 @@ def test_shared_boundary_preserves_adjacency_and_outer_dates(right_role):
 @pytest.mark.parametrize('side',['left','right'])
 def test_adjacent_windows_can_be_separated_with_side_grips(side):
     """Independent grips open a gap without moving the neighboring window."""
-    playwright=pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api=__import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser=runner.chromium.launch(headless=True)
         try:
             page=browser.new_page(viewport={'width':1500,'height':1100})
@@ -528,8 +526,8 @@ def _draw_dates(page, role, start, end, total):
 
 def test_outer_window_boundaries_align_with_window_dates():
     """Outer green markers follow window dates, not the chart's full date range."""
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()

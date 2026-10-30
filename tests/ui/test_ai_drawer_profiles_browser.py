@@ -1,7 +1,7 @@
 """Offline browser coverage for profile routing in the compact AI drawer."""
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
-from playwright.sync_api import sync_playwright
+from browser_driver import sync_browser
 
 
 def test_drawer_profile_selection_routes_models_and_chats():
@@ -11,7 +11,7 @@ def test_drawer_profile_selection_routes_models_and_chats():
     models = []
     errors = []
     work = 'b' * 32
-    with sync_playwright() as pw:
+    with sync_browser() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page()
         page.on('pageerror', lambda error: errors.append(str(error)))

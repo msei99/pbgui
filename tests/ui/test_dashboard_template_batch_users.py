@@ -1,7 +1,8 @@
 """Dashboard batch creation carries each user and generates distinct names."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -21,7 +22,7 @@ def test_batch_template_payloads(users, name, expected, exists):
     end = source.index('\n      });', start) + len('\n      });')
     script = 'const users=%s, name=%s, expected=%s, exists=%s;\n' % tuple(map(json.dumps, [users,name,expected,exists]))
     script += r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 let handler; const posted = [];
 const createBtn = {addEventListener:(event, fn)=>handler=fn};
 const document = {getElementById:id=>({value:id === 'tpl-select' ? 'source' : name})};
@@ -40,6 +41,6 @@ function apiPost(path, payload, cb) {posted.push(payload); cb({status:'ok'});}
  assert.deepEqual(posted.map(p=>p.name),expected);
  assert.deepEqual(posted.map(p=>p.user),users);
  assert.equal(createBtn.disabled,false);
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);testResult.exitCode=1;});
 '''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True,timeout=10)
+    run_javascript(['-e',script],check=True,capture_output=True,text=True,timeout=10)

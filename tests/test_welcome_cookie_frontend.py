@@ -1,7 +1,8 @@
 """Executable Welcome regressions for cookie-only browser authentication."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 
 def test_welcome_navigation_and_requests_use_cookie_auth() -> None:
@@ -10,12 +11,12 @@ def test_welcome_navigation_and_requests_use_cookie_auth() -> None:
     assert "TOKEN" not in source
     assert "Authorization" not in source
     script = r"""
-const assert = require('node:assert/strict');
-const vm = require('node:vm');
+const assert = browserAssert;
+const vm = browserScope;
 let source = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => { source += chunk; });
-process.stdin.on('end', async () => {
+testInput.setEncoding('utf8');
+testInput.on('data', chunk => { source += chunk; });
+testInput.on('end', async () => {
     try {
         for (const match of source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) {
             new vm.Script(match[1]);
@@ -147,9 +148,9 @@ process.stdin.on('end', async () => {
         assert.equal(requests.length, before + 1, 'An embedded static Welcome shell must not issue a session');
     } catch (error) {
         console.error(error);
-        process.exitCode = 1;
+        testResult.exitCode = 1;
     }
 });
 """
-    result = subprocess.run(["node", "-e", script], input=source, text=True, capture_output=True, timeout=15)
+    result = run_javascript(["-e", script], input=source, text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr

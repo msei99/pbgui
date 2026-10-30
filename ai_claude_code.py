@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib.metadata
 import json
 import os
-import platform
 import re
-import shutil
 import signal
 import sys
 import time
@@ -20,7 +19,7 @@ from secure_files import ensure_private_directory_tree
 
 SERVICE = "AIChat"
 RUNTIME = Path(__file__).resolve().parent / "runtime" / "claude_agent"
-SDK_VERSION = "0.3.310"
+SDK_VERSION = "0.2.175"
 CLAUDE_UNAVAILABLE = "Claude subscription is not connected"
 MAX_LINE = 2 * 1024 * 1024
 # uvloop rejects subprocess.Popen's umask option. Set it in an isolated child,
@@ -55,25 +54,18 @@ class ClaudeRuntime:
 
     @staticmethod
     def executable() -> Path:
-        """Use the version-pinned native binary supplied with the local SDK."""
-        system = {"Linux": "linux", "Darwin": "darwin"}.get(platform.system(), "unsupported")
-        arch = {"x86_64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine(), "unsupported")
-        suffix = "-musl" if system == "linux" and platform.libc_ver()[0] == "musl" else ""
-        return RUNTIME / "node_modules" / "@anthropic-ai" / f"claude-agent-sdk-{system}-{arch}{suffix}" / "claude"
+        """Use the native binary bundled in the installed Python SDK, never a PATH fallback."""
+        package = importlib.metadata.distribution("claude-agent-sdk")
+        return Path(package.locate_file("claude_agent_sdk/_bundled/" + ("claude.exe" if os.name == "nt" else "claude")))
 
     @classmethod
     def available(cls) -> bool:
         """Check pinned dependencies locally without installing or calling a model."""
         try:
-            package = RUNTIME / "node_modules" / "@anthropic-ai" / "claude-agent-sdk" / "package.json"
-            platform_package = cls.executable().parent / "package.json"
-            schema_package = RUNTIME / "node_modules" / "zod" / "package.json"
-            return bool(shutil.which("node") and package.is_file()
-                        and json.loads(package.read_text())["version"] == SDK_VERSION
-                        and platform_package.is_file() and json.loads(platform_package.read_text())["version"] == SDK_VERSION
-                        and schema_package.is_file() and json.loads(schema_package.read_text())["version"] == "4.1.12"
-                        and cls.executable().is_file() and os.access(cls.executable(), os.X_OK))
-        except (OSError, ValueError, KeyError):
+            return (importlib.metadata.version("claude-agent-sdk") == SDK_VERSION
+                    and cls.executable().is_file() and os.access(cls.executable(), os.X_OK)
+                    and (RUNTIME / "worker.py").is_file())
+        except (importlib.metadata.PackageNotFoundError, OSError, ValueError, KeyError):
             return False
 
     def profile(self, owner: str) -> Path:
@@ -101,7 +93,7 @@ class ClaudeRuntime:
         if self.closed:
             raise ClaudeCodeError("Claude runtime is shutting down")
         if not self.available():
-            raise ClaudeCodeError("Claude requires Node.js 22+ and the local SDK. See Guide.")
+            raise ClaudeCodeError("Claude requires the Python Agent SDK from PBGui requirements. See Guide.")
         async with self.spawn_lock:
             if self.closed or len(self.processes) >= 32:
                 raise ClaudeCodeError("Claude runtime is busy. Try again shortly.")
@@ -312,7 +304,7 @@ class ClaudeRuntime:
         timeout = 15 if payload['mode'] in {'models', 'context'} else 180 if timeout_seconds is None else timeout_seconds
         if type(timeout) not in (int, float) or not 0 < timeout <= 604800:
             raise ClaudeCodeError('Invalid Claude request timeout')
-        process = await self._spawn(owner, shutil.which("node"), RUNTIME / "worker.mjs")
+        process = await self._spawn(owner, sys.executable, "-I", RUNTIME / "worker.py")
         task = asyncio.current_task()
         self.operations[task] = owner
         drain = asyncio.create_task(self._drain(process.stderr))

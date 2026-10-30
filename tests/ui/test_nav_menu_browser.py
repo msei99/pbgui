@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture(params=['', '/mounted'], ids=['root', 'mounted'])
 def dashboard_nav(request):
     """Serve real Dashboard/Services bootstraps, local assets and synthetic API data."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     prefix = request.param
     requests, errors, outside_mount = [], [], []
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         try:
             context = browser.new_context(viewport={'width': 1280, 'height': 800}, service_workers='block')
@@ -76,7 +76,7 @@ def dashboard_nav(request):
                 page = context.new_page()
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 yield SimpleNamespace(page=page, prefix=prefix, requests=requests,
-                                      errors=errors, outside_mount=outside_mount, expect=playwright.expect)
+                                      errors=errors, outside_mount=outside_mount, expect=browser_api.expect)
             finally:
                 context.close()
         finally:
@@ -131,9 +131,9 @@ def test_dashboard_guide_retains_mount_without_navigation(dashboard_nav):
 @pytest.mark.parametrize('width', [700, 1280])
 def test_open_navigation_menu_tracks_mouse_and_preserves_taps(width):
     """Mouse movement switches open menus; touch, keyboard and outside clicks still work."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     errors = []
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width':width, 'height':800}, has_touch=True)
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -166,30 +166,30 @@ def test_open_navigation_menu_tracks_mouse_and_preserves_taps(width):
             return page.locator('.nav-group-btn[data-group="'+name+'"]')
 
         menu('information').hover()
-        playwright.expect(groups).to_have_count(0)
+        browser_api.expect(groups).to_have_count(0)
         menu('system').click()
         for name in ['information','pbv7','pbv8','system']:
             menu(name).hover()
-            playwright.expect(groups).to_have_count(1)
-            playwright.expect(groups.locator('.nav-group-btn')).to_have_attribute('data-group', name)
-            playwright.expect(groups.locator('.nav-dropdown')).to_be_visible()
+            browser_api.expect(groups).to_have_count(1)
+            browser_api.expect(groups.locator('.nav-group-btn')).to_have_attribute('data-group', name)
+            browser_api.expect(groups.locator('.nav-dropdown')).to_be_visible()
             groups.locator('.nav-item').first.hover()
-            playwright.expect(groups).to_have_count(1)
+            browser_api.expect(groups).to_have_count(1)
         # Real touch taps must not first hover-open and then click-close the new menu.
         menu('information').tap()
-        playwright.expect(groups.locator('.nav-group-btn')).to_have_attribute('data-group', 'information')
+        browser_api.expect(groups.locator('.nav-group-btn')).to_have_attribute('data-group', 'information')
         menu('pbv7').tap()
-        playwright.expect(groups.locator('.nav-group-btn')).to_have_attribute('data-group', 'pbv7')
+        browser_api.expect(groups.locator('.nav-group-btn')).to_have_attribute('data-group', 'pbv7')
         menu('pbv7').tap()
-        playwright.expect(groups).to_have_count(0)
+        browser_api.expect(groups).to_have_count(0)
         menu('system').focus()
         page.keyboard.press('Enter')
-        playwright.expect(groups.locator('.nav-group-btn')).to_have_attribute('data-group', 'system')
+        browser_api.expect(groups.locator('.nav-group-btn')).to_have_attribute('data-group', 'system')
         draft.click()
-        playwright.expect(groups).to_have_count(0)
+        browser_api.expect(groups).to_have_count(0)
         menu('pbv8').hover()
-        playwright.expect(groups).to_have_count(0)
-        playwright.expect(draft).to_have_value('Keep my edits')
+        browser_api.expect(groups).to_have_count(0)
+        browser_api.expect(draft).to_have_value('Keep my edits')
         assert page.url==destination
         assert not errors, errors
         browser.close()

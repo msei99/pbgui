@@ -1,8 +1,9 @@
 """Frontend regression tests for backtest fee input formatting."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
 import re
-import subprocess
 import textwrap
 
 
@@ -18,7 +19,7 @@ def test_fee_inputs_hide_binary_float_artifacts_without_coarse_rounding() -> Non
     assert "tfEnabled ? formatFeeInputValue(bt.taker_fee_override) : 0" in source
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {match.group(0)}
         assert.equal(formatFeeInputValue(0.00019999999999999047), '0.0002');
         assert.equal(formatFeeInputValue(0.0005500000000000314), '0.00055');
@@ -27,6 +28,6 @@ def test_fee_inputs_hide_binary_float_artifacts_without_coarse_rounding() -> Non
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
 
     assert completed.returncode == 0, completed.stderr or completed.stdout

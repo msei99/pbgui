@@ -1,7 +1,8 @@
 """Offline PNL gap, conversion and strict HTTP JSON regressions for issue #427."""
 
+from javascript_checks import run_javascript
+
 import json
-import subprocess
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -89,9 +90,9 @@ def test_pnl_rounding_overflow_and_empty_http_response(pnl_client, values, incom
 @pytest.mark.parametrize("scenario", ["mixed", "invalid", "empty", "missing"])
 def test_pnl_renderer_values_and_build_paths(mode, scenario):
     """Exercise real renderer and both builder paths with isolated DOM/Plotly doubles."""
-    script = Path(__file__).with_name("dashboard_frontend_regressions.cjs")
-    result = subprocess.run(
-        ["node", str(script), "pnl", mode, scenario],
+    script = Path(__file__).with_name("dashboard_frontend_regressions.browser.js")
+    result = run_javascript(
+        [str(script), "pnl", mode, scenario],
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr

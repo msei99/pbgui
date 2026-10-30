@@ -12,11 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture
 def log_page():
     """Load the real API Keys shell without application scripts or network access."""
-    playwright = pytest.importorskip("playwright.sync_api")
-    with playwright.sync_playwright() as runner:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         try:
             browser = runner.chromium.launch(headless=True)
-        except playwright.Error as error:
+        except browser_api.Error as error:
             if "Executable doesn't exist" in str(error):
                 pytest.skip("Offline Chromium installation is required")
             raise

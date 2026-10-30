@@ -881,7 +881,7 @@ def test_rental_amounts_and_deadline_fit_separate_cards(cloud_page, width):
 @pytest.fixture
 def cloud_page():
     """Run the production component with intercepted HTTP and no provider access."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     preferences = dict(gpu_name=None, max_price=.5, min_vram=12, min_ram=16,
                        min_cpu=4, min_power_watts=0, min_reliability_pct=0,
                        disk_gb=40, verified_only=True, hours=1, budget=1,
@@ -966,7 +966,7 @@ def cloud_page():
             payload = {}
         route.fulfill(json=payload)
 
-    with playwright.sync_playwright() as p:
+    with browser_api.sync_browser() as p:
         browser = p.chromium.launch()
         context = browser.new_context()
         page = context.new_page()

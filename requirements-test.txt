@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest==9.0.2
+# Direct Python-to-browser DevTools connection; no automation server/runtime.
+websockets==16.0

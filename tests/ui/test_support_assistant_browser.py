@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import expect,sync_playwright
+from browser_driver import expect,sync_browser
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -30,7 +30,7 @@ def test_diagnose_apply_connect_review_public_image_choice_and_publish(width,pre
     diagnose_posts=[]; review_posts=[]; publish_posts=[]; requests=[]; errors=[]
     state={'connected':False,'reviews':{},'tokens':[]}
     first,second=png_pixel(255),png_pixel(0)
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser=driver.chromium.launch()
         page=browser.new_page(viewport={'width':width,'height':850})
         page.on('pageerror',lambda error:errors.append(str(error)))

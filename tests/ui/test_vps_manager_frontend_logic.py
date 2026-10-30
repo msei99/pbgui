@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from javascript_checks import run_javascript
+
 import json
 import subprocess
 import textwrap
@@ -92,7 +94,7 @@ def test_pb8_update_notice_preserves_actions(command, scope, has_pb8, notice):
                 ? {reboot:false,reboot_requested:false} : null,debug:true
             }]]);
           }
-        })().catch(error => { console.error(error); process.exitCode=1; });
+        })().catch(error => { console.error(error); testResult.exitCode=1; });
     """
     _run_node_assertions(
         ["withPb8UpdateNotice", "runMasterWithLog", "runVpsWithLog", "deploySelectedVpsAction"],
@@ -176,7 +178,7 @@ def _run_node_assertions(
     extracted = "\n\n".join(_extract_function(source, name) for name in function_names)
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
 
         {bootstrap}
 
@@ -186,8 +188,8 @@ def _run_node_assertions(
         """
     )
     try:
-        result = subprocess.run(
-            ["node", "-e", script],
+        result = run_javascript(
+            ["-e", script],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -195,9 +197,9 @@ def _run_node_assertions(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        pytest.fail(f"Node-backed frontend regression exceeded {timeout} seconds", pytrace=False)
+        pytest.fail(f"browser-backed frontend regression exceeded {timeout} seconds", pytrace=False)
     assert result.returncode == 0, (
-        "Node-backed frontend regression failed\n"
+        "browser-backed frontend regression failed\n"
         f"STDOUT:\n{result.stdout}\n"
         f"STDERR:\n{result.stderr}"
     )
@@ -484,7 +486,7 @@ def _run_hl_history_assertions(assertions: str) -> None:
           assert.equal(cpuHistoryAbortController, null);
         }
         """,
-        assertions="(async () => {\n" + assertions + "\n})().catch(error => { process.stderr.write(error.stack); process.exitCode = 1; });",
+        assertions="(async () => {\n" + assertions + "\n})().catch(error => { testErrors.write(error.stack); testResult.exitCode = 1; });",
     )
 
 
@@ -533,7 +535,7 @@ def _run_master_detail_assertions(assertions: str) -> None:
         }
         """,
         assertions="(async () => {\n" + assertions
-        + "\n})().catch(error => {process.stderr.write(String(error.stack)); process.exitCode=1;});",
+        + "\n})().catch(error => {testErrors.write(String(error.stack)); testResult.exitCode=1;});",
     )
 
 
@@ -753,7 +755,7 @@ def test_master_detail_toast_preserves_real_sudo_dialog(kind: str, protected_dia
             assert.equal(elements.toastContainer.children.length,1);
             assert.equal(elements.dialogToastContainer.children.length,0);
           }
-        })().catch(error=>{process.stderr.write(String(error.stack)); process.exitCode=1;});
+        })().catch(error=>{testErrors.write(String(error.stack)); testResult.exitCode=1;});
         """,
     )
 
@@ -825,7 +827,7 @@ def _run_vps_detail_assertions(assertions: str) -> None:
         }
         ''',
         assertions='(async()=>{\n' + assertions
-        + '\n})().catch(error=>{process.stderr.write(String(error.stack));process.exitCode=1;});',
+        + '\n})().catch(error=>{testErrors.write(String(error.stack));testResult.exitCode=1;});',
     )
 
 
@@ -1002,7 +1004,7 @@ def _run_cluster_onboard_assertions(assertions: str) -> None:
         };
         """,
         assertions="(async () => {\n" + assertions
-        + "\n})().catch(error => {console.error(error); process.exitCode=1;});",
+        + "\n})().catch(error => {console.error(error); testResult.exitCode=1;});",
     )
 
 
@@ -1407,7 +1409,7 @@ class TestVpsManagerFrontendLogic:
           assert.equal(store.clusterNodesImport.progress, null);
           assert.equal(store.clusterNodesImport.error, 'network offline');
           assert.equal(store.clusterNodesImport.preview, preview);
-        }()).catch(function(error) { console.error(error); process.exitCode = 1; });
+        }()).catch(function(error) { console.error(error); testResult.exitCode = 1; });
         """
         _run_node_assertions(
             ["defaultClusterNodesImportState", "loadClusterNodesImportPreview", "applyClusterNodesImport"],

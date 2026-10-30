@@ -1,6 +1,7 @@
 """Executable correlation selection and detail visibility regression checks."""
+
+from javascript_checks import run_javascript
 from pathlib import Path
-import subprocess
 
 
 def test_radar_selection_and_detail_visibility():
@@ -9,7 +10,7 @@ def test_radar_selection_and_detail_visibility():
     functions = page[page.index('  function bindPlotClick('):page.index('  function refreshPlaygroundFromSettings(')]
     functions += page[page.index('  function applyDeepTabUi('):page.index('  function loadCommandCenterData(')]
     script = r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const nodes={};
 const el=id=>nodes[id]||(nodes[id]={style:{}});
 const state={stage:'deep_intelligence',allResultsLoaded:false,deepEvolution:{requires_full_mode:true}};
@@ -32,4 +33,4 @@ assert.equal(el('selected-config-detail').style.display,'none');
 applyDeepTabUi('correlations',false);
 assert.equal(el('selected-config-detail').style.display,'block');
 '''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+    run_javascript(['-e',script],check=True,capture_output=True,text=True)

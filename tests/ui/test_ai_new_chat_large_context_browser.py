@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse
 
-from playwright.sync_api import expect
+from browser_driver import expect
 
 from ai_chat import AIChatError, AIChatService
 

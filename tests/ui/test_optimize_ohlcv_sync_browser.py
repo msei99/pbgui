@@ -538,7 +538,7 @@ def test_hype_lookup_connects_editor_helper_and_date_apply(log_page, tmp_path, w
     page.wait_for_function("_optOhlcvStartDateRun?.jobId === 'synthetic'")
     sent = posts[0]["config"]
     assert sent["live"]["approved_coins"] == config["live"]["approved_coins"]
-    # Playwright owns an event loop in this thread; execute the async helper separately.
+    # Keep the async helper separate from synchronous browser callbacks.
     with ThreadPoolExecutor(max_workers=1) as executor:
         result = executor.submit(_synthetic_hype_start_dates, sent, tmp_path).result(timeout=5)
     page.unroute("**/ohlcv-start-dates/synthetic")

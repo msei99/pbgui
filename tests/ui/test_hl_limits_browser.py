@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_limits_sidebar_preserves_filter_selection_and_live_values():
     """The shared shell retains all columns, history and URL state across reloads."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     html = (ROOT / 'frontend/hl_limits.html').read_text()
     for marker, value in {'API_BASE': '/api/test', 'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test'}.items():
         html = html.replace('%%' + marker + '%%', value)
@@ -21,7 +21,7 @@ def test_limits_sidebar_preserves_filter_selection_and_live_values():
         {'users': ['idle-wallet'], 'bots': [], 'hosts': [], 'state': 'idle'},
     ]
     errors = []
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width': 1440, 'height': 900})
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -45,11 +45,11 @@ def test_limits_sidebar_preserves_filter_selection_and_live_values():
 
         page.route('**/*', respond)
         page.goto('http://limits.test/limits')
-        playwright.expect(page.locator('#rows tr')).to_have_count(2)
-        playwright.expect(page.locator('#sidebar #summary')).to_contain_text('2 wallets')
+        browser_api.expect(page.locator('#rows tr')).to_have_count(2)
+        browser_api.expect(page.locator('#sidebar #summary')).to_contain_text('2 wallets')
         assert page.locator('thead th').count() == 8
         assert page.locator('#rows tr').first.locator('td').count() == 8
-        playwright.expect(page.locator('#rows')).to_contain_text("1'234")
+        browser_api.expect(page.locator('#rows')).to_contain_text("1'234")
         assert page.locator('thead th').first.evaluate('(e) => getComputedStyle(e).position') == 'sticky'
         page.locator('#sidebar-resize').focus()
         page.keyboard.press('End')
@@ -57,20 +57,20 @@ def test_limits_sidebar_preserves_filter_selection_and_live_values():
         main = page.locator('#main-content').bounding_box()
         assert round(main['x']) == 420 and round(main['x'] + main['width']) == 1440
         page.locator('#filter').fill('test-vps')
-        playwright.expect(page.locator('#rows tr')).to_have_count(1)
+        browser_api.expect(page.locator('#rows tr')).to_have_count(1)
         page.locator('#rows tr').click()
-        playwright.expect(page.locator('#chart circle')).to_have_count(2)
+        browser_api.expect(page.locator('#chart circle')).to_have_count(2)
         assert page.locator('#detail').bounding_box()['y'] < page.locator('.table-wrap').bounding_box()['y']
         page.reload()
-        playwright.expect(page.locator('#filter')).to_have_value('test-vps')
-        playwright.expect(page.locator('#rows tr.is-selected')).to_have_count(1)
-        playwright.expect(page.locator('#chart circle')).to_have_count(2)
+        browser_api.expect(page.locator('#filter')).to_have_value('test-vps')
+        browser_api.expect(page.locator('#rows tr.is-selected')).to_have_count(1)
+        browser_api.expect(page.locator('#chart circle')).to_have_count(2)
         assert round(page.locator('#sidebar').bounding_box()['width']) == 420
         accounts[0]['used'] = 1500
         page.evaluate('load()')
-        playwright.expect(page.locator('#rows')).to_contain_text("1'500")
-        playwright.expect(page.locator('#filter')).to_have_value('test-vps')
-        playwright.expect(page.locator('#rows tr.is-selected')).to_have_count(1)
+        browser_api.expect(page.locator('#rows')).to_contain_text("1'500")
+        browser_api.expect(page.locator('#filter')).to_have_value('test-vps')
+        browser_api.expect(page.locator('#rows tr.is-selected')).to_have_count(1)
         page.set_viewport_size({'width': 390, 'height': 800})
         assert round(page.locator('#sidebar').bounding_box()['width']) == 390
         main = page.locator('#main-content').bounding_box()

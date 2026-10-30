@@ -131,4 +131,6 @@ Coin Data liest und schreibt unter:
 
 Die Zeilenauswahl ändert nur die Markierung und die Detailkarte, ohne Tabellenzeilen neu aufzubauen. Offene Tag-Filter behalten Fokus und Eingabeentwurf. Auch nach wiederholtem Anklicken bleibt genau eine Zeile ausgewählt. `X` oder Escape schließt die Detailkarte und entfernt alle Zeilenmarkierungen, ohne Tabellen oder Filter-Steuerungen neu aufzubauen.
 
+Die Detailkarte der ausgewählten Coin öffnet sich bereits während derselben Auswahl in ihrer angepassten Größe, auch bei langen Listen.
+
 Filter zurücksetzen setzt auch die HIP-3-DEX-Auswahl zurück. Escape schließt die Detailkarte der ausgewählten Coin. Die Statuszeile bleibt während der Hintergrundarbeit sichtbar und meldet Teilergebnisse oder Fehler.

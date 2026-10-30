@@ -6,7 +6,7 @@ import json
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -30,7 +30,7 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
     for key, value in values.items():
         source = source.replace('%%' + key + '%%', value)
     source = source.replace('src="/app/', 'src="' + prefix + '/app/').replace('href="/app/', 'href="' + prefix + '/app/')
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': width, 'height': 900})
         page.set_default_timeout(7000)

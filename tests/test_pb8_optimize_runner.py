@@ -466,7 +466,7 @@ def _local_native(tmp_path, monkeypatch, *, backend='pymoo', fault=None, gpu_thr
     assert not hasattr(Recorder, '_pbgui_progress_patched')
     assert checkpoint.read_bytes() == b'previous-safe-checkpoint'
     assert not any(thread.name == 'pb8-convergence-watchdog' for thread in threading.enumerate())
-    assert all(process.poll() == 0 and process.stdin.closed for process in watchdogs)
+    assert all(process.poll() == 0 and testInput.closed for process in watchdogs)
     if gpu_threads:
         assert len(watchdogs) == 1
         assert not monitors[0].unavailable

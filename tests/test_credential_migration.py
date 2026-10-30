@@ -704,6 +704,56 @@ def test_scan_covers_only_managed_logs_tasks_blobs_and_owned_argv(
     assert "scan-sentinel" not in rendered
 
 
+@pytest.mark.parametrize('ownership', ['absolute', 'relative', 'unrelated'])
+def test_process_scan_handles_unresolvable_tilde_without_skipping_owned_processes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ownership: str,
+) -> None:
+    """A literal tilde argument cannot abort scanning or hide owned sensitive argv."""
+    coordinator = CredentialMigrationCoordinator(tmp_path)
+    literal = '~unresolvable-process-argument'
+    expanduser = Path.expanduser
+
+    def expand(path):
+        """Simulate an unknown account independently of the host passwd database."""
+        if str(path) == literal:
+            raise RuntimeError('Could not determine home directory.')
+        return expanduser(path)
+
+    class FakeProcess:
+        """Place an invalid path argument before the actual process ownership proof."""
+        info = {
+            'pid': 43,
+            'uids': type('Uids', (), {'real': credential_migration.os.getuid()})(),
+            'cmdline': [literal, str(tmp_path / 'PBApiServer.py') if ownership == 'absolute'
+                        else 'PBApiServer.py' if ownership == 'relative' else 'browser', 'scan-sentinel'],
+        }
+
+        def cwd(self):
+            """Only relative PBGui scripts use this checkout as their working directory."""
+            return str(tmp_path if ownership == 'relative' else tmp_path.parent)
+
+    monkeypatch.setattr(Path, 'expanduser', expand)
+    monkeypatch.setattr(credential_migration.psutil, 'process_iter', lambda _fields: [FakeProcess()])
+    assert coordinator._scan_owned_process_argv({'scan-sentinel'}) == (
+        [] if ownership == 'unrelated' else ['process:43:argv[2]'])
+
+
+def test_completed_scan_recovers_from_old_unresolvable_home_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rechecking a completed migration clears a stale error without starting a new cutover."""
+    coordinator = CredentialMigrationCoordinator(tmp_path)
+    coordinator._write_state({'version': 1, 'phase': 'complete', 'status': 'complete',
+                              'blocker_reason': 'RuntimeError: Could not determine home directory.'})
+    monkeypatch.setattr(coordinator, '_scan_for_legacy_values', lambda _state: [])
+    result = coordinator.run()
+    assert result['phase'] == result['status'] == 'complete'
+    assert result['blocker_reason'] is None
+    assert credential_migration_restart_block_reason(tmp_path) == ''
+
+
 def test_remote_managed_scan_uses_post_freeze_local_sentinels(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

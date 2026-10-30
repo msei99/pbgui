@@ -2,15 +2,15 @@
 import json
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from browser_driver import sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_inline_transfer_confirmation_and_recovery():
     """Max is exact; cancellation, stale editors and lost replies cannot duplicate writes."""
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+    with sync_browser() as browser_api:
+        browser = browser_api.chromium.launch(headless=True)
         page = browser.new_page()
         writes = []
         preview = {"routes": [{"id": "spot_to_perp", "asset": "USDC", "source": "Spot", "destination": "Perps", "minimum_amount": "0.000001", "max_transferable": "99.842907"}]}
@@ -66,8 +66,8 @@ def test_inline_transfer_confirmation_and_recovery():
 
 def test_inline_transfer_automatically_resolves_pending_operation():
     """Polling updates balances and clears a confirmed ID without a transfer POST."""
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+    with sync_browser() as browser_api:
+        browser = browser_api.chromium.launch(headless=True)
         page = browser.new_page()
         writes = []
 

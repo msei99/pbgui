@@ -1,6 +1,7 @@
 """Exercise real attachment-default and persistence code without runtime data or a browser."""
+
+from javascript_checks import run_javascript
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -21,13 +22,13 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_defaults_and_user_choices(area, saved, required, excluded, count):
     """Manual/unknown scopes are complete; known errors include dependencies and choices survive."""
     script = r'''
-      const fs = require('fs');
+      const fs = testSources;
       const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
       global.window = {};
       const store = new Map();
       if (fixture.saved !== null) store.set('fixture', JSON.stringify(fixture.saved));
       global.sessionStorage = {getItem:key=>store.get(key)||null, setItem:(key,value)=>store.set(key,value)};
-      eval(fs.readFileSync(process.argv[1], 'utf8'));
+      eval(fs.readFileSync(testArguments[1], 'utf8'));
       const model = window.PBGuiSupportAttachments.create(()=>{}, {storageKey:'fixture'});
       const report = {format:'pbgui-support-debug-v1',system:{version:'fixture'},records:{},logs:{},coverage:{}};
       if (fixture.area) report.error_context = {area:fixture.area};
@@ -37,7 +38,7 @@ def test_defaults_and_user_choices(area, saved, required, excluded, count):
       restored.setReport(report);
       console.log(JSON.stringify({groups, restored:restored.getData().coverage.attachment_selection.groups}));
     '''
-    result = subprocess.run(['node','-e',script,str(ROOT/'frontend/js/support_attachments.js')],
+    result = run_javascript(['-e',script,str(ROOT/'frontend/js/support_attachments.js')],
         input=json.dumps({'area':area,'saved':saved}), text=True, capture_output=True, timeout=10, check=True)
     value = json.loads(result.stdout)
     assert len(value['groups']) == count

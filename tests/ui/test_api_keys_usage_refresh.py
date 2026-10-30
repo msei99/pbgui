@@ -1,5 +1,6 @@
 """Account usage refresh keeps newer list responses authoritative."""
-import subprocess
+
+from javascript_checks import run_javascript
 from pathlib import Path
 
 
@@ -9,7 +10,7 @@ def test_usage_refresh_discards_stale_response():
     start = source.index('    async function loadUsers(')
     function = source[start:source.index('\n    function renderUserTable()', start)]
     script = r'''
-const assert = require('assert');
+const assert = browserAssert;
 let usersRequestGeneration = 0, usersRefreshTimer = null, currentUsers = [], rendered = [];
 const scheduleUsersRefresh = () => {};
 const nodes = new Map();
@@ -26,9 +27,9 @@ pending[1]([{name:'test-account',in_use:false}]); await fresh;
 pending[0]([{name:'test-account',in_use:true}]); await old;
 assert.deepEqual(rendered, [false]);
 assert.equal(currentUsers[0].in_use, false);
-})().catch(error => {console.error(error);process.exitCode=1;});
+})().catch(error => {console.error(error);testResult.exitCode=1;});
 '''
-    result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=10)
+    result = run_javascript(['-e', script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert 'title="Refresh account usage"' not in source
     assert 'list.style.display !== "none") loadUsers(true)' in source

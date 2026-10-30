@@ -90,17 +90,17 @@ def test_process_identity_and_errors(consumer, kind, expected):
     if kind == "empty":
         processes = []
     elif kind == "pb8":
-        consumer.process.argv = ["passivbot", "live", str(consumer.runtime)]
+        consumer.testArguments = ["passivbot", "live", str(consumer.runtime)]
     elif kind == "relative":
-        consumer.process.argv = ["python", "pb7/src/main.py", "data/run_v7/test-bot/config_run.json"]
+        consumer.testArguments = ["python", "pb7/src/main.py", "data/run_v7/test-bot/config_run.json"]
     elif kind == "other-main":
-        consumer.process.argv[2] = str(consumer.root / "foreign" / "main.py")
+        consumer.testArguments[2] = str(consumer.root / "foreign" / "main.py")
     elif kind == "other-root":
-        consumer.process.argv[-1] = str(consumer.root / "other" / "data/run_v7/test-bot/config_run.json")
+        consumer.testArguments[-1] = str(consumer.root / "other" / "data/run_v7/test-bot/config_run.json")
     elif kind in {"denied", "gone"}:
-        consumer.process.argv = psutil.AccessDenied(1) if kind == "denied" else psutil.NoSuchProcess(1)
+        consumer.testArguments = psutil.AccessDenied(1) if kind == "denied" else psutil.NoSuchProcess(1)
     elif kind == "no-runtime-arg":
-        consumer.process.argv.pop()
+        consumer.testArguments.pop()
     elif kind == "symlink":
         consumer.runtime.unlink()
         target = consumer.root / "external.json"

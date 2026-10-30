@@ -24,9 +24,10 @@ boto3>=1.28.0,<2.0.0
 lz4>=4.4.3,<5.0.0
 orjson>=3.9.0,<4.0.0
 beautifulsoup4>=4.12.0
-fastapi==0.115.0
+fastapi==0.162.0
+starlette==1.10.0
 uvicorn[standard]==0.32.0
-pydantic==2.9.2
+pydantic==2.14.2
 python-multipart==0.0.12
 asyncssh>=2.13.0,<2.24.0
 aiohttp==3.13.1
@@ -35,3 +36,7 @@ openai-codex-cli-bin==0.159.2
 
 # Offline token estimate proxy; vocabulary is bundled under vendor/ai_tokenizer.
 tiktoken==0.12.0
+
+# Official Python Agent SDK and MCP bridge; installed in the existing PBGui venv.
+claude-agent-sdk==0.2.175
+mcp==2.3.0

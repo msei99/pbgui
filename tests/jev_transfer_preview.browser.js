@@ -1,7 +1,7 @@
 /* Verify Jev transfer review sends exactly the previewed payload or discards it. */
-const fs = require('fs');
-const vm = require('vm');
-const assert = require('assert');
+const fs = testSources;
+const vm = browserScope;
+const assert = browserAssert;
 const source = fs.readFileSync('frontend/js/jev_transfer_preview.js', 'utf8');
 const window = {};
 vm.runInNewContext(source, { window, JSON, String, Array, encodeURIComponent });
@@ -26,4 +26,4 @@ const api = async (path, options) => {
   const allowed = await helper.review({ ...options, confirm: async () => true });
   assert.strictEqual(allowed.previewId, 'a'.repeat(32));
   assert.deepStrictEqual(calls.map(x => x.method), ['POST']);
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); testResult.exitCode = 1; });

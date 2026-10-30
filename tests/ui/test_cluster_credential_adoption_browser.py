@@ -3,7 +3,7 @@ from pathlib import Path
 import time
 from urllib.parse import urlparse
 
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -17,7 +17,7 @@ def test_cluster_preview_updates_adoption_without_resetting_navigation():
     node = {'node_id': 'node-b', 'pbname': 'node-b', 'hostname': 'node-b', 'role': 'vps', 'enabled': True, 'state_replica': True}
     phase = {'status': 'pending'}
     reads, errors = [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width': 1200, 'height': 850})
         page.clock.install()

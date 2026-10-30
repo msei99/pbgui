@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import subprocess
+from javascript_checks import run_javascript
+
 import textwrap
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def test_choose_returns_only_explicit_action_values_and_defaults_to_null() -> No
     close_function = _extract_function(source, "close")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         var OVERLAY_ID = 'pbgui-dialog-ovl';
         var currentMode = 'choose';
         var resolved = 'unset';
@@ -76,8 +77,8 @@ def test_choose_returns_only_explicit_action_values_and_defaults_to_null() -> No
         assert.equal(resolved, null);
         """
     )
-    completed = subprocess.run(
-        ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False
+    completed = run_javascript(
+        ["-e", script], cwd=ROOT, text=True, capture_output=True, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "if (event.key === 'Escape')" in source

@@ -1,14 +1,15 @@
 """Queue-in-place behavior with isolated requests and no production state."""
+
+from javascript_checks import run_javascript
 from pathlib import Path
-import subprocess
 
 
 def test_queue_stays_put_retries_and_keeps_validation_group():
     """Partial retries reuse operations, preserve grouping and do not navigate/start."""
     source = Path('frontend/js/backtest_queue_actions.js').read_text()
     script = r'''
-const assert=require('node:assert/strict');
-const crypto=require('node:crypto').webcrypto;
+const assert=browserAssert;
+const crypto=browserCrypto.webcrypto;
 const status={textContent:''}, auto={textContent:''}, open={textContent:'',addEventListener:(event,fn)=>open.click=fn};
 const document={readyState:'complete',querySelectorAll:selector=>selector.includes('status')?[status]:selector.includes('autostart')?[auto]:[open]};
 const window={OPTIMIZE_VERSION:'v7',location:{href:'explorer'}};
@@ -50,17 +51,17 @@ async function fetch(url,opts){
  assert.equal(button.disabled,false);
  await client.perform(button,()=>calls++);release();await first;
  assert.equal(calls,2);
-})().catch(error=>{console.error(error);process.exit(1);});
+})().catch(error=>{console.error(error);finishTest(1);});
 '''
-    subprocess.run(['node','-e',script],check=True,text=True,capture_output=True)
+    run_javascript(['-e',script],check=True,text=True,capture_output=True)
 
 
 def test_background_batches_snapshot_selection_and_continue_after_failure():
     """Pending submissions accept more selections without duplicate POSTs or mutation."""
     source = Path('frontend/js/backtest_queue_actions.js').read_text()
     script = r'''
-const assert = require('node:assert/strict');
-const crypto = require('node:crypto').webcrypto;
+const assert = browserAssert;
+const crypto = browserCrypto.webcrypto;
 const status={textContent:''}, auto={textContent:''};
 const open={textContent:'',addEventListener:(event,fn)=>open.click=fn};
 const document={readyState:'complete',querySelectorAll:s=>s.includes('status')?[status]:s.includes('autostart')?[auto]:[open]};
@@ -109,17 +110,17 @@ async function fetch(url,opts) {
  assert.equal(posts[2].operation_id,posts[4].operation_id);
  open.click();
  assert.equal(window.location.href,'/api/backtest-v7/main_page?panel=queue');
-})().catch(error=>{console.error(error);process.exit(1);});
+})().catch(error=>{console.error(error);finishTest(1);});
 '''
-    subprocess.run(['node', '-e', script], check=True, text=True, capture_output=True)
+    run_javascript(['-e', script], check=True, text=True, capture_output=True)
 
 
 def test_pb8_uses_one_durable_backend_batch_and_restores_progress():
     """PB8 submits one command and reads progress from the server."""
     source = Path('frontend/js/backtest_queue_actions.js').read_text()
     script = r'''
-const assert=require('node:assert/strict');
-const crypto=require('node:crypto').webcrypto;
+const assert=browserAssert;
+const crypto=browserCrypto.webcrypto;
 const status={textContent:''}, auto={textContent:''};
 const open={textContent:'',addEventListener:(event,fn)=>open.click=fn};
 const document={readyState:'complete',querySelectorAll:s=>s.includes('status')?[status]:s.includes('autostart')?[auto]:[open]};
@@ -148,6 +149,6 @@ async function fetch(url,opts) {
   confirmed=10;
   await window.PBGuiBacktestQueue.refresh();
   assert.match(status.textContent,/10 \/ 90 jobs queued by PBGui server/);
-})().catch(error=>{console.error(error);process.exit(1)});
+})().catch(error=>{console.error(error);finishTest(1)});
 '''
-    subprocess.run(['node', '-e', script], check=True, text=True, capture_output=True)
+    run_javascript(['-e', script], check=True, text=True, capture_output=True)

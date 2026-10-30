@@ -1,7 +1,8 @@
 """Frontend contracts for focused Hyperliquid Market Data actions."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 import textwrap
 
 
@@ -43,7 +44,7 @@ def test_build_coin_filters_combine_tradfi_and_local_data_state() -> None:
     function = _extract_function(source, "getBuildVisibleCoins")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         var buildCoins = ['BTC', 'ETH', 'xyz:AAPL', 'XYZ-MSFT'];
         var buildCoinsWithDownloadedHistory = new Set(['BTC', 'xyz:AAPL']);
         var buildFilter = '';
@@ -62,7 +63,7 @@ def test_build_coin_filters_combine_tradfi_and_local_data_state() -> None:
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_build_coin_filter_controls_and_payload_contract_are_present() -> None:
@@ -99,7 +100,7 @@ def test_build_info_retry_runtime_handles_stale_success_and_exhaustion() -> None
     retry = _extract_function(source, "scheduleBuildInfoRetry")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         var buildInfoRetryTimer = null;
         var BUILD_INFO_MAX_RETRIES = 12, BUILD_INFO_RETRY_DELAY = 5000;
         var initGeneration = 1, ROOT = {{isConnected: true}}, API_BASE = '/api';
@@ -183,11 +184,11 @@ def test_build_info_retry_runtime_handles_stale_success_and_exhaustion() -> None
             scheduleBuildInfoRetry(1, 0);
             await timerCallback();
             assert.equal(buildInfoRetryTimer, null);
-        }})().catch(function(error) {{ console.error(error); process.exit(1); }});
+        }})().catch(function(error) {{ console.error(error); finishTest(1); }});
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_job_history_requests_filter_before_the_api_limit() -> None:
@@ -208,7 +209,7 @@ def test_queue_submissions_render_http_errors_instead_of_false_success() -> None
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         function loading() {{ return {{classList: {{add() {{}}, remove() {{}}}}}}; }}
         const elements = {{
             'dl-btn': {{disabled: false}}, 'dl-lo': loading(),
@@ -249,8 +250,8 @@ def test_queue_submissions_render_http_errors_instead_of_false_success() -> None
             await submitBuild();
             assert.equal(queued.length, 1);
             assert.equal(queued[0].ns, 'build');
-        }})().catch(function(error) {{ console.error(error); process.exit(1); }});
+        }})().catch(function(error) {{ console.error(error); finishTest(1); }});
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)

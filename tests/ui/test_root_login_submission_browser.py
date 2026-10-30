@@ -1,13 +1,13 @@
 """Browser-level regression for duplicate root login submissions."""
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from browser_driver import sync_browser
 
 
 def test_delayed_login_accepts_one_submission_and_recovers():
     """Rapid form submissions send one request and restore input on rejection."""
     html = (Path(__file__).resolve().parents[2] / 'frontend/root_login.html').read_text()
     html = html.replace('%%API_ORIGIN%%', 'http://pbgui.test')
-    with sync_playwright() as pw:
+    with sync_browser() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page()
         pending = []

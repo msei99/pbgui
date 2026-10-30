@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 REASON = "bot.long.ema_span_0 is a legacy flat strategy field. Run passivbot tool migrate-config-v7."
@@ -25,7 +25,7 @@ def _snapshot(config):
 @pytest.fixture
 def explorer_browser():
     """Serve real local assets while intercepting every browser HTTP request."""
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         context = browser.new_context(viewport={"width": 1280, "height": 900})
         page = context.new_page()

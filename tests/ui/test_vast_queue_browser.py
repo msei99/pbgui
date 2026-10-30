@@ -13,7 +13,7 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide():
     """Follow the real PBv8 menu into the full Optimize template with isolated API responses."""
     import mimetypes
     from urllib.parse import urlsplit
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     calls, errors = [], []
     job = dict(id='a'*32, config_name='isolated-test', status='running', has_log=True,
                workers=4, iterations=100, rental_state='none', created_at=1)
@@ -57,7 +57,7 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide():
         else:
             route.fulfill(json={})
 
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport=dict(width=1280, height=900))
@@ -104,7 +104,7 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide():
 
 def test_cloud_setup_editor_selection_and_queue(tmp_path):
     """Keep GPU preferences in Settings and queueing free of rental calls."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     calls = []
     jobs = []
     starts = []
@@ -204,7 +204,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
     server = ThreadingHTTPServer(('127.0.0.1',0),Handler)
     thread = threading.Thread(target=server.serve_forever,daemon=True); thread.start()
     try:
-        with playwright.sync_playwright() as engine:
+        with browser_api.sync_browser() as engine:
             browser = engine.chromium.launch(headless=True)
             try:
                 page = browser.new_page()
@@ -509,7 +509,6 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
                 assert page.evaluate('state.selectedQueue.size') == 0
                 assert '/api/vast/jobs/' + 'a'*32 + '/requeue' in calls
                 assert not errors
-                page.screenshot(path=str(tmp_path/'vast-queue.png'),full_page=True)
             finally:
                 browser.close()
     finally:
@@ -519,7 +518,7 @@ def test_cloud_setup_editor_selection_and_queue(tmp_path):
 def test_optimizer_settings_main_area():
     """Exercise real page layout and navigation without production API access."""
     import re
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
     markup = re.sub(r'<script\b[^>]*>.*?</script>', '', source, flags=re.S)
     functions = []
@@ -534,7 +533,7 @@ def test_optimizer_settings_main_area():
         start = source.index(marker)
         end = source.index('\n}\n', start) + 2
         functions.append(source[start:end])
-    with playwright.sync_playwright() as engine:
+    with browser_api.sync_browser() as engine:
         browser = engine.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={'width':1440, 'height':1000})
@@ -645,13 +644,13 @@ def test_optimizer_settings_main_area():
 def test_convergence_dashboard_progress_and_completion():
     """Render persisted detection progress and hide it for jobs without opt-in."""
     import re
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/js/vast.js').read_text()
     function = source[source.index('  function renderUtilization(job)'):source.index('  function openCloudLog(job)')]
     shell = (ROOT / 'frontend/v7_optimize.html').read_text()
     shell = re.sub(r'<script\b[^>]*>.*?</script>', '', shell, flags=re.S | re.I)
     component = (ROOT / 'frontend/vast.html').read_text()
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()
@@ -752,13 +751,13 @@ def test_convergence_dashboard_progress_and_completion():
 
 def test_completed_calibration_remains_visible_and_acceptable():
     """Render persisted case evidence and its pending acceptance after reload."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/js/vast.js').read_text()
     functions = source[
         source.index('  function formatElapsedSeconds(value)'):
         source.index('  function hostStatus(profile)')
     ]
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()
@@ -869,10 +868,10 @@ def test_completed_calibration_remains_visible_and_acceptable():
 
 def test_vast_result_snapshots_trigger_refresh_without_local_runs():
     """Each newly published snapshot refreshes results once, including completion."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/js/vast.js').read_text()
     function = source[source.index('  async function refreshJobs(preferred'):source.index('  async function pollJobs()')]
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()
@@ -908,12 +907,12 @@ def test_vast_result_snapshots_trigger_refresh_without_local_runs():
 
 def test_pool_summary_and_explicit_start_consent():
     """Display all leases and gate pool activation behind the aggregate budget consent."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/js/vast.js').read_text()
     activity = source[source.index('  function uploadProgressMetrics(job)'):source.index('  function renderJob()')]
     overview = source[source.index('  function openCloudResults(job)'):source.index('  async function refreshJobs(preferred')]
     start = source[source.index('  async function startCloudQueue(job)'):source.index("  el('rent-offer').addEventListener")]
-    with playwright.sync_playwright() as runner:
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()

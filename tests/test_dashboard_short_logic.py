@@ -4,10 +4,11 @@ These tests lock down the long/short-specific mapping used by the dashboard
 snapshot and live API paths for DCA counting plus nearest DCA/TP prices.
 """
 
+from javascript_checks import run_javascript
+
 import asyncio
 import json
 import re
-import subprocess
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
@@ -133,8 +134,8 @@ def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket(dashboard_ren
 
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
-        const vm = require('node:vm');
+        const assert = browserAssert;
+        const vm = browserScope;
         const fragment = {json.dumps(source)};
         const sockets = [];
         const timers = [];
@@ -167,8 +168,8 @@ def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket(dashboard_ren
         assert.equal(sockets.length, 2);
         """
     )
-    result = subprocess.run(
-        ["node", "-e", script],
+    result = run_javascript(
+        ["-e", script],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -222,8 +223,8 @@ def test_dashboard_top_older_fetch_cannot_overwrite_newer_render(dashboard_rende
 
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
-        const vm = require('node:vm');
+        const assert = browserAssert;
+        const vm = browserScope;
         const fragment = {json.dumps(source)};
         const sockets = [];
         const requests = [];
@@ -272,12 +273,12 @@ def test_dashboard_top_older_fetch_cannot_overwrite_newer_render(dashboard_rende
             assert.deepEqual(renders, ['new']);
         }})().catch(function (error) {{
             console.error(error);
-            process.exitCode = 1;
+            testResult.exitCode = 1;
         }});
         """
     )
-    result = subprocess.run(
-        ["node", "-e", script],
+    result = run_javascript(
+        ["-e", script],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -306,8 +307,8 @@ def test_dashboard_positions_waits_for_live_before_rendering_db_fallback(dashboa
 
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
-        const vm = require('node:vm');
+        const assert = browserAssert;
+        const vm = browserScope;
         const fragment = {json.dumps(source)};
         const requests = [];
         const renders = [];
@@ -356,12 +357,12 @@ def test_dashboard_positions_waits_for_live_before_rendering_db_fallback(dashboa
             assert.deepEqual(renders, ['live']);
         }})().catch(function (error) {{
             console.error(error);
-            process.exitCode = 1;
+            testResult.exitCode = 1;
         }});
         """
     )
-    result = subprocess.run(
-        ["node", "-e", script],
+    result = run_javascript(
+        ["-e", script],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -395,7 +396,7 @@ def test_dashboard_editor_defers_widget_refresh_while_a_control_is_active() -> N
     function = source[start:end]
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let blurHandler = null;
         const active = {{
           tagName: 'SELECT',
@@ -421,8 +422,8 @@ def test_dashboard_editor_defers_widget_refresh_while_a_control_is_active() -> N
         }}, 5);
         """
     )
-    result = subprocess.run(
-        ["node", "-e", script],
+    result = run_javascript(
+        ["-e", script],
         cwd=ROOT,
         capture_output=True,
         text=True,

@@ -1,8 +1,9 @@
 """Offline Node regressions for Vast metrics and GPU recommendation rates."""
 
+from javascript_checks import run_javascript
+
 import json
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -21,7 +22,7 @@ def function_source(source, start_marker, end_marker):
 
 def run_node(code):
     """Execute isolated JavaScript assertions without browser or cloud access."""
-    result = subprocess.run(['node', '-e', "'use strict';\n" + code],
+    result = run_javascript(['-e', "'use strict';\n" + code],
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
@@ -35,7 +36,7 @@ def run_node(code):
 def test_fmt_returns_unknown_for_missing_or_nonfinite_values(vast_source, value):
     """Missing metrics and failed numeric conversions never display NaN/Infinity."""
     formatter = function_source(vast_source, '  function fmt(', '\n  function offerDuration(')
-    run_node(formatter + f"\nrequire('node:assert/strict').equal(fmt({value}), 'Unknown');")
+    run_node(formatter + f"\nbrowserAssert.equal(fmt({value}), 'Unknown');")
 
 
 @pytest.mark.parametrize('arguments, expected', [
@@ -54,7 +55,7 @@ def test_fmt_returns_unknown_for_missing_or_nonfinite_values(vast_source, value)
 def test_fmt_preserves_finite_values_and_precision(vast_source, arguments, expected):
     """Zero, numeric strings, rounding and default/explicit precision stay valid."""
     formatter = function_source(vast_source, '  function fmt(', '\n  function offerDuration(')
-    run_node(formatter + f"\nrequire('node:assert/strict').equal(fmt({arguments}), {json.dumps(expected)});")
+    run_node(formatter + f"\nbrowserAssert.equal(fmt({arguments}), {json.dumps(expected)});")
 
 
 def test_gpu_recommendation_formats_missing_and_nonfinite_rates(vast_source):
@@ -63,7 +64,7 @@ def test_gpu_recommendation_formats_missing_and_nonfinite_rates(vast_source):
     renderer = function_source(vast_source, '  function renderGpuRecommendation(',
                                '\n  async function refreshGpuRecommendation(')
     run_node(formatter + renderer + r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const elements = {
     'opted-gpu-recommendation': {},
     'opted-gpu-dispatch-preview': {},

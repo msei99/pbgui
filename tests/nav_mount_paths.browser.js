@@ -1,18 +1,18 @@
 /* Run the complete shared nav in a VM with inert DOM, network and timers. */
 'use strict';
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const assert = browserAssert;
+const fs = testSources;
+const path = sourcePath;
+const vm = browserScope;
 const source = fs.readFileSync(path.join(__dirname, '../frontend/pbgui_nav.js'), 'utf8');
 const helpSource = fs.readFileSync(path.join(__dirname, '../frontend/js/shared_help_overlay.js'), 'utf8');
 const dashboard = fs.readFileSync(path.join(__dirname, '../frontend/dashboard_main.html'), 'utf8');
 const dashboardBootstrap = [...dashboard.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   .map(match => match[1]).find(script => script.includes('window.PBGUI_NAV_CONFIG ='));
 assert.ok(dashboardBootstrap, 'Real Dashboard navigation bootstrap is present');
-const prefixArg = process.argv[2];
+const prefixArg = testArguments[2];
 const prefix = prefixArg === '<absent>' ? '' : prefixArg;
-const origin = process.argv[3];
+const origin = testArguments[3];
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function guidePath(browserContext, target = '/app/vendor/marked.min.js') {
@@ -334,4 +334,4 @@ async function main() {
   }
 }
 
-main().catch(error => {console.error(error); process.exitCode = 1;});
+main().catch(error => {console.error(error); testResult.exitCode = 1;});

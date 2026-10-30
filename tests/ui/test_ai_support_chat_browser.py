@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -18,7 +18,7 @@ def test_chat_connect_describe_review_publish_and_restore(prefix,width):
         'preview':{'action':'publish_github_issue','name':'Add dashboard ranges','title':'Add dashboard ranges',
                    'body':body,'login':'fixture-user','target':'msei99/pbgui','review_id':review_id,'encrypted_attachment':False}}
     state={'connected':False,'sent':False,'published':False}; turns=[]; approvals=[]; tokens=[]; urls=[]; errors=[]
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser=driver.chromium.launch()
         page=browser.new_page(viewport={'width':width,'height':850})
         page.on('pageerror',lambda error:errors.append(str(error)))

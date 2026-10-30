@@ -17,7 +17,8 @@ PB7 optimizer behavior:
 
 from __future__ import annotations
 
-import subprocess
+from javascript_checks import run_javascript
+
 import textwrap
 from pathlib import Path
 
@@ -70,7 +71,7 @@ def _run_node_assertions(function_names: list[str], *, bootstrap: str, assertion
     extracted = "\n\n".join(_extract_function(source, name) for name in function_names)
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
 
         {bootstrap}
 
@@ -79,15 +80,15 @@ def _run_node_assertions(function_names: list[str], *, bootstrap: str, assertion
         {assertions}
         """
     )
-    result = subprocess.run(
-        ["node", "-e", script],
+    result = run_javascript(
+        ["-e", script],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 0, (
-        "Node-backed frontend regression failed\n"
+        "browser-backed frontend regression failed\n"
         f"STDOUT:\n{result.stdout}\n"
         f"STDERR:\n{result.stderr}"
     )

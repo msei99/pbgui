@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize('outcome', ['success', 'preview_error', 'resume_error', 'selection_error', 'cancel_paid', 'cancel_interrupted', 'lifecycle'])
 def test_recovery_feedback_is_immediate_and_scoped(outcome):
     """Pending work, errors and approvals remain visible in the attached report."""
-    playwright = pytest.importorskip('playwright.sync_api')
+    browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
     for key, value in {'API_BASE':'/api/optimize-v8', 'OPTIMIZE_VERSION':'v8', 'VERSION':'test',
         'SERIAL':'1', 'NAV_HASH':'test', 'BASE_PREFIX':'', 'LIMITS_META':'{}',
@@ -25,7 +25,7 @@ def test_recovery_feedback_is_immediate_and_scoped(outcome):
     preview = {'context':1000000, 'native_archive':{'effective':500}, 'streaming':True,
                'paid':outcome=='cancel_paid', 'maximum_decisions':5, 'maximum_attempts':5}
     previews, actions, errors = [], [], []
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width':1200,'height':900})
         page.set_default_timeout(5000)

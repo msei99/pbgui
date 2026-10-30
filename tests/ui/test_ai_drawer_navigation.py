@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse
 
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -14,7 +14,7 @@ def test_delayed_preferences_and_ai_menu_navigation():
     action_id = 'b' * 32
     writes, acknowledgements, errors = [], [], []
     pending = []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': 1400, 'height': 900})
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -86,7 +86,7 @@ def test_delayed_preferences_and_ai_menu_navigation():
 
 def test_navigation_ids_survive_counter_and_entity_updates():
     """Background counters cannot invalidate navigation; resource actions still change IDs."""
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page()
 

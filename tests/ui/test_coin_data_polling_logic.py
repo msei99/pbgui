@@ -1,7 +1,8 @@
 """Execute the real automatic coordinator with a deterministic network and clock."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 
 def test_coordinator_retains_jobs_after_lost_responses_and_stops_on_exit():
@@ -10,7 +11,7 @@ def test_coordinator_retains_jobs_after_lost_responses_and_stops_on_exit():
     lifecycle = source[source.index("    function showBusy("):source.index("    function toggleButtonState(")]
     coordinator = source[source.index("    function requestJson("):source.index("    function renderWarnings(")]
     script = r"""
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 var autoTimer=0,autoController=null,autoGeneration=0,autoStopped=false,autoInFlight=false;
 var autoAgain=false,autoFailures=0,autoJobs={},autoStatus='',autoDismissed=false;
 var autoResults=[],autoStatusLevel=false;
@@ -57,7 +58,7 @@ const tick=()=>{assert.equal(timers.size,1);const [id,t]=[...timers][0];timers.d
  stopAutomaticUpdates();assert.equal(requests[11].options.signal.aborted,true);
  await reply(11,{job:{status:'completed',message:'stale callback'}});
  assert.equal(snapshots,2);assert.equal(timers.size,0);
-})().catch(e=>{console.error(e);process.exitCode=1});
+})().catch(e=>{console.error(e);testResult.exitCode=1});
 """
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=15)
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr

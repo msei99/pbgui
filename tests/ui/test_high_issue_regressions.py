@@ -10,7 +10,7 @@ from test_remaining_issue_regressions import ROOT, execute, function
 def test_stop_before_conversation_creation_invalidates_pending_send():
     """A late conversation ID cannot send the prompt after local Stop (#297)."""
     execute(function('js/ai_drawer.js', 'sendMessage') + function('js/ai_drawer.js', 'newConversation') + function('js/ai_drawer.js', 'stopTurn') + r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const nodes={'textarea':{value:'hello',focus:()=>{}},'#pai-model':{value:'model'},'#pai-effort':{value:''},'#pai-speed':{hidden:true,value:''},'#pai-context-toggle':{checked:false}};
 const root={querySelector:key=>nodes[key]};
 const state={current:'',sendGeneration:0,requestGeneration:0,sending:false,busy:false,imageReads:Promise.resolve(),imageDrafts:{},retryMessages:{},retryImages:{}};
@@ -20,7 +20,7 @@ const selectedProvider=()=> 'test',selectedProfile=()=> 'default',setBusy=value=
 (async()=>{const sending=sendMessage();await new Promise(resolve=>setImmediate(resolve));assert.equal(state.busy,true);await stopTurn();assert.equal(state.busy,false);
 finish({conversation_id:'late'});await sending;assert.equal(state.current,'');assert.equal(state.sending,false);assert(!requests.some(([path])=>path.endsWith('/turns')));assert(requests.some(([path,method])=>path==='/conversations/late'&&method==='DELETE'));
 const creating=newConversation({type:'click'});await new Promise(resolve=>setImmediate(resolve));finish({conversation_id:'fresh'});await creating;assert.equal(state.current,'fresh');assert(!requests.some(([path,method])=>path==='/conversations/fresh'&&method==='DELETE'));
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch(e=>{console.error(e);testResult.exitCode=1;});
 ''')
 
 
@@ -35,7 +35,7 @@ def test_draft_symbol_keys_do_not_hide_nested_credentials(payload, allowed):
     """Allow TOKEN override objects while rejecting credential values (#344)."""
     execute(function('v7_optimize.html', 'storeOptimizeDraft') +
             'const payload=' + json.dumps(payload) + '; const allowed=' + json.dumps(allowed) + ';' + r'''
-const assert=require('node:assert/strict');let stored=null;
+const assert=browserAssert;let stored=null;
 const window={sessionStorage:{setItem:(_,v)=>stored=v,removeItem:()=>stored=null}};
 const optimizeDraftStorageKey=()=> 'draft';const setPageEditorStatus=()=>{};
 assert.equal(storeOptimizeDraft(payload),allowed);assert.equal(stored!==null,allowed);
@@ -45,7 +45,7 @@ assert.equal(storeOptimizeDraft(payload),allowed);assert.equal(stored!==null,all
 def test_account_switch_releases_old_action_without_unlocking_new_action():
     """Existing account-generation reset already protects cancellation (#346)."""
     execute(function('profit_sweep.html', 'selectAccount') + function('profit_sweep.html', 'cancelPreparedTest') + r'''
-const assert=require('node:assert/strict');
+const assert=browserAssert;
 const state={selectedUser:'old',accountGeneration:1,users:[{name:'old'},{name:'new'}],testActionPending:false};
 const isCurrentAccount=(name,generation)=>state.selectedUser===name&&state.accountGeneration===generation;
 const stopAutomaticPreview=()=>{};const overview={hide(){},show(){}};
@@ -61,14 +61,14 @@ let finish;const requestJson=()=>new Promise(resolve=>finish=resolve);
 const pending=cancelPreparedTest({operation_id:'old-op',can_cancel:true});assert.equal(state.testActionPending,true);
 await selectAccount('new');assert.equal(state.selectedUser,'new');assert.equal(state.testActionPending,false);
 state.testActionPending=true;finish({});await pending;assert.equal(state.testActionPending,true);
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch(e=>{console.error(e);testResult.exitCode=1;});
 ''')
 
 
 def test_scenario_apply_uses_latest_base_context_and_preserves_windows():
     """Applying after date/exchange edits validates the retained draft (#347)."""
     execute(function('js/suite_editor.js', '_suiteMountVisual') + r'''
-const assert=require('node:assert/strict');let mounted,payload;
+const assert=browserAssert;let mounted,payload;
 let context={start_date:'2024-01-01',end_date:'2024-12-31',exchanges:['binance']};
 const _suiteState={apiBase:'/api/test',aggregate:{},scenarioRequestId:0,scenarios:[]};
 const _suiteScenarioContext=()=>structuredClone(context),_suiteScenarioContextSignature=JSON.stringify;
@@ -80,7 +80,7 @@ const apiFetch=async(_,opts)=>{payload=JSON.parse(opts.body);return {training_sc
 const _suiteApplyScenarioPreview=async()=>{_suiteState.scenarios=_suiteState.scenarioPreview.training_scenarios;_suiteState.scenarioTemplate={};};
 (async()=>{_suiteMountVisual({});context.end_date='2025-01-01';context.exchanges=['bybit'];await mounted.apply(windows);
 assert.equal(payload.end_date,context.end_date);assert.deepEqual(payload.exchanges,['bybit']);assert.deepEqual(payload.windows,windows);
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch(e=>{console.error(e);testResult.exitCode=1;});
 ''')
 
 
@@ -88,7 +88,7 @@ assert.equal(payload.end_date,context.end_date);assert.deepEqual(payload.exchang
 def test_delete_by_date_single_flight_and_visible_failure(failure):
     """Confirmation and deletion are locked, and errors dismiss the covering modal (#355)."""
     execute(function('market_data_main.html', 'runInventoryDeleteOlder') + 'const failure=' + json.dumps(failure) + ';' + r'''
-const assert=require('node:assert/strict');const inventoryState={};const uiState={contextExchange:'binance'};
+const assert=browserAssert;const inventoryState={};const uiState={contextExchange:'binance'};
 const viewState={olderCutoffDay:'2024-01-01',payload:{},selectedRowIds:['BTC']};
 const getCurrentInventoryViewState=()=>viewState,getResolvedInventoryView=()=> 'ohlcv';
 const getInventoryOlderScopeCoins=()=>['BTC'],getInventoryCoinDisplayNames=x=>x,getExchangeMeta=()=>({});
@@ -100,7 +100,7 @@ const fetchJson=()=>{requests++;return new Promise((resolve,reject)=>complete=()
 (async()=>{const pending=runInventoryDeleteOlder();await runInventoryDeleteOlder();assert.equal(button.disabled,true);
 confirm(true);await new Promise(setImmediate);await runInventoryDeleteOlder();assert.equal(requests,1);
 complete();await pending;assert.equal(inventoryState.deleteOlderPending,false);assert.equal(button.disabled,false);assert.equal(closed,1);
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch(e=>{console.error(e);testResult.exitCode=1;});
 ''')
 
 
@@ -108,7 +108,7 @@ complete();await pending;assert.equal(inventoryState.deleteOlderPending,false);a
 def test_status_actions_lock_and_handle_html_errors(failure):
     """Running refreshes cannot be requeued; proxy errors release the action lock (#354)."""
     execute(function('market_data_status.html', 'callAPI') + 'const failure=' + json.dumps(failure) + ';' + r'''
-const assert=require('node:assert/strict');let actionPending=false,destroyed=false;
+const assert=browserAssert;let actionPending=false,destroyed=false;
 const currentStatus={running:true,queued:false},API_BASE='/api';let finish,calls=0,notices=[];
 const updateUI=()=>{};const showToast=msg=>notices.push(msg);
 const fetch=()=>{calls++;return new Promise(resolve=>finish=resolve);};
@@ -116,14 +116,14 @@ const fetch=()=>{calls++;return new Promise(resolve=>finish=resolve);};
 currentStatus.running=false;const pending=callAPI('/market-data/refresh-now',{},'ok');await callAPI('/market-data/refresh-now',{},'ok');assert.equal(calls,1);assert.equal(actionPending,true);
 finish({ok:!failure,status:failure?502:200,json:async()=>{if(failure)throw Error('html');return {success:true};}});
 await pending;assert.equal(actionPending,false);assert.equal(currentStatus.queued,!failure);if(failure)assert.match(notices[0],/HTTP 502/);
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch(e=>{console.error(e);testResult.exitCode=1;});
 ''')
 
 
 def test_visual_context_refresh_in_browser_preserves_drawn_windows():
     """Date/exchange edits remount the real chart with the same explicit windows (#347)."""
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as runner:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as runner:
         browser = runner.chromium.launch(headless=True)
         try:
             page = browser.new_page()

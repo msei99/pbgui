@@ -1,8 +1,9 @@
 """Execute real backtest modal renderers with hostile stored configuration values."""
 
+from javascript_checks import run_javascript
+
 import json
 import re
-import subprocess
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -63,12 +64,12 @@ FUNCTIONS
 CALL
 setImmediate(() => {
   if (errors.length || !body) throw new Error(JSON.stringify(errors));
-  process.stdout.write(JSON.stringify(body));
+  testOutput.write(JSON.stringify(body));
 });
 """.replace("CONFIG", json.dumps(cfg)).replace("DATE_INPUT", date_input_source).replace("FUNCTIONS", functions).replace(
         "CALL", f"{name}([{{name:'test',config:cfg}}]);" if name == "showInitialBacktestQueueDraftModal" else f"{name}();"
     )
-    result = subprocess.run(["node", "-e", script], cwd=root, text=True, capture_output=True, timeout=10, check=False)
+    result = run_javascript(["-e", script], cwd=root, text=True, capture_output=True, timeout=10, check=False)
     assert result.returncode == 0, result.stderr
     parser = ModalParser()
     parser.feed(json.loads(result.stdout))

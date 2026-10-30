@@ -3487,6 +3487,7 @@
            Remember a visible candle's time before reindexing history, not its old index. */
         var _rightMargin = 0;
         var _following = true;
+        var _followNeedsSnap = false;
         var _viewportDepth = 0;
         var _programmaticRange = null;
         var _pendingViewportRange = null;
@@ -3591,7 +3592,7 @@
             if (!range || !lwData.length) return null;
             var index = Math.max(0, Math.min(lwData.length - 1, Math.ceil(range.from)));
             return {range: range, time: lwData[index].time, index: index,
-                follow: _following};
+                follow: _following, rightOffset: range.to - (lwData.length - 1), snap: _followNeedsSnap};
         }
         function _setLogicalRange(range) {
             _programmaticRange = {from: range.from, to: range.to};
@@ -3608,13 +3609,17 @@
                 // Respect LWC's density limit when a narrower plot cannot represent
                 // the previous span; otherwise retain the user's exact zoom.
                 span = Math.min(span, Math.max(1, _plotWidth() / _minimumSpacing() - 1));
-                _rightMargin = _marginForSpan(span, _plotWidth());
+                // Preserve an existing following viewport exactly. Only a manual
+                // return from history, resize or density change needs a new margin.
+                _rightMargin = !view.snap && !_sizeChanged() && span === view.range.to - view.range.from
+                    && Number.isFinite(view.rightOffset) ? view.rightOffset : _marginForSpan(span, _plotWidth());
                 shift = lwData.length - 1 + _rightMargin - view.range.to;
             } else {
                 var index = lwData.findIndex(function (c) { return c.time === view.time; });
                 if (index >= 0) shift = index - view.index;
             }
             _following = view.follow;
+            _followNeedsSnap = false;
             _layoutWidth = _plotWidth();
             _setLogicalRange({from: view.range.to + shift - span, to: view.range.to + shift});
         }
@@ -3632,7 +3637,9 @@
                 var range = chart.timeScale().getVisibleLogicalRange();
                 if (range) {
                     _lastViewportRange = {from: range.from, to: range.to};
+                    var wasFollowing = _following;
                     _following = _atLatest(range);
+                    _followNeedsSnap = _following && (_followNeedsSnap || !wasFollowing);
                 }
             }
             _pendingViewportRange = null;
@@ -3657,6 +3664,7 @@
                 _rightMargin = _marginForSpan(span, width);
                 _layoutWidth = width;
                 _following = true;
+                _followNeedsSnap = false;
                 if (lwData.length) {
                     var to = lwData.length - 1 + _rightMargin;
                     _setLogicalRange({from: to - span, to: to});
@@ -3677,8 +3685,10 @@
                 return;
             }
             if (!_programmaticViewport(range)) {
+                var wasFollowing = _following;
                 _cancelInitialFit();
                 _following = _atLatest(range);
+                _followNeedsSnap = _following && (_followNeedsSnap || !wasFollowing);
                 _lastViewportRange = {from: range.from, to: range.to};
             }
         }
@@ -4505,7 +4515,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20261023d',
+        VERSION:            '20261030c',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

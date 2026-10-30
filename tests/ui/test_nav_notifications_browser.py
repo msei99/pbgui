@@ -40,7 +40,7 @@ LogViewerPanel = class extends Issue420Viewer {
 @pytest.fixture
 def nav(request):
     """Serve only repository assets and synthetic API replies; hold viewer script delivery."""
-    playwright = pytest.importorskip("playwright.sync_api")
+    browser_api = __import__('browser_driver')
     parameters = getattr(
         request, "param", ("", "info_balance_calc", "/api/balance-calc/main_page")
     )
@@ -62,7 +62,7 @@ def nav(request):
         +
         '<script src="' + prefix + '/app/pbgui_nav.js?v=test"></script>'
     )
-    with playwright.sync_playwright() as driver:
+    with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1280, "height": 800})
         page.add_init_script(SOCKET_FIXTURE)
@@ -126,7 +126,7 @@ def nav(request):
         page.goto("http://notify.test" + prefix + destination)
         yield SimpleNamespace(
             page=page, begin=begin, release=release, viewer_requests=viewer_requests,
-            requests=requests, prefix=prefix, expect=playwright.expect,
+            requests=requests, prefix=prefix, expect=browser_api.expect,
         )
         browser.close()
         assert not errors, errors

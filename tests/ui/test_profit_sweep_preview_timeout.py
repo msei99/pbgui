@@ -1,7 +1,8 @@
 """Offline regressions for stalled and superseded Profit Sweep previews."""
 
+from javascript_checks import run_javascript
+
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ def function(name):
 
 def execute(code):
     """Run mocked JavaScript without browser, network, or runtime data."""
-    result = subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=10)
+    result = run_javascript(["-e", code], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -28,7 +29,7 @@ def execute(code):
 def test_preview_deadline_and_account_abort_cleanup(ending):
     """Deadline reports a failure while account changes retain cancellation semantics."""
     execute(function("requestPreview") + "const ending=" + json.dumps(ending) + r"""
-const assert = require('assert');
+const assert = browserAssert;
 let timer, cleared = 0, removed = 0;
 const window = {setTimeout(fn, ms) {assert.equal(ms,60000); timer=fn; return 1;},
  clearTimeout(id) {assert.equal(id,1); cleared++;}};
@@ -52,7 +53,7 @@ function requestJson(path, options) {
  if(ending==='success') assert.deepEqual(await result,{ok:true});
  else await assert.rejects(result,e=>ending==='timeout'?e.message.includes('60 seconds'):e.name==='AbortError');
  assert.equal(cleared,1);assert.equal(removed,1);
-})().catch(e=>{console.error(e);process.exit(1);});
+})().catch(e=>{console.error(e);finishTest(1);});
 """)
 
 
@@ -60,7 +61,7 @@ function requestJson(path, options) {
 def test_balance_error_replaces_loading_and_recovers(vault):
     """Failure is visible in Exchange / Vault, and recovery removes the error."""
     execute(function("detectedAccountMode") + function("renderAccountBalances") + "const vault=" + json.dumps(vault) + r"""
-const assert=require('assert');
+const assert=browserAssert;
 const nodes={};function byId(id){return nodes[id] ||= {};}
 const state={snapshot:null,previewError:'Rate limited <test>'};
 const text=(value,fallback)=>value==null?fallback:String(value);
@@ -80,7 +81,7 @@ assert.equal(nodes['source-balance-value'].textContent,'5 USDC');
 def test_failed_preview_releases_loading_and_renders_exchange_error():
     """A rejected snapshot releases the busy state and schedules a retry."""
     execute(function("evaluateNow") + r"""
-const assert=require('assert');
+const assert=browserAssert;
 const state={selectedUser:'a',accountGeneration:1,previewLoading:false,users:[{name:'a'}],schema:{defaults:{}}};
 const isCurrentAccount=(user,generation)=>user===state.selectedUser&&generation===state.accountGeneration;
 function byId(){return {value:'USDC'};}
@@ -88,7 +89,7 @@ function renderPreview(){}let rendered=0,retry;
 function renderAccountBalances(){rendered++;assert.equal(state.previewLoading,false);assert.equal(state.previewError,'failed');}
 function scheduleAutomaticPreview(delay){retry=delay;}
 async function requestPreview(){throw new Error('failed');}
-(async()=>{await evaluateNow();assert.equal(rendered,1);assert.equal(retry,15000);assert.equal(state.previewLoading,false);})().catch(e=>{console.error(e);process.exit(1);});
+(async()=>{await evaluateNow();assert.equal(rendered,1);assert.equal(retry,15000);assert.equal(state.previewLoading,false);})().catch(e=>{console.error(e);finishTest(1);});
 """)
 
 
@@ -99,7 +100,7 @@ def test_preview_uses_account_asset_without_mutating_defaults(selected_asset, sa
     """Unsaved accounts use the displayed asset; saved policies retain their own asset."""
     execute(function('evaluateNow') + 'const selectedAsset=' + json.dumps(selected_asset)
             + ',savedAsset=' + json.dumps(saved_asset) + r'''
-const assert=require('assert');
+const assert=browserAssert;
 const defaults=Object.freeze({asset:'USDT',operating_mode:'disabled'});
 const record=savedAsset?{policy:Object.freeze({asset:savedAsset,operating_mode:'dry'})}:null;
 const state={selectedUser:'hyperliquid',accountGeneration:1,users:[{name:'hyperliquid'}],schema:{defaults},record};
@@ -119,7 +120,7 @@ async function requestPreview(user,policy){requested=policy;return {snapshot:{}}
  assert.equal(state.previewError,'');
  assert.equal(state.previewLoading,false);
  if(record)assert.equal(record.policy.asset,savedAsset);
-})().catch(e=>{console.error(e);process.exit(1);});
+})().catch(e=>{console.error(e);finishTest(1);});
 ''')
 
 
@@ -128,7 +129,7 @@ def test_loaded_policy_refreshes_only_current_sidebar_account(outcome):
     """Account detail loads repair stale sidebar badges without accepting stale/error state."""
     execute(function('loadPolicyForAccount') + function('syncSelectedUserSummary')
             + 'const outcome=' + json.dumps(outcome) + r'''
-const assert=require('assert');
+const assert=browserAssert;
 const livePolicyRevisions = new Map();
 const original={policy:{operating_mode:'dry'}};
 const user={name:'mani10',has_policy:true,operating_mode:'dry',due:'7'};
@@ -150,5 +151,5 @@ async function requestJson(){
   assert.equal(user.operating_mode,outcome==='live'?'live':'disabled');
   assert.equal(user.has_policy,outcome!=='missing');assert.equal(renders,1);
  }
-})().catch(e=>{console.error(e);process.exit(1);});
+})().catch(e=>{console.error(e);finishTest(1);});
 ''')

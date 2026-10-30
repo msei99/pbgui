@@ -1,7 +1,8 @@
 """Static frontend contracts for the standalone PB8 backtest page."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 import textwrap
 
 
@@ -117,7 +118,7 @@ def test_results_sidebar_shows_archive_push_only_for_pending_own_archive() -> No
     push_archive = _extract_function(page, "pushArchive")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let archives = [];
         {pending}
         assert.equal(ownArchiveHasPendingChanges(), false);
@@ -129,7 +130,7 @@ def test_results_sidebar_shows_archive_push_only_for_pending_own_archive() -> No
         assert.equal(ownArchiveHasPendingChanges(), true);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert 'id="btn-result-push-archive"' in page
@@ -167,7 +168,7 @@ def test_exchange_multiselect_clicks_toggle_only_the_target_option() -> None:
     function = _extract_function(source, "enableToggleMultiSelect")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         class Event {{ constructor(type, options) {{ this.type = type; this.bubbles = !!options.bubbles; }} }}
         let handler = null;
         let changes = 0;
@@ -196,7 +197,7 @@ def test_exchange_multiselect_clicks_toggle_only_the_target_option() -> None:
         assert.equal(changes, 2);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert source.count("multiple data-toggle-multiselect") == 5
     assert "box.querySelectorAll('select[data-toggle-multiselect]').forEach(enableToggleMultiSelect)" in source
@@ -208,7 +209,7 @@ def test_suite_pareto_queue_draft_uses_each_candidates_bound_exchange() -> None:
     function = _extract_function(source, "getQueueDraftItemExchanges")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {function}
         const selected = ['binance', 'bybit', 'hyperliquid'];
         const items = selected.map(exchange => ({{config: {{backtest: {{
@@ -223,7 +224,7 @@ def test_suite_pareto_queue_draft_uses_each_candidates_bound_exchange() -> None:
         }}}}}}, selected), selected);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     modal = _extract_function(source, "showInitialBacktestQueueDraftModal")
     assert "item && item.preserve_exchanges === true" in modal
@@ -240,7 +241,7 @@ def test_validation_queue_draft_preserves_each_items_timerange() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const controls = {{
           'rbt-balance': {{value: '1000'}},
           'rbt-pbgui-data': {{checked: false}}
@@ -284,10 +285,10 @@ def test_validation_queue_draft_preserves_each_items_timerange() -> None:
           ]);
           assert.equal(queued.length, 3);
           assert.equal(queued.every(item => JSON.stringify(item.config.backtest.exchanges) === '["binance","bybit"]'), true);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -297,7 +298,7 @@ def test_v8_optimize_result_draft_opens_without_repreparing() -> None:
     function = _extract_function(source, "openInitialBacktestDraftFromUrl")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const resultConfig = {{
           bot: {{long: {{forager: {{volume_ema_span_1m: 0}}}}}},
           optimize: {{bounds: {{long: {{forager: {{volume_ema_span_1m: [0, 0, 1]}}}}}}}}
@@ -323,10 +324,10 @@ def test_v8_optimize_result_draft_opens_without_repreparing() -> None:
           assert.equal(await openInitialBacktestDraftFromUrl(), true);
           assert.equal(prepareCalls, 0);
           assert.equal(openedConfig, resultConfig);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -341,7 +342,7 @@ def test_backtest_editor_preserves_zero_minimum_coin_age() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let inputValue = '';
         const document = {{getElementById(id) {{
           assert.equal(id, 'cfg-min-coin-age');
@@ -359,7 +360,7 @@ def test_backtest_editor_preserves_zero_minimum_coin_age() -> None:
         assert.equal(serialize('invalid'), 30);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -402,7 +403,7 @@ def test_v7_run_conversion_renders_structured_manual_review_error() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {functions}
         const error = v8RunMigrationError({{
           detail: {{
@@ -424,7 +425,7 @@ def test_v7_run_conversion_renders_structured_manual_review_error() -> None:
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -441,7 +442,7 @@ def test_v7_run_manual_review_conversion_opens_unsaved_pb8_editor_draft() -> Non
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let requestBody = null;
         let conversionBusy = false;
         const BASE_PREFIX = '/mounted';
@@ -466,11 +467,11 @@ def test_v7_run_manual_review_conversion_opens_unsaved_pb8_editor_draft() -> Non
             window.location.href,
             'https://example.test/api/v8/edit_page?new=1&draft_id=review-draft'
           );
-        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        }}).catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     run_editor_source = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
     assert "showRunMigrationReview(draftResp)" in run_editor_source
@@ -486,7 +487,7 @@ def test_v8_run_editor_distinguishes_adjustments_from_manual_review() -> None:
     function = _extract_function(source, "showRunMigrationReview")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const main = {{notice: null, prepend(node) {{ this.notice = node; }}}};
         const document = {{
           getElementById(id) {{ return id === 'main-content' ? main : null; }},
@@ -529,7 +530,7 @@ def test_v8_run_editor_distinguishes_adjustments_from_manual_review() -> None:
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -540,7 +541,7 @@ def test_backtest_migration_keeps_age_choice_and_rejects_retired_raw_mode() -> N
         "applyMigrationReviewDecision", "ensureMigrationReviewDecisionsResolvedForSave",
     ))
     script = textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const path = 'live.minimum_coin_age_days';
         const ageInput = {{value:'30', closest:() => ({{classList:{{remove() {{}}}}}})}};
         const select = {{value:'', classList:{{add() {{}},remove() {{}}}}, focus() {{this.focused=true;}}}};
@@ -571,7 +572,7 @@ def test_backtest_migration_keeps_age_choice_and_rejects_retired_raw_mode() -> N
         assert.equal(_pendingMigrationReport.pbgui_review_decisions[0].resolved,false);
         assert.equal(ageInput.value,'30');
     """)
-    completed = subprocess.run(["node","-e",script],cwd=ROOT,text=True,capture_output=True,check=False)
+    completed = run_javascript(["-e",script],cwd=ROOT,text=True,capture_output=True,check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "legacy_raw" not in source
     assert "we_excess_allowance_mode" not in source
@@ -584,7 +585,7 @@ def test_backtest_migration_displays_native_behavior_warning_without_choices() -
     source = (ROOT / "frontend/v7_backtest.html").read_text()
     function = _extract_function(source, "showMigrationReviewNotice")
     script = textwrap.dedent(f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes=[];
         const editor={{prepend(node) {{this.notice=node;}}}};
         const document={{getElementById:() => editor,createElement(tag) {{
@@ -599,7 +600,7 @@ def test_backtest_migration_displays_native_behavior_warning_without_choices() -
         assert.ok(nodes.some(node => node.textContent === warning));
         assert.ok(!nodes.some(node => node.tag === 'select'));
     """)
-    completed = subprocess.run(["node","-e",script],cwd=ROOT,text=True,capture_output=True,check=False)
+    completed = run_javascript(["-e",script],cwd=ROOT,text=True,capture_output=True,check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -609,7 +610,7 @@ def test_shared_editor_payload_preserves_migration_review_metadata() -> None:
     normalize = _extract_function(source, "normalizeEditorConfigPayload")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {normalize}
         const report = {{manual_review_fields: ['live.price_distance_threshold']}};
         const values = {{'live.price_distance_threshold': 0.01}};
@@ -626,7 +627,7 @@ def test_shared_editor_payload_preserves_migration_review_metadata() -> None:
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -643,7 +644,7 @@ def test_v7_backtest_manual_review_conversion_opens_unsaved_pb8_editor_draft() -
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let requestBody = null;
         const BASE_PREFIX = '/mounted';
         const window = {{
@@ -667,11 +668,11 @@ def test_v7_backtest_manual_review_conversion_opens_unsaved_pb8_editor_draft() -
             window.location.href,
             '/mounted/api/backtest-v8/main_page?opt_draft_id=review-draft&draft_name=demo_v8'
           );
-        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        }}).catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "_pendingMigrationReviewDraft = draft && draft.migration_report ? draft : null" in source
     assert "showMigrationReviewNotice(_pendingMigrationReviewDraft)" in source
@@ -695,7 +696,7 @@ def test_v7_backtest_successful_conversion_always_opens_unsaved_draft() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const BASE_PREFIX = '/mounted';
         const window = {{
           location: {{origin: 'https://example.test', href: ''}},
@@ -718,11 +719,11 @@ def test_v7_backtest_successful_conversion_always_opens_unsaved_draft() -> None:
             window.location.href,
             '/mounted/api/backtest-v8/main_page?opt_draft_id=clean-draft&draft_name=demo_v8'
           );
-        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        }}).catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "migration_report: _pendingMigrationReport" in source
     assert "_pendingMigrationReport = draft && draft.migration_report ? draft.migration_report : null;" in source
@@ -752,7 +753,7 @@ def test_delayed_config_load_does_not_replace_results_sidebar() -> None:
     functions = "\n\n".join(_extract_function(source, name) for name in ("editConfig", "newConfig"))
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const backtestEditorAdapter = {{isV8: false}};
         let currentPanel = 'configs';
         let editingConfig = null;
@@ -785,10 +786,10 @@ def test_delayed_config_load_does_not_replace_results_sidebar() -> None:
           await create;
           assert.equal(opened.length, 1);
           assert.equal(editingConfig, 'beta');
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -798,7 +799,7 @@ def test_panel_navigation_closes_config_editor_sidebar_outside_configs() -> None
     function = source[source.index("var backtestReads="):source.index("window.addEventListener('pagehide'",source.index("var backtestReads="))] + _extract_function(source, "selectPanel")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let hidden = 0;
         let shown = 0;
         let rendered = 0;
@@ -842,7 +843,7 @@ def test_panel_navigation_closes_config_editor_sidebar_outside_configs() -> None
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -856,7 +857,7 @@ def test_editor_results_button_opens_the_unfiltered_results_panel() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const elements = {{
           'sb-btn-add-to-run': {{disabled: true}},
           'sb-btn-convert-v8': {{disabled: true, style: {{}}}},
@@ -887,7 +888,7 @@ def test_editor_results_button_opens_the_unfiltered_results_panel() -> None:
 
     assert " disabled" not in button_markup
     assert 'title="Show all backtest results"' in button_markup
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -897,7 +898,7 @@ def test_queue_result_action_applies_filter_before_showing_results() -> None:
     function = _extract_function(source, "viewConfigResults")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const configFilter = {{
           options: [{{value: ''}}],
           value: '',
@@ -952,7 +953,7 @@ def test_queue_result_action_applies_filter_before_showing_results() -> None:
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -962,7 +963,7 @@ def test_results_load_in_one_compact_request_and_use_server_config_filter() -> N
     function = source[source.index("var backtestReads="):source.index("window.addEventListener('pagehide'",source.index("var backtestReads="))] + _extract_function(source, "loadResults")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const nodes = {{
           'results-list': {{innerHTML: '<table>stale</table>'}},
           'results-count-label': {{textContent: '', style: {{display: ''}}}}
@@ -1012,11 +1013,11 @@ def test_results_load_in_one_compact_request_and_use_server_config_filter() -> N
           assert.match(requests[0], /offset=0&limit=0&name=target%20config&snapshot=new$/);
           assert.equal(paintFrames, 0);
           assert.equal(nodes['results-count-label'].textContent, '2 results');
-        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        }}).catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1026,7 +1027,7 @@ def test_progressive_results_render_preserves_selection_by_path() -> None:
     function = _extract_function(source, "setResultRowSelection")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let _selectedResultPaths = new Set();
         function row(path) {{
           const classes = new Set();
@@ -1050,7 +1051,7 @@ def test_progressive_results_render_preserves_selection_by_path() -> None:
         assert.equal(_selectedResultPaths.size, 0);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "_selectedResultPaths.has(r.path)" in source
     assert "_selectedResultPaths.clear()" in source
@@ -1064,7 +1065,7 @@ def test_delayed_v8_settings_load_does_not_replace_results_sidebar() -> None:
     function = function[: function.index("  resetBacktestEditorUiState();")] + "  resetBacktestEditorUiState();\n}"
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const backtestEditorAdapter = {{isV8: true}};
         const settings = {{exchange_options: []}};
         let currentPanel = 'configs';
@@ -1081,10 +1082,10 @@ def test_delayed_v8_settings_load_does_not_replace_results_sidebar() -> None:
           resolveSettings();
           await new Promise(resolve => setImmediate(resolve));
           assert.equal(editorRenderCount, 0);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1099,7 +1100,7 @@ def test_v8_result_without_saved_config_opens_as_new_draft() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         function resultEditorSource(isV8, configNames) {{
           const backtestEditorAdapter = {{isV8}};
           const configs = configNames.map(name => ({{name}}));
@@ -1113,7 +1114,7 @@ def test_v8_result_without_saved_config_opens_as_new_draft() -> None:
         assert.equal(resultEditorSource(false, []), 'hash');
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1126,7 +1127,7 @@ def test_backtest_settings_modal_opens_immediately_then_refreshes_authoritative_
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let settings = {{cpu: 1, cpu_max: null, autostart: false, use_pbgui_market_data: false, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24}};
         let settingsLoadPromise = null;
         let settingsModalDirty = false;
@@ -1164,10 +1165,10 @@ def test_backtest_settings_modal_opens_immediately_then_refreshes_authoritative_
           await openSettingsModal();
           assert.match(modalBody, /max 16/);
           assert.match(toastMessage, /Failed to refresh settings: offline/);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1193,7 +1194,7 @@ def test_ai_backtest_compare_selects_exact_results_and_opens_existing_chart() ->
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const backtestEditorAdapter = {{ version: 'v8' }};
         const versionFilter = {{ value: 'both' }};
         const compareEl = {{ scrollIntoView: options => {{ compareEl.scrolled = options; }} }};
@@ -1235,10 +1236,10 @@ def test_ai_backtest_compare_selects_exact_results_and_opens_existing_chart() ->
           }});
           assert.deepEqual(selected, ['path-a', 'path-b']);
           assert.deepEqual(compared, selected);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1248,7 +1249,7 @@ def test_compare_legend_reserves_rows_above_the_plot() -> None:
     function = _extract_function(page, "_compareLegendLayout")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {function}
         const short = _compareLegendLayout([{{name:'eq short'}}, {{name:'bal short'}}], 1200);
         const many = _compareLegendLayout(
@@ -1260,8 +1261,8 @@ def test_compare_legend_reserves_rows_above_the_plot() -> None:
         assert.equal(many.height - many.marginTop, 760);
         """
     )
-    completed = subprocess.run(
-        ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False
+    completed = run_javascript(
+        ["-e", script], cwd=ROOT, text=True, capture_output=True, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
@@ -1283,7 +1284,7 @@ def test_ai_queue_batch_waits_for_exact_jobs_then_opens_results_compare() -> Non
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const backtestEditorAdapter = {{isV8:true}};
         const AI_BACKTEST_COMPARE_KEY = 'pbgui:ai:backtest_compare:v1';
         let aiQueueCompareRequest = null, aiQueueCompareOpening = false, aiQueueCompareRetryCount = 0, aiQueueCompareRetryTimer = null;
@@ -1330,10 +1331,10 @@ def test_ai_queue_batch_waits_for_exact_jobs_then_opens_results_compare() -> Non
           assert.deepEqual(compared, selected);
           assert.equal(stored.has(AI_BACKTEST_COMPARE_KEY), false);
           assert.match(toastMessage, /Opened Results Compare for 2 completed backtests/);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1470,7 +1471,7 @@ def test_combined_pb8_result_builds_price_market_options() -> None:
     function = _extract_function(source, "resultPriceMarkets")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         {function}
         const markets = resultPriceMarkets({{
           exchange_dir: 'combined',
@@ -1489,7 +1490,7 @@ def test_combined_pb8_result_builds_price_market_options() -> None:
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_balance_chart_renders_market_price_on_second_axis() -> None:
@@ -1498,7 +1499,7 @@ def test_balance_chart_renders_market_price_on_second_axis() -> None:
     function = _extract_function(source, "renderBEChart")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let plot = null;
         const document = {{getElementById() {{ return {{}}; }}}};
         const Plotly = {{newPlot(id, traces, layout) {{ plot = {{id, traces, layout}}; }}}};
@@ -1522,7 +1523,7 @@ def test_balance_chart_renders_market_price_on_second_axis() -> None:
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_price_coverage_is_measured_against_visible_chart_range() -> None:
@@ -1532,7 +1533,7 @@ def test_price_coverage_is_measured_against_visible_chart_range() -> None:
     render_function = _extract_function(source, "renderBEWithSelectedPrice")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         var _priceRequestSeq = {{}};
         let status = null;
         const payload = {{
@@ -1562,7 +1563,7 @@ def test_price_coverage_is_measured_against_visible_chart_range() -> None:
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_combined_result_prefers_exchange_with_full_price_coverage() -> None:
@@ -1572,7 +1573,7 @@ def test_combined_result_prefers_exchange_with_full_price_coverage() -> None:
     render_function = _extract_function(source, "renderBEWithSelectedPrice")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         var _priceRequestSeq = {{}};
         let rendered = null;
         let status = null;
@@ -1611,7 +1612,7 @@ def test_combined_result_prefers_exchange_with_full_price_coverage() -> None:
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_pb8_symbol_pnl_uses_real_timestamps_and_net_fees() -> None:
@@ -1621,7 +1622,7 @@ def test_pb8_symbol_pnl_uses_real_timestamps_and_net_fees() -> None:
     render_function = _extract_function(source, "renderPnlChart")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let plot = null;
         let axisTitle = null;
         const document = {{getElementById: () => ({{}})}};
@@ -1644,7 +1645,7 @@ def test_pb8_symbol_pnl_uses_real_timestamps_and_net_fees() -> None:
         """
     )
 
-    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(["-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_notification_bell_opens_transient_gui_messages() -> None:
@@ -1722,8 +1723,8 @@ def test_v8_advanced_field_transformations_round_trip() -> None:
     """Market overrides and visible-metric modes must retain their PB8 JSON semantics."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         global.window = {};
         eval(fs.readFileSync('frontend/js/backtest_advanced_fields.js', 'utf8'));
         const advanced = window.PBGuiBacktestAdvancedFields;
@@ -1767,7 +1768,7 @@ def test_v8_advanced_field_transformations_round_trip() -> None:
         assert.deepEqual(exact.overrides, { '1000ABC/USDT:USDT': { c_mult: 1000 } });
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1775,8 +1776,8 @@ def test_suite_coin_lists_preserve_pb8_identifiers_only() -> None:
     """Suite scenarios must keep exact PB8 identifiers while retaining PB7 uppercase behavior."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
         _suiteAvailableCoins = () => [];
 
@@ -1791,7 +1792,7 @@ def test_suite_coin_lists_preserve_pb8_identifiers_only() -> None:
         ]);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1799,8 +1800,8 @@ def test_suite_exchange_options_are_injected_for_pb8_and_reset_for_pb7() -> None
     """Shared Suite selectors must use runtime PB8 choices without changing PB7."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
         _suiteLoadBotParams = () => Promise.resolve([]);
 
@@ -1811,7 +1812,7 @@ def test_suite_exchange_options_are_injected_for_pb8_and_reset_for_pb7() -> None
         assert.deepEqual(_suiteState.exchanges, ['binance','bybit','bitget','okx','hyperliquid','kucoin']);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1819,8 +1820,8 @@ def test_suite_load_prefers_the_pb8_reducer_without_mutating_it() -> None:
     """Suite loading must retain PB8 metric reducers and prefer them over the legacy alias."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
         _suiteRender = () => {};
         const reducer = {
@@ -1836,7 +1837,7 @@ def test_suite_load_prefers_the_pb8_reducer_without_mutating_it() -> None:
         assert.notEqual(_suiteState.aggregate, reducer);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1874,8 +1875,8 @@ def test_editor_adapter_preserves_v7_paths_and_writes_v8_risk_paths() -> None:
     """The shared editor's only generation difference is handled by its path adapter."""
     script = textwrap.dedent(
         """
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         global.window = { location: { origin: 'https://example.test' } };
         eval(fs.readFileSync('frontend/js/backtest_editor_adapter.js', 'utf8'));
 
@@ -1902,7 +1903,7 @@ def test_editor_adapter_preserves_v7_paths_and_writes_v8_risk_paths() -> None:
         assert.equal(v7.websocketPath, '/api/backtest-v7/ws/bt7');
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -1910,8 +1911,8 @@ def test_shared_coin_override_editor_preserves_nested_v8_paths() -> None:
     """Dotted V8 override selectors must round-trip as nested canonical objects."""
     script = textwrap.dedent(
         r"""
-        const assert = require('node:assert/strict');
-        const fs = require('node:fs');
+        const assert = browserAssert;
+        const fs = testSources;
         global.window = { PBGuiEditorShared: { clearFixedValidationStatus() {}, setFixedValidationError() {} } };
         eval(fs.readFileSync('frontend/js/coin_overrides_editor.js', 'utf8'));
         _covState.allowedParams = {
@@ -2014,7 +2015,7 @@ def test_shared_coin_override_editor_preserves_nested_v8_paths() -> None:
         assert.doesNotMatch(moduleSource, /onclick="coinOvEdit\(\\'" \+ esc\(c\)/);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -2038,7 +2039,7 @@ def test_v8_apply_filters_keeps_resolved_coins_when_some_symbols_are_unavailable
     function = _extract_function(source, "cfgApplyFilters")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const API_BASE = '/api/backtest-v8';
         const backtestEditorAdapter = {{
           isV8: true,
@@ -2076,10 +2077,10 @@ def test_v8_apply_filters_keeps_resolved_coins_when_some_symbols_are_unavailable
           assert.deepEqual(selected['ms-cfg-ign-long'], ['DOGE']);
           assert.equal(messages[0].level, 'info');
           assert.match(messages[0].message, /2 unavailable PB8 symbols skipped/);
-        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -2089,7 +2090,7 @@ def test_backtest_v8_results_render_strategy_without_changing_v7_rows() -> None:
     function = _extract_function(source, "_renderResultsTableInto")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{}};
         let _activeResultsCtx = null;
         const _selectedResultPaths = new Set();
@@ -2133,7 +2134,7 @@ def test_backtest_v8_results_render_strategy_without_changing_v7_rows() -> None:
         assert.doesNotMatch(v7.innerHTML, /data-key="strategy"/);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -2146,7 +2147,7 @@ def test_backtest_result_date_columns_migrate_saved_selections_once() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const BACKTEST_VIEW_STATE_KEY = 'pbgui:v8_backtest:view_state';
         const values = new Map();
         const window = {{localStorage: {{
@@ -2161,7 +2162,7 @@ def test_backtest_result_date_columns_migrate_saved_selections_once() -> None:
         assert.deepEqual(readStoredResultColumns('results'), ['modified', 'gain']);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -2174,7 +2175,7 @@ def test_optimize_validation_results_render_as_collapsible_candidate_groups() ->
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{}};
         let _activeResultsCtx = null;
         const _selectedResultPaths = new Set();
@@ -2221,7 +2222,7 @@ def test_optimize_validation_results_render_as_collapsible_candidate_groups() ->
         assert.equal((host.innerHTML.match(/class="selected result-group-member" hidden/g) || []).length, 4);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "groupValidation: true" in source
     assert "tbody tr:not([hidden])" in source
@@ -2236,7 +2237,7 @@ def test_collapsed_validation_groups_support_bulk_selection() -> None:
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const _selectedResultPaths = new Set();
         function row(path, group, groupRow = false) {{
           const classes = new Set(groupRow ? ['result-group-row'] : ['result-group-member']);
@@ -2279,7 +2280,7 @@ def test_collapsed_validation_groups_support_bulk_selection() -> None:
         assert.deepEqual(getSelectedResults(), ['/first/train', '/first/full']);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "e.target.closest('.actions-cell, .result-group-compare, .result-group-toggle')" in source
 
@@ -2292,7 +2293,7 @@ def test_collapsed_validation_group_uses_full_metrics_and_visible_columns() -> N
     )
     script = textwrap.dedent(
         rf"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const window = {{}};
         let _activeResultsCtx = null;
         const _selectedResultPaths = new Set();
@@ -2359,7 +2360,7 @@ def test_collapsed_validation_group_uses_full_metrics_and_visible_columns() -> N
         assert.equal((summary().match(/<td/g) || []).length, 5);
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -2372,7 +2373,7 @@ def test_optimize_validation_group_compare_selects_and_opens_all_members() -> No
     )
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const group = {{kind: 'optimize_validate', id: 'batch:0'}};
         const results = [
           {{backtest_version: 'v8', path: '/group-a', result_group: group}},
@@ -2398,7 +2399,7 @@ def test_optimize_validation_group_compare_selects_and_opens_all_members() -> No
         assert.equal(compared.chartId, 'compare-chart-div');
         """
     )
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
@@ -2427,7 +2428,7 @@ def test_backtest_and_archive_result_columns_are_independently_configurable() ->
     assert "columnContext: 'archive'" in source
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const BACKTEST_RESULT_COLUMN_DEFINITIONS = [
           {{key: 'backtest_version', conditional: 'version', default: true}},
           {{key: 'strategy', conditional: 'strategy', default: true}},
@@ -2457,7 +2458,7 @@ def test_backtest_and_archive_result_columns_are_independently_configurable() ->
         """
     )
 
-    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = run_javascript(["-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 

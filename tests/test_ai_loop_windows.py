@@ -1,9 +1,10 @@
 """Offline reviewed-window contracts and mandatory isolated background reports."""
+
+from javascript_checks import run_javascript
 import asyncio
 import copy
 import json
 from pathlib import Path
-import subprocess
 import time
 from types import SimpleNamespace
 
@@ -134,8 +135,8 @@ def test_bound_windows_reject_drift_at_creation_and_start(tmp_path, change):
 def test_js_inclusive_split_and_calendar_boundaries():
     """Run production JS arithmetic directly, including leap days and minimum lengths."""
     code = """
-require('./frontend/js/ai_loop_windows.js');
-const assert=require('node:assert/strict'), w=globalThis.PBGuiAILoopWindows;
+loadBrowserModule('./frontend/js/ai_loop_windows.js');
+const assert=browserAssert, w=globalThis.PBGuiAILoopWindows;
 assert.deepEqual(w.generate('2024-01-01','2024-01-10',3,true).windows.map(r=>[r.start_date,r.end_date]),
  [['2024-01-01','2024-01-02'],['2024-01-03','2024-01-05'],['2024-01-06','2024-01-07'],['2024-01-08','2024-01-10']]);
 assert.equal(w.generate('2024-01-01','2024-01-10',3,false).windows.length,3);
@@ -145,7 +146,7 @@ assert.throws(()=>w.generate('2024-02-30','2024-03-10',1,true));
 assert.throws(()=>w.generate('2024-01-01','2024-12-31',49,false));
 assert.equal(w.generate('2024-01-01','2024-12-31',48,true).windows.length,49);
 """
-    subprocess.run(['node', '-e', code], cwd=ROOT, check=True, capture_output=True, text=True)
+    run_javascript(['-e', code], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 @pytest.mark.parametrize('problem', ['quota', 'time', 'claimed', 'none'])

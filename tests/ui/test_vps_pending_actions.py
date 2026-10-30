@@ -1,8 +1,9 @@
 """Execute pending-action recovery with mocked browser controls and sockets."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
 import re
-import subprocess
 
 import pytest
 
@@ -19,7 +20,7 @@ def function(source, name):
 
 def run(script):
     """Run isolated JavaScript assertions without browser or network access."""
-    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True, timeout=10)
+    run_javascript(['-e', script], check=True, capture_output=True, text=True, timeout=10)
 
 
 @pytest.mark.parametrize('action', ['kill-instance', 'restart-service'])
@@ -33,7 +34,7 @@ def test_monitor_pending_survives_redraw(action, finish):
     script = "const action = %r, finish = %r;\n" % (action, finish)
     script += "\n".join(function(source, name) for name in names)
     script += r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const pendingMonitorActions = new Map();
 let calls = 0, timers = new Map(), nextTimer = 0, buttons = [];
 let cpuHistoryTimeout = null;
@@ -74,7 +75,7 @@ def test_manager_disconnect_restores_all_pending_settings():
     source = (ROOT / 'frontend/vps_manager.html').read_text()
     script = function(source, 'clearInterruptedSettingsReads') + function(source, 'updateReadSettingsProgress')
     script += r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const store = {vps:{one:{readSettingsLoading:true}, two:{readSettingsLoading:false}}, pendingWsMessages:[{cmd:'read_vps_settings'}, {cmd:'refresh'}]};
 function ensureVpsUi(host) { return store.vps[host]; }
 clearInterruptedSettingsReads();
@@ -105,7 +106,7 @@ def logging_script(real_dialogs=False, api_base='/api/vps-manager'):
     script += '\n' + next(line for line in source.splitlines()
                           if "window.addEventListener('pagehide'" in line)
     bootstrap = r'''
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 let timers = new Map(), nextTimer = 0, messages = [], toasts = [], builds = 0;
 let button = null, inputs = [], renderedSignature = '', reconnects = 0;
 const events = {};

@@ -1,7 +1,8 @@
 """VPS Manager offers request-credit purchases only to depleted main accounts."""
 
+from javascript_checks import run_javascript
+
 from pathlib import Path
-import subprocess
 
 
 PAGE = Path(__file__).resolve().parents[2] / "frontend" / "vps_manager.html"
@@ -14,7 +15,7 @@ def test_hl_credit_purchase_visibility_and_guard() -> None:
     renderer = source[source.index("    function renderMetricHistoryPayload("):source.index("    function renderHlRateLimitHistoryMeta(")]
     purchase = source[source.index("    async function buyHlRequestCredits("):source.index("    document.getElementById('hlCreditAmount').addEventListener", source.index("    async function buyHlRequestCredits("))]
     script = r"""
-const assert = require('node:assert/strict');
+const assert = browserAssert;
 const nodes = new Map();
 const document = {getElementById(id) {
   if (!nodes.has(id)) nodes.set(id, {hidden: true, value: '', textContent: '', innerHTML: '', disabled: false});
@@ -64,7 +65,7 @@ const updateHlCreditCost = () => {
 
   renderMetricHistoryPayload({...sample(1000, 10000), is_vault: false}, 'host', 'main', 'cpu');
   assert.equal(element('hlCreditPurchasePanel').hidden, true);
-})().catch(error => {console.error(error); process.exitCode = 1;});
+})().catch(error => {console.error(error); testResult.exitCode = 1;});
 """
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+    result = run_javascript(["-e", script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr

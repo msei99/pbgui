@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import sync_playwright, expect
+from browser_driver import sync_browser, expect
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,7 +29,7 @@ def test_screenshot_picker_paste_drop_removal_and_encrypted_snapshot(width):
               'coverage':{'registered_routes':[],'sources':[],'omitted':[]}}
     html = (ROOT/'frontend/support_debug.html').read_text().replace('"%%API_BASE%%"','"/api/debug"').replace('"%%BASE_PREFIX%%"','""').replace('%%NAV_HASH%%','test')
     attachments, errors, requests = [], [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width':width,'height':850})
         page.on('pageerror',lambda error: errors.append(str(error)))
@@ -109,7 +109,7 @@ def test_feature_requests_optional_diagnostics_and_private_screenshots(width, pr
               'records':{'private-record':{'value':42}},'logs':{},'coverage':{}}
     html = (ROOT/'frontend/support_debug.html').read_text().replace('"%%API_BASE%%"',json.dumps(prefix+'/api/debug')).replace('"%%BASE_PREFIX%%"',json.dumps(prefix)).replace('%%NAV_HASH%%','test')
     attachments, collections, errors = [], [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width':width,'height':850})
         page.on('pageerror',lambda error: errors.append(str(error)))

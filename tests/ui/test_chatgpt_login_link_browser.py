@@ -1,7 +1,7 @@
 """Verify that AI Setup displays and cancels browser login with actual local assets."""
 from pathlib import Path
 from urllib.parse import urlparse
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -12,7 +12,7 @@ def test_browser_login_shows_link_and_cancel():
     for marker, value in [('API_BASE', '/api/ai'), ('BASE_PREFIX', ''), ('VERSION', 'fixture'), ('SERIAL', '1'), ('NAV_HASH', 'test')]:
         html = html.replace('%%' + marker + '%%', value)
     cancelled, errors = [], []
-    with sync_playwright() as pw:
+    with sync_browser() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page()
         page.on('pageerror', lambda error: errors.append(str(error)))

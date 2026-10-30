@@ -38,8 +38,8 @@ def log_page(request):
     errors, calls, held = [], [], []
     control = {'hold_settings': False, 'settings_status': 200, 'settings_posts': [],
                'settings': dict(cpu=8, cpu_max=16, host_cpu_count=16, autostart=False, cpu_override=False, use_pbgui_market_data=False), 'hold_status': False, 'hold_charges': False, 'hold_jobs': False, 'jobs_before_hold': 0, 'jobs_status': 200, 'hold_fragment': False, 'status': {}}
-    playwright = pytest.importorskip('playwright.sync_api')
-    with playwright.sync_playwright() as pw:
+    browser_api = __import__('browser_driver')
+    with browser_api.sync_browser() as pw:
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width': 1280, 'height': 900}, locale='en-US')
         page.set_default_timeout(6000)
@@ -602,7 +602,7 @@ def test_slow_restore_cannot_override_user_action(log_page, action):
     control.update(hold_jobs=True, jobs_before_hold=1)
     page.reload()
     page.wait_for_function('window.PBGuiVast && !state.initialLoadPending')
-    page.wait_for_timeout(100)
+    page._wait(lambda: bool(held))
     assert held and held[-1][0] == 'jobs'
     if action == 'open':
         page.evaluate("openLogPanel('job','Chosen local log')")

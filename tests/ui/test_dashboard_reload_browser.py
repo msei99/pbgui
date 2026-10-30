@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from browser_driver import expect, sync_browser
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -30,7 +30,7 @@ def _check_dashboard_manage_guide_priority_across_iframe():
     config = {'name': name, 'rows': 1, 'cols': 1, 'dashboard_type_1_1': 'POSITIONS',
               'dashboard_positions_users_1_1': ['test-user']}
     errors, previews = [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         try:
             page = browser.new_page(viewport={'width': 1280, 'height': 900})
@@ -159,7 +159,7 @@ def test_dashboard_menu_reload_restores_selection_and_filter(editing):
     """Use real navigation and shell assets while all dashboard data stays synthetic."""
     dashboards = ['Alpha', 'HL manicpt', 'Beta', 'Gamma']
     errors, loads = [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page()
         page.set_default_timeout(5000)
@@ -240,7 +240,7 @@ def test_ppl_aggregation_controls_persist_and_update(editing, saved_sum):
         'MONTH': ['2023-01', '2024-01', '2024-06', '2025-01'],
         'YEAR': ['2023', '2024', '2025'], 'ALL_TIME': ['ALL_TIME'],
     }
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': 1280, 'height': 900})
         page.set_default_timeout(10000)
@@ -390,7 +390,7 @@ def test_orders_viewport_survives_updates():
     candles = [candle(i) for i in range(180) if i != 40]
     snapshots, history, pending = [], [], {}
     errors, assets = [], []
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         try:
             page = browser.new_page(viewport={'width': 1280, 'height': 1000})
@@ -520,6 +520,13 @@ def test_orders_viewport_survives_updates():
             assert raw['initial']['to'] == pytest.approx(len(candles) - 1 + 8), raw
             assert raw['fit']['to'] == pytest.approx(len(candles) - 1 + 8), raw
             assert raw['replaced']['to'] == pytest.approx(len(candles) - 2 + 8), raw
+            # Continuing follow must preserve fractional offsets. Returning from
+            # historical panning is tested separately and still restores its margin.
+            inner.evaluate('''() => {
+                const ts=ordersTest.chart.timeScale(), range=ts.getVisibleLogicalRange();
+                ts.setVisibleLogicalRange({from:range.from+.125,to:range.to+.125});
+            }''')
+            settle()
             base = bounds()
             reconcile()
             assert_range(base)
@@ -542,7 +549,9 @@ def test_orders_viewport_survives_updates():
             x, y = box['x'] + box['width'] * 0.5, box['y'] + box['height'] * 0.5
             page.mouse.move(x, y)
             page.mouse.down()
-            page.mouse.move(x - 40, y, steps=8)
+            # Native input must leave the label-dependent follow margin, which
+            # can exceed the chart library's eight-bar default after zooming.
+            page.mouse.move(x - 80, y, steps=8)
             page.mouse.up()
             page.mouse.wheel(0, -30)
             settle()
@@ -660,7 +669,7 @@ def test_orders_viewport_survives_updates():
 @pytest.mark.parametrize('pixel_ratio', [1, 2])
 def test_orders_initial_label_clearance(width, pixel_ratio):
     """Measure real painted badges and candle edges from the first visible chart frame."""
-    with sync_playwright() as driver:
+    with sync_browser() as driver:
         browser = driver.chromium.launch()
         try:
             page = browser.new_page(viewport={'width': 1400, 'height': 800}, device_scale_factor=pixel_ratio)

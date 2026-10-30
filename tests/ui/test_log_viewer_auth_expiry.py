@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from javascript_checks import run_javascript
+
 import re
-import subprocess
 import textwrap
 from pathlib import Path
 
@@ -23,7 +24,7 @@ def test_log_viewer_close_4001_is_terminal_and_redirects() -> None:
     connect_method = source[connect_start:source.index("    _disconnect() {", connect_start)]
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         let sockets = [];
         let timers = 0;
         let redirects = [];
@@ -71,7 +72,7 @@ def test_log_viewer_close_4001_is_terminal_and_redirects() -> None:
         assert.equal(sockets.length, 1);
         """
     )
-    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -83,7 +84,7 @@ def test_log_viewer_open_reconnects_only_when_socket_is_disconnected() -> None:
     open_method = source[open_start:source.index("    close() {", open_start)]
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         class FakeWebSocket {{
           static CONNECTING = 0;
           static OPEN = 1;
@@ -116,7 +117,7 @@ def test_log_viewer_open_reconnects_only_when_socket_is_disconnected() -> None:
         assert.equal(panel.connects, 2);
         """
     )
-    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -126,7 +127,7 @@ def test_replaced_log_viewer_socket_callbacks_cannot_mutate_current_state() -> N
     source = LOG_VIEWER.read_text(encoding="utf-8")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const sockets = [];
         const redirects = [];
         let handled = 0;
@@ -199,7 +200,7 @@ def test_replaced_log_viewer_socket_callbacks_cannot_mutate_current_state() -> N
         assert.deepEqual(currentSocket.sent, [{{cmd: 'list_local_logs'}}]);
         """
     )
-    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -209,7 +210,7 @@ def test_log_viewer_buffers_and_dom_keep_the_newest_configured_lines() -> None:
     source = LOG_VIEWER.read_text(encoding="utf-8")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const frames = [];
         globalThis.window = {{}};
         globalThis.WebSocket = {{OPEN: 1, CLOSING: 2, CLOSED: 3}};
@@ -272,7 +273,7 @@ def test_log_viewer_buffers_and_dom_keep_the_newest_configured_lines() -> None:
         assert.equal(panel._getLines(), 200);
         """
     )
-    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     assert '<option value="50000">Max (50,000)</option>' in source
     assert '<option value="0">All</option>' not in source
@@ -284,7 +285,7 @@ def test_chunked_full_render_defers_live_lines_until_frozen_snapshot_finishes() 
     source = LOG_VIEWER.read_text(encoding="utf-8")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const frames = [];
         globalThis.window = {{}};
         globalThis.WebSocket = {{OPEN: 1, CLOSING: 2, CLOSED: 3}};
@@ -357,7 +358,7 @@ def test_chunked_full_render_defers_live_lines_until_frozen_snapshot_finishes() 
         assert.deepEqual(terminal.children.map(item => item.num), [3, 4, 5, 6, 7]);
         """
     )
-    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -367,7 +368,7 @@ def test_large_log_filter_renders_from_the_model_without_full_dom() -> None:
     source = LOG_VIEWER.read_text(encoding="utf-8")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         const frames = [];
         let contentWrites = 0;
         let displayWrites = 0;
@@ -509,7 +510,7 @@ def test_large_log_filter_renders_from_the_model_without_full_dom() -> None:
         assert.equal(displayWrites, 0);
         """
     )
-    result = subprocess.run(["node"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript([], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -519,7 +520,7 @@ def test_remote_log_info_uses_subscription_sid_to_reject_delayed_metadata() -> N
     source = LOG_VIEWER.read_text(encoding="utf-8")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         globalThis.window = {{}};
         globalThis.WebSocket = {{OPEN: 1}};
         {source}
@@ -546,7 +547,7 @@ def test_remote_log_info_uses_subscription_sid_to_reject_delayed_metadata() -> N
         assert.deepEqual(sizes, [20]);
         """
     )
-    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -556,7 +557,7 @@ def test_server_filtered_local_records_remain_compact_and_drop_expired_blocks() 
     source = LOG_VIEWER.read_text(encoding="utf-8")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         globalThis.window = {{}};
         globalThis.WebSocket = {{OPEN: 1}};
         {source}
@@ -612,7 +613,7 @@ def test_server_filtered_local_records_remain_compact_and_drop_expired_blocks() 
         assert.deepEqual(panel._lines, ['later context', 'new needle']);
         """
     )
-    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
@@ -640,7 +641,7 @@ def test_restart_arms_stream_before_kill_and_keeps_it_after_success() -> None:
     source = LOG_VIEWER.read_text(encoding="utf-8")
     script = textwrap.dedent(
         f"""
-        const assert = require('node:assert/strict');
+        const assert = browserAssert;
         globalThis.window = {{}};
         globalThis.WebSocket = {{OPEN: 1, CLOSING: 2, CLOSED: 3}};
         globalThis.setTimeout = () => 1;
@@ -691,7 +692,7 @@ def test_restart_arms_stream_before_kill_and_keeps_it_after_success() -> None:
         assert.equal(panel._restartAttempt, null);
         """
     )
-    result = subprocess.run(["node", "-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
+    result = run_javascript(["-"], input=script, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
