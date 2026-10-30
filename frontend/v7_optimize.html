@@ -2734,7 +2734,9 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
     <div id="optlog-actions">
       <button type="button" class="optlog-mini-btn" id="optlog-open-results" title="Show matching optimize results">Results</button>
       <button type="button" class="optlog-mini-btn" id="optlog-open-pareto-explorer" title="Open matching result in Pareto Explorer">Pareto Explorer</button>
-      <div id="optlog-cloud-actions" class="vast-component" hidden></div>
+      <div id="optlog-cloud-actions" class="vast-component" hidden>
+        <button id="collect-job" type="button" disabled>Collect Pareto</button>
+      </div>
     </div>
     <div id="opt-log-dashboard">
     <div class="optlog-progress-track"><div id="optlog-progress-fill" class="optlog-progress-fill"></div></div>
@@ -16460,7 +16462,7 @@ window.PBGUI_NAV_CONFIG = {
 
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=3"></script>
-<script src="/app/js/optimizer_log_layout.js?v=6"></script>
-<script src="/app/js/vast.js?v=176"></script>
+<script src="/app/js/optimizer_log_layout.js?v=7"></script>
+<script src="/app/js/vast.js?v=177"></script>
 </body>
 </html>

@@ -4741,6 +4741,66 @@ def resume_checkpoint(filename: str, body: dict, session: SessionToken = Depends
     return _reset_queue_item(filename, {**(body or {}), "mode": "checkpoint_resume", "source": (body or {}).get("source")})
 
 
+def _collect_pareto_results(store, identifier: str) -> dict:
+    """Publish Pareto without stop, finalization, convergence or rental controls."""
+    from vast_jobs import job_id
+    from vast_provider import VastClient, VastError
+    from vast_transfer import WorkerConnection, import_results
+    from vast_credentials import VastCredentialStore
+    from vast_job_runner import owned_instance, validate_intent
+
+    identifier = job_id(identifier)
+    directory = store.directory(identifier)
+    # Match the finalizer's lock order. A snapshot cannot replace files while
+    # either importer reads them, or regress a concurrently finalized result.
+    with advisory_file_lock(directory / '.finalize-lock'):
+        with advisory_file_lock(directory / '.snapshot-lock'):
+            state = store.read(identifier)
+            if state.get('kind') in {'worker', 'calibration'} or state['status'] in {'ready', 'preparing'}:
+                raise VastError('This job has no optimizer Pareto results ready to collect', 409)
+            partial = not state.get('final_collected', False)
+            if partial:
+                lease_id = job_id(state.get('lease_id') or identifier)
+                rental = store.read(lease_id)
+                if rental['rental_state'] in {'none', 'deletion_verified'}:
+                    raise VastError('The job instance is no longer reachable; previously collected results are retained', 409)
+                if store.read(lease_id, 'control.json').get('cleanup'):
+                    raise VastError('Rental cleanup is already requested; previously collected results are retained', 409)
+                intent = validate_intent(store.read(lease_id, 'intent.json'), lease_id)
+                client = VastClient(VastCredentialStore(store.root).secrets()['api_key'])
+                instance = owned_instance(client, intent, fresh=True, expected_id=rental.get('instance_id'))
+                if instance is None or instance.get('actual_status') != 'running':
+                    raise VastError('The job instance is not reachable or running; try again when it is available', 409)
+                connection = WorkerConnection(store, identifier, instance, lease_id=lease_id)
+                connection.bootstrap(client)
+                # Even a finished optimizer is read through its immutable Pareto
+                # snapshot: final_collected would make the supervisor clean up.
+                connection.collect(False, timeout=60)
+            source = directory / ('partial-results' if partial else 'final-results') / 'optimize_results'
+            runs = list(source.glob('*'))
+            if len(runs) != 1 or not list((runs[0] / 'pareto').glob('*.json')):
+                raise VastError('No Pareto results are ready yet; wait for exact evaluations and try again', 409)
+            imported = import_results(store, identifier, partial=partial)
+            return store.update(identifier, **imported)
+
+
+@router.post("/queue/{filename}/collect")
+def collect_queue_pareto(filename: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """Collect the PB8 cloud optimizer's current Pareto without stopping its job."""
+    from vast_jobs import JobStore
+    from vast_provider import VastError
+
+    try:
+        return _collect_pareto_results(JobStore(), filename)
+    except VastError as exc:
+        _log(SERVICE, str(exc), level="WARNING")
+        raise HTTPException(status_code=exc.status, detail=str(exc),
+                            headers={"X-PBGui-Error-Source": "vast"}) from None
+    except Exception as exc:
+        _log(SERVICE, "Pareto collection failed: " + type(exc).__name__, level="ERROR")
+        raise HTTPException(status_code=502, detail="Pareto collection could not finish; previous results are retained. Check the instance connection and retry.") from None
+
+
 @router.post("/queue/{filename}/stop")
 def stop_queue_item(filename: str, session: SessionToken = Depends(require_auth)) -> dict:
     with _queue_lock():

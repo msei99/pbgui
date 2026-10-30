@@ -54,7 +54,6 @@ class MockCoinData:
         pass
 
 
-_previous_pbcoindata = sys.modules.get("PBCoinData")
 PBCoinData = ModuleType("PBCoinData")
 PBCoinData.normalize_symbol = normalize_symbol
 PBCoinData.compute_coin_name = compute_coin_name
@@ -63,14 +62,7 @@ PBCoinData.CoinData = MockCoinData
 sys.modules["PBCoinData"] = PBCoinData
 
 
-try:
-    from api import optimize_v7  # noqa: E402
-finally:
-    # Do not leak this reduced contract into unrelated market-data collection.
-    if _previous_pbcoindata is None:
-        sys.modules.pop("PBCoinData", None)
-    else:
-        sys.modules["PBCoinData"] = _previous_pbcoindata
+from api import optimize_v7  # noqa: E402
 
 
 LOG_SAMPLE = """2026-03-30T12:10:14Z INFO Selected optimizer backend: pymoo

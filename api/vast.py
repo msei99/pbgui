@@ -1620,19 +1620,6 @@ def stop_job(identifier: str, session: SessionToken = Depends(require_auth)) -> 
         raise _error(exc) from None
 
 
-@router.post("/jobs/{identifier}/collect")
-def collect_job(identifier: str, session: SessionToken = Depends(require_auth)) -> dict:
-    """Collect an owned optimizer's Pareto without stopping work or its rental."""
-    from vast_transfer import collect_pareto_results
-    try:
-        return collect_pareto_results(JobStore(), identifier)
-    except VastError as exc:
-        raise _error(exc) from None
-    except Exception as exc:
-        _log(SERVICE, 'Pareto collection failed: ' + type(exc).__name__, level='ERROR')
-        raise HTTPException(status_code=502, detail='Pareto collection could not finish; previous results are retained. Check the instance connection and retry.') from None
-
-
 @router.post("/jobs/{identifier}/recover")
 def recover_job(identifier: str, session: SessionToken = Depends(require_auth)) -> dict:
     """Resume supervision of an existing authorization without a replacement rent."""

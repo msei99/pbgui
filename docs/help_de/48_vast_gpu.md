@@ -409,8 +409,6 @@ Nach Klick auf Start zeigt die Queue-Zeile sofort **Starting…**, solange die A
 
 Das Job-Logfenster bietet **Requeue** für inaktive fehlgeschlagene/abgebrochene Jobs und **Start** für vorbereitete Jobs. Requeue lässt das Fenster beim Ersatzjob geöffnet und setzt einen bereits autorisierten **Auto rent & start**-Pool fort.
 
-**Collect Pareto** im Optimize-Log kopiert den aktuellen verifizierten Pareto-Snapshot, ohne den Optimizer zu stoppen oder die Mietbereinigung anzufordern. Nach Bestätigung des Jobs bleiben die Aktionen während der Sammlung gesperrt; Results/Pareto aktualisieren sich automatisch. Laufende Jobs liefern eine vorläufige Pareto-Front und laufen weiter; diese Aktion löst keinen Sättigungsstopp aus. Wiederholte Sammlung aktualisiert denselben Ergebniseintrag. Bereits gesicherte finale Daten werden lokal wiederverwendet. Gibt es noch keine Pareto-Ergebnisse oder ist die Instanz nicht erreichbar, bleiben die vorher publizierten Ergebnisse erhalten und das Log zeigt einen Fehler. Bestehende Mietfristen sowie Queue- und Leerlaufbereinigung gelten unverändert.
-
 **Stop & collect** ist vor dem Start und nach Abschluss deaktiviert. Die Aktion ist während Bereitstellung, Upload, Ausführung und Ergebnissicherung verfügbar.
 
 Während Requeue zeigt die Queue nur den vorbereiteten Ersatz als preparing. Schlägt die Vorbereitung fehl, bleibt der ursprüngliche Job für einen erneuten Versuch verfügbar.

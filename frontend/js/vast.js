@@ -215,14 +215,14 @@
     });
   }
 
-  async function request(path, options) {
+  async function request(path, options, base = apiBase) {
     if (disposed) throw new Error('Cloud controls are disconnected. Sign in and reload this page.');
     const controller = new AbortController();
     controllers.add(controller);
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, (["/jobs/prepare", "/queue/start"].includes(path) || path.endsWith('/requeue')) ? 600000 : path.endsWith('/collect') ? 120000 : 30000);
     try {
-      const response = await fetch(apiBase + path, {
+      const response = await fetch(base + path, {
         credentials: 'same-origin', cache: 'no-store', ...options,
         headers: {'Content-Type': 'application/json'}, signal: controller.signal
       });
@@ -1550,8 +1550,11 @@
     el('resume-worker').disabled ||= !queueState.paused;
     el('stop-job').textContent = stopRetryAvailable(job) ? 'Retry stop & collect' : stopPhase(job) || 'Stop & collect';
     el('stop-job').disabled = !canStopJob(job) || jobActions.has(job?.id);
-    el('collect-job').disabled = !canCollectJob(job) || jobActions.has(job?.id);
-    el('collect-job').textContent = jobActions.get(job?.id)?.action === 'collect' ? 'Collecting Pareto…' : 'Collect Pareto';
+    const collectButton = el('collect-job');
+    if (collectButton) {
+      collectButton.disabled = !canCollectJob(job) || jobActions.has(job?.id);
+      collectButton.textContent = jobActions.get(job?.id)?.action === 'collect' ? 'Collecting Pareto…' : 'Collect Pareto';
+    }
     el('recover-job').disabled = !canRecoverJob(job) || jobActions.has(job?.id);
     el('recover-job').textContent = jobActions.get(job?.id)?.action === 'recover' ? 'Importing results…' : 'Retry result import';
     el('job-results').hidden = !job || !job.result_path;
@@ -2605,7 +2608,7 @@
     renderCloudDashboard(observedOptimizerJob(item));
     el('optlog-activity').textContent = observed.activity || 'Optimizer process detected';
     el('stop-job').disabled = true;
-    el('collect-job').disabled = true;
+    if (el('collect-job')) el('collect-job').disabled = true;
     el('recover-job').disabled = true;
     el('requeue-job').hidden = true;
     el('start-job').hidden = true;
@@ -3165,10 +3168,11 @@
     const eligible = () => action === 'stop' ? canStopJob(job) : action === 'collect' ? canCollectJob(job) : canRecoverJob(job);
     if (disposed || jobActions.has(identifier) || !eligible()) return;
     const token = {action, lifecycle:actionLifecycle, view:actionViewGeneration,
-      uncertain:uncertainStops.has(identifier), submitted:false};
+      uncertain:uncertainStops.has(identifier), logGeneration:window.state?.logContextGeneration, submitted:false};
     jobActions.set(identifier, token);
     const owns = () => !disposed && token.lifecycle === actionLifecycle && jobActions.get(identifier) === token;
-    const visible = () => owns() && token.view === actionViewGeneration && selectedJobId === identifier;
+    const visible = () => owns() && token.view === actionViewGeneration && selectedJobId === identifier
+      && (action !== 'collect' || (window.state?.cloudLogId === identifier && token.logGeneration === window.state?.logContextGeneration));
     const repaint = () => {
       renderJob();
       const displayed = jobRows.find(row => row.id === window.state?.cloudLogId);
@@ -3200,7 +3204,11 @@
         if (!accepted || !visible() || !eligible()) return;
       }
       token.submitted = true;
-      await request('/jobs/' + encodeURIComponent(identifier) + '/' + action, {method:'POST'});
+      if (action === 'collect') {
+        await request('/queue/' + encodeURIComponent(identifier) + '/collect', {method:'POST'}, window.API_BASE);
+      } else {
+        await request('/jobs/' + encodeURIComponent(identifier) + '/' + action, {method:'POST'});
+      }
       if (!owns()) return;
       if (action === 'stop') {
         uncertainStops.delete(identifier);
@@ -3225,7 +3233,7 @@
       if (owns()) { jobActions.delete(identifier); repaint(); }
     }
   }
-  ['stop', 'collect', 'recover'].forEach(action => el(action + '-job').addEventListener('click', () => {
+  ['stop', 'collect', 'recover'].forEach(action => el(action + '-job')?.addEventListener('click', () => {
     void runJobAction(action, selectedJob()?.id);
   }));
   ['pause', 'resume', 'end', 'recover'].forEach(action => el(action + '-worker').addEventListener('click', async () => {

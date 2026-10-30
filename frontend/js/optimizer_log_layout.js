@@ -75,6 +75,7 @@
     ['queue-message', 'supervision-status'].forEach(id => move(id, 'optlog-cloud-notices'));
     const actions = cloud.querySelector('.fields');
     if (actions) el('optlog-cloud-actions').append(actions);
+    if (el('collect-job') && el('stop-job')) el('stop-job').after(el('collect-job'));
     ['cloud-calibration-accept', 'job-results'].forEach(id => move(id, 'optlog-cloud-actions'));
     schedule();
   }

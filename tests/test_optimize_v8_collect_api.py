@@ -1,4 +1,4 @@
-"""Offline collect-only API contracts: Pareto publication must never stop work."""
+"""Offline Optimize v8 collect-only API contracts: Pareto publication must never stop work."""
 
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api import vast
+from api import optimize_v8
 from api.auth import require_auth
 from secure_files import ensure_private_directory
 from vast_jobs import IMAGE, REVISION, JobStore, write_json
@@ -37,10 +37,10 @@ def collection(tmp_path, monkeypatch):
     client.instances.return_value = [dict(id=123, label='pbgui-vast-' + lease_id,
         actual_status='running', public_ipaddr='8.8.8.8', ports={'22/tcp': [{'HostPort': '2222'}]})]
     client.request.side_effect = AssertionError('Collection must not call provider mutation APIs')
-    monkeypatch.setattr(vast_transfer, 'VastClient', lambda _key: client)
+    monkeypatch.setattr('vast_provider.VastClient', lambda _key: client)
     monkeypatch.setattr(vast_credentials, 'VastCredentialStore',
         lambda _root: SimpleNamespace(secrets=lambda: {'api_key': 'isolated-test-key'}))
-    monkeypatch.setattr(vast, 'JobStore', lambda: store)
+    monkeypatch.setattr('vast_jobs.JobStore', lambda: store)
     bootstrap = Mock()
     monkeypatch.setattr(vast_transfer.WorkerConnection, 'bootstrap', bootstrap)
     operation = Mock(side_effect=AssertionError('Collection must not stop the worker'))
@@ -64,7 +64,7 @@ def collection(tmp_path, monkeypatch):
         return snapshot(connection, final, timeout)
     monkeypatch.setattr(vast_transfer.WorkerConnection, 'collect', collect_snapshot)
     app = FastAPI()
-    app.include_router(vast.router, prefix='/api/vast')
+    app.include_router(optimize_v8.router, prefix='/api/optimize-v8')
     app.dependency_overrides[require_auth] = lambda: object()
     with TestClient(app) as http:
         yield SimpleNamespace(http=http, store=store, identifier=identifier, lease_id=lease_id,
@@ -82,7 +82,7 @@ def test_collect_publishes_pareto_without_stop_and_is_idempotent(collection, sta
         c.store.update(c.identifier, lease_id=None)
         c.provider.instances.return_value[0]['label'] = 'pbgui-vast-' + c.identifier
     original_control = c.store.read(c.identifier, 'control.json')
-    url = '/api/vast/jobs/' + c.identifier + '/collect'
+    url = '/api/optimize-v8/queue/' + c.identifier + '/collect'
     first = c.http.post(url)
     assert first.status_code == 200, first.text
     result = first.json()
@@ -107,7 +107,7 @@ def test_collect_without_pareto_returns_readable_conflict(collection, monkeypatc
     """An empty snapshot does not publish or mutate execution/rental controls."""
     c = collection
     monkeypatch.setattr(vast_transfer.WorkerConnection, 'collect', Mock())
-    response = c.http.post('/api/vast/jobs/' + c.identifier + '/collect')
+    response = c.http.post('/api/optimize-v8/queue/' + c.identifier + '/collect')
     assert response.status_code == 409
     assert 'No Pareto results are ready yet' in response.json()['detail']
     assert 'result_path' not in c.store.read(c.identifier)
@@ -128,7 +128,7 @@ def test_collect_unreachable_instance_retains_previous_results(collection, monke
         write_json(c.store.directory(c.lease_id) / 'control.json', dict(stop=False, cleanup=True))
     else:
         monkeypatch.setattr(vast_transfer.WorkerConnection, 'bootstrap', Mock(side_effect=VastError('SSH connection refused')))
-    response = c.http.post('/api/vast/jobs/' + c.identifier + '/collect')
+    response = c.http.post('/api/optimize-v8/queue/' + c.identifier + '/collect')
     assert response.status_code == (502 if failure == 'ssh' else 409)
     assert response.json()['detail']
     assert c.store.read(c.identifier)['result_path'] == '/previous/result'
@@ -149,7 +149,7 @@ def test_collect_reuses_final_snapshot_without_provider_or_finalizer(collection,
     import vast_job_runner
     finalize = Mock(side_effect=AssertionError('Collect-only must not run lifecycle finalization'))
     monkeypatch.setattr(vast_job_runner, 'finalize_collected_results', finalize)
-    url = '/api/vast/jobs/' + c.identifier + '/collect'
+    url = '/api/optimize-v8/queue/' + c.identifier + '/collect'
     first, second = c.http.post(url), c.http.post(url)
     assert first.status_code == second.status_code == 200
     assert first.json()['result_path'] == second.json()['result_path']
@@ -166,9 +166,9 @@ def test_collect_reuses_final_snapshot_without_provider_or_finalizer(collection,
 def test_collect_requires_auth_and_valid_job(collection):
     """A collect endpoint exposes neither anonymous nor invalid job operations."""
     c = collection
-    assert c.http.post('/api/vast/jobs/unknown/collect').status_code == 422
+    assert c.http.post('/api/optimize-v8/queue/unknown/collect').status_code == 422
     c.app.dependency_overrides.clear()
-    assert c.http.post('/api/vast/jobs/' + c.identifier + '/collect').status_code == 401
+    assert c.http.post('/api/optimize-v8/queue/' + c.identifier + '/collect').status_code == 401
     c.collect.assert_not_called()
 
 
@@ -176,7 +176,7 @@ def test_collect_unexpected_transfer_error_is_readable(collection, monkeypatch):
     """Technical snapshot failures become safe errors without changing job controls."""
     c = collection
     monkeypatch.setattr(vast_transfer.WorkerConnection, 'collect', Mock(side_effect=RuntimeError('isolated snapshot failure')))
-    response = c.http.post('/api/vast/jobs/' + c.identifier + '/collect')
+    response = c.http.post('/api/optimize-v8/queue/' + c.identifier + '/collect')
     assert response.status_code == 502
     assert 'previous results are retained' in response.json()['detail']
     assert c.store.read(c.identifier)['status'] == 'running'
