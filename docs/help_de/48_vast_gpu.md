@@ -1,5 +1,19 @@
 # Vast.ai GPU-Queue
 
+## Collect Pareto
+
+Eine abgeschlossene Veröffentlichung wird auch nach der Rückkehr aus einem verborgenen Browser-Tab automatisch geladen. Der gewählte Results-/Paretos-Kontext bleibt erhalten, auch ohne aktive lokale Optimizer-Läufe; Browser-Neuladen oder erneutes Collect ist nicht nötig.
+
+Ist Collect nicht verfügbar, steht der Grund neben den Log-Aktionen, einschließlich des Hinweises auf einen veralteten Run-Supervisor. Nach erfolgreicher Veröffentlichung aktualisiert Collect die aktuelle Results-/Paretos-Ansicht ausdrücklich, auch wenn während des Imports bereits eine Job-Aktualisierung eingetroffen ist. Snapshot-Sperren behalten ihre gemeinsame Identität auch über symbolisch verknüpfte Vorfahren wie `data`. Die bisherigen Pfadprüfungen für JobStore und Zugangsdaten gelten weiter: Die Store-Wurzel selbst muss ein reguläres Verzeichnis sein oder über ihren kanonischen Pfad konfiguriert werden. Symbolische Links auf Sperrdateien und Verzeichniswechsel während der Sammlung werden abgelehnt.
+
+Öffne **PBv8 → Optimize → Queue → Open log**. **Collect Pareto** neben **Stop & collect** veröffentlicht den aktuellen unveränderlichen Pareto-Snapshot, ohne den Optimizer zu stoppen, Mietbereinigung anzufordern oder Konvergenz beziehungsweise Finalisierung auszuführen. Wiederholtes Sammeln aktualisiert denselben Ergebniseintrag. Results und Pareto Explorer aktualisieren sich automatisch; Jobauswahl und Seitenkontext bleiben erhalten. Stop bleibt während der Sammlung bedienbar.
+
+Entferntes Sammeln benötigt die Snapshot-Transaktionsfähigkeit des aktuellen Run-Supervisors und eine bereits verifizierte Worker-Verbindung. Ein veralteter Supervisor muss ausdrücklich über die vorhandenen Supervisor-Bedienelemente neu gestartet werden; Collect startet ihn nicht neu. Stop und finale Sammlung haben Vorrang. Das manuelle Teiltransferlimit beträgt einschließlich des neuen Archivs 1 GiB; Mietfrist, Reserve für finale Sammlung, Budget und Leerlaufbereinigung gelten weiter. Collect verlängert keine Miete. Fehlende Pareto-Daten oder unerreichbare Instanzen erhalten das bisher veröffentlichte Ergebnis. Nach Browser-Timeout bleibt der Ausgang unbestätigt; der Jobstatus aktualisiert sich automatisch, ohne den POST zu wiederholen.
+
+Verifizierte Finaldaten lassen sich nach Mietende ohne Vast-Zugriff lokal veröffentlichen. Collect bestimmt nicht den Ausführungsstatus. Bei ausstehender Finalisierung bleibt **Retry result import** auch nach Veröffentlichung des vollständigen Ergebnisses verfügbar. Die Aktion führt die reguläre lokale Finalisierung aus; vollständig abgeschlossene terminale Ergebnisse erhalten keine unnötige Wiederholung.
+
+Das Warten auf lokale Job-Metadaten verwendet dieselbe Sammlungsfrist und denselben Shutdown-Abbruch. Vor der Veröffentlichung erhält ein Abbruch das bisherige Ergebnis. Ist die Veröffentlichung bereits übernommen, werden die passenden Job-Metadaten noch vor Abschluss der Anfrage fertiggeschrieben.
+
 ## Verifizierte Hostsperren im KI-Chat
 
 Unlesbare lokale Hostmetadaten oder beschädigte Ausführungsnachweise werden als Fehler oder unbestätigter Ausgang gemeldet. Sie belegen keine erfolgreiche Sperre und erlauben keinen weiteren Schreibversuch. Die ausschließlich lesende Statusabfrage prüft den Nachweis gegen den freigegebenen Job, Lease, die Maschine, den Boolean und die Revision, bevor sie historischen Erfolg meldet.

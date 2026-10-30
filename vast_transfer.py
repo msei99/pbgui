@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from contextlib import contextmanager
 import threading
 from functools import wraps
 import gzip
@@ -26,6 +27,7 @@ import urllib.parse
 import urllib.request
 
 from file_lock import advisory_file_lock
+from vast_snapshot import bounded_lock, snapshot_method, snapshot_import, check_work
 from secure_files import atomic_write_private_text, ensure_private_directory
 from vast_jobs import PROJECT, JobStore, digest, write_json, job_id
 from vast_provider import NoRedirect, VastClient, VastError, positive_id
@@ -197,6 +199,7 @@ class WorkerConnection:
         process = None
         try:
             WorkerConnection.check_upload(self)
+            check_work()
             process = subprocess.Popen(args, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
             deadline = time.monotonic() + max(1, timeout)
             last_progress = 0.0
@@ -209,6 +212,7 @@ class WorkerConnection:
                 # both streams and checking cancellation until it really exits.
                 while selector.get_map() or process.poll() is None:
                     WorkerConnection.check_upload(self)
+                    check_work()
                     if cancel_event is not None and cancel_event.is_set():
                         raise VastError("SSH upload cancelled after another chunk failed", 422)
                     if progress is not None and time.monotonic() - last_progress >= 2:
@@ -640,12 +644,26 @@ class WorkerConnection:
                 self.command('/usr/local/bin/python -c ' + shlex.quote(script), stdin=stream, timeout=30)
         self.command("mkdir -p " + self.remote_root + " && " + "PBGUI_WORKDIR=" + self.remote_root + " nohup " + WORKER + "run > " + self.remote_root + "/runner.log 2>&1 < /dev/null &", timeout=15)
 
+    @contextmanager
+    def _collection_state_lock(self):
+        """Bound manual state waits without changing independent supervisor writes."""
+        if check_work() is None:
+            yield
+        else:
+            with bounded_lock(self.directory / '.state-lock'):
+                yield
+
+    @snapshot_method
     def collect(self, final: bool, timeout: int) -> Path:
         """Download and verify a bounded snapshot before replacing the last copy."""
+        state = self.store.read(self.identifier)
+        if state.get('final_collected'):
+            return self.directory / 'final-results'
         deadline = time.monotonic() + timeout
         def remaining():
             """Metadata, download, verification and extraction share one deadline."""
-            seconds = deadline - time.monotonic()
+            manual = check_work()
+            seconds = min(deadline - time.monotonic(), manual) if manual is not None else deadline - time.monotonic()
             if seconds <= 0:
                 raise VastError('Result collection deadline reached; last verified snapshot retained')
             return seconds
@@ -655,6 +673,8 @@ class WorkerConnection:
         if type(size) is not int or not 0 < size <= 2 * 1024**3 or not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("sha256"))):
             raise VastError("Invalid result snapshot metadata")
         state = self.store.read(self.identifier)
+        if check_work() is not None and not final and int(state.get("downloaded_bytes", 0)) + size > 1024**3:
+            raise VastError('Partial transfer allowance reached; final collection reserve retained', 409)
         if int(state.get("downloaded_bytes", 0)) + size > 2 * 1024**3:
             raise VastError("Job transfer limit reached; collection cannot exceed 2 GB")
         destination = self.directory / (action + ".tar.gz")
@@ -664,12 +684,15 @@ class WorkerConnection:
                 temporary.chmod(0o600)
                 self.command(f"head -c {size + 1} {self.remote_root}/{action}.tar.gz", stdout=stream,
                              timeout=remaining(), max_output=size + 1)
-            if temporary.stat().st_size != size or checked_digest(temporary, remaining) != metadata["sha256"]:
-                raise VastError("Result archive checksum mismatch")
-            os.replace(temporary, destination)
+            # Network work has finished. Admit the local verification/accounting
+            # transaction before accepting this archive, using the manual budget.
+            with self._collection_state_lock():
+                if temporary.stat().st_size != size or checked_digest(temporary, remaining) != metadata["sha256"]:
+                    raise VastError("Result archive checksum mismatch")
+                os.replace(temporary, destination)
+                self.store.update(self.identifier, downloaded_bytes=int(state.get("downloaded_bytes", 0)) + size)
         finally:
             temporary.unlink(missing_ok=True)
-        self.store.update(self.identifier, downloaded_bytes=int(state.get("downloaded_bytes", 0)) + size)
         extracted = extract_results(destination, self.directory, action, check=remaining)
         log = extracted / "optimizer.log"
         if log.is_file():
@@ -678,7 +701,8 @@ class WorkerConnection:
                 stream.seek(max(0, log.stat().st_size - 1024 * 1024))
                 text = stream.read(1024 * 1024).decode("utf-8", errors="replace")
             atomic_write_private_text(log_root / ("vast_" + self.identifier + ".log"), text)
-        self.store.update(self.identifier, last_backup_at=time.time(), final_collected=final or state.get("final_collected", False))
+        with self._collection_state_lock():
+            self.store.update(self.identifier, last_backup_at=time.time(), final_collected=final or state.get("final_collected", False))
         return extracted
 
 
@@ -793,6 +817,7 @@ def execution_input(store: JobStore, identifier: str) -> Path:
     return target
 
 
+@snapshot_import
 def import_results(store: JobStore, identifier: str, *, partial: bool = False, check=lambda: None) -> dict:
     """Import verified native results idempotently, never unpickle a checkpoint."""
     import msgpack
@@ -813,6 +838,8 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False, c
         raise VastError("No single complete native result directory found")
     source = sources[0]
     binary = source / "all_results.bin"
+    if partial and not list((source / 'pareto').glob('*.json')):
+        raise VastError('No Pareto results are ready yet; previous results are retained', 409)
     count, complete = 0, 0
     if binary.is_file():
         with binary.open("rb") as stream:
@@ -836,7 +863,7 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False, c
         raise VastError("Invalid configured optimizer result root")
     root.mkdir(parents=True, exist_ok=True)
     target = root / (source.name + "_vast_" + identifier[:12])
-    with advisory_file_lock(root / ".vast-import"):
+    with bounded_lock(root / ".vast-import", check=check):
         check()
         if target.is_symlink():
             raise VastError("Invalid existing result destination")
@@ -847,26 +874,51 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False, c
             if provenance.get("partial"):
                 if count < int(provenance.get("evaluations", 0)):
                     raise VastError("Result snapshot is older than the published results")
-                # Replace individual files atomically so open readers retain a valid
-                # previous file while new readers see the latest complete snapshot.
-                for source_file in ([binary] if binary.is_file() else []) + sorted((source / "pareto").glob("*.json")):
-                    destination = target / source_file.relative_to(source)
-                    destination.parent.mkdir(exist_ok=True, mode=0o700)
-                    if destination.is_symlink() or destination.parent.is_symlink():
-                        raise VastError("Invalid result destination")
-                    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
-                        temporary = Path(stream.name)
-                        try:
-                            stream.close()
-                            copy_checked(source_file, temporary)
-                            os.replace(temporary, destination)
-                        finally:
-                            temporary.unlink(missing_ok=True)
-                for old in (target / "pareto").glob("*.json"):
-                    if not (source / "pareto" / old.name).exists():
-                        old.unlink()
-                provenance.update(partial=partial, evaluations=count)
-                write_json(target / ".pbgui_vast.json", provenance)
+                # Prepare every new file and every rollback copy before changing
+                # the publication. Cancellation is allowed only before commit.
+                with tempfile.TemporaryDirectory(prefix='.vast-update-', dir=root) as temporary:
+                    stage = Path(temporary)
+                    files = ([binary] if binary.is_file() else []) + sorted((source / 'pareto').glob('*.json'))
+                    replacements, backups, created = [], [], []
+                    old_files = list((target / 'pareto').glob('*.json'))
+                    affected = {target / item.relative_to(source) for item in files} | set(old_files)
+                    provenance_path = target / '.pbgui_vast.json'
+                    affected.add(provenance_path)
+                    for index, destination in enumerate(sorted(affected)):
+                        check()
+                        if destination.is_symlink() or destination.parent.is_symlink():
+                            raise VastError('Invalid result destination')
+                        if destination.exists():
+                            backup = stage / ('backup-' + str(index))
+                            copy_checked(destination, backup)
+                            backups.append((backup, destination))
+                        else:
+                            created.append(destination)
+                    for index, source_file in enumerate(files):
+                        prepared = stage / ('new-' + str(index))
+                        copy_checked(source_file, prepared)
+                        replacements.append((prepared, target / source_file.relative_to(source)))
+                    provenance.update(partial=partial, evaluations=count)
+                    write_json(stage / 'provenance', provenance)
+                    check()
+                    try:
+                        for prepared, destination in replacements:
+                            destination.parent.mkdir(exist_ok=True, mode=0o700)
+                            os.replace(prepared, destination)
+                        for old in old_files:
+                            if not (source / 'pareto' / old.name).exists():
+                                old.unlink()
+                        os.replace(stage / 'provenance', provenance_path)
+                    except BaseException:
+                        for backup, destination in backups:
+                            os.replace(backup, destination)
+                        for destination in created:
+                            destination.unlink(missing_ok=True)
+                        raise
+            elif partial:
+                return {"result_path": str(target), "result_partial": False,
+                        "evaluations": provenance.get('evaluations', 0),
+                        "pareto_count": len(list((target / 'pareto').glob('*.json')))}
             elif checked_digest(target / "all_results.bin", check) != checked_digest(binary, check):
                 raise VastError("Existing result belongs to another import")
         else:

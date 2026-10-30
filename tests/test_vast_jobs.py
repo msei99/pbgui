@@ -99,7 +99,7 @@ def test_finalization_waiter_reads_completed_state_before_expired_budget(job, mo
     store, identifier, intent = job
     final_result_fixture(store, identifier)
     entered, release, waiting = threading.Event(), threading.Event(), threading.Event()
-    original_import, original_lock = runner.import_results, runner.advisory_file_lock
+    original_import, original_lock = runner.import_results, runner.bounded_lock
     count = []
 
     def held_import(*args, **kwargs):
@@ -110,16 +110,16 @@ def test_finalization_waiter_reads_completed_state_before_expired_budget(job, mo
         return original_import(*args, **kwargs)
 
     @contextmanager
-    def tracked_lock(target):
+    def tracked_lock(target, **kwargs):
         """Observe the waiter before it blocks, without replacing the real lock."""
         if Path(target).name == '.finalize-lock' and threading.current_thread().name.endswith('_1'):
             waiting.set()
-        with original_lock(target):
+        with original_lock(target, **kwargs):
             yield
 
     def expired():
-        """A completed outcome must bypass a now-expired cooperative deadline."""
-        pytest.fail('Completed finalization re-entered its expired import budget')
+        """Allow bounded lock waiting; duplicate import is detected by count below."""
+        return 5
 
     def waiter():
         """Exercise the actual public callers while the first import is held."""
@@ -133,7 +133,7 @@ def test_finalization_waiter_reads_completed_state_before_expired_budget(job, mo
         return store.read(identifier)
 
     monkeypatch.setattr(runner, 'import_results', held_import)
-    monkeypatch.setattr(runner, 'advisory_file_lock', tracked_lock)
+    monkeypatch.setattr(runner, 'bounded_lock', tracked_lock)
     with ThreadPoolExecutor(max_workers=2) as executor:
         first = executor.submit(runner.finalize_collected_results, store, identifier)
         try:
@@ -143,7 +143,11 @@ def test_finalization_waiter_reads_completed_state_before_expired_budget(job, mo
         finally:
             release.set()
         assert first.result(timeout=5)['status'] == 'completed'
-        assert second.result(timeout=5)['status'] == 'completed'
+        second_state = second.result(timeout=5)
+        if caller != 'stop':
+            assert second_state['status'] == 'completed'
+        # An expired Stop does not wait for the other publisher or rewrite it.
+        assert store.read(identifier)['status'] == 'completed'
     assert count == [1]
     assert store.read(identifier)['error'] is None
 
@@ -227,21 +231,21 @@ def test_finalization_process_serialization(job, monkeypatch):
     parent, child = ctx.Pipe()
     process = ctx.Process(target=_process_finalizer, args=(store.root, identifier, child))
     waiting = threading.Event()
-    original_lock = runner.advisory_file_lock
+    original_lock = runner.bounded_lock
 
     @contextmanager
-    def tracked_lock(target):
+    def tracked_lock(target, **kwargs):
         """Observe the parent waiter while retaining the production file lock."""
         if Path(target).name == '.finalize-lock':
             waiting.set()
-        with original_lock(target):
+        with original_lock(target, **kwargs):
             yield
 
     process.start()
     child.close()
     try:
         assert parent.poll(8) and parent.recv() == 'import'
-        monkeypatch.setattr(runner, 'advisory_file_lock', tracked_lock)
+        monkeypatch.setattr(runner, 'bounded_lock', tracked_lock)
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(runner.finalize_collected_results, store, identifier)
             try:
@@ -1399,6 +1403,97 @@ def test_pareto_only_live_snapshot_is_published(job):
     assert result['pareto_count'] == 1
     assert not (Path(result['result_path']) / 'all_results.bin').exists()
     assert import_results(store, identifier, partial=True) == result
+
+
+@pytest.mark.parametrize('final', [False, True])
+def test_symlinked_data_root_supports_automatic_publication(job, tmp_path, final):
+    """Automatic Snapshot/import/observe and Finalize accept a linked data/vast root."""
+    from file_lock import advisory_file_lock
+    from vast_snapshot import snapshot
+    from vast_convergence import observe
+    from vast_job_runner import finalize_collected_results
+    store, identifier, _ = job
+    alias = tmp_path / 'data'
+    alias.symlink_to(store.root.parent, target_is_directory=True)
+    store.root = alias / 'vast'
+    if final:
+        final_result_fixture(store, identifier)
+        assert finalize_collected_results(store, identifier)['status'] == 'completed'
+    else:
+        native = ensure_private_directory(store.directory(identifier) / 'partial-results/optimize_results/run/pareto')
+        write_json(native / 'candidate.json', {'config': {}})
+        write_json(ensure_private_directory(store.directory(identifier) / 'input') / 'manifest.json', {})
+        # This is the same outer transaction and nested legacy state lock as run_loop.
+        with snapshot(store, identifier), advisory_file_lock(store.directory(identifier) / '.snapshot-lock'):
+            store.update(identifier, **import_results(store, identifier, partial=True))
+            observe(store, identifier)
+        assert store.read(identifier)['pareto_count'] == 1
+
+
+def test_archive_conflict_after_interrupted_collect_is_retryable(job, monkeypatch):
+    """Interrupted SSH followed by a worker archive conflict never enters upload failure cleanup."""
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    import vast_job_runner as runner
+    from vast_transfer import WorkerConnection
+    from vast_snapshot import work_boundary
+    store, identifier, _ = job
+    native = ensure_private_directory(store.directory(identifier) / 'partial-results/optimize_results/run/pareto')
+    write_json(native / 'candidate.json', {'config': {}})
+    write_json(ensure_private_directory(store.directory(identifier) / 'input') / 'manifest.json', {})
+    published = import_results(store, identifier, partial=True)
+    store.update(identifier, **published, uploaded=True, worker_ready=True, started_at=1050,
+                 status='running', rental_state='active', downloaded_bytes=4, exact_completed=12)
+    before = {str(p.relative_to(Path(published['result_path']))): p.read_bytes()
+              for p in Path(published['result_path']).rglob('*') if p.is_file()}
+    row = dict(id=123, actual_status='running', public_ipaddr='8.8.8.8', ports={'22/tcp': [{'HostPort': '2222'}]})
+    children = []
+    real_popen = subprocess.Popen
+    def spawn(_args, **kwargs):
+        """Represent SSH loss then the surviving remote writer's fixed-name archive conflict locally."""
+        diagnostic = b'connection reset' if not children else b'tar: partial.tar.tmp: Cannot stat: No such file'
+        process = real_popen([sys.executable, '-c',
+            'import os; os.write(2, ' + repr(diagnostic) + '); os._exit(1)'], **kwargs)
+        children.append(process)
+        return process
+    monkeypatch.setattr('vast_transfer.subprocess.Popen', spawn)
+    monkeypatch.setattr(WorkerConnection, 'bootstrap', lambda *_args: None)
+    original_operation = WorkerConnection.operation
+    def operation(connection, action, **kwargs):
+        """Only the status is mocked; partial uses the production SSH error classification."""
+        if action == 'status':
+            return dict(started=True, finished=False, exact_completed=12)
+        assert action == 'partial'
+        return original_operation(connection, action, **kwargs)
+    monkeypatch.setattr(WorkerConnection, 'operation', operation)
+    with work_boundary(lambda: 30), pytest.raises(VastError) as interrupted:
+        WorkerConnection(store, identifier, row).collect(False, timeout=30)
+    assert interrupted.value.status != 422 and 'upload' not in str(interrupted.value).lower()
+    monkeypatch.setattr(runner, 'VastClient', lambda *_args: object())
+    monkeypatch.setattr(runner, 'VastCredentialStore', lambda *_args: SimpleNamespace(secrets=lambda: {'api_key': 'isolated'}))
+    monkeypatch.setattr(runner, 'owned_instance', lambda *_args, **_kwargs: row)
+    monkeypatch.setattr(runner, 'sync_optimizer_log', lambda *_args: None)
+    monkeypatch.setattr('vast_runtime_metrics.sample_metrics', lambda *_args: None)
+    monkeypatch.setattr(runner, '_log', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner.time, 'time', lambda: 1100)
+    class TickFinished(Exception):
+        """End after the supervisor's first ordinary retry boundary."""
+    def finish_tick(_seconds):
+        """Never retry indefinitely or perform provider work in this isolated test."""
+        raise TickFinished()
+    monkeypatch.setattr(runner.time, 'sleep', finish_tick)
+    with pytest.raises(TickFinished):
+        runner.run_loop(store, identifier)
+    current = store.read(identifier)
+    assert current['status'] == 'running' and current['downloaded_bytes'] == 4
+    assert current['result_path'] == published['result_path']
+    assert 'SSH worker operation failed' in current['error'] and 'upload' not in current['error'].lower()
+    assert store.read(identifier, 'control.json') == {'stop': False, 'cleanup': False}
+    assert before == {str(p.relative_to(Path(published['result_path']))): p.read_bytes()
+                      for p in Path(published['result_path']).rglob('*') if p.is_file()}
+    assert len(children) == 2
+    assert all(p.poll() is not None and p.stdout.closed and p.stderr.closed for p in children)
 
 
 @pytest.mark.parametrize('exit_code,expected', [(0, 'completed'), (-2, 'completed'), (1, 'cancelled')])

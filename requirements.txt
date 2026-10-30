@@ -39,4 +39,6 @@ tiktoken==0.12.0
 
 # Official Python Agent SDK and MCP bridge; installed in the existing PBGui venv.
 claude-agent-sdk==0.2.175
+# Shared AI Loop configuration-schema validation, including non-Claude providers.
+jsonschema>=4.20.0
 mcp==2.3.0

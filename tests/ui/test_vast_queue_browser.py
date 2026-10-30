@@ -16,7 +16,7 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide():
     browser_api = __import__('browser_driver')
     calls, errors = [], []
     job = dict(id='a'*32, config_name='isolated-test', status='running', has_log=True,
-               workers=4, iterations=100, rental_state='none', created_at=1)
+               workers=4, iterations=100, rental_state='none', created_at=1, uploaded=True, collect_available=True)
     template = (ROOT / 'frontend/v7_optimize.html').read_text()
     for key, value in {
         'API_BASE':'/api/optimize-v8', 'BASE_PREFIX':'', 'LIMITS_META':'{}',
@@ -77,7 +77,12 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide():
             assert page.locator('#pbgui-dialog-title').inner_text() == 'Stop optimizer?'
             page.locator('#pbgui-dialog-cancel').click()
             page.wait_for_function("!document.getElementById('stop-job').disabled")
-            assert any('/app/js/vast.js?v=175' in url for _, url in calls)
+            assert page.locator('#collect-job').is_enabled()
+            assert page.locator('#stop-job').evaluate("node=>node.nextElementSibling.id") == 'collect-job'
+            page.locator('#collect-job').click()
+            page.wait_for_function("document.getElementById('queue-message').textContent.includes('Pareto results collected')")
+            assert sum(method == 'POST' and url.endswith('/collect') for method, url in calls) == 1
+            assert any('/app/js/vast.js?v=177' in url for _, url in calls)
             location_before = page.url
             page.locator('#pbgui-guide-btn').click()
             page.wait_for_function("document.getElementById('pbgui-shared-help-ovl')?.getAttribute('aria-hidden')==='false'")

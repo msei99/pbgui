@@ -12,6 +12,8 @@ import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from config_dates import normalize_backtest_dates
+
 _OPTIMIZE_METADATA_CACHE: dict[str, dict] = {}
 SERVICE = "PB8ConfigHelper"
 
@@ -836,7 +838,7 @@ def _sanitize_for_editor(modules: dict, prepared: dict, source: dict) -> dict:
     sanitized = modules["sanitize"](prepared)
     if preserve_auto:
         sanitized["optimize"]["n_cpus"] = None
-    return sanitized
+    return normalize_backtest_dates(sanitized)
 
 
 def _prepare(modules: dict, config: dict, base_config_path: str = "") -> dict:

@@ -114,7 +114,8 @@ class VastClient:
         root = ensure_private_directory(COORDINATION_ROOT)
         state_path = root / 'state.json'
         fingerprint = hashlib.sha256(self._key.encode()).hexdigest()
-        with advisory_file_lock(root / '.http-lock'):
+        from vast_snapshot import bounded_lock, check_work, sleep_work
+        with (bounded_lock(root / '.http-lock') if check_work() is not None else advisory_file_lock(root / '.http-lock')):
             state = {}
             if state_path.exists():
                 try:
@@ -141,7 +142,7 @@ class VastClient:
                 # Long adaptive delays must not block API handlers or guards.
                 if remaining > ENDPOINT_INTERVAL:
                     raise VastRateLimit(remaining, request_sent=False)
-                time.sleep(remaining)
+                sleep_work(remaining)
             # Record the reservation before sending, including failed calls.
             slots = {key: value for key, value in slots.items() if value > time.time()}
             slots[endpoint] = time.time() + interval
@@ -197,9 +198,28 @@ class VastClient:
             data=json.dumps(body, allow_nan=False).encode() if body is not None else None,
             headers={"Authorization": "Bearer " + self._key, "Content-Type": "application/json"},
         )
+        from vast_snapshot import check_work
+        allowance = check_work()
         try:
-            with urllib.request.build_opener(NoRedirect()).open(req, timeout=20) as response:
-                raw = response.read(4 * 1024 * 1024 + 1)
+            with urllib.request.build_opener(NoRedirect()).open(req, timeout=min(20, allowance) if allowance is not None else 20) as response:
+                if allowance is None:
+                    raw = response.read(4 * 1024 * 1024 + 1)
+                else:
+                    chunks, size = [], 0
+                    response_socket = response.fp.raw._sock
+                    while size <= 4 * 1024 * 1024:
+                        allowance = check_work()
+                        if response.isclosed():
+                            break
+                        # urllib retains its initial socket timeout; shorten each
+                        # blocking read so Stop/shutdown and the work deadline win.
+                        response_socket.settimeout(min(.5, allowance))
+                        block = response.read1(min(65536, 4 * 1024 * 1024 + 1 - size))
+                        if not block:
+                            break
+                        chunks.append(block)
+                        size += len(block)
+                    raw = b''.join(chunks)
             if len(raw) > 4 * 1024 * 1024:
                 raise VastError("Vast response exceeds the size limit")
             result = json.loads(raw)
@@ -247,7 +267,8 @@ class VastClient:
             cursors.add(token)
             params['after_token'] = token
             # Pagination uses the same endpoint and must not create a burst.
-            time.sleep(interval)
+            from vast_snapshot import sleep_work
+            sleep_work(interval)
 
     def account(self) -> dict:
         """Expose balance and account ID only, never email, sid or SSH material."""

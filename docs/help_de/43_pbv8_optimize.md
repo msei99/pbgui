@@ -1,5 +1,11 @@
 # PBv8 Optimize
 
+## Pareto sammeln ohne Stop
+
+Endet die Sammlung bei verborgenem Browser-Tab, lädt die Rückkehr zu **Results** oder **Paretos** die abgeschlossene Veröffentlichung automatisch, auch bei bereits ausgewähltem Ergebnis ohne laufenden lokalen Optimizer. Ansicht, Auswahl und Eingaben bleiben erhalten.
+
+Über **PBv8 → Optimize → Queue → Open log → Collect Pareto** veröffentlichst du das aktuelle Cloud-Pareto bei weiterlaufender Optimierung. Stop und Mietregeln bleiben unverändert. Die Veröffentlichung aktualisiert Results/Paretos automatisch und verwendet denselben Ergebniseintrag. **Retry result import** bleibt verfügbar, wenn verifizierte Finaldaten bereits veröffentlicht sind, die Ausführungsfinalisierung aber noch aussteht. Verbindungs-, Supervisor- und Transfergrenzen stehen unter [Collect Pareto](48_vast_gpu.md#collect-pareto).
+
 ## Stagnationsstopp für lokale CPU-/GPU-Läufe
 
 Unter **PBv8 → Optimize → Configs** eine Testkonfiguration mit **Edit Selected** öffnen. In **Execution & optimizer backend** **Run on → Local** und als **backend** CPU (`pymoo`) oder `gpu` wählen. **Stop on stagnation (Local)** ist unabhängig von Vast.ai-Mieteinstellungen und der Runden-Patience des AI Loop. Standardmäßig ist es Off; die Quellcode-Defaults sind 512 minimale exakte Bewertungen, 512 Patience und 0,25 % Verbesserungstoleranz. Die Werte werden unter `pbgui.optimize_runtime.convergence_config` gespeichert und für jeden Queue-Job eingefroren.
@@ -616,6 +622,8 @@ Neue Loop-eigene Optimizer-Jobs erhalten ein sichtbares, aus Modell und Bewertun
 **Preview AI limits** zeigt den Fortschritt sofort im geöffneten Bericht und anschließend dort die Vorschau. **Resume with current AI selection** zeigt Vorbereitung und Anwendung getrennt. Während der Anfrage sind die Eingaben gesperrt; Fehler und abgebrochene Freigaben erscheinen direkt daneben. Die Vorschau setzt den Loop nicht fort. Historische Optimierergebnisse werden nur für die erste Planung/Bootstrap geprüft; bei späteren Fortsetzungen zeigt die Vorschau, dass diese Quellenauswahl nicht mehr benötigt wird. Geänderte Grenzen machen die angezeigte Vorschau ungültig; nach einem Fehler bleiben die Eingaben erhalten.
 
 Fortsetzbare Pausen zeigen ihren Grund in den Loop-Details: **context_budget**, **ai_budget**, **ai_timeout**, **evidence_storage** oder **evidence_recovery**. Ein geeignetes Modell, angepasste freigegebene Grenzen oder reparierter Speicher ermöglichen die Fortsetzung. Pflichtnachweise müssen ihre ursprüngliche Prüfsumme behalten; ein Modellwechsel umgeht keine Integritätsfehler. Passt die Fortsetzung weiterhin nicht ins Budget des gewählten Anbieters, wird sie vor einer weiteren Anfrage abgelehnt. Die Aufbewahrung schützt aktuelle oder strittige Nachweise; das 1-GiB-Speicherziel pro Owner ist für geschützte Originale weich.
+
+Alle AI-Loop-Anbieter (ChatGPT, Claude und OpenCode) erhalten dasselbe Konfigurationsschema mit den freigegebenen Datumswerten, Training-Fenstern, Herkunftsdaten und Einstellungen des deaktivierten Scenario Editors. PBGui prüft jede zurückgegebene Variante vor der Annahme gegen dieses Schema und fordert im bestehenden begrenzten Korrekturablauf eine gültige Entscheidung an. Claude nutzt dasselbe Schema zusätzlich im nativen Werkzeug für strukturierte Ausgaben. Optimizer-Bounds, Scoring und andere erlaubte Suchfelder bleiben veränderbar; die vollständige Konfigurationsprüfung gilt weiterhin.
 
 ### Rundenübersicht und Details
 

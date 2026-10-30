@@ -6,12 +6,13 @@ import json
 import time
 
 from pb8_loop_ai_policy import check_context
+from pb8_loop_config_contract import variant_config_schema as _variant_config_schema
 from pb8_loop_evidence import LoopAIPause, TOOL_DESCRIPTION, TOOL_SCHEMA, encode, sha
 
 SERVICE = 'PB8Loop'
 
 
-def _decision_schema(active):
+def _decision_schema(active, record):
     """Specify each Loop stage's typed result; native and domain validation both apply."""
     snapshot = active['session'].snapshot
     stage, evidence = snapshot['phase'], snapshot['data']['evidence']
@@ -34,9 +35,7 @@ def _decision_schema(active):
                                        'minItems': 1, 'maxItems': evidence['max_candidates'], 'uniqueItems': True}
         required.append('candidate_ids')
     elif stage in {'bootstrap', 'evaluate'}:
-        config = {'type': 'object', 'properties': {key: {'type': 'object'}
-                  for key in ('backtest', 'bot', 'live', 'optimize')},
-                  'required': ['backtest', 'bot', 'live', 'optimize'], 'additionalProperties': True}
+        config = _variant_config_schema(record)
         properties['variants'] = {'type': 'array', 'items': {'type': 'object',
             'properties': {'config': config, 'overrides': {'type': 'object'}, 'reason': {**text, 'minLength': 1}},
             'required': ['config', 'overrides', 'reason'], 'additionalProperties': False}}
@@ -63,10 +62,13 @@ async def claude_dialog(ai, record, content, output_tokens, active):
     """Keep evidence coverage, cancellation and durable accounting outside the native SDK."""
     from pb8_loop_controller import owned_thread
     settings, session, ledger = record['settings'], active['session'], active['ledger']
-    output_schema = _decision_schema(active)
+    output_schema = _decision_schema(active, record)
     instructions = active['instructions'] + (
         '\nSubmit the final decision through the SDK StructuredOutput format tool. '
-        'This only submits the final response; loop_evidence remains the sole evidence reader.')
+        'This only submits the final response; loop_evidence remains the sole evidence reader. '
+        'Configuration const values are the reviewed read-only run contract, including pbgui '
+        'window provenance. Preserve every required constant exactly; choose optimizer changes '
+        'only in the remaining editable fields.')
     feedback = ''
     rejections = []
     for dialog in range(2):
@@ -79,7 +81,7 @@ async def claude_dialog(ai, record, content, output_tokens, active):
                               required_pages=len(session.required_pages), initial=True)
         call_id = await owned_thread(ledger.reserve, count, output_tokens, sha(payload))
         usage = {}
-        diagnostics = {'provider': 'claude-code', 'phase': 'model_request', 'started_at': time.time(),
+        diagnostics = {'provider': 'claude-code', 'phase': 'model_request', 'started_at': time.time(), 'compactions': 0,
                        'input_characters': len(message), 'outcome': 'interrupted'}
 
         async def evidence(name, arguments, native_call_id):
@@ -94,6 +96,7 @@ async def claude_dialog(ai, record, content, output_tokens, active):
         async def event(value):
             """Compaction invalidates mandatory coverage; retain only numeric usage telemetry."""
             if value.get('event') == 'compaction':
+                diagnostics['compactions'] += 1
                 session.compacted()
             elif value.get('event') == 'usage':
                 for key in ('input_tokens', 'output_tokens', 'context_window'):
@@ -125,6 +128,7 @@ async def claude_dialog(ai, record, content, output_tokens, active):
             raise
         finally:
             diagnostics['ended_at'] = time.time()
+            diagnostics['missing_required_pages'] = len(session.missing())
             await owned_thread(ai.store.update, record['owner'], record['id'], lambda row: row.update(
                 last_ai_request={'id': call_id, 'stage': session.snapshot['phase'], **diagnostics}))
         await owned_thread(ledger.settle, call_id, usage)

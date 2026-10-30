@@ -5025,3 +5025,56 @@ def test_config_count_synchronous_completion_keeps_safety_limits(optimize_v8_roo
         monkeypatch.setattr(optimize_v8, "_BACKTEST_COUNT_SCAN_MAX_AGE_SECONDS", 0.3)
     assert optimize_v8._managed_backtest_count("owned", config, root) is None
     assert not optimize_v8._backtest_count_cache and not optimize_v8._backtest_count_scans
+
+
+@pytest.mark.parametrize("suffix", ["", "T00:00:00", " 00:00:00", "T23:30:00-05:00"])
+def test_save_datetime_dates_through_shared_helper(tmp_path, monkeypatch, suffix):
+    """Real optimize_v8 staging and validation persist date-only bounds for thirty scenarios."""
+    from collections import OrderedDict
+    import pb8_config
+    import pb8_config_helper
+
+    configs = tmp_path / "configs"
+    monkeypatch.setattr(optimize_v8, "_configs_dir", lambda: configs)
+    monkeypatch.setattr(optimize_v8, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(pb8_config, "_runtime_fingerprint", lambda: ("isolated",))
+    monkeypatch.setattr(pb8_config, "_config_cache", OrderedDict())
+    operations, validated = [], []
+
+    def load_native(path, **_kwargs):
+        """Replace only the external native file loader with isolated JSON input."""
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        validated.append(copy.deepcopy(value))
+        return value
+
+    modules = {"prepare_config": lambda config, **_kwargs: config,
+               "sanitize": lambda value: value,
+               "load_prepared_config": load_native,
+               "parse_overrides": lambda *_args, **_kwargs: None,
+               "apply_optimizer_overrides": lambda _overrides, config, _side: config}
+    monkeypatch.setattr(pb8_config_helper, "_load_pb8_modules", lambda _root: modules)
+
+    def call_helper(operation, **payload):
+        """Keep the actual dispatcher while replacing the native process transport."""
+        operations.append(operation)
+        return pb8_config_helper.handle(copy.deepcopy({"operation": operation,
+            "pb8_dir": str(tmp_path), **payload}))
+
+    monkeypatch.setattr(pb8_config, "_call_helper", call_helper)
+    config = {"backtest": {"start_date": "2019-10-04" + suffix,
+        "end_date": "2020-01-01" + suffix, "suite_enabled": True,
+        "scenarios": [{"label": f"train_{index}", "start_date": "2019-10-04" + suffix,
+                       "end_date": "2019-12-31" + suffix} for index in range(30)]}}
+    before = copy.deepcopy(config)
+    response = optimize_v8.save_config("calendar_dates", config, session=None)
+    saved = json.loads((configs / "calendar_dates" / "optimize.json").read_text(encoding="utf-8"))
+    expected = copy.deepcopy(saved)
+    expected["backtest"].update(start_date="2019-10-04", end_date="2020-01-01")
+    expected["backtest"]["scenarios"] = [{"label": f"train_{index}",
+        "start_date": "2019-10-04", "end_date": "2019-12-31"} for index in range(30)]
+    assert config == before
+    assert response["ok"] is True
+    assert response["config"] == saved == expected
+    assert validated == [expected]
+    assert "prepare" in operations and "validate_overrides" in operations
+    assert not list(configs.glob(".calendar_dates.*"))

@@ -109,6 +109,8 @@ def test_claude_loop_owned_evidence_decision_and_recovery(record, ending):
         assert saved['last_usage']['status'] == 'reported'
         assert saved['ai_model_profile']['context'] == 1000000
         assert saved['ai_evidence_status']['tool_calls'] > 0
+        assert saved['last_ai_request']['compactions'] == (1 if ending == 'compaction' else 0)
+        assert saved['last_ai_request']['missing_required_pages'] == 0
 
 
 def test_claude_start_proposal_preserves_selected_provider(native_runs):

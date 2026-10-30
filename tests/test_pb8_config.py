@@ -7,6 +7,8 @@ import copy
 import io
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +16,105 @@ import pb8_config
 import pb8_config_helper
 import pytest
 from master_update_lock import MasterUpdateBusyError
+from config_dates import normalize_backtest_dates, parse_config_date
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("2019-10-04", "2019-10-04"),
+    ("2019-10-04T00:00:00", "2019-10-04"),
+    ("2019-10-04 12:34:56", "2019-10-04"),
+    ("2019-10-04T23:30:00-05:00", "2019-10-04"),
+    ("2019-10-04T00:30:00+05:00", "2019-10-04"),
+    ("2019-10-04T23:59:59.123Z", "2019-10-04"),
+])
+def test_config_date_preserves_represented_calendar_day(value, expected):
+    """Offsets must not move a daily bound into the previous or next UTC day."""
+    assert parse_config_date(value).isoformat() == expected
+
+
+@pytest.mark.parametrize("value", [
+    "2019-02-30", "2019-10-04Tbroken", "2019-10-04T25:00:00",
+    "2019-10-04 garbage", "20191004T000000", None, 42, [], {},
+])
+def test_config_date_rejects_invalid_or_unsupported_values(value):
+    """A calendar-looking prefix cannot hide an invalid timestamp or type."""
+    with pytest.raises((ValueError, TypeError)):
+        parse_config_date(value)
+
+
+@pytest.mark.parametrize("config", [None, [], {}, {"backtest": None},
+    {"backtest": {"start_date": "2019-10-04T00:00:00", "scenarios": None}},
+    {"backtest": {"scenarios": [None, 42, "invalid", {"label": "inherit"},
+        {"start_date": None, "end_date": "now"}, {"end_date": "today"},
+        {"start_date": "", "end_date": "2019-10-04Tbroken"},
+        {"start_date": "20191004T000000", "end_date": "2019-10-04"}]}},
+])
+def test_date_normalization_owns_output_and_preserves_sparse_values(config):
+    """Malformed containers and sparse values survive without mutating input."""
+    before = copy.deepcopy(config)
+    result = normalize_backtest_dates(config)
+    assert config == before
+    if (isinstance(config, dict) and isinstance(config.get("backtest"), dict)
+            and config["backtest"].get("start_date")):
+        assert result["backtest"]["start_date"] == "2019-10-04"
+    else:
+        assert result == before
+
+
+def test_helper_normalizes_native_output_without_mutating_identity_sanitizer():
+    """Normalize after native preparation even when sanitize returns its input."""
+    prepared = {"backtest": {"start_date": "2019-10-04T23:30:00-05:00",
+        "end_date": "now", "scenarios": [None,
+        {"start_date": "2019-10-04 00:00:00", "end_date": "2019-12-31T00:00:00"}]}}
+    before = copy.deepcopy(prepared)
+    metadata = {"created_at": "2019-10-04T23:30:00-05:00"}
+    source = {"backtest": {}, "pbgui": metadata}
+    modules = {"prepare_config": lambda *_args, **_kwargs: prepared,
+               "sanitize": lambda value: value}
+    result = pb8_config_helper._prepare(modules, source)
+    assert prepared == before
+    assert source == {"backtest": {}, "pbgui": metadata}
+    assert result["pbgui"] == metadata
+    assert result["backtest"]["start_date"] == "2019-10-04"
+    assert result["backtest"]["end_date"] == "now"
+    assert result["backtest"]["scenarios"] == [None,
+        {"start_date": "2019-10-04", "end_date": "2019-12-31"}]
+
+
+def test_helper_legacy_datetime_load_preserves_bytes_and_mtime(tmp_path, monkeypatch):
+    """Legacy loading normalizes only the returned copy, never the saved file."""
+    native = {"backtest": {"start_date": "2019-10-04T00:00:00",
+        "end_date": "2020-01-01 00:00:00", "scenarios": [
+        {"start_date": "2019-10-04T23:30:00-05:00", "end_date": "2019-12-31T00:00:00Z"}]}}
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(native), encoding="utf-8")
+    before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    untouched = copy.deepcopy(native)
+    modules = {"load_prepared_config": lambda *_args, **_kwargs: native,
+               "sanitize": lambda value: value}
+    monkeypatch.setattr(pb8_config_helper, "_load_pb8_modules", lambda _root: modules)
+    result = pb8_config_helper.handle({"operation": "load", "pb8_dir": str(tmp_path),
+                                      "config_path": str(path)})["config"]
+    assert path.read_bytes() == before
+    assert path.stat().st_mtime_ns == mtime
+    assert native == untouched
+    assert result["backtest"]["start_date"] == "2019-10-04"
+    assert result["backtest"]["end_date"] == "2020-01-01"
+    assert result["backtest"]["scenarios"] == [
+        {"start_date": "2019-10-04", "end_date": "2019-12-31"}]
+
+
+@pytest.mark.parametrize("serve", [False, True])
+def test_helper_script_imports_date_module_from_foreign_cwd(tmp_path, serve):
+    """Real script startup keeps JSON stdout intact without loading native PB8."""
+    script = Path(pb8_config_helper.__file__).resolve()
+    command = [sys.executable, "-E", str(script), *(["--serve"] if serve else [])]
+    result = subprocess.run(command, cwd=tmp_path, input="[]\n", text=True,
+                            capture_output=True, timeout=10, check=False)
+    assert result.returncode == (0 if serve else 1)
+    assert json.loads(result.stdout) == {
+        "ok": False, "error": "TypeError", "detail": "request must be an object"}
+    assert result.stderr == ""
 
 
 def _reset_cache(monkeypatch) -> None:

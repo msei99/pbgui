@@ -14803,6 +14803,9 @@ function removeResultsFromState(paths) {
 
 async function refreshOptimizePageData() {
   await Promise.all([loadSettings(), loadConfigs(), loadQueue(), loadResults()]);
+  // A cloud publication can finish while hidden, with no local run to poll.
+  // Reload the current panel without restoring an abandoned selection.
+  await refreshLiveResultsDuringRun(true);
 }
 
 function refreshOptimizePageOnReturn() {
@@ -15271,15 +15274,20 @@ function hasActiveOptimizeRuns() {
 }
 
 async function refreshLiveResultsDuringRun(force) {
+  if (force) state.livePanelRefreshPending = true;
   if (document.visibilityState !== 'visible') return;
   if (state.panel !== 'results' && state.panel !== 'paretos') return;
-  if (!force && !hasActiveOptimizeRuns()) return;
+  if (!state.livePanelRefreshPending && !hasActiveOptimizeRuns()) return;
   if (state.livePanelRefreshInFlight) return;
+  state.livePanelRefreshPending = false;
   state.livePanelRefreshInFlight = true;
   try {
     await refreshCurrentPanel();
   } finally {
     state.livePanelRefreshInFlight = false;
+    if (state.livePanelRefreshPending) {
+      refreshLiveResultsDuringRun(true).catch(handleError);
+    }
   }
 }
 
@@ -16467,6 +16475,6 @@ window.PBGUI_NAV_CONFIG = {
 <script src="/app/js/backtest_queue_actions.js?v=3"></script>
 <script src="/app/js/vast_performance.js?v=3"></script>
 <script src="/app/js/optimizer_log_layout.js?v=6"></script>
-<script src="/app/js/vast.js?v=175"></script>
+<script src="/app/js/vast.js?v=177"></script>
 </body>
 </html>

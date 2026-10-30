@@ -83,6 +83,8 @@ def test_stop_rechecks_confirmation_context(cloud_page, change):
     ('completed', '/test/final', False, None, False),
     ('failed', '/test/final', False, 'PB8 optimizer exited with code 1; see collected optimizer.log', False),
     ('collecting', '/test/partial', True, None, True),
+    ('collecting', '/test/final', False, None, True),
+    ('running', '/test/final', False, None, True),
 ])
 def test_recover_eligibility_and_inflight_lock(cloud_page, status, path, partial, error, eligible):
     """Only unfinished publication or the exact technical retry state permits final import."""
@@ -163,25 +165,25 @@ def test_independent_job_actions_preserve_new_selection(cloud_page, response_sta
     assert page.evaluate('state.cloudLogId') == 'b'*32
 
 
-@pytest.mark.parametrize('action', ['stop', 'recover'])
+@pytest.mark.parametrize('action', ['stop', 'recover', 'collect'])
 def test_action_timeout_differs_from_lifecycle_abort(cloud_page, action):
-    """A 30s browser timeout retains a possible stop and never retries a mutation automatically."""
+    """A browser timeout retains a possible stop and never retries a mutation automatically."""
     page, data, calls, overrides, held = cloud_page
-    data['jobs'][0].update(status='running', final_collected=True, result_partial=True)
+    data['jobs'][0].update(status='running', final_collected=True, result_partial=True, collect_available=True)
     page.reload()
     page.locator('[title="Open log"]').click()
     page.clock.install()
     overrides['/api/vast/jobs/' + 'a'*32 + '/' + action] = 'hold'
     page.locator('#' + action + '-job').click()
     page.wait_for_timeout(50)
-    page.clock.fast_forward(30001)
+    page.clock.fast_forward(120001 if action == 'collect' else 30001)
     page.wait_for_function("document.getElementById('queue-message').textContent.includes('server-side work may continue')")
     assert sum(method == 'POST' and url.endswith('/' + action) for method, url in calls) == 1
     if action == 'stop':
         assert page.locator('#stop-job').is_disabled()
         assert 'Stopping' in page.locator('#stop-job').inner_text()
     else:
-        assert page.locator('#recover-job').is_enabled()
+        assert page.locator('#' + action + '-job').is_enabled()
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}))")
     page.wait_for_timeout(50)
     assert page.evaluate('state.cloudLogId') == 'a'*32
@@ -1746,3 +1748,202 @@ def test_metadata_submission_progress_is_not_reported_as_received(cloud_page):
     assert 'waiting for worker acknowledgement' in label
     assert page.locator('#optlog-progress-fill').evaluate('(el) => el.style.width') == '50%'
     assert 'not confirmation of remote receipt' in page.locator('#optlog-progress-label').get_attribute('data-tip')
+
+
+
+def test_collect_keeps_stop_available_and_recovers_after_failure(cloud_page):
+    """Collect has its own lock while Stop retains its normal confirmation flow."""
+    page, data, calls, overrides, held = cloud_page
+    job = data['jobs'][0]
+    job.update(status='running', uploaded=True, collect_available=True)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    endpoint = '/api/vast/jobs/' + job['id'] + '/collect'
+    overrides[endpoint] = 'hold'
+    page.locator('#collect-job').click()
+    page.wait_for_function("document.getElementById('collect-job').textContent==='Collecting Pareto…'")
+    assert page.locator('#collect-job').is_disabled()
+    assert page.locator('#stop-job').is_enabled()
+    assert page.locator('[title="Stop"]').is_enabled()
+    page.locator('#collect-job').evaluate("node=>node.dispatchEvent(new MouseEvent('click'))")
+    assert sum(method == 'POST' and url.endswith('/collect') for method, url in calls) == 1
+    held.pop().fulfill(status=409, json={'detail': 'No Pareto results are ready yet'})
+    page.wait_for_function("!document.getElementById('collect-job').disabled")
+    assert page.locator('#queue-message').inner_text() == 'No Pareto results are ready yet'
+    assert not any(method == 'POST' and url.endswith('/stop') for method, url in calls)
+
+
+def test_collect_updates_results_without_reselecting_abandoned_context(cloud_page):
+    """A response updates inventory but cannot put success text into another log."""
+    page, data, calls, overrides, held = cloud_page
+    job = data['jobs'][0]
+    job.update(status='running', uploaded=True, collect_available=True)
+    data['jobs'].append(dict(job, id='b'*32, config_name='second-test'))
+    page.reload()
+    page.locator('[title="Open log"]').first.click()
+    endpoint = '/api/vast/jobs/' + job['id'] + '/collect'
+    overrides[endpoint] = 'hold'
+    page.locator('#collect-job').click()
+    page.locator('[title="Open log"]').nth(1).click()
+    page.evaluate('window.resultsUpdates=0;window.refreshLiveResultsDuringRun=async()=>{resultsUpdates++}')
+    job.update(result_path='/test/result', result_partial=True, last_backup_at=123)
+    held.pop().fulfill(json={})
+    page.wait_for_function('window.resultsUpdates===2')
+    assert page.evaluate('state.cloudLogId') == 'b'*32
+    assert 'Pareto results collected' not in page.locator('#queue-message').inner_text()
+
+
+@pytest.mark.parametrize('panel', ['results', 'paretos'])
+def test_collect_forces_publication_refresh_after_early_backup_poll(cloud_page, panel):
+    """A poll before import cannot consume the only refresh of the published front."""
+    page, data, calls, overrides, held = cloud_page
+    job = data['jobs'][0]
+    job.update(status='running', uploaded=True, collect_available=True,
+               result_path='/test/existing-result', result_partial=True, last_backup_at=1)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    source = (ROOT / 'frontend/v7_optimize.html').read_text()
+    updater = source[source.index('async function refreshLiveResultsDuringRun(force)'):source.index('function scheduleOptimizeLiveResults()')]
+    page.evaluate('''window.publishedFront='old candidate';window.reads=0;
+      state.queue=[];state.panel=''' + json.dumps(panel) + ''';
+      window.hasActiveOptimizeRuns=()=>false;window.handleError=e=>{throw e};
+      const output=document.createElement('div');output.id='test-front';document.body.append(output);
+      const selection=document.createElement('input');selection.id='test-selection';selection.value='candidate-a';document.body.append(selection);
+      window.refreshCurrentPanel=async()=>{reads++;document.getElementById('test-front').textContent=publishedFront};''')
+    page.evaluate('(() => {' + updater + ';window.refreshLiveResultsDuringRun=refreshLiveResultsDuringRun;})()')
+    overrides['/api/vast/jobs/' + job['id'] + '/collect'] = 'hold'
+    page.locator('#collect-job').click()
+    job['last_backup_at'] = 2
+    poll_cloud(page)
+    page.wait_for_function("reads===1 && document.getElementById('test-front').textContent==='old candidate'")
+    assert page.locator('#stop-job').is_enabled()
+    page.evaluate("publishedFront='new published candidate'")
+    held.pop().fulfill(json={})
+    page.wait_for_function("reads===2 && document.getElementById('test-front').textContent==='new published candidate'")
+    assert page.evaluate('state.panel') == panel
+    assert page.evaluate('state.cloudLogId') == job['id']
+    assert page.locator('#test-selection').input_value() == 'candidate-a'
+    assert page.locator('#stop-job').is_enabled()
+    assert not any(method == 'POST' and url.endswith('/stop') for method, url in calls)
+
+
+@pytest.mark.parametrize('panel', ['results', 'paretos'])
+def test_collect_hidden_completion_refreshes_selected_panel_on_return(cloud_page, panel):
+    """Real Collect and page return callbacks reload a retained selection without active local runs."""
+    page, data, calls, overrides, held = cloud_page
+    job = data['jobs'][0]
+    job.update(status='running', uploaded=True, collect_available=True,
+               result_path='/test/existing-result', result_partial=True, last_backup_at=1)
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    source = (ROOT / 'frontend/v7_optimize.html').read_text()
+    functions = '\n'.join([
+        source[source.index('async function loadResults()'):source.index('function selectedOptimizeResultStorageKey()')],
+        source[source.index('function restoreSelectedOptimizeResultWhenReady()'):source.index('function removeResultsFromState(')],
+        source[source.index('async function refreshOptimizePageData()'):source.index('async function loadParetos(')],
+        source[source.index('async function loadParetos('):source.index('async function deleteConfig(')],
+        source[source.index('async function refreshCurrentPanel()'):source.index('function attachEventHandlers()')],
+        source[source.index('function attachEventHandlers()'):source.index("  el('btn-new-config').addEventListener")] + '}'])
+    page.evaluate('''window.testVisibility='visible';
+      Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>testVisibility});
+      Object.defineProperty(document,'hidden',{configurable:true,get:()=>testVisibility!=='visible'});
+      Object.assign(state,{panel:''' + json.dumps(panel) + ''',queue:[],initialLoadPending:false,
+        selectedResultPath:'/test/existing-result',selectedResultName:'retained selection',
+        selectedParetos:new Set(['candidate-a']),paretoLoadSeq:0,resultsLoadSeq:0,
+        paretoMetricColumnsLoaded:true,paretoMetricColumns:[],paretoStatistic:'mean',
+        paretoScenario:'Aggregated',paretos:[{name:'old candidate'}]});
+      window.resultReads=0;window.paretoReads=0;window.publishedFront='old candidate';window.returnErrors=[];
+      window.handleError=e=>returnErrors.push(String(e));
+      window.el=id=>document.getElementById(id);
+      window.loadSettings=window.loadConfigs=window.loadQueue=async()=>{};
+      window.renderResults=()=>{};window.restoreParetoSelection=()=>{};window.applyParetoMeta=()=>{};
+      window.normalizeParetoStatistic=value=>value;window.scheduleOptimizeConfigs=()=>{};
+      window.optimizeEditorAdapter={resultsPath:'/test/results',paretosPath:()=>'/test/paretos'};
+      window.apiFetch=async path=>{if(path==='/test/results'){resultReads++;return {results:[{path:state.selectedResultPath,name:publishedFront}]};}
+        if(path==='/test/paretos'){paretoReads++;return {paretos:[{name:publishedFront}],meta:{}};}
+        throw Error('Unexpected test request '+path);};
+      const output=document.createElement('div');output.id='test-front';document.body.append(output);
+      const draft=document.createElement('input');draft.id='test-draft';draft.value='unsaved draft';document.body.append(draft);
+      const filter=document.createElement('input');filter.id='test-filter';filter.value='candidate';document.body.append(filter);
+      const scroll=document.createElement('div');scroll.id='test-scroll';scroll.style.cssText='height:20px;overflow:auto';
+      const content=document.createElement('div');content.style.height='500px';scroll.append(content);document.body.append(scroll);scroll.scrollTop=77;
+      window.renderParetos=()=>{document.getElementById('test-front').textContent=state.paretos[0]?.name||'';};''')
+    page.evaluate('(() => {' + functions + ';window.refreshLiveResultsDuringRun=refreshLiveResultsDuringRun;attachEventHandlers();})()')
+    endpoint = '/api/vast/jobs/' + job['id'] + '/collect'
+    overrides[endpoint] = 'hold'
+    page.locator('#collect-job').click()
+    page.wait_for_function("document.getElementById('collect-job').textContent==='Collecting Pareto…'")
+    assert page.locator('#stop-job').is_enabled()
+    page.evaluate("testVisibility='hidden';document.dispatchEvent(new Event('visibilitychange'))")
+    page.evaluate("publishedFront='new published candidate'")
+    job['last_backup_at'] = 2
+    held.pop().fulfill(json={})
+    page.wait_for_function("document.getElementById('collect-job').textContent==='Collect Pareto'")
+    assert page.evaluate('resultReads===0 && paretoReads===0')
+    assert page.evaluate('state.livePanelRefreshPending === true')
+    page.evaluate("testVisibility='visible';document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_function("!state.returnRefreshInFlight && !state.livePanelRefreshInFlight && resultReads>0 && (state.panel!=='paretos'||paretoReads>0)")
+    assert page.evaluate("state.panel") == panel
+    assert page.evaluate("state.selectedResultPath") == '/test/existing-result'
+    assert page.evaluate("state.selectedResultName") == 'retained selection'
+    assert page.evaluate("state.selectedParetos.has('candidate-a')")
+    assert page.evaluate('state.queue.length') == 0
+    assert page.evaluate('state.results[0].name') == 'new published candidate'
+    if panel == 'paretos':
+        assert page.locator('#test-front').inner_text() == 'new published candidate'
+    assert page.locator('#test-draft').input_value() == 'unsaved draft'
+    assert page.locator('#test-filter').input_value() == 'candidate'
+    assert page.locator('#test-scroll').evaluate('node=>node.scrollTop') == 77
+    assert page.evaluate('state.cloudLogId') == job['id']
+    assert page.locator('#stop-job').is_enabled()
+    assert page.evaluate('returnErrors') == []
+    assert sum(method == 'POST' and url.endswith('/collect') for method, url in calls) == 1
+    assert not any(method == 'POST' and url.endswith('/stop') for method, url in calls)
+
+
+def test_collect_unavailable_reason_is_visible_in_log_context(cloud_page):
+    """Old supervisors explain their disabled Collect action without an attempted POST."""
+    page, data, calls, _, _ = cloud_page
+    reason = 'Restart the Vast run supervisor to enable safe Pareto collection'
+    job = data['jobs'][0]
+    job.update(status='running', uploaded=True, collect_available=False, collect_unavailable_reason=reason)
+    data['jobs'].append(dict(job, id='b'*32, collect_available=True, collect_unavailable_reason=''))
+    page.reload()
+    page.locator('[title="Open log"]').first.click()
+    assert page.locator('#collect-job').is_disabled()
+    assert page.locator('#collect-unavailable-reason').is_visible()
+    assert page.locator('#collect-unavailable-reason').inner_text() == reason
+    assert page.locator('#collect-job').get_attribute('aria-describedby') == 'collect-unavailable-reason'
+    page.locator('[title="Open log"]').nth(1).click()
+    assert page.locator('#collect-job').is_enabled()
+    assert not page.locator('#collect-unavailable-reason').is_visible()
+    assert not any(method == 'POST' for method, _ in calls)
+
+
+
+@pytest.mark.parametrize('completion_visibility', ['visible', 'hidden'])
+def test_forced_result_refresh_is_replayed_after_inflight_request(completion_visibility):
+    """The production inline updater remembers publication arriving during a read."""
+    browser_api = __import__('browser_driver')
+    source = (ROOT / 'frontend/v7_optimize.html').read_text()
+    function = source[source.index('async function refreshLiveResultsDuringRun(force)'):source.index('function scheduleOptimizeLiveResults()')]
+    with browser_api.sync_browser() as runner:
+        browser = runner.chromium.launch()
+        page = browser.new_page()
+        page.goto('about:blank')
+        page.evaluate("""window.state={panel:'results'};window.reads=0;
+          window.testVisibility='visible';
+          Object.defineProperty(document,'visibilityState',{get:()=>testVisibility});
+          window.hasActiveOptimizeRuns=()=>false;window.handleError=e=>{throw e};
+          window.refreshCurrentPanel=()=>{reads++;return reads===1?new Promise(resolve=>window.finishRead=resolve):Promise.resolve()};""")
+        page.evaluate('(() => {' + function + ';window.refreshLiveResultsDuringRun=refreshLiveResultsDuringRun;})()')
+        page.evaluate('refreshLiveResultsDuringRun(true); refreshLiveResultsDuringRun(true);')
+        assert page.evaluate('reads') == 1
+        page.evaluate('testVisibility=' + json.dumps(completion_visibility))
+        page.evaluate('finishRead()')
+        if completion_visibility == 'hidden':
+            page.wait_for_function('!state.livePanelRefreshInFlight')
+            assert page.evaluate('reads===1 && state.livePanelRefreshPending')
+            page.evaluate("testVisibility='visible';refreshLiveResultsDuringRun();")
+        page.wait_for_function('reads===2 && !state.livePanelRefreshInFlight')
+        browser.close()

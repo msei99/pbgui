@@ -151,6 +151,7 @@
   const stoppingJobs = new Map();
   const uncertainStops = new Map();
   const jobActions = new Map();
+  const collectingJobs = new Map();
   let actionLifecycle = 0;
   let actionView = null, actionViewGeneration = 0;
   const deletingJobs = new Set();
@@ -162,9 +163,14 @@
     return stoppingJobs.get(job.id) || (job.stop_requested ? 'Stop requested' : null);
   }
   function canRecoverJob(job) {
-    return !!job?.final_collected && ((!job.result_path || job.result_partial) ||
+    return !!job?.final_collected && ((!['completed','cancelled','failed'].includes(job.status)) || (!job.result_path || job.result_partial) ||
       (job.collection_incomplete && !!job.collection_error) ||
       (job.status === 'failed' && job.error === 'Raw results saved locally; result import needs retry'));
+  }
+  function canCollectJob(job) {
+    return !!job && job.collect_available === true && !['worker','calibration'].includes(job.kind)
+      && (!!job.final_collected || (job.uploaded && !stopPhase(job)))
+      && !jobActions.has(job.id) && !collectingJobs.has(job.id);
   }
   function canStopJob(job) {
     return !!job && (!stopPhase(job) || stopRetryAvailable(job)) && ['provisioning', 'uploading', 'running', 'collecting'].includes(job.status);
@@ -188,6 +194,7 @@
     }
     actionLifecycle++;
     jobActions.clear();
+    collectingJobs.clear();
   }
   function currentObservedOptimizer(item) {
     const observed = item?.observed_optimizer;
@@ -215,7 +222,7 @@
     const controller = new AbortController();
     controllers.add(controller);
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, (["/jobs/prepare", "/queue/start"].includes(path) || path.endsWith('/requeue')) ? 600000 : 30000);
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, (["/jobs/prepare", "/queue/start"].includes(path) || path.endsWith('/requeue')) ? 600000 : path.endsWith('/collect') ? 120000 : 30000);
     try {
       const response = await fetch(apiBase + path, {
         credentials: 'same-origin', cache: 'no-store', ...options,
@@ -1545,7 +1552,13 @@
     el('resume-worker').disabled ||= !queueState.paused;
     el('stop-job').textContent = stopRetryAvailable(job) ? 'Retry stop & collect' : stopPhase(job) || 'Stop & collect';
     el('stop-job').disabled = !canStopJob(job) || jobActions.has(job?.id);
-    el('recover-job').disabled = !canRecoverJob(job) || jobActions.has(job?.id);
+    el('recover-job').disabled = !canRecoverJob(job) || jobActions.has(job?.id) || collectingJobs.has(job?.id);
+    el('collect-job').disabled = !canCollectJob(job);
+    el('collect-job').textContent = collectingJobs.has(job?.id) ? 'Collecting Pareto…' : 'Collect Pareto';
+    el('collect-job').setAttribute('aria-description', job?.collect_unavailable_reason || '');
+    const collectReason = el('collect-unavailable-reason');
+    collectReason.textContent = job?.collect_available === false ? job.collect_unavailable_reason || '' : '';
+    collectReason.hidden = !collectReason.textContent;
     el('recover-job').textContent = jobActions.get(job?.id)?.action === 'recover' ? 'Importing results…' : 'Retry result import';
     el('job-results').hidden = !job || !job.result_path;
   }
@@ -2598,6 +2611,9 @@
     renderCloudDashboard(observedOptimizerJob(item));
     el('optlog-activity').textContent = observed.activity || 'Optimizer process detected';
     el('stop-job').disabled = true;
+    el('collect-job').disabled = true;
+    el('collect-unavailable-reason').textContent = '';
+    el('collect-unavailable-reason').hidden = true;
     el('recover-job').disabled = true;
     el('requeue-job').hidden = true;
     el('start-job').hidden = true;
@@ -3152,10 +3168,40 @@
   });
   el('settings-end-rental')?.addEventListener('click', () => el('end-worker')?.click());
   el('start-job').addEventListener('click', () => startCloudQueue(selectedJob()));
+  async function runCollect(identifier) {
+    const job = jobRows.find(row => row.id === identifier);
+    if (disposed || !canCollectJob(job)) return;
+    const token = {lifecycle:actionLifecycle, view:actionViewGeneration,
+      log:window.state?.logContextGeneration};
+    collectingJobs.set(identifier, token);
+    const owns = () => !disposed && actionLifecycle === token.lifecycle && collectingJobs.get(identifier) === token;
+    const visible = () => owns() && actionViewGeneration === token.view && selectedJobId === identifier
+      && window.state?.cloudLogId === identifier && window.state?.logContextGeneration === token.log;
+    const repaint = () => {
+      renderJob();
+      const displayed = jobRows.find(row => row.id === window.state?.cloudLogId);
+      if (displayed) renderCloudDashboard(displayed);
+    };
+    repaint();
+    try {
+      await request('/jobs/' + encodeURIComponent(identifier) + '/collect', {method:'POST'});
+      if (!owns()) return;
+      await refreshJobs(undefined, true);
+      // A poll may already have consumed last_backup_at before import finished.
+      // Refresh the current panel explicitly; never restore an abandoned log.
+      if (owns() && typeof refreshLiveResultsDuringRun === 'function') await refreshLiveResultsDuringRun(true);
+      if (visible()) message('Pareto results collected. Optimizer and rental controls were not changed.');
+    } catch (error) {
+      if (visible()) message(error.message, true);
+    } finally {
+      if (owns()) { collectingJobs.delete(identifier); repaint(); }
+    }
+  }
+  el('collect-job').addEventListener('click', () => { void runCollect(selectedJob()?.id); });
   async function runJobAction(action, identifier) {
     let job = jobRows.find(row => row.id === identifier);
     const eligible = () => action === 'stop' ? canStopJob(job) : canRecoverJob(job);
-    if (disposed || jobActions.has(identifier) || !eligible()) return;
+    if (disposed || jobActions.has(identifier) || (action === 'recover' && collectingJobs.has(identifier)) || !eligible()) return;
     const token = {action, lifecycle:actionLifecycle, view:actionViewGeneration,
       uncertain:uncertainStops.has(identifier), submitted:false};
     jobActions.set(identifier, token);

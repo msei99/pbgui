@@ -1,5 +1,11 @@
 # PBv8 Optimize
 
+## Collect Pareto without stopping
+
+If collection finishes while this browser tab is hidden, returning to **Results** or **Paretos** loads the completed publication automatically, including an already selected result when no local optimizer is running. The current view, selection and edits stay in place.
+
+Use **PBv8 → Optimize → Queue → Open log → Collect Pareto** to publish the current cloud Pareto while optimization continues. Stop and rental policies remain unchanged. Publication updates Results/Paretos automatically and reuses the same result entry. **Retry result import** remains available when verified final data has been published but execution finalization is still pending. See [Collect Pareto](48_vast_gpu.md#collect-pareto) for connection, supervisor and transfer limits.
+
 ## Local CPU/GPU stagnation stopping
 
 In **PBv8 → Optimize → Configs**, open a test config with **Edit Selected**. Under **Execution & optimizer backend**, choose **Run on → Local** and the CPU (`pymoo`) or `gpu` **backend**. **Stop on stagnation (Local)** is independent of Vast.ai rental settings and AI Loop round-level patience. It defaults to Off; source defaults are 512 minimum exact evaluations, 512 patience and 0.25% improvement tolerance. Values are saved under `pbgui.optimize_runtime.convergence_config` and frozen with each queued job.
@@ -614,6 +620,8 @@ New Loop-owned optimizer jobs have a visible, model/rubric-derived **Pareto arch
 **Preview AI limits** shows progress immediately inside the open report and displays the prepared preview there. **Resume with current AI selection** shows preparation and application separately. Controls remain disabled while the request is pending; failures and cancelled approvals appear beside them. Preview does not resume the Loop. Historical optimizer sources are inspected only for initial planning/bootstrap; later resumes report that this selection is no longer needed. Editing the limits invalidates the displayed preview; values remain available after an error.
 
 Recoverable pauses expose their reason in Loop details: **context_budget**, **ai_budget**, **ai_timeout**, **evidence_storage** or **evidence_recovery**. Resume with a suitable model, adjusted authorized limit or repaired storage. Required evidence must retain its original checksum; changing models cannot bypass an integrity error. A resume that still exceeds the selected provider's budget is rejected before sending another request. Snapshot retention keeps recent decisions and protects active or disputed evidence; the 1 GiB owner storage target is soft for protected originals.
+
+Every AI Loop provider (ChatGPT, Claude and OpenCode) receives the same configuration schema with reviewed dates, Training windows, window provenance and disabled Scenario Editor settings fixed to the approved values. PBGui checks each returned variant against that schema before accepting it and asks the model to correct invalid decisions within the existing bounded recovery flow. Claude additionally uses the same schema in its native structured-output tool. Optimizer bounds, scoring and other permitted search fields remain editable; full configuration validation still applies.
 
 ### Round overview and details
 

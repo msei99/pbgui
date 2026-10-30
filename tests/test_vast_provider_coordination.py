@@ -17,7 +17,11 @@ def test_endpoint_pacing_spans_clients_and_instance_ids(monkeypatch):
         """Advance an isolated clock instead of waiting."""
         sleeps.append(seconds)
         now[0] += seconds
-    monkeypatch.setattr(provider, 'time', SimpleNamespace(time=lambda: now[0], sleep=sleep))
+    clock = SimpleNamespace(time=lambda: now[0], sleep=sleep)
+    monkeypatch.setattr(provider, 'time', clock)
+    # The cancellable wait shares the same simulated clock as coordination.
+    import vast_snapshot
+    monkeypatch.setattr(vast_snapshot, 'time', clock)
     monkeypatch.setattr(provider.VastClient, '_request',
                         lambda self, *args: calls.append(now[0]) or {'success': True})
     provider.VastClient('key').request('DELETE', '/instances/1')

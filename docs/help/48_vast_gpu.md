@@ -1,5 +1,19 @@
 # Vast.ai GPU queue
 
+## Collect Pareto
+
+A completed publication is also loaded automatically when returning from a hidden browser tab. The selected Results/Paretos context is retained, even without active local optimizer runs; no browser reload or repeated Collect is needed.
+
+Open **PBv8 → Optimize → Queue → Open log**. **Collect Pareto**, next to **Stop & collect**, publishes the current immutable Pareto snapshot without stopping the optimizer, requesting rental cleanup or running convergence/finalization. Repeated collection updates the same result. Results and Pareto Explorer update automatically; the selected job and page context stay in place. Stop remains available during collection.
+
+Remote collection requires the current run supervisor's snapshot-transaction support and an already verified worker connection. An outdated supervisor must be restarted explicitly through the existing supervisor controls; Collect never restarts it. Stop/final collection takes priority. The manual partial allowance is 1 GiB including the new archive; rental deadlines, the final collection reserve, budgets and idle cleanup still apply. Collect is not a rental keep-alive. Missing Pareto data or unavailable instances retain the previous published result. A browser timeout leaves the outcome unconfirmed; job status continues updating automatically, without repeating the POST.
+
+When Collect is unavailable, its reason appears beside the log actions, including the instruction to restart an outdated run supervisor. Successful collection explicitly updates the current Results/Paretos view after publication, even if a job update arrived during import. Snapshot locks retain their shared identity through symlinked ancestors such as `data`. Existing job-store and credential path checks still apply: the store root itself must be a regular directory or be configured using its canonical path. Lock-file symlinks and directory changes during collection are rejected.
+
+Verified final data can be published locally after the rental has ended, without contacting Vast. Collect does not decide the execution outcome. If finalization remains pending, **Retry result import** stays available even after the complete result has been published. It performs the normal local finalization; completed terminal outcomes are not offered an unnecessary retry.
+
+Waiting for local job metadata uses the same collection time limit and shutdown cancellation. Before publication, interruption preserves the previous result. Once publication commits, its matching job metadata is completed before the request finishes.
+
 ## Verified host exclusions in AI Chat
 
 Unreadable local host metadata or damaged execution evidence is reported as a failure or unconfirmed outcome. It never proves a successful block and never authorizes another write. The read-only outcome lookup validates the receipt against the reviewed job, lease, machine, Boolean and revision before reporting historical success.

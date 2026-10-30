@@ -115,3 +115,50 @@ def test_native_helper_combines_optimizer_and_preload_warmup(monkeypatch):
     c = {'live': {'max_warmup_minutes': 0}, 'optimize': {'bounds': {'example': [1, 10]}}}
     assert _optimizer_warmup([c]) == {'minutes': [15000]}
     assert seen == [c]
+
+
+@pytest.mark.parametrize('suffix', ['', 'T00:00:00', ' 12:34:56',
+    'T23:30:00-05:00', 'T00:30:00+05:00', 'T23:59:59.123Z'])
+def test_datetime_dates_preserve_export_and_integrity_windows(config, warmup, suffix):
+    """Both consumers keep calendar days, shared warmup and scenario inheritance."""
+    from vast_history import integrity_requirements
+
+    config['backtest'].update(gap_tolerance_ohlcvs_minutes=0, suite_enabled=True, scenarios=[
+        {'label': 'earlier', 'start_date': '2025-12-01', 'end_date': '2025-12-10'},
+        {'label': 'later', 'start_date': '2026-10-01', 'end_date': '2026-10-31'},
+        {'label': 'inherited'}])
+    config['live']['minimum_coin_age_days'] = 0
+    warmup[0][:] = [0, 1440, 2881, 0]
+    contexts, _, errors = scenario_plan(config)
+    assert not errors
+    expected = integrity_requirements(config, contexts)
+    for section in [config['backtest'], *config['backtest']['scenarios']]:
+        for field in ('start_date', 'end_date'):
+            if field in section:
+                section[field] += suffix
+    before = copy.deepcopy(config)
+    contexts, _, errors = scenario_plan(config)
+    assert not errors
+    assert history_window(config, contexts) == ('2025-11-28', '2026-10-31')
+    assert integrity_requirements(config, contexts) == expected
+    assert config == before
+
+
+@pytest.mark.parametrize('field', ['start_date', 'end_date'])
+@pytest.mark.parametrize('value', [None, 42, [], {}, '2019-02-30',
+    '2019-10-04Tbroken', '2019-10-04 25:00:00', '20191004T000000'])
+def test_invalid_datetime_types_and_suffixes_fail_closed(config, warmup, field, value):
+    """Invalid dates keep the public history error and never reach warmup/export."""
+    from vast_history import integrity_requirements
+
+    config['backtest'][field] = value
+    with pytest.raises(ValueError, match='Cloud export requires valid start_date and end_date'):
+        history_window(config, [])
+    assert not warmup[1]
+    # The existing integrity date converter treats None as a relative sentinel.
+    if value is None:
+        return
+    config['backtest']['gap_tolerance_ohlcvs_minutes'] = 0
+    config['live']['minimum_coin_age_days'] = 0
+    with pytest.raises((TypeError, ValueError)):
+        integrity_requirements(config, scenario_plan(config)[0])

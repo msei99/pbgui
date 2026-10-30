@@ -1,6 +1,8 @@
 """Bound cloud daily-shard exports using PB8's optimizer warmup requirements."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+
+from config_dates import parse_config_date
 
 SERVICE = 'VastHistory'
 
@@ -23,9 +25,9 @@ def history_window(config, contexts):
     for item in configs:
         bt = item['backtest']
         try:
-            start = date.fromisoformat(bt['start_date'])
+            start = parse_config_date(bt['start_date'])
             end = (datetime.now(timezone.utc).date() if bt['end_date'] == 'now'
-                   else date.fromisoformat(bt['end_date']))
+                   else parse_config_date(bt['end_date']))
         except (KeyError, ValueError, TypeError):
             raise ValueError('Cloud export requires valid start_date and end_date') from None
         if start > end:
@@ -92,7 +94,7 @@ def integrity_requirements(config, contexts):
 
     def date_ms(value):
         """Match pinned format_end_date('now'): the UTC day two days ago."""
-        day = today - timedelta(days=2) if value in ('now', 'today', '', None) else date.fromisoformat(value)
+        day = today - timedelta(days=2) if value in ('now', 'today', '', None) else parse_config_date(value)
         return int(datetime.combine(day, datetime.min.time(), timezone.utc).timestamp() * 1000)
 
     for label, consumers in groups.items():

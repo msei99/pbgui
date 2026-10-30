@@ -14,6 +14,7 @@ import aiohttp
 from pb8_loop_evidence import (EvidenceStore, EvidenceSession, LoopAIPause, BootstrapWithoutAdvice, TOOL_SCHEMA,
                                TOOL_DESCRIPTION, encode, sha, select_findings, required_content)
 from pb8_loop_ai_policy import DecisionLedger, check_context
+from pb8_loop_config_contract import variant_config_schema, validate_variant_config
 from pb8_loop_dialog import OpenCodeDialog, read_sse, IncompleteResponse, StreamingUnavailable, NativeToolsUnavailable
 
 SERVICE = 'PB8LoopDecision'
@@ -84,6 +85,11 @@ side/config/override and its search bounds; on requires active, effective HSL on
 throughout every experiment. Only auto permits AI changes to HSL activation. Never change hsl_mode.
 Return one complete JSON decision. knowledge should be at most 1000 characters, and optional
 knowledge_hypothesis at most 600; longer text is archived, never treated as proof or a hard constraint.
+variant_config_schema in the mandatory package defines every complete variant.config.
+Its const values and required fields are the approved read-only configuration contract.
+Copy fixed dates, scenarios and pbgui provenance exactly, including inherited null values;
+never reconstruct or invent them. Change only permitted optimizer/search fields.
+This contract applies equally to every provider and is checked before accepting a variant.
 Metrics tables preserve exact values; missing column indices mean absent, not zero or null.
 per_report_context explicitly maps each report_index to its window label and requested/effective
 dates. Join per_report by report_index, NEVER by list position in the requested scenarios or
@@ -176,6 +182,7 @@ def validate_decision(record, stage, evidence, text):
         for variant in ([] if at_round_limit else variants or []):
             if not isinstance(variant, dict):
                 raise ValueError('Variant must be an object')
+            validate_variant_config(record, variant.get('config'))
             validate_change(record, variant.get('config'), variant.get('overrides', record['initial_overrides']))
             if stage == 'evaluate' and needs_variant:
                 changes = validate_exploration(record, variant['config'],
@@ -250,6 +257,8 @@ async def run_decision(ai, record, stage, evidence):
                        {'controller_pins_native_iters': settings.get('run_limit_mode', 'config') != 'config',
                         'effective_native_iters': apply_run_limit(settings, record['initial_config'])['optimize'].get('iters')},
                    'evidence': evidence, 'passivbot_manual': manual}
+        if stage in {'bootstrap', 'evaluate'}:
+            content['variant_config_schema'] = variant_config_schema(record)
         if settings['execution'] in {'gpu', 'vast'}:
             content['optimizer_metric_policy'] = cloud_loop_metric_contract()
         if stage == 'bootstrap':

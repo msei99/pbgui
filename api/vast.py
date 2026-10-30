@@ -46,6 +46,8 @@ _PERFORMANCE_COLLECTOR = None
 def startup() -> None:
     """Start the bounded local input-preparation owner for this API lifespan."""
     global _PREPARATION_EXECUTOR, _PREPARATION_STOPPING, _PERFORMANCE_COLLECTOR, _DELETION_EXECUTOR
+    from vast_collect import startup as collect_startup
+    collect_startup()
     with _PREPARATION_LOCK:
         _PREPARATION_STOPPING = False
         if _PREPARATION_EXECUTOR is None:
@@ -134,7 +136,8 @@ async def shutdown() -> None:
         executor, _PREPARATION_EXECUTOR = _PREPARATION_EXECUTOR, None
         deletion_executor, _DELETION_EXECUTOR = _DELETION_EXECUTOR, None
         collector, _PERFORMANCE_COLLECTOR = _PERFORMANCE_COLLECTOR, None
-    pending = []
+    from vast_collect import shutdown as collect_shutdown
+    pending = [collect_shutdown()]
     if collector is not None:
         collector.stop()
         pending.append(asyncio.to_thread(collector.join))
@@ -1127,6 +1130,8 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
         if worker:
             provider_log = CLOUD_LOG_ROOT / ('vast_' + job_id(worker['id']) + '_provider.log')
             worker = dict(worker, has_provider_log=provider_log.is_file() and not provider_log.is_symlink())
+        from vast_collect import availability
+        collect_owners = {}
         rows = []
         rentals = {}
         active_job_ids = {
@@ -1174,6 +1179,7 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
                         estimate = current
             row = dict(row, estimated_coin_candles=estimate, exchange=', '.join(queue.store.exchanges(row)),
                        has_log=log.is_file() and not log.is_symlink(), can_delete=can_remove_job(row, worker_by_id.get(row.get('lease_id'), worker)))
+            row.update(availability(queue.store, row, collect_owners))
             is_terminal = row.get('status') in _TERMINAL_JOB_STATES
             # Stop requests are moot once a job has finished; skip the control file read.
             control_exists = not is_terminal and (queue.store.directory(row['id']) / 'control.json').exists()
@@ -1609,6 +1615,22 @@ def queue_action(action: str, body: EndRentalAck | None = None, session: Session
         return result
     except VastError as exc:
         raise _error(exc) from None
+
+
+@router.post("/jobs/{identifier}/collect")
+def collect_job(identifier: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """Publish Pareto without requesting Stop, cleanup or lifecycle finalization."""
+    from vast_collect import collect_results
+    try:
+        return collect_results(JobStore(), identifier)
+    except HTTPException:
+        raise
+    except VastError as exc:
+        _log(SERVICE, str(exc), level='WARNING')
+        raise _error(exc) from None
+    except Exception as exc:
+        _log(SERVICE, 'Pareto collection failed: ' + type(exc).__name__, level='ERROR')
+        raise HTTPException(status_code=502, detail='Pareto collection could not finish; previous results are retained. Check the connection and retry.') from None
 
 
 @router.post("/jobs/{identifier}/stop")

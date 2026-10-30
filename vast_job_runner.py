@@ -19,6 +19,7 @@ from vast_credentials import VastCredentialStore
 from vast_jobs import SUPPORTED_RENTAL_IMAGES, SUPPORTED_RENTAL_IMAGE_REVISIONS, PROJECT, JobStore, digest, job_id, write_json
 from vast_provider import VastRateLimit, VastClient, VastError, positive_id
 from vast_transfer import WorkerConnection, import_results
+from vast_snapshot import snapshot, bounded_lock
 
 SERVICE = "VastRunner"
 RUNNER_CODE_SERIAL = (PROJECT / "api/serial.txt").read_text().strip()
@@ -524,7 +525,7 @@ def _persist_finalization_error(store: JobStore, identifier: str, *, preserve_ex
 
 def finalize_collected_results(store: JobStore, identifier: str, *, check=None, preserve_execution=False) -> dict:
     """Serialize import, assessment and final status across API, runner and stop callers."""
-    with advisory_file_lock(store.directory(identifier) / '.finalize-lock'):
+    with bounded_lock(store.directory(identifier) / '.finalize-lock', check=check or (lambda: None), check_on_acquire=False), bounded_lock(store.directory(identifier) / '.snapshot-lock', check=check or (lambda: None), check_on_acquire=False):
         try:
             return _finalize_collected_results_locked(store, identifier, check=check)
         except Exception as exc:
@@ -647,41 +648,52 @@ def stop_and_collect(connection, store, identifier, intent, *, lease_id=None):
     finalized = False
     collection_failed = False
     try:
-        # A recovered supervisor publishes the already verified archive instead
-        # of downloading it again with a new or depleted allowance.
-        final = state.get('final_collected') or bool(progress.get('finished'))
-        if not state.get('stop_snapshot_collected') and not state.get('final_collected'):
-            connection.collect(final, timeout=remaining())
-            store.update(identifier, stop_snapshot_collected=True)
+        # Keep the persisted Stop allowance; lock waits do not renew it.
+        with snapshot(store, identifier, check=remaining):
+            current = store.read(identifier)
+            final = current.get('final_collected') or bool(progress.get('finished'))
+            if not current.get('stop_snapshot_collected') and not current.get('final_collected'):
+                connection.collect(final, timeout=remaining())
+                store.update(identifier, stop_snapshot_collected=True)
+            if not final:
+                sources = store.directory(identifier) / 'partial-results/optimize_results'
+                if sources.is_dir():
+                    imported = import_results(store, identifier, partial=True, check=remaining)
+                    store.update(identifier, **imported)
+                store.update(identifier, collection_incomplete=True, collection_error=None,
+                             stop_results_published=True)
+        # Never acquire Finalize while holding Snapshot.
         if final:
             finalize_collected_results(store, identifier, check=remaining, preserve_execution=True)
             finalized = True
-        else:
-            sources = store.directory(identifier) / 'partial-results/optimize_results'
-            if sources.is_dir():
-                imported = import_results(store, identifier, partial=True, check=remaining)
-                store.update(identifier, **imported)
-        store.update(identifier, collection_incomplete=not final, collection_error=None)
-        store.update(identifier, stop_results_published=True)
+            store.update(identifier, collection_incomplete=False, collection_error=None,
+                         stop_results_published=True)
     except Exception as exc:
         _log(SERVICE, 'Final collection incomplete: ' + type(exc).__name__, level='WARNING')
         collection_failed = True
     if not finalized:
         # Match every finalizer's Finalize-before-State order, then re-read
         # collection and completion so a concurrent successful recovery wins.
-        with advisory_file_lock(store.directory(identifier) / '.finalize-lock'):
-            with advisory_file_lock(store.directory(identifier) / '.state-lock'):
-                current = store.read(identifier)
-                collected = bool(current.get('final_collected'))
-                if not collected:
-                    changes = {} if current['status'] in {'failed', 'completed', 'cancelled'} else {'status': 'cancelled'}
-                    if collection_failed:
-                        changes.update(collection_incomplete=True,
-                            collection_error='Final collection could not finish; available verified snapshots and logs are retained')
-                    if changes:
-                        store.update(identifier, **changes)
-            if collected:
-                _persist_finalization_error(store, identifier, preserve_execution=True)
+        try:
+            with bounded_lock(store.directory(identifier) / '.finalize-lock', blocking=False), bounded_lock(store.directory(identifier) / '.snapshot-lock', blocking=False):
+                with bounded_lock(store.directory(identifier) / '.state-lock', blocking=False):
+                    current = store.read(identifier)
+                    collected = bool(current.get('final_collected'))
+                    if not collected:
+                        changes = {} if current['status'] in {'failed', 'completed', 'cancelled'} else {'status': 'cancelled'}
+                        if collection_failed:
+                            changes.update(collection_incomplete=True,
+                                collection_error='Final collection could not finish; available verified snapshots and logs are retained')
+                        if changes:
+                            store.update(identifier, **changes)
+                if collected:
+                    _persist_finalization_error(store, identifier, preserve_execution=True)
+        except VastError as exc:
+            if 'Collection is busy' not in str(exc):
+                raise
+            # Another publisher owns the outcome. Retry from the persisted
+            # Stop markers instead of waiting beyond the Stop deadline.
+            return False
     if not lease_id:
         store.control(identifier, 'cleanup')
     return True
@@ -849,13 +861,32 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                          gpu_candidates=max(state.get("gpu_candidates", 0), progress.get("gpu_candidates", 0)), error=None)
             if progress.get("finished"):
                 store.update(identifier, status="collecting")
-                connection.collect(True, timeout=max(1, min(180, int(remaining - 15))))
+                def final_remaining():
+                    """Preserve the rental reserve even after waiting for Snapshot."""
+                    current_intent = effective_intent(store, lease_id or identifier, original_intent)
+                    seconds = current_intent['deadline'] - time.time() - 15
+                    if seconds <= 0:
+                        raise VastError('Rental collection deadline reached; last verified results retained')
+                    return min(180, seconds)
+                with snapshot(store, identifier, check=final_remaining):
+                    if not store.read(identifier).get('final_collected'):
+                        connection.collect(True, timeout=final_remaining())
                 continue
             if time.time() - last_backup >= 60 and progress.get("exact_completed", 0) > 0:
                 if state.get("downloaded_bytes", 0) < 1024**3:
-                    connection.collect(False, timeout=max(1, min(60, int(remaining - 180))))
-                    store.update(identifier, **import_results(store, identifier, partial=True))
-                    observe(store, identifier)
+                    def partial_remaining():
+                        """Recompute the effective reserve after every lock wait."""
+                        current_intent = effective_intent(store, lease_id or identifier, original_intent)
+                        seconds = current_intent['deadline'] - time.time() - 180
+                        if seconds <= 0:
+                            raise VastError('Partial backup reserve reached; final collection takes priority')
+                        return min(60, seconds)
+                    with snapshot(store, identifier, check=partial_remaining):
+                        current = store.read(identifier)
+                        if not current.get('final_collected') and current.get('downloaded_bytes', 0) < 1024**3:
+                            connection.collect(False, timeout=partial_remaining())
+                            store.update(identifier, **import_results(store, identifier, partial=True, check=partial_remaining))
+                            observe(store, identifier)
                 elif (store.read(identifier).get('convergence_config') or {}).get('convergence_enabled'):
                     from vast_convergence import observe_points
                     points = connection.convergence_snapshot()
@@ -907,7 +938,7 @@ def main() -> None:
             return
         store.update(identifier, **{'supervisor_' + mode: {
             'pid': os.getpid(), 'created_at': psutil.Process().create_time(),
-            'code_serial': RUNNER_CODE_SERIAL}})
+            'code_serial': RUNNER_CODE_SERIAL, **({'snapshot_transaction': 1} if mode == 'run' else {})}})
         if mode == "guard":
             guard_loop(store, identifier)
         else:

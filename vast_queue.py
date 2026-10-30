@@ -525,24 +525,26 @@ class CloudQueue:
                 row = by_id[job_identifier]
                 if not can_remove_job(row, self.worker_for(row.get('lease_id'))):
                     raise VastError('Stop every retry attempt and finish collection/cleanup before deleting its history', 409)
-            deleted_at = time.time()
-            for job_identifier in lineage:
-                row = by_id[job_identifier]
-                changes = {'deleted_at': deleted_at}
-                if row['status'] == 'ready':
-                    changes['status'] = 'cancelled'
-                self.store.update(job_identifier, **changes)
-            from vast_performance import PerformanceHistory
-            PerformanceHistory(self.root).delete_runs(lineage)
-            staged = []
-            for job_identifier in lineage:
-                directory = self.store.directory(job_identifier)
-                temporary = directory.with_name(f'.{job_identifier}.delete-{uuid.uuid4().hex}')
-                try:
-                    os.replace(directory, temporary)
-                except OSError as exc:
-                    raise VastError('Cloud job history could not be removed completely', 500) from exc
-                staged.append(temporary)
+            from vast_snapshot import deletion_snapshots
+            with deletion_snapshots(self.store, lineage):
+                deleted_at = time.time()
+                for job_identifier in lineage:
+                    row = by_id[job_identifier]
+                    changes = {'deleted_at': deleted_at}
+                    if row['status'] == 'ready':
+                        changes['status'] = 'cancelled'
+                    self.store.update(job_identifier, **changes)
+                from vast_performance import PerformanceHistory
+                PerformanceHistory(self.root).delete_runs(lineage)
+                staged = []
+                for job_identifier in lineage:
+                    directory = self.store.directory(job_identifier)
+                    temporary = directory.with_name(f'.{job_identifier}.delete-{uuid.uuid4().hex}')
+                    try:
+                        os.replace(directory, temporary)
+                    except OSError as exc:
+                        raise VastError('Cloud job history could not be removed completely', 500) from exc
+                    staged.append(temporary)
         # Snapshot cleanup can take minutes. Readers must never see a partially
         # removed job, and unrelated queue actions must not wait for its files.
         for directory in staged:
@@ -579,18 +581,20 @@ class CloudQueue:
                           and row.get('deleted_at') and row['id'] not in protected]
             retained = sum(row.get('kind') != 'worker' and bool(row.get('deleted_at'))
                            and row['id'] in protected for row in rows)
-            if candidates:
-                from vast_performance import PerformanceHistory
-                PerformanceHistory(self.root).delete_runs(candidates)
-            for identifier in candidates:
-                try:
-                    directory = self.store.directory(identifier)
-                    temporary = directory.with_name(f'.{identifier}.delete-{uuid.uuid4().hex}')
-                    os.replace(directory, temporary)
-                except (OSError, VastError):
-                    failed.append(identifier)
-                else:
-                    staged.append((identifier, temporary))
+            from vast_snapshot import deletion_snapshots
+            with deletion_snapshots(self.store, candidates):
+                if candidates:
+                    from vast_performance import PerformanceHistory
+                    PerformanceHistory(self.root).delete_runs(candidates)
+                for identifier in candidates:
+                    try:
+                        directory = self.store.directory(identifier)
+                        temporary = directory.with_name(f'.{identifier}.delete-{uuid.uuid4().hex}')
+                        os.replace(directory, temporary)
+                    except (OSError, VastError):
+                        failed.append(identifier)
+                    else:
+                        staged.append((identifier, temporary))
         removed = []
         for identifier, directory in staged:
             try:

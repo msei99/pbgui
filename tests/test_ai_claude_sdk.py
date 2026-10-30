@@ -1,5 +1,6 @@
 """Exercise the installed SDK/native bridge against a local synthetic model server."""
 import asyncio
+import copy
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,7 +14,8 @@ from ai_claude_code import ClaudeCodeError, ClaudeRuntime
 @pytest.mark.skipif(not ClaudeRuntime.available(), reason="Optional pinned Claude SDK is not installed")
 @pytest.mark.parametrize('loop_name', ['asyncio', 'uvloop'])
 @pytest.mark.parametrize('output_kind', ['text', 'structured', 'structured_retry', 'structured_failure',
-                                        'structured_missing', 'loop', 'loop_select', 'loop_bootstrap', 'loop_evaluate'])
+                                        'structured_missing', 'loop', 'loop_select', 'loop_bootstrap', 'loop_evaluate',
+                                        'loop_evaluate_windows', 'loop_evaluate_scenario'])
 def test_installed_sdk_routes_native_mcp_tool_without_real_account(tmp_path, monkeypatch, loop_name, output_kind):
     """The real native client must round-trip MCP into Python without user data or API billing."""
     requests = []
@@ -25,7 +27,10 @@ def test_installed_sdk_routes_native_mcp_tool_without_real_account(tmp_path, mon
         from types import SimpleNamespace
         from pb8_loop_claude import _decision_schema
         from tests.test_pb8_loop_optimizer import RULE
-        stage = 'interpret' if output_kind == 'loop' else output_kind.removeprefix('loop_')
+        stage = ('interpret' if output_kind == 'loop' else 'evaluate' if output_kind.startswith('loop_evaluate')
+                 else output_kind.removeprefix('loop_'))
+        schema_record = {'settings': {'scenario_enabled': False},
+                         'initial_config': {key: {} for key in ('backtest', 'bot', 'live', 'optimize')}}
         evidence = {}
         structured_value = {'reason': 'Synthetic Loop decision'}
         if stage == 'interpret':
@@ -41,7 +46,13 @@ def test_installed_sdk_routes_native_mcp_tool_without_real_account(tmp_path, mon
                 structured_value.update(winner_operation='keep', finish=False,
                     evaluation_criteria=[{'metric': 'gain', 'direction': 'max', 'reducer': 'mean', 'reason': 'Fixture criterion'}],
                     candidate_assessments={'keep': 'Fixture assessment'})
-        output_schema = _decision_schema({'session': SimpleNamespace(snapshot={'phase': stage, 'data': {'evidence': evidence}})})
+        if output_kind in {'loop_evaluate_windows', 'loop_evaluate_scenario'}:
+            from tests.test_ai_loop_windows import run_record
+            _, schema_record = run_record(tmp_path / 'reviewed')
+            schema_record['settings']['scenario_enabled'] = False
+            structured_value['variants'][0]['config'] = copy.deepcopy(schema_record['initial_config'])
+        output_schema = _decision_schema({'session': SimpleNamespace(snapshot={'phase': stage, 'data': {'evidence': evidence}})},
+                                         schema_record)
     factory = asyncio.new_event_loop if loop_name == 'asyncio' else pytest.importorskip('uvloop').new_event_loop
 
     class ModelServer(BaseHTTPRequestHandler):
@@ -61,8 +72,15 @@ def test_installed_sdk_routes_native_mcp_tool_without_real_account(tmp_path, mon
                 elif used and output_kind != 'text':
                     structured_attempts.append(True)
                     invalid = output_kind == 'structured_failure' or output_kind == 'structured_retry' and len(structured_attempts) == 1
+                    value = {'result': 7} if invalid else structured_value
+                    if output_kind in {'loop_evaluate_windows', 'loop_evaluate_scenario'} and len(structured_attempts) == 1:
+                        value = copy.deepcopy(structured_value)
+                        if output_kind == 'loop_evaluate_windows':
+                            value['variants'][0]['config']['backtest']['start_date'] = '1999-01-01'
+                        else:
+                            value['variants'][0]['config']['backtest']['starting_balance'] = 999999
                     content = [{'type': 'tool_use', 'id': 'structured_fixture_'+str(len(structured_attempts)), 'name': 'StructuredOutput',
-                                'input': {'result': 7} if invalid else structured_value}]
+                                'input': value}]
                 else:
                     content = ([{'type': 'text', 'text': 'PBGui fixture completed'}] if used else
                                [{'type': 'tool_use', 'id': 'tool_fixture', 'name': 'mcp__pbgui__fixture_tool', 'input': {'value': 'fixture'}}])
@@ -151,7 +169,7 @@ def test_installed_sdk_routes_native_mcp_tool_without_real_account(tmp_path, mon
             assert requests and not runtime.operations and not runtime.processes
             if output_kind != 'structured_failure':
                 assert any(value['event'] == 'usage' and value['context_window'] >= 256000 for value in events)
-            if output_kind == 'structured_retry':
+            if output_kind in {'structured_retry', 'loop_evaluate_windows', 'loop_evaluate_scenario'}:
                 assert len(structured_attempts) >= 2
             if output_kind != 'text':
                 assert any(tool.get('name') == 'StructuredOutput' for body in requests for tool in body.get('tools', []))
