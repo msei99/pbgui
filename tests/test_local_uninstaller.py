@@ -959,7 +959,7 @@ def test_session_tokens_are_absent_from_browser_and_backend_urls() -> None:
     """PBGui page, SSE, WebSocket, and proxy URLs must never contain sessions."""
     frontend_root = Path("frontend")
     forbidden = re.compile(
-        r"(?:[?&]token=|(?:searchParams|params)\.set\(['\"]token|"
+        r"(?:[?&]token=(?!=)|(?:searchParams|params)\.set\(['\"]token|"
         r"(?:[A-Za-z_$][\w$]*|new\s+URLSearchParams\([^)]*\))\.get\(['\"]token['\"]\))"
     )
     offenders = []

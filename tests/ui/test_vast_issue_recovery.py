@@ -1744,3 +1744,63 @@ def test_metadata_submission_progress_is_not_reported_as_received(cloud_page):
     assert 'waiting for worker acknowledgement' in label
     assert page.locator('#optlog-progress-fill').evaluate('(el) => el.style.width') == '50%'
     assert 'not confirmation of remote receipt' in page.locator('#optlog-progress-label').get_attribute('data-tip')
+
+
+@pytest.mark.parametrize('outcome', ['success', 'error', 'cancel'])
+def test_collect_pareto_confirmation_lock_refresh_and_errors(cloud_page, outcome):
+    """Collect-only shares the action lock, refreshes Pareto and never sends Stop."""
+    page, data, calls, overrides, held = cloud_page
+    job = data['jobs'][0]
+    job.update(status='running', final_collected=False)
+    job['rental']['rental_state'] = 'active'
+    page.reload()
+    page.locator('[title="Open log"]').click()
+    page.evaluate('''window.confirmations=0; window.paretoRefreshes=0;
+      window.refreshLiveResultsDuringRun=async(force)=>{if(force)paretoRefreshes++};
+      PBGuiDialogs.confirm=()=>{confirmations++;return new Promise(resolve=>window.confirmCollect=resolve)}; void 0;''')
+    path = '/api/vast/jobs/' + job['id'] + '/collect'
+    overrides[path] = 'hold'
+    button = page.locator('#collect-job')
+    button.click()
+    assert page.evaluate('confirmations') == 1
+    assert button.is_disabled()
+    assert page.locator('#stop-job').is_disabled()
+    poll_cloud(page)
+    button.evaluate("node=>node.dispatchEvent(new MouseEvent('click'))")
+    assert page.evaluate('confirmations') == 1
+    page.evaluate('confirmCollect(' + ('false' if outcome == 'cancel' else 'true') + ')')
+    if outcome != 'cancel':
+        page.wait_for_function("document.getElementById('collect-job').textContent === 'Collecting Pareto…'")
+        page.wait_for_timeout(30)
+        assert len(held) == 1
+        if outcome == 'success':
+            job.update(result_path='/isolated/optimize_results/run', last_backup_at=123,
+                       result_partial=True, pareto_count=1)
+            held.pop().fulfill(json=job)
+            page.wait_for_function('paretoRefreshes === 1')
+            page.wait_for_function("document.getElementById('queue-message').textContent.includes('Pareto results collected')")
+            assert page.locator('#optlog-open-pareto-explorer').is_enabled()
+        else:
+            held.pop().fulfill(status=409, json={'detail': 'No Pareto results are ready yet'})
+            page.wait_for_function("document.getElementById('queue-message').textContent.includes('No Pareto results')")
+    page.wait_for_function("!document.getElementById('collect-job').disabled")
+    assert page.locator('#stop-job').is_enabled()
+    assert sum(method == 'POST' and url.endswith('/collect') for method, url in calls) == (0 if outcome == 'cancel' else 1)
+    assert not any(method == 'POST' and url.endswith(('/stop', '/cleanup', '/end')) for method, url in calls)
+
+
+def test_collect_pareto_late_confirmation_preserves_other_job(cloud_page):
+    """A confirmation from an abandoned log cannot collect or reselect its job."""
+    page, data, calls, _, _ = cloud_page
+    data['jobs'][0].update(status='running', final_collected=False)
+    data['jobs'][0]['rental']['rental_state'] = 'active'
+    data['jobs'].append(dict(data['jobs'][0], id='b'*32, config_name='other-job'))
+    page.reload()
+    page.locator('[title="Open log"]').first.click()
+    page.evaluate('PBGuiDialogs.confirm=()=>new Promise(resolve=>window.confirmCollect=resolve); void 0')
+    page.locator('#collect-job').click()
+    page.locator('[title="Open log"]').nth(1).click()
+    page.evaluate('confirmCollect(true)')
+    page.wait_for_function("!document.getElementById('collect-job').disabled")
+    assert page.evaluate('state.cloudLogId') == 'b'*32
+    assert not any(method == 'POST' and url.endswith('/collect') for method, url in calls)

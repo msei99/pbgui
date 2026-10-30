@@ -397,6 +397,8 @@ Clicking Start immediately shows **Starting…** in the queue row while the requ
 
 The job log window offers **Requeue** for inactive failed/cancelled jobs and **Start** for ready jobs. Requeue keeps the window open on the replacement job and resumes an already authorized **Auto rent & start** pool.
 
+**Collect Pareto** in the Optimize log copies the current verified Pareto snapshot without stopping the optimizer or requesting rental cleanup. Confirm the selected job; controls stay disabled during collection and Results/Pareto update automatically. Active runs publish an intermediate Pareto front; they continue running and no stagnation stop is triggered by this action. Repeating collection updates the same result entry. Already collected final data is reused locally. If no Pareto exists yet or the instance is unreachable, the previous published results remain available and the log shows an error. This action does not extend the rental or disable existing deadline, queue, or idle cleanup policies.
+
 **Stop & collect** is disabled before a job starts and after it finishes. It is available during provisioning, upload, execution, and collection.
 
 During Requeue the queue displays only the preparing replacement. If preparation fails, the original remains available for retry.

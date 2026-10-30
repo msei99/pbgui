@@ -64,6 +64,22 @@ def upload_boundary(function):
     return bounded
 
 
+def snapshot_transaction(*, connection=False):
+    """Serialize snapshot replacement and import with the independent supervisor."""
+    def decorate(function):
+        """Retain the public transport/import signatures for existing callers."""
+        @wraps(function)
+        def locked(*args, **kwargs):
+            """Protect files while preserving positional and keyword call styles."""
+            owner = args[0] if args else kwargs['self' if connection else 'store']
+            directory = owner.directory if connection else owner.directory(
+                args[1] if len(args) > 1 else kwargs['identifier'])
+            with advisory_file_lock(directory / '.snapshot-lock'):
+                return function(*args, **kwargs)
+        return locked
+    return decorate
+
+
 def reap_process_group(process):
     """Terminate the owned process group, escalate and reap its direct child."""
     try:
@@ -640,6 +656,7 @@ class WorkerConnection:
                 self.command('/usr/local/bin/python -c ' + shlex.quote(script), stdin=stream, timeout=30)
         self.command("mkdir -p " + self.remote_root + " && " + "PBGUI_WORKDIR=" + self.remote_root + " nohup " + WORKER + "run > " + self.remote_root + "/runner.log 2>&1 < /dev/null &", timeout=15)
 
+    @snapshot_transaction(connection=True)
     def collect(self, final: bool, timeout: int) -> Path:
         """Download and verify a bounded snapshot before replacing the last copy."""
         deadline = time.monotonic() + timeout
@@ -793,6 +810,7 @@ def execution_input(store: JobStore, identifier: str) -> Path:
     return target
 
 
+@snapshot_transaction()
 def import_results(store: JobStore, identifier: str, *, partial: bool = False, check=lambda: None) -> dict:
     """Import verified native results idempotently, never unpickle a checkpoint."""
     import msgpack
@@ -890,3 +908,43 @@ def import_results(store: JobStore, identifier: str, *, partial: bool = False, c
                 check()
                 os.replace(stage, target)
     return {"result_path": str(target), "result_partial": partial, "evaluations": count, "pareto_count": len(list((target / "pareto").glob("*.json")))}
+
+
+def collect_pareto_results(store: JobStore, identifier: str) -> dict:
+    """Publish Pareto without stop, finalization, convergence or rental controls."""
+    from vast_credentials import VastCredentialStore
+    from vast_job_runner import owned_instance, validate_intent
+
+    identifier = job_id(identifier)
+    directory = store.directory(identifier)
+    # Match the finalizer's lock order. A snapshot cannot replace files while
+    # either importer reads them, or regress a concurrently finalized result.
+    with advisory_file_lock(directory / '.finalize-lock'):
+        with advisory_file_lock(directory / '.snapshot-lock'):
+            state = store.read(identifier)
+            if state.get('kind') in {'worker', 'calibration'} or state['status'] in {'ready', 'preparing'}:
+                raise VastError('This job has no optimizer Pareto results ready to collect', 409)
+            partial = not state.get('final_collected', False)
+            if partial:
+                lease_id = job_id(state.get('lease_id') or identifier)
+                rental = store.read(lease_id)
+                if rental['rental_state'] in {'none', 'deletion_verified'}:
+                    raise VastError('The job instance is no longer reachable; previously collected results are retained', 409)
+                if store.read(lease_id, 'control.json').get('cleanup'):
+                    raise VastError('Rental cleanup is already requested; previously collected results are retained', 409)
+                intent = validate_intent(store.read(lease_id, 'intent.json'), lease_id)
+                client = VastClient(VastCredentialStore(store.root).secrets()['api_key'])
+                instance = owned_instance(client, intent, fresh=True, expected_id=rental.get('instance_id'))
+                if instance is None or instance.get('actual_status') != 'running':
+                    raise VastError('The job instance is not reachable or running; try again when it is available', 409)
+                connection = WorkerConnection(store, identifier, instance, lease_id=lease_id)
+                connection.bootstrap(client)
+                # Even a finished optimizer is read through its immutable Pareto
+                # snapshot: final_collected would make the supervisor clean up.
+                connection.collect(False, timeout=60)
+            source = directory / ('partial-results' if partial else 'final-results') / 'optimize_results'
+            runs = list(source.glob('*'))
+            if len(runs) != 1 or not list((runs[0] / 'pareto').glob('*.json')):
+                raise VastError('No Pareto results are ready yet; wait for exact evaluations and try again', 409)
+            imported = import_results(store, identifier, partial=partial)
+            return store.update(identifier, **imported)
