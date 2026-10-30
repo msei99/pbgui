@@ -447,6 +447,7 @@
       if (signature !== state.usageSignature) {
         state.usageSignature = signature;
         if (provider === 'openrouter') window.PBGuiAIUsage.renderOpenRouter(container, usage);
+        else if (provider === 'claude-code') container.textContent = 'Subscription usage limits unavailable';
         else window.PBGuiAIUsage.render(container, usage);
       }
     } catch (error) {
@@ -457,13 +458,28 @@
     } finally {
       if (generation === state.usageGeneration && state.open) {
         updateJevAvailability(provider, container);
-        if (provider !== 'openrouter') {
-          api('/status').then(function (status) {
-            if (generation !== state.usageGeneration || !state.open || provider !== selectedProvider()) return;
-            state.providers = status.providers || {};
-            updateJevAvailability(provider, container);
-          }).catch(function () {});
-        }
+        api('/status').then(function (status) {
+          if (generation !== state.usageGeneration || !state.open || provider !== selectedProvider()) return;
+          var previous = state.providers['claude-code'] || {};
+          state.providers = status.providers || {};
+          updateJevAvailability(provider, container);
+          var current = state.providers['claude-code'] || {};
+          if (JSON.stringify([previous.available,previous.connected,previous.catalog]) !== JSON.stringify([current.available,current.connected,current.catalog])) state.claudeInventoryPending = true;
+          if (!state.busy && state.claudeInventoryPending) {
+            state.claudeInventoryPending = false;
+            var selected = root.querySelector('#pai-provider').value;
+            var model = root.querySelector('#pai-model').value;
+            var effort = root.querySelector('#pai-effort').value;
+            var speed = root.querySelector('#pai-speed').value;
+            var rebuilding = rebuildProviders(selected, model, true);
+            var catalogGeneration = state.modelGeneration;
+            rebuilding.then(function (loaded) {
+              if (loaded && catalogGeneration === state.modelGeneration && selected === root.querySelector('#pai-provider').value && model === root.querySelector('#pai-model').value) {
+                rebuildEfforts(effort); rebuildSpeeds(speed);
+              }
+            });
+          }
+        }).catch(function () {});
         state.usageTimer = setTimeout(refreshUsage, 30000);
       }
     }
@@ -517,6 +533,7 @@
 
   function setBusy(busy, conversation) {
     state.busy = !!busy;
+    var claudeBlocked = selectedProvider() === 'claude-code' && !(state.providers['claude-code'] || {}).connected;
     updateWorkingIndicator(conversation);
     var usage = (conversation || {}).context_usage;
     var meter = root.querySelector('.pai-context-meter');
@@ -528,16 +545,16 @@
     meter.title = available ? 'Context: ' + usage.used_tokens.toLocaleString() + ' / ' + usage.limit_tokens.toLocaleString() + ' tokens (last reported)' : 'Context usage unavailable from this provider';
     meter.setAttribute('aria-label', meter.title);
     root.querySelector('.primary').hidden = busy;
-    root.querySelector('.primary').disabled = !busy && state.sending;
+    root.querySelector('.primary').disabled = !busy && (state.sending || claudeBlocked);
     root.querySelector('.danger').hidden = !busy;
     root.querySelector('textarea').disabled = busy;
     renderChatImageDrafts();
-    root.querySelector('.pai-retry').disabled = busy;
+    root.querySelector('.pai-retry').disabled = busy || claudeBlocked;
     root.querySelector('#pai-provider').disabled = busy || !root.querySelector('#pai-provider').options.length;
     root.querySelector('#pai-model').disabled = busy || state.modelsLoading || !Object.keys(state.models).length;
     root.querySelector('#pai-effort').disabled = busy || state.modelsLoading || root.querySelector('#pai-effort').hidden;
     root.querySelector('#pai-speed').disabled = busy || state.modelsLoading || root.querySelector('#pai-speed').hidden;
-    root.querySelector('.pai-new').disabled = busy;
+    root.querySelector('.pai-new').disabled = busy || claudeBlocked;
   }
 
   async function refreshAll() {
@@ -705,7 +722,7 @@
       option.value = 'chatgpt:' + profile.id;
       select.appendChild(option);
     });
-    [ ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go'], ['openrouter', 'OpenRouter'] ].forEach(function (provider) {
+    [ ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go'], ['claude-code', 'Claude Agent'], ['openrouter', 'OpenRouter'] ].forEach(function (provider) {
       if (!(state.providers[provider[0]] || {}).connected) return;
       var option = el('option', '', provider[1]);
       option.value = provider[0];
@@ -725,7 +742,7 @@
     var profile = selectedProfile();
     root.querySelector('.pai-compose textarea').placeholder = provider === 'openrouter'
       ? 'Ask Jev to choose, rate, or judge yes/no from supplied data.'
-      : 'Type a message, paste an image, or drop images here...';
+      : provider === 'claude-code' ? 'Type a message (text only)...' : 'Type a message, paste an image, or drop images here...';
     refreshUsage();
     var select = root.querySelector('#pai-model');
     var current = preferred || select.value;
@@ -744,6 +761,15 @@
     effort.disabled = true;
     speed.hidden = true;
     speed.disabled = true;
+    if (provider === 'claude-code' && !(state.providers[provider] || {}).connected) {
+      select.replaceChildren();
+      var historical = el('option', '', (current || 'Model') + ' · unavailable');
+      historical.value = current || '';
+      select.appendChild(historical);
+      state.modelsLoading = false;
+      setBusy(state.busy);
+      return;
+    }
     if (!provider) {
       state.modelsLoading = false;
       setBusy(state.busy);
@@ -923,7 +949,7 @@
         state.profile = conversation.chatgpt_profile || 'default';
         var providerValue = conversation.provider === 'chatgpt' ? 'chatgpt:' + state.profile : conversation.provider;
         if (root.querySelector('#pai-provider').value !== providerValue) {
-          await rebuildProviders(providerValue, conversation.model);
+          await rebuildProviders(providerValue, conversation.model, true);
         } else if (root.querySelector('#pai-model').value !== conversation.model) {
           await loadModels(conversation.model);
         }
@@ -1515,6 +1541,7 @@
     var provider = selectedProvider();
     var profile = selectedProfile();
     var model = root.querySelector('#pai-model').value;
+    if (provider === 'claude-code' && !(state.providers[provider] || {}).connected) { setStatus('Claude is not connected', true); return; }
     if (!provider || !model) return;
     try {
       var context = root.querySelector('#pai-context-toggle').checked ? collectContext() : null;
@@ -1537,6 +1564,7 @@
 
   async function sendMessage(override, retryImages) {
     if (state.busy || state.sending) return;
+    if (selectedProvider() === 'claude-code' && !(state.providers['claude-code'] || {}).connected) { setStatus('Claude is not connected', true); return; }
     state.sending = true;
     var sendGeneration = ++state.sendGeneration, submitted = false;
     state.sendOwner = sendGeneration;

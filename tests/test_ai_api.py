@@ -32,6 +32,45 @@ def test_ai_routes_require_auth_dependency() -> None:
         assert require_auth in dependency_calls
 
 
+@pytest.mark.parametrize('method,path,body', [('POST','connect',b'not-json'), ('POST','connect',b'{}'), ('DELETE','connection',b'')])
+def test_claude_connection_routes_are_owner_scoped_and_no_store(tmp_path, monkeypatch, method, path, body):
+    """Native login and disconnect bind the authenticated owner and preserve legacy key files."""
+    import httpx
+    from fastapi import FastAPI
+    from unittest.mock import Mock, AsyncMock
+    test_ai_routes_require_auth_dependency()
+    legacy = tmp_path / ('a'*32 + '.claude-code.json')
+    legacy.write_bytes(b'synthetic legacy bytes; never read by the route')
+    before = {item.name: item.read_bytes() for item in tmp_path.iterdir()}
+    runtime=SimpleNamespace(start_login=AsyncMock(return_value={'started':True}))
+    service=SimpleNamespace(claude=runtime,disconnect_claude=AsyncMock())
+    monkeypatch.setattr(ai_api, 'get_ai_chat_service', lambda:service)
+    application = FastAPI()
+    application.include_router(ai_api.router, prefix="/api/ai")
+    async def scenario():
+        """No lifespan, real sessions, secrets or external traffic are involved."""
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application),base_url='http://fixture') as client:
+            application.dependency_overrides[require_auth] = lambda: SimpleNamespace(user_id='fixture-user')
+            response = await client.request(method, '/api/ai/providers/claude-code/'+path,content=body,headers={'content-type':'application/json'})
+            assert response.status_code == 200
+            expected_owner=ai_api.owner_key('fixture-user')
+            if path=='connect':
+                runtime.start_login.assert_awaited_once_with(expected_owner)
+                assert response.json()=={'started':True}
+            else:
+                service.disconnect_claude.assert_awaited_once_with(expected_owner)
+                assert response.json()=={'connected':False}
+            assert response.headers['cache-control'] == 'no-store'
+            def unauthenticated():
+                """Keep the shared authentication dependency authoritative."""
+                from fastapi import HTTPException
+                raise HTTPException(status_code=401)
+            application.dependency_overrides[require_auth] = unauthenticated
+            assert (await client.request(method, '/api/ai/providers/claude-code/'+path,content=body)).status_code == 401
+    asyncio_run(scenario())
+    assert {item.name: item.read_bytes() for item in tmp_path.iterdir()} == before
+
+
 def test_main_page_is_cookie_only_and_no_store() -> None:
     """The AI page must not render or inspect the HttpOnly session token."""
     class CookieOnlySession:

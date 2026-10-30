@@ -11,6 +11,109 @@ from tests.test_pb8_loop_optimizer import FakeBackend, OWNER, record
 from tests.test_pb8_loop_observer import Backend, reference
 
 
+@pytest.mark.parametrize('case,eligible', [
+    ('idle',True), ('unstarted_job',True), ('unstarted_report',True), ('running_job',False),
+    ('running_report',False), ('unfinished_report',False), ('missing_holdout',False),
+    ('extension',False), ('handover',False), ('replacement',False), ('pending_ai',True), ('active',False),
+])
+def test_paused_idle_requires_no_collectable_work(case, eligible):
+    """Never suppress native collection, recovery, infrastructure changes or active work."""
+    row = {'status':'paused', 'jobs':[], 'observer_jobs':[]}
+    if case in {'unstarted_job', 'running_job'}:
+        row['jobs'] = [{'status':'queued', 'backend':{'id':'native'} if case=='running_job' else None}]
+    elif case in {'unstarted_report', 'running_report'}:
+        row['observer_jobs'] = [{'status':'planned', 'backend':{'id':'native'} if case=='running_report' else None}]
+    elif case in {'unfinished_report', 'missing_holdout'}:
+        row['observer_jobs'] = [{'status':'complete', 'report_done':case=='missing_holdout',
+                                 'kind':'observer_holdout' if case=='missing_holdout' else 'observer_full_range'}]
+    elif case == 'extension':
+        row['rental_extension'] = {'request':'pending'}
+    elif case == 'handover':
+        row['rental_handover'] = {'status':'collecting'}
+    elif case == 'replacement':
+        row.update(gpu_replacement_id='operation', gpu_replacements={'operation':{'step':'transfer'}})
+    elif case == 'pending_ai':
+        row['pending_ai'] = {'stage':'evaluate'}
+    elif case == 'active':
+        row['status'] = 'running'
+    assert LoopController._can_idle_paused(row) is eligible
+
+
+def test_paused_unstarted_reports_do_not_reread_full_run(record, monkeypatch):
+    """Planned jobs with no native backend cannot advance while paused and need no per-job read."""
+    store, row = record
+    row.update(status='paused', jobs=[], history=[], baseline=None,
+               observer_jobs=[{'operation':'a'*32, 'kind':'observer_full_range', 'round':0,
+                               'status':'planned', 'backend':None, 'started':False}])
+
+    def forbidden(*_args, **_kwargs):
+        """A read here would only repeat the already-known cannot-launch decision."""
+        raise AssertionError('Paused planned reports copied the complete run')
+
+    monkeypatch.setattr(store, 'read', forbidden)
+    asyncio.run(ObserverJobs(store, FakeBackend(), owned_thread).tick(row))
+    assert row['observer_jobs'][0]['status'] == 'planned'
+
+
+@pytest.mark.parametrize('wake', ['resume', 'deadline'])
+@pytest.mark.parametrize('reserved', [False, True])
+def test_unchanged_paused_loop_skips_hydration_but_wakes_for_controls_and_deadline(record, tmp_path, monkeypatch, wake, reserved):
+    """Skip only identical paused state; persisted actions and time limits still wake the controller."""
+    import pb8_loop_controller as module
+    store, row = record
+    reservation={'id':'reservation', 'stage':'evaluate', 'tokens':123} if reserved else None
+    row = store.update(OWNER, row['id'], lambda value: value.update(status='paused', pending_ai=reservation))
+    controller = LoopController(tmp_path, store=store, backend=FakeBackend())
+    controller._evidence_retention_at = float('inf')
+    ticks, reads = [], []
+    original_read = store.read
+
+    def read(*args, **kwargs):
+        """Count real full snapshot reads without replacing their validation."""
+        reads.append(True)
+        return original_read(*args, **kwargs)
+
+    async def step(current):
+        """Observe scheduling while avoiding native launch and paid/provider work."""
+        ticks.append(current['status'])
+
+    async def observers(_current):
+        """This fixture has no native observer work to collect."""
+        return None
+
+    monkeypatch.setattr(store, 'read', read)
+    monkeypatch.setattr(controller, '_tick', step)
+    monkeypatch.setattr(controller.observers, 'tick', observers)
+
+    async def exercise():
+        """Let one real inventory cycle pass, then trigger either kind of required wakeup."""
+        controller.start()
+        try:
+            for _ in range(300):
+                if controller._idle_paused:
+                    break
+                await asyncio.sleep(.01)
+            assert controller._idle_paused and ticks == ['paused']
+            count = len(reads)
+            await asyncio.sleep(2.2)
+            assert ticks == ['paused'] and len(reads) == count
+            assert original_read(OWNER, row['id'])['pending_ai'] == reservation
+            if wake == 'resume':
+                await asyncio.to_thread(store.update, OWNER, row['id'], lambda value: value.update(status='running'))
+            else:
+                monkeypatch.setattr(module.time, 'time', lambda: row['deadline'] - 59)
+            for _ in range(300):
+                if len(ticks) >= 2:
+                    break
+                await asyncio.sleep(.01)
+            assert ticks[1] == ('running' if wake=='resume' else 'paused')
+        finally:
+            await controller.close()
+        assert not controller._idle_paused
+
+    asyncio.run(exercise())
+
+
 def test_loop_archive_read_allows_unrelated_api_work(record, tmp_path, monkeypatch):
     """A slow archive read must yield to other requests before it completes."""
     store, row = record
@@ -246,10 +349,10 @@ def test_loop_list_builds_projection_and_json_outside_api_thread(record, monkeyp
     calls = []
     original = store.read
 
-    def listed(*args):
+    def listed(*args, **kwargs):
         """Capture the owning thread of filesystem inventory."""
         assert threading.get_ident() != api_thread
-        return original(*args)
+        return original(*args, **kwargs)
 
     def projected(row):
         """Projection and serialization belong to the same worker as inventory."""
@@ -276,10 +379,10 @@ def test_loop_polling_reuses_projection_but_tracks_writes_deletion_and_owner(rec
     original = store.read
     reads = []
 
-    def counted(*args):
+    def counted(*args, **kwargs):
         """Count full state hydration without changing the real projection contract."""
         reads.append(args)
-        return original(*args)
+        return original(*args, **kwargs)
 
     module._clear_list_cache()
     monkeypatch.setattr(store, 'read', counted)

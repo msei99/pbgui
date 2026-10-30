@@ -555,6 +555,7 @@ def test_optimizer_settings_main_area():
                 window.handlePb8RuntimeUnavailable = () => false;
                 window.refreshLiveResultsDuringRun = async () => {};
                 window.restoreSelectedOptimizeResultWhenReady = async () => {};
+                window.scheduleOptimizeConfigs = () => {};
                 window.handleError = error => { throw error; };
                 window.normalizeOptimizePositiveInteger = value => Number(value);
                 window.toast = () => {};

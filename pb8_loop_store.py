@@ -10,7 +10,6 @@ from pathlib import Path
 import re
 import time
 import threading
-import sys
 import uuid
 
 from file_lock import advisory_file_lock
@@ -23,15 +22,6 @@ ACTIVE = {'running', 'finishing'}
 MAX_JSON_BYTES = 32 * 1024 * 1024
 READ_CACHE_BYTES = 128 * 1024 * 1024
 READ_CACHE_TTL = 30
-
-
-def _independent_json_copy(value):
-    """Copy JSON trees without aliasing repeated mutable config references."""
-    if isinstance(value, dict):
-        return {key: _independent_json_copy(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_independent_json_copy(item) for item in value]
-    return value
 
 
 def round_limit(settings):
@@ -611,22 +601,11 @@ class LoopStore:
         return tuple(stamps)
 
     def _remember_read(self, path, stamp, record):
-        """Own independent snapshots, bounded by actual Python object size and idle TTL."""
-        snapshot = _independent_json_copy(record)
-        size, seen, pending = 0, set(), [snapshot]
-        while pending:
-            value = pending.pop()
-            if id(value) in seen:
-                continue
-            seen.add(id(value))
-            size += sys.getsizeof(value)
-            if size > READ_CACHE_BYTES // 2:
-                return
-            if isinstance(value, dict):
-                pending.extend(value.keys())
-                pending.extend(value.values())
-            elif isinstance(value, (list, tuple)):
-                pending.extend(value)
+        """Keep immutable JSON bytes; decode independent caller values outside the lock."""
+        snapshot = json.dumps(record, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode()
+        size = len(snapshot)
+        if size > READ_CACHE_BYTES // 2:
+            return
         with self._read_cache_lock:
             old = self._read_cache.pop(path, None)
             if old:
@@ -808,9 +787,10 @@ class LoopStore:
     def path(self, owner, loop_id):
         return self.owner_dir(owner) / (identifier(loop_id) + '.json')
 
-    def read(self, owner, loop_id):
-        """Return an independent current state, without decoding unchanged archives again."""
-        result = self._read_snapshot(owner, loop_id)
+    def read(self, owner, loop_id, *, cache_snapshot=True, fields=None, settings_fields=None, prefer_cached_fields=False):
+        """Read verified state; display projections can skip the extra raw snapshot cache."""
+        result = self._read_snapshot(owner, loop_id, cache_snapshot=cache_snapshot, fields=fields,
+                                     settings_fields=settings_fields, prefer_cached_fields=prefer_cached_fields)
         # Report scheduling is mandatory, including restored Template runs.
         result['observer_enabled'] = True
         if result.get('final_holdout_policy') in {'final_only', 'disabled'}:
@@ -819,31 +799,86 @@ class LoopStore:
             result['holdout_retryable'] = False
         return result
 
-    def _read_snapshot(self, owner, loop_id):
+    def native_job(self, owner, loop_id, operation):
+        """Read only verified native navigation metadata, independently of the raw cache."""
+        identifier(operation)
+        path = self.path(owner, loop_id)
+        if not path.is_file() or path.is_symlink():
+            raise FileNotFoundError('Loop not found')
+        if path.stat().st_size > MAX_JSON_BYTES:
+            raise ValueError('Loop state is too large')
+        self._read_stamp(path)
+        header = json.loads(read_regular_file_nofollow(path, self.root))
+        if header.get('owner') != owner or header.get('id') != loop_id:
+            raise ValueError('Loop ownership mismatch')
+        if '_loop_storage' in header:
+            if header['_loop_storage'].get('version') != 1:
+                raise LoopStorageError('Unsupported Loop archive format')
+            identity, job = LoopArchive(path.parent, loop_id).native_job(header['_loop_storage']['root'], operation)
+            if identity != {'owner': owner, 'id': loop_id}:
+                raise LoopStorageError('Loop archive ownership mismatch')
+            return identity, job
+        job = next((item for field in ('jobs', 'observer_jobs') for item in header.get(field, [])
+                    if item.get('operation') == operation), None)
+        return {'owner': owner, 'id': loop_id}, ({key: job[key] for key in ('operation', 'name', 'kind', 'backend')
+                                                if key in job} if job is not None else None)
+
+    def _read_snapshot(self, owner, loop_id, *, cache_snapshot=True, fields=None, settings_fields=None, prefer_cached_fields=False):
         """Cache only verified reads; external file changes always force verification again."""
+        if settings_fields is not None and fields is None:
+            raise ValueError('Selective settings require an explicit display field selection')
+        use_cache = cache_snapshot and (fields is None or prefer_cached_fields)
+        if fields is not None:
+            fields = frozenset(fields) | {'id', 'owner'}
+            cache_snapshot = False
         path = self.path(owner, loop_id)
         if not path.is_file() or path.is_symlink():
             raise FileNotFoundError('Loop not found')
         if path.stat().st_size > MAX_JSON_BYTES:
             raise ValueError('Loop state is too large')
         stamp = self._read_stamp(path)
-        with self._read_cache_lock:
-            for key, cached in list(self._read_cache.items()):
-                if cached[3] <= time.monotonic() or key == path and cached[0] != stamp:
-                    self._read_cache.pop(key)
-                    self._read_cache_size -= cached[2]
-            cached = self._read_cache.get(path)
-            if cached:
-                self._read_cache.move_to_end(path)
-                return copy.deepcopy(cached[1])
-        result = json.loads(read_regular_file_nofollow(path, self.root))
+        cached_manifest = None
+        if use_cache and fields is not None:
+            cached_manifest = read_regular_file_nofollow(path, self.root)
+            # Bind the manifest revision and cached values to the same archive/file identity.
+            use_cache = self._read_stamp(path) == stamp
+        if use_cache:
+            snapshot = None
+            # Display requests never wait behind a controller's cache mutation.
+            acquired = self._read_cache_lock.acquire(blocking=fields is None)
+            if acquired:
+                try:
+                    for key, cached in list(self._read_cache.items()):
+                        if cached[3] <= time.monotonic() or key == path and cached[0] != stamp:
+                            self._read_cache.pop(key)
+                            self._read_cache_size -= cached[2]
+                    cached = self._read_cache.get(path)
+                    if cached:
+                        self._read_cache.move_to_end(path)
+                        self._read_cache[path] = (*cached[:3], time.monotonic() + READ_CACHE_TTL)
+                        snapshot = cached[1]
+                finally:
+                    self._read_cache_lock.release()
+            if snapshot is not None:
+                result = json.loads(snapshot)
+                if fields is None:
+                    return result
+                if settings_fields is not None and 'settings' in result:
+                    result['settings'] = {key: value for key, value in result['settings'].items() if key in settings_fields}
+                return {**{key: value for key, value in result.items() if key in fields},
+                        '_view_revision': hashlib.sha256(cached_manifest).hexdigest()}
+        raw = read_regular_file_nofollow(path, self.root)
+        result = json.loads(raw)
         if result.get('owner') != owner or result.get('id') != loop_id:
             raise ValueError('Loop ownership mismatch')
+        view_revision = hashlib.sha256(raw).hexdigest() if fields is not None else None
         if '_loop_storage' in result:
             header = result
             if header['_loop_storage'].get('version') != 1:
                 raise LoopStorageError('Unsupported Loop archive format')
-            result = LoopArchive(self.owner_dir(owner), loop_id).load(header['_loop_storage']['root'])
+            archive = LoopArchive(self.owner_dir(owner), loop_id)
+            result = (archive.load(header['_loop_storage']['root']) if fields is None
+                      else archive.fields(header['_loop_storage']['root'], fields, settings_fields=settings_fields))
             if result.get('owner') != owner or result.get('id') != loop_id:
                 raise LoopStorageError('Loop archive ownership mismatch')
             result.update({key: header[key] for key in HOT_FIELDS if key in header})
@@ -851,9 +886,12 @@ class LoopStore:
                 result.update(reason=header['_storage_failure']['message'], last_error=header['_storage_failure']['message'],
                               ai_pause={'reason': 'storage', 'message': header['_storage_failure']['message'],
                                         'details': {}, 'at': header['_storage_failure']['at'], 'phase': result['phase']})
-        if self._read_stamp(path) == stamp:
+        if cache_snapshot and self._read_stamp(path) == stamp:
             self._remember_read(path, stamp, result)
-        return result
+        if settings_fields is not None and 'settings' in result:
+            result['settings'] = {key: value for key, value in result['settings'].items() if key in settings_fields}
+        return result if fields is None else {
+            **{key: value for key, value in result.items() if key in fields}, '_view_revision': view_revision}
 
     def write(self, record):
         """Archive immutable chunks, then atomically publish one bounded active root."""

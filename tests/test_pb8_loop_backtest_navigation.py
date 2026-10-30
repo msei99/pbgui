@@ -5,6 +5,34 @@ import subprocess
 import pytest
 
 
+def test_overview_merge_retains_details_and_rejects_obsolete_detail_reply():
+    """Metadata updates preserve loaded fields; an older background request cannot revive state."""
+    source = (Path(__file__).resolve().parents[1] / 'frontend/js/pb8_loop_optimizer.js').read_text()
+    start = source.index('  function startDetail(')
+    end = source.index('  async function pollCycle()', start)
+    script = r'''
+const assert=require('node:assert/strict');
+let stopped=false,state={panel:'loops-results',navigationSeq:1},detailFlights=new Map(),detailActive=0;
+let rows=[{id:'a',view_revision:'new',updated_at:2,summary_only:false,_detail_revision:'old',
+ settings:{execution:'cpu',max_rounds:50},jobs:[{operation:'kept'}],cycles:[{round:1}],deletable:true}];
+let renders=0;function render(){renders++;}function restoreLoopScroll(){}function restoreNativeLog(){}
+function pumpDetails(){}function request(){return Promise.resolve({id:'a',view_revision:'old',settings:{}});}
+''' + source[start:end] + r'''
+(async()=>{
+ let merged=mergeOverview([{id:'a',view_revision:'new',updated_at:2,summary_only:true,
+  settings:{execution:'vast'},jobs:[],history:[],observer_jobs:[],cycles:[],best:null,deletable:false}])[0];
+ assert.equal(merged.settings.max_rounds,50);assert.equal(merged.settings.execution,'vast');
+ assert.equal(merged.jobs[0].operation,'kept');assert.equal(merged.cycles[0].round,1);
+ assert.equal(merged.summary_only,false);assert.equal(merged.deletable,false);
+ let before=rows[0];startDetail({id:'a',revision:'old',panel:'loops-results',navigation:1});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rows[0],before);assert.equal(renders,0);assert.equal(detailActive,0);assert.equal(detailFlights.size,0);
+})().catch(error=>{console.error(error);process.exit(1);});
+'''
+    completed = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_loop_backtest_links_keep_filters_logs_and_newer_navigation():
     """A native result link filters the real loader and does not override newer hash state."""
     source = (Path(__file__).resolve().parents[1] / 'frontend/v7_backtest.html').read_text()

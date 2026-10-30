@@ -58,3 +58,13 @@ def test_setup_suspends_work_and_rejects_late_results():
     assert "visibilitychange" in JS and "pagehide" in JS and "pageshow" in JS
     assert 'controllers.forEach' in JS and 'controller.abort()' in JS
     assert "state.nameDirty" in JS and "url.searchParams.set('section'" in JS
+
+
+def test_claude_has_no_credentials_or_usable_connection_controls():
+    """Subscription controls never request an Anthropic API key or store login codes."""
+    assert 'Sign in with Claude' in HTML
+    for identifier in ('claude-code-connect','claude-code-disconnect','claude-code-test','claude-code-login-code'):
+        assert 'id="'+identifier+'"' in HTML
+    assert 'Anthropic API key' not in HTML
+    assert "api('/providers/claude-code/login-code',json('POST',{code:code,login_id:loginId}))" in JS
+    assert "'claude-code-login-code'" in JS.split('function clearSecrets()',1)[1].split('function selectSection',1)[0]

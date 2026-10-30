@@ -7,13 +7,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from logging_helpers import _redact_text
+from ai_chat import AIChatError
 from support_issue_ai import IssueDraftRequest, draft_for_request, provider_reply
 
 
 class ModelTestRequest(BaseModel):
     """Validate an explicit model selection, never accept prompts or application data."""
     model_config = ConfigDict(extra='forbid')
-    provider: Literal['chatgpt','opencode-go','opencode-zen','openrouter']
+    provider: Literal['chatgpt','opencode-go','opencode-zen','openrouter','claude-code']
     profile: str = Field(default='default', pattern=r'^(?:default|[a-f0-9]{32})$')
     model: str = Field(min_length=1,max_length=128)
     effort: str = Field(default='',max_length=64)
@@ -41,4 +42,4 @@ async def test_model(chat, owner, selection, request):
         return {'provider':selection.provider,'model':selection.model,'profile':selection.profile,
                 'reply':_redact_text(reply)[:4000],'elapsed_seconds':round(time.monotonic()-started,2),
                 'tools_enabled':False,'conversation_created':False}
-    return await draft_for_request(chat,owner,body,request,operation=operation,timeout=90)
+    return await draft_for_request(chat,owner,body,request,operation=operation,timeout=90,selected_provider=selection.provider)

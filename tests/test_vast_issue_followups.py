@@ -14,6 +14,7 @@ import vast_job_runner as runner
 import vast_market_cache
 from vast_jobs import IMAGE, REVISION, JobStore, write_json
 from vast_direction_fixtures import complete_direction, direction_config
+from vast_integrity_fixtures import freeze_test_proof
 from vast_provider import VastError
 from vast_queue import CloudQueue, worker_step
 from vast_transfer import WorkerConnection
@@ -39,9 +40,11 @@ def queue(tmp_path):
 
 
 @pytest.fixture
-def reserve_queue(queue):
+def reserve_queue(queue, monkeypatch):
     """Add a valid frozen GPU input only for transfer-reserve scheduling tests."""
+    monkeypatch.setattr(time, 'time', lambda: 1000)
     write_json(queue.store.directory('b'*32) / 'input/optimize.json', complete_direction(direction_config()))
+    freeze_test_proof(queue.store, 'b'*32)
     return queue
 
 
@@ -280,7 +283,7 @@ def test_incomplete_or_expired_market_metadata_never_reaches_worker(monkeypatch,
         """Return an invalid local snapshot."""
         return snapshot
     monkeypatch.setattr(vast_market_cache, 'fetch_markets', fetch)
-    connection = SimpleNamespace(identifier='test', store=SimpleNamespace(read=lambda _: {'exchanges': ['bybit']}))
+    connection = SimpleNamespace(identifier='test', store=SimpleNamespace(read=lambda _, relative='state.json': {'exchanges': ['bybit']} if relative=='state.json' else {}))
     with pytest.raises(VastError) as error:
         vast_market_cache.stage_public_markets(connection)
     assert error.value.status == 422

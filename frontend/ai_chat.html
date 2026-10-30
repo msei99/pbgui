@@ -13,6 +13,7 @@
 <button class="sb-section" data-section="models" type="button">Models and tests</button>
 <button class="sb-section" data-section="chatgpt" type="button">ChatGPT</button>
 <button class="sb-section" data-section="opencode" type="button">OpenCode</button>
+<button class="sb-section" data-section="claude-code" type="button">Claude Agent</button>
 <button class="sb-section" data-section="openrouter" type="button">OpenRouter / Jev</button>
 <button class="sb-section" data-section="github" type="button">GitHub issues</button>
 </div><div id="sidebar-resize"></div></aside>
@@ -94,6 +95,17 @@
 <div class="connection-test-row"><label><span tabindex="0" data-tip="Send a fixed synthetic request to the displayed provider and model. This may consume provider credits. No conversation, page data or PBGui tools are used.">Test model</span><select id="openrouter-test-model" aria-label="openrouter connection test model" disabled></select></label><button id="openrouter-test" type="button" disabled>Test connection</button></div><p id="openrouter-test-result" role="status" hidden></p>
       <button id="openrouter-disconnect" class="danger" hidden>Disconnect</button>
     </section></section>
+<section data-view="claude-code" hidden><h2>Claude Agent</h2><section class="provider-card">
+<div class="provider-head"><span class="provider-name" tabindex="0" data-tip="Sign in with your own Claude subscription through Anthropic. PBGui tools use the same permissions and reviewed actions as other providers. Account terms and usage limits remain your responsibility. See Guide for setup.">Claude Agent · Claude Code</span><span id="claude-code-status" class="status">Checking</span></div>
+<p id="claude-code-account"></p>
+<div class="provider-actions"><button id="claude-code-connect" class="primary" type="button">Sign in with Claude</button><button id="claude-code-disconnect" class="danger" type="button" hidden>Disconnect</button></div>
+<div id="claude-code-login" hidden>
+<a id="claude-code-login-link" class="button-link" target="_blank" rel="noopener noreferrer">Open Claude sign-in</a>
+<label for="claude-code-login-code"><span tabindex="0" data-tip="If Anthropic shows a one-time sign-in code, paste it here. It is sent only to the active native login and is never saved.">Sign-in code</span></label>
+<div class="row"><input id="claude-code-login-code" type="password" autocomplete="off" aria-label="Claude one-time sign-in code"><button id="claude-code-login-submit" type="button">Complete sign-in</button><button id="claude-code-login-cancel" type="button">Cancel sign-in</button></div>
+</div>
+<div class="connection-test-row"><label><span tabindex="0" data-tip="Send a fixed synthetic request using your subscription. No conversation, page data or PBGui tools are included. This consumes account usage.">Test model</span><select id="claude-code-test-model" aria-label="Claude connection test model" disabled></select></label><button id="claude-code-test" type="button" disabled>Test connection</button></div><p id="claude-code-test-result" role="status" hidden></p>
+</section></section>
 <section data-view="github" hidden><h2>GitHub issues</h2><section class="provider-card">
 <div class="provider-head"><span class="provider-name" tabindex="0" data-tip="Describe bugs or feature requests in AI Chat. The AI prepares an English issue; review it before publishing. The token is encrypted on this PBGui server and is never sent to the AI. The support dialog uses the same connection.">GitHub</span><span id="github-status" class="status">Checking</span></div>
 <div id="github-connect-row" class="setup-grid">
@@ -113,5 +125,5 @@ window.PBGUI_NAV_CONFIG = {subtitle:'AI SETUP',current:'info_ai_chat',authentica
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
 <script src="/app/js/ai_usage.js?v=2"></script>
 <script src="/app/js/data_tip.js?v=1"></script>
-<script src="/app/js/ai_setup.js?v=4"></script>
+<script src="/app/js/ai_setup.js?v=8"></script>
 </body></html>

@@ -76,12 +76,12 @@ def _run_host_resolution(result, lost):
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=80" in NAV
+    assert "/app/js/ai_drawer.js?v=84" in NAV
     assert "/app/js/ai_usage.js?v=2" in NAV
     assert "/app/js/jev_transfer_preview.js?v=1" in NAV
     assert "jev_preview_id: jevPreviewId || null" in DRAWER
     assert "PBGuiAIUsage.renderOpenRouter(container, usage)" in DRAWER
-    assert "/app/css/ai_drawer.css?v=27" in NAV
+    assert "/app/css/ai_drawer.css?v=28" in NAV
     assert "/app/js/pbgui_dialogs.js?v=12" in NAV
     loader = NAV.split("function loadDrawerScript", 1)[1].split("var pendingAIAction", 1)[0]
     assert loader.index("pbgui_dialogs.js?v=12") < loader.index("dialogs.onload = loadDrawerScript")
@@ -128,7 +128,7 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "state.selectionDirty = true;" in DRAWER
     assert "state.selectionDirty = true; rebuildEfforts();" in DRAWER
     assert "if (!state.selectionDirty && !state.savedSelection)" in DRAWER
-    assert "await rebuildProviders(providerValue, conversation.model)" in DRAWER
+    assert "await rebuildProviders(providerValue, conversation.model, true)" in DRAWER
     assert "Loading models..." in DRAWER
     assert "Models unavailable" in DRAWER
     assert "state.modelsLoading" in DRAWER

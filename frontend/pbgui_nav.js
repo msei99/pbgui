@@ -471,8 +471,24 @@
       } catch (_) {}
     });
     context.entities = context.entities.slice(0, 8);
-    while (context.controls.length && JSON.stringify(context).length > 256 * 1024) context.controls.pop();
-    while (context.evidence.length && JSON.stringify(context).length > 256 * 1024) context.evidence.shift();
+    // Match the backend's compact UTF-8 JSON budget. Counting JS characters
+    // underestimates Unicode, while ASCII-escaped JSON overestimates it.
+    var encoder = new TextEncoder();
+    var byteLimit = 256 * 1024;
+    var candidates = context.controls;
+    context.controls = [];
+    var byteSize = encoder.encode(JSON.stringify(context)).byteLength;
+    for (var index = 0; index < candidates.length; index += 1) {
+      var controlBytes = encoder.encode(JSON.stringify(candidates[index])).byteLength
+        + (context.controls.length ? 1 : 0);
+      if (byteSize + controlBytes > byteLimit) break;
+      context.controls.push(candidates[index]);
+      byteSize += controlBytes;
+    }
+    while (context.evidence.length && byteSize > byteLimit) {
+      context.evidence.shift();
+      byteSize = encoder.encode(JSON.stringify(context)).byteLength;
+    }
     return context;
   }
 
@@ -2097,7 +2113,7 @@
       _aiDrawerLoading = true;
       var link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = _appPath('/app/css/ai_drawer.css?v=27');
+      link.href = _appPath('/app/css/ai_drawer.css?v=28');
       document.head.appendChild(link);
       function loadDrawerScript() {
         var dependencies = [
@@ -2139,7 +2155,7 @@
           return;
         }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=80');
+        script.src = _appPath('/app/js/ai_drawer.js?v=84');
         script.onload = function () { _aiDrawerLoading = false; if (show && window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); window.dispatchEvent(new Event('pbgui:ai-ready')); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);

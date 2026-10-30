@@ -77,7 +77,7 @@ def test_local_public_metadata_staging(tmp_path, monkeypatch, exchange):
         subprocess.run([sys.executable, '-c', shlex.split(value)[2]], stdin=stdin, check=True)
 
     connection = SimpleNamespace(identifier='test', remote_root=str(tmp_path), command=command,
-        store=SimpleNamespace(read=lambda _: {'exchanges': [exchange]}))
+        store=SimpleNamespace(read=lambda _, relative='state.json': {'exchanges': [exchange]} if relative=='state.json' else {}))
     stage_public_markets(connection)
     assert json.loads((tmp_path / 'output/caches' / exchange / 'markets.json').read_text()) == snapshots[exchange]['markets']
 

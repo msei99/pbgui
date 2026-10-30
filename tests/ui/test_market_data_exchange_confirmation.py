@@ -53,72 +53,43 @@ function syncInventorySubsectionVisibility() {}
 @pytest.mark.parametrize('stale_failure', [False, True])
 def test_settings_responses_cannot_restore_previous_exchange(stale_failure):
     """Resolve exchange requests out of order and suppress stale data and errors."""
-    source = (Path(__file__).resolve().parents[2] / 'frontend/market_data_main.html').read_text()
-    start = source.index('      var settingsLoadRequestId = 0;')
-    end = source.index('      function collectSettingsRequest()', start)
-    script = 'const staleFailure = %s;\n' % str(stale_failure).lower() + source[start:end] + r'''
-const assert = require('node:assert/strict');
-const uiState = {contextExchange:'binance'}, settingsState = {}, pending = [], renders = [], errors = [];
-const document = {getElementById:()=>({value:''})};
-function fetchJson() {return new Promise((resolve,reject)=>pending.push({resolve,reject}));}
-function renderSettingsPayload() {renders.push(settingsState.exchange);}
-function setSettingsBaseline() {}
-function showToast(error) {errors.push(error);}
-(async()=>{
- const first = loadSettings('binance');
- uiState.contextExchange = 'bybit';
- const second = loadSettings('bybit');
- pending[1].resolve({exchange:'bybit',enabled_coins:['BTC']}); await second;
- if (staleFailure) pending[0].reject(new Error('old failure'));
- else pending[0].resolve({exchange:'binance',enabled_coins:['ETH']});
- await first;
- assert.equal(settingsState.exchange,'bybit');
- assert.deepEqual([...settingsState.selectedCoins],['BTC']);
- assert.deepEqual(renders,['bybit']); assert.deepEqual(errors,[]);
-})().catch(error=>{console.error(error);process.exitCode=1;});
-'''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True,timeout=10)
+    from tests.ui.test_market_data_tiingo_frontend import _run_settings_js
+    _run_settings_js(["loadSettings", "stopSettingsSync", "settingsSyncVisible", "scheduleSettingsSync", "resumeSettingsSync", "settingsSyncMessage", "restoreSettingsCoinFilter", "applySettingsDynamicPayload"], r"""
+      let pending = [];
+      global.fetchSettingsJson = () => {const item=deferred();pending.push(item);return item.promise;};
+      uiState.contextExchange='binance';
+      const first=loadSettings('binance');
+      uiState.contextExchange='bybit';
+      const second=loadSettings('bybit');
+      pending[1].resolve({...payload('bybit'),enabled_coins:['BTC']});await second;
+      if(STALE_FAILURE)pending[0].reject(new Error('old failure'));
+      else pending[0].resolve({...payload('binance'),enabled_coins:['ETH']});
+      await first;
+      assert.equal(settingsState.exchange,'bybit');
+      assert.deepEqual([...settingsState.selectedCoins],['BTC']);
+      assert.equal(renders,1);assert.deepEqual(toasts,[]);
+      assert.equal(document.getElementById('settings-sync-error').textContent,'');
+    """.replace('STALE_FAILURE',str(stale_failure).lower()))
 
 
 def test_settings_save_deduplicates_requests_and_keeps_edits_made_during_save():
     """A second Save cannot POST while the first is pending or erase newer input."""
-    source = (Path(__file__).resolve().parents[2] / 'frontend/market_data_main.html').read_text()
-    start = source.index('      function updateSaveSettingsButton()')
-    end = source.index('      function setFieldValue(', start)
-    helpers = source[start:end]
-    start = source.index('      async function saveSettings()')
-    end = source.index('      async function testTiingo()', start)
-    script = helpers + source[start:end] + r'''
-const assert = require('node:assert/strict');
-const button = {disabled:false,classList:{toggle:()=>{}}};
-const document = {getElementById:()=>button};
-const settingsState = {exchange:'binance',selectedCoins:new Set(),payload:null,baselineRequest:'',isDirty:true,saveBusy:false};
-let current='BTC';
-const requests=[], renders=[], messages=[];
-function collectSettingsRequest(){return {enabled_coins:[current]};}
-function fetchJson(path,options){return new Promise((resolve,reject)=>requests.push({path,options,resolve,reject}));}
-function renderSettingsPayload(){renders.push(current);}
-function showToast(message){messages.push(message);}
-(async()=>{
- const first=saveSettings();
- assert.equal(button.disabled,true);
- await saveSettings();
- assert.equal(requests.length,1);
- assert.deepEqual(JSON.parse(requests[0].options.body),{enabled_coins:['BTC']});
- current='ETH';
- requests[0].resolve({success:true,settings:{enabled_coins:['BTC']}});
- await first;
- assert.deepEqual(renders,[]);
- assert.equal(settingsState.isDirty,true);
- assert.equal(button.disabled,false);
- const second=saveSettings();
- assert.equal(requests.length,2);
- requests[1].resolve({success:true,settings:{enabled_coins:['ETH']}});
- await second;
- assert.deepEqual(renders,['ETH']);
- assert.equal(settingsState.isDirty,false);
- assert.equal(button.disabled,true);
- assert.equal(messages.length,2);
-})().catch(error=>{console.error(error);process.exitCode=1;});
-'''
-    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True, timeout=10)
+    from tests.ui.test_market_data_tiingo_frontend import _run_settings_js
+    _run_settings_js(["saveSettings", "settingsRequestsEqual", "updateSaveSettingsButton", "setSettingsBaseline", "syncSettingsDirtyState", "stopSettingsSync", "scheduleSettingsSync", "settingsSyncVisible", "applySettingsDynamicPayload"], r"""
+      let current='BTC',pending=[];
+      collectSettingsRequest=()=>({enabled_coins:[current]});
+      global.fetchSettingsJson=(path,options)=>{const item=deferred();pending.push(item);requests.push({path,options});return item.promise;};
+      settingsState.payload=payload();settingsState.isDirty=true;
+      const first=saveSettings();
+      assert.equal(document.getElementById('btn-save-settings-sidebar').disabled,true);
+      await saveSettings();assert.equal(requests.length,1);
+      assert.deepEqual(JSON.parse(requests[0].options.body),{enabled_coins:['BTC']});
+      current='ETH';settingsEditRevision++;
+      pending[0].resolve({success:true,settings:payload()});await first;
+      assert.equal(renders,0); // unchanged availability must not repaint the draft
+      assert.equal(current,'ETH');assert.equal(settingsState.isDirty,true);
+      const second=saveSettings();assert.equal(requests.length,2);
+      pending[1].resolve({success:true,settings:{...payload(),enabled_coins:['ETH']}});await second;
+      assert.equal(settingsState.isDirty,false);assert.equal(settingsState.saveBusy,false);
+      assert.equal(toasts.length,2);
+    """)

@@ -27,7 +27,7 @@
 <script src="/app/js/ai_loop_templates.js?v=15"></script>
 <script src="/app/js/pb8_loop_instructions.js?v=2"></script>
 <script src="/app/js/loop_gpu_replacement.js?v=1"></script>
-<script src="/app/js/pb8_loop_optimizer.js?v=69"></script>
+<script src="/app/js/pb8_loop_optimizer.js?v=83"></script>
 <link rel="stylesheet" href="/app/css/pb8_loop_optimizer.css?v=16">
 <style>
 :root {
@@ -15979,6 +15979,12 @@ async function init() {
     if (migrationDraftId) {
       showMigrationDraftLoadingState(false);
       migrationDraftPromise = apiFetch('/migration-draft/' + encodeURIComponent(migrationDraftId));
+    }
+    // Give the restored Loop list/report the browser's HTTP slots before loading
+    // native editor/queue/results data that is not visible on this destination.
+    if (optimizeEditorAdapter.isV8 && /^loops-(queue|results)$/.test(state.panel)
+        && !restoreEditor && !migrationDraftPromise) {
+      await window.PBGuiLoopOptimizer?.whenInitialViewReady();
     }
     connectWS();
     var metadataPromise = migrationDraftPromise

@@ -23,10 +23,10 @@ def archive_budget(record, config):
                  'source': {'run': 'r' * 256, 'artifact': 'f' * 255, 'modified': 1.7976931348623157e308}}
     per_candidate = max(1, tokens(candidate))
     output = profile.get('output_tokens', 32768)
-    ceiling = int(profile['context'] * (.75 * .5 if record['settings']['provider'] == 'chatgpt' else .9))
+    ceiling = int(profile['context'] * (.75 * .5 if record['settings']['provider'] in {'chatgpt', 'claude-code'} else .9))
     overhead = tokens({'initial_config': record['initial_config'], 'goals': record['settings']['goals'],
                        'rubric': record['rubric']}) + profile.get('knowledge_tokens', 6000) + 8000
-    if record['settings']['provider'] != 'chatgpt':
+    if record['settings']['provider'] not in {'chatgpt', 'claude-code'}:
         overhead += profile.get('additional_context_tokens', 12000)
     capacity = math.floor(((ceiling - output - 512) / 1.25 - overhead) / per_candidate)
     parallel = record['settings']['parallel']
@@ -125,7 +125,7 @@ def select_sources(record, content, profile, output_tokens, *, metadata=None):
             pager = EvidenceSession(None, {'id': '0' * 32, 'sha256': '0' * 64, 'required': required}, profile.get('page_tokens', 5000))
             payload = initial_payload(record['settings'], metadata, profile, instructions, required, output_tokens)
             count = check_context(payload, profile,
-                                  output_tokens, codex=record['settings']['provider'] == 'chatgpt',
+                                  output_tokens, codex=record['settings']['provider'] in {'chatgpt', 'claude-code'},
                                   required_pages=len(pager.required_pages), initial=True)
             return count
         except LoopAIPause:

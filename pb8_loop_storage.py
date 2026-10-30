@@ -106,10 +106,31 @@ class LoopArchive:
             return {'items': items, 'total': count, 'offset': offset,
                     'next_offset': offset + len(items) if offset + len(items) < count else None}
 
-    def fields(self, root, names):
+    def fields(self, root, names, *, settings_fields=None):
         """Load explicitly requested small fields without expanding historical collections."""
         with self.connection() as session:
-            return {key: session.unpack(value) for key, value in session.entries(root) if key in names}
+            return {key: ({name: session.unpack(item) for name, item in session.entries(value)
+                           if name in settings_fields} if key == 'settings' and settings_fields is not None
+                          else session.unpack(value))
+                    for key, value in session.entries(root) if key in names}
+
+    def native_job(self, root, operation):
+        """Resolve one native identity without hydrating configs, reports or round history."""
+        with self.connection() as session:
+            identity = {key: session.unpack(session.field(root, key)) for key in ('id', 'owner')}
+            for field in ('jobs', 'observer_jobs'):
+                try:
+                    collection = session.field(root, field)
+                except KeyError:
+                    continue
+                for reference in session.entries(collection):
+                    fields = dict(session.entries(reference))
+                    if 'operation' not in fields or session.unpack(fields['operation']) != operation:
+                        continue
+                    job = {key: session.unpack(value) for key, value in fields.items()
+                           if key in {'operation', 'name', 'kind', 'backend'}}
+                    return identity, job
+            return identity, None
 
 
 class ObjectSession:

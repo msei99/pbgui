@@ -361,13 +361,18 @@ class AILoopTools:
 
     def _prepare_run(self, owner, args, selection, request):
         """Validate the owned revision and freeze shared AI selection and cost settings."""
-        if set(args) - {'operation', 'name', 'revision', 'loop_id'}:
+        if set(args) - {'operation', 'name', 'revision', 'loop_id', 'reuse_existing'}:
             raise ValueError('Unknown Loop run field')
+        reuse = args.get('reuse_existing', False)
+        if type(reuse) is not bool:
+            raise ValueError('reuse_existing must be a boolean')
         operation = args.get('operation')
         if operation not in {'queue', 'queue_and_start', 'start', 'replace'}:
             raise ValueError('Choose queue, queue_and_start, start or replace')
         runtime = self._runtime()
         if operation == 'start':
+            if reuse:
+                raise ValueError('Unchanged reuse requires queue or queue_and_start with the saved definition revision')
             if args.get('name') or args.get('revision') is not None:
                 raise ValueError('Start uses loop_id, not definition fields')
             row = runtime._controller.store.read(owner, self.caps._opaque_id(args.get('loop_id'), 'loop'))
@@ -400,8 +405,15 @@ class AILoopTools:
                                source_generation=source['control_generation'])
         from ai_loop_request import validate_request
         store = runtime._controller.store
+        instructions = store.instruction_version(owner, 'default')
+        if reuse:
+            from ai_loop_request import preserve_request
+            payload['definition_digest'] = self.caps._digest(row)
+            source = {**row['source'], 'loop_request': preserve_request(request, instructions, row, owner)}
+            payload['reuse_source'] = source
+            row = {**row, 'source': source}
         bound_settings = settings if operation == 'start' else {**settings, 'source': row['source']}
-        binding = validate_request(bound_settings, request, store.instruction_version(owner, 'default')['digest'],
+        binding = validate_request(bound_settings, request, instructions['digest'],
                                    row['initial_config'] if operation == 'start' else row['bundle']['config'])
         if operation == 'start':
             if (row.get('ai_instructions') or {}).get('digest') != binding['instruction_digest']:
@@ -427,6 +439,24 @@ class AILoopTools:
                    'changes': [{'path': 'run.status', 'before': 'queued' if operation == 'start' else '(absent)',
                                 'after': 'queued' if operation == 'queue' else 'running'}],
                    'effect': 'Queue/start the saved Loop through native backend validation. Starting authorizes automatic jobs, AI usage and paid rentals within the displayed limits.'}
+        if reuse:
+            preview.update(definition_mode='preserved_reuse', definition_revision=revision,
+                           saved_goals=copy.deepcopy(settings['goals']),
+                           reviewed_window_plan=binding.get('window_plan'))
+            preview['effect'] = ('Explicit unchanged reuse of the displayed saved revision. Preserve all saved goals, '
+                                 'windows and Loop limits; do not save or create a definition. Use current PBGui default '
+                                 'instructions and the displayed shared AI selection/rental preferences. '
+                                 + preview['effect'])
+            preview['changes'].append({'path': 'request.saved_goals', 'before': settings['goals'],
+                                       'after': settings['goals']})
+            preview['changes'].extend([
+                {'path': 'run.saved_limits', 'before': None,
+                 'after': {key: value for key, value in settings.items()
+                           if key not in {'goals', 'provider', 'model', 'profile', 'effort', 'service_tier'}}},
+                {'path': 'run.ai_selection', 'before': None, 'after': payload['selection']},
+                {'path': 'run.rental_preferences', 'before': None, 'after': rental},
+                {'path': 'run.saved_window_plan', 'before': None, 'after': binding.get('window_plan')},
+            ])
         if operation == 'replace':
             preview.update(source_loop_id=payload['source_loop_id'], worker_id=payload['worker_id'],
                            effect='Stop and collect the source Loop, preserve its current GPU rental, '
@@ -478,6 +508,10 @@ class AILoopTools:
                 definition = await asyncio.to_thread(store.definition, proposal.owner, payload['name'])
                 if definition['revision'] != payload['revision']:
                     raise ValueError('Loop definition changed since review; request a new proposal')
+                if 'reuse_source' in payload:
+                    if self.caps._digest(definition) != payload['definition_digest']:
+                        raise ValueError('Loop definition changed since review; request a new proposal')
+                    definition = {**definition, 'source': payload['reuse_source']}
                 from pb8_loop_store import apply_run_limit, validate_cloud_loop_config
                 validate_cloud_loop_config(apply_run_limit(definition['settings'], definition['bundle']['config']),
                                            definition['settings']['execution'])
@@ -702,8 +736,8 @@ def tool_specs():
          'schema': schema({'loop_id': {'type': 'string'}}, []), 'effect': 'read'},
         {'name': 'read_ai_loop_log', 'description': 'Read actual retained optimizer/backtest log text for an owned AI Loop job. Get operation from get_ai_loop_runs(loop_id). Starts with the last 32 KiB; pass returned next_before to read earlier chunks. Includes cloud collected logs or current mirrored logs. Read-only; no browser clicks required.',
          'schema': schema({'loop_id': {'type': 'string'}, 'operation': {'type': 'string'}, 'before': {'type': 'integer', 'minimum': 0}}, ['loop_id', 'operation']), 'effect': 'read'},
-        {'name': 'propose_ai_loop_run', 'description': 'Queue/start only a fresh reviewed definition bound to the current original user request in this chat. Old, foreign-chat, already-used or unreconciled definitions are rejected. First create and approve a new uniquely named definition with propose_ai_loop_config; never assume an old definition matches a new request. Use queue_and_start with exact name/revision, or start for its queued loop_id. Use replace with the NEW bound definition and OLD donor loop_id to preserve the existing rental. Requires user approval and uses current shared AI selection.',
-         'schema': schema({'operation': {'type': 'string', 'enum': ['queue', 'queue_and_start', 'start', 'replace']}, 'name': {'type': 'string'}, 'revision': {'type': 'integer', 'minimum': 1}, 'loop_id': {'type': 'string'}}, ['operation']), 'effect': 'draft'},
+        {'name': 'propose_ai_loop_run', 'description': 'Prepare a user-reviewed queue/start proposal using the current shared AI selection. For a NEW optimization request first create and approve a fresh definition with propose_ai_loop_config. When the user explicitly asks to start an EXISTING saved definition unchanged, read it and pass reuse_existing=true with its exact name/revision and queue_and_start (or queue). This reviews its saved goals, windows and all Loop limits unchanged, binds the current request and creates no definition; never use propose_ai_loop_config to replace its goals with a short start instruction. Already-used revisions remain single-use; no silent reuse. Use start for a queued loop_id bound to the same request. Use replace with a bound definition and OLD donor loop_id to preserve the existing rental. No native action occurs before approval.',
+         'schema': schema({'operation': {'type': 'string', 'enum': ['queue', 'queue_and_start', 'start', 'replace']}, 'name': {'type': 'string'}, 'revision': {'type': 'integer', 'minimum': 1}, 'loop_id': {'type': 'string'}, 'reuse_existing': {'type': 'boolean', 'default': False}}, ['operation']), 'effect': 'draft'},
         {'name': 'get_ai_loop_configs', 'description': 'Read owned PB8 AI Loop definitions and editable settings schema; supply name to inspect a definition before editing. Source strategy, exchanges, training windows and holdout come from a saved PB8 optimizer config. max_rounds is a required explicit hard upper bound on completed rounds; set it from the user request. max_runs separately limits optimizer attempts.',
          'schema': schema({'name': {'type':'string'}}, []), 'effect': 'read'},
         {'name': 'get_vast_preferences', 'description': 'Read non-secret shared Vast.ai GPU requirements, rental limits, schema and settings_digest, plus separate fresh persisted host_exclusions with blocked_machine_ids and host_block_revision. Supply job_id from current_cloud_job or an ownership-verified cloud_job_id to resolve its local lease, machine_id and blocked state without provider access. Exclusions are not editable rental preferences and do not affect settings_digest. For two RTX 3060 rentals use gpu_name RTX 3060 and max_rentals 2, independently of AI Loop parallel variants. Preserve existing budget/duration unless requested; clarify missing material cost requirements.',

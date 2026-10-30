@@ -396,6 +396,7 @@ def test_optimizer_adjustment_notice_in_real_page_preserves_edits_and_navigation
             for sidebar_width in (160, 240, 420):
                 page.evaluate("width=>document.getElementById('sidebar').style.width=width+'px'", sidebar_width)
                 assert page.locator('#opted-config-changes').evaluate('el=>el.scrollWidth<=el.clientWidth')
-        assert not [item for item in mutations if item[1].startswith('/api/optimize-v8/configs')]
+        assert not [item for item in mutations if item[1].startswith('/api/optimize-v8/configs')
+                    and item[1] != '/api/optimize-v8/configs/backtest-counts']
         assert not errors, errors
         browser.close()

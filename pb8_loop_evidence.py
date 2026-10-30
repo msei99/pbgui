@@ -440,7 +440,9 @@ class EvidenceStore:
         """Expire only snapshots; shared historical originals are never garbage-collected."""
         owner = self.store.owner_dir(record['owner'])
         protected = set(protected)
-        current = self.store.read(record['owner'], record['id'])
+        current = self.store.read(record['owner'], record['id'], fields={
+            'status', 'ai_snapshot_id', 'pending_ai', 'interrupted_ai', 'interrupted_ai_audit',
+        })
         if current['status'] not in {'completed', 'stopped', 'failed', 'unconfirmed'}:
             protected.add(current.get('ai_snapshot_id'))
         for key in ('pending_ai', 'interrupted_ai'):

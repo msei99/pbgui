@@ -112,7 +112,8 @@ def test_failed_research_can_be_corrected_without_duplicate_proposals(tmp_path: 
 
 
 @pytest.mark.parametrize('arguments', [None, [], 'bad-json', 42])
-def test_invalid_arguments_never_dispatch(tmp_path, arguments):
+@pytest.mark.parametrize('provider',['opencode-go'])
+def test_invalid_arguments_never_dispatch(tmp_path, arguments, provider, monkeypatch):
     """Malformed provider arguments cannot turn into an executable empty request."""
     async def scenario():
         service = AIChatService(tmp_path / 'ai')

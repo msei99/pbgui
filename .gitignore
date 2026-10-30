@@ -50,3 +50,7 @@ backup/
 .claude/
 .opencode/
 CLAUDE.md
+
+# Optional Claude Agent SDK installation (keep manifests and lockfile versioned)
+
+/runtime/claude_agent/node_modules/

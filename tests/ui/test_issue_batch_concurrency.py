@@ -85,11 +85,12 @@ assert.equal(requests.length,1);assert(requests[0][0].includes('/bybit/'));asser
 
 def test_services_validation_message_and_save_lock():
     """Settings display 422 field errors and reject overlapping writes."""
-    run_js(function('services_monitor','_post') + '''
+    run_js(function('services_monitor','releaseSettingsPost')+function('services_monitor','_post') + '''
+const settingsPostJobs=new Map(),_settingsLoaded={pbdata:true},_settingsLoading={};let settingsPostsHidden=false;function showSettingsSaveResult(){}
 const pendingSettingsPosts=new Set(),button={disabled:false};let release,requests=0,message='';
-const document={getElementById:()=>({previousElementSibling:button})},API_BASE='',authOptions=x=>x,_flash=(id,text)=>message=text;
+const document={getElementById:id=>id.endsWith('-tab-settings')?null:({previousElementSibling:button})},API_BASE='',authOptions=x=>x,_flash=(id,text)=>message=text;
 const fetch=()=>{requests++;return new Promise(r=>release=r)};
-(async()=>{const a=_post('/settings',{},'save'),b=_post('/settings',{},'save');assert.equal(requests,1);assert(button.disabled);
+(async()=>{const a=_post('/settings/pbdata',{},'save'),b=_post('/settings/pbdata',{},'save');assert.equal(requests,1);assert(button.disabled);
 release({ok:false,status:422,json:async()=>({detail:[{loc:['body','port'],msg:'Invalid integer'}]})});await Promise.all([a,b]);assert(message.includes('port: Invalid integer'));assert(!button.disabled);
 })().catch(e=>{console.error(e);process.exitCode=1});
 ''')

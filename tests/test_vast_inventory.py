@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 
 import vast_jobs
 from vast_jobs import IMAGE, REVISION, IncompleteJobStore, JobStore, write_json
+from vast_integrity_fixtures import freeze_test_proof
+from vast_direction_fixtures import direction_config
 from vast_provider import VastError
 from vast_queue import CloudQueue, worker_step
 
@@ -406,6 +408,8 @@ def test_store_and_queue_start_never_rent_from_partial_inventory(inventory, monk
     queue, _, healthy, _ = inventory
     monkeypatch.setattr(vast_jobs, 'services_available', lambda: True)
     queue.store.update(healthy, workers=4)
+    write_json(queue.store.directory(healthy) / 'input/optimize.json', direction_config())
+    freeze_test_proof(queue.store, healthy)
     queue.update(worker_id=None)
     offer = {'id': 42, 'machine_id': 1, 'price_hour_usd': .1,
              'cpu_cores': 4, 'cuda_max_good': 13, 'disk_gb': 40}

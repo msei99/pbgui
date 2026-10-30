@@ -16,6 +16,7 @@ from api.auth import SessionToken, require_auth
 from logging_helpers import human_log as _log
 from ai_setup import ModelTestRequest
 from ai_chat_images import ChatImage
+from ai_claude_code import ClaudeCodeError
 
 
 SERVICE = "AIChat"
@@ -220,6 +221,47 @@ async def save_preferences(
         )
     except Exception as exc:
         raise _provider_error("save_preferences", exc) from exc
+
+
+@router.post("/providers/claude-code/connect")
+async def connect_claude(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Start Anthropic's native subscription sign-in for the authenticated owner."""
+    try:
+        return _json(await get_ai_chat_service().claude.start_login(_owner(session)))
+    except ClaudeCodeError as exc:
+        raise _provider_error("connect_claude", AIChatError(str(exc))) from exc
+
+
+@router.post("/providers/claude-code/login-code")
+async def claude_login_code(request: Request, session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Pass a one-time code in an authenticated body, never a URL or log."""
+    try:
+        if len(await request.body()) > 4096:
+            raise AIChatError("Invalid Claude sign-in code")
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise AIChatError("Invalid Claude sign-in code")
+        await get_ai_chat_service().claude.login_code(_owner(session), body.get("code"), body.get("login_id"))
+        return _json({"submitted": True})
+    except (ClaudeCodeError, ValueError, AIChatError) as exc:
+        raise _provider_error("claude_login_code", AIChatError("Claude sign-in code could not be submitted")) from exc
+
+
+@router.delete("/providers/claude-code/login")
+async def cancel_claude_login(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Cancel the selected owner's pending native login."""
+    await get_ai_chat_service().claude.cancel_login(_owner(session))
+    return _json({"cancelled": True})
+
+
+@router.delete("/providers/claude-code/connection")
+async def disconnect_claude(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Stop owned Claude operations and sign out through the native runtime."""
+    try:
+        await get_ai_chat_service().disconnect_claude(_owner(session))
+        return _json({"connected": False})
+    except Exception as exc:
+        raise _provider_error("disconnect_claude", exc) from exc
 
 
 @router.post("/providers/opencode-go/connect")

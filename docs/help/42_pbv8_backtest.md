@@ -1,5 +1,7 @@
 # PBv8 Backtest
 
+Results appear progressively while later pages load. One browser load shares a single file-discovery pass across its pages; later pages do not rescan the complete result tree. New loads and automatic updates discover current files. If a page sequence expires, PBGui retries it once automatically while retaining the selected filter and requested Loop comparison.
+
 AI Loop result links load their filtered results before unrelated saved panels or archives. **Results** shows **Opening…** while checking the owned native job, and comparison shows loading feedback while equity data is read. **Back to AI Loop** restores the originating round/tab, expansion, selection and scroll position; current Loop data then updates automatically. If the Loop is no longer available, PBGui explains this in the original Queue/Results context. A request deadline reports an error rather than leaving navigation busy indefinitely.
 
 If an equity file fails to load, the other available curves remain visible with a count of the affected selected results. The selection is retained. If no selected equity file can be loaded, the comparison displays an error instead of an empty chart.
@@ -74,6 +76,8 @@ Frequently used PB8-specific backtest fields have structured controls:
 **Additional Parameters** contains Result Metrics, the PBGui-managed `base_dir` as read-only, and the expert-only `hlcvs_data_dir` and `hlcvs_data_override_mode` fields. Prepared-dataset replay requires a server-side PB8 dataset path with a valid manifest and is normally left at `null`; PB8 then resolves datasets automatically. Future unknown top-level backtest fields also appear in this fallback section.
 
 ## Queue
+
+Automatic queue inspection runs in the background so retained completed jobs do not block navigation. Changed queue entries and live runner states are checked automatically.
 
 The V8 queue is stored separately under `data/bt_v8_queue`. **Start** launches `<venv_pb8>/bin/passivbot backtest <snapshot>`. **Stop**, **Restart**, **Delete**, and **Clear Finished** affect only V8 queue items. Live queue updates use the version-specific `/api/backtest-v8/ws/bt8` WebSocket; the historical `/ws/bt7` route remains an authenticated compatibility alias.
 

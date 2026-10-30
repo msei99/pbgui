@@ -56,7 +56,7 @@ function browser(apiBase = prefix + '/api/balance-calc', mount = prefixArg, opti
   location.replace = value => redirects.push(value);
   location.reload = () => {};
   const context = {
-    URL, console, WeakMap, Map, Set, AbortController,
+    URL, console, WeakMap, Map, Set, AbortController, TextEncoder,
     location, API_BASE: apiBase,
     PBGUI_NAV_CONFIG: {current: 'info_balance_calc', authenticated: true},
     sessionStorage: {getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key)},
@@ -224,7 +224,7 @@ async function main() {
     b.assets.at(-1).onerror();
     assert.equal(c.location.href, app + '/app/help.html?v=1779');
     b.nodes['pbgui-ai-btn'].click();
-    assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=27');
+    assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=28');
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/pbgui_dialogs.js?v=12');
     b.assets.at(-1).onload();
     // Follow the current local dependency chain before the drawer's usage module.
@@ -244,7 +244,7 @@ async function main() {
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/jev_transfer_preview.js?v=1');
     c.PBGuiJevTransferPreview = {review() {}};
     b.assets.at(-1).onload();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=80');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=84');
     b.nodes['pbgui-notify-btn'].click();
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/log_viewer_panel.js?v=50');
     let viewerOptions;

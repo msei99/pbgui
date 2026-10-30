@@ -162,6 +162,9 @@ def test_runner_caps_workers_before_upload(tmp_path, monkeypatch):
             """Record the resolved count and stop before sending data."""
             checked.append(store.read(identifier)['workers'])
             raise VastError('End isolated test', 422)
+        def verify_upload_input(self, bundle_sha256, **kwargs):
+            """Match the current upload boundary without any remote operation."""
+            assert bundle_sha256 == digest(bundle)
     monkeypatch.setattr(runner, 'WorkerConnection', Connection)
     runner.run_loop(store, identifier)
     assert checked == [21]

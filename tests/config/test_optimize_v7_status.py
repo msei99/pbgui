@@ -59,10 +59,17 @@ PBCoinData.normalize_symbol = normalize_symbol
 PBCoinData.compute_coin_name = compute_coin_name
 PBCoinData.get_symbol_for_coin = get_symbol_for_coin
 PBCoinData.CoinData = MockCoinData
+_previous_coin_data = sys.modules.get("PBCoinData")
 sys.modules["PBCoinData"] = PBCoinData
 
 
-from api import optimize_v7  # noqa: E402
+try:
+    from api import optimize_v7  # noqa: E402
+finally:
+    if _previous_coin_data is None:
+        sys.modules.pop("PBCoinData", None)
+    else:
+        sys.modules["PBCoinData"] = _previous_coin_data
 
 
 LOG_SAMPLE = """2026-03-30T12:10:14Z INFO Selected optimizer backend: pymoo

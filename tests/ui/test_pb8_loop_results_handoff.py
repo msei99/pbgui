@@ -9,8 +9,107 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize('stored_panel,result_count,missing_equity', [('queue',3,False), ('configs',3,False), ('results',3,False), ('queue',1,False), ('queue',0,False), ('queue',3,True)])
-def test_loop_result_handoff_overrides_stored_panel_and_preserves_return(stored_panel, result_count, missing_equity):
+@pytest.mark.parametrize('prefix', ['', '/nested'])
+@pytest.mark.parametrize('initial_error', [False, True])
+def test_loop_overview_renders_before_blocked_configs_and_details(prefix, initial_error):
+    """A restored report and its list stay usable while independent reads remain pending."""
+    playwright = pytest.importorskip('playwright.sync_api')
+    source = (ROOT / 'frontend/v7_optimize.html').read_text()
+    values = {'API_BASE':prefix+'/api/optimize-v8', 'OPTIMIZE_VERSION':'v8', 'VERSION':'test',
+              'SERIAL':'1', 'NAV_HASH':'test', 'BASE_PREFIX':prefix, 'LIMITS_META':'{}',
+              'OPTIMIZE_NAV_TITLE':'PB8 Optimize', 'OPTIMIZE_NAV_CURRENT':'v8_optimize'}
+    for key, value in values.items():
+        source = source.replace('%%'+key+'%%', value)
+    ids = [letter*32 for letter in 'abc']
+    full = {identity: {'id':identity, 'name':'Visible '+identity[0], 'status':'completed', 'phase':'evaluate',
+        'round':1, 'ended':True, 'created_at':1000, 'updated_at':1001, 'view_revision':'1'*64,
+        'settings':{'config_name':'fixture', 'execution':'cpu'}, 'jobs':[], 'history':[],
+        'observer_jobs':[{'operation':'d'*32, 'name':'user evaluation', 'kind':'observer_full_range',
+            'round':1, 'status':'complete', 'simulation_complete':True, 'report_done':True,
+            'log_available':True, 'metrics':{'gain':2}}], 'observer_enabled':True,
+        'cycles':[{'round':1, 'status':'validated', 'ai_evaluated':True, 'goals':[],
+                   'backtests':0, 'completed_backtests':0}]} for identity in ids}
+    summaries = [{**row, 'summary_only':True, 'jobs':[], 'history':[], 'observer_jobs':[], 'cycles':[],
+                  'best':None, 'deletable':False} for row in full.values()]
+    held_details, held_configs, errors, scans, native_reads = [], [], [], [], []
+    with playwright.sync_playwright() as driver:
+        browser = driver.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width':1200, 'height':900})
+        page.on('pageerror', lambda error: errors.append(str(error)))
+
+        def respond(route):
+            """Hold real requests instead of substituting a synthetic report renderer."""
+            parsed = urlparse(route.request.url)
+            path = parsed.path.removeprefix(prefix) if prefix else parsed.path
+            if path == '/api/optimize-v8/main_page':
+                route.fulfill(body=source, content_type='text/html')
+            elif path.startswith('/app/'):
+                asset = ROOT / 'frontend' / path.removeprefix('/app/')
+                route.fulfill(body=asset.read_bytes() if asset.is_file() else b'',
+                              content_type='text/css' if asset.suffix=='.css' else 'text/javascript')
+            elif path == '/api/optimize-v8/loops':
+                assert parse_qs(parsed.query).get('summary') == ['true']
+                scans.append(True)
+                route.fulfill(json={'loops':summaries})
+            elif path == '/api/optimize-v8/loops/configs':
+                held_configs.append(route)
+            elif path.removeprefix('/api/optimize-v8/loops/') in ids:
+                held_details.append(route)
+            elif path == '/api/optimize-v8/loops/options':
+                return
+            elif path == '/api/help/index':
+                route.fulfill(json=[])
+            else:
+                if path in {'/api/optimize-v8/metadata', '/api/optimize-v8/configs',
+                            '/api/optimize-v8/queue', '/api/optimize-v8/results'}:
+                    native_reads.append(path)
+                route.fulfill(json={})
+
+        page.route('**/*', respond)
+        page.route_web_socket('**/*', lambda socket: socket.on_message(lambda message: None))
+        page.add_init_script("localStorage.setItem('pbgui.pb8.loops.workflow',JSON.stringify({expanded:['"+ids[0]+"','"+ids[0]+":1']}));")
+        context = '?loop_id='+ids[0]+'&loop_view=cycle&loop_cycle=1&loop_tab=performance#loops-results'
+        page.goto('http://pbgui.test'+prefix+'/api/optimize-v8/main_page'+context)
+        page.wait_for_selector('#loops-results-table tr[data-key="'+ids[0]+'"]')
+        assert page.locator('#loops-results-table tr[data-key]').count() >= 3
+        assert page.locator('#loop-report-body').inner_text() == 'Loading Loop report…'
+        assert page.locator('#loop-report-tab-performance').get_attribute('aria-selected') == 'true'
+        page.wait_for_timeout(3500)
+        assert len(scans) >= 2 and len(held_details) == 2
+        assert len(held_configs) == 1, 'polls reuse an independent pending configuration read'
+        assert not native_reads, 'invisible native panels must not compete with the restored Loop report'
+        assert 'Could not load AI Loops' not in page.locator('body').inner_text()
+        assert 'loop_cycle=1' in page.url and 'loop_tab=performance' in page.url
+        selected = next(route for route in held_details if urlparse(route.request.url).path.endswith(ids[0]))
+        if initial_error:
+            selected.abort('failed')
+            page.wait_for_function("document.getElementById('loop-report-body').textContent.includes('Could not load Loop details')")
+            page.wait_for_function("!window.state.initialLoadPending")
+            assert native_reads, 'a failed initial detail must not hold unrelated panels indefinitely'
+            other = next(route for route in held_details if not urlparse(route.request.url).path.endswith(ids[0]))
+            other.fulfill(json=full[urlparse(other.request.url).path.rsplit('/',1)[-1]])
+            page.wait_for_timeout(3500)
+            selected = [route for route in held_details if urlparse(route.request.url).path.endswith(ids[0])][-1]
+        selected.fulfill(json=full[ids[0]])
+        page.wait_for_selector('#loop-report-body [data-loop-result]')
+        page.wait_for_function("!window.state.initialLoadPending")
+        assert native_reads, 'native panels still load automatically after the visible report'
+        assert page.locator('#loop-report-title').inner_text() == 'Round 2 · validated'
+        assert page.locator('#loop-report-tab-performance').get_attribute('aria-selected') == 'true'
+        assert 'Loading Loop report' not in page.locator('#loop-report-body').inner_text()
+        assert 'Could not load Loop details' not in page.locator('#loop-report-body').inner_text()
+        assert page.locator('#loops-results-table tr[data-key="'+ids[0]+'"]').is_visible()
+        page.wait_for_timeout(3200)
+        assert len([route for route in held_details if urlparse(route.request.url).path.endswith(ids[0])]) == (2 if initial_error else 1)
+        assert page.locator('#loop-report-body [data-loop-result]').count() == 1
+        assert not errors, errors
+        browser.close()
+
+
+@pytest.mark.parametrize('stored_panel,result_count,missing_equity,expired_snapshot', [
+    ('queue',3,False,False), ('configs',3,False,False), ('results',3,False,False),
+    ('queue',1,False,False), ('queue',0,False,False), ('queue',3,True,False), ('queue',3,False,True)])
+def test_loop_result_handoff_overrides_stored_panel_and_preserves_return(stored_panel, result_count, missing_equity, expired_snapshot):
     """An explicit result link wins on arrival; later navigation wins on reload."""
     playwright = pytest.importorskip('playwright.sync_api')
     source = (ROOT / 'frontend/v7_backtest.html').read_text()
@@ -20,6 +119,7 @@ def test_loop_result_handoff_overrides_stored_panel_and_preserves_return(stored_
     for key, value in replacements.items():
         source = source.replace('%%'+key+'%%', value)
     errors, filters, equity_paths = [], [], []
+    expired_once = []
     curve_count=result_count-(1 if missing_equity else 0)
     context = '/api/optimize-v8/main_page?loop_id='+'a'*32+'&loop_view=cycle&loop_cycle=4&loop_tab=performance#loops-results'
     with playwright.sync_playwright() as driver:
@@ -39,12 +139,17 @@ def test_loop_result_handoff_overrides_stored_panel_and_preserves_return(stored_
             elif parsed.path == '/api/backtest-v8/results':
                 filters.append(parse_qs(parsed.query).get('name', [''])[0])
                 offset=int(parse_qs(parsed.query).get('offset',['0'])[0])
+                assert parse_qs(parsed.query).get('snapshot') == ['a'*32 if offset else 'new']
+                if offset and expired_snapshot and not expired_once:
+                    expired_once.append(True)
+                    route.fulfill(status=409,json={'detail':'Fixture result pages expired'})
+                    return
                 indices=range(result_count) if result_count<2 else ([0] if offset==0 else range(1,result_count))
                 route.fulfill(json={'results':[{'path':'loop_fixture/result_'+str(index), 'config_name':'loop_fixture',
                     'exchange':'binance','name':'loop_fixture', 'start_date':'2020-01-01',
                     'end_date':'2020-02-01','analysis':{}} for index in indices] + [
                     {'path':'other_job/result','config_name':'other_job','exchange':'binance','analysis':{}}],
-                    'pagination':{'has_more':result_count>1 and offset==0,'next_offset':1}})
+                    'pagination':{'has_more':result_count>1 and offset==0,'next_offset':1,'snapshot':'a'*32}})
             elif parsed.path == '/api/backtest-v8/results/equity':
                 equity_paths.append(parse_qs(parsed.query)['path'][0])
                 if missing_equity and equity_paths[-1]=='loop_fixture/result_2':
@@ -70,7 +175,7 @@ def test_loop_result_handoff_overrides_stored_panel_and_preserves_return(stored_
                 assert page.locator('#compare-chart-area [role="status"]').inner_text()=='1 of 3 selected results could not load equity data.'
             assert set(equity_paths)=={'loop_fixture/result_'+str(index) for index in range(result_count)}
             assert page.locator('#results-config-filter').input_value()=='loop_fixture'
-            assert len(filters)==(2 if result_count>1 else 1),'exactly one initial filtered page sequence'
+            assert len(filters)==(4 if expired_snapshot else 2 if result_count>1 else 1),'one page sequence, or one automatic snapshot recovery'
             measures=page.evaluate("performance.getEntriesByType('measure').filter(x=>x.name.startsWith('pbgui.backtest.')).map(x=>({name:x.name,duration:x.duration}))")
             assert {'pbgui.backtest.filtered-results','pbgui.backtest.document-results','pbgui.backtest.equity-prepare','pbgui.backtest.chart'}<=set(x['name'] for x in measures)
             assert all(x['duration']>=0 for x in measures)
@@ -289,14 +394,25 @@ def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix
         page.wait_for_selector('#loop-report-body [data-loop-result]')
         assert held_options,'primary report does not wait for options'
         if not ended:assert held_rentals,'primary report does not wait for rental'
-        page.locator('#loop-report-body [data-loop-result]').first.click()
+        immediate=page.locator('#loop-report-body [data-loop-result]').first.evaluate('''node=>{
+            node.click();
+            const buttons=[...document.querySelectorAll('#loop-report-body [data-loop-result]')];
+            return {disabled:buttons.every(button=>button.disabled),label:buttons[0].textContent};
+        }''')
+        assert immediate=={'disabled':True,'label':'Opening…'},'the live redrawn button acknowledges the click immediately'
         page.wait_for_function("document.querySelector('#loop-report-body [aria-busy=true]')!==null")
         assert page.locator('#loop-report-body [data-loop-result]').first.inner_text()=='Opening…'
+        held_targets[-1].fulfill(status=503,json={'detail':'Fixture result lookup temporarily unavailable'})
+        page.wait_for_function("document.querySelector('#loop-report-body [data-loop-results-error]')?.textContent==='Fixture result lookup temporarily unavailable'")
+        page.wait_for_function("document.querySelector('#loop-report-body [data-loop-result]')?.disabled===false")
+        page.locator('#loop-report-body [data-loop-result]').first.click()
+        page.wait_for_function("document.querySelector('#loop-report-body [aria-busy=true]')!==null")
+        assert page.locator('#loop-report-body [data-loop-results-error]').count()==0
         # Poll/render while resolving must retain the click lock.
         run['reason']='fixture changed'
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
         page.wait_for_function("[...document.querySelectorAll('#loop-report-body [data-loop-result]')].every(node=>node.disabled)")
-        assert len(target_count)==1
+        assert len(target_count)==2
         # Simulate BFCache suspension while the destination request is pending.
         page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));")
         page.wait_for_function("document.querySelector('#loop-report-body [data-loop-result]')?.disabled===false")
@@ -305,7 +421,7 @@ def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix
         page.locator('#loop-report-body [data-loop-result]').first.dispatch_event('click')
         page.wait_for_function("document.querySelector('#loop-report-body [aria-busy=true]')!==null")
         page.wait_for_function('true')
-        assert len(target_count)==2,'cancelled handoff is restartable'
+        assert len(target_count)==3,'cancelled handoff is restartable'
         scroll=page.locator('#loop-report-body').evaluate('node=>node.scrollTop')
         assert scroll>0
         held_targets[-1].fulfill(json={'name':'evaluation_0','id':'1'*32,'cloud':False,'kind':kind})

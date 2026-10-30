@@ -10,6 +10,7 @@ from pb8_loop_handover import advance, begin
 from pb8_loop_store import LoopStore
 from secure_files import ensure_private_directory
 from vast_jobs import JobStore, write_json, IMAGE, REVISION
+from vast_integrity_fixtures import freeze_test_proof
 from vast_provider import VastError
 from vast_queue import CloudQueue, worker_step
 from vast_direction_fixtures import direction_config
@@ -93,6 +94,7 @@ def test_handover_preserves_rental_limits_and_survives_restart(environment):
             'workers': 4, 'input_bytes': 100, 'created_at': time.time()})
         ensure_private_directory(directory / 'input')
         write_json(directory / 'input/optimize.json', direction_config())
+        freeze_test_proof(queue.store, job_id)
     assert worker_step(queue, WORKER) == 'b' * 32
     assert queue.store.read('b' * 32)['lease_id'] == WORKER
     assert queue.store.read('c' * 32)['status'] == 'ready'

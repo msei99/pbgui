@@ -374,7 +374,9 @@ def test_native_optimizer_log_target_checks_real_job_ownership(workflow,monkeypa
         monkeypatch.setattr(optimize_v8,'_read_runner_state',lambda key:{})
     endpoint='/loops/'+loop_id+'/log-target?operation='+operation
     assert client.get('/loops/'+loop_id).json()['jobs'][0]['log_available'] is True
-    response=client.get(endpoint)
+    with monkeypatch.context() as target_patch:
+        target_patch.setattr(controller.store, 'read', lambda *a, **k: pytest.fail('Target loaded full history'))
+        response=client.get(endpoint)
     assert response.status_code==200,response.text
     assert response.json()=={'id':native_id,'cloud':execution=='vast','name':'Actual optimizer run','kind':'optimizer'}
     assert response.headers['cache-control']=='no-store'
@@ -733,7 +735,9 @@ def test_user_evaluation_log_target_is_native_and_owner_scoped(workflow,monkeypa
     controller.backend.poll=forbidden
     endpoint='/loops/'+loop_id+'/log-target?operation='+operation
     assert client.get('/loops/'+loop_id).json()['jobs']==[]
-    response=client.get(endpoint)
+    with monkeypatch.context() as target_patch:
+        target_patch.setattr(controller.store, 'read', forbidden)
+        response=client.get(endpoint)
     assert response.status_code==200,response.text
     assert response.json()=={'id':native_id,'cloud':execution=='vast','name':'User evaluation','kind':kind}
     native['loop_owner']=OTHER
@@ -772,7 +776,7 @@ class Node {
  replaceChildren(...nodes){this.children.forEach(node=>node.parent=null);this.children=[];nodes.forEach(node=>this.appendChild(node));}
  remove(){if(this.parent)this.parent.children=this.parent.children.filter(node=>node!==this);this.parent=null;}
  prepend(node){node.remove();this.children.unshift(node);node.parent=this;}
- get firstElementChild(){return this.children[0];} get lastElementChild(){return this.children.at(-1);}
+ get childNodes(){return this.children;} get firstElementChild(){return this.children[0];} get lastElementChild(){return this.children.at(-1);}
  addEventListener(name,fn){this[name]=fn;} setAttribute(){} querySelector(){return null;} querySelectorAll(){return [];}
  focus(){document.activeElement=this;}
 }

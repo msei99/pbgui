@@ -14,14 +14,15 @@ SELECTION = {'provider': 'chatgpt', 'profile': 'b' * 32, 'model': 'gpt-6.1-sol',
              'effort': 'high', 'service_tier': 'fast'}
 
 
-def test_selection_survives_reconstruction_geometry_updates_and_owner_isolation(tmp_path):
+@pytest.mark.parametrize('selection', [SELECTION, {'provider':'claude-code','profile':'default','model':'claude-fixture','effort':'','service_tier':''}])
+def test_selection_survives_reconstruction_geometry_updates_and_owner_isolation(tmp_path,selection):
     """Unrelated drawer writes and another account cannot reset the saved model."""
     service = AIChatService(tmp_path / 'ai')
     owner = 'a' * 32
-    service.save_preferences(owner, selection=SELECTION)
+    service.save_preferences(owner, selection=selection)
     service.save_preferences(owner, drawer_width=612, drawer_open=True)
     reconstructed = AIChatService(tmp_path / 'ai')
-    assert reconstructed.get_preferences(owner)['selection'] == SELECTION
+    assert reconstructed.get_preferences(owner)['selection'] == selection
     assert reconstructed.get_preferences(owner)['drawer_width'] == 612
     assert 'selection' not in reconstructed.get_preferences('c' * 32)
     assert service._preference_path(owner).stat().st_mode & 0o777 == 0o600

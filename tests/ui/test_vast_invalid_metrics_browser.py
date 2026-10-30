@@ -39,6 +39,7 @@ def test_invalid_metrics_do_not_abort_vast_renderers():
     ''' + log_markup + '''<div id="log-viewer-target"></div>
       <script>
         window.OPTIMIZE_VERSION='v8'; window.API_BASE='/api/optimize-v8';
+        window.optimizeEditorAdapter={isV8:true};
         window.state={}; const el=id=>document.getElementById(id);
       </script><script>''' + helpers + '''</script>
       <script src="/app/js/vast.js"></script>'''

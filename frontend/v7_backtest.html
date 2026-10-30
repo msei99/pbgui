@@ -6231,6 +6231,7 @@ function loadResults(filterName, loadOptions) {
   function loadVersionPage(version, offset) {
     var path = '/results?offset=' + offset + '&limit=' + RESULTS_PAGE_SIZE;
     if (selectedFilter) path += '&name=' + encodeURIComponent(selectedFilter);
+    if(version==='v8')path+='&snapshot='+encodeURIComponent(progress[version].snapshot||'new');
     return backtestResultRead(backtestApiBase(version), path).then(function(d) {
       if (loadGeneration !== _resultsLoadGeneration) return;
       var page = (d.results || []).map(function(result) {
@@ -6238,6 +6239,7 @@ function loadResults(filterName, loadOptions) {
       });
       resultsByVersion[version] = resultsByVersion[version].concat(page);
       var pagination = d.pagination && typeof d.pagination === 'object' ? d.pagination : null;
+      if(pagination&&pagination.snapshot)progress[version].snapshot=pagination.snapshot;
       progress[version].loaded = resultsByVersion[version].length;
       progress[version].total = pagination && Number.isFinite(Number(pagination.total))
         ? Number(pagination.total)
@@ -6251,6 +6253,13 @@ function loadResults(filterName, loadOptions) {
           return loadVersionPage(version, nextOffset);
         });
       }
+    }).catch(function(error){
+      if(loadGeneration===_resultsLoadGeneration&&error.status===409&&!progress[version].snapshotRetried){
+        resultsByVersion[version]=[];
+        progress[version]={loaded:0,total:null,hasMore:true,snapshotRetried:true};
+        return loadVersionPage(version,0);
+      }
+      throw error;
     });
   }
 

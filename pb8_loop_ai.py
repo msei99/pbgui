@@ -175,6 +175,8 @@ def _transient_ai_error(exc):
         'ChatGPT response timed out',
         'AI provider is temporarily unavailable',
         'Selected AI model is currently unavailable',
+        'Claude request timed out',
+        'Claude request ended without a completed result',
     }
     if isinstance(exc, AIChatError) and (str(exc) in transient_messages
             or re.fullmatch(r'Research inactive for \d+(?:\.\d+)? seconds', str(exc))
@@ -365,14 +367,22 @@ class LoopAI:
     async def preflight(self, owner, settings, check_budget=True):
         """Check a pinned provider/model before any paid optimizer is scheduled."""
         chat = self.service()
-        if settings['provider'] not in {'chatgpt', 'opencode-go', 'opencode-zen'}:
-            raise ValueError('Choose a ChatGPT or OpenCode model; JEV is an optional decision model')
+        if settings['provider'] not in {'chatgpt', 'opencode-go', 'opencode-zen', 'claude-code'}:
+            raise ValueError('Choose a ChatGPT, Claude or OpenCode model; JEV is an optional decision model')
         metadata = dict(await chat._validate_provider_model(owner, settings['provider'], settings['model'], settings['profile']))
         chat._selected_reasoning_variant(metadata, settings.get('effort', ''))
         chat._validate_model_service_tier(metadata, settings['provider'], settings.get('service_tier', ''))
         if metadata.get('decision'):
             raise ValueError('The selected model cannot generate optimizer configurations')
-        if settings['provider'] != 'chatgpt' and metadata.get('protocol') not in {'chat', 'responses', 'messages'}:
+        if settings['provider'] == 'claude-code':
+            from ai_claude_code import ClaudeCodeError
+            from ai_chat import AIChatError
+            try:
+                metadata.update(await chat.claude.model_context(owner, settings['model']))
+            except ClaudeCodeError as exc:
+                raise AIChatError(str(exc)) from exc
+            metadata.update(protocol='claude-code', loop_tool_support=True)
+        if settings['provider'] not in {'chatgpt', 'claude-code'} and metadata.get('protocol') not in {'chat', 'responses', 'messages'}:
             raise ValueError('Model does not support native background decisions')
         if settings['provider'] == 'opencode-zen' and not metadata.get('free'):
             cost = metadata.get('cost') or {}

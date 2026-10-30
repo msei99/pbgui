@@ -734,6 +734,7 @@ def test_three_vast_slots_use_frozen_budget_and_reject_fourth(tmp_path, monkeypa
     from secure_files import ensure_private_directory
     from vast_provider import VastError
     from vast_direction_fixtures import direction_config
+    from vast_integrity_fixtures import freeze_test_proof
     store = LoopStore(tmp_path / 'data/loop_optimizer')
     preferences = RentalPreferences(gpu_name='RTX 3060', budget=5, max_rentals=3).model_dump()
     row = store.create(OWNER, settings(execution='vast', vast=preferences), valid_gpu_config(), {}, {'pb8': 'commit'}, [], config()['backtest'])
@@ -744,6 +745,7 @@ def test_three_vast_slots_use_frozen_budget_and_reject_fourth(tmp_path, monkeypa
     folder = ensure_private_directory(directory / 'input')
     write_json(folder / 'optimize.json', direction_config())
     write_json(folder / 'manifest.json', {'config_sha256': digest(folder / 'optimize.json')})
+    freeze_test_proof(jobs, 'b' * 32)
     monkeypatch.setattr(vast_queue, 'PROJECT', tmp_path)
     monkeypatch.setattr(vast_queue, 'preflight_local_metadata', lambda *args: None)
     def start(identifier, offer, hours, budget):
@@ -1570,10 +1572,12 @@ def test_overlapping_progress_watches_have_one_timer():
     script = r"""
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
-const body=source.slice(source.indexOf('  function cancelRentalRead('),source.indexOf('  function mount()'));
+const body=source.slice(source.indexOf('  function settleInitialView('),source.indexOf('  function navigationTiming('))+source.slice(source.indexOf('  function cancelRentalRead('),source.indexOf('  function mount()'));
 const pending=[],rentals=[],timers=new Map(),order=[];let count=0;
 const run={id:'a',settings:{execution:'vast'}},snapshots=new Map();
 const context=vm.createContext({AbortController,performance,Map,Set,Promise,
+ URL,location:{href:'http://localhost/'},auxiliaryBlocked:new Map(),auxiliaryFlights:new Map(),detailFlights:new Map(),detailQueue:[],detailActive:0,
+ uiError:'',uiErrorPanel:'',pollError:'',pollErrorPanel:'',definitionsLoaded:false,renderWorkflow(){},overviewLoaded:false,initialViewWaiters:[],
  timer:null,watchGeneration:0,generation:0,rentalGeneration:0,rentalFlight:null,pollFlight:null,pollAgain:false,pollBlocked:'',stopped:false,
  rows:[],definitions:[],selected:'a',selectedRuns:new Set(['a']),rentalSnapshots:snapshots,
  reportView:'',document:{hidden:false,getElementById:()=>null},window:{state:{}},state:{panel:'loops-queue',navigationSeq:1},loopRenderStarted:0,
@@ -1585,7 +1589,7 @@ const context=vm.createContext({AbortController,performance,Map,Set,Promise,
 });
 vm.runInContext(body,context);
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
-function reply(){assert.equal(pending.length,2);pending.shift().resolve({loops:[run]});pending.shift().resolve({configs:[]});}
+function reply(){assert.equal(pending.length,2);pending.splice(0).forEach(item=>item.resolve(item.path==='/configs'?{configs:[]}:{loops:[run]}));}
 (async()=>{
  const first=context.watch(),second=context.watch();assert.equal(pending.length,2,'one initial fetch pair');
  reply();await first;await second;
@@ -1615,18 +1619,20 @@ def test_slow_rental_reads_survive_regular_polls():
     script = r"""
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
-const body=source.slice(source.indexOf('  function cancelRentalRead('),source.indexOf('  function mount()'));
+const body=source.slice(source.indexOf('  function settleInitialView('),source.indexOf('  function navigationTiming('))+source.slice(source.indexOf('  function cancelRentalRead('),source.indexOf('  function mount()'));
 let clock=0,next=0,rentalRequests=0,aborted=0,rentalRenders=0,loopRenders=0;
 const timers=new Map(),snapshots=new Map(),runs=[{id:'fixture',settings:{execution:'vast'}},{id:'other',settings:{execution:'vast'}}];
 function schedule(fn,delay){timers.set(++next,{fn,due:clock+delay});return next;}
 const context=vm.createContext({AbortController,performance,Map,Set,Promise,
+ URL,location:{href:'http://localhost/'},auxiliaryBlocked:new Map(),auxiliaryFlights:new Map(),detailFlights:new Map(),detailQueue:[],detailActive:0,
+ uiError:'',uiErrorPanel:'',pollError:'',pollErrorPanel:'',definitionsLoaded:false,renderWorkflow(){},overviewLoaded:false,initialViewWaiters:[],
  timer:null,watchGeneration:0,generation:0,rentalGeneration:0,rentalFlight:null,pollFlight:null,pollAgain:false,pollBlocked:'',stopped:false,
  rows:[],definitions:[],selected:'fixture',selectedRuns:new Set(['fixture']),rentalSnapshots:snapshots,
  reportView:'',document:{hidden:false,getElementById:()=>null},window:{state:{}},state:{panel:'loops-queue',navigationSeq:1},loopRenderStarted:null,
  isLoopPanel:()=>true,render(){loopRenders++;},restoreLoopScroll(){},navigationTiming(){},restoreNativeLog:async()=>{},
  rentalRun:()=>runs.find(run=>run.id===context.selected),renderRental(){rentalRenders++;},refreshRentalBilling(){},showMessages(){},forgetRun(){},
  request(path,body,method,options){
-   if(path==='')return Promise.resolve({loops:runs});if(path==='/configs')return Promise.resolve({configs:[]});
+   if(path==='?summary=true')return Promise.resolve({loops:runs});if(path==='/configs')return Promise.resolve({configs:[]});
    const attempt=++rentalRequests;
    return new Promise((resolve,reject)=>{
      const timer=schedule(()=>resolve({rental:{worker_id:'worker-'+attempt}}),5000);
@@ -2405,7 +2411,12 @@ def test_loop_overview_options_do_not_load_or_validate_legacy_sources(tmp_path, 
     def forbidden(*args, **kwargs):
         raise AssertionError('Overview must not prepare a selected config')
 
-    monkeypatch.setattr(opt, 'list_configs', lambda *args, **kwargs: {'configs': [{'name': 'legacy'}]})
+    def names_only(session, *, include_result_summary, include_backtest_counts):
+        assert include_result_summary is False
+        assert include_backtest_counts is False
+        return {'configs': [{'name': 'legacy'}]}
+
+    monkeypatch.setattr(opt, 'list_configs', names_only)
     monkeypatch.setattr(opt, 'get_config', forbidden)
     monkeypatch.setattr(api_loop, '_source_bundle', forbidden)
     monkeypatch.setattr(api_loop, '_controller', SimpleNamespace(backend=SimpleNamespace(initial=forbidden)))

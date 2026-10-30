@@ -6,10 +6,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'js', 'vast.js'), 'utf8');
-const start = source.indexOf('  async function refreshJobs(preferred)');
+const start = source.indexOf('  async function refreshJobs(');
 const end = source.indexOf('  let validationGeneration', start);
 const listenerStart = source.indexOf("  document.addEventListener('visibilitychange'");
-const listenerEnd = source.indexOf("\n  window.addEventListener('pagehide'", listenerStart);
+const listenerEnd = source.indexOf("\n  window.addEventListener('hashchange'", listenerStart);
 assert.ok(start > 0 && end > start && listenerStart > 0 && listenerEnd > listenerStart);
 const pollCode = source.slice(start, end);
 const visibilityCode = source.slice(listenerStart, listenerEnd);
@@ -37,6 +37,9 @@ const context = vm.createContext({
     calibrationWorkerAvailable: false,
     selectedJobId: null,
     stoppingJobs: new Map(),
+    uncertainStops: new Map(),
+    unreadableJobs: [],
+    reconcileExcludedOffers() {},
     clearSecrets() {},
     el() { return null; },
     message() {},

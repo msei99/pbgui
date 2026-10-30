@@ -9,6 +9,91 @@ from playwright.sync_api import expect,sync_playwright
 ROOT=Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize('prefix,width',[('',1400),('/mounted',761),('/mounted',760),('',700)])
+def test_claude_setup_real_menu_connection_probe_and_navigation(prefix,width):
+    """Native subscription controls preserve the real menu, Guide, model and mount."""
+    requests,errors=[],[]
+    selection={'provider':'claude-code','model':'claude-fixture','profile':'default','effort':'','service_tier':''}
+    account={'connected':False,'login':False}
+    with sync_playwright() as driver:
+        browser=driver.chromium.launch()
+        page=browser.new_page(viewport={'width':width,'height':900})
+        page.clock.install()
+        page.on('pageerror',lambda error:errors.append(str(error)))
+        def respond(route):
+            """Use synthetic native login metadata and no external provider traffic."""
+            url=urlparse(route.request.url);path=url.path.removeprefix(prefix)
+            requests.append((route.request.method,path,url.query))
+            if path=='/app/start.html':
+                route.fulfill(content_type='text/html',body='<nav id="topnav"></nav><script>window.PBGUI_BASE_PREFIX='+json.dumps(prefix)+';window.PBGUI_NAV_CONFIG={current:"welcome",authenticated:true};</script><script src="'+prefix+'/app/pbgui_nav.js"></script>')
+            elif path=='/api/ai/main_page':
+                from api.ai import main_page
+                from starlette.requests import Request
+                request=Request({'type':'http','scheme':'http','server':('fixture',80),'root_path':prefix,'path':'/api/ai/main_page','headers':[],'query_string':b''})
+                route.fulfill(content_type='text/html',body=main_page(request,object()).body)
+            elif path.startswith('/app/'):
+                asset=ROOT/'frontend'/path.removeprefix('/app/')
+                route.fulfill(body=asset.read_bytes() if asset.is_file() else b'',content_type='text/css' if asset.suffix=='.css' else 'text/javascript')
+            elif path=='/api/ai/preferences':route.fulfill(json={'selection':selection})
+            elif path=='/api/ai/status':route.fulfill(json={'providers':{'claude-code':{'available':True,'connected':account['connected'],'catalog':['claude-fixture'] if account['connected'] else [],'login':{'id':'fixture-login','active':account['login'],'url':'https://claude.com/cai/oauth/authorize?client_id=fixture' if account['login'] else ''}}}})
+            elif path=='/api/ai/providers/claude-code/connect':
+                account['login']=True;route.fulfill(json={'started':True})
+            elif path=='/api/ai/providers/claude-code/login-code':
+                assert route.request.post_data_json=={'code':'synthetic-one-time-code','login_id':'fixture-login'}
+                account.update(connected=True,login=False);route.fulfill(json={'submitted':True})
+            elif path=='/api/ai/models':route.fulfill(json={'models':[{'id':'claude-fixture','name':'Claude fixture','tools':True}]})
+            elif path=='/api/ai/test-model':
+                assert route.request.post_data_json['provider']=='claude-code'
+                route.fulfill(json={'provider':'claude-code','model':'claude-fixture','reply':'PBGui connection OK','elapsed_seconds':.1,'tools_enabled':False})
+            elif path=='/api/ai/usage':route.fulfill(json={'message':'Subscription usage limits unavailable'})
+            elif path=='/api/ai/conversations':route.fulfill(json={'conversations':[]})
+            elif path=='/api/help/index':route.fulfill(json=[{'file':'45_ai_chat','title':'AI Setup and Chat'}])
+            elif path=='/api/help/content':route.fulfill(json={'content':'# AI Setup and Chat\nClaude subscription.'})
+            elif path.endswith('/stream'):route.fulfill(status=204,body='')
+            else:route.fulfill(json={})
+        page.route('**/*',respond)
+        page.goto('http://claude-setup.test'+prefix+'/app/start.html')
+        page.locator('.nav-group-btn',has_text='Information').click()
+        page.locator('[data-page="info_ai_chat"]').click()
+        page.locator('[data-section="claude-code"]').click()
+        expect(page.locator('#claude-code-status')).to_have_text('Not connected')
+        expect(page.get_by_label('Anthropic API key',exact=True)).to_have_count(0)
+        page.locator('#claude-code-connect').click()
+        expect(page.locator('#claude-code-login-link')).to_have_attribute('href','https://claude.com/cai/oauth/authorize?client_id=fixture')
+        page.locator('#claude-code-login-code').fill('synthetic-one-time-code')
+        page.locator('#claude-code-login-submit').click()
+        expect(page.locator('#claude-code-status')).to_have_text('Connected')
+        expect(page.locator('#claude-code-login-code')).to_have_value('')
+        page.locator('#claude-code-test').click()
+        expect(page.locator('#claude-code-test-result')).to_contain_text('PBGui connection OK')
+        destination=page.url
+        page.locator('#pbgui-guide-btn').click()
+        expect(page.locator('#pbgui-shared-help-ovl')).to_be_visible()
+        assert page.url==destination
+        page.locator('#pbgui-shared-help-close').click()
+        if width>760:
+            handle=page.get_by_role('separator',name='Resize sidebar')
+            for key,size in [('Home',160),('End',420)]:
+                handle.press(key)
+                assert page.locator('#sidebar').bounding_box()['width']==size
+                assert page.locator('#sidebar-inner').evaluate('(n)=>n.scrollWidth<=n.clientWidth')
+        assert page.locator('#main-content').evaluate('(n)=>n.scrollWidth<=n.clientWidth')
+        page.reload()
+        expect(page.locator('[data-view="claude-code"]')).to_be_visible()
+        expect(page.locator('#claude-code-status')).to_have_text('Connected')
+        page.locator('[data-section="models"]').click()
+        expect(page.locator('#provider-select')).to_have_value('claude-code')
+        expect(page.locator('#model-select')).to_have_value('claude-fixture')
+        expect(page.locator('#save-model')).to_be_enabled()
+        page.locator('#open-assistant').click()
+        expect(page.locator('#pai-provider')).to_have_value('claude-code')
+        expect(page.locator('#pai-model')).to_have_value('claude-fixture')
+        expect(page.get_by_role('button',name='Send',exact=True)).to_be_enabled()
+        assert not any('synthetic-one-time-code' in query for _,_,query in requests)
+        assert not errors
+        browser.close()
+
+
 @pytest.mark.parametrize('prefix,width',[('',1400),('/mounted',700)])
 def test_setup_profiles_models_probe_github_and_restoration(prefix,width):
     """Setup preserves location and model edits, shares credentials and never starts chat jobs."""

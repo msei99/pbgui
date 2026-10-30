@@ -48,7 +48,7 @@ const fetch=async()=>{if(failure==='network')throw new Error('offline');return {
 @pytest.mark.parametrize('failure', ['401', '403', '500', '502', 'network'])
 def test_logging_get_failure_does_not_apply_fake_rotation_defaults(failure):
     """HTTP and proxy failures reach the error banner without replacing form values."""
-    code = function('logging_monitor.html', 'apiGet') + function('logging_monitor.html', 'loadRotationSettings')
+    code = function('logging_monitor.html', 'formatApiError') + function('logging_monitor.html', 'apiGet') + function('logging_monitor.html', 'loadRotationSettings')
     execute(code + 'const failure=' + json.dumps(failure) + ';' + r'''
 const assert=require('node:assert/strict');
 const nodes={'per-svc-loading':{style:{}},'per-svc-body':{},'def-max-mb':{value:'77'},'def-backup-count':{value:'4'}};
@@ -115,13 +115,13 @@ async function historyJobAction(){requests++;return new Promise(resolve=>resolve
 @pytest.mark.parametrize('failure',['http','network'])
 def test_rotation_save_reports_failure(kind,failure):
     """Failed rotation writes remain visible and do not discard inputs."""
-    code=function('logging_monitor.html',kind)
+    code=function('logging_monitor.html','formatApiError')+function('logging_monitor.html','rotationValues')+function('logging_monitor.html',kind)
     execute(code+f'const kind={json.dumps(kind)},failure={json.dumps(failure)};'+r'''
-const assert=require('node:assert/strict');const msg={style:{},classList:{add:x=>msg.visible=x}},input={value:'250'};
-const document={getElementById:id=>id.includes('msg')?msg:input};
+const assert=require('node:assert/strict');const msg={dataset:{},style:{},classList:{add:x=>msg.visible=x}},input={value:'250'},copies={value:'4'};
+const document={getElementById:id=>id.includes('msg')?msg:id.includes('-bc-')?copies:input};
 function numberOrDefault(v){return Number(v);}
 const apiPost=async()=>{if(failure==='network')throw new Error('offline');return {success:false,error:'denied'};};
-(async()=>{if(kind==='saveManagedScope')saveManagedScope('scope');else saveService('svc',input,input,msg);await new Promise(setImmediate);assert.match(msg.textContent,/Save failed/);assert.equal(msg.visible,'visible');assert.equal(input.value,'250');})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{if(kind==='saveManagedScope')saveManagedScope('scope');else saveService('svc',input,copies,msg);await new Promise(setImmediate);assert.match(msg.textContent,/Save failed/);assert.equal(msg.visible,'visible');assert.equal(input.value,'250');})().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 
 
@@ -170,9 +170,10 @@ const fetch=async()=>({ok:false,status:500,json:async()=>({detail:'Server failed
 
 def test_service_settings_failure_has_retry():
     """A failed PBData settings load removes the spinner and offers a working retry."""
-    execute(function('services_monitor.html','loadSettings')+r'''
+    execute(function('services_monitor.html','getSettingsDraft')+function('services_monitor.html','releaseSettingsDraft')+function('services_monitor.html','loadSettings')+r'''
+const _settingsDrafts={};
 const assert=require('node:assert/strict');let _settingsLoaded={},_settingsLoading={},calls=0,applied=0;
-const wrap={children:[],replaceChildren(){this.children=[];},append(...children){this.children.push(...children);}};
+const wrap={querySelector(){return null;},addEventListener(){},removeEventListener(){},children:[],replaceChildren(){this.children=[];},append(...children){this.children.push(...children);}};
 const document={getElementById:()=>wrap,createElement:()=>({addEventListener(type,fn){this.click=fn;}})};
 const API_BASE='',authOptions=()=>({});console.error=()=>{};
 const fetch=async()=>{calls++;return {ok:calls>1,json:async()=>({})};};function applySettings(){applied++;}

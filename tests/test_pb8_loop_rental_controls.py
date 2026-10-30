@@ -196,6 +196,33 @@ def test_billing_endpoint_checks_owner_before_provider_access(bound, monkeypatch
     assert error.value.status_code == 404 and calls == [worker_id]
 
 
+@pytest.mark.parametrize('replacement', [False, True])
+def test_rental_status_and_charges_do_not_hydrate_loop_history(bound, monkeypatch, replacement):
+    """Frequent rental reads retain control semantics without loading complete runs."""
+    from api import loop_optimizer_v8 as api
+    store, queue, row, worker_id = bound
+    if replacement:
+        row = store.update(row['owner'], row['id'], lambda value: value.update(
+            gpu_replacement_id='replace', gpu_replacements={'replace': {'step': 'transfer'}}))
+    expected = rental_snapshot(queue, row)
+    original = store.read
+
+    def read(owner, loop_id, **kwargs):
+        """Reject the expensive full-record path rather than merely timing a tiny fixture."""
+        assert kwargs.get('fields') and not {'jobs', 'history', 'initial_config'} & kwargs['fields']
+        return original(owner, loop_id, **kwargs)
+
+    monkeypatch.setattr(store, 'read', read)
+    monkeypatch.setattr(api, '_controller', SimpleNamespace(store=store))
+    monkeypatch.setattr(api, '_owner', lambda session: row['owner'])
+    monkeypatch.setattr('vast_queue.CloudQueue', lambda: queue)
+    monkeypatch.setattr('vast_billing.instance_charges', lambda *args: None)
+    response = asyncio.run(api.loop_rental(row['id'], session=None))
+    assert json.loads(response.body) == {'rental': expected}
+    response = asyncio.run(api.loop_rental_charges(row['id'], session=None))
+    assert json.loads(response.body) == {'worker_id': worker_id, 'billing': None}
+
+
 def test_budget_endpoint_preserves_conflict_status(bound, monkeypatch):
     """The browser receives an actionable conflict instead of a generic server error."""
     from api import loop_optimizer_v8 as api

@@ -69,6 +69,8 @@ def test_queue_settings_and_five_vast_views_are_separate(cloud_page):
         const p = document.createElement('div');p.id='panel-'+name;p.className='view-panel';document.body.append(p);
       }
       window.syncQueueSettingsModalFields = () => {};
+      window.scheduleOptimizeConfigs = () => {};
+      window.loadSettings = async () => {};
       window.refreshLiveResultsDuringRun = window.restoreSelectedOptimizeResultWhenReady = async () => {};
       window.handleError = e => {throw e;};
       window.setPanel = (0,eval)('(' + SWITCHER + ')');

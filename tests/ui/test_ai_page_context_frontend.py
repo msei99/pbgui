@@ -59,7 +59,9 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     assert "tryLocalCommand" in NAV
     assert "descriptor.context ? 0 : 1" in NAV
     assert "candidates.slice(0, 2048)" in NAV
-    assert "JSON.stringify(context).length > 256 * 1024" in NAV
+    assert "var byteLimit = 256 * 1024" in NAV
+    assert "new TextEncoder()" in NAV
+    assert "encoder.encode(JSON.stringify(context)).byteLength" in NAV
     assert "rect.bottom >= 0" not in NAV
     assert "descriptor.name = controlContext ? controlContext + ' :: ' + label : label" in NAV
     assert "var selector = 'body *'" in NAV

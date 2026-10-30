@@ -18,11 +18,13 @@ import secrets
 import signal
 import shutil
 import socket
+import stat
 import subprocess
 import threading
 import time
 import traceback
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from shutil import rmtree, which
@@ -91,6 +93,39 @@ from secure_files import atomic_write_private_text
 
 SERVICE = "BacktestV8"
 router = APIRouter()
+_result_path_snapshots = OrderedDict()
+_result_path_snapshot_lock = threading.Lock()
+
+
+def _result_page_paths(name, snapshot, session):
+    """Keep one bounded, owner-bound discovery snapshot for a browser's page sequence."""
+    if snapshot and snapshot != 'new' and not re.fullmatch(r'[0-9a-f]{32}', snapshot):
+        raise HTTPException(422, 'Invalid result page snapshot')
+    identity = (str(getattr(session, 'user_id', '')), str(_results_root().resolve()), name or '')
+    now = time.monotonic()
+    with _result_path_snapshot_lock:
+        for key, entry in list(_result_path_snapshots.items()):
+            if entry['expires'] <= now:
+                _result_path_snapshots.pop(key)
+        if snapshot and snapshot != 'new':
+            cached = _result_path_snapshots.get(snapshot)
+            if cached is None or cached['identity'] != identity:
+                raise HTTPException(409, 'Result pages expired; reload the current result list.')
+            cached['expires'] = min(now + 60, cached['created'] + 180)
+            _result_path_snapshots.move_to_end(snapshot)
+            return cached['paths'], snapshot
+    paths = _result_analysis_paths(name)
+    if snapshot != 'new' or len(paths) > 40000:
+        return paths, None
+    token = uuid.uuid4().hex
+    with _result_path_snapshot_lock:
+        while _result_path_snapshots and (len(_result_path_snapshots) >= 8
+                or sum(len(entry['paths']) for entry in _result_path_snapshots.values()) + len(paths) > 40000):
+            _result_path_snapshots.popitem(last=False)
+        created = time.monotonic()
+        _result_path_snapshots[token] = {'identity': identity, 'paths': tuple(paths),
+            'created': created, 'expires': created + 60}
+    return paths, token
 
 
 @router.get("/scenario-templates")
@@ -1113,8 +1148,55 @@ def _queue_status(data: dict) -> tuple[str, Optional[int]]:
     return ("error" if data.get("started_at") is not None else "queued"), int(record["pid"]) if record else None
 
 
+_queue_item_cache = OrderedDict()
+_queue_item_cache_lock = threading.RLock()
+_queue_item_cache_size = 0
+_QUEUE_ITEM_CACHE_BYTES = 4 * 1024 * 1024
+_QUEUE_ITEM_CACHE_TTL = 30
+
+
+def _clear_queue_item_cache():
+    """Release API-owned immutable queue summaries at shutdown."""
+    global _queue_item_cache_size
+    with _queue_item_cache_lock:
+        _queue_item_cache.clear()
+        _queue_item_cache_size = 0
+
+
+def _queue_item_stamp(path):
+    """Revalidate all status sources without following substituted symlinks."""
+    state_dir = path.parent / 'state'
+    if state_dir.is_symlink():
+        raise RuntimeError('Managed queue state directory must not be a symlink')
+    stamps = []
+    for source in (path, path.with_suffix('.pid'), state_dir / path.name):
+        try:
+            identity = source.lstat()
+        except FileNotFoundError:
+            stamps.append(None)
+            continue
+        if not stat.S_ISREG(identity.st_mode):
+            raise RuntimeError('Managed queue status source must be a regular file')
+        stamps.append((identity.st_dev, identity.st_ino, identity.st_size, identity.st_mtime_ns, identity.st_ctime_ns))
+    return tuple(stamps)
+
+
 def _queue_item(path: Path) -> dict:
+    global _queue_item_cache_size
     path = _safe_path(path, _queue_dir())
+    stamp = _queue_item_stamp(path)
+    with _queue_item_cache_lock:
+        cached = _queue_item_cache.get(path)
+        if cached and (cached[0] != stamp or cached[3] <= time.monotonic()):
+            _queue_item_cache.pop(path)
+            _queue_item_cache_size -= len(cached[1])
+            cached = None
+    if cached and (cached[2] is None or not psutil.pid_exists(cached[2])):
+        with _queue_item_cache_lock:
+            if _queue_item_cache.get(path) is cached:
+                _queue_item_cache.move_to_end(path)
+                _queue_item_cache[path] = (*cached[:3], time.monotonic() + _QUEUE_ITEM_CACHE_TTL)
+        return json.loads(cached[1])
     data = _read_json(path)
     filename = str(data.get("filename") or path.stem)
     if filename != path.stem:
@@ -1122,7 +1204,7 @@ def _queue_item(path: Path) -> dict:
     _validate_name(filename)
     _validate_name(str(data.get("name") or ""))
     status, pid = _queue_status({**data, "filename": filename})
-    return {
+    item = {
         "filename": filename,
         "loop_id": data.get("loop_id"),
         "name": str(data.get("name") or filename),
@@ -1134,6 +1216,20 @@ def _queue_item(path: Path) -> dict:
         "pb8_version": data.get("pb8_version") or "",
         "pb8_commit": data.get("pb8_commit") or "",
     }
+    if status in {'complete', 'error', 'stopped'} and (pid is None or not psutil.pid_exists(pid)):
+        content = json.dumps(item, separators=(',', ':'), allow_nan=False).encode()
+        if len(content) <= _QUEUE_ITEM_CACHE_BYTES // 2 and _queue_item_stamp(path) == stamp:
+            with _queue_item_cache_lock:
+                old = _queue_item_cache.pop(path, None)
+                if old:
+                    _queue_item_cache_size -= len(old[1])
+                while _queue_item_cache and (len(_queue_item_cache) >= 4096
+                        or _queue_item_cache_size + len(content) > _QUEUE_ITEM_CACHE_BYTES):
+                    _, removed = _queue_item_cache.popitem(last=False)
+                    _queue_item_cache_size -= len(removed[1])
+                _queue_item_cache[path] = (stamp, content, pid, time.monotonic() + _QUEUE_ITEM_CACHE_TTL)
+                _queue_item_cache_size += len(content)
+    return item
 
 
 def _load_queue() -> list[dict]:
@@ -1810,7 +1906,7 @@ class BacktestV8Worker:
         task = self._task
         if task is None:
             return
-        if not task.done():
+        if not task.done() and not task.cancelling():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         if self._task is task:
@@ -1833,7 +1929,15 @@ class BacktestV8Worker:
                     await asyncio.sleep(5)
                     continue
                 cpu_limit = _cpu_limit(settings)
-                items = _load_queue()
+                # A large retained Loop queue may take seconds to inspect. Keep
+                # filesystem/PID probes off the API event loop, and join a started
+                # read before shutdown so it cannot outlive this controller.
+                scan = asyncio.create_task(asyncio.to_thread(_load_queue), name="backtest-v8-queue-scan")
+                try:
+                    items = await asyncio.shield(scan)
+                except asyncio.CancelledError:
+                    await asyncio.gather(scan, return_exceptions=True)
+                    raise
                 running = sum(item["status"] == "running" for item in items)
                 for item in items:
                     if item["status"] != "queued" or item.get("loop_id") or running >= cpu_limit:
@@ -2037,6 +2141,9 @@ def startup() -> None:
 async def shutdown() -> None:
     """Stop only the controller; detached PB8 backtests remain running."""
     await asyncio.gather(_worker.stop(), _batch_submitter.stop(), return_exceptions=True)
+    _clear_queue_item_cache()
+    with _result_path_snapshot_lock:
+        _result_path_snapshots.clear()
 
 
 @router.get("/main_page", response_class=HTMLResponse)
@@ -3002,10 +3109,11 @@ def get_results(
     offset: int = 0,
     limit: int = 0,
     session: SessionToken = Depends(require_auth),
+    snapshot: str = '',
 ) -> dict:
     if offset < 0 or limit < 0 or limit > 100:
         raise HTTPException(status_code=422, detail="offset must be non-negative and limit must be between 0 and 100")
-    paths = _result_analysis_paths(name)
+    paths, snapshot = _result_page_paths(name, snapshot, session)
     page_paths = paths[offset:] if limit == 0 else paths[offset : offset + limit]
     next_offset = offset + len(page_paths)
     return {
@@ -3022,6 +3130,7 @@ def get_results(
             "returned": len(page_paths),
             "has_more": next_offset < len(paths),
             "next_offset": next_offset,
+            **({'snapshot': snapshot} if snapshot else {}),
         },
     }
 

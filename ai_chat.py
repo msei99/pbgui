@@ -19,6 +19,8 @@ from uuid import uuid4
 
 import aiohttp
 
+from ai_claude_code import ClaudeCodeError, ClaudeRuntime
+
 from ai_openrouter import DEFAULT_JEV_BUDGET_USD, JEV_MODEL, OPENROUTER_API, OpenRouterDecisionError, _user_options, decide_backtest_candidates, decide_backtest_results, decide_general_choice, decide_user_jev_request, parse_structured_jev_request, prepare_user_jev_payload
 
 from ai_capabilities import (
@@ -1336,6 +1338,8 @@ class AIChatService:
         self.credentials = AICredentialStore(self.root / "credentials")
         self.http: aiohttp.ClientSession | None = None
         self.codex: dict[str, CodexRuntime] = {}
+        self.claude = ClaudeRuntime(self.root / "claude")
+        self.claude_live: dict[str, list[dict[str, Any]]] = {}
         self.conversations: dict[str, Conversation] = {}
         self.active_tasks: dict[str, asyncio.Task] = {}
         self.jev_previews: dict[str, dict[str, Any]] = {}
@@ -1369,7 +1373,7 @@ class AIChatService:
     async def shutdown(self) -> None:
         """Cancel active chats and close all provider resources."""
         self.accepting_turns = False
-        await self.research.shutdown()
+        await asyncio.gather(self.research.shutdown(), return_exceptions=True)
         tasks = list(self.active_tasks.values())
         if self.reaper_task is not None and not self.reaper_task.done():
             self.reaper_task.cancel()
@@ -1388,6 +1392,8 @@ class AIChatService:
         if runtimes:
             await asyncio.gather(*(runtime.close() for runtime in runtimes), return_exceptions=True)
         self.codex.clear()
+        await self.claude.close()
+        self.claude_live.clear()
         if self.http is not None:
             await self.http.close()
             self.http = None
@@ -1497,12 +1503,16 @@ class AIChatService:
                 "opencode-zen": {"available": True, "connected": self.credentials.configured(owner)},
                 "opencode-go": {"available": True, "connected": self.credentials.configured(owner)},
                 "openrouter": {"available": True, "connected": self.credentials.openrouter_configured(owner)},
+                "claude-code": await self.claude.status(owner),
             },
             "capabilities": {"chat_only": False, "pbgui_tools": True},
         }
 
     async def usage(self, owner: str, provider: str, profile: str = "default") -> dict[str, Any]:
         """Read provider-reported usage only, without exposing credentials."""
+        if provider == "claude-code":
+            return {"provider": provider, **await self.claude.status(owner), "limits": [],
+                    "message": "Subscription usage limits are not reported by Claude Code."}
         if provider == "chatgpt":
             status = await self.status(owner, profile)
             info = status["providers"]["chatgpt"]
@@ -1704,6 +1714,11 @@ class AIChatService:
 
     async def models(self, owner: str, provider: str, profile: str = "default") -> list[dict[str, Any]]:
         """Return account-visible models supported by the native adapters."""
+        if provider == "claude-code":
+            try:
+                return await self.claude.models(owner)
+            except ClaudeCodeError as exc:
+                raise AIChatError(str(exc)) from exc
         if provider == "openrouter":
             if not self.credentials.openrouter_configured(owner):
                 raise AIChatError("OpenRouter is not connected")
@@ -1752,11 +1767,12 @@ class AIChatService:
         operation: Any,
     ) -> str:
         """Retry one transient timeout only for a hidden post-approval continuation."""
-
         try:
             return await operation()
         except AIChatError as exc:
             detail = str(exc).lower()
+            if self.conversations.get(conversation_id) is not None and self.conversations[conversation_id].provider == "claude-code":
+                raise
             if not (pending_user and pending_user.get("hidden")) or (
                 "timed out" not in detail and "timeout" not in detail
             ):
@@ -1948,7 +1964,7 @@ class AIChatService:
                                     proposal=new_proposal,
                                     ui_action=new_ui_action,
                                 )
-                elif provider in (*_OPENCODE_PROVIDERS, "openrouter"):
+                elif provider in (*_OPENCODE_PROVIDERS, "openrouter", "claude-code"):
                     current_user = pending_user
                     if pending_user is None:
                         current_user = {
@@ -1973,7 +1989,8 @@ class AIChatService:
                                 owner,
                                 conversation.id,
                                 pending_user,
-                                lambda: self._openrouter_jev_chat(
+                                lambda: self._claude_chat(owner, model, provider_history, conversation.id, clean_effort)
+                                if provider == "claude-code" else self._openrouter_jev_chat(
                                     owner, model, clean_message, conversation.context, conversation.id, _jev_payload
                                 ) if provider == "openrouter" else self._go_chat(
                                     owner, model, provider_history, provider, conversation.id, clean_effort,
@@ -1999,7 +2016,7 @@ class AIChatService:
                     [
                         *(
                             []
-                            if provider in _OPENCODE_PROVIDERS or provider == "openrouter" or pending_user is not None
+                            if provider in _OPENCODE_PROVIDERS or provider in {"openrouter", "claude-code"} or pending_user is not None
                             else [
                                 {
                                     "role": "user",
@@ -2035,6 +2052,7 @@ class AIChatService:
             finally:
                 self.jev_user_requests.pop(conversation.id, None)
                 self.active_tasks.pop(conversation.id, None)
+                self.claude_live.pop(conversation.id, None)
                 runtime_stopped = runtime is not None and (
                     runtime.process is None
                     or getattr(runtime.process, "returncode", None) is not None
@@ -2332,7 +2350,7 @@ class AIChatService:
             if not isinstance(value, str) or len(value) > limit or any(ord(char) < 32 for char in value):
                 raise AIChatError("Invalid AI model selection")
             result[key] = value
-        if result["provider"] not in {"chatgpt", "opencode-go", "opencode-zen", "openrouter"} or not result["model"]:
+        if result["provider"] not in {"chatgpt", "opencode-go", "opencode-zen", "openrouter", "claude-code"} or not result["model"]:
             raise AIChatError("Invalid AI model selection")
         return result
 
@@ -2553,14 +2571,16 @@ class AIChatService:
         if not self.accepting_turns:
             raise AIChatError("AI runtime is shutting down")
         await self._ensure_owner_loaded(owner)
+        existing = self._owned_conversation(owner, conversation_id)
+        selected_provider = str(provider or existing.provider).strip()
         clean_message = self._validate_message(message)
+        if selected_provider == "claude-code" and (images or any(item.get("images") for item in existing.messages)):
+            raise AIChatError("Claude currently accepts text only. Select an image-capable provider for images.")
         from support_debug_crypto import decoded_screenshots
         try:
             decoded_screenshots({"screenshots": images or []})
         except ValueError as exc:
             raise AIChatError(str(exc)) from exc
-        existing = self._owned_conversation(owner, conversation_id)
-        selected_provider = str(provider or existing.provider).strip()
         if selected_provider == "openrouter" and (images or any(item.get("images") for item in existing.messages)):
             raise AIChatError("Jev does not accept images. Select ChatGPT or an image-capable OpenCode model.")
         provider_changed = selected_provider != existing.provider
@@ -2569,7 +2589,7 @@ class AIChatService:
         selected_model_id = str(model or existing.model).strip()
         model_changed = selected_model_id != existing.model
         selected_model = None
-        if provider_changed or model_changed or effort is not None or service_tier is not None:
+        if provider_changed or model_changed or effort is not None or service_tier is not None or selected_provider == "claude-code":
             selected_model = await self._validate_provider_model(
                 owner, selected_provider, selected_model_id, **({"profile": existing.chatgpt_profile} if existing.chatgpt_profile != "default" else {})
             )
@@ -2679,8 +2699,8 @@ class AIChatService:
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist one browser-completed UI action without contacting a provider."""
-        self.analysis_policy.require_action_context(owner, conversation_id)
         await self._ensure_owner_loaded(owner)
+        self.analysis_policy.require_action_context(owner, conversation_id)
         clean_message = self._validate_message(message)
         async with self.state_lock:
             conversation = self._owned_conversation(owner, conversation_id)
@@ -3101,7 +3121,7 @@ class AIChatService:
                     safe_focused[key] = value
             if safe_focused:
                 result["focused_field"] = safe_focused
-        if len(json.dumps(result, allow_nan=False).encode("utf-8")) > 300 * 1024:
+        if len(json.dumps(result, allow_nan=False, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 300 * 1024:
             raise AIChatError("Page context is too large")
         return result
 
@@ -3126,6 +3146,8 @@ class AIChatService:
                         if conversation.activity_history else time.time())
         live_messages = (getattr(runtime, "live_messages", {}).get(conversation.codex_thread_id, [])
                          if conversation.busy and conversation.provider == "chatgpt" else [])
+        if conversation.busy and conversation.provider == "claude-code":
+            live_messages = self.claude_live.get(conversation.id, [])
         payload = {
             "conversation_id": conversation.id,
             "title": conversation.title,
@@ -3487,6 +3509,56 @@ class AIChatService:
         } if isinstance(tiers, list) else set()
         if service_tier not in supported:
             raise AIChatError("Selected AI model does not support this speed")
+
+    async def _claude_reply(self, owner, model, history, instructions, **kwargs):
+        """Use the same owner-scoped subscription transport for isolated calls."""
+        try:
+            return await self.claude.reply(owner, model, history, instructions, **kwargs)
+        except ClaudeCodeError as exc:
+            raise AIChatError(str(exc)) from exc
+
+    async def _claude_chat(self, owner, model, history, conversation_id, effort=""):
+        """Dispatch Claude tools through existing PBGui checks and proposal approvals."""
+        tools = _tools_for_openrouter_connection(self.capabilities.messages_tools(), self.credentials.openrouter_configured(owner))
+        allowed = {item["name"] for item in tools}
+        seen_requests = {}
+        new_segment = True
+        async def handler(name, arguments):
+            """Never accept model-provided account or conversation authority."""
+            nonlocal new_segment
+            self._owned_conversation(owner, conversation_id)
+            if name not in allowed:
+                raise AIChatError("Claude requested an unsupported capability")
+            result = await self._agent_capability_result(owner, conversation_id, name, arguments, seen_requests)
+            new_segment = True
+            return result
+        async def stream(text):
+            """Project partial text without saving it as a completed response."""
+            nonlocal new_segment
+            entries = self.claude_live.setdefault(conversation_id, [])
+            if entries and not new_segment:
+                entries[-1]["content"] = (entries[-1]["content"] + text)[:_MAX_REPLY_CHARS]
+            else:
+                entries.append({"content": text, "timestamp": time.time()})
+            new_segment = False
+        self.claude_live[conversation_id] = []
+        return await self._claude_reply(owner, model, history, _agent_rules(),
+            tools=tools, handler=handler, on_text=stream, effort=effort)
+
+    async def disconnect_claude(self, owner):
+        """Stop this owner's Claude turns before logging out the native account."""
+        async with self._provider_lock(owner, "claude-code"):
+            key = self._provider_state_key(owner, "claude-code")
+            self.provider_disconnecting.add(key)
+            try:
+                for conversation in list(self.conversations.values()):
+                    if conversation.owner == owner and conversation.provider == "claude-code" and conversation.busy:
+                        await self.cancel(owner, conversation.id)
+                await self.claude.logout(owner)
+            except ClaudeCodeError as exc:
+                raise AIChatError(str(exc)) from exc
+            finally:
+                self.provider_disconnecting.discard(key)
 
     async def _openrouter_jev_chat(
         self, owner: str, model: str, message: str, context: dict[str, Any], conversation_id: str,

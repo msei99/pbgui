@@ -20,13 +20,15 @@ def review_page(request):
         'preview': {'action': 'reviewed_config_change', 'name': 'test', 'version': 'v8', 'kind': 'backtest',
             'mode': 'save', 'effect': 'Save config only', 'changed_count': 1,
             'changes': [{'path': 'live.approved_coins.long', 'kind': 'removed', 'before': 'ETH'}]}}
-    if getattr(request, 'param', '') == 'loop':
+    if getattr(request, 'param', '') in {'loop', 'loop_run'}:
         proposal['preview'] = {'action': 'save_ai_loop_config', 'name': 'HYPE_loop',
             'effect': 'Save an owned AI Loop definition only. No jobs or rentals are started.',
             'changed_count': 3, 'changes': [
                 {'path': 'max_runs', 'kind': 'added', 'after': 25},
                 {'path': 'run_proxy', 'kind': 'added', 'after': 100000},
                 {'path': 'goals', 'kind': 'added', 'after': {'text': 'Keep exact_gain and HSL unchanged. ' * 40}}]}
+        if request.param == 'loop_run':
+            proposal['preview'].update(action='run_ai_loop', effect='Start the saved Loop within the reviewed limits.')
     pending = [proposal]
     calls, errors = [], []
     with sync_playwright() as driver:
@@ -133,4 +135,56 @@ def test_loop_review_names_settings_and_save_effect(review_page, surface):
     expect(dialog.get_by_text('Keep exact_gain and HSL unchanged. ', exact=False).first).not_to_be_visible()
     dialog.get_by_text('Show full text', exact=True).click()
     expect(dialog.locator('.pai-change-value').filter(has_text='Keep exact_gain').last).to_be_visible()
+    assert calls == []
+
+
+@pytest.mark.parametrize('review_page', ['loop_run'], indirect=True)
+@pytest.mark.parametrize('surface', ['drawer', 'page'])
+@pytest.mark.parametrize('outcome', ['executed', 'failed'])
+def test_confirmed_review_hides_while_approval_response_is_pending(review_page, surface, outcome):
+    """Real CSS must hide confirmed cards before a delayed native response, and recover failures."""
+    page, calls = review_page
+    pending_requests = []
+    page.route('**/api/ai/proposals/*/approve', lambda route: pending_requests.append(route))
+    if surface == 'page':
+        page.locator('.nav-group-btn', has_text='Information').click()
+        page.locator('.nav-item[data-page="info_ai_chat"]').click()
+    page.locator('#pbgui-ai-btn').click()
+    page.locator('.pai-compose textarea').fill('Keep this draft')
+    page.get_by_role('button', name='Review changes', exact=True).click()
+    page.locator('.pai-review-dialog').get_by_role('button', name='Approve', exact=True).click()
+    confirm = page.locator('#pbgui-dialog-ovl')
+    expect(confirm).to_be_visible()
+    confirm.get_by_role('button', name='Approve', exact=True).click()
+    expect(confirm).not_to_be_visible()
+    expect(page.locator('.pai-status')).to_have_text('Applying approved action...')
+    assert len(pending_requests) == 1
+    # This check runs while the POST is deliberately held, not after its reply.
+    expect(page.get_by_role('button', name='Review changes', exact=True)).not_to_be_visible()
+    expect(page.locator('.pai-proposal')).not_to_be_visible()
+    expect(page.locator('.pai-compose textarea')).to_have_value('Keep this draft')
+    assert page.locator('link[href$="/app/css/ai_drawer.css?v=28"]').count() == 1
+    if outcome == 'executed':
+        page.route('**/api/ai/proposals?**', lambda route: route.fulfill(json={'proposals': []}))
+        pending_requests[0].fulfill(json={'status': 'executed', 'action': 'run_ai_loop'})
+        expect(page.locator('.pai-status')).to_have_text('Approved action completed.')
+        expect(page.get_by_role('button', name='Review changes', exact=True)).to_have_count(0)
+    else:
+        pending_requests[0].fulfill(status=409, json={'detail': 'Loop definition changed since review'})
+        expect(page.locator('.pai-status')).to_contain_text('Loop definition changed since review')
+        expect(page.get_by_role('button', name='Review changes', exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name='Review changes', exact=True)).to_be_enabled()
+    assert len(pending_requests) == 1 and calls == []
+
+
+@pytest.mark.parametrize('review_page', ['loop_run'], indirect=True)
+def test_cancelled_confirmation_restores_the_pending_review(review_page):
+    """Cancelling the confirmation restores its card without any approval request."""
+    page, calls = review_page
+    page.locator('#pbgui-ai-btn').click()
+    page.get_by_role('button', name='Review changes', exact=True).click()
+    page.locator('.pai-review-dialog').get_by_role('button', name='Approve', exact=True).click()
+    page.locator('#pbgui-dialog-ovl').get_by_role('button', name='Cancel', exact=True).click()
+    expect(page.get_by_role('button', name='Review changes', exact=True)).to_be_visible()
+    expect(page.get_by_role('button', name='Review changes', exact=True)).to_be_enabled()
     assert calls == []

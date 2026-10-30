@@ -398,6 +398,8 @@ def test_save_and_queue_navigates_before_slow_jobs_refresh(cloud_page):
       window.editorVisible = () => true;
       window.ensureRawJsonValidForSave = () => true;
       window.ensureStructuredJsonFieldsValidForSave = () => true;
+      window.cancelOptimizeEditorSync = () => {};
+      window.reconcileOptimizeEditorSync = async () => {};
       window.collectEditorConfig = () => ({name:'test', config:{pbgui:{execution:'vast'}, optimize:{backend:'gpu',iters:100,n_cpus:4,gpu:{population_size:4096,batch_size:4096,max_dispatch_candidate_bars:1000000000}}}});
       window.setPageEditorStatus = text => {window.saveStatus=text;};
       window.apiFetch = () => new Promise(resolve => {window.finishSave=resolve;});

@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import sqlite3
+import stat
 import threading
 from pathlib import Path
 from typing import Callable
@@ -66,8 +67,8 @@ def _connect() -> sqlite3.Connection:
 def _file_signature(path: Path) -> tuple[int, int, int]:
     """Return a cheap identity tuple for one regular file."""
     try:
-        stat_result = path.stat()
-        if path.is_symlink() or not path.is_file():
+        stat_result = path.lstat()
+        if not stat.S_ISREG(stat_result.st_mode):
             return (0, 0, 0)
         return (int(stat_result.st_ino or 0), int(stat_result.st_size), int(stat_result.st_mtime_ns))
     except OSError:
@@ -109,13 +110,18 @@ def load_indexed_results(
             with advisory_file_lock(db_path):
                 connection = _connect()
                 try:
-                    cached = {
-                        str(row[0]): {"signature": str(row[1]), "payload": str(row[2])}
-                        for row in connection.execute(
-                            "SELECT result_path, signature, payload FROM result_summaries WHERE version = ?",
-                            (normalized_version,),
-                        )
-                    }
+                    cached = {}
+                    selected_paths = list(signatures)
+                    for start in range(0, len(selected_paths), 200):
+                        batch = selected_paths[start:start + 200]
+                        cached.update({
+                            str(row[0]): {"signature": str(row[1]), "payload": str(row[2])}
+                            for row in connection.execute(
+                                "SELECT result_path, signature, payload FROM result_summaries WHERE version = ? "
+                                + "AND result_path IN (" + ','.join('?' for _ in batch) + ")",
+                                (normalized_version, *batch),
+                            )
+                        })
                     payloads: dict[str, dict] = {}
                     missing = []
                     for analysis_path in paths:
@@ -159,7 +165,9 @@ def load_indexed_results(
                             ),
                         )
                     if prune_missing:
-                        stale = [path for path in cached if path not in signatures]
+                        stale = [str(row[0]) for row in connection.execute(
+                            'SELECT result_path FROM result_summaries WHERE version = ?', (normalized_version,))
+                            if str(row[0]) not in signatures]
                         if stale:
                             connection.executemany(
                                 "DELETE FROM result_summaries WHERE version = ? AND result_path = ?",

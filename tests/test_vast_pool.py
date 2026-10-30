@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from secure_files import ensure_private_directory
 from vast_jobs import JobStore, IMAGE, REVISION, write_json
 from vast_direction_fixtures import direction_config
+from vast_integrity_fixtures import freeze_test_proof
 from vast_provider import VastError
 from vast_queue import CloudQueue, worker_step
 import vast_pool as pool
@@ -28,6 +29,7 @@ def add_row(queue, number, *, worker=False, **changes):
     if not worker:
         ensure_private_directory(directory / 'input')
         write_json(directory / 'input/optimize.json', direction_config())
+        freeze_test_proof(queue.store, identifier)
     return identifier
 
 
@@ -102,6 +104,7 @@ def test_old_idle_rental_cannot_hide_new_job_capacity_and_mixed_queue_reuses_bot
     config = queue.store.read(new_job, 'input/optimize.json')
     config['bot']['long'].setdefault('hsl', {})['scale_budget_with_excess_allowance'] = True
     write_json(queue.store.directory(new_job) / 'input/optimize.json', config)
+    freeze_test_proof(queue.store, new_job)
     old_worker = add_row(queue, 1, worker=True)
     write_json(queue.store.directory(old_worker) / "intent.json", {
         "image": "ghcr.io/msei99/pbgui-pb8-worker@sha256:47032b1e42076555a29909a9b888cd24efb69dec6ccd80d06ac26b0bc653ac99",

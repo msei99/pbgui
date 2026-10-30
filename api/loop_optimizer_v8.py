@@ -6,6 +6,7 @@ import copy
 from collections import OrderedDict
 import math
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -32,12 +33,79 @@ _list_cache = OrderedDict()
 _list_cache_lock = threading.RLock()
 _LIST_CACHE_BYTES = 8 * 1024 * 1024
 _LIST_CACHE_TTL = 30
+_DETAIL_CACHE_TTL = 300
+_DISPLAY_FIELDS = frozenset({
+    'id', 'owner', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at', 'reason',
+    'last_error', 'failure', 'holdout_retryable', 'stop_reason', 'continuation', 'interpretation',
+    'rubric', 'history', 'bootstrap', 'ai_calls', 'ai_tokens_reserved', 'ai_usd_reserved',
+    'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover',
+    'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview',
+    'ai_preview', 'control_generation', 'gpu_replacements', 'gpu_replacement_id',
+    'initial_config', 'initial_overrides', 'interrupted_ai', 'settings', 'fingerprint',
+    'jobs', 'observations', 'observer_jobs', 'observer_enabled', 'observer_holdouts',
+    'training_exclusions', 'holdouts', 'final_holdout_policy', 'final_validation_status',
+    'comparison', 'baseline', 'final_validation', 'best', 'bootstrap_jev_answers', 'jev_answers',
+    'cleanup_done',
+})
+_OVERVIEW_FIELDS = frozenset({
+    'id', 'owner', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at',
+    'deadline', 'settings', 'control_generation', 'reason', 'last_error',
+})
+_RENTAL_FIELDS = frozenset({
+    'id', 'owner', 'status', 'deadline', 'gpu_replacements', 'gpu_replacement_id',
+    'rental_extension', 'rental_extension_error',
+})
 
 
 def _clear_list_cache():
     """Release owner-scoped serialized rows when the API shuts down."""
     with _list_cache_lock:
         _list_cache.clear()
+
+
+def _overview_response(owner):
+    """Return navigation/status independently of report/history projection or its cache."""
+    store = _controller.store
+    rows = []
+    with _list_cache_lock:
+        now = time.monotonic()
+        for key, entry in list(_list_cache.items()):
+            if entry[3] <= now:
+                _list_cache.pop(key)
+    for path in store.owner_dir(owner).glob('*.json'):
+        if not re.fullmatch(r'[a-f0-9]{32}', path.stem):
+            continue
+        try:
+            stamp = store._read_stamp(path)
+            key = (path.absolute(), _overview_response)
+            with _list_cache_lock:
+                cached = _list_cache.get(key)
+                if cached is not None and cached[0] == stamp:
+                    _list_cache.move_to_end(key)
+                    _list_cache[key] = (*cached[:3], time.monotonic() + _LIST_CACHE_TTL)
+                    rows.append((cached[1], cached[2]))
+                    continue
+            row = store.read(owner, path.stem, fields=_OVERVIEW_FIELDS,
+                             settings_fields={'config_name', 'loop_name', 'execution'})
+            value = {name: value for name, value in row.items() if name not in {'owner', '_view_revision'}} | {
+                'view_revision': row['_view_revision'], 'summary_only': True,
+                'name': row['settings'].get('loop_name') or row['settings']['config_name'],
+                'ended': row['status'] in TERMINAL, 'deletable': False,
+                'jobs': [], 'observer_jobs': [], 'history': [], 'cycles': [], 'best': None,
+            }
+            content = JSONResponse(value).body
+            rows.append((row['created_at'], content))
+            with _list_cache_lock:
+                if len(content) <= _LIST_CACHE_BYTES // 2 and store._read_stamp(path) == stamp:
+                    _list_cache.pop(key, None)
+                    while _list_cache and (len(_list_cache) >= 128 or sum(len(item[2]) for item in _list_cache.values()) + len(content) > _LIST_CACHE_BYTES):
+                        _list_cache.popitem(last=False)
+                    _list_cache[key] = (stamp, row['created_at'], content, time.monotonic() + _LIST_CACHE_TTL)
+        except (OSError, ValueError) as exc:
+            _log(SERVICE, f'Cannot read loop overview {path.name}: {type(exc).__name__}', level='WARNING')
+    rows.sort(key=lambda row: row[0], reverse=True)
+    return Response(content=b'{"loops":[' + b','.join(row[1] for row in rows) + b']}',
+                    media_type='application/json', headers={'Cache-Control': 'no-store'})
 
 
 def _list_response(owner):
@@ -50,29 +118,33 @@ def _list_response(owner):
         for key, entry in list(_list_cache.items()):
             if entry[3] <= now:
                 _list_cache.pop(key)
-        for path in directory.glob('*.json'):
-            if not re.fullmatch(r'[a-f0-9]{32}', path.stem):
-                continue
-            try:
-                stamp = store._read_stamp(path)
-                key = (path.absolute(), projection)
+    for path in directory.glob('*.json'):
+        if not re.fullmatch(r'[a-f0-9]{32}', path.stem):
+            continue
+        try:
+            stamp = store._read_stamp(path)
+            key = (path.absolute(), projection)
+            with _list_cache_lock:
                 cached = _list_cache.get(key)
                 if cached is not None and cached[0] == stamp:
                     _list_cache.move_to_end(key)
-                    _list_cache[key] = (*cached[:3], now + _LIST_CACHE_TTL)
+                    _list_cache[key] = (*cached[:3], time.monotonic() + _LIST_CACHE_TTL)
                     rows.append((cached[1], cached[2]))
                     continue
-                row = store.read(owner, path.stem)
-                content = JSONResponse(projection(row)).body
-                rows.append((row['created_at'], content))
+            # The serialized response already has its own bounded cache.
+            # Avoid copying/measuring every large raw history just to poll it.
+            row = store.read(owner, path.stem, fields=_DISPLAY_FIELDS)
+            content = JSONResponse(projection(row)).body
+            rows.append((row['created_at'], content))
+            with _list_cache_lock:
                 _list_cache.pop(key, None)
                 if len(content) <= _LIST_CACHE_BYTES // 2 and store._read_stamp(path) == stamp:
                     while _list_cache and (len(_list_cache) >= 128 or sum(len(item[2]) for item in _list_cache.values()) + len(content) > _LIST_CACHE_BYTES):
                         _list_cache.popitem(last=False)
-                    _list_cache[key] = (stamp, row['created_at'], content, now + _LIST_CACHE_TTL)
-            except (OSError, ValueError) as exc:
-                _log(SERVICE, f'Cannot read loop state {path.name}: {type(exc).__name__}', level='WARNING')
-        rows.sort(key=lambda item: item[0], reverse=True)
+                    _list_cache[key] = (stamp, row['created_at'], content, time.monotonic() + _LIST_CACHE_TTL)
+        except (OSError, ValueError) as exc:
+            _log(SERVICE, f'Cannot read loop state {path.name}: {type(exc).__name__}', level='WARNING')
+    rows.sort(key=lambda item: item[0], reverse=True)
     return Response(content=b'{"loops":[' + b','.join(item[1] for item in rows) + b']}',
                     media_type='application/json', headers={'Cache-Control': 'no-store'})
 router = APIRouter()
@@ -129,7 +201,7 @@ class LoopStart(BaseModel):
     """One bounded authorization for automatic optimizer and validation jobs."""
     model_config = ConfigDict(extra='forbid')
     config_name: str = Field(min_length=1, max_length=120)
-    provider: Literal['chatgpt', 'opencode-go', 'opencode-zen']
+    provider: Literal['chatgpt', 'opencode-go', 'opencode-zen', 'claude-code']
     model: str = Field(min_length=1, max_length=128)
     profile: str = Field(default='default', max_length=32)
     effort: str = Field(default='', max_length=64)
@@ -434,7 +506,8 @@ async def options(config_name: str = Query(default='', max_length=120), session:
         from api.vast import RentalPreferences
         from vast_queue import CloudQueue
         from vast_credentials import VastCredentialStore
-        configs = await asyncio.to_thread(lambda: [row['name'] for row in opt.list_configs(session, include_result_summary=False)['configs']])
+        configs = await asyncio.to_thread(lambda: [row['name'] for row in opt.list_configs(
+            session, include_result_summary=False, include_backtest_counts=False)['configs']])
         if config_name:
             opt._validate_name(config_name)
         selected_name = config_name if config_name in configs else (configs[0] if configs else '')
@@ -471,7 +544,7 @@ async def options(config_name: str = Query(default='', max_length=120), session:
 async def models(provider: str, profile: str = 'default', session: SessionToken = Depends(require_auth)):
     """List explicitly selected provider models for the owning account."""
     try:
-        if provider not in {'chatgpt', 'opencode-go', 'opencode-zen'}:
+        if provider not in {'chatgpt', 'opencode-go', 'opencode-zen', 'claude-code'}:
             raise ValueError('Unsupported loop provider')
         value = await get_ai_chat_service().models(_owner(session), provider, profile=profile)
         return JSONResponse({'models': [row for row in value if not row.get('decision')]}, headers={'Cache-Control': 'no-store'})
@@ -490,9 +563,9 @@ async def knowledge(session: SessionToken = Depends(require_auth), limit: int = 
 
 
 @router.get('')
-async def list_loops(session: SessionToken = Depends(require_auth)):
+async def list_loops(session: SessionToken = Depends(require_auth), summary: bool = False):
     try:
-        return await asyncio.to_thread(_list_response, _owner(session))
+        return await asyncio.to_thread(_overview_response if summary else _list_response, _owner(session))
     except Exception as exc:
         raise _error(exc) from exc
 
@@ -868,7 +941,7 @@ async def loop_rental(loop_id: str, session: SessionToken = Depends(require_auth
     from pb8_loop_rental_controls import rental_snapshot
     from vast_queue import CloudQueue
     try:
-        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
+        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id, fields=_RENTAL_FIELDS)
         rental = await asyncio.to_thread(rental_snapshot, CloudQueue(), row)
         return JSONResponse({'rental': rental}, headers={'Cache-Control': 'no-store'})
     except VastError as exc:
@@ -927,7 +1000,7 @@ async def loop_rental_charges(loop_id: str, session: SessionToken = Depends(requ
     from vast_queue import CloudQueue
     try:
         queue = CloudQueue()
-        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
+        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id, fields=_RENTAL_FIELDS)
         rental = await asyncio.to_thread(rental_snapshot, queue, row)
         if not rental:
             return JSONResponse({'worker_id': None, 'billing': None}, headers={'Cache-Control': 'no-store'})
@@ -954,11 +1027,50 @@ async def loop_run_instructions(loop_id: str, session: SessionToken = Depends(re
 
 @router.get('/{loop_id}')
 async def get_loop(loop_id: str, session: SessionToken = Depends(require_auth)):
+    started = time.monotonic()
+    queued_at = started
+    worker_started = None
+
+    def read_detail():
+        """Distinguish executor queue delay from verified report construction."""
+        nonlocal worker_started
+        worker_started = time.monotonic()
+        return _detail_response(_owner(session), loop_id)
+
     try:
-        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
-        return JSONResponse(projection(row), headers={'Cache-Control': 'no-store'})
+        return await asyncio.to_thread(read_detail)
     except Exception as exc:
         raise _error(exc) from exc
+    finally:
+        elapsed = time.monotonic() - started
+        if elapsed >= 3:
+            _log(SERVICE, 'Slow Loop report read', level='DEBUG', meta={
+                'duration_seconds': round(elapsed, 3),
+                'queue_seconds': round((worker_started or time.monotonic()) - queued_at, 3),
+                'worker_seconds': round(time.monotonic() - worker_started, 3) if worker_started else None})
+
+
+def _detail_response(owner, loop_id):
+    """Reuse verified unchanged report bytes; build misses outside the API event loop."""
+    store = _controller.store
+    path = store.path(owner, loop_id)
+    stamp = store._read_stamp(path)
+    key = (path.absolute(), _detail_response)
+    with _list_cache_lock:
+        cached = _list_cache.get(key)
+        if cached and cached[0] == stamp and cached[3] > time.monotonic():
+            _list_cache.move_to_end(key)
+            _list_cache[key] = (*cached[:3], time.monotonic() + _DETAIL_CACHE_TTL)
+            return Response(content=cached[2], media_type='application/json', headers={'Cache-Control': 'no-store'})
+    row = store.read(owner, loop_id, fields=_DISPLAY_FIELDS, prefer_cached_fields=True)
+    response = JSONResponse({**projection(row), 'view_revision': row['_view_revision']}, headers={'Cache-Control': 'no-store'})
+    if len(response.body) <= _LIST_CACHE_BYTES // 2 and store._read_stamp(path) == stamp:
+        with _list_cache_lock:
+            _list_cache.pop(key, None)
+            while _list_cache and (len(_list_cache) >= 128 or sum(len(item[2]) for item in _list_cache.values()) + len(response.body) > _LIST_CACHE_BYTES):
+                _list_cache.popitem(last=False)
+            _list_cache[key] = (stamp, row['created_at'], response.body, time.monotonic() + _DETAIL_CACHE_TTL)
+    return response
 
 
 @router.get('/{loop_id}/archive/{collection}')
@@ -1008,8 +1120,7 @@ async def log_target(loop_id: str, operation: str = Query(pattern=r'^[0-9a-f]{32
                      session: SessionToken = Depends(require_auth)):
     """Resolve an owned optimizer operation to its verified native queue log window."""
     try:
-        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
-        job = next((item for item in row['jobs'] + row.get('observer_jobs', []) if item['operation'] == operation), None)
+        row, job = await asyncio.to_thread(_controller.store.native_job, _owner(session), loop_id, operation)
         if job is None or not (job.get('backend') or {}).get('id'):
             raise HTTPException(404, 'The native optimizer job has not been created or is no longer available.')
         # The native queue/job record must still belong to this loop and owner.
@@ -1076,9 +1187,35 @@ async def _handover_owned(owner, loop_id, body):
 @router.post('/{loop_id}/ai-preview')
 async def ai_execution_preview(loop_id: str, body: LoopAction, session: SessionToken = Depends(require_auth)):
     """Inspect a saved run without renting, sending model prompts or changing its source config."""
+    started = time.monotonic()
+    stage = 'reading_loop'
+
+    async def report_slow_preview():
+        """Expose the slow local phase without recording settings or evidence."""
+        await asyncio.sleep(10)
+        stacks = {}
+        for frame in sys._current_frames().values():
+            names = []
+            while frame is not None and len(names) < 6:
+                names.append(frame.f_code.co_name)
+                frame = frame.f_back
+            key = '/'.join(names)
+            stacks[key] = stacks.get(key, 0) + 1
+        _log(SERVICE, 'AI recovery preview still preparing', level='DEBUG',
+             meta={'stage': stage, 'duration_seconds': round(time.monotonic() - started, 3),
+                   'thread_functions': stacks})
+
+    monitor = asyncio.create_task(report_slow_preview(), name='loop-recovery-preview-timing')
     try:
         owner = _owner(session)
-        row = await asyncio.to_thread(_controller.store.read, owner, loop_id)
+        def read_preview():
+            """Read only preview inputs; exclude growing decisions, jobs and evidence."""
+            nonlocal stage
+            stage = 'reading_loop_running'
+            return _controller.store.read(owner, loop_id, fields={
+                'settings', 'phase', 'rubric', 'initial_config', 'initial_overrides', 'ai_preview'})
+
+        row = await asyncio.to_thread(read_preview)
         if body.selection and not set(body.selection) <= {'provider','model','profile','effort','service_tier'}:
             raise ValueError('Invalid AI selection')
         settings = dict(row['settings'])
@@ -1091,6 +1228,7 @@ async def ai_execution_preview(loop_id: str, body: LoopAction, session: SessionT
             settings.update(body.ai_settings)
         checked = LoopStart.model_validate({key: value for key, value in settings.items() if key in LoopStart.model_fields})
         settings.update(checked.model_dump(exclude={'authorization'}))
+        stage = 'provider_metadata'
         metadata = await _controller.ai.preflight(owner, settings, check_budget=False)
         profile = metadata['loop_profile']
         from pb8_loop_archive import archive_budget
@@ -1098,16 +1236,23 @@ async def ai_execution_preview(loop_id: str, body: LoopAction, session: SessionT
         provisional = not bool(row['rubric'])
         if provisional:
             staged['rubric'] = [{'metrics': ['reserved_goal_metric_' + str(i) for i in range(24)]}]
-        native = archive_budget(staged, row['initial_config'])
+        stage = 'archive_budget'
+        native = await asyncio.to_thread(archive_budget, staged, row['initial_config'])
         from pb8_loop_archive import select_sources
-        if settings.get('historical_advice', True):
+        if settings.get('historical_advice', True) and row['phase'] in {'interpret', 'bootstrap'}:
+            stage = 'historical_discovery'
+            # Initial source compatibility still needs the complete verified run.
+            row = await asyncio.to_thread(_controller.store.read, owner, loop_id)
+            staged = {**row, 'settings': settings, 'ai_model_profile': profile, 'rubric': staged['rubric']}
             candidates = await asyncio.to_thread(_controller.backend.existing_candidates, staged)
+            stage = 'historical_selection'
             _selected, historical = await asyncio.to_thread(select_sources, staged, {
                 'stage':'bootstrap', 'initial_config':row['initial_config'], 'rubric':staged['rubric'],
                 'goals':settings['goals'], 'evidence':{'existing_results':candidates}}, profile,
                 min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768)), metadata=metadata)
         else:
-            historical = {'mode':'off', 'sources':[], 'in_a':0, 'in_b':0}
+            historical = {'mode':'not_applicable' if settings.get('historical_advice', True) else 'off',
+                          'sources':[], 'in_a':0, 'in_b':0}
         paid = settings['provider'] == 'opencode-zen' and metadata.get('free') is not True
         cost = metadata.get('cost') or {}
         reserve = min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768))
@@ -1130,11 +1275,19 @@ async def ai_execution_preview(loop_id: str, body: LoopAction, session: SessionT
                        if paid and settings.get('ai_decision_usd_limit') else None,
                    'call_timeout_seconds': settings.get('model_call_timeout_seconds') or profile.get('call_timeout'),
                    'decision_timeout_seconds': settings.get('decision_timeout_seconds')}
-        await asyncio.to_thread(_controller.store.update, owner, loop_id, lambda current: current.update(ai_preview=preview))
+        stage = 'saving_preview'
+        if row.get('ai_preview') != preview:
+            await asyncio.to_thread(_controller.store.update, owner, loop_id, lambda current: current.update(ai_preview=preview))
+        stage = 'complete'
         return JSONResponse(preview, headers={'Cache-Control': 'no-store'})
     except Exception as exc:
         raise _error(exc) from exc
 
+    finally:
+        monitor.cancel()
+        await asyncio.gather(monitor, return_exceptions=True)
+        _log(SERVICE, 'AI recovery preview finished', level='DEBUG',
+             meta={'stage': stage, 'duration_seconds': round(time.monotonic() - started, 3)})
 
 async def _loop_action_owned(owner, loop_id, body):
     """Run native owner-scoped actions for authenticated routes and reviewed AI tools."""

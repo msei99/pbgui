@@ -680,6 +680,8 @@ class TestV7OptimizeBackendLogic:
     def test_raw_json_sync_recomputes_backend_hint_from_parsed_config(self) -> None:
         """Raw JSON reparse must clear stale backend hints unless legacy DEAP keys still imply them."""
         bootstrap = """
+        var document = { activeElement: null };
+        var window = { PBGuiEditorShared: { restoreTextareaAnchor() {} } };
         var OPT_LEGACY_DEAP_HINT_KEYS = [
           'crossover_probability',
           'mutation_probability',

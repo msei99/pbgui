@@ -17,6 +17,8 @@ const setPageEditorStatus=()=>{};
 const editorVisible=()=>true;
 const ensureRawJsonValidForSave=()=>true;
 const ensureStructuredJsonFieldsValidForSave=()=>true;
+const cancelOptimizeEditorSync=()=>{};
+const reconcileOptimizeEditorSync=async()=>{};
 const collectEditorConfig=()=>({name:'unsaved',config:draft});
 const optimizeEditorAdapter={isV8:true};
 const el=()=>({textContent:'Short enabledness must remain fixed.'});

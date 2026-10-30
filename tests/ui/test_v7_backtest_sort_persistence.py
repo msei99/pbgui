@@ -111,7 +111,7 @@ def test_backtest_sort_state_validates_restores_and_persists() -> None:
     ]
     assert config_header_keys
     assert result_header_keys
-    assert source.index("applyBacktestSortState(initialViewState.sorts);") < source.index("loadConfigs();", source.index("var initialViewState"))
+    assert source.index("applyBacktestSortState(initialViewState.sorts);") < source.index("initializeBacktestPageFromUrl(initialBacktestUrl)", source.index("var initialViewState"))
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');

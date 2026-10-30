@@ -37,19 +37,40 @@ def bind_request(request, instructions, reuse_existing=False):
             'mode': 'reconciled_reuse' if reuse_existing else 'new'}
 
 
+def preserve_request(request, instructions, definition, owner):
+    """Bind an explicit unchanged reuse review without replacing saved objectives."""
+    from ai_loop_windows import plan_from_text
+    previous = definition['source'].get('loop_request') or {}
+    goals = definition['settings'].get('goals') or {}
+    window_request = previous.get('window_request', goals.get('text', ''))
+    if not isinstance(window_request, str):
+        raise ValueError('Saved Loop window request is invalid; reconcile the definition')
+    # Keep the revision single-use, including legacy definitions without a binding.
+    binding_id = previous.get('binding_id') or digest({
+        'owner': owner, 'name': definition['name'], 'revision': definition['revision']})[:32]
+    identifier(binding_id)
+    return {**request, 'binding_id': binding_id, 'instruction_digest': instructions['digest'],
+            'mode': 'preserved_reuse', 'goals_digest': digest(goals),
+            'window_request': window_request, 'window_plan': plan_from_text(window_request)}
+
+
 def validate_request(settings, request, instruction_digest=None, config=None):
     """Reject stale goals, foreign chats and unreconciled legacy definitions."""
     binding = (settings.get('source') or {}).get('loop_request')
     if not isinstance(binding, dict) or any(binding.get(k) != request.get(k) for k in ('conversation_id', 'digest', 'text')):
         raise ValueError('Create a new Loop definition from the current chat request before starting. '
-                         'Old definitions cannot be reused silently; explicit reuse requires a fresh reconciliation proposal.')
+                         'Old definitions cannot be reused silently; for an explicit unchanged restart, '
+                         'prepare propose_ai_loop_run with reuse_existing=true and the exact revision.')
     identifier(binding.get('conversation_id'))
     identifier(binding.get('binding_id'))
-    if (binding.get('mode') not in {'new', 'reconciled_reuse'}
+    preserved = binding.get('mode') == 'preserved_reuse'
+    if (binding.get('mode') not in {'new', 'reconciled_reuse', 'preserved_reuse'}
             or binding['digest'] != digest({'conversation_id': binding['conversation_id'], 'text': binding['text']})):
         raise ValueError('Invalid Loop request provenance; create a fresh reviewed definition')
     goals = settings.get('goals') or {}
-    if goals.get('text') != request['text'] or goals.get('presets') or goals.get('targets'):
+    if preserved and binding.get('goals_digest') != digest(goals):
+        raise ValueError('Saved Loop goals changed since the unchanged reuse review')
+    if not preserved and (goals.get('text') != request['text'] or goals.get('presets') or goals.get('targets')):
         raise ValueError('The Loop goals differ from the original request. Reconcile the definition before starting')
     if instruction_digest is not None and binding.get('instruction_digest') != instruction_digest:
         raise ValueError('Default Loop instructions changed; create a fresh reviewed definition')
@@ -57,9 +78,10 @@ def validate_request(settings, request, instruction_digest=None, config=None):
         from ai_loop_search_limits import exposure_ceiling, validate_exposure_ceiling
         validate_exposure_ceiling(config, exposure_ceiling(settings))
     from ai_loop_windows import plan_from_text, verify_config
-    plan = plan_from_text(request.get('window_request', request['text']))
-    if (binding.get('window_request') != request.get('window_request')
-            or binding.get('window_plan') != plan or request.get('window_plan') != plan):
+    plan = plan_from_text(binding['window_request'] if preserved else request.get('window_request', request['text']))
+    if ((preserved and binding.get('window_plan') != plan) or (not preserved and (
+            binding.get('window_request') != request.get('window_request')
+            or binding.get('window_plan') != plan or request.get('window_plan') != plan))):
         raise ValueError('The reviewed Loop window plan changed; create a fresh definition')
     if plan is not None and config is not None:
         verify_config(plan, config)

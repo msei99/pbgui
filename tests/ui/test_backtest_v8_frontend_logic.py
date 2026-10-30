@@ -795,7 +795,7 @@ def test_delayed_config_load_does_not_replace_results_sidebar() -> None:
 def test_panel_navigation_closes_config_editor_sidebar_outside_configs() -> None:
     """Every non-Config panel must synchronously restore the normal action sidebar."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
-    function = _extract_function(source, "selectPanel")
+    function = source[source.index("var backtestReads="):source.index("window.addEventListener('pagehide'",source.index("var backtestReads="))] + _extract_function(source, "selectPanel")
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
@@ -809,7 +809,7 @@ def test_panel_navigation_closes_config_editor_sidebar_outside_configs() -> None
         const backtestShell = {{selectPanel(id) {{ selected.push(id); }}}};
         let currentPanel = 'configs';
         let editingConfig = null;
-        let _resultsEmptyRetryTimer = null, _resultsEmptyRetryCount = 0;
+        let _resultsEmptyRetryTimer = null, _resultsEmptyRetryCount = 0, _resultsLoadGeneration = 0;
         let configs = [{{}}], results = [{{}}], archives = [{{}}], legacyResults = [{{}}];
         let selectedArchiveName = '';
         function hideEditorSidebar() {{ hidden += 1; }}
@@ -959,7 +959,7 @@ def test_queue_result_action_applies_filter_before_showing_results() -> None:
 def test_results_load_in_one_compact_request_and_use_server_config_filter() -> None:
     """All compact result summaries load in one request while charts remain lazy."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
-    function = _extract_function(source, "loadResults")
+    function = source[source.index("var backtestReads="):source.index("window.addEventListener('pagehide'",source.index("var backtestReads="))] + _extract_function(source, "loadResults")
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
@@ -1009,7 +1009,7 @@ def test_results_load_in_one_compact_request_and_use_server_config_filter() -> N
           assert.deepEqual(appliedCounts, [2]);
           assert.equal(results.length, 2);
           assert.equal(requests.length, 1);
-          assert.match(requests[0], /offset=0&limit=0&name=target%20config$/);
+          assert.match(requests[0], /offset=0&limit=0&name=target%20config&snapshot=new$/);
           assert.equal(paintFrames, 0);
           assert.equal(nodes['results-count-label'].textContent, '2 results');
         }}).catch(error => {{ console.error(error); process.exit(1); }});

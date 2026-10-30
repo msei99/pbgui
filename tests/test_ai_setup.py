@@ -9,7 +9,7 @@ from pydantic import ValidationError
 import ai_setup
 
 
-@pytest.mark.parametrize('provider',['chatgpt','opencode-go','opencode-zen'])
+@pytest.mark.parametrize('provider',['chatgpt','opencode-go','opencode-zen','claude-code'])
 def test_setup_model_probe_is_isolated_and_does_not_create_conversations(monkeypatch,provider):
     """The fixed probe forwards the chosen model/profile without local diagnostics or tools."""
     reply=AsyncMock(return_value=('PBGui connection OK','fixture','fixture-model'))
@@ -71,6 +71,17 @@ def test_setup_page_preserves_mount_without_trusting_host_headers():
                      'path':'/api/ai/main_page','headers':[],'query_string':b''})
     page=main_page(request,object()).body.decode()
     assert 'window.API_BASE = "/mounted/api/ai"' in page
-    assert '/mounted/app/js/ai_setup.js?v=4' in page
+    assert '/mounted/app/js/ai_setup.js?v=8' in page
     assert 'href="/mounted/api/ai/providers/opencode-go/subscribe"' in page
     assert 'forged-host.test' not in page and '%%BASE_PREFIX%%' not in page
+
+
+def test_claude_model_probe_uses_the_same_isolated_request_owner(monkeypatch):
+    """Claude connection tests retain shared lifecycle and fixed-input handling."""
+    probe=AsyncMock(return_value={'reply':'fixture'})
+    monkeypatch.setattr(ai_setup,'draft_for_request',probe)
+    request=object(); chat=object()
+    result=asyncio.run(ai_setup.test_model(chat,'a'*32,ai_setup.ModelTestRequest(provider='claude-code',model='claude-fixture'),request))
+    assert result=={'reply':'fixture'}
+    assert probe.call_args.kwargs['selected_provider']=='claude-code'
+    assert probe.call_args.kwargs['timeout']==90

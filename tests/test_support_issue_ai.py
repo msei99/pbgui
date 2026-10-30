@@ -103,6 +103,17 @@ def test_missing_text_model_does_not_fallback():
         asyncio.run(ai.generate_draft(chat_fixture('openrouter'), 'owner', ai.IssueDraftRequest(description='Text')))
 
 
+def test_claude_isolated_transport_never_uses_other_providers(monkeypatch):
+    """Claude support requests stay tool-free and never use another transport."""
+    chat=chat_fixture('claude-code')
+    chat._validate_provider_model=AsyncMock(return_value={})
+    chat._claude_reply=AsyncMock(return_value='Synthetic reply')
+    monkeypatch.setattr(ai,'CodexRuntime',Mock(side_effect=AssertionError('Wrong provider')))
+    result=asyncio.run(ai.provider_reply(chat,'fixture-owner',ai.IssueDraftRequest(description='Synthetic issue')))
+    assert result[0]=='Synthetic reply' and result[1]=='claude-code'
+    assert not chat._claude_reply.call_args.kwargs.get('tools')
+
+
 @pytest.mark.parametrize('ending', ['success','disconnect','timeout','shutdown'])
 def test_request_ownership_and_cleanup(monkeypatch, ending):
     """Disconnect, timeout and service cancellation deterministically release provider work."""

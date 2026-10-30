@@ -43,6 +43,28 @@ def test_retention_never_decodes_bodies_of_retained_snapshots(record, monkeypatc
     assert all(path.exists() for path in paths)
 
 
+def test_retention_reads_only_protection_fields_and_preserves_recovery_snapshots(record, monkeypatch):
+    """Retention must not hydrate complete run archives just to protect four snapshot references."""
+    store, row = record
+    protected = [snapshot(store, row, number, age=15 * 86400)[0] for number in range(4)]
+    for number in range(4, 26):
+        snapshot(store, row, number)
+    row = store.update(OWNER, row['id'], lambda value: value.update(
+        status='paused', ai_snapshot_id=protected[0].stem,
+        pending_ai={'snapshot_id':protected[1].stem}, interrupted_ai={'snapshot_id':protected[2].stem},
+        interrupted_ai_audit=[{'snapshot_id':protected[3].stem}]))
+    original = store.read
+
+    def read(*args, **kwargs):
+        """Forbid whole-run loading while still exercising archive and identity checks."""
+        assert kwargs.get('fields') and not {'jobs', 'history', 'settings'} & kwargs['fields']
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(store, 'read', read)
+    EvidenceStore(store).cleanup(row)
+    assert all(path.exists() for path in protected)
+
+
 def test_retention_verifies_expired_candidates_and_keeps_corrupt_or_protected_files(record):
     """Only validated expired data may be removed; recovery references always survive."""
     store, row = record

@@ -3,16 +3,16 @@
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
   var params = new URL(window.location.href).searchParams;
-  var sections = ['models','chatgpt','opencode','openrouter','github'];
+  var sections = ['models','chatgpt','opencode','claude-code','openrouter','github'];
   var state = {section:sections.includes(params.get('section')) ? params.get('section') : 'models',
     profile:params.get('chatgpt_profile') || 'default', provider:params.get('model_provider') || '',
     model:params.get('model') || '', effort:params.get('effort') || '', speed:params.get('speed') || '',
-    profiles:[], providers:{}, models:{}, statusGeneration:0, modelGeneration:0,
+    profiles:[], providers:{}, models:{}, claudeLoginId:'', statusGeneration:0, modelGeneration:0,
     githubGeneration:0, testGeneration:0, writing:false, testing:false, nameDirty:false, nameCleared:false, nameRevision:0,
     loginProfile:'', loginGeneration:0, loginDeadline:0, loginTimer:null, timer:null, stopped:false};
   var controllers = new Map();
   var connectionTests = {};
-  ['chatgpt','opencode','openrouter'].forEach(function(key){connectionTests[key]={generation:0,choices:new Map(),fingerprint:'',loading:false};});
+  ['chatgpt','opencode','openrouter','claude-code'].forEach(function(key){connectionTests[key]={generation:0,choices:new Map(),fingerprint:'',loading:false};});
   function notice(message,error) { $('setup-status').textContent=message || ''; $('setup-status').classList.toggle('error',!!error); }
   function report(error) { if(error.name!=='AbortError') notice(error.message,true); }
   function option(select,value,label) { var node=document.createElement('option');node.value=value;node.textContent=label;select.appendChild(node);return node; }
@@ -25,7 +25,7 @@
       var base=debug ? window.API_BASE.replace(/\/ai\/?$/,'/debug') : window.API_BASE;
       var response=await fetch(base+path,Object.assign({credentials:'same-origin',cache:'no-store'},options,{signal:controller.signal}));
       var data=await response.json();
-      if(!response.ok){var error=new Error(typeof data.detail==='string' ? data.detail : 'Request failed.');error.status=response.status;throw error;}
+      if(!response.ok){if(response.status===401)clearSecrets();var error=new Error(typeof data.detail==='string' ? data.detail : 'Request failed.');error.status=response.status;throw error;}
       return data;
     } finally {clearTimeout(timeout);if(controllers.get(key)===controller)controllers.delete(key);}
   }
@@ -36,7 +36,7 @@
     [['model_provider',state.provider],['model',state.model],['effort',state.effort],['speed',state.speed]].forEach(function(pair){if(pair[1])url.searchParams.set(pair[0],pair[1]);else url.searchParams.delete(pair[0]);});
     url.searchParams.delete('conversation');history.replaceState(null,'',url);
   }
-  function clearSecrets() {['github-token','go-key','openrouter-key'].forEach(function(id){$(id).value='';});}
+  function clearSecrets() {['github-token','go-key','openrouter-key','claude-code-login-code'].forEach(function(id){$(id).value='';});}
   function selectSection(section) {
     state.section=sections.includes(section) ? section : 'models';
     document.querySelectorAll('[data-view]').forEach(function(node){node.hidden=node.dataset.view!==state.section;});
@@ -59,6 +59,9 @@
     var loggingIn=!!state.loginProfile;
     ['chatgpt-profile','chatgpt-profile-add','chatgpt-profile-rename','chatgpt-profile-remove'].forEach(function(id){$(id).disabled=blocked || loggingIn;});
     $('chatgpt-connect').disabled=$('chatgpt-device-connect').disabled=blocked || loggingIn;
+    var claude=state.providers['claude-code'] || {};
+    $('claude-code-connect').disabled=blocked || !claude.available || !!(claude.login && claude.login.active);
+    ['claude-code-disconnect','claude-code-login-submit','claude-code-login-cancel'].forEach(function(id){$(id).disabled=blocked;});
   }
   function modelDetails() {
     var model=state.models[state.model];
@@ -90,8 +93,8 @@
   function buildProviders() {
     var select=$('provider-select');select.replaceChildren();
     state.profiles.forEach(function(profile){option(select,'chatgpt:'+profile.id,'ChatGPT · '+profile.name);});
-    [['opencode-zen','OpenCode Zen'],['opencode-go','OpenCode Go'],['openrouter','OpenRouter / Jev']].forEach(function(pair){option(select,pair[0],pair[1]);});
-    if(!state.provider){var connected=['chatgpt','opencode-go','opencode-zen','openrouter'].find(function(name){return (state.providers[name] || {}).connected;});state.provider=connected==='chatgpt' ? 'chatgpt:'+state.profile : connected || 'chatgpt:'+state.profile;}
+    [['opencode-zen','OpenCode Zen'],['opencode-go','OpenCode Go'],['claude-code','Claude Agent'],['openrouter','OpenRouter / Jev']].forEach(function(pair){option(select,pair[0],pair[1]);});
+    if(!state.provider){var connected=['chatgpt','opencode-go','opencode-zen','openrouter','claude-code'].find(function(name){return (state.providers[name] || {}).connected;});state.provider=connected==='chatgpt' ? 'chatgpt:'+state.profile : connected || 'chatgpt:'+state.profile;}
     if(!Array.from(select.options).some(function(item){return item.value===state.provider;}))option(select,state.provider,state.provider+' · unavailable');
     select.value=state.provider;controls();
   }
@@ -101,7 +104,7 @@
     if(!slot || state.stopped || state.testing)return;
     var providers=key==='opencode' ? ['opencode-zen','opencode-go'] : [key];
     var profile=key==='chatgpt' ? state.profile : 'default';
-    var fingerprint=JSON.stringify([profile,providers.map(function(name){return [name,!!(state.providers[name] || {}).connected];})]);
+    var fingerprint=JSON.stringify([profile,providers.map(function(name){return [name,!!(state.providers[name] || {}).connected,(state.providers[name] || {}).catalog || []];})]);
     if(!force && fingerprint===slot.fingerprint)return;
     var select=$(key+'-test-model'),previous=select.value || params.get('test_'+key) || '';
     var generation=++slot.generation;slot.fingerprint=fingerprint;slot.loading=true;slot.choices.clear();select.replaceChildren();
@@ -137,7 +140,7 @@
     try {
       var result=await api('/status?profile='+encodeURIComponent(profile),{},'status');
       if(generation!==state.statusGeneration || profile!==state.profile || state.stopped || state.writing)return;
-      function inventory(value) {return JSON.stringify(Object.entries(value).map(function(pair){return [pair[0],!!pair[1].connected,pair[1].profiles || []];}));}
+      function inventory(value) {return JSON.stringify(Object.entries(value).map(function(pair){return [pair[0],!!pair[1].connected,pair[1].profiles || [],pair[1].catalog || []];}));}
       var fingerprint=inventory(state.providers);state.providers=result.providers || {};
       var chat=state.providers.chatgpt || {}, go=state.providers['opencode-go'] || {}, router=state.providers.openrouter || {};
       state.profiles=chat.profiles || [{id:'default',name:'Default'}];
@@ -148,6 +151,17 @@
       $('chatgpt-account').textContent=chat.email || '';window.PBGuiAIUsage.render($('chatgpt-limits'),chat);
       providerStatus('chatgpt',chat.connected,chat.connected ? 'Connected'+(chat.plan ? ' · '+chat.plan : '') : chat.available ? 'Not connected' : 'Runtime missing',!chat.available);
       providerStatus('go',go.connected,go.connected ? 'Connected' : 'Not connected');providerStatus('openrouter',router.connected,router.connected ? 'Connected' : 'Not connected');
+      var claude=state.providers['claude-code'] || {}, login=claude.login || {};
+      if(state.claudeLoginId!==(login.id || ''))$('claude-code-login-code').value='';
+      state.claudeLoginId=login.id || '';
+      providerStatus('claude-code',claude.connected,claude.error || login.error || (claude.connected ? 'Connected'+(claude.plan ? ' · '+claude.plan : '') : login.active ? 'Waiting for sign-in' : claude.available ? 'Not connected' : 'Runtime missing'),!!claude.error || !!login.error || !claude.available);
+      $('claude-code-account').textContent=claude.email || '';
+      $('claude-code-connect').hidden=!!claude.connected;
+      $('claude-code-disconnect').hidden=!claude.connected;
+      $('claude-code-login').hidden=!!claude.connected || !login.active;
+      var link=$('claude-code-login-link');link.hidden=!login.url;
+      if(login.url)link.setAttribute('href',login.url);else link.removeAttribute('href');
+      if(claude.connected || !login.active)$('claude-code-login-code').value='';
       $('chatgpt-connect').hidden=$('chatgpt-device-connect').hidden=!current || chat.connected || !chat.available;
       $('chatgpt-disconnect').hidden=!chat.connected;
       $('go-connect-row').hidden=!!go.connected;$('go-disconnect').hidden=!go.connected;
@@ -281,6 +295,10 @@
     });
   });
   async function refreshAll() {await Promise.allSettled([refreshStatus(false),refreshGitHub()]);}
+  $('claude-code-connect').addEventListener('click',function(){mutate(function(){return api('/providers/claude-code/connect',{method:'POST'});},'Claude sign-in started. Open the sign-in link when it appears.');});
+  $('claude-code-disconnect').addEventListener('click',function(){clearSecrets();mutate(function(){return api('/providers/claude-code/connection',{method:'DELETE'});},'Claude disconnected.');});
+  $('claude-code-login-cancel').addEventListener('click',function(){clearSecrets();mutate(function(){return api('/providers/claude-code/login',{method:'DELETE'});},'Claude sign-in cancelled.');});
+  $('claude-code-login-submit').addEventListener('click',function(){var code=$('claude-code-login-code').value.trim(),loginId=state.claudeLoginId;$('claude-code-login-code').value='';if(!code)return;mutate(function(){return api('/providers/claude-code/login-code',json('POST',{code:code,login_id:loginId}));},'Sign-in code submitted.');});
   function schedule() {clearTimeout(state.timer);if(state.stopped || document.hidden)return;state.timer=setTimeout(async function(){await refreshAll();schedule();},15000);}
   function suspend() {state.stopped=true;++state.statusGeneration;++state.modelGeneration;++state.githubGeneration;++state.testGeneration;++state.loginGeneration;Object.keys(connectionTests).forEach(function(key){var slot=connectionTests[key];++slot.generation;slot.loading=false;slot.fingerprint='';if(state.testing){$(key+'-test-result').hidden=true;}});clearTimeout(state.timer);clearTimeout(state.loginTimer);controllers.forEach(function(controller){controller.abort();});controllers.clear();state.testing=false;clearSecrets();controls();}
   document.addEventListener('visibilitychange',function(){if(document.hidden)suspend();else {state.stopped=false;refreshAll().then(schedule);pollLogin();}});

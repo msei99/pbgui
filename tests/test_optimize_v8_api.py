@@ -4896,8 +4896,12 @@ def test_config_count_slow_scan_preserves_synchronous_callers(
         monkeypatch.setattr(vast_credentials, "VastCredentialStore", lambda _root: SimpleNamespace(metadata=lambda: {"configured": False}))
         response = asyncio.run(loop_optimizer_v8.options(config_name="", session=None, list_only=True))
         assert json.loads(response.body)["configs"] == ["owned"]
-    assert counts == [2] and len(root_calls) == 1
-    assert clock[0] > 100.1
+    if caller == "loop":
+        assert counts == [] and root_calls == []
+        assert clock[0] == 100.0, "Names-only Loop options must not scan backtests"
+    else:
+        assert counts == [2] and len(root_calls) == 1
+        assert clock[0] > 100.1
     assert not optimize_v8._backtest_count_scans
 
 

@@ -43,7 +43,7 @@ def test_loop_comparison_ignores_stale_owner_and_result_responses():
     """Late replies cannot overwrite a newer panel, run or comparison request."""
     root=Path(__file__).resolve().parents[1]
     source=(root/'frontend/v7_backtest.html').read_text()
-    body=source[source.index('var _loopEvaluationComparison ='):source.index('async function openLoopResultComparison(')]
+    body=source[source.index('var backtestReads='):source.index("window.addEventListener('pagehide'",source.index('var backtestReads='))]+source[source.index('var _loopEvaluationComparison ='):source.index('async function openLoopResultComparison(')]
     script=r"""
 const assert=require('node:assert/strict');
 let location={href:'http://pbgui.test/nested/api/backtest-v8/main_page?panel=results&result_loop='+'a'.repeat(32)+'&result_evaluation=observer_holdout&result_compare=1'};
@@ -76,10 +76,11 @@ def test_comparison_link_preserves_mount_and_current_loop_context():
     """One click addresses only the selected run and returns to its report tab."""
     root=Path(__file__).resolve().parents[1]
     source=(root/'frontend/js/pb8_loop_optimizer.js').read_text()
-    body=source[source.index('  function hasEvaluationResults('):source.index('  function backtestButton(')]
+    body=source[source.index('  function leaveForBacktest('):source.index('  function cancelResultTarget(')]+source[source.index('  function hasEvaluationResults('):source.index('  function backtestButton(')]
     script=r"""
 const assert=require('node:assert/strict');let assigned='';
 let location={href:'http://pbgui.test/nested/api/optimize-v8/main_page?loop_id='+'a'.repeat(32)+'&loop_view=run&loop_tab=performance#loops-results',assign:value=>assigned=value};
+let history={length:2},sessionStorage={setItem(){}};function saveLoopScroll(){}
 let state={panel:'loops-results'};function select(id){assert.equal(id,'a'.repeat(32));}
 """+body+r"""
 const run={id:'a'.repeat(32),observer_jobs:[{kind:'observer_holdout',simulation_complete:true,status:'complete',log_available:true}]};
@@ -98,7 +99,7 @@ def test_all_49_holdouts_load_with_bounded_requests_and_no_reopen_after_close():
     """All jobs are compared without a top-N cap or unrelated-result leakage."""
     root=Path(__file__).resolve().parents[1]
     source=(root/'frontend/v7_backtest.html').read_text()
-    body=source[source.index('var _loopEvaluationComparison ='):source.index('async function openLoopResultComparison(')]
+    body=source[source.index('var backtestReads='):source.index("window.addEventListener('pagehide'",source.index('var backtestReads='))]+source[source.index('var _loopEvaluationComparison ='):source.index('async function openLoopResultComparison(')]
     script=r"""
 const assert=require('node:assert/strict');
 let window={location:{href:'http://pbgui.test/api/backtest-v8/main_page?panel=results&result_loop='+'a'.repeat(32)+'&result_evaluation=observer_holdout&result_compare=1'},addEventListener(){}};

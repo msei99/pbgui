@@ -22,7 +22,7 @@ _ACTIVE = contextvars.ContextVar('pb8_loop_evidence_decision', default=None)
 
 def initial_payload(settings, metadata, profile, instructions, required, output):
     """Use one complete wire envelope for source selection, resume and dispatch."""
-    if settings['provider'] == 'chatgpt':
+    if settings['provider'] in {'chatgpt', 'claude-code'}:
         return {'instructions': instructions, 'content': required, 'tool': TOOL_SCHEMA}
     return OpenCodeDialog(settings, metadata, profile, None, None, None).initial(instructions, required, output)
 
@@ -35,7 +35,7 @@ def validate_snapshot_budget(record, snapshot, metadata):
     output = min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768))
     instructions = instructions_for_run(record)['text'] + PROTOCOL
     payload = initial_payload(record['settings'], metadata, profile, instructions, snapshot['required'], output)
-    check_context(payload, profile, output, codex=record['settings']['provider'] == 'chatgpt',
+    check_context(payload, profile, output, codex=record['settings']['provider'] in {'chatgpt', 'claude-code'},
                   required_pages=len(session.required_pages), initial=True)
 
 PROTOCOL = '''
@@ -283,7 +283,7 @@ async def run_decision(ai, record, stage, evidence):
     instructions = instructions_for_run(record)['text'] + PROTOCOL
     output = min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768))
     check_context(initial_payload(settings, metadata, profile, instructions, snapshot['required'], output),
-                  profile, output, codex=settings['provider'] == 'chatgpt', required_pages=len(session.required_pages), initial=True)
+                  profile, output, codex=settings['provider'] in {'chatgpt', 'claude-code'}, required_pages=len(session.required_pages), initial=True)
     if fallback_fresh:
         raise BootstrapWithoutAdvice(snapshot['data']['historical_sources'])
     ledger = await owned_thread(DecisionLedger, ai.store, record, stage, snapshot['sha256'], metadata)
@@ -342,6 +342,9 @@ async def provider_request(ai, record, metadata, content, output_tokens):
     settings = record['settings']
     if settings['provider'] == 'chatgpt':
         return await codex_dialog(ai, record, content, output_tokens, active)
+    if settings['provider'] == 'claude-code':
+        from pb8_loop_claude import claude_dialog
+        return await claude_dialog(ai, record, content, output_tokens, active)
     from ai_chat import AIChatService, _OPENCODE_PROVIDERS
     chat = ai.service()
     protocol = metadata['protocol']

@@ -389,7 +389,7 @@ def market_settings_browser():
                 route.fulfill(content_type="text/html", body='<nav id="topnav"></nav><script>window.PBGUI_NAV_CONFIG={current:"welcome",authenticated:true};</script><script src="/app/pbgui_nav.js"></script>')
             elif path == "/api/market-data/main_page":
                 source = PAGE.read_text(encoding="utf-8")
-                for key, value in {"API_BASE": "/api/market-data", "VERSION": "test", "SERIAL": "1", "NAV_HASH": "test"}.items():
+                for key, value in {"BASE_PREFIX":"", "API_BASE": "/api/market-data", "VERSION": "test", "SERIAL": "1", "NAV_HASH": "test"}.items():
                     source = source.replace("%%" + key + "%%", value)
                 route.fulfill(content_type="text/html", body=source, headers={"Cache-Control": "no-store"})
             elif path.startswith("/api/market-data/settings/") and path.count("/") == 4:

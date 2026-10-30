@@ -321,6 +321,10 @@ class ObserverJobs:
         record = await self.thread(self.plan, record)
         pending = [job for job in record.get('observer_jobs', [])
                    if job['status'] not in FINISHED or needs_observer_report(job)]
+        if record['status'] == 'paused':
+            # A backend-free job cannot start while paused. Avoid copying the
+            # full run for each such job merely to reach that same decision.
+            pending = [job for job in pending if job.get('backend')]
         for original in self._poll_batch(record, pending):
             job = copy.deepcopy(original)
             starting = False

@@ -9,7 +9,7 @@ def test_inventory_warning_repair_and_stale_poll_preserve_context():
     """Only the latest poll changes the warning; healthy selection and drafts survive."""
     playwright = pytest.importorskip('playwright.sync_api')
     source = Path('frontend/js/vast.js').read_text()
-    function = source[source.index('  async function refreshJobs(preferred)'):
+    function = source[source.index('  async function refreshJobs(preferred,'):
                       source.index('  async function pollJobs()')]
     with playwright.sync_playwright() as runner:
         browser = runner.chromium.launch(headless=True)
@@ -24,7 +24,8 @@ def test_inventory_warning_repair_and_stale_poll_preserve_context():
                 let jobGeneration=0, jobTimer=null, disposed=false, jobRows=[], workers=[], worker=null;
                 let queueState={}, supervision=false, selectedJobId='healthy', unreadableJobs=[];
                 let calibrationWorkerAvailable=false, resolvers=[];
-                const stoppingJobs=new Map(), pollJobs=()=>{};
+                const stoppingJobs=new Map(), uncertainStops=new Map(), pollJobs=()=>{};
+                const reconcileExcludedOffers=()=>{};
                 const setTimeout=()=>1, clearTimeout=()=>{};
                 const request=()=>new Promise(resolve=>resolvers.push(resolve));
                 const renderJob=()=>{}, renderQueueOverview=()=>{}, refreshActiveGpuProfile=()=>{};

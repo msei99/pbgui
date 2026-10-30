@@ -26,9 +26,10 @@ def test_readiness_scopes_offline_metadata_and_restores_policy(monkeypatch, offl
 
     modules = {'simulation_data_policy': policy}
 
-    async def build(payload, modules=None):
+    async def build(payload, modules=None, diagnostic=None):
         """Observe the policy at the real planner boundary."""
         assert active == [offline]
+        assert diagnostic is None
         assert modules['simulation_data_policy'] is policy
         if failure:
             raise ValueError('missing offline metadata')

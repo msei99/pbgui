@@ -147,6 +147,16 @@ async def provider_reply(chat, owner, body, *, instructions=INSTRUCTIONS, conten
     """Make one isolated read-only response, pinned to an owner-selected model."""
     selection = selection if selection is not None else (chat.get_preferences(owner).get('selection') or {})
     provider, model = selection.get('provider'), selection.get('model')
+    if provider == 'claude-code':
+        if body.screenshots:
+            raise AIChatError('Claude currently accepts text only')
+        if not model:
+            raise AIChatError('Select a Claude model first')
+        await chat._validate_provider_model(owner, provider, model)
+        content = content if content is not None else {'untrusted_issue_fields':body.model_dump(include={'subject','description','steps','expected','issue_type'})}
+        reply = await chat._claude_reply(owner, model, [{'role':'user','content':json.dumps(content)}], instructions,
+                                        effort=selection.get('effort') or '')
+        return reply, provider, model
     if provider not in {'chatgpt', 'opencode-go', 'opencode-zen'} or not model:
         raise AIChatError('Select a connected ChatGPT or OpenCode text model in AI Chat first.')
     profile = selection.get('profile') or 'default'
@@ -192,8 +202,9 @@ async def generate_draft(chat, owner: str, body: IssueDraftRequest) -> dict:
     return {'draft':parse_draft(reply), 'provider':provider, 'model':model}
 
 
-async def draft_for_request(chat, owner, body, request, *, operation=None, timeout=None):
+async def draft_for_request(chat, owner, body, request, *, operation=None, timeout=None, selected_provider=None):
     """Own provider work through AI shutdown; cancel on disconnect and bound concurrency/time."""
+    selected = selected_provider or (getattr(chat, 'get_preferences', lambda _owner: {})(owner).get('selection') or {}).get('provider')
     key = 'support-issue-draft:' + owner
     if not chat.accepting_turns:
         raise AIChatError('AI is shutting down. Try again after restart.')
