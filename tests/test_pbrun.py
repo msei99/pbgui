@@ -41,6 +41,30 @@ pbrun_spec.loader.exec_module(PBRun_mod)
 DynamicIgnore = PBRun_mod.DynamicIgnore
 
 
+def test_stderr_reader_keeps_draining_after_log_write_failure(monkeypatch) -> None:
+    """A diagnostic-log failure must not leave the child blocked on stderr."""
+
+    consumed = []
+
+    def stderr_lines():
+        for line in ("raw one\n", "raw two\n", "raw three\n"):
+            consumed.append(line)
+            yield line
+
+    class FailingLog:
+        def write(self, _data):
+            raise OSError(28, "No space left on device")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: FailingLog())
+
+    PBRun_mod._ts_wrap_stderr(stderr_lines(), "unused.log")
+
+    assert consumed == ["raw one\n", "raw two\n", "raw three\n"]
+
+
 def test_pbrun_startup_uses_one_canonical_ini_snapshot(tmp_path, monkeypatch) -> None:
     """PBRun startup reads all restart-required values from one canonical generation."""
     ini_path = tmp_path / "config" / "pbgui.ini"
