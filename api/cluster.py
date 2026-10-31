@@ -934,37 +934,55 @@ def _get_master_pbname() -> str:
     return platform.node()
 
 
+def _snapshot_identity(root: Path, *, repair: bool = False) -> dict[str, Any] | None:
+    """Read complete identity metadata; repair only while the caller owns the lock."""
+
+    paths = ClusterPaths.from_root(root)
+    metadata: dict[str, Any] = {}
+    if paths.node_identity.exists():
+        try:
+            stored = json.loads(paths.node_identity.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            stored = None  # Preserve the existing one-time identity repair.
+        if isinstance(stored, dict):
+            metadata = stored
+    role = metadata.get("role")
+    role = role if isinstance(role, str) and role.strip() else "master"
+    complete = (
+        {"schema_version", "cluster_id", "node_id", "created_at", "created_from_pbname", "role"}
+        <= metadata.keys()
+        and isinstance(metadata.get("role"), str)
+        and bool(metadata["role"].strip())
+        and type(metadata.get("created_at")) is int
+        and metadata["created_at"] != 0
+        and isinstance(metadata.get("created_from_pbname"), str)
+    )
+    if complete and paths.cluster_id.exists() and paths.node_id.exists():
+        return read_local_identity(root)
+    if repair:
+        return ensure_local_identity(root, role=role, pbname=_get_master_pbname())
+    return None
+
+
 def _load_cluster_snapshot() -> dict[str, Any]:
     """Read coherent cluster state, initializing or repairing identity only as needed."""
 
     root = _cluster_root()
     try:
-        # Serialize repair with snapshot publication and concurrent UI reads.
+        try:
+            identity = _snapshot_identity(root)
+            if identity is not None:
+                materialized = read_materialized_state(root, optimistic=True)
+                if (
+                    identity == _snapshot_identity(root)
+                    and all(materialized[key].get("cluster_id") == identity["cluster_id"]
+                            for key in ("cluster_nodes", "desired_state"))
+                ):
+                    return {"cluster_root": str(root), "identity": identity, **materialized}
+        except (OSError, ValueError, TypeError, ClusterStateError):
+            pass  # A concurrent identity replacement must be checked under the lock.
         with advisory_file_lock(root / ".append_sequence"):
-            paths = ClusterPaths.from_root(root)
-            metadata: dict[str, Any] = {}
-            if paths.node_identity.exists():
-                try:
-                    stored = json.loads(paths.node_identity.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    stored = None  # Preserve the existing one-time identity repair.
-                if isinstance(stored, dict):
-                    metadata = stored
-            role = metadata.get("role")
-            role = role if isinstance(role, str) and role.strip() else "master"
-            complete = (
-                {"schema_version", "cluster_id", "node_id", "created_at", "created_from_pbname", "role"}
-                <= metadata.keys()
-                and isinstance(metadata.get("role"), str)
-                and bool(metadata["role"].strip())
-                and type(metadata.get("created_at")) is int
-                and metadata["created_at"] != 0
-                and isinstance(metadata.get("created_from_pbname"), str)
-            )
-            if complete and paths.cluster_id.exists() and paths.node_id.exists():
-                identity = read_local_identity(root)
-            else:
-                identity = ensure_local_identity(root, role=role, pbname=_get_master_pbname())
+            identity = _snapshot_identity(root, repair=True)
             materialized = read_materialized_state(root)
     except ClusterStateError as exc:
         _log(SERVICE, f"Failed to load cluster state: {exc}", level="ERROR")

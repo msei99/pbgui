@@ -152,6 +152,19 @@ if [[ ${#enabled[@]} -eq 0 ]]; then
   exit 2
 fi
 
+# Resolve the switch before writing unit files or touching service state.
+USER_SWITCH=()
+if [[ "$RUNNING_AS_ROOT" == true && "$TARGET_UID" -ne 0 ]]; then
+  if command -v sudo >/dev/null 2>&1; then
+    USER_SWITCH=(sudo -H -u "$TARGET_USER")
+  elif command -v runuser >/dev/null 2>&1; then
+    USER_SWITCH=(runuser -u "$TARGET_USER" --)
+  else
+    err "sudo or runuser is required to switch to the target service user."
+    exit 1
+  fi
+fi
+
 unit_dir="$TARGET_HOME/.config/systemd/user"
 wants_dir="$unit_dir/default.target.wants"
 mkdir -p "$unit_dir" "$wants_dir"
@@ -245,7 +258,7 @@ if [[ "$RUNNING_AS_ROOT" == true ]]; then
   uid="$(id -u "$TARGET_USER")"
   systemctl start "user@$uid.service" >/dev/null 2>&1 || true
   run_user_systemctl() {
-    sudo -H -u "$TARGET_USER" env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user "$@"
+    "${USER_SWITCH[@]}" env HOME="$TARGET_HOME" USER="$TARGET_USER" LOGNAME="$TARGET_USER" XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user "$@"
   }
 else
   uid="$(id -u "$TARGET_USER")"

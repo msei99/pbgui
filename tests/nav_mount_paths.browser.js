@@ -141,7 +141,7 @@ async function main() {
       b.nodes['pbgui-guide-btn'].click();
       assert.equal(b.assets.at(-1).src, expected + '/app/js/shared_help_overlay.js?v=12');
       b.assets.at(-1).onerror();
-      assert.equal(c.location.href, origin + expected + '/app/help.html?v=1779');
+      assert.equal(c.location.href, origin + expected + '/app/help.html?v=1780');
     }
   }
 
@@ -222,7 +222,7 @@ async function main() {
     b.nodes['pbgui-guide-btn'].click();
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/shared_help_overlay.js?v=12');
     b.assets.at(-1).onerror();
-    assert.equal(c.location.href, app + '/app/help.html?v=1779');
+    assert.equal(c.location.href, app + '/app/help.html?v=1780');
     b.nodes['pbgui-ai-btn'].click();
     assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=28');
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/pbgui_dialogs.js?v=12');

@@ -9,7 +9,7 @@ import uuid
 
 from file_lock import advisory_file_lock
 from secure_files import atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow
-from pb8_loop_evidence import LoopAIPause, MIN_CONTEXT, encode, sha, tokens
+from pb8_loop_evidence import EvidenceSession, LoopAIPause, MIN_CONTEXT, encode, sha, tokens
 
 SERVICE = 'PB8LoopAIPolicy'
 PROFILE_VERSION = 1
@@ -139,6 +139,30 @@ class ModelProfiles:
                  meta={'error_type': type(exc).__name__})
 
 
+def recovery_page_capacity(profile):
+    """Keep the same optional/recovery reserves in planning and dispatch."""
+    return (64 - profile.get('optional_call_reserve', 12) - profile.get('recovery_call_reserve', 4)) // profile.get('recovery_passes', 1)
+
+
+def evidence_session(store, snapshot, profile, *, native=False):
+    """Fit exact mandatory pages within existing call and tool-output allowances."""
+    page_tokens = profile.get('page_tokens', 5000)
+    if native:
+        # The complete delivered JSON envelope is measured by EvidenceSession.
+        # Retain a 25% tokenizer margin and 512 tokens of transport headroom
+        # inside the existing 8192-token native tool-output allowance.
+        output_limit = profile.get('tool_output_tokens', 8192)
+        maximum = min(6144, math.floor((output_limit - 512) / 1.25))
+        if maximum < 512:
+            raise LoopAIPause('context_budget', 'Native tool-output allowance cannot fit a safe evidence page')
+        page_tokens = min(page_tokens, maximum)
+    session = EvidenceSession(store, snapshot, page_tokens)
+    if native and len(session.required_pages) > recovery_page_capacity(profile):
+        if maximum > session.page_tokens:
+            session = EvidenceSession(store, snapshot, maximum)
+    return session
+
+
 def check_context(payload, profile, output_tokens, *, codex=False, required_pages=0, initial=False):
     """Check the actual cumulative wire payload; a call quota is not token capacity."""
     count = math.ceil(tokens(payload) * 1.25) + 512
@@ -148,8 +172,7 @@ def check_context(payload, profile, output_tokens, *, codex=False, required_page
     if codex:
         if len(encode(payload)) > 1_048_576:
             raise LoopAIPause('context_budget', 'Initial message exceeds the runtime character allowance')
-        recovery_passes = profile.get('recovery_passes', 1)
-        capacity = (64 - profile.get('optional_call_reserve', 12) - profile.get('recovery_call_reserve', 4)) // recovery_passes
+        capacity = recovery_page_capacity(profile)
         if required_pages > capacity:
             raise LoopAIPause('context_budget', 'Mandatory evidence exceeds the measured recovery call allowance', pages=required_pages)
         ceiling = int(context * .75 * .5)

@@ -30,6 +30,7 @@ def dashboard_data(monkeypatch):
     ]
     db.fetch_balances.side_effect = lambda selected: [row for row in balances if row[3] in selected]
     db.fetch_positions.side_effect = lambda user: positions[user.name]
+    db.fetch_positions_for_users.side_effect = lambda names: {name: positions[name] for name in names}
     db.fetch_prices.return_value = [[1, "ETHUSDT", 0, 110.0]]
     db.fetch_orders_by_symbol.return_value = []
     db.fetch_orders.return_value = []
@@ -56,7 +57,8 @@ def test_gross_exposure_in_db_and_live_fallback(dashboard_data, monkeypatch):
     assert result["source"] == "db"
     assert [row["we"] for row in result["rows"]] == [10.0, 10.0]
     assert result["totals"]["we"] == 10.0
-    assert db.fetch_positions.call_count == 4
+    assert db.fetch_positions_for_users.call_count == 2
+    db.fetch_positions.assert_not_called()
 
 
 def test_live_balance_exposure_uses_absolute_notional(dashboard_data, monkeypatch):

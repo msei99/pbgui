@@ -4761,3 +4761,101 @@ def test_credential_runtime_route_reads_target_without_materializing(monkeypatch
     assert caught.value.status_code == 404
     route = next(route for route in cluster.router.routes if route.path == '/credential-runtime/{node_id}')
     assert any(dependency.call is cluster.require_auth for dependency in route.dependant.dependencies)
+
+
+def test_status_current_snapshot_takes_no_append_lock(snapshot_reads, monkeypatch):
+    """Both API and state reader leave the global append lock untouched."""
+    cluster.get_status(session=None)
+    forbidden = Mock(side_effect=AssertionError("read acquired append lock"))
+    monkeypatch.setattr(cluster, "advisory_file_lock", forbidden)
+    monkeypatch.setattr(cluster_state, "advisory_file_lock", forbidden)
+    assert cluster.get_status(session=None)["read_only"] is True
+    forbidden.assert_not_called()
+
+
+def test_status_completes_while_another_thread_holds_append_lock(snapshot_reads):
+    """A real authenticated route read completes before a foreign lock is released."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from file_lock import advisory_file_lock
+
+    root, _replay = snapshot_reads
+    cluster.get_status(session=None)
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        """Keep the real writer lock owned until the assertion finishes."""
+        with advisory_file_lock(root / ".append_sequence"):
+            held.set()
+            assert release.wait(15)
+
+    app = FastAPI()
+    app.include_router(cluster.router, prefix="/api/cluster")
+    app.dependency_overrides[cluster.require_auth] = lambda: object()
+    with ThreadPoolExecutor(max_workers=2) as pool, TestClient(app) as client:
+        holder = pool.submit(hold)
+        try:
+            assert held.wait(5)
+            response = pool.submit(client.get, "/api/cluster/status").result(timeout=5)
+            assert response.status_code == 200
+            assert response.json()["read_only"] is True
+            assert not release.is_set()
+        finally:
+            release.set()
+            holder.result(timeout=5)
+
+
+def test_parallel_snapshot_readers_do_not_block_append(snapshot_reads, monkeypatch):
+    """Two readers paused after validation do not serialize each other or append."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    root, _replay = snapshot_reads
+    cluster.get_status(session=None)
+    barrier = threading.Barrier(3, timeout=5)
+    release = threading.Event()
+    original = cluster_state._materialized_snapshot_hash
+    owner = threading.get_ident()
+
+    def pause(materialized):
+        """Pause only reader threads on their first hash calculation."""
+        value = original(materialized)
+        if threading.get_ident() != owner and not release.is_set():
+            barrier.wait()
+            assert release.wait(10)
+        return value
+
+    monkeypatch.setattr(cluster_state, "_materialized_snapshot_hash", pause)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        readers = [pool.submit(cluster._load_cluster_snapshot) for _ in range(2)]
+        try:
+            barrier.wait()
+            append_operation(root, "STOP_INSTANCE", {"instance": "isolated"}, created_at=101)
+        finally:
+            release.set()
+        assert all(reader.result(timeout=10)["cluster_nodes"]["generation"] == 1 for reader in readers)
+
+
+def test_identity_change_during_api_snapshot_rechecks_under_lock(snapshot_reads, monkeypatch):
+    """Metadata replaced during a read cannot leak the older API identity."""
+    root, _replay = snapshot_reads
+    cluster.get_status(session=None)
+    original = cluster._snapshot_identity
+    calls = []
+
+    def change(active_root, *, repair=False):
+        """Replace synthetic metadata at the second identity read boundary."""
+        calls.append(repair)
+        if len(calls) == 2:
+            path = root / "node_identity.json"
+            metadata = json.loads(path.read_text())
+            metadata["created_from_pbname"] = "changed"
+            cluster_state._atomic_write_json(path, metadata)
+        return original(active_root, repair=repair)
+
+    lock = Mock(wraps=cluster.advisory_file_lock)
+    monkeypatch.setattr(cluster, "_snapshot_identity", change)
+    monkeypatch.setattr(cluster, "advisory_file_lock", lock)
+    assert cluster.get_status(session=None)["identity"]["created_from_pbname"] == "changed"
+    assert calls == [False, False, True]
+    lock.assert_called_once_with(root / ".append_sequence")

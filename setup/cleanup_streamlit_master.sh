@@ -302,19 +302,32 @@ cleanup_ufw_8501() {
         return
     fi
 
-    if [ "$dry_run" -eq 1 ]; then
+    local sudo_cmd=()
+    if [[ "$(id -u)" -ne 0 ]]; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            if [[ "$dry_run" -eq 1 ]]; then
+                warn "sudo is unavailable; skipping UFW dry-run inspection."
+                return 0
+            fi
+            error "Run as root or install sudo to update UFW rules."
+            return 1
+        fi
+        sudo_cmd=(sudo)
+    fi
+
+    if [[ ${#sudo_cmd[@]} -gt 0 ]] && [ "$dry_run" -eq 1 ]; then
         if ! sudo -n true 2>/dev/null; then
             warn "sudo is not available non-interactively; skipping UFW dry-run inspection."
             warn "Run without --dry-run in an interactive shell to remove port 8501 rules."
             return 0
         fi
-    elif ! sudo -v; then
+    elif [[ ${#sudo_cmd[@]} -gt 0 ]] && ! sudo -v; then
         error "sudo is required to inspect and update UFW rules."
         return 1
     fi
 
-    mapfile -t rule_lines < <(sudo ufw status numbered 2>/dev/null | grep '8501' || true)
-    mapfile -t rule_numbers < <(sudo ufw status numbered 2>/dev/null | sed -n '/8501/s/^\[ *\([0-9][0-9]*\)\].*/\1/p')
+    mapfile -t rule_lines < <("${sudo_cmd[@]}" ufw status numbered 2>/dev/null | grep '8501' || true)
+    mapfile -t rule_numbers < <("${sudo_cmd[@]}" ufw status numbered 2>/dev/null | sed -n '/8501/s/^\[ *\([0-9][0-9]*\)\].*/\1/p')
 
     if [ "${#rule_numbers[@]}" -eq 0 ]; then
         success "No active UFW rules for port 8501 found."
@@ -331,7 +344,7 @@ cleanup_ufw_8501() {
 
     for ((idx=${#rule_numbers[@]}-1; idx>=0; idx--)); do
         number="${rule_numbers[$idx]}"
-        if printf 'y\n' | sudo ufw delete "$number" >/dev/null; then
+        if printf 'y\n' | "${sudo_cmd[@]}" ufw delete "$number" >/dev/null; then
             success "Deleted UFW rule #$number."
         else
             warn "Could not delete UFW rule #$number; check 'sudo ufw status numbered'."

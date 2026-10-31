@@ -1898,6 +1898,8 @@ def get_balance(
         all_pprices = 0.0
         used_live = False
         used_db = False
+        fallback_balances = None
+        fallback_positions = {}
 
         for user_name in users_selected:
             user_obj = all_users.find_user(user_name)
@@ -1910,16 +1912,23 @@ def get_balance(
             except Exception as exc:
                 used_db = True
                 _log(SERVICE, f"Live balance fetch failed for '{user_name}', falling back to DB: {exc}", level="WARNING", user=user_name)
-                db_rows = db.fetch_balances([user_name]) or []
-                if not db_rows:
+                if fallback_balances is None:
+                    resolved_names = list(dict.fromkeys(
+                        name for name in users_selected if all_users.find_user(name)
+                    ))
+                    fallback_balances = {}
+                    for db_row in db.fetch_balances(resolved_names) or []:
+                        fallback_balances[db_row[3]] = db_row
+                    fallback_positions = db.fetch_positions_for_users(resolved_names)
+                db_row = fallback_balances.get(user_name)
+                if db_row is None:
                     continue
-                db_row = db_rows[-1]
                 balance = _safe_float(db_row[2], 0.0)
                 try:
                     date_str = datetime.utcfromtimestamp(db_row[1] / 1000).strftime("%Y-%m-%d %H:%M:%S")
                 except Exception:
                     date_str = str(db_row[1])
-                positions = db.fetch_positions(user_obj) or []
+                positions = fallback_positions.get(user_name, [])
                 upnl = sum(_safe_float(pos[4], 0.0) for pos in positions)
                 pprices = sum(abs(_safe_float(pos[3], 0.0) * _safe_float(pos[5], 0.0)) for pos in positions)
             total_balance += balance
@@ -1951,6 +1960,10 @@ def get_balance(
     if not balances:
         return {"rows": [], "totals": {"balance": 0, "upnl": 0, "we": 0}, "source": "db"}
 
+    resolved_names = list(dict.fromkeys(
+        name for name in users_selected if all_users.find_user(name)
+    ))
+    all_positions = db.fetch_positions_for_users(resolved_names)
     rows = []
     total_balance = 0.0
     total_upnl = 0.0
@@ -1969,7 +1982,7 @@ def get_balance(
 
         # fetch positions for TWE / uPnl
         user_obj = all_users.find_user(user_name)
-        positions = db.fetch_positions(user_obj) if user_obj else []
+        positions = all_positions.get(user_name, []) if user_obj else []
 
         upnl = 0.0
         pprices = 0.0

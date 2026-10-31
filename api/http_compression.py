@@ -5,6 +5,7 @@ import zlib
 from email.utils import parsedate
 
 from starlette.datastructures import Headers, MutableHeaders
+from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse
 from starlette.staticfiles import NotModifiedResponse, StaticFiles
 
@@ -74,6 +75,18 @@ def _encoding_quality(value):
 
 class ConditionalStaticFiles(StaticFiles):
     """Stateless static serving with correct conditional precedence and weak ETags."""
+
+    def __init__(self, *args, allowed_html=None, **kwargs):
+        """Optionally restrict HTML to exact relative paths at an asset mount."""
+        self._allowed_html = None if allowed_html is None else frozenset(allowed_html)
+        super().__init__(*args, **kwargs)
+
+    async def get_response(self, path, scope):
+        """Reject raw templates before file delivery or conditional cache handling."""
+        if (self._allowed_html is not None and path.lower().endswith(".html")
+                and path not in self._allowed_html):
+            raise HTTPException(status_code=404)
+        return await super().get_response(path, scope)
 
     def is_not_modified(self, response_headers, request_headers):
         """If-None-Match takes precedence, including nonmatching tags and '*'."""

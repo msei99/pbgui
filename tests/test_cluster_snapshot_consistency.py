@@ -64,7 +64,7 @@ def _paused_rebuild(root, captured, release, results, write=True, pause_file=Non
         results.put(type(exc).__name__ + ": " + str(exc))
 
 
-def _contender(root, attempted, finished, results, mutate=True):
+def _contender(root, attempted, finished, results, mutate=True, optimistic=False):
     """Signal lock acquisition attempts before appending or reading a snapshot."""
 
     owner = threading.get_ident()
@@ -83,7 +83,7 @@ def _contender(root, attempted, finished, results, mutate=True):
                 state.append_operation(root, "UPDATE_NODE", {"node_id": NODE_ID, "pbname": "new"}, created_at=102)
                 materialized = state.rebuild_materialized_state(root)
             else:
-                materialized = state.read_materialized_state(root)
+                materialized = state.read_materialized_state(root, optimistic=optimistic)
         results.put(materialized["state_vector"][NODE_ID])
     except BaseException as exc:
         results.put(type(exc).__name__ + ": " + str(exc))
@@ -124,8 +124,9 @@ def test_rebuild_serializes_history_read_through_publish(root: Path, worker_kind
         results.join_thread()
 
 
+@pytest.mark.parametrize("optimistic", [False, True])
 @pytest.mark.parametrize("pause_file", ["cluster_nodes.json", "desired_state.json", "state_vector.json"])
-def test_reader_waits_for_complete_publication(root: Path, pause_file: str) -> None:
+def test_reader_waits_for_complete_publication(root: Path, pause_file: str, optimistic: bool) -> None:
     """A reader cannot accept a stable midpoint between snapshot replacements."""
 
     state.rebuild_materialized_state(root)
@@ -133,7 +134,7 @@ def test_reader_waits_for_complete_publication(root: Path, pause_file: str) -> N
     captured, release, attempted, finished = [threading.Event() for _ in range(4)]
     results = queue.Queue()
     writer = threading.Thread(target=_paused_rebuild, args=(root, captured, release, results, True, pause_file))
-    reader = threading.Thread(target=_contender, args=(root, attempted, finished, results, False))
+    reader = threading.Thread(target=_contender, args=(root, attempted, finished, results, False, optimistic))
     writer.start()
     try:
         assert captured.wait(15)
@@ -279,7 +280,8 @@ def test_checkpoint_identity_invalidates_equal_vector_and_survives_pruning(root:
     assert after["cluster_nodes"]["nodes"][NODE_ID]["pbname"] == "tail"
 
 
-def test_checkpoint_corruption_is_not_hidden_by_current_snapshot(root: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("reader", ["default", "optimistic", "api"])
+def test_checkpoint_corruption_is_not_hidden_by_current_snapshot(root: Path, monkeypatch, reader: str) -> None:
     """Changes to checkpoint content with preserved mtimes cannot reuse a snapshot."""
 
     from master import cluster_checkpoint as checkpoint
@@ -294,8 +296,17 @@ def test_checkpoint_corruption_is_not_hidden_by_current_snapshot(root: Path, mon
             old_stat = path.stat()
             path.write_text("{}", encoding="utf-8")
             os.utime(path, ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns))
-    with pytest.raises(checkpoint.ClusterCheckpointError):
-        state.read_materialized_state(root)
+    if reader == "api":
+        from api import cluster
+        from fastapi import HTTPException
+        monkeypatch.setattr(cluster, "_cluster_root", lambda: root)
+        monkeypatch.setattr(cluster, "_get_master_pbname", lambda: "isolated")
+        with pytest.raises(HTTPException) as caught:
+            cluster.get_status(session=None)
+        assert caught.value.status_code == 500
+    else:
+        with pytest.raises(checkpoint.ClusterCheckpointError):
+            state.read_materialized_state(root, optimistic=reader == "optimistic")
 
 
 def test_checkpoint_activation_waits_for_readonly_replay(root: Path, monkeypatch) -> None:
@@ -380,3 +391,42 @@ def test_monitor_metadata_uses_coherent_snapshot_reader() -> None:
     assert "materialized = read_materialized_state(cluster_root)" in HOST_META_SCRIPT
     assert "cluster_nodes.json" not in HOST_META_SCRIPT
     assert "desired_state.json" not in HOST_META_SCRIPT
+
+
+@pytest.mark.parametrize("change", ["history", "commit", "partial", "invalid_json"])
+def test_optimistic_read_revalidates_after_read_phase_change(root: Path, monkeypatch, change: str) -> None:
+    """A change after hashing forces locked revalidation, never a mixed result."""
+    state.rebuild_materialized_state(root)
+    original = state._materialized_snapshot_hash
+    changed = False
+
+    def alter(materialized):
+        """Inject one replacement precisely between snapshot and boundary checks."""
+        nonlocal changed
+        value = original(materialized)
+        if not changed:
+            changed = True
+            if change == "history":
+                state.append_operation(root, "UPDATE_NODE", {"node_id": NODE_ID, "pbname": "new"}, created_at=102)
+            elif change == "commit":
+                path = root / "snapshot_commit.json"
+                commit = state._read_json(path)
+                state._atomic_write_json(path, {**commit, "generation": "replacement"})
+            else:
+                path = root / "desired_state.json"
+                path.write_text("{" if change == "invalid_json" else "{}")
+                # Model a publisher changing the commit at the end of this read.
+                commit_path = root / "snapshot_commit.json"
+                commit = state._read_json(commit_path)
+                state._atomic_write_json(commit_path, {**commit, "generation": "partial"})
+        return value
+
+    from unittest.mock import Mock
+    lock = Mock(wraps=advisory_file_lock)
+    monkeypatch.setattr(state, "_materialized_snapshot_hash", alter)
+    monkeypatch.setattr(state, "advisory_file_lock", lock)
+    materialized = state.read_materialized_state(root, optimistic=True)
+    assert lock.call_count >= 1
+    assert materialized == state.rebuild_materialized_state(root, write=False)
+    if change == "history":
+        assert materialized["cluster_nodes"]["generation"] == 2

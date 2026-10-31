@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ast
 from collections import Counter
+from functools import lru_cache
 import glob
 import json
 import importlib
@@ -326,17 +327,29 @@ def _pid_matches_service(pid: int, name: str) -> bool:
         return False
 
 
+@lru_cache(maxsize=64)
+def _resolved_service_script(pbgdir: str, script: str) -> Path:
+    """Cache canonical daemon paths separately for each PBGui installation."""
+    return (Path(pbgdir) / script).resolve(strict=False)
+
+
 def _process_matches_service_script(process: Any, cmdline: list[Any], script: str) -> bool:
     """Match a daemon only when its script resolves below this PBGui install."""
-    expected = (Path(PBGDIR) / script).resolve(strict=False)
+    script_lower = script.lower()
+    canonical_script = next(
+        (name for name in _SERVICE_SCRIPT_NAMES.values() if name.lower() == script_lower), None
+    )
+    if canonical_script is None:
+        return False
+    matching_args = [Path(str(arg)) for arg in cmdline if Path(str(arg)).name.lower() == script_lower]
+    if not matching_args:
+        return False
     try:
         cwd = Path(process.cwd())
     except Exception:
         return False
-    for raw_arg in cmdline:
-        arg = Path(str(raw_arg))
-        if arg.name.lower() != script.lower():
-            continue
+    expected = _resolved_service_script(str(PBGDIR), canonical_script)
+    for arg in matching_args:
         candidate = arg if arg.is_absolute() else cwd / arg
         if candidate.resolve(strict=False) == expected:
             return True

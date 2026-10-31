@@ -1187,7 +1187,10 @@ async def append_notify_log(request: Request, session: SessionToken = Depends(re
 
 frontend_dir = Path(__file__).parent / "frontend"
 if frontend_dir.exists():
-    app.mount("/app", ConditionalStaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+    app.mount("/app", ConditionalStaticFiles(
+        directory=str(frontend_dir), html=False,
+        allowed_html={"help.html", "jobs_monitor.html"},
+    ), name="frontend")
 
 
 # ── WebSocket endpoints ───────────────────────────────────────

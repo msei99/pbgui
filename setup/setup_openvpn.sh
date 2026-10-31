@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Root needs no privilege wrapper; other users must have sudo.
+SUDO=()
+if [[ "$(id -u)" -ne 0 ]]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "Run as root or install sudo before running this script." >&2
+        exit 1
+    fi
+    SUDO=(sudo)
+fi
+
 # ==========================================
 # 🚀 OpenVPN Server Setup Script
 # Automatically uses hostname and current user
@@ -47,46 +57,46 @@ echo
 
 # --- Install dependencies ---
 info "Installing OpenVPN, Easy-RSA, qrencode..."
-sudo apt update
-sudo apt install -y openvpn easy-rsa qrencode
+"${SUDO[@]}" apt update
+"${SUDO[@]}" apt install -y openvpn easy-rsa qrencode
 success "Dependencies installed."
 
 # --- Setup Easy-RSA ---
 info "Setting up Easy-RSA..."
-sudo rm -rf "$EASYRSA_DIR"
-sudo mkdir -p "$EASYRSA_DIR"
-sudo cp -r /usr/share/easy-rsa/* "$EASYRSA_DIR"
+"${SUDO[@]}" rm -rf "$EASYRSA_DIR"
+"${SUDO[@]}" mkdir -p "$EASYRSA_DIR"
+"${SUDO[@]}" cp -r /usr/share/easy-rsa/* "$EASYRSA_DIR"
 cd "$EASYRSA_DIR"
 
 info "Initializing PKI..."
-sudo bash -c "EASYRSA_BATCH=1 EASYRSA_REQ_CN=$SERVER_NAME ./easyrsa init-pki"
+"${SUDO[@]}" bash -c "EASYRSA_BATCH=1 EASYRSA_REQ_CN=$SERVER_NAME ./easyrsa init-pki"
 info "Building CA..."
-sudo bash -c "EASYRSA_BATCH=1 EASYRSA_REQ_CN=$SERVER_NAME ./easyrsa build-ca nopass"
+"${SUDO[@]}" bash -c "EASYRSA_BATCH=1 EASYRSA_REQ_CN=$SERVER_NAME ./easyrsa build-ca nopass"
 info "Generating client request..."
-sudo bash -c "EASYRSA_BATCH=1 EASYRSA_REQ_CN=$SERVER_NAME ./easyrsa gen-req $CLIENT_NAME nopass"
+"${SUDO[@]}" bash -c "EASYRSA_BATCH=1 EASYRSA_REQ_CN=$SERVER_NAME ./easyrsa gen-req $CLIENT_NAME nopass"
 info "Signing client request..."
-sudo bash -c "echo yes | EASYRSA_BATCH=1 ./easyrsa sign-req client $CLIENT_NAME"
+"${SUDO[@]}" bash -c "echo yes | EASYRSA_BATCH=1 ./easyrsa sign-req client $CLIENT_NAME"
 info "Generating server request..."
-sudo bash -c "EASYRSA_BATCH=1 ./easyrsa gen-req server nopass"
+"${SUDO[@]}" bash -c "EASYRSA_BATCH=1 ./easyrsa gen-req server nopass"
 info "Signing server request..."
-sudo bash -c "echo yes | EASYRSA_BATCH=1 ./easyrsa sign-req server server"
+"${SUDO[@]}" bash -c "echo yes | EASYRSA_BATCH=1 ./easyrsa sign-req server server"
 success "Easy-RSA setup complete."
 
 # --- Copy certs/keys to OpenVPN directory ---
 info "Copying certificates and keys to OpenVPN directory..."
-sudo mkdir -p "$OVPN_DIR"
-sudo cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/issued/${CLIENT_NAME}.crt pki/private/${CLIENT_NAME}.key "$OVPN_DIR/"
+"${SUDO[@]}" mkdir -p "$OVPN_DIR"
+"${SUDO[@]}" cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/issued/${CLIENT_NAME}.crt pki/private/${CLIENT_NAME}.key "$OVPN_DIR/"
 success "Certificates and keys copied."
 
 # --- Generate TLS and ECDH keys ---
 info "Generating TLS and ECDH keys..."
-sudo openssl ecparam -name prime256v1 -out "$OVPN_DIR/ecdh.pem"
-sudo openvpn --genkey secret "$OVPN_DIR/ta.key"
+"${SUDO[@]}" openssl ecparam -name prime256v1 -out "$OVPN_DIR/ecdh.pem"
+"${SUDO[@]}" openvpn --genkey secret "$OVPN_DIR/ta.key"
 success "TLS and ECDH keys generated."
 
 # --- OpenVPN server config ---
 info "Creating OpenVPN server configuration..."
-sudo tee "$OVPN_DIR/server.conf" > /dev/null <<'EOF'
+"${SUDO[@]}" tee "$OVPN_DIR/server.conf" > /dev/null <<'EOF'
 port 1194
 proto udp
 dev tun
@@ -148,22 +158,22 @@ success "OpenVPN server configuration created."
 
 # --- Ensure TUN device exists ---
 info "Ensuring TUN device exists..."
-sudo mkdir -p /dev/net || true
-sudo mknod -m 600 /dev/net/tun c 10 200 || true
+"${SUDO[@]}" mkdir -p /dev/net || true
+"${SUDO[@]}" mknod -m 600 /dev/net/tun c 10 200 || true
 success "TUN device created."
 
 # --- Set Permissions ---
 info "Setting permissions for OpenVPN directory..."
-sudo chown -R root:root "$OVPN_DIR"
-sudo chmod 600 "$OVPN_DIR/server.key" "$OVPN_DIR/ta.key"
-sudo chmod 644 "$OVPN_DIR/server.crt" "$OVPN_DIR/ca.crt" "$OVPN_DIR/${CLIENT_NAME}.crt"
+"${SUDO[@]}" chown -R root:root "$OVPN_DIR"
+"${SUDO[@]}" chmod 600 "$OVPN_DIR/server.key" "$OVPN_DIR/ta.key"
+"${SUDO[@]}" chmod 644 "$OVPN_DIR/server.crt" "$OVPN_DIR/ca.crt" "$OVPN_DIR/${CLIENT_NAME}.crt"
 success "Permissions set."
 
 # --- Create systemd override for proper logging and PID ---
 info "Configuring systemd override for OpenVPN..."
-sudo mkdir -p /etc/systemd/system/openvpn-server@server.service.d
+"${SUDO[@]}" mkdir -p /etc/systemd/system/openvpn-server@server.service.d
 
-sudo tee /etc/systemd/system/openvpn-server@server.service.d/override.conf > /dev/null <<EOF
+"${SUDO[@]}" tee /etc/systemd/system/openvpn-server@server.service.d/override.conf > /dev/null <<EOF
 [Service]
 # Clear the original ExecStart
 ExecStart=
@@ -172,23 +182,23 @@ ExecStart=/usr/sbin/openvpn --config /etc/openvpn/server/server.conf --writepid 
 EOF
 
 # Reload systemd to pick up override
-sudo systemctl daemon-reload
+"${SUDO[@]}" systemctl daemon-reload
 success "Systemd override created."
 
 # --- Enable & start OpenVPN ---
 info "Enabling and starting OpenVPN service..."
-sudo systemctl daemon-reload
-sudo systemctl enable openvpn-server@server.service
-sudo systemctl restart openvpn-server@server.service
+"${SUDO[@]}" systemctl daemon-reload
+"${SUDO[@]}" systemctl enable openvpn-server@server.service
+"${SUDO[@]}" systemctl restart openvpn-server@server.service
 success "OpenVPN service started."
 
 # --- Prepare client files ---
 info "Preparing client files..."
 
 # Move client keys directory to a more secure location
-sudo mkdir -p "$CLIENT_KEYS_DIR"
-sudo cp "$OVPN_DIR/${CLIENT_NAME}.crt" "$OVPN_DIR/${CLIENT_NAME}.key" "$CLIENT_KEYS_DIR/"
-sudo chown root:root "$CLIENT_KEYS_DIR"/*
+"${SUDO[@]}" mkdir -p "$CLIENT_KEYS_DIR"
+"${SUDO[@]}" cp "$OVPN_DIR/${CLIENT_NAME}.crt" "$OVPN_DIR/${CLIENT_NAME}.key" "$CLIENT_KEYS_DIR/"
+"${SUDO[@]}" chown root:root "$CLIENT_KEYS_DIR"/*
 
 # --- Detect external IP ---
 info "Detecting external IP..."
@@ -221,19 +231,19 @@ auth-user-pass
 verb 3
 
 <ca>
-$(sudo cat "$OVPN_DIR/ca.crt")
+$("${SUDO[@]}" cat "$OVPN_DIR/ca.crt")
 </ca>
 
 <cert>
-$(sudo cat "$CLIENT_KEYS_DIR/${CLIENT_NAME}.crt")
+$("${SUDO[@]}" cat "$CLIENT_KEYS_DIR/${CLIENT_NAME}.crt")
 </cert>
 
 <key>
-$(sudo cat "$CLIENT_KEYS_DIR/${CLIENT_NAME}.key")
+$("${SUDO[@]}" cat "$CLIENT_KEYS_DIR/${CLIENT_NAME}.key")
 </key>
 
 <tls-crypt>
-$(sudo cat "$OVPN_DIR/ta.key")
+$("${SUDO[@]}" cat "$OVPN_DIR/ta.key")
 </tls-crypt>
 EOF
 chmod 600 "$CLIENT_FILE"

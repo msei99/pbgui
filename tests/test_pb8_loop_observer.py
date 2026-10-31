@@ -104,6 +104,39 @@ def test_missing_holdout_still_runs_full_range(record):
     assert not observer.pending(current)
 
 
+@pytest.mark.parametrize('previous_phase', ['interpret', 'bootstrap', 'baseline', 'evaluate'])
+def test_new_optimizer_launch_precedes_report_preparation(record, tmp_path, monkeypatch, previous_phase):
+    """A transition releases its claim so slow reports cannot precede the new launch."""
+    store, row = record
+    store.update(OWNER, row['id'], lambda current: current.update(phase=previous_phase))
+    backend = Backend()
+    controller = LoopController(tmp_path, store, backend, FakeAI())
+    original_tick = controller._tick
+    reports = []
+
+    async def transition(current):
+        """Persist a ready next round, then exercise the real optimizer launch path."""
+        if current['phase'] == previous_phase:
+            job = {'operation': 'f' * 32, 'name': 'next', 'kind': 'optimizer', 'round': 1,
+                   'config': config(), 'overrides': {}, 'status': 'planned', 'started': False, 'backend': None}
+            await owned_thread(store.update, OWNER, row['id'],
+                               lambda value: value.update(phase='optimize', round=1, jobs=[job]))
+        else:
+            await original_tick(current)
+
+    async def report_pass(current):
+        """A real next training launch must already have happened before report work."""
+        assert 'f' * 32 in backend.starts
+        reports.append(current['round'])
+
+    monkeypatch.setattr(controller, '_tick', transition)
+    monkeypatch.setattr(controller.observers, 'tick', report_pass)
+    asyncio.run(controller.tick(OWNER, row['id']))
+    assert reports == [] and backend.starts == []
+    asyncio.run(controller.tick(OWNER, row['id']))
+    assert reports == [1] and 'f' * 32 in backend.starts
+
+
 @pytest.mark.parametrize('template', [False, True])
 def test_next_optimizer_and_terminal_collection_do_not_wait_for_observers(record, tmp_path, template):
     """A background monitor cannot block the next round or final normal completion."""

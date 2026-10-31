@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Root needs no privilege wrapper; other users must have sudo.
+SUDO=()
+if [[ "$(id -u)" -ne 0 ]]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "Run as root or install sudo before running this script." >&2
+        exit 1
+    fi
+    SUDO=(sudo)
+fi
+
 # ==========================================
 # 🔧 Resize or create swapfile
 # ==========================================
@@ -32,38 +42,38 @@ info "Checking current swapfile..."
 
 if [ -f "$SWAPFILE" ]; then
     info "Swapfile exists. Disabling it..."
-    sudo swapoff "$SWAPFILE"
+    "${SUDO[@]}" swapoff "$SWAPFILE"
     success "Swapfile disabled."
     info "Removing old swapfile..."
-    sudo rm -f "$SWAPFILE"
+    "${SUDO[@]}" rm -f "$SWAPFILE"
     success "Old swapfile removed."
 else
     info "No existing swapfile found. Creating a new one..."
 fi
 
 info "Creating new swapfile of size $SWAP_SIZE..."
-sudo fallocate -l "$SWAP_SIZE" "$SWAPFILE"
-sudo chmod 600 "$SWAPFILE"
-sudo mkswap "$SWAPFILE"
-sudo swapon "$SWAPFILE"
+"${SUDO[@]}" fallocate -l "$SWAP_SIZE" "$SWAPFILE"
+"${SUDO[@]}" chmod 600 "$SWAPFILE"
+"${SUDO[@]}" mkswap "$SWAPFILE"
+"${SUDO[@]}" swapon "$SWAPFILE"
 success "Swapfile created and enabled."
 
 # Add to fstab if not already present
 if ! grep -q "$SWAPFILE" /etc/fstab; then
-    echo "$SWAPFILE none swap sw 0 0" | sudo tee -a /etc/fstab
+    echo "$SWAPFILE none swap sw 0 0" | "${SUDO[@]}" tee -a /etc/fstab
     success "Swapfile entry added to /etc/fstab"
 fi
 
 info "Tuning swap settings..."
-sudo sysctl -w vm.swappiness=10 > /dev/null
-sudo sysctl -w vm.vfs_cache_pressure=50 > /dev/null
+"${SUDO[@]}" sysctl -w vm.swappiness=10 > /dev/null
+"${SUDO[@]}" sysctl -w vm.vfs_cache_pressure=50 > /dev/null
 
 # Persist settings
-sudo sed -i '/vm.swappiness/d' /etc/sysctl.conf
-echo "vm.swappiness=10" | sudo tee -a /etc/sysctl.conf
+"${SUDO[@]}" sed -i '/vm.swappiness/d' /etc/sysctl.conf
+echo "vm.swappiness=10" | "${SUDO[@]}" tee -a /etc/sysctl.conf
 
-sudo sed -i '/vm.vfs_cache_pressure/d' /etc/sysctl.conf
-echo "vm.vfs_cache_pressure=50" | sudo tee -a /etc/sysctl.conf
+"${SUDO[@]}" sed -i '/vm.vfs_cache_pressure/d' /etc/sysctl.conf
+echo "vm.vfs_cache_pressure=50" | "${SUDO[@]}" tee -a /etc/sysctl.conf
 
 success "Swap settings applied."
 success "✅ Swapfile resize/create complete!"

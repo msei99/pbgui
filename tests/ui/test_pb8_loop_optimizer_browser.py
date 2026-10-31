@@ -398,7 +398,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
                 payload=json.loads(route.request.post_data);continuations.append(payload)
                 parent=next(row for row in loops if row['id']==path.split('/')[-2])
                 child=copy.deepcopy(parent);child.update(id='e'*32, name='Continued fixture', status='running', ended=False, phase='baseline', jobs=[], cycles=[], best=None)
-                child['settings']['max_runs']=payload['rounds'];child['continuation']={'parent':parent['id'],'round':payload['round']}
+                child['settings']['max_runs']=payload['rounds'];child['settings']['hours']=payload['hours'];child['continuation']={'parent':parent['id'],'round':payload['round']}
                 if continuation_delay['enabled']:
                     continuation_delay['pending'].append((route, child))
                 else:
@@ -1295,6 +1295,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
         # Continue from a result is one direct authorized action, using shared AI settings.
         parent=copy.deepcopy(old_result);parent.update(id='f'*32,status='unconfirmed',ended=True,deletable=True,
             best={'round':1,'assessment':{'score':1.2,'hard_targets_met':True,'goals':[{'goal':'gain','metric':'gain','value':1.2,'target':2,'confirmed':False,'direction':'max'}]}})
+        parent['settings']['hours']=36.00000000019868
         loops.append(parent)
         for identifier,status in [('1'*32,'failed'),('2'*32,'stopped')]:
             without_continue=copy.deepcopy(parent)
@@ -1362,12 +1363,22 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
         parent_row.get_by_role('button',name='Continue',exact=True).click()
         page.locator('#loop-report-tab-overview').click()
         page.get_by_role('button',name='10 more',exact=True).click()
+        hours=page.get_by_role('spinbutton',name='Continuation hours')
+        assert hours.input_value()=='36'
+        hours.fill('0')
+        page.locator('#loop-report-body').get_by_role('button',name='Continue',exact=True).click()
+        assert not continuations
+        hours.fill('12')
+        parent['ai_calls']+=1
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        page.wait_for_function("document.querySelector('[aria-label=\"Continuation hours\"]').value==='12'")
         continuation_delay['enabled']=True
         with page.expect_request('**/api/optimize-v8/loops/'+'f'*32+'/continue'):
             page.locator('#loop-report-body').get_by_role('button',name='Continue',exact=True).click()
         starting=page.locator('#loop-report-body').get_by_role('button',name='Starting…',exact=True)
         assert starting.is_disabled()
         assert page.get_by_role('spinbutton',name='Additional optimizer runs').is_disabled()
+        assert hours.is_disabled() and hours.input_value()=='12'
         assert page.get_by_role('button',name='5 more',exact=True).is_disabled()
         assert page.locator('#loop-report-body [role="status"]').inner_text()=='Starting the linked run…'
         starting.evaluate('node=>window.loopStartingButton=node')
@@ -1387,7 +1398,10 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
         assert page.locator('#loop-report-body').get_by_role('button',name='Continue',exact=True).is_enabled()
         count=page.get_by_role('spinbutton',name='Additional optimizer runs')
         assert count.is_enabled() and count.input_value()=='10'
+        assert hours.is_enabled() and hours.input_value()=='12'
+        assert continuations[-1]['hours']==12
         count.fill('20')
+        hours.fill('6.5')
         with page.expect_request('**/api/optimize-v8/loops/'+'f'*32+'/continue'):
             page.locator('#loop-report-body').get_by_role('button',name='Continue',exact=True).click()
         assert len(continuation_delay['pending'])==1 and len(continuations)==2
@@ -1396,6 +1410,7 @@ def test_pb8_loop_navigation_setup_polling_and_restore(viewport_width=1200, capa
         page.wait_for_function("document.querySelector('#panel-loops-queue').classList.contains('active') && document.querySelector('#loops-queue-table').textContent.includes('Continued fixture')")
         assert continuations[-1]['rounds']==20 and continuations[-1]['round'] is None
         assert continuations[-1]['authorization'] and continuations[-1]['selection']['model']=='pinned'
+        assert continuations[-1]['hours']==6.5
         assert loops[-1]['continuation']['parent']=='f'*32
         assert 'loop_id='+('e'*32) in page.url
         page.locator('#loops-queue-table tr[data-key="'+'e'*32+'"]').get_by_role('button',name='Open',exact=True).click()

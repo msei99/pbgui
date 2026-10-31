@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Root needs no privilege wrapper; other users must have sudo.
+SUDO=()
+if [[ "$(id -u)" -ne 0 ]]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "Run as root or install sudo before running this script." >&2
+        exit 1
+    fi
+    SUDO=(sudo)
+fi
+
 # =============================================================================
 # UFW Firewall Configuration for OpenVPN Server
 # =============================================================================
@@ -91,14 +101,14 @@ echo
 # =============================================================================
 
 info "Ensuring UFW is installed..."
-sudo apt install -y ufw
+"${SUDO[@]}" apt install -y ufw
 success "UFW installed."
 
 info "Resetting UFW rules..."
-sudo ufw --force reset
+"${SUDO[@]}" ufw --force reset
 
 info "Allowing essential services..."
-sudo ufw allow 1194/udp comment 'OpenVPN UDP'
+"${SUDO[@]}" ufw allow 1194/udp comment 'OpenVPN UDP'
 
 # --- SSH access logic ---
 SSH_ALLOWED=()
@@ -114,25 +124,25 @@ fi
 
 if [[ ${#SSH_ALLOWED[@]} -eq 0 ]]; then
   info "Allowing SSH from all IPs (default)..."
-  sudo ufw allow 22/tcp comment "Allow SSH from all IPs"
+  "${SUDO[@]}" ufw allow 22/tcp comment "Allow SSH from all IPs"
 else
   info "Allowing SSH from the following sources: ${SSH_ALLOWED[*]}"
   for src in "${SSH_ALLOWED[@]}"; do
-    sudo ufw allow from "$src" to any port 22 proto tcp comment "SSH from $src"
+    "${SUDO[@]}" ufw allow from "$src" to any port 22 proto tcp comment "SSH from $src"
   done
 fi
 
 # --- PBGui access logic (port 8000) ---
 info "Allowing PBGui access over VPN..."
-sudo ufw allow from "$VPN_CIDR" to any port 8000 proto tcp comment "PBGui via VPN"
+"${SUDO[@]}" ufw allow from "$VPN_CIDR" to any port 8000 proto tcp comment "PBGui via VPN"
 
 # --- Default policies and enable UFW ---
 info "Setting default policies..."
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
+"${SUDO[@]}" ufw default deny incoming
+"${SUDO[@]}" ufw default allow outgoing
 
 info "Enabling UFW..."
-sudo ufw --force enable
+"${SUDO[@]}" ufw --force enable
 success "Firewall configured and enabled."
 
 # =============================================================================

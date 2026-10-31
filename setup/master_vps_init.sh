@@ -32,22 +32,86 @@ echo -e "${BOLD}==============================================="
 echo -e " 🔧 Master VPS Initialization - Secure Setup "
 echo -e "===============================================${RESET}\n"
 
-# ----------[ OS Check ]----------
-info "Checking operating system..."
-if [ "$(lsb_release -si)" != "Ubuntu" ]; then
-    error "This script only supports Ubuntu systems."
+# Validate all inputs before package installation or system changes.
+if [[ "$#" -ne 2 ]]; then
+    echo "Usage: $0 <server_name> <user_name>" >&2
     exit 1
 fi
-success "Ubuntu detected."
-
-# ----------[ Argument Validation ]----------
-if [ "$#" -ne 2 ]; then
-    echo -e "${YELLOW}Usage:${RESET} $0 <server_name> <user_name>"
-    exit 1
-fi
-
 SERVER_NAME="$1"
 USER_NAME="$2"
+if [[ ${#SERVER_NAME} -gt 253 || ! "$SERVER_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+    error "Invalid server hostname."
+    exit 1
+fi
+IFS='.' read -r -a hostname_labels <<< "$SERVER_NAME"
+for label in "${hostname_labels[@]}"; do
+    if [[ ${#label} -gt 63 || ! "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]]; then
+        error "Invalid server hostname label."
+        exit 1
+    fi
+done
+if [[ "$USER_NAME" == root || ! "$USER_NAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    error "Invalid non-root administrator name."
+    exit 1
+fi
+
+# Read distribution metadata in a subshell without changing script variables.
+ubuntu_id() (
+    ID=""
+    if [[ -r /etc/os-release ]]; then
+        . /etc/os-release
+    fi
+    if [[ -n "$ID" ]]; then
+        printf '%s\n' "$ID"
+    elif command -v lsb_release >/dev/null 2>&1; then
+        lsb_release -si | tr '[:upper:]' '[:lower:]'
+    fi
+)
+if [[ "$(ubuntu_id)" != "ubuntu" ]]; then
+    echo "This script only supports Ubuntu systems." >&2
+    exit 1
+fi
+
+# Existing accounts must already be administrators; never grant them new rights.
+validate_admin_account() {
+    local uid groups
+    uid="$(id -u "$USER_NAME")" || return 1
+    [[ "$uid" =~ ^[0-9]+$ && "$uid" -ne 0 ]] || return 1
+    groups="$(id -nG "$USER_NAME")" || return 1
+    [[ " $groups " == *" sudo "* ]]
+}
+if id "$USER_NAME" >/dev/null 2>&1 && ! validate_admin_account; then
+    error "Existing target account must be a non-root member of the sudo group."
+    exit 1
+fi
+
+# Root login will be disabled later: the administrator must have sudo first.
+if [[ "$(id -u)" -eq 0 ]] && ! command -v sudo >/dev/null 2>&1; then
+    if ! command -v apt-get >/dev/null 2>&1; then
+        error "apt-get is required to install sudo before disabling root login."
+        exit 1
+    fi
+    APT_OPTS=(-o Dpkg::Use-Pty=0 -o APT::Color=0)
+    if ! DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTS[@]}" update ||
+       ! DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTS[@]}" install -y sudo; then
+        error "Could not install sudo; root login has not been changed."
+        exit 1
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        error "sudo is still unavailable; root login has not been changed."
+        exit 1
+    fi
+fi
+
+# Root needs no privilege wrapper; other users must have sudo.
+SUDO=()
+if [[ "$(id -u)" -ne 0 ]]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "Run as root or install sudo before running this script." >&2
+        exit 1
+    fi
+    SUDO=(sudo)
+fi
 
 echo
 info "Configuration:"
@@ -75,40 +139,42 @@ success "Password confirmed."
 
 # ----------[ Set Hostname ]----------
 info "Setting system hostname to '${SERVER_NAME}'..."
-if [ "$(id -u)" -eq 0 ]; then
-    hostnamectl set-hostname "$SERVER_NAME"
-else
-    printf "%s\n" "$user_pw" | sudo -S hostnamectl set-hostname "$SERVER_NAME"
-fi
+"${SUDO[@]}" hostnamectl set-hostname "$SERVER_NAME"
 success "Hostname set successfully."
 
 # ----------[ Create New User ]----------
 info "Creating new sudo user '$USER_NAME'..."
 if ! id "$USER_NAME" &>/dev/null; then
-    sudo useradd -m -s /bin/bash "$USER_NAME"
-    echo "$USER_NAME:$user_pw" | sudo chpasswd
-    sudo usermod -aG sudo "$USER_NAME"
+    "${SUDO[@]}" useradd -m -s /bin/bash "$USER_NAME"
+    printf '%s:%s\n' "$USER_NAME" "$user_pw" | "${SUDO[@]}" chpasswd
+    "${SUDO[@]}" usermod -aG sudo "$USER_NAME"
     success "User '$USER_NAME' created and added to sudo group."
 else
     warn "User '$USER_NAME' already exists. Skipping creation."
 fi
 
+if ! validate_admin_account; then
+    error "Administrator verification failed; root login has not been changed."
+    exit 1
+fi
+unset user_pw pw1 pw2
+
 # ----------[ Secure SSH Configuration ]----------
 info "Securing SSH access (disabling root login)..."
-sudo passwd -l root
+"${SUDO[@]}" passwd -l root
 
 # Ensure PermitRootLogin is set properly
 if grep -q '^PermitRootLogin' /etc/ssh/sshd_config; then
-    sudo sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+    "${SUDO[@]}" sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 else
-    echo 'PermitRootLogin no' | sudo tee -a /etc/ssh/sshd_config > /dev/null
+    echo 'PermitRootLogin no' | "${SUDO[@]}" tee -a /etc/ssh/sshd_config > /dev/null
 fi
 
 # Reload SSH service gracefully
 if systemctl list-units --type=service | grep -q 'sshd.service'; then
-    sudo systemctl reload sshd
+    "${SUDO[@]}" systemctl reload sshd
 else
-    sudo systemctl reload ssh
+    "${SUDO[@]}" systemctl reload ssh
 fi
 success "Root login disabled and SSH reloaded."
 

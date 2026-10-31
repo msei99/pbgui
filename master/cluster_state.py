@@ -947,37 +947,54 @@ def _rebuild_materialized_state_unlocked(cluster_root: Path) -> dict[str, Any]:
     return materialized
 
 
-def read_materialized_state(cluster_root: Path) -> dict[str, Any]:
-    """Read a current persisted snapshot or validate and rebuild a stale one."""
+def _read_committed_materialized_state(root: Path, *, optimistic: bool = False) -> dict[str, Any]:
+    """Validate one publication, checking both read boundaries without a lock."""
+
+    paths = ClusterPaths.from_root(root)
+    history = _materialized_history_identity(paths)
+    commit = _read_json(root / "snapshot_commit.json")
+    if (
+        not isinstance(commit, dict)
+        or commit.get("schema_version") != 1
+        or commit.get("history") != history
+    ):
+        raise ClusterStateError("materialized snapshot history changed")
+    materialized = {
+        "cluster_nodes": _read_json(paths.cluster_nodes),
+        "desired_state": _read_json(paths.desired_state),
+        "state_vector": _read_json(paths.state_vector),
+    }
+    if not all(isinstance(value, dict) for value in materialized.values()):
+        raise ClusterStateError("materialized snapshot is invalid")
+    if commit.get("snapshot_hash") != _materialized_snapshot_hash(materialized):
+        raise ClusterStateError("materialized snapshot publication is incomplete")
+    cluster_id = str(read_local_identity(root)["cluster_id"])
+    if any(
+        materialized[key].get("cluster_id") != cluster_id
+        for key in ("cluster_nodes", "desired_state")
+    ):
+        raise ClusterStateError("materialized snapshot belongs to another cluster")
+    if optimistic and (
+        commit != _read_json(root / "snapshot_commit.json")
+        or history != _materialized_history_identity(paths)
+    ):
+        raise ClusterStateError("materialized snapshot changed during read")
+    return materialized
+
+
+def read_materialized_state(cluster_root: Path, *, optimistic: bool = False) -> dict[str, Any]:
+    """Read a validated snapshot; optionally try once before taking the history lock."""
 
     root = Path(cluster_root)
-    paths = ClusterPaths.from_root(root)
     read_local_identity(root)
+    if optimistic:
+        try:
+            return _read_committed_materialized_state(root, optimistic=True)
+        except (OSError, ValueError, TypeError, ClusterStateError):
+            pass  # Revalidate under the writer lock before deciding to rebuild.
     with advisory_file_lock(root / ".append_sequence"):
         try:
-            commit = _read_json(root / "snapshot_commit.json")
-            if (
-                not isinstance(commit, dict)
-                or commit.get("schema_version") != 1
-                or commit.get("history") != _materialized_history_identity(paths)
-            ):
-                raise ClusterStateError("materialized snapshot history changed")
-            materialized = {
-                "cluster_nodes": _read_json(paths.cluster_nodes),
-                "desired_state": _read_json(paths.desired_state),
-                "state_vector": _read_json(paths.state_vector),
-            }
-            if not all(isinstance(value, dict) for value in materialized.values()):
-                raise ClusterStateError("materialized snapshot is invalid")
-            if commit.get("snapshot_hash") != _materialized_snapshot_hash(materialized):
-                raise ClusterStateError("materialized snapshot publication is incomplete")
-            cluster_id = str(read_local_identity(root)["cluster_id"])
-            if any(
-                materialized[key].get("cluster_id") != cluster_id
-                for key in ("cluster_nodes", "desired_state")
-            ):
-                raise ClusterStateError("materialized snapshot belongs to another cluster")
-            return materialized
+            return _read_committed_materialized_state(root)
         except (OSError, ValueError, TypeError, ClusterStateError):
             return rebuild_materialized_state(root)
 

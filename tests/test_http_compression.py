@@ -4,6 +4,7 @@ import ast
 import asyncio
 import gzip
 import http.client
+import json
 import re
 import socket
 import threading
@@ -85,7 +86,13 @@ def server(tmp_path, monkeypatch):
     frontend.mkdir()
     asset = b"const label = 'offline asset';\n" * 4000
     (frontend / "asset.js").write_bytes(asset)
-    (frontend / "page.html").write_bytes(b"<html>" + b"x" * 3000 + b"</html>")
+    names = {path.name for path in (ROOT / "frontend").glob("*.html")}
+    for name in names | {"page.html", "new_template.html", "UPPER.HTML", "index.html"}:
+        (frontend / name).write_bytes(b"<html>%%API_BASE%%" + b"x" * 3000 + b"</html>")
+    (frontend / "asset.css").write_text("body { color: white; }" * 200)
+    (frontend / "sub").mkdir()
+    (frontend / "sub" / "help.html").write_text("nested template")
+    (frontend / "sub" / "index.html").write_text("directory template")
     package = tmp_path / "package_data"
     package.mkdir()
     (package / "plotly.min.js").write_bytes(asset)
@@ -385,10 +392,10 @@ def test_unacceptable_and_security_errors(server):
 
 def test_html_security_headers_and_bodyless_statuses(server):
     """Framing protections survive compression and bodyless statuses pass through."""
-    html = _raw(server.app, "/app/page.html")
+    html = _raw(server.app, "/app/help.html")
     assert html.headers["x-frame-options"] == "SAMEORIGIN"
     assert "frame-ancestors 'self'" in html.headers["content-security-policy"]
-    cached = _raw(server.app, "/app/page.html", headers={"if-none-match": html.headers["etag"]})
+    cached = _raw(server.app, "/app/help.html", headers={"if-none-match": html.headers["etag"]})
     assert cached.status == 304 and cached.body == b""
     assert cached.headers["x-frame-options"] == "SAMEORIGIN"
     assert "frame-ancestors 'self'" in cached.headers["content-security-policy"]
@@ -397,6 +404,76 @@ def test_html_security_headers_and_bodyless_statuses(server):
         empty = _raw(server.app, f"/empty/{status}")
         assert empty.status == status and empty.body == b""
         assert "content-encoding" not in empty.headers
+
+
+@pytest.mark.parametrize("prefix", ["", "/proxy/pbgui"])
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_frontend_template_access_policy(server, prefix, method):
+    """Real mount wiring blocks templates before caches, including path aliases."""
+    app = FastAPI()
+    app.mount(prefix or "/", server.app)
+    with TestClient(app) as client:
+        for name in ("help.html", "jobs_monitor.html", "asset.js", "asset.css"):
+            url = prefix + "/app/" + name
+            response = client.request(method, url)
+            assert response.status_code == 200, url
+            cached = client.request(method, url, headers={"If-None-Match": response.headers["etag"]})
+            assert cached.status_code == 304
+        blocked = {path.name for path in server.frontend.glob("*.html")} - {"help.html", "jobs_monitor.html"}
+        blocked |= {"UPPER.HTML", "sub/help.html", "sub/", "", "page.html/",
+                    "./page.html", "sub/../page.html", "%70age.html", "/page.html", "page.html%00"}
+        for path in sorted(blocked):
+            for headers in ({}, {"If-None-Match": "*"},
+                            {"If-Modified-Since": "Wed, 31 Dec 2099 23:59:59 GMT"}):
+                response = client.request(method, prefix + "/app/" + path, headers=headers)
+                assert response.status_code == 404, (path, headers, response.status_code)
+                assert "%%API_BASE%%" not in response.text
+                assert "etag" not in response.headers
+
+
+def test_direct_html_links_target_explicit_static_entries(server):
+    """Source links cannot silently introduce a destination blocked by the mount."""
+    mount = next(route for route in server.app.routes if getattr(route, "path", None) == "/app")
+    references = set()
+    paths = [ROOT / "PBApiServer.py"]
+    paths += list((ROOT / "frontend").rglob("*.html"))
+    paths += [path for path in (ROOT / "frontend").rglob("*.js") if "vendor" not in path.parts]
+    paths += list((ROOT / "api").glob("*.py"))
+    for path in paths:
+        references.update(re.findall(r"/app/([A-Za-z0-9_/-]+\.html)", path.read_text()))
+    assert references == mount.app._allowed_html == {"help.html", "jobs_monitor.html"}
+
+
+@pytest.mark.parametrize("prefix", ["", "/proxy/pbgui"])
+@pytest.mark.parametrize(("module", "function", "route"), [
+    ("balance_calc", "get_main_page", "/api/balance-calc/main_page"),
+    ("ai", "main_page", "/api/ai/main_page"),
+])
+def test_official_template_handlers_still_render(prefix, module, function, route):
+    """Execute real page handlers without starting production services or providers."""
+    from fastapi import Depends, Query
+    from fastapi.responses import HTMLResponse
+    from api.page_templates import render_page_urls, script_json
+
+    path = ROOT / "api" / (module + ".py")
+    node = next(node for node in ast.parse(path.read_text()).body
+                if isinstance(node, ast.FunctionDef) and node.name == function)
+    node.decorator_list = []
+    namespace = {"__file__": str(path), "Path": Path, "Request": Request,
+                 "Depends": Depends, "Query": Query, "HTMLResponse": HTMLResponse,
+                 "SessionToken": object, "require_auth": auth.require_auth,
+                 "render_page_urls": render_page_urls, "script_json": script_json,
+                 "EXCHANGES": ["binance", "bybit"], "json": json}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
+    app = FastAPI()
+    app.add_api_route(route, namespace[function])
+    app.dependency_overrides[auth.require_auth] = lambda: object()
+    with TestClient(app, root_path=prefix) as client:
+        response = client.get(route)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert not re.search(r"%%[A-Z_]+%%", response.text)
+    assert prefix + "/app/pbgui_nav.js?v=" in response.text
 
 
 @pytest.mark.parametrize("media_type", ["text/event-stream", "application/x-ndjson"])

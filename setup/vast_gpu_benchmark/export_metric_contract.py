@@ -8,7 +8,7 @@ from pathlib import Path
 
 def export_contract():
     """Include canonical names and schema aliases only when PB8 accepts them."""
-    from config import metrics as schema
+    from config import metrics as schema, hsl
     from optimization.gpu import metrics, metric_registry
 
     names = set(metrics.SUPPORTED_METRICS) | set(schema.CURRENCY_METRICS) | set(schema.SHARED_METRICS) | set(schema.METRIC_ALIASES)
@@ -26,8 +26,10 @@ def export_contract():
         'supported_metrics': sorted(set(metrics.SUPPORTED_METRICS)),
         'allowed_metrics': allowed,
         'exact_only_metrics': sorted(metric_registry.GPU_EXACT_ONLY_METRICS),
+        'metric_aliases': schema.METRIC_ALIASES,
+        'stat_suffixes': list(schema.STAT_SUFFIXES),
         'source_sha256': {module.__name__: hashlib.sha256(Path(inspect.getfile(module)).read_bytes()).hexdigest()
-                          for module in (schema, metrics, metric_registry)},
+                          for module in (schema, metrics, metric_registry, hsl)},
     }
 
 

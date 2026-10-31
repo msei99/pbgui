@@ -601,8 +601,10 @@ vm.runInContext(body,context);
     assert result.returncode==0,result.stdout+result.stderr
 
 
-@pytest.mark.parametrize('selected_round,extra,evaluated', [(None, 10, True), (0, 5, True), (1, 20, False)])
-def test_continue_from_best_or_exact_previous_round_keeps_provenance(workflow, monkeypatch, selected_round, extra, evaluated):
+@pytest.mark.parametrize('selected_round,extra,evaluated,hours', [(None, 10, True, None), (0, 5, True, 12),
+                                                             (0, 25, True, 48), (0, 5, True, .25),
+                                                             (1, 20, False, None)])
+def test_continue_from_best_or_exact_previous_round_keeps_provenance(workflow, monkeypatch, selected_round, extra, evaluated, hours):
     """Continue starts a separate bounded run with winner parameters and optimizer settings."""
     from pb8_loop_store import evaluate
     client, controller, source, session, _ = workflow
@@ -633,7 +635,10 @@ def test_continue_from_best_or_exact_previous_round_keeps_provenance(workflow, m
     controller.store.update(OWNER, loop_id, lambda row: row.update(ai_model_profile={'context': 4_000_000, 'page_tokens': 1500, 'output_tokens': 1000}))
     parent = controller.store.update(OWNER, loop_id, completed)
     monkeypatch.setattr(controller.backend, 'observations', lambda row, job: next(item for item in checkpoints if item['operation'] == job['operation']), raising=False)
-    response = client.post('/loops/' + loop_id + '/continue', json={'round': selected_round, 'rounds': extra, 'selection': {'provider': 'chatgpt', 'model': 'shared-current'}, 'authorization': True})
+    payload = {'round': selected_round, 'rounds': extra, 'selection': {'provider': 'chatgpt', 'model': 'shared-current'}, 'authorization': True}
+    if hours is not None:
+        payload['hours'] = hours
+    response = client.post('/loops/' + loop_id + '/continue', json=payload)
     if not evaluated:
         assert response.status_code == 422
         assert 'AI-selected checkpoint' in response.json()['detail']
@@ -641,6 +646,9 @@ def test_continue_from_best_or_exact_previous_round_keeps_provenance(workflow, m
     assert response.status_code == 201, response.text
     result = response.json(); assert result['id'] != loop_id and result['status'] == 'running'
     child = controller.store.read(OWNER, result['id']); index = 1 if selected_round is None else selected_round
+    expected_hours = parent['settings']['hours'] if hours is None else hours
+    assert child['settings']['hours'] == expected_hours
+    assert child['deadline'] - child['created_at'] == pytest.approx(expected_hours * 3600, abs=2)
     assert child['settings']['max_runs'] == extra and child['settings']['max_validations'] >= extra
     assert child['required_rounds'] == extra
     assert child['initial_config']['bot']['long']['risk']['total_wallet_exposure_limit'] == .1 + index

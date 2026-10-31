@@ -318,6 +318,11 @@
     function hasInjectedPlaceholder(value) {
       return typeof value === 'string' && value.indexOf('%%') !== -1;
     }
+    if (hasInjectedPlaceholder(API_BASE)) API_BASE = appPath('/api');
+    if (hasInjectedPlaceholder(WS_BASE)) {
+      WS_BASE = (window.location.protocol === 'https:' ? 'wss://' : 'ws://')
+        + window.location.host + APP_PREFIX;
+    }
 
     function syncNavMeta() {
       if (!window.PBGUI_NAV_CONFIG) return;
@@ -831,6 +836,6 @@
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="./pbgui_nav.js?v=1810"></script>
+  <script src="./pbgui_nav.js?v=1811"></script>
 </body>
 </html>

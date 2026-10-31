@@ -23,3 +23,5 @@ Alle Seiten-Sidebars verwenden dieselben Abstände und Bedienelemente: 8 px Auß
 Die eigenständige Help-Seite verwendet die gemeinsame verstellbare Sidebar für Sprache, Themenfilter und Themenliste. Der Hilfetext nutzt den Hauptbereich; darüber bleiben die Suche im Thema und die Suche über alle Themen verfügbar. Thema, Sprache, Themenfilter, Suchtext und Suchmodus werden nach dem Neuladen aus der Seiten-URL wiederhergestellt. Das Guide-Fenster auf anderen Seiten bleibt separat.
 
 Die Sprachbuttons EN/DE verwenden die kompakte gemeinsame Button-Leiste und bleiben auch bei minimaler Sidebar-Breite nebeneinander sichtbar.
+
+Öffne Anwendungsseiten über die Navigationsmenüs. Direkte Links auf HTML-Vorlagen unter `/app/` liefern HTTP 404; die eigenständigen Seiten Help und Jobs Monitor bleiben erreichbar. Help unterstützt auch das Benachrichtigungsprotokoll mit demselben Anwendungs-Mount-Prefix.

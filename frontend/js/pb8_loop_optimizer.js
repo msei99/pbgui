@@ -788,23 +788,28 @@
   function continueButton(parent,run,round){
     var control=button(parent,'Continue',function(){select(run.id);openReport(round==null?'run':'cycle',round==null?0:round,'overview');var count=reportBody.querySelector('input[aria-label="Additional optimizer runs"]');if(count){count.focus();count.scrollIntoView({block:'nearest'});}});control.className='act-btn loop-open';control.title=round==null?'Continue from the best exact comparison with 5, 10 or a custom number of runs.':'Continue from this round with 5, 10 or a custom number of runs.';
   }
-  var continueRounds=5,continuing=false,continuationBusyReset;
+  var continueRounds=5,continueHoursByRun=new Map(),continuing=false,continuationBusyReset;
   function continuationControls(parent,row,round,key){
     var form=element('div');form.dataset.continuationKey=key;parent.appendChild(form);
     var actions=element('div',undefined,'panel-toolbar');actions.appendChild(element('span',round==null?'Continue from best exact comparison':'Continue from this round’s best exact comparison'));
     var count=element('input');count.type='number';count.min='1';count.max='200';count.required=true;count.value=continueRounds;count.className='panel-input';count.style.width='90px';count.setAttribute('aria-label','Additional optimizer runs');count.oninput=function(){continueRounds=count.value;};actions.appendChild(count);
     var presets=[5,10].map(function(n){return button(actions,String(n)+' more',function(){continueRounds=n;count.value=n;});});
+    var hoursLabel=element('label');hoursLabel.className='panel-toolbar';hoursLabel.style.marginBottom='0';
+    var hoursText=element('span','Hours');hoursText.dataset.tip='Fresh total time allowance for the linked run, including pauses. Current rental and budget limits still apply.';hoursLabel.appendChild(hoursText);
+    var hours=element('input');hours.type='number';hours.min='0.1';hours.max='168';hours.step='any';hours.required=true;hours.className='panel-input';hours.style.width='90px';hours.setAttribute('aria-label','Continuation hours');
+    var initialHours=Number((row.settings||{}).hours);initialHours=Number.isFinite(initialHours)&&initialHours>=0.1?Number(initialHours.toFixed(6)):24;
+    hours.value=continueHoursByRun.has(row.id)?continueHoursByRun.get(row.id):String(initialHours);hours.oninput=function(){continueHoursByRun.set(row.id,hours.value);};hoursLabel.appendChild(hours);actions.appendChild(hoursLabel);
     var status=element('p','','muted-line');status.setAttribute('role','status');status.hidden=true;
-    function busy(value){action.disabled=value;count.disabled=value;presets.forEach(function(control){control.disabled=value;});action.textContent=value?'Starting…':'Continue';form.setAttribute('aria-busy',String(value));}
+    function busy(value){action.disabled=value;count.disabled=value;hours.disabled=value;presets.forEach(function(control){control.disabled=value;});action.textContent=value?'Starting…':'Continue';form.setAttribute('aria-busy',String(value));}
     continuationBusyReset=function(){busy(false);};
     var action=button(actions,'Continue',async function(){
-      if(continuing||!count.reportValidity())return;
+      if(continuing||!count.reportValidity()||!hours.reportValidity())return;
       var rounds=Number(count.value);continuing=true;busy(true);status.hidden=false;status.className='muted-line';status.textContent='Preparing the linked run…';
-      try{var ai=await PBGuiAI.ensureSelection();status.textContent='Starting the linked run…';var result=await request('/'+row.id+'/continue',{rounds:rounds,round:round,selection:ai,authorization:true});closeReport();selected=result.id;selectedRuns=new Set([result.id]);expanded.add(result.id);persistWorkflow();var url=new URL(location.href);url.searchParams.set('loop_id',result.id);history.replaceState(null,'',url);selectPanel('loops-queue');await poll();}
+      try{var ai=await PBGuiAI.ensureSelection();status.textContent='Starting the linked run…';var result=await request('/'+row.id+'/continue',{rounds:rounds,hours:Number(hours.value),round:round,selection:ai,authorization:true});closeReport();selected=result.id;selectedRuns=new Set([result.id]);expanded.add(result.id);persistWorkflow();var url=new URL(location.href);url.searchParams.set('loop_id',result.id);history.replaceState(null,'',url);selectPanel('loops-queue');await poll();}
       catch(exc){status.className='loop-error';status.textContent=exc.message;error(exc);}
       finally{continuing=false;busy(false);continuationBusyReset();}
     });busy(continuing);form.appendChild(actions);
-    form.appendChild(element('p','Starts a new linked run. Goals and current rental limits still apply; a used final holdout is not reused.','muted-line'));form.appendChild(status);
+    form.appendChild(element('p','New linked run · existing goals and rental limits.','muted-line'));form.appendChild(status);
   }
   function failureReason(row){return (row.failure||{}).reason||row.reason||row.last_error||'Failure reason was not recorded for this older run. See PBGui.log.';}
   function terminationReport(parent,row){

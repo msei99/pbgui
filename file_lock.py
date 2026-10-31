@@ -31,7 +31,9 @@ def advisory_file_lock(target: Path) -> Iterator[None]:
     target_path = Path(target).expanduser().resolve(strict=False)
     key = str(target_path)
     lock_path = target_path.with_name(f"{target_path.name}.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    parent = lock_path.parent
+    if not parent.is_dir():
+        parent.mkdir(parents=True, exist_ok=True)
 
     with _thread_lock(key):
         held = getattr(_HELD_LOCKS, "entries", None)

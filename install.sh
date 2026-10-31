@@ -1,24 +1,45 @@
 #!/usr/bin/bash
 set -euo pipefail
 
-# check if Linux distribution using lsb_release is ubuntu else exit
-if [ "$(lsb_release -si)" != "Ubuntu" ]; then
-    echo "This script is only for Ubuntu"
+# Read distribution metadata in a subshell without changing script variables.
+ubuntu_id() (
+    ID=""
+    if [[ -r /etc/os-release ]]; then
+        . /etc/os-release
+    fi
+    if [[ -n "$ID" ]]; then
+        printf '%s\n' "$ID"
+    elif command -v lsb_release >/dev/null 2>&1; then
+        lsb_release -si | tr '[:upper:]' '[:lower:]'
+    fi
+)
+if [[ "$(ubuntu_id)" != "ubuntu" ]]; then
+    echo "This script only supports Ubuntu systems." >&2
     exit 1
 fi
 
+# Root needs no privilege wrapper; other users must have sudo.
+SUDO=()
+if [[ "$(id -u)" -ne 0 ]]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "Run as root or install sudo before running this script." >&2
+        exit 1
+    fi
+    SUDO=(sudo)
+fi
+
 # Refresh apt metadata before checking package candidates
-sudo apt update
+"${SUDO[@]}" apt update
 
 # Add deadsnakes/ppa only when python3.12-venv is not provided by current apt sources
 if apt-cache policy python3.12-venv | grep -Eq 'Candidate:\s+\(none\)'; then
-    sudo add-apt-repository ppa:deadsnakes/ppa -y
-    sudo apt update
+    "${SUDO[@]}" add-apt-repository ppa:deadsnakes/ppa -y
+    "${SUDO[@]}" apt update
 fi
 
 # Install git, python3.12-venv, rclone, rustc and cargo
-sudo apt install git python3.12-venv rclone rsync rustc cargo sshpass -y
-sudo apt install rustup -y
+"${SUDO[@]}" apt install git python3.12-venv rclone rsync rustc cargo sshpass -y
+"${SUDO[@]}" apt install rustup -y
 
 # Update rust
 rustup update 1.90.0

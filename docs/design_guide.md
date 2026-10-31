@@ -252,6 +252,8 @@ Minimal detail-window shell (opened by adding `.is-open` and setting `aria-hidde
 
 ## 7. Cache and delivery
 
+- The `/app` mount disables directory index pages and serves HTML only from an exact relative-path allowlist: `help.html` and `jobs_monitor.html`. Other HTML templates must be opened through their rendering API routes. Static pages must resolve raw API/WebSocket URL placeholders to same-origin URLs using their application mount prefix before shared navigation starts; retain already injected values.
+
 - Bump `?v=` references for changed shared JS/CSS consumers, including dynamically loaded assets.
 - For versioned static HTML destinations, also bump the URL in `FASTAPI_PAGES`. Changing `help.html` while keeping the old menu URL can leave users on a cached dialog page.
 - Check static-page navigation-script versions as well as server-rendered `%%NAV_HASH%%` references.

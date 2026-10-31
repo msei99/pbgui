@@ -11,9 +11,9 @@ import time
 
 import aiohttp
 
-from pb8_loop_evidence import (EvidenceStore, EvidenceSession, LoopAIPause, BootstrapWithoutAdvice, TOOL_SCHEMA,
+from pb8_loop_evidence import (EvidenceStore, LoopAIPause, BootstrapWithoutAdvice, TOOL_SCHEMA,
                                TOOL_DESCRIPTION, encode, sha, select_findings, required_content)
-from pb8_loop_ai_policy import DecisionLedger, check_context
+from pb8_loop_ai_policy import DecisionLedger, check_context, evidence_session
 from pb8_loop_config_contract import variant_config_schema, validate_variant_config
 from pb8_loop_dialog import OpenCodeDialog, read_sse, IncompleteResponse, StreamingUnavailable, NativeToolsUnavailable
 
@@ -32,7 +32,7 @@ def validate_snapshot_budget(record, snapshot, metadata):
     """A resume must actually fit the selected provider before changing runtime state."""
     from pb8_loop_ai import instructions_for_run
     profile = metadata['loop_profile']
-    session = EvidenceSession(None, snapshot, profile.get('page_tokens', 5000))
+    session = evidence_session(None, snapshot, profile, native=record['settings']['provider'] in {'chatgpt', 'claude-code'})
     output = min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768))
     instructions = instructions_for_run(record)['text'] + PROTOCOL
     payload = initial_payload(record['settings'], metadata, profile, instructions, snapshot['required'], output)
@@ -257,6 +257,12 @@ async def run_decision(ai, record, stage, evidence):
                        {'controller_pins_native_iters': settings.get('run_limit_mode', 'config') != 'config',
                         'effective_native_iters': apply_run_limit(settings, record['initial_config'])['optimize'].get('iters')},
                    'evidence': evidence, 'passivbot_manual': manual}
+        content['metric_dependency_policy'] = {
+            'rule': 'A supported metric name is not necessarily available in this run. '
+                    'hard_stop_* and EMA strategy-equity drawdown metrics require an enabled HSL controller. '
+                    'Side metrics require that side controller and cannot be used with unified HSL. '
+                    'Each enabled scoring objective or limit must be available in every scenario it consumes. '
+                    'Preserve the reviewed HSL policy; choose compatible metrics rather than enabling HSL.'}
         if stage in {'bootstrap', 'evaluate'}:
             content['variant_config_schema'] = variant_config_schema(record)
         if settings['execution'] in {'gpu', 'vast'}:
@@ -287,7 +293,7 @@ async def run_decision(ai, record, stage, evidence):
             row.update(ai_snapshot_id=snapshot['id'], ai_snapshot_stage=stage, ai_snapshot_round=record['round'],
                        knowledge_summary={key: package[key] for key in ('eligible', 'included', 'omitted', 'excluded')})
         await owned_thread(ai.store.update, record['owner'], record['id'], bind)
-    session = EvidenceSession(evidence_store, snapshot, profile.get('page_tokens', 5000))
+    session = evidence_session(evidence_store, snapshot, profile, native=settings['provider'] in {'chatgpt', 'claude-code'})
     fallback_fresh = fallback_fresh or bool(snapshot['data'].get('historical_sources', {}).get('fallback_fresh'))
     instructions = instructions_for_run(record)['text'] + PROTOCOL
     output = min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768))

@@ -1,2 +1,5 @@
 # Unified-diff context lines intentionally preserve a leading space.
 patches/*.patch -whitespace
+
+# Shell scripts must remain executable on Linux after Windows checkouts.
+*.sh text eol=lf

@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from pb8_loop_evidence import LoopAIPause, SAFE_METRICS, required_content, tokens, sha, EvidenceSession
+from pb8_loop_evidence import LoopAIPause, SAFE_METRICS, required_content, tokens, sha
 
 SERVICE = 'PB8LoopArchive'
 
@@ -94,7 +94,7 @@ def thin_with_extremes(candidates, maximum):
 
 def select_sources(record, content, profile, output_tokens, *, metadata=None):
     """Select whole source archives, with an explicit thinning exception, never filename slicing."""
-    from pb8_loop_ai_policy import check_context
+    from pb8_loop_ai_policy import check_context, evidence_session
     from pb8_loop_ai import instructions_for_run
     from pb8_loop_ai_v2 import initial_payload, PROTOCOL
     metadata = metadata or {'protocol': 'chat'}
@@ -122,7 +122,8 @@ def select_sources(record, content, profile, output_tokens, *, metadata=None):
         trial['evidence']['existing_results'] = values
         required = required_content(trial)
         try:
-            pager = EvidenceSession(None, {'id': '0' * 32, 'sha256': '0' * 64, 'required': required}, profile.get('page_tokens', 5000))
+            pager = evidence_session(None, {'id': '0' * 32, 'sha256': '0' * 64, 'required': required}, profile,
+                                     native=record['settings']['provider'] in {'chatgpt', 'claude-code'})
             payload = initial_payload(record['settings'], metadata, profile, instructions, required, output_tokens)
             count = check_context(payload, profile,
                                   output_tokens, codex=record['settings']['provider'] in {'chatgpt', 'claude-code'},

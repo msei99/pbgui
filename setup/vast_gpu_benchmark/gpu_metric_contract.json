@@ -689,6 +689,50 @@
     "source_sha256": {
         "config.metrics": "907d413215697bb3efe02d6a327cc25ced45df29f87d1fe18c042caa67fe6aa1",
         "optimization.gpu.metrics": "dc5a8c1a58dc37488393c8bab4191330460cefcaa26291e67072a59e9c75b8ee",
-        "optimization.gpu.metric_registry": "caf009466e0bd81a50033f11ee66cff795db004e47e7e108d6d2ae63249a7ff9"
-    }
+        "optimization.gpu.metric_registry": "caf009466e0bd81a50033f11ee66cff795db004e47e7e108d6d2ae63249a7ff9",
+        "config.hsl": "88022745a0c1836bf1fece7ba5b38f69d85485fa8f5adc045bb30ed79c61f2b5"
+    },
+    "metric_aliases": {
+        "long_short_profit_ratio": "pnl_ratio_long_short",
+        "fills_analysis_duration_days": "n_days",
+        "gain_strategy_pnl_rebased": "gain_strategy_eq",
+        "adg_strategy_pnl_rebased": "adg_strategy_eq",
+        "mdg_strategy_pnl_rebased": "mdg_strategy_eq",
+        "sharpe_ratio_strategy_pnl_rebased": "sharpe_ratio_strategy_eq",
+        "sortino_ratio_strategy_pnl_rebased": "sortino_ratio_strategy_eq",
+        "omega_ratio_strategy_pnl_rebased": "omega_ratio_strategy_eq",
+        "expected_shortfall_1pct_strategy_pnl_rebased": "expected_shortfall_1pct_strategy_eq",
+        "calmar_ratio_strategy_pnl_rebased": "calmar_ratio_strategy_eq",
+        "sterling_ratio_strategy_pnl_rebased": "sterling_ratio_strategy_eq",
+        "adg_strategy_pnl_rebased_w": "adg_strategy_eq_w",
+        "mdg_strategy_pnl_rebased_w": "mdg_strategy_eq_w",
+        "sharpe_ratio_strategy_pnl_rebased_w": "sharpe_ratio_strategy_eq_w",
+        "sortino_ratio_strategy_pnl_rebased_w": "sortino_ratio_strategy_eq_w",
+        "omega_ratio_strategy_pnl_rebased_w": "omega_ratio_strategy_eq_w",
+        "calmar_ratio_strategy_pnl_rebased_w": "calmar_ratio_strategy_eq_w",
+        "sterling_ratio_strategy_pnl_rebased_w": "sterling_ratio_strategy_eq_w",
+        "drawdown_worst_hsl": "drawdown_worst_strategy_eq",
+        "drawdown_worst_hsl_long": "drawdown_worst_strategy_eq_long",
+        "drawdown_worst_hsl_short": "drawdown_worst_strategy_eq_short",
+        "drawdown_worst_ema_hsl": "drawdown_worst_ema_strategy_eq",
+        "drawdown_worst_ema_hsl_long": "drawdown_worst_ema_strategy_eq_long",
+        "drawdown_worst_ema_hsl_short": "drawdown_worst_ema_strategy_eq_short",
+        "drawdown_worst_mean_1pct_hsl": "drawdown_worst_mean_1pct_strategy_eq",
+        "drawdown_worst_mean_1pct_hsl_long": "drawdown_worst_mean_1pct_strategy_eq_long",
+        "drawdown_worst_mean_1pct_hsl_short": "drawdown_worst_mean_1pct_strategy_eq_short",
+        "drawdown_worst_mean_1pct_ema_hsl": "drawdown_worst_mean_1pct_ema_strategy_eq",
+        "drawdown_worst_mean_1pct_ema_hsl_long": "drawdown_worst_mean_1pct_ema_strategy_eq_long",
+        "drawdown_worst_mean_1pct_ema_hsl_short": "drawdown_worst_mean_1pct_ema_strategy_eq_short",
+        "peak_recovery_days_strategy_eq": "strategy_eq_recovery_days_max",
+        "peak_recovery_hours_hsl": "peak_recovery_hours_strategy_eq",
+        "peak_recovery_hours_hsl_long": "peak_recovery_hours_strategy_eq_long",
+        "peak_recovery_hours_hsl_short": "peak_recovery_hours_strategy_eq_short"
+    },
+    "stat_suffixes": [
+        "min",
+        "max",
+        "mean",
+        "std",
+        "median"
+    ]
 }

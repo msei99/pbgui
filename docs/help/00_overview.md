@@ -23,3 +23,5 @@ All page sidebars use the same spacing and controls: 8 px outer padding, 4 px ga
 The standalone Help page uses the shared resizable sidebar for language selection, topic filtering and the topic list. Documentation fills the main area; topic search and All topics search remain available above it. Selected topic, language, topic filter, search text and search mode are restored from the page URL after reload. The Guide overlay on other pages remains separate.
 
 The EN/DE language buttons use the compact shared button row and remain side by side even at the minimum sidebar width.
+
+Open application pages from the navigation menus. Direct links to HTML templates under `/app/` return HTTP 404; the standalone Help and Jobs Monitor pages remain available. Help also supports the notification log using the same application mount prefix.

@@ -504,7 +504,7 @@ class EvidenceSession:
     """Own page coverage and quotas across correction turns and compaction generations."""
 
     def __init__(self, evidence_store, snapshot, page_tokens=5000):
-        if type(page_tokens) is not int or not 512 <= page_tokens <= 5000:
+        if type(page_tokens) is not int or not 512 <= page_tokens <= 6144:
             raise ValueError('Invalid evidence page profile')
         self.store, self.snapshot, self.page_tokens = evidence_store, snapshot, page_tokens
         self.lock = threading.RLock()

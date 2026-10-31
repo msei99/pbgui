@@ -217,6 +217,7 @@ class LoopController:
                 await owned_thread(self.store.pause_storage, owner, loop_id, exc)
                 _log(SERVICE, f'Loop {loop_id} archive cannot be read: {exc}', level='ERROR')
                 return
+            phase_before = record.get('phase')
             try:
                 await self._tick(record)
             except asyncio.CancelledError:
@@ -271,7 +272,14 @@ class LoopController:
                      meta={'failure': updated.get('failure'), 'traceback': traceback.format_exc()})
             # Separate failure boundary: user-only diagnostics never change the Loop's decisions/errors.
             try:
-                await self.observers.tick(await owned_thread(self.store.read, owner, loop_id))
+                current = await owned_thread(self.store.read, owner, loop_id)
+                if (phase_before != 'optimize' and current.get('phase') == 'optimize'
+                        and current['status'] in ACTIVE):
+                    # Release this transition's controller claim first. The next
+                    # tick prepares/starts training before expensive report work;
+                    # its normal observer pass still runs after training launch.
+                    return
+                await self.observers.tick(current)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

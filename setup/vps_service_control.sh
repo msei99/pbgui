@@ -44,9 +44,23 @@ else
 fi
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$target_uid}"
 
+# Check once before status probes can mistake a failed switch for inactivity.
+USER_SWITCH=()
+CURRENT_UID="$(id -u)"
+if [[ "$CURRENT_UID" -eq 0 && "$target_uid" -ne 0 ]]; then
+  if command -v sudo >/dev/null 2>&1; then
+    USER_SWITCH=(sudo -H -u "$target_user")
+  elif command -v runuser >/dev/null 2>&1; then
+    USER_SWITCH=(runuser -u "$target_user" --)
+  else
+    echo "sudo or runuser is required to switch to the target service user." >&2
+    exit 1
+  fi
+fi
+
 run_as_service_user() {
-  if [[ -n "$target_user" && "$(id -u)" -eq 0 && "$target_user" != "root" ]]; then
-    sudo -H -u "$target_user" env XDG_RUNTIME_DIR="/run/user/$target_uid" "$@"
+  if [[ -n "$target_user" && "$CURRENT_UID" -eq 0 ]]; then
+    "${USER_SWITCH[@]}" env HOME="$target_home" USER="$target_user" LOGNAME="$target_user" XDG_RUNTIME_DIR="/run/user/$target_uid" "$@"
   else
     env XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" "$@"
   fi

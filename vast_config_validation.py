@@ -61,6 +61,9 @@ def validate_cloud_config(config, iterations=None, workers=None, *, use_adg=Fals
     if image != PROFILE_IMAGE or revision != PROFILE_REVISION:
         error('worker.image', 'No validated GPU profile exists for this worker image/revision. Update the compatibility rules before queueing.')
     source = obj(config, 'config')
+    if _check_scenarios:
+        from pb8_metric_dependencies import metric_dependency_errors
+        errors.extend(metric_dependency_errors(source))
     for item in worker_compatibility_errors(source, revision, for_preparation=True):
         error(item['path'], item['message'])
     if source.get('_fine_tune_anchor_plan'):

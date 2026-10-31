@@ -1278,6 +1278,24 @@ class Database():
         except sqlite3.Error as e:
             _human_log(SERVICE, f"DB fetch_positions error {e} user={user.name}", level='ERROR', user=user.name)
 
+    def fetch_positions_for_users(self, users: list[str]) -> dict[str, list[tuple]]:
+        """Read unchanged position rows for selected users in one query."""
+        names = list(dict.fromkeys(users))
+        if not names:
+            return {}
+        placeholders = ','.join('?' for _ in names)
+        sql = f'SELECT * FROM "position" WHERE "user" IN ({placeholders})'
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(sql, names).fetchall()
+            grouped = {}
+            for row in rows:
+                grouped.setdefault(row[6], []).append(row)
+            return grouped
+        except sqlite3.Error as e:
+            _human_log(SERVICE, f"DB fetch_positions_for_users error {e}", level='ERROR')
+            return {}
+
     def fetch_orders(self, user: User):
         sql = '''SELECT * FROM "orders"
                 WHERE "orders"."user" = ? '''

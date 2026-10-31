@@ -1425,6 +1425,7 @@ class LoopContinue(BaseModel):
     """Continue an exact checkpoint with a new bounded authorization and provenance."""
     model_config = ConfigDict(extra='forbid')
     rounds: int = Field(default=5, ge=1, le=200)
+    hours: float | None = Field(default=None, ge=.1, le=168, allow_inf_nan=False)
     round: int | None = Field(default=None, ge=0)
     selection: dict = Field(default_factory=dict)
     authorization: bool = False
@@ -1481,12 +1482,17 @@ async def continue_loop(loop_id: str, body: LoopContinue, session: SessionToken 
         raw.update(body.selection)
         raw.update(max_runs=body.rounds, max_rounds=body.rounds, patience=min(100, max(row['settings']['patience'], body.rounds)),
                    authorization=True)
+        if body.hours is not None:
+            raw['hours'] = body.hours
         if raw['execution'] == 'vast':
             from api.vast import RentalPreferences
             from vast_queue import CloudQueue
             rental = RentalPreferences.model_validate(CloudQueue().read().get('gpu_preferences') or {})
+            if body.hours is not None and body.hours > rental.hours:
+                raise ValueError(f'Continuation hours cannot exceed current Maximum rental hours ({rental.hours:g}). '
+                                 'Choose a shorter duration or adjust Vast.ai Rental & Automation first.')
             raw.update(hours=min(raw['hours'], rental.hours), parallel=min(raw['parallel'], rental.max_rentals))
-            if raw['run_limit_mode'] == 'hours':
+            if raw['run_limit_mode'] == 'hours' and body.hours is None:
                 raw['run_hours'] = min(raw['run_hours'], raw['hours'])
         name = (row['settings'].get('loop_name') or row['settings']['config_name'])[:85] + '_continue'
         definition = {'name': name, 'source': {'kind': 'run', 'id': row['id']},

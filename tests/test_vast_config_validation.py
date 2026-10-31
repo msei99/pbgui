@@ -144,7 +144,9 @@ def test_multicoin_worker_boundary(config, count):
 @pytest.mark.parametrize('metric', sorted(__import__('vast_config_validation').METRICS))
 @pytest.mark.parametrize('group', ['scoring', 'limits'])
 def test_full_gpu_contract_is_allowed_for_scoring_and_limits(config, metric, group):
-    """Every name accepted by the worker's GPU validator reaches both editors."""
+    """Every GPU name works when its required side HSL controllers are enabled."""
+    for side in ('long', 'short'):
+        config['bot'][side]['hsl'] = {'enabled': True}
     config['optimize'][group][0]['metric'] = metric
     assert validate_cloud_config(config) == []
 
