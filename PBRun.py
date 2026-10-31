@@ -115,25 +115,52 @@ def _attach_process_stats(process: psutil.Process, run_v7: "RunV7"):
 
 
 def _ts_wrap_stderr(stderr_pipe, filepath: str):
-    """Read stderr lines and write non-log lines with UTC timestamp prefix.
+    """Drain child stderr even when the diagnostic log cannot be written.
 
     Passivbot log lines already have a ``YYYY-MM-DDTHH:MM:SSZ`` prefix and are
     written to ``pb7/logs/`` by passivbot's own file handler — skip those.
-    Only raw stderr (tracebacks, startup tracebacks, subprocess noise) gets saved.
+    Raw stderr is best-effort diagnostics: a full/unwritable disk must never stop
+    draining the pipe, otherwise the child may block forever on ``pipe_write``.
     """
+    log_file = None
+    retry_open_after = 0.0
     try:
-        with open(filepath, "ab") as f:
-            for raw_line in stderr_pipe:
-                line = raw_line.strip() if isinstance(raw_line, str) else raw_line.decode(errors='replace').strip()
-                if not line:
-                    continue
-                # skip passivbot log lines (already saved via its FileHandler)
-                if len(line) >= 20 and line[4] == '-' and line[7] == '-' and line[10] == 'T' and line[19] == 'Z':
-                    continue
-                ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-                f.write(f"{ts} {line}\n".encode())
-    except Exception:
-        pass
+        for raw_line in stderr_pipe:
+            line = raw_line.strip() if isinstance(raw_line, str) else raw_line.decode(errors='replace').strip()
+            if not line:
+                continue
+            # skip passivbot log lines (already saved via its FileHandler)
+            if len(line) >= 20 and line[4] == '-' and line[7] == '-' and line[10] == 'T' and line[19] == 'Z':
+                continue
+
+            now = time()
+            if log_file is None and now >= retry_open_after:
+                try:
+                    # Unbuffered writes surface ENOSPC immediately instead of later
+                    # during flush/close, while the reader keeps draining stderr.
+                    log_file = open(filepath, "ab", buffering=0)
+                except Exception:
+                    retry_open_after = now + 30
+
+            if log_file is None:
+                continue
+
+            ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            try:
+                log_file.write(f"{ts} {line}\n".encode())
+            except Exception:
+                try:
+                    log_file.close()
+                except Exception:
+                    pass
+                log_file = None
+                retry_open_after = now + 30
+    finally:
+        if log_file is not None:
+            try:
+                log_file.close()
+            except Exception:
+                pass
 
 
 def _memory_usage_bytes(memory_info) -> int:
