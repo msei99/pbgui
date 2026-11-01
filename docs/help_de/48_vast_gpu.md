@@ -361,6 +361,32 @@ PBGui teilt die Anfragedrosselung zwischen seinen lokalen Prozessen: vorsorglich
 Erst **deletion_verified**
 bestätigt die Löschung; blosses Stoppen kann weitere Speicherkosten verursachen.
 
+### Große Pareto-Sammlungen
+
+Manuelles Sammeln verwendet eine gemeinsame Frist für Verbindung, Übertragung,
+Verifikation und lokale Veröffentlichung. Standard sind 120 Sekunden plus eine
+Sekunde pro Pareto-JSON-Datei, mindestens 120 und höchstens 3600 Sekunden. PBGui
+verwendet den gespeicherten `pareto_count` oder bei fehlender Anzahl eine zeitlich
+begrenzte entfernte Dateinamenabfrage. Die dreiminütige Reserve für die abschließende
+Sammlung vor Mietende hat weiterhin Vorrang.
+
+Betreiber können `[vast] collect_timeout_seconds` in `pbgui.ini` oder die
+Umgebungsvariable `PBGUI_COLLECT_TIMEOUT_SECONDS` setzen. Der INI-Wert hat Vorrang;
+ausdrücklich gesetzte positive Fristen werden nicht auf 3600 Sekunden begrenzt.
+`[vast] collect_batch_files` legt die Paketgröße fest: standardmäßig 100
+Pareto-JSON-Dateien, zulässig sind positive ganze Zahlen.
+
+Jedes Paket wird vor der Veröffentlichung vollständig vorbereitet. Bei Timeout
+wird nur das noch unbestätigte Paket verworfen; die Meldung nennt **N/M Dateien**,
+bereits veröffentlichte Dateien bleiben erhalten. Der Job speichert
+`collection_incomplete` und `collection_progress` mit `published_files` und
+`total_files`; jedes bestätigte Paket aktualisiert außerdem `.pbgui_vast.json`.
+Ein erneuter Versuch desselben verifizierten Snapshots setzt am gespeicherten
+Paketstand fort. Veraltete Dateien der vorherigen Front werden erst nach dem
+letzten Paket entfernt. Bis dahin wird ein finales Ergebnis ausdrücklich als
+teilweise veröffentlicht markiert. Die Download-Verifikation bleibt vollständig:
+abgebrochene Downloads werden nicht veröffentlicht.
+
 ## Grenzen und Wiederaufnahme
 
 Vorübergehende Upload-/SSH-Fehler erhalten ein Wiederherstellungsfenster von 15 Minuten statt einer Grenze von zwei Versuchen. PBGui wartet zunächst 15, dann 30 und anschließend höchstens 60 Sekunden zwischen Versuchen und verwendet Teildateien bzw. geprüfte Blöcke weiter. Neuer beobachteter Transferfortschritt erneuert das Fenster; wiederholte Versuche ohne Fortschritt nicht. Das Log zeigt den nächsten Versuch und den ursprünglichen Verbindungsfehler. Der separate 15-Minuten-Timer für die Worker-Einrichtung gilt nach erfolgreicher Health-Prüfung nicht mehr für den Upload. Die Mietfrist abzüglich drei Minuten für Ergebnissicherung begrenzt weiterhin die Übertragung. Stop reagiert auch während der Wartezeit. Identitäts-, Integritäts- und Speicherplatzfehler führen weiterhin zum sofortigen Abbruch; Mietfrist und Budget werden nicht automatisch verlängert.

@@ -4,12 +4,14 @@ from pathlib import Path
 from threading import Event, RLock
 import asyncio
 import fcntl
+import math
 import os
 import time
 
 import psutil
 
 from vast_jobs import job_id
+from vast_collection_config import collection_setting
 from vast_provider import VastError
 from vast_snapshot import bounded_lock, work_boundary
 
@@ -18,6 +20,38 @@ _OWNER_LOCK = RLock()
 _ACTIVE = {}
 _STOPPING = False
 TERMINAL = {'completed', 'cancelled', 'failed'}
+
+
+def _collection_timeout_override():
+    """Resolve INI before environment; invalid overrides fail before any work."""
+    configured = collection_setting('collect_timeout_seconds')
+    if configured is not None:
+        return configured
+    value = os.environ.get('PBGUI_COLLECT_TIMEOUT_SECONDS')
+    if value is not None:
+        try:
+            seconds = float(value)
+            if not math.isfinite(seconds) or seconds <= 0:
+                raise ValueError
+        except ValueError:
+            raise VastError('Invalid PBGUI_COLLECT_TIMEOUT_SECONDS: expected a positive number', 422) from None
+        return seconds
+    return None
+
+
+def _collection_seconds(store, identifier, *, pareto_file_count=None):
+    """Use INI > environment > 120s + 1s/Pareto file (120..3600s).
+
+    The rental's final-collection reserve is enforced separately and always wins.
+    A remote listing can refine the estimate after connecting, without renewing
+    elapsed time. Explicit operator budgets are never scaled or capped here.
+    """
+    override = _collection_timeout_override()
+    if override is not None:
+        return override
+    count = store.read(identifier).get('pareto_count') if pareto_file_count is None else pareto_file_count
+    count = count if type(count) is int and count >= 0 else 0
+    return max(120, min(3600, 120 + 1.0 * count))
 
 
 def startup():
@@ -185,14 +219,15 @@ def collect_results(store, identifier):
     with owned_work() as cancel:
         with admission(store, identifier, lease_id) as state:
             partial = not state.get('final_collected')
-            seconds = 90
+            seconds = _collection_seconds(store, identifier)
             if partial:
                 intent = validate_intent(store.read(lease_id, 'intent.json'), lease_id)
                 intent = effective_intent(store, lease_id, intent)
-                seconds = min(90, intent['deadline'] - time.time() - 180)
+                seconds = min(seconds, intent['deadline'] - time.time() - 180)
                 if seconds <= 0:
                     raise VastError('Rental final collection reserve reached; previous results are retained', 409)
-            deadline = time.monotonic() + seconds
+            started = time.monotonic()
+            deadline = started + seconds
 
             def remaining():
                 """Cancel only manual collection, never the independent supervisor."""
@@ -227,6 +262,10 @@ def collect_results(store, identifier):
                     if not all((identity / name).is_file() and not (identity / name).is_symlink()
                                for name in ('ssh-key', 'known_hosts', 'ssh-attached.json')):
                         raise VastError('The verified worker connection is not ready; try after supervision reconnects', 409)
+                    if type(state.get('pareto_count')) is not int and _collection_timeout_override() is None:
+                        # Only a bounded filename listing, never remote JSON reads.
+                        files = connection.pareto_file_count(timeout=remaining())
+                        deadline = started + _collection_seconds(store, identifier, pareto_file_count=files)
                     connection.collect(False, timeout=remaining())
                 # Only local work remains. Acquire State before publication so
                 # its matching metadata cannot encounter an unbounded wait after

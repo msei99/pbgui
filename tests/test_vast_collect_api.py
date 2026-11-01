@@ -32,7 +32,7 @@ def collection(tmp_path, monkeypatch):
     for key in (identifier, lease):
         directory = ensure_private_directory(store.root / 'jobs' / key)
         write_json(directory / 'state.json', dict(id=key, kind='optimizer', status='running',
-            rental_state='active', uploaded=True, instance_id=123, exact_completed=12,
+            rental_state='active', uploaded=True, instance_id=123, exact_completed=12, pareto_count=1,
             lease_id=lease if key == identifier else None, active_job=identifier))
         write_json(directory / 'control.json', dict(stop=False, cleanup=False))
         write_json(directory / 'intent.json', dict(id=key, label='pbgui-vast-' + key,
@@ -58,7 +58,7 @@ def collection(tmp_path, monkeypatch):
 
     def download(connection, final, timeout):
         """Publish only an immutable Pareto fixture, never final control state."""
-        assert final is False and 0 < timeout <= 90
+        assert final is False and 0 < timeout <= 121
         native = ensure_private_directory(connection.directory / 'partial-results/optimize_results/run/pareto')
         write_json(native / 'candidate.json', {'config': {}})
         store.update(identifier, last_backup_at=time.time())
@@ -227,7 +227,7 @@ def test_final_import_deadline_preserves_publication(collection, monkeypatch):
             """Retain unpacker's byte accounting and expire after one record."""
             def __iter__(self):
                 for item in unpacker:
-                    clock[0] += 91
+                    clock[0] += 3601
                     yield item
             def tell(self):
                 """Return native stream consumption."""
@@ -507,3 +507,252 @@ def test_manual_publication_cannot_regress_concurrent_finalizer(collection, monk
     published = Path(last['result_path'])
     assert [p.name for p in (published / 'pareto').glob('*.json')] == ['final.json']
     assert json.loads((published / '.pbgui_vast.json').read_text())['partial'] is False
+
+
+@pytest.mark.parametrize('existing', [False, True])
+@pytest.mark.parametrize('final', [False, True])
+def test_large_collection_retains_batches_and_resumes(collection, monkeypatch, existing, final):
+    """A 25ms budget retains complete batches, old files and resumable progress."""
+    c = collection
+    if existing:
+        assert c.http.post(c.url).status_code == 200
+    target = Path(c.store.read(c.identifier, 'intent.json')['results_root']) / ('run_vast_' + c.identifier[:12])
+    previous = (target / 'pareto/candidate.json').read_bytes() if existing else None
+    native = ensure_private_directory(c.store.directory(c.identifier) /
+        ('final-results' if final else 'partial-results') / 'optimize_results/run/pareto')
+    (native / 'candidate.json').unlink(missing_ok=True)
+    for index in range(1000):
+        write_json(native / f'{index:04}.json', {'candidate': index})
+    if final:
+        (native.parent / 'all_results.bin').write_bytes(msgpack.packb({'config': {}}) * 13)
+        (native.parent / 'checkpoint.pkl').write_bytes(b'must never be copied')
+    # Match a verified worker archive. Re-extraction may change local mtimes,
+    # but unchanged manifest entries must still allow retrying the next batch.
+    files = list(native.glob('*.json')) + ([native.parent / 'all_results.bin'] if final else [])
+    snapshot = native.parent.parent.parent
+    write_json(snapshot / 'manifest.json', {'files': [dict(path=path.relative_to(snapshot).as_posix(),
+        bytes=path.stat().st_size, sha256=vast_transfer.digest(path)) for path in files]})
+    c.store.update(c.identifier, exact_completed=13, final_collected=final)
+    monkeypatch.setattr(vast_transfer.WorkerConnection, 'collect', lambda *args, **kwargs: None)
+    monkeypatch.setenv('PBGUI_COLLECT_TIMEOUT_SECONDS', '0.025')
+    clock = [time.monotonic()]
+    monkeypatch.setattr(vast_collect.time, 'monotonic', lambda: clock[0])
+    replace = os.replace
+    def publish(source, destination):
+        """Spend 10ms per real batch commit without machine-speed-dependent sleeps."""
+        replace(source, destination)
+        if Path(destination) in {target, target / '.pbgui_vast.json'}:
+            clock[0] += .01
+    monkeypatch.setattr(vast_transfer.os, 'replace', publish)
+    for expected in (300, 600, 900):
+        response = c.http.post(c.url)
+        assert response.status_code == 409, response.text
+        assert f'after {expected}/1000 files; published files retained' in response.text
+        state = c.store.read(c.identifier)
+        provenance = json.loads((target / '.pbgui_vast.json').read_text())
+        progress = dict(published_files=expected, total_files=1000)
+        assert state['collection_incomplete'] is provenance['collection_incomplete'] is True
+        assert state['collection_progress'] == provenance['collection_progress'] == progress
+        assert state['result_partial'] is provenance['partial'] is True
+        assert state['pareto_count'] == expected + int(existing)
+        assert state['evaluations'] == provenance['evaluations'] == 13
+        assert len(list((target / 'pareto').glob('[0-9]*.json'))) == expected
+        assert not (target / 'checkpoint.pkl').exists()
+        if existing:
+            assert (target / 'pareto/candidate.json').read_bytes() == previous
+        for path in files:
+            os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1000000))
+    response = c.http.post(c.url)
+    assert response.status_code == 200, response.text
+    assert response.json()['collection_incomplete'] is False
+    assert response.json()['collection_error'] is None
+    assert response.json()['collection_progress'] == dict(published_files=1000, total_files=1000)
+    assert response.json()['pareto_count'] == 1000
+    assert response.json()['result_partial'] is (not final)
+    assert not (target / 'pareto/candidate.json').exists()
+    provenance = json.loads((target / '.pbgui_vast.json').read_text())
+    assert provenance['collection_incomplete'] is False
+    assert provenance['partial'] is (not final)
+    if final:
+        assert c.http.post(c.url).json()['collection_progress'] == response.json()['collection_progress']
+
+
+@pytest.mark.parametrize('files,expected', [(0, 120), (10, 130), (1000, 1120), (100000, 3600)])
+def test_collection_budget_scales_with_pareto(collection, monkeypatch, files, expected):
+    """Metadata provides a bounded default; an explicit listing refines the count."""
+    c = collection
+    monkeypatch.delenv('PBGUI_COLLECT_TIMEOUT_SECONDS', raising=False)
+    c.store.update(c.identifier, pareto_count=files)
+    assert vast_collect._collection_seconds(c.store, c.identifier) == expected
+    assert vast_collect._collection_seconds(c.store, c.identifier, pareto_file_count=1000) == 1120
+
+
+@pytest.mark.parametrize('configured,environment,expected', [
+    (None, '17.5', 17.5), ('47', '17.5', 47), ('47', None, 47), ('7200', '3', 7200),
+])
+def test_collection_budget_override_precedence(collection, tmp_path, monkeypatch, configured, environment, expected):
+    """INI overrides the environment; explicit budgets are not silently clamped."""
+    config = tmp_path / 'pbgui.ini'
+    config.write_text('[vast]\n' + (f'collect_timeout_seconds = {configured}\n' if configured else ''))
+    monkeypatch.setattr('pbgui_purefunc.pbgui_ini_path', lambda: config)
+    if environment is None:
+        monkeypatch.delenv('PBGUI_COLLECT_TIMEOUT_SECONDS', raising=False)
+    else:
+        monkeypatch.setenv('PBGUI_COLLECT_TIMEOUT_SECONDS', environment)
+    assert vast_collect._collection_seconds(collection.store, collection.identifier) == expected
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'nan', 'inf', 'not-a-number'])
+def test_collection_rejects_invalid_budget(collection, monkeypatch, value):
+    """Invalid environment budgets cannot disable deadline enforcement."""
+    monkeypatch.setenv('PBGUI_COLLECT_TIMEOUT_SECONDS', value)
+    with pytest.raises(VastError, match='PBGUI_COLLECT_TIMEOUT_SECONDS'):
+        vast_collect._collection_seconds(collection.store, collection.identifier)
+
+
+@pytest.mark.parametrize('batch_files,commits', [(None, 1), (3, 4)])
+def test_small_import_and_configured_batches(collection, tmp_path, monkeypatch, batch_files, commits):
+    """Ten-file imports stay atomic by default and honor the INI batch size."""
+    c = collection
+    config = tmp_path / 'pbgui.ini'
+    config.write_text('[vast]\n' + (f'collect_batch_files = {batch_files}\n' if batch_files else ''))
+    monkeypatch.setattr('pbgui_purefunc.pbgui_ini_path', lambda: config)
+    native = ensure_private_directory(c.store.directory(c.identifier) / 'partial-results/optimize_results/run/pareto')
+    for index in range(10):
+        write_json(native / f'{index}.json', {'candidate': index})
+    target = Path(c.store.read(c.identifier, 'intent.json')['results_root']) / ('run_vast_' + c.identifier[:12])
+    replace, publications = os.replace, []
+    def publish(source, destination):
+        """Observe whole-publication commits without changing the I/O behavior."""
+        replace(source, destination)
+        if Path(destination) in {target, target / '.pbgui_vast.json'}:
+            publications.append(Path(destination))
+    monkeypatch.setattr(vast_transfer.os, 'replace', publish)
+    first = vast_transfer.import_results(c.store, c.identifier, partial=True)
+    assert len(publications) == commits
+    assert first['pareto_count'] == 10 and first['evaluations'] == 12
+    assert first == vast_transfer.import_results(c.store, c.identifier, partial=True)
+    assert sorted(path.name for path in (target / 'pareto').glob('*.json')) == [f'{index}.json' for index in range(10)]
+
+
+def test_remote_listing_refines_missing_collection_count(collection, monkeypatch):
+    """A connected job without count metadata gets a scaled, non-renewed budget."""
+    c = collection
+    c.store.update(c.identifier, pareto_count=None)
+    listing = Mock(return_value=1000)
+    monkeypatch.setattr(vast_transfer.WorkerConnection, 'pareto_file_count', listing)
+    def download(_connection, _final, timeout):
+        """Verify that the listing extends the shared allowance before download."""
+        assert 1100 < timeout <= 1120
+        native = ensure_private_directory(c.store.directory(c.identifier) / 'partial-results/optimize_results/run/pareto')
+        write_json(native / 'candidate.json', {})
+    monkeypatch.setattr(vast_transfer.WorkerConnection, 'collect', download)
+    assert c.http.post(c.url).status_code == 200
+    listing.assert_called_once()
+    assert 0 < listing.call_args.kwargs['timeout'] <= 120
+
+
+@pytest.mark.parametrize('override', [False, True])
+def test_scaled_collection_preserves_rental_reserve(collection, monkeypatch, override):
+    """Neither remote count refinement nor an explicit budget consumes reserve."""
+    c = collection
+    intent = c.store.read(c.lease, 'intent.json')
+    intent['deadline'] = time.time() + 190
+    write_json(c.store.directory(c.lease) / 'intent.json', intent)
+    c.store.update(c.identifier, pareto_count=None)
+    monkeypatch.setattr(vast_collect, 'collection_setting', lambda _name: None)
+    if override:
+        monkeypatch.setenv('PBGUI_COLLECT_TIMEOUT_SECONDS', '7200')
+    else:
+        monkeypatch.delenv('PBGUI_COLLECT_TIMEOUT_SECONDS', raising=False)
+    listing = Mock(return_value=1000)
+    monkeypatch.setattr(vast_transfer.WorkerConnection, 'pareto_file_count', listing)
+
+    def download(connection, final, timeout):
+        """Observe the real remaining allowance without any remote operation."""
+        assert 0 < timeout <= 10
+        native = ensure_private_directory(connection.directory / 'partial-results/optimize_results/run/pareto')
+        write_json(native / 'candidate.json', {})
+
+    monkeypatch.setattr(vast_transfer.WorkerConnection, 'collect', download)
+    assert c.http.post(c.url).status_code == 200
+    assert listing.call_count == (0 if override else 1)
+
+
+def test_timeout_during_batch_preparation_keeps_previous_commits(collection, monkeypatch):
+    """The currently staged batch is discarded; earlier commits stay consistent."""
+    c = collection
+    assert c.http.post(c.url).status_code == 200
+    target = Path(c.store.read(c.identifier)['result_path'])
+    native = c.store.directory(c.identifier) / 'partial-results/optimize_results/run/pareto'
+    (native / 'candidate.json').unlink()
+    for index in range(1000):
+        write_json(native / f'{index:04}.json', {'candidate': index})
+    expired, copystat = [False], vast_transfer.shutil.copystat
+    def stage(source, destination, *args, **kwargs):
+        """Expire while copying the third batch, not at a synthetic commit point."""
+        copystat(source, destination, *args, **kwargs)
+        if Path(source) == native / '0250.json':
+            expired[0] = True
+    def remaining():
+        """Use the same cooperative error a collection deadline produces."""
+        if expired[0]:
+            raise VastError('Pareto collection timed out', 409)
+    monkeypatch.setattr(vast_transfer.shutil, 'copystat', stage)
+    with pytest.raises(VastError, match='after 200/1000 files; published files retained'):
+        vast_transfer.import_results(c.store, c.identifier, partial=True, check=remaining)
+    assert len(list((target / 'pareto').glob('*.json'))) == 201
+    assert not (target / 'pareto/0200.json').exists()
+    assert (target / 'pareto/candidate.json').is_file()
+    assert c.store.read(c.identifier)['collection_progress']['published_files'] == 200
+    assert json.loads((target / '.pbgui_vast.json').read_text())['collection_progress']['published_files'] == 200
+
+
+@pytest.mark.parametrize('guard', ['job_id', 'older_snapshot'])
+def test_batch_import_keeps_provenance_guards(collection, guard):
+    """Large fronts cannot bypass import ownership or regress evaluation evidence."""
+    c = collection
+    assert c.http.post(c.url).status_code == 200
+    target = Path(c.store.read(c.identifier)['result_path'])
+    native = c.store.directory(c.identifier) / 'partial-results/optimize_results/run/pareto'
+    for index in range(101):
+        write_json(native / f'{index:04}.json', {})
+    if guard == 'job_id':
+        provenance = json.loads((target / '.pbgui_vast.json').read_text())
+        write_json(target / '.pbgui_vast.json', dict(provenance, job_id='d' * 32))
+        error = 'belongs to another import'
+    else:
+        c.store.update(c.identifier, exact_completed=11)
+        error = 'older than the published results'
+    before = {path.relative_to(target): path.read_bytes() for path in target.rglob('*') if path.is_file()}
+    with pytest.raises(VastError, match=error):
+        vast_transfer.import_results(c.store, c.identifier, partial=True)
+    assert before == {path.relative_to(target): path.read_bytes() for path in target.rglob('*') if path.is_file()}
+
+
+def test_batch_commit_failure_rolls_back_only_current_batch(collection, monkeypatch):
+    """A failed replace restores the current batch and retains retryable progress."""
+    c = collection
+    assert c.http.post(c.url).status_code == 200
+    target = Path(c.store.read(c.identifier)['result_path'])
+    native = c.store.directory(c.identifier) / 'partial-results/optimize_results/run/pareto'
+    (native / 'candidate.json').unlink()
+    for index in range(201):
+        write_json(native / f'{index:04}.json', {'candidate': index})
+    replace = os.replace
+    def fail(source, destination):
+        """Inject a real commit failure after several files in the second batch."""
+        if Path(destination) == target / 'pareto/0105.json':
+            raise OSError('isolated replace failure')
+        return replace(source, destination)
+    monkeypatch.setattr(vast_transfer.os, 'replace', fail)
+    with pytest.raises(OSError, match='isolated replace failure'):
+        vast_transfer.import_results(c.store, c.identifier, partial=True)
+    assert sorted(path.name for path in (target / 'pareto').glob('*.json')) == [
+        *[f'{index:04}.json' for index in range(100)], 'candidate.json']
+    assert c.store.read(c.identifier)['collection_progress']['published_files'] == 100
+    assert json.loads((target / '.pbgui_vast.json').read_text())['collection_progress']['published_files'] == 100
+    monkeypatch.setattr(vast_transfer.os, 'replace', replace)
+    imported = vast_transfer.import_results(c.store, c.identifier, partial=True)
+    assert imported['pareto_count'] == 201 and imported['collection_incomplete'] is False
+    assert not (target / 'pareto/candidate.json').exists()

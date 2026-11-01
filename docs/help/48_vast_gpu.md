@@ -350,6 +350,29 @@ PBGui shares request pacing across its local processes: a conservative five-seco
 Confirm **deletion_verified**;
 merely stopping a Vast instance can leave disk storage billable.
 
+### Large Pareto collections
+
+Manual collection shares one deadline across connection, transfer, verification
+and local publication. Its default is 120 seconds plus one second per Pareto
+JSON file (at least 120 seconds, at most 3600 seconds). PBGui uses the job's
+`pareto_count`, or a bounded remote filename listing when that count is absent.
+The rental's three-minute final-collection reserve still takes priority.
+
+Operators can set `[vast] collect_timeout_seconds` in `pbgui.ini`, or use the
+`PBGUI_COLLECT_TIMEOUT_SECONDS` environment variable. The INI setting wins;
+explicit positive budgets are not capped by the default's 3600-second limit.
+`[vast] collect_batch_files` controls the publication batch size (default 100
+Pareto JSON files; positive integer).
+
+Each batch is staged before publication. A timeout discards any uncommitted
+batch, reports **N/M files**, and retains previously committed files. Job metadata
+records `collection_incomplete` and `collection_progress` with `published_files`
+and `total_files`; each committed batch also updates `.pbgui_vast.json`.
+Retrying an unchanged verified snapshot resumes from its committed batch offset.
+Obsolete files from the preceding front are removed only after the last batch;
+until then a final snapshot is explicitly marked partial. Download verification
+is still all-or-nothing: interrupted downloads are not published.
+
 ## Limits and recovery
 
 Transient upload/SSH failures receive a 15-minute recovery window instead of a fixed two-attempt limit. PBGui retries after 15, 30, then at most 60 seconds and reuses partial files or verified chunks. New observed transfer progress renews that window; repeated retries without progress do not. The log shows the next retry and the original connection error. The separate 15-minute worker-setup timer stops applying once worker health is verified, so slow setup does not consume the upload's recovery time. Active transfers remain bounded by the rental deadline minus the three-minute collection reserve. Stop remains responsive during retry waits. Identity, integrity and disk-full errors still fail immediately; no deadline or budget is extended automatically.
