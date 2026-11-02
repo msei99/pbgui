@@ -21,6 +21,14 @@ Für einen eigenen PB8-Vast-Loop erstellt die native Fähigkeit `propose_ai_loop
 
 ## AI Setup
 
+### DeepSeek — direkte API
+
+Unter **Information → AI Setup → DeepSeek** einen Schlüssel von <https://platform.deepseek.com/api_keys> eingeben und **Connect** wählen. PBGui prüft ihn über den nur lesenden `/models`-Endpunkt und speichert ihn getrennt in einer benutzerspezifischen privaten Datei. **Disconnect** beendet eigene DeepSeek-Chats und entfernt nur diesen Schlüssel. Unter **Models and tests** den Provider **DeepSeek** und ein Modell wählen, danach **Use for new chats**. **Test connection** sendet ausschließlich einen festen synthetischen Text ohne Tools oder Gesprächsdaten und kann API-Guthaben verbrauchen.
+
+Die am 02.11.2026 geprüfte öffentliche API-Dokumentation nennt `deepseek-flash` (Standard) und `deepseek-v4-pro`. Die gewünschten älteren IDs `deepseek-chat` (V3) und `deepseek-reasoner` (R1) bleiben explizite Optionen; ihre Verfügbarkeit bestimmt DeepSeek. PBGui wechselt niemals automatisch auf ein anderes Modell. Direkte Anfragen verwenden `https://api.deepseek.com/v1/chat/completions`, Streaming und die üblichen geprüften PBGui-Tools. Reasoning-Inhalte bleiben im nativen Tool-Austausch erhalten; Activity zeigt die Denkphase und Antworttext erscheint laufend im Chat. Ungefiltertes Reasoning wird weder angezeigt noch als finale Antwort gespeichert. Dieser Adapter unterstützt keine Bilder.
+
+AI Loops können DeepSeek über dieselben Modelleinstellungen verwenden. Aktuelle Flash/Pro-Modelle haben laut Dokumentation 1M Kontext; ältere Modelle erhalten konservative 128k und werden durch die bestehende 256k-Mindestgrenze für Loops abgelehnt. Der isolierte Loop-Dialog bietet nur sein lesendes Evidenz-Tool, keine normalen Chat-Aktionen. DeepSeek rechnet API-Nutzung direkt ab; PBGui zeigt hierfür kein Restguthaben und keine USD-Schätzung. Bestehende Loop-Ausführungs- und Mietlimits gelten weiter. Die Integration wurde nicht mit einem echten API-Schlüssel geprüft.
+
 ### Claude Agent — Claude-Abonnement
 
 Claude kann auch **AI Loops** mit demselben gewählten Modell und Effort steuern. Loop-Entscheidungen verwenden einen isolierten SDK-Dialog, der das reine Lesewerkzeug `loop_evidence` und das SDK-Formatwerkzeug zur Abgabe der abschließenden strukturierten Entscheidung erhält. Normale Chataktionen und Freigabewerkzeuge sind dort nicht verfügbar. Queue, Start und Mietlimits benötigen weiterhin die bestehende geprüfte Benutzerfreigabe. Der Modellkontext muss mindestens 256.000 Tokens umfassen; PBGui liest die nativen Metadaten, statt eine Kapazität anzunehmen. Stop/API-Shutdown beendet den zugehörigen Prozess und erhält unklare Anfragen für den normalen Wiederherstellungsablauf.

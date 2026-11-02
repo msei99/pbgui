@@ -20,6 +20,7 @@ from uuid import uuid4
 import aiohttp
 
 from ai_claude_code import ClaudeCodeError, ClaudeRuntime
+from ai_deepseek import DEEPSEEK_PROVIDER, MAX_REASONING_CHARS, models as deepseek_models, request as deepseek_request
 
 from ai_openrouter import DEFAULT_JEV_BUDGET_USD, JEV_MODEL, OPENROUTER_API, OpenRouterDecisionError, _user_options, decide_backtest_candidates, decide_backtest_results, decide_general_choice, decide_user_jev_request, parse_structured_jev_request, prepare_user_jev_payload
 
@@ -431,6 +432,45 @@ class AICredentialStore:
         """Resolve a separate credential file below the approved root."""
         self._path(owner)
         return self.root / f"{owner}.openrouter.json"
+
+    def deepseek_configured(self, owner: str) -> bool:
+        """Return whether an owner has a separate DeepSeek key."""
+        path = self._deepseek_path(owner)
+        return path.is_file() and not path.is_symlink()
+
+    def save_deepseek_key(self, owner: str, api_key: str) -> None:
+        """Atomically store the validated DeepSeek key in an owner-only file."""
+        key = self._validate_key(api_key)
+        with advisory_file_lock(self.lock_target):
+            atomic_write_private_text(
+                self._deepseek_path(owner),
+                json.dumps({"provider": "deepseek", "api_key": key}, indent=4) + "\n",
+            )
+
+    def load_deepseek_key(self, owner: str) -> str:
+        """Read the owner's DeepSeek key only for a server-side request."""
+        path = self._deepseek_path(owner)
+        with advisory_file_lock(self.lock_target):
+            if not path.is_file() or path.is_symlink():
+                raise AIChatError("DeepSeek is not connected")
+            try:
+                secure_private_file(path)
+                payload = json.loads(read_regular_file_nofollow(path, self.root).decode("utf-8"))
+                if payload.get("provider") != "deepseek":
+                    raise ValueError("Invalid provider")
+                return self._validate_key(payload.get("api_key"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                raise AIChatError("DeepSeek credentials are unavailable") from exc
+
+    def delete_deepseek_key(self, owner: str) -> None:
+        """Delete only the selected owner's DeepSeek key."""
+        with advisory_file_lock(self.lock_target):
+            self._deepseek_path(owner).unlink(missing_ok=True)
+
+    def _deepseek_path(self, owner: str) -> Path:
+        """Resolve a separate credential file below the approved root."""
+        self._path(owner)
+        return self.root / f"{owner}.deepseek.json"
 
     def owners(self) -> list[str]:
         """Return validated opaque owners with configured OpenCode credentials."""
@@ -1344,6 +1384,7 @@ class AIChatService:
         self.codex: dict[str, CodexRuntime] = {}
         self.claude = ClaudeRuntime(self.root / "claude")
         self.claude_live: dict[str, list[dict[str, Any]]] = {}
+        self.deepseek_live: dict[str, list[dict[str, Any]]] = {}
         self.conversations: dict[str, Conversation] = {}
         self.active_tasks: dict[str, asyncio.Task] = {}
         self.jev_previews: dict[str, dict[str, Any]] = {}
@@ -1398,6 +1439,7 @@ class AIChatService:
         self.codex.clear()
         await self.claude.close()
         self.claude_live.clear()
+        self.deepseek_live.clear()
         if self.http is not None:
             await self.http.close()
             self.http = None
@@ -1507,6 +1549,7 @@ class AIChatService:
                 "opencode-zen": {"available": True, "connected": self.credentials.configured(owner)},
                 "opencode-go": {"available": True, "connected": self.credentials.configured(owner)},
                 "openrouter": {"available": True, "connected": self.credentials.openrouter_configured(owner)},
+                "deepseek": {"available": True, "connected": self.credentials.deepseek_configured(owner)},
                 "claude-code": await self.claude.status(owner),
             },
             "capabilities": {"chat_only": False, "pbgui_tools": True},
@@ -1522,6 +1565,9 @@ class AIChatService:
             info = status["providers"]["chatgpt"]
             return {"provider": provider, "profile": profile, "email": info.get("email", ""),
                     "limits": info.get("limits", []), "connected": info.get("connected", False)}
+        if provider == "deepseek":
+            return {"provider": provider, "connected": self.credentials.deepseek_configured(owner),
+                    "limits": [], "message": "Usage is available in the DeepSeek console."}
         if provider == "openrouter":
             if not self.credentials.openrouter_configured(owner):
                 return {"provider": provider, "connected": False}
@@ -1642,6 +1688,40 @@ class AIChatService:
             finally:
                 self.provider_disconnecting.discard(state_key)
 
+    async def connect_deepseek(self, owner: str, api_key: str) -> None:
+        """Verify one DeepSeek key before storing it separately."""
+        async with self._provider_lock(owner, "deepseek"):
+            key = AICredentialStore._validate_key(api_key)
+            session = await self._http_session()
+            try:
+                async with session.get(
+                    f"{DEEPSEEK_PROVIDER['base_url']}/models",
+                    headers={"Authorization": f"Bearer {key}"},
+                    allow_redirects=False,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as response:
+                    if response.status != 200:
+                        raise AIChatError("DeepSeek rejected this API key")
+                    payload = await self._read_json_response(response, expected_status=200)
+                    if not isinstance(payload, dict) or payload.get("error") or not isinstance(payload.get("data"), list):
+                        raise AIChatError("DeepSeek returned invalid model information")
+            except AIChatError:
+                raise
+            except Exception as exc:
+                raise AIChatError("Could not verify DeepSeek connection") from exc
+            self.credentials.save_deepseek_key(owner, key)
+
+    async def disconnect_deepseek(self, owner: str) -> None:
+        """Cancel DeepSeek turns and remove only its credential."""
+        async with self._provider_lock(owner, "deepseek"):
+            state_key = self._provider_state_key(owner, "deepseek")
+            self.provider_disconnecting.add(state_key)
+            try:
+                await self._cancel_provider(owner, "deepseek")
+                self.credentials.delete_deepseek_key(owner)
+            finally:
+                self.provider_disconnecting.discard(state_key)
+
     async def disconnect_go(self, owner: str) -> None:
         """Remove the owner's OpenCode Go key."""
         key = (owner, "opencode-go")
@@ -1723,6 +1803,10 @@ class AIChatService:
                 return await self.claude.models(owner)
             except ClaudeCodeError as exc:
                 raise AIChatError(str(exc)) from exc
+        if provider == "deepseek":
+            if not self.credentials.deepseek_configured(owner):
+                raise AIChatError("DeepSeek is not connected")
+            return deepseek_models()
         if provider == "openrouter":
             if not self.credentials.openrouter_configured(owner):
                 raise AIChatError("OpenRouter is not connected")
@@ -1845,6 +1929,8 @@ class AIChatService:
                 raise AIChatError("AI provider is disconnecting")
             if provider in _OPENCODE_PROVIDERS and not self.credentials.configured(owner):
                 raise AIChatError("OpenCode is not connected")
+            if provider == "deepseek" and not self.credentials.deepseek_configured(owner):
+                raise AIChatError("DeepSeek is not connected")
             if provider == "openrouter" and not self.credentials.openrouter_configured(owner):
                 raise AIChatError("OpenRouter is not connected")
             if not _pre_reserved:
@@ -1968,7 +2054,7 @@ class AIChatService:
                                     proposal=new_proposal,
                                     ui_action=new_ui_action,
                                 )
-                elif provider in (*_OPENCODE_PROVIDERS, "openrouter", "claude-code"):
+                elif provider in (*_OPENCODE_PROVIDERS, "openrouter", "claude-code", "deepseek"):
                     current_user = pending_user
                     if pending_user is None:
                         current_user = {
@@ -1983,6 +2069,8 @@ class AIChatService:
                             "role": item.get("role", ""),
                             "content": provider_message if item is current_user else item.get("content", ""),
                             **({"images": item["images"]} if item.get("images") else {}),
+                            **({"reasoning_content": item.get("reasoning_content", "")}
+                               if provider == "deepseek" and item.get("role") == "assistant" else {}),
                         }
                         for item in conversation.messages
                         if not item.get("failed") and item.get("role") in {"user", "assistant"}
@@ -1996,7 +2084,9 @@ class AIChatService:
                                 lambda: self._claude_chat(owner, model, provider_history, conversation.id, clean_effort)
                                 if provider == "claude-code" else self._openrouter_jev_chat(
                                     owner, model, clean_message, conversation.context, conversation.id, _jev_payload
-                                ) if provider == "openrouter" else self._go_chat(
+                                ) if provider == "openrouter" else self._deepseek_chat(
+                                    owner, model, provider_history, conversation.id, clean_effort,
+                                ) if provider == "deepseek" else self._go_chat(
                                     owner, model, provider_history, provider, conversation.id, clean_effort,
                                 ),
                             )
@@ -2020,7 +2110,7 @@ class AIChatService:
                     [
                         *(
                             []
-                            if provider in _OPENCODE_PROVIDERS or provider in {"openrouter", "claude-code"} or pending_user is not None
+                            if provider in _OPENCODE_PROVIDERS or provider in {"openrouter", "claude-code", "deepseek"} or pending_user is not None
                             else [
                                 {
                                     "role": "user",
@@ -2029,7 +2119,9 @@ class AIChatService:
                                 }
                             ]
                         ),
-                        {"role": "assistant", "content": reply},
+                        {"role": "assistant", "content": reply,
+                         **({"reasoning_content": (self.deepseek_live.get(conversation.id) or [{}])[-1].get("reasoning_content", "")}
+                            if provider == "deepseek" else {})},
                     ]
                 )
                 self._trim_history(conversation.messages, _MAX_HISTORY_MESSAGES)
@@ -2057,6 +2149,7 @@ class AIChatService:
                 self.jev_user_requests.pop(conversation.id, None)
                 self.active_tasks.pop(conversation.id, None)
                 self.claude_live.pop(conversation.id, None)
+                self.deepseek_live.pop(conversation.id, None)
                 runtime_stopped = runtime is not None and (
                     runtime.process is None
                     or getattr(runtime.process, "returncode", None) is not None
@@ -2354,7 +2447,7 @@ class AIChatService:
             if not isinstance(value, str) or len(value) > limit or any(ord(char) < 32 for char in value):
                 raise AIChatError("Invalid AI model selection")
             result[key] = value
-        if result["provider"] not in {"chatgpt", "opencode-go", "opencode-zen", "openrouter", "claude-code"} or not result["model"]:
+        if result["provider"] not in {"chatgpt", "opencode-go", "opencode-zen", "openrouter", "claude-code", "deepseek"} or not result["model"]:
             raise AIChatError("Invalid AI model selection")
         return result
 
@@ -3157,6 +3250,8 @@ class AIChatService:
                          if conversation.busy and conversation.provider == "chatgpt" else [])
         if conversation.busy and conversation.provider == "claude-code":
             live_messages = self.claude_live.get(conversation.id, [])
+        if conversation.busy and conversation.provider == "deepseek":
+            live_messages = self.deepseek_live.get(conversation.id, [])
         payload = {
             "conversation_id": conversation.id,
             "title": conversation.title,
@@ -3623,6 +3718,58 @@ class AIChatService:
                     "Jev makes structured decisions. Give a goal and 2 to 20 numbered alternatives under 'Options:', or ask about PBGui Pareto or backtest results.")
         except (OpenRouterDecisionError, AICapabilityError) as exc:
             raise AIChatError(str(exc)) from exc
+
+    async def _deepseek_chat(self, owner, model, history, conversation_id="", effort=""):
+        """Use the independent key and native tool loop without OpenCode state."""
+        metadata = await self._validate_provider_model(owner, "deepseek", model)
+        self._validate_model_effort(metadata, effort)
+        if any(item.get("images") for item in history):
+            raise AIChatError("DeepSeek text models do not accept images")
+        if sum(len(item.get("content", "")) + len(item.get("reasoning_content", "")) for item in history) > _MAX_HISTORY_CHARS:
+            raise AIChatError("Conversation context exceeds the supported provider payload")
+        key = self.credentials.load_deepseek_key(owner)
+        if conversation_id:
+            self.deepseek_live[conversation_id] = []
+            return await self._go_chat_completion_agent(
+                owner, conversation_id, DEEPSEEK_PROVIDER["base_url"], model, key,
+                history[-_MAX_HISTORY_MESSAGES:], effort, metadata,
+            )
+        body = {"model": model, "messages": [
+            {"role": "system", "content": _go_instructions(model)},
+            *copy.deepcopy(history[-_MAX_HISTORY_MESSAGES:]),
+        ]}
+        budget = self._apply_opencode_output_budget(body, "chat", metadata)
+        payload = await deepseek_request(await self._http_session(), key, body)
+        self._validate_opencode_completion(payload, "chat", budget)
+        text = self._chat_completion_text(payload)
+        if not text or len(text) > _MAX_REPLY_CHARS:
+            raise AIChatError("DeepSeek returned an empty or oversized answer")
+        return text
+
+    async def _deepseek_stream_request(self, owner, conversation_id, session, key, body):
+        """Project answer deltas; retain reasoning only in the native tool envelope."""
+        entries = self.deepseek_live.setdefault(conversation_id, [])
+        entry = {"timestamp": time.time(), "content": ""}
+        entries.append(entry)
+        thinking = False
+        async def on_text(text):
+            """Bound partial display text without accepting it as a completed answer."""
+            entry["content"] = (entry["content"] + text)[:_MAX_REPLY_CHARS]
+        async def on_reasoning(_text):
+            """Show reasoning activity, not raw private model chain-of-thought."""
+            nonlocal thinking
+            if not thinking:
+                thinking = True
+                await self._set_activity(owner, conversation_id, "DeepSeek is reasoning")
+        payload = await deepseek_request(session, key, body, on_text=on_text, on_reasoning=on_reasoning)
+        choices = payload.get("choices") or []
+        assistant = (choices[0].get("message") or {}) if choices else {}
+        reasoning = assistant.get("reasoning_content")
+        if isinstance(reasoning, str):
+            if len(reasoning) > MAX_REASONING_CHARS:
+                raise AIChatError("DeepSeek reasoning is too large")
+            entry["reasoning_content"] = reasoning
+        return payload
 
     async def _go_chat(
         self,
@@ -4209,20 +4356,23 @@ class AIChatService:
             if not final_round:
                 request_body["tools"] = tools
             output_budget = self._apply_opencode_output_budget(request_body, "chat", metadata)
-            try:
-                async with session.post(
-                    f"{base_url}/chat/completions",
-                    headers=self._opencode_request_headers(
-                        api_key, conversation_id, "chat"
-                    ),
-                    json=request_body,
-                    allow_redirects=False,
-                ) as response:
-                    payload = await self._read_json_response(response, expected_status=200)
-            except AIChatError:
-                raise
-            except Exception as exc:
-                raise AIChatError("OpenCode agent request failed") from exc
+            if (metadata or {}).get("provider") == "deepseek":
+                payload = await self._deepseek_stream_request(owner, conversation_id, session, api_key, request_body)
+            else:
+                try:
+                    async with session.post(
+                        f"{base_url}/chat/completions",
+                        headers=self._opencode_request_headers(
+                            api_key, conversation_id, "chat"
+                        ),
+                        json=request_body,
+                        allow_redirects=False,
+                    ) as response:
+                        payload = await self._read_json_response(response, expected_status=200)
+                except AIChatError:
+                    raise
+                except Exception as exc:
+                    raise AIChatError("OpenCode agent request failed") from exc
             choices = payload.get("choices") if isinstance(payload, dict) else None
             choice = choices[0] if isinstance(choices, list) and choices else None
             assistant = choice.get("message") if isinstance(choice, dict) else None
@@ -4248,8 +4398,9 @@ class AIChatService:
             }
             reasoning_content = assistant.get("reasoning_content")
             if isinstance(reasoning_content, str):
-                if len(reasoning_content) > _MAX_REPLY_CHARS:
-                    raise AIChatError("OpenCode agent reasoning is too large")
+                reasoning_limit = MAX_REASONING_CHARS if (metadata or {}).get("provider") == "deepseek" else _MAX_REPLY_CHARS
+                if len(reasoning_content) > reasoning_limit:
+                    raise AIChatError("AI provider reasoning is too large")
                 assistant_message["reasoning_content"] = reasoning_content
             messages.append(assistant_message)
             for call in calls:
@@ -5297,7 +5448,9 @@ class AIChatService:
     @staticmethod
     def _trim_history(messages: list[dict[str, str]], max_messages: int) -> None:
         """Trim complete oldest turns until both history limits are satisfied."""
-        while len(messages) > max_messages or sum(len(item["content"]) for item in messages) > _MAX_HISTORY_CHARS:
+        while len(messages) > max_messages or sum(
+            len(item["content"]) + len(item.get("reasoning_content", "")) for item in messages
+        ) > _MAX_HISTORY_CHARS:
             if len(messages) <= 2:
                 raise AIChatError("Conversation context exceeds the supported provider payload")
             del messages[:2]

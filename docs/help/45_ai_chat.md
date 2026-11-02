@@ -21,6 +21,14 @@ For an owned PB8 Vast Loop, the native `propose_ai_loop_gpu_replacement` capabil
 
 ## AI Setup
 
+### DeepSeek — direct API
+
+Open **Information → AI Setup → DeepSeek**, enter a key from <https://platform.deepseek.com/api_keys> and select **Connect**. PBGui verifies it with the read-only `/models` endpoint and stores it in a separate owner-only credential file. **Disconnect** cancels your DeepSeek chats and removes only this key. In **Models and tests**, select **DeepSeek** and a model, then **Use for new chats**. **Test connection** sends fixed synthetic text without tools or conversation data; it can consume API credits.
+
+The public API documentation checked on 2026-11-02 lists `deepseek-flash` (default) and `deepseek-v4-pro`. The requested legacy IDs `deepseek-chat` (V3) and `deepseek-reasoner` (R1) remain explicit choices; their availability depends on DeepSeek. PBGui never silently substitutes another model. Direct requests use `https://api.deepseek.com/v1/chat/completions`, streaming and the normal reviewed PBGui tools. Reasoning content is retained in the native tool exchange; Activity indicates reasoning and answer text streams into the chat. Raw reasoning is not shown or stored as the final answer. Images are not supported by this adapter.
+
+AI Loops can select DeepSeek through the same model settings. Current Flash/Pro models have a documented 1M context; legacy models use a conservative 128k context and are refused by the existing 256k Loop minimum. The isolated Loop dialog exposes only its read-only evidence tool, not normal chat actions. DeepSeek bills API usage directly; PBGui does not report remaining credits or estimate USD spend for this provider. Existing Loop execution/rental limits still apply. No live API key was used to verify this integration.
+
 ### Claude Agent — Claude subscription
 
 Claude can also drive **AI Loops** using the same selected model and effort. Loop decisions use an isolated SDK dialog with the read-only `loop_evidence` tool and the SDK format tool for submitting the final structured decision. Normal chat actions and approval tools are unavailable there. Queuing, starting and rental limits still require the existing reviewed user approval. Model context must be at least 256,000 tokens; PBGui reads the actual native metadata instead of assuming a model's capacity. Stop/shutdown cancels the owned process and preserves uncertain requests for the normal recovery workflow.
