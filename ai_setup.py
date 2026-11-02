@@ -39,7 +39,7 @@ async def test_model(chat, owner, selection, request):
             metadata=await service._validate_provider_model(user,'deepseek',selection.model,selection.profile)
             service._validate_model_effort(metadata,selection.effort)
             service._validate_model_service_tier(metadata,'deepseek',selection.service_tier)
-            reply=await service._deepseek_chat(user,selection.model,[{'role':'user','content':'Reply PBGui connection OK.'}])
+            reply=await service._deepseek_chat(user,selection.model,[{'role':'user','content':'Reply PBGui connection OK.'}],effort=selection.effort)
         else:
             reply,_,_=await provider_reply(service,user,body,selection=selection.model_dump(),
                 instructions='This is a connection test. Reply briefly with PBGui connection OK. Do not use tools.',

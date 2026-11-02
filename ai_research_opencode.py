@@ -1,4 +1,4 @@
-"""Isolated Go/Zen research: selected model, fixed public search endpoint, no action tools."""
+"""Isolated OpenCode/DeepSeek research with public search and no action tools."""
 from __future__ import annotations
 
 import json
@@ -6,6 +6,8 @@ import re
 from datetime import datetime, timezone
 
 import aiohttp
+
+SERVICE = 'AIResearch'
 
 SEARCH_URL = 'https://mcp.exa.ai/mcp'
 MAX_RESPONSE_BYTES = 1024 * 1024
@@ -35,7 +37,7 @@ async def _post(session, url, headers, body):
     """Bound every response and refuse redirects before any credentials can be forwarded."""
     async with session.post(url, headers=headers, json=body, allow_redirects=False) as response:
         if response.status != 200:
-            source = 'Exa web search' if url == SEARCH_URL else 'OpenCode model'
+            source = 'Exa web search' if url == SEARCH_URL else ('DeepSeek model' if url.startswith('https://api.deepseek.com/') else 'OpenCode model')
             # Never display/log upstream bodies: they can echo prompts or credentials.
             reason = 'request failed'
             if not 300 <= response.status < 400:
@@ -59,7 +61,7 @@ async def _post(session, url, headers, body):
                         reason = 'authentication/access rejected'
             from logging_helpers import human_log
             diagnostic = f'{source}: {reason} (HTTP {response.status})'
-            human_log('AIResearch', diagnostic, level='WARNING')
+            human_log(SERVICE, diagnostic, level='WARNING')
             raise _error(diagnostic + '; no automatic retry or provider fallback was used')
         data = bytearray()
         async for chunk in response.content.iter_chunked(65536):
@@ -134,11 +136,15 @@ async def _model_text(session, chat, record, metadata, key, content):
     variant = chat._selected_reasoning_variant(metadata, record['effort'])
     chat._apply_reasoning_variant(body, protocol, model, variant)
     output_budget = AIChatService._apply_opencode_output_budget(body, protocol, metadata)
-    headers = AIChatService._opencode_request_headers(key, record['id'], protocol)
+    deepseek = record['provider'] == 'deepseek'
+    if deepseek:
+        from ai_deepseek import DEEPSEEK_PROVIDER
+    config = DEEPSEEK_PROVIDER if deepseek else _OPENCODE_PROVIDERS[record['provider']]
+    headers = {'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'} if deepseek else AIChatService._opencode_request_headers(key, record['id'], protocol)
     from ai_chat import AIChatError
     stage_label = 'report generation' if content.get('stage') == 'answer' else 'query planning'
     try:
-        raw = await _post(session, _OPENCODE_PROVIDERS[record['provider']]['base_url'] + '/' + endpoint, headers, body)
+        raw = await _post(session, config['base_url'] + '/' + endpoint, headers, body)
     except AIChatError as exc:
         raise _error(f'Research {stage_label}: {exc}') from exc
     try:
@@ -171,6 +177,8 @@ async def _model_text(session, chat, record, metadata, key, content):
             if message.get('tool_calls') or message.get('function_call'):
                 raise _error('Research model requested an unavailable tool')
             limited = limited or choice.get('finish_reason') == 'length'
+            if choice.get('finish_reason') in {'aborted', 'insufficient_system_resource'}:
+                raise _error('Research provider stopped the response before completion')
             if choice.get('finish_reason') == 'content_filter':
                 raise _error('Research response was stopped by the provider content filter')
         text = AIChatService._chat_completion_text(payload)
@@ -186,6 +194,9 @@ async def _model_text(session, chat, record, metadata, key, content):
             record['answer'] = text
         stage = 'report' if content.get('stage') == 'answer' else 'query plan'
         raise _error(f'Research {stage} reached the output limit ({output_budget} tokens, including reasoning where applicable); incomplete output was not sent to Jev')
+    if deepseek:
+        from ai_deepseek import validate_finish
+        validate_finish(payload)
     if not text:
         raise _error('Selected model returned no research text')
     return text
@@ -195,7 +206,7 @@ async def run_opencode_research(chat, record, maximum_web_calls):
     """Own disposable HTTP clients for one approved research job, including cancellation."""
     from ai_research import IDLE_TIMEOUT
     metadata = await chat._validate_provider_model(record['owner'], record['provider'], record['model'], record['profile'])
-    key = chat.credentials.load_go_key(record['owner'])
+    key = chat.credentials.load_deepseek_key(record['owner']) if record['provider'] == 'deepseek' else chat.credentials.load_go_key(record['owner'])
     content = {'stage': 'plan', 'prompt': record['prompt'], 'date_utc': datetime.now(timezone.utc).date().isoformat()}
     # Independent sessions have no inherited cookies, proxy settings, headers or PBGui state.
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, connect=30, sock_read=IDLE_TIMEOUT), cookie_jar=aiohttp.DummyCookieJar(), trust_env=False) as model_session:

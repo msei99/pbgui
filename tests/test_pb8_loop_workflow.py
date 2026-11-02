@@ -792,13 +792,13 @@ class Node {
 }
 const body=new Node('body'),problem=new Node('button'),overlay=new Node('overlay'),pending=[];
 const find=(node,id)=>node.id===id?node:node.children.map(child=>find(child,id)).find(Boolean);
-const document={activeElement:null,getElementById:id=>id==='loop-report-problem'?problem:find(body,id)};
+const document={activeElement:null,documentElement:{hasAttribute:()=>true},getElementById:id=>id==='loop-report-problem'?problem:find(body,id)};
 const run={id:'a',status:'running',jobs:[{kind:'optimizer',round:0,operation:'first',name:'First',snapshot_digest:'one'},
  {kind:'optimizer',round:1,operation:'second',name:'Second',snapshot_digest:'two'}],cycles:[{round:1,status:'validated'}],initial_snapshot_digest:'start'};
 const context=vm.createContext({AbortController,JSON,document,base:'/loops',rows:[run],selected:'a',reportView:'cycle',reportRound:1,reportTab:'changes',
  reportSuspended:false,reportSignature:'',diffState:null,diffRequest:null,diffGeneration:0,diffOperation:'',diffBaseline:'',
  reportBody:body,reportDialog:{contains:()=>true},reportOverlay:overlay,reportTitle:new Node('h3'),reportTabs:new Node('tabs'),
- element:(tag,text)=>new Node(tag,text),cycleRows:row=>row.cycles,canContinueRound:()=>false,reportNavigation(){},
+ element:(tag,text)=>new Node(tag,text),cycleRows:row=>row.cycles,canContinueRound:()=>false,reportNavigation(){},navigationTiming(){},
  reportTable(parent,headers,values){const table=new Node('table',JSON.stringify(values));parent.appendChild(table);},
  fetch(url,options){return new Promise(resolve=>pending.push({url,options,resolve}));}});
 vm.runInContext(source.slice(source.indexOf('  function resetDiff('),source.indexOf('  function backtestButton(')),context);

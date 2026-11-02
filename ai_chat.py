@@ -1370,6 +1370,7 @@ class Conversation:
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
     research_items: list[dict[str, Any]] = field(default_factory=list)
     chatgpt_profile: str = "default"
+    deepseek_state: dict[str, Any] = field(default_factory=dict)
 
 
 class AIChatService:
@@ -1566,8 +1567,7 @@ class AIChatService:
             return {"provider": provider, "profile": profile, "email": info.get("email", ""),
                     "limits": info.get("limits", []), "connected": info.get("connected", False)}
         if provider == "deepseek":
-            return {"provider": provider, "connected": self.credentials.deepseek_configured(owner),
-                    "limits": [], "message": "Usage is available in the DeepSeek console."}
+            return await self._deepseek_usage(owner)
         if provider == "openrouter":
             if not self.credentials.openrouter_configured(owner):
                 return {"provider": provider, "connected": False}
@@ -1717,6 +1717,7 @@ class AIChatService:
             state_key = self._provider_state_key(owner, "deepseek")
             self.provider_disconnecting.add(state_key)
             try:
+                await self.research.cancel_deepseek(owner)
                 await self._cancel_provider(owner, "deepseek")
                 self.credentials.delete_deepseek_key(owner)
             finally:
@@ -1806,7 +1807,7 @@ class AIChatService:
         if provider == "deepseek":
             if not self.credentials.deepseek_configured(owner):
                 raise AIChatError("DeepSeek is not connected")
-            return deepseek_models()
+            return await self._deepseek_models(owner)
         if provider == "openrouter":
             if not self.credentials.openrouter_configured(owner):
                 raise AIChatError("OpenRouter is not connected")
@@ -2064,11 +2065,15 @@ class AIChatService:
                         }
                         conversation.messages.append(current_user)
                     self._trim_history(conversation.messages, _MAX_HISTORY_MESSAGES - 1)
+                    if provider == "deepseek":
+                        for item in conversation.messages:
+                            item.setdefault("deepseek_id", uuid4().hex)
                     provider_history = [
                         {
                             "role": item.get("role", ""),
                             "content": provider_message if item is current_user else item.get("content", ""),
                             **({"images": item["images"]} if item.get("images") else {}),
+                            **({"context_id": item["deepseek_id"]} if provider == "deepseek" else {}),
                             **({"reasoning_content": item.get("reasoning_content", "")}
                                if provider == "deepseek" and item.get("role") == "assistant" else {}),
                         }
@@ -2334,6 +2339,7 @@ class AIChatService:
             await self.research.cancel_conversation(owner, conversation_id, visible_index)
             conversation.research_items = [item for item in conversation.research_items if item.get('message_index', 0) < visible_index]
             conversation.messages = conversation.messages[:message_index]
+            conversation.deepseek_state = {}
             conversation.ui_actions = []
             conversation.last_error = ""
             conversation.reasoning_summary = ""
@@ -2738,6 +2744,7 @@ class AIChatService:
             if provider_changed:
                 conversation.provider = selected_provider
             if provider_changed or model_changed:
+                conversation.deepseek_state = {}
                 conversation.model = selected_model_id
             if clean_effort is not None:
                 conversation.effort = clean_effort
@@ -3244,6 +3251,11 @@ class AIChatService:
         runtime = conversation.codex_runtime
         context_usage = (getattr(runtime, "context_usage", {}).get(conversation.codex_thread_id)
                          if conversation.provider == "chatgpt" and runtime is not None else None)
+        if conversation.provider == "deepseek":
+            from ai_deepseek_context import projection
+            reported = projection(conversation.deepseek_state)
+            context_usage = ({"used_tokens": reported["used_tokens"], "limit_tokens": reported["limit_tokens"]}
+                             if "used_tokens" in reported and reported.get("limit_tokens", 0) > 0 else None)
         turn_started = (conversation.activity_history[0].get("timestamp", 0)
                         if conversation.activity_history else time.time())
         live_messages = (getattr(runtime, "live_messages", {}).get(conversation.codex_thread_id, [])
@@ -3272,6 +3284,7 @@ class AIChatService:
             "reasoning_summary": conversation.reasoning_summary,
             "activity_history": copy.deepcopy(conversation.activity_history),
             "context_usage": copy.deepcopy(context_usage),
+            "token_usage": ({key: value for key, value in reported.items() if key != "limit_tokens"} if conversation.provider == "deepseek" else None),
             "streaming_messages": [
                 {"timestamp": item["timestamp"], "content": item["content"]}
                 for item in live_messages if item["timestamp"] >= turn_started
@@ -3332,6 +3345,7 @@ class AIChatService:
         self._retain_loop_window_request(conversation)
         payload = {
             "schema_version": 1,
+            "deepseek_state": conversation.deepseek_state,
             "conversation_id": conversation.id,
             "owner": conversation.owner,
             "provider": conversation.provider,
@@ -3390,7 +3404,9 @@ class AIChatService:
                         from ai_loop_windows import conversation_window_request
                         _, loop_window_request = conversation_window_request(data)
                         self._profile_key(owner, str(data.get("chatgpt_profile") or "default"))
+                        from ai_deepseek_context import restore as restore_deepseek
                         conversation = Conversation(
+                            deepseek_state=restore_deepseek(data.get("deepseek_state")),
                             id=str(data.get("conversation_id") or ""),
                             owner=owner,
                             provider=str(data.get("provider") or ""),
@@ -3425,6 +3441,42 @@ class AIChatService:
             for conversation in loaded:
                 self.conversations[conversation.id] = conversation
             self.loaded_owners.add(owner)
+
+    async def _deepseek_usage(self, owner: str) -> dict[str, Any]:
+        """Read current provider balances without guessing subscription limits or spend."""
+        from ai_deepseek import balances
+        result = {"provider": "deepseek", "connected": self.credentials.deepseek_configured(owner), "limits": []}
+        if not result["connected"]:
+            return result
+        key = self.credentials.load_deepseek_key(owner)
+        try:
+            async with (await self._http_session()).get(
+                f"{DEEPSEEK_PROVIDER['base_url']}/user/balance", headers={"Authorization": f"Bearer {key}"},
+                allow_redirects=False, timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                payload = await self._read_json_response(response, expected_status=200, max_bytes=64 * 1024)
+            return {**result, **balances(payload)}
+        except Exception as exc:
+            _log(SERVICE, f"DeepSeek balance unavailable: {type(exc).__name__}", level="WARNING")
+            return {**result, "message": "DeepSeek balance currently unavailable."}
+
+    async def _deepseek_models(self, owner: str) -> list[dict[str, Any]]:
+        """Read the owner's current provider catalog without a guessed fallback or cache."""
+        key = self.credentials.load_deepseek_key(owner)
+        session = await self._http_session()
+        try:
+            async with session.get(
+                f"{DEEPSEEK_PROVIDER['base_url']}/models",
+                headers={"Authorization": f"Bearer {key}"}, allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as response:
+                payload = await self._read_json_response(response, expected_status=200, max_bytes=256 * 1024)
+            return deepseek_models(payload)
+        except AIChatError:
+            raise
+        except Exception as exc:
+            _log(SERVICE, f"DeepSeek model discovery failed: {type(exc).__name__}", level="WARNING")
+            raise AIChatError("Could not load DeepSeek models") from exc
 
     async def _go_models(self, provider: str = "opencode-go") -> list[dict[str, Any]]:
         """Load one public OpenCode model catalog and project supported adapters."""
@@ -3720,14 +3772,42 @@ class AIChatService:
             raise AIChatError(str(exc)) from exc
 
     async def _deepseek_chat(self, owner, model, history, conversation_id="", effort=""):
+        """Normalize shared-adapter errors to the selected provider name."""
+        try:
+            return await self._deepseek_chat_inner(owner, model, history, conversation_id, effort)
+        except AIChatError as exc:
+            raise AIChatError(str(exc).replace("OpenCode", "DeepSeek")) from exc
+
+    async def _deepseek_chat_inner(self, owner, model, history, conversation_id="", effort=""):
         """Use the independent key and native tool loop without OpenCode state."""
         metadata = await self._validate_provider_model(owner, "deepseek", model)
         self._validate_model_effort(metadata, effort)
-        if any(item.get("images") for item in history):
-            raise AIChatError("DeepSeek text models do not accept images")
+        key = self.credentials.load_deepseek_key(owner)
+        if conversation_id:
+            from ai_deepseek_context import prepare
+            conversation = self._owned_conversation(owner, conversation_id)
+            if type(metadata.get("context")) is int and metadata["context"] > 0:
+                conversation.deepseek_state["limit_tokens"] = metadata["context"]
+            else:
+                conversation.deepseek_state.pop("limit_tokens", None)
+            history = await prepare(self, owner, conversation, history, metadata, key)
         if sum(len(item.get("content", "")) + len(item.get("reasoning_content", "")) for item in history) > _MAX_HISTORY_CHARS:
             raise AIChatError("Conversation context exceeds the supported provider payload")
-        key = self.credentials.load_deepseek_key(owner)
+        if any(item.get("images") for item in history):
+            if metadata.get("image_input") is not True:
+                raise AIChatError("Selected DeepSeek model does not accept images. Select an image-capable model.")
+            if any(item.get("images") and item.get("role") != "user" for item in history):
+                raise AIChatError("DeepSeek accepts images only in user messages")
+            try:
+                native = self.image_store.native_history(owner, conversation_id, history, "chat")
+            except (OSError, ValueError) as exc:
+                raise AIChatError("Chat images are unavailable or invalid") from exc
+            # The shared image converter projects content only. DeepSeek also needs
+            # previous assistant reasoning when tools are present in the next turn.
+            for original, converted in zip(history, native):
+                if original.get("role") == "assistant" and isinstance(original.get("reasoning_content"), str):
+                    converted["reasoning_content"] = original["reasoning_content"]
+            history = native
         if conversation_id:
             self.deepseek_live[conversation_id] = []
             return await self._go_chat_completion_agent(
@@ -3738,6 +3818,9 @@ class AIChatService:
             {"role": "system", "content": _go_instructions(model)},
             *copy.deepcopy(history[-_MAX_HISTORY_MESSAGES:]),
         ]}
+        self._apply_reasoning_variant(
+            body, "chat", model, self._selected_reasoning_variant(metadata, effort)
+        )
         budget = self._apply_opencode_output_budget(body, "chat", metadata)
         payload = await deepseek_request(await self._http_session(), key, body)
         self._validate_opencode_completion(payload, "chat", budget)
@@ -3762,6 +3845,8 @@ class AIChatService:
                 thinking = True
                 await self._set_activity(owner, conversation_id, "DeepSeek is reasoning")
         payload = await deepseek_request(session, key, body, on_text=on_text, on_reasoning=on_reasoning)
+        from ai_deepseek_context import observe
+        observe(self._owned_conversation(owner, conversation_id).deepseek_state, payload)
         choices = payload.get("choices") or []
         assistant = (choices[0].get("message") or {}) if choices else {}
         reasoning = assistant.get("reasoning_content")
@@ -4285,6 +4370,8 @@ class AIChatService:
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """Run one provider tool loop under a hard total time budget."""
+        deepseek = (metadata or {}).get("provider") == "deepseek"
+        from ai_deepseek import REQUEST_TIMEOUT
         try:
             return await asyncio.wait_for(
                 self._go_chat_completion_agent_inner(
@@ -4297,10 +4384,10 @@ class AIChatService:
                     effort,
                     metadata,
                 ),
-                timeout=180,
+                timeout=REQUEST_TIMEOUT if deepseek else 180,
             )
         except asyncio.TimeoutError as exc:
-            raise AIChatError("OpenCode agent capability turn timed out") from exc
+            raise AIChatError(("DeepSeek" if deepseek else "OpenCode") + " agent capability turn timed out") from exc
 
     async def _go_chat_completion_agent_inner(
         self,
@@ -4455,12 +4542,18 @@ class AIChatService:
         limits = metadata or {}
         advertised = limits.get("output_limit")
         budget = advertised if type(advertised) is int and advertised > 0 else 32768
+        if limits.get("provider") == "deepseek":
+            from ai_deepseek import MAX_OUTPUT_TOKENS
+            budget = min(budget, MAX_OUTPUT_TOKENS)
         # Never count an old output setting as input or send competing limit fields.
         for key in ("max_tokens", "max_output_tokens", "max_completion_tokens"):
             body.pop(key, None)
         context = limits.get("context")
         if type(context) is int and context > 0:
             reserve = len(json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")) + 1024
+            if limits.get("provider") == "deepseek" and protocol == "chat":
+                from ai_deepseek import input_reserve
+                reserve = input_reserve(body)
             budget = min(budget, context - reserve)
         thinking = body.get("thinking") or {}
         thinking_budget = thinking.get("budget_tokens", 0)
@@ -4489,6 +4582,8 @@ class AIChatService:
                 if not isinstance(choice, dict):
                     continue
                 limited = limited or choice.get("finish_reason") == "length"
+                if choice.get("finish_reason") in {"aborted", "insufficient_system_resource"}:
+                    raise AIChatError("AI provider stopped the response before completion")
                 if choice.get("finish_reason") == "content_filter":
                     raise AIChatError("OpenCode response was stopped by the provider content filter")
         if limited:
@@ -5552,7 +5647,7 @@ class AIChatService:
                 "ausgabenlimit",
             )
         ):
-            return "OpenCode billing or spending limit prevents this request"
+            return "AI provider billing or spending limit prevents this request"
         if status in {401, 403} or any(
             value in normalized
             for value in (

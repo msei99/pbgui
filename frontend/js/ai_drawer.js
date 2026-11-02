@@ -182,6 +182,8 @@
     var usage = el('div', 'pai-usage');
     usage.id = 'pai-usage';
     root.appendChild(usage);
+    var tokens = el('div', 'pai-usage');tokens.id='pai-token-usage';tokens.hidden=true;
+    root.appendChild(tokens);
 
     var context = el('div', 'pai-context');
     var contextToggle = el('label', 'pai-context-toggle');
@@ -447,6 +449,7 @@
       if (signature !== state.usageSignature) {
         state.usageSignature = signature;
         if (provider === 'openrouter') window.PBGuiAIUsage.renderOpenRouter(container, usage);
+        else if (provider === 'deepseek') window.PBGuiAIUsage.renderDeepSeek(container, usage);
         else if (provider === 'claude-code') container.textContent = 'Subscription usage limits unavailable';
         else window.PBGuiAIUsage.render(container, usage);
       }
@@ -532,10 +535,20 @@
   }
 
   function setBusy(busy, conversation) {
+    var finished = state.busy && !busy;
     state.busy = !!busy;
+    if (finished && state.open && selectedProvider() === 'deepseek') refreshUsage();
     var claudeBlocked = selectedProvider() === 'claude-code' && !(state.providers['claude-code'] || {}).connected;
     updateWorkingIndicator(conversation);
-    var usage = (conversation || {}).context_usage;
+    if (conversation) state.lastUsage = {
+      key: conversation.conversation_id + '|' + conversation.provider + '|' + conversation.model,
+      context_usage: conversation.context_usage, token_usage: conversation.token_usage
+    };
+    var usageKey = state.current + '|' + selectedProvider() + '|' + root.querySelector('#pai-model').value;
+    var reported = state.lastUsage && state.lastUsage.key === usageKey ? state.lastUsage : {};
+    var usage = reported.context_usage;
+    var tokens = root.querySelector('#pai-token-usage');
+    if (tokens && window.PBGuiAIUsage.renderTokens) window.PBGuiAIUsage.renderTokens(tokens, reported.token_usage);
     var meter = root.querySelector('.pai-context-meter');
     var available = usage && Number.isFinite(usage.used_tokens) && usage.used_tokens >= 0 && Number.isFinite(usage.limit_tokens) && usage.limit_tokens > 0;
     var percent = available ? Math.min(100, Math.round(100 * usage.used_tokens / usage.limit_tokens)) : null;

@@ -376,7 +376,7 @@ async def provider_request(ai, record, metadata, content, output_tokens):
         from pb8_loop_claude import claude_dialog
         return await claude_dialog(ai, record, content, output_tokens, active)
     from ai_chat import AIChatService, _OPENCODE_PROVIDERS
-    from ai_deepseek import DEEPSEEK_PROVIDER
+    from ai_deepseek import DEEPSEEK_PROVIDER, MAX_CONTENT_CHARS, stream_limit
     chat = ai.service()
     protocol = metadata['protocol']
     endpoint = {'chat': 'chat/completions', 'messages': 'messages', 'responses': 'responses'}[protocol]
@@ -445,7 +445,10 @@ async def provider_request(ai, record, metadata, content, output_tokens):
                     cap = settings.get('model_call_timeout_seconds') or profile['call_timeout']
                     return await asyncio.wait_for(chat._read_json_response(
                         response, expected_status=200, max_bytes=2 * 1024 * 1024), min(remaining, cap))
-                return await read_sse(response.content, protocol, profile)
+                stream_profile = dict(profile)
+                if deepseek:
+                    stream_profile.update(max_stream_bytes=stream_limit(payload.get('max_tokens')), max_content_chars=MAX_CONTENT_CHARS)
+                return await read_sse(response.content, protocol, stream_profile)
             return await chat._read_json_response(response, expected_status=200, max_bytes=2 * 1024 * 1024)
         except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError) as exc:
             raise ConnectionError('Provider transport did not complete') from exc

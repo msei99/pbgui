@@ -6,6 +6,8 @@ import tempfile
 
 import aiohttp
 
+SERVICE = 'AIResearchSummary'
+
 SUMMARY_APPROVAL = (
     '\nAfter successful research and Jev classification, the selected model makes one additional '
     'tool-free request to produce the requested final analysis/table from the complete results. '
@@ -29,14 +31,14 @@ async def summarize_research(chat, record):
     from ai_research import IDLE_TIMEOUT
     content = {'stage': 'answer', 'approved_prompt': record['prompt'],
                'untrusted_research': record['answer'], 'untrusted_jev': record['jev_answer']}
-    if record['provider'] in {'opencode-go', 'opencode-zen'}:
+    if record['provider'] in {'opencode-go', 'opencode-zen', 'deepseek'}:
         from ai_research_opencode import _model_text
         metadata = await chat._validate_provider_model(record['owner'], record['provider'], record['model'], record['profile'])
         isolated = {**record, 'instructions': SUMMARY_INSTRUCTIONS}
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, connect=30, sock_read=IDLE_TIMEOUT),
                                          cookie_jar=aiohttp.DummyCookieJar(), trust_env=False) as session:
             return await _model_text(session, chat, isolated, metadata,
-                                     chat.credentials.load_go_key(record['owner']), content)
+                                     (chat.credentials.load_deepseek_key(record['owner']) if record['provider'] == 'deepseek' else chat.credentials.load_go_key(record['owner'])), content)
     existing = chat._profile_runtime(record['owner'], record['profile'])
     runtime = CodexRuntime(record['owner'], existing.root)
     runtime.research_mode = True

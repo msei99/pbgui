@@ -81,5 +81,26 @@
     link.textContent = 'View full usage on OpenRouter ↗';
     container.appendChild(link);
   }
-  window.PBGuiAIUsage = {render: render, renderOpenRouter: renderOpenRouter};
+  function renderDeepSeek(container, data) {
+    container.replaceChildren();
+    if (!data.connected) { container.textContent = 'Connect DeepSeek to view balance.'; return; }
+    (data.balances || []).forEach(function (balance) {
+      var amount = Number(balance.total_balance);
+      if (!['USD', 'CNY'].includes(balance.currency) || !Number.isFinite(amount) || amount < 0) return;
+      var row = document.createElement('div');
+      row.textContent = 'Balance: ' + new Intl.NumberFormat('en-US', {style:'currency', currency:balance.currency, maximumFractionDigits:6}).format(amount);
+      container.appendChild(row);
+    });
+    if (data.is_available === false) { var unavailable=document.createElement('div');unavailable.textContent='Insufficient API balance';container.appendChild(unavailable); }
+    if (data.message || !container.childNodes.length) { var note=document.createElement('div');note.textContent=data.message || 'DeepSeek balance currently unavailable.';container.appendChild(note); }
+  }
+  function renderTokens(container, usage) {
+    container.replaceChildren();
+    var valid = usage && Number.isInteger(usage.input_tokens) && usage.input_tokens >= 0 && Number.isInteger(usage.output_tokens) && usage.output_tokens >= 0;
+    container.hidden = !valid;
+    if (!valid) return;
+    container.textContent = 'Last call: ' + usage.input_tokens.toLocaleString() + ' input · ' + usage.output_tokens.toLocaleString() + ' output tokens';
+    container.title = [Number.isInteger(usage.cached_tokens) ? 'Cached input: '+usage.cached_tokens.toLocaleString() : '', Number.isInteger(usage.reasoning_tokens) ? 'Reasoning: '+usage.reasoning_tokens.toLocaleString() : '', usage.compactions ? 'Context compactions: '+usage.compactions : ''].filter(Boolean).join(' · ');
+  }
+  window.PBGuiAIUsage = {render: render, renderOpenRouter: renderOpenRouter, renderDeepSeek: renderDeepSeek, renderTokens: renderTokens};
 }());

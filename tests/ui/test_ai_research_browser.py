@@ -8,7 +8,7 @@ from browser_driver import expect, sync_browser
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.fixture(params=['chatgpt', 'opencode-go', 'opencode-zen'])
+@pytest.fixture(params=['chatgpt', 'opencode-go', 'opencode-zen', 'deepseek'])
 def research_page(request):
     """Serve real local assets while intercepting every provider and PBGui request."""
     sent, errors = [], []
@@ -18,6 +18,8 @@ def research_page(request):
     conversation = dict(conversation_id=cid, title='Research chat', provider=provider,
                         chatgpt_profile='default', model='selected-model', busy=False,
                         messages=[], research_items=[])
+    if provider == 'deepseek':
+        conversation.update(context_usage={'used_tokens':300_000,'limit_tokens':1_000_000},token_usage={'input_tokens':290_000,'output_tokens':10_000,'cached_tokens':1000,'compactions':1})
     with sync_browser() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': 1450, 'height': 1000})
@@ -40,6 +42,8 @@ def research_page(request):
                 route.fulfill(body=asset.read_bytes() if asset.is_file() else b'', content_type='text/css' if asset.suffix == '.css' else 'text/javascript; charset=utf-8')
             elif path.endswith('/ai/status'):
                 route.fulfill(json={'providers': {provider: {'connected': True, 'available': True, 'profiles': [{'id': 'default', 'name': 'Personal'}]}}})
+            elif path.endswith('/usage') and provider == 'deepseek':
+                route.fulfill(json={'provider':'deepseek','connected':True,'is_available':True,'balances':[{'currency':'USD','total_balance':'12.34'}]})
             elif path.endswith('/models'):
                 route.fulfill(json={'models': [{'id': 'selected-model', 'name': 'Selected model', 'tools': True}]})
             elif path.endswith('/conversations'):
@@ -283,3 +287,28 @@ def test_final_analysis_appears_as_safe_table_without_new_turn(research_page, su
     if not card.is_visible():
         page.locator('#pbgui-ai-btn').click()
     expect(page.locator('.pbgui-research-summary table')).to_have_count(1)
+
+
+@pytest.mark.parametrize('research_page',['deepseek'],indirect=True)
+def test_deepseek_balance_tokens_guide_and_navigation(research_page):
+    """Actual menu, mounted assets, shared Guide, narrow view and reload retain chat state."""
+    page,sent,record,conversation=research_page
+    open_research(page,'page')
+    expect(page.locator('#pai-usage')).to_contain_text('$12.34')
+    expect(page.locator('#pai-token-usage')).to_contain_text(page.evaluate('(290000).toLocaleString()')+' input')
+    expect(page.locator('#pai-token-usage')).to_contain_text(page.evaluate('(10000).toLocaleString()')+' output')
+    expect(page.locator('.pai-context-meter')).to_have_text('30%')
+    destination=page.url
+    page.locator('#pbgui-guide-btn').click()
+    expect(page.locator('#pbgui-shared-help-ovl')).to_have_class('visible')
+    assert page.url==destination
+    page.keyboard.press('Escape')
+    page.set_viewport_size({'width':740,'height':900})
+    assert page.locator('#pai-token-usage').evaluate('(e)=>e.scrollWidth<=e.clientWidth')
+    page.reload()
+    assert page.url==destination
+    if not page.locator('#pai-provider').is_visible():
+        page.locator('#pbgui-ai-btn').click()
+    expect(page.locator('#pai-provider')).to_have_value('deepseek')
+    expect(page.locator('#pai-usage')).to_contain_text('$12.34')
+    assert [kind for kind,_ in sent]==['turn']
