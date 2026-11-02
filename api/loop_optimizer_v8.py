@@ -207,7 +207,7 @@ class LoopStart(BaseModel):
     """One bounded authorization for automatic optimizer and validation jobs."""
     model_config = ConfigDict(extra='forbid')
     config_name: str = Field(min_length=1, max_length=120)
-    provider: Literal['chatgpt', 'opencode-go', 'opencode-zen', 'claude-code']
+    provider: Literal['chatgpt', 'opencode-go', 'opencode-zen', 'claude-code', 'deepseek']
     model: str = Field(min_length=1, max_length=128)
     profile: str = Field(default='default', max_length=32)
     effort: str = Field(default='', max_length=64)
@@ -516,7 +516,8 @@ def projection(row):
                  } for job in row['jobs']],
         'jev_answers': (row.get('bootstrap_jev_answers') or []) + (row.get('jev_answers') or []),
         'jev_status': 'disabled' if not row['settings'].get('jev_enabled') else 'consulted' if row.get('jev_usd_reserved', 0) else 'failed' if any('failed' in str(answer).lower() for answer in (row.get('bootstrap_jev_answers') or []) + (row.get('jev_answers') or [])) else 'not requested',
-        'usd_status': 'reserved_estimate' if row['settings']['provider'] == 'opencode-zen' else 'subscription',
+        'usd_status': ('reserved_estimate' if row['settings']['provider'] == 'opencode-zen'
+                       else 'provider_billed' if row['settings']['provider'] == 'deepseek' else 'subscription'),
         'ended': row['status'] in TERMINAL,
         'deletable': run_deletable(row),
     }
@@ -568,7 +569,7 @@ async def options(config_name: str = Query(default='', max_length=120), session:
 async def models(provider: str, profile: str = 'default', session: SessionToken = Depends(require_auth)):
     """List explicitly selected provider models for the owning account."""
     try:
-        if provider not in {'chatgpt', 'opencode-go', 'opencode-zen', 'claude-code'}:
+        if provider not in {'chatgpt', 'opencode-go', 'opencode-zen', 'claude-code', 'deepseek'}:
             raise ValueError('Unsupported loop provider')
         value = await get_ai_chat_service().models(_owner(session), provider, profile=profile)
         return JSONResponse({'models': [row for row in value if not row.get('decision')]}, headers={'Cache-Control': 'no-store'})

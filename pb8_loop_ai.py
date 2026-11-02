@@ -367,8 +367,8 @@ class LoopAI:
     async def preflight(self, owner, settings, check_budget=True):
         """Check a pinned provider/model before any paid optimizer is scheduled."""
         chat = self.service()
-        if settings['provider'] not in {'chatgpt', 'opencode-go', 'opencode-zen', 'claude-code'}:
-            raise ValueError('Choose a ChatGPT, Claude or OpenCode model; JEV is an optional decision model')
+        if settings['provider'] not in {'chatgpt', 'opencode-go', 'opencode-zen', 'claude-code', 'deepseek'}:
+            raise ValueError('Choose a ChatGPT, Claude, DeepSeek or OpenCode model; JEV is an optional decision model')
         metadata = dict(await chat._validate_provider_model(owner, settings['provider'], settings['model'], settings['profile']))
         chat._selected_reasoning_variant(metadata, settings.get('effort', ''))
         chat._validate_model_service_tier(metadata, settings['provider'], settings.get('service_tier', ''))

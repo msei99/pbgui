@@ -15,9 +15,9 @@ def test_overview_merge_retains_details_and_rejects_obsolete_detail_reply():
 const assert=browserAssert;
 let stopped=false,state={panel:'loops-results',navigationSeq:1},detailFlights=new Map(),detailActive=0;
 let rows=[{id:'a',view_revision:'new',updated_at:2,summary_only:false,_detail_revision:'old',
- settings:{execution:'cpu',max_rounds:50},jobs:[{operation:'kept'}],cycles:[{round:1}],deletable:true}];
+ _detail_updated_at:2,settings:{execution:'cpu',max_rounds:50},jobs:[{operation:'kept'}],cycles:[{round:1}],deletable:true}];
 let renders=0;function render(){renders++;}function restoreLoopScroll(){}function restoreNativeLog(){}
-function pumpDetails(){}function request(){return Promise.resolve({id:'a',view_revision:'old',settings:{}});}
+function pumpDetails(){}function request(){return Promise.resolve({id:'a',view_revision:'old',updated_at:1,settings:{}});}
 ''' + source[start:end] + r'''
 (async()=>{
  let merged=mergeOverview([{id:'a',view_revision:'new',updated_at:2,summary_only:true,

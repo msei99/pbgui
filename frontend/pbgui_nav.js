@@ -2144,7 +2144,7 @@
         }
         if (!window.PBGuiAIUsage) {
           var usage = document.createElement('script');
-          usage.src = _appPath('/app/js/ai_usage.js?v=2');
+          usage.src = _appPath('/app/js/ai_usage.js?v=3');
           usage.onload = loadDrawerScript;
           usage.onerror = function () { _aiDrawerLoading = false; };
           document.head.appendChild(usage);
@@ -2159,7 +2159,7 @@
           return;
         }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=87');
+        script.src = _appPath('/app/js/ai_drawer.js?v=90');
         script.onload = function () { _aiDrawerLoading = false; if (show && window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); window.dispatchEvent(new Event('pbgui:ai-ready')); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);

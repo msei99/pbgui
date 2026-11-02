@@ -527,7 +527,7 @@ def test_reasoning_variant_uses_protocol_correct_wire_shape(protocol, expected) 
         (400, "Model is unavailable.", "Selected AI model is currently unavailable"),
         (429, "Rate limit exceeded.", "AI provider rate limit reached"),
         (429, "Monthly limit reached.", "AI provider usage limit reached"),
-        (429, "Insufficient balance.", "OpenCode billing or spending limit prevents this request"),
+        (429, "Insufficient balance.", "AI provider billing or spending limit prevents this request"),
         (429, "Invalid API key", "AI provider authentication failed"),
         (403, "Invalid API key", "AI provider authentication failed"),
         (400, "Region not allowed", "Selected AI model is not available in this region"),

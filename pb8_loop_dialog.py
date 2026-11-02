@@ -33,6 +33,8 @@ class StreamAccumulator:
         self.calls, self.items, self.blocks, self.usage = {}, [], {}, {}
         self.open_blocks = set()
         self.result = None
+        self.content_chars = 0
+        self.max_content_chars = None
 
     def feed(self, payload):
         """Return true only for new meaningful data, never keepalives or repeats."""
@@ -58,6 +60,10 @@ class StreamAccumulator:
                     progress |= bool(function.get('name') or function.get('arguments'))
                     target['function']['name'] += function.get('name') or ''
                     target['function']['arguments'] += function.get('arguments') or ''
+                self.content_chars += sum(len(delta.get(key) or '') for key in ('content', 'reasoning_content'))
+                self.content_chars += sum(len(str(part.get('id') or '')) + sum(len(str((part.get('function') or {}).get(key) or '')) for key in ('name','arguments')) for part in delta.get('tool_calls') or [])
+                if self.max_content_chars is not None and self.content_chars > self.max_content_chars:
+                    raise IncompleteResponse('Provider decoded response exceeds its bounded size')
                 # A finish reason is not sufficient to retain trailing usage: [DONE] finishes SSE.
                 if choice.get('finish_reason'):
                     self.finish_reason = choice['finish_reason']
@@ -149,7 +155,7 @@ class StreamAccumulator:
                 message['reasoning_content'] = reasoning
             if self.calls:
                 message['tool_calls'] = [self.calls[key] for key in sorted(self.calls)]
-            return {'choices': [{'message': message, 'finish_reason': getattr(self, 'finish_reason', 'stop')}],
+            return {'choices': [{'message': message, 'finish_reason': getattr(self, 'finish_reason', None)}],
                     'usage': self.usage}
         if self.open_blocks:
             raise IncompleteResponse('Provider message ended with unfinished content blocks')
@@ -160,6 +166,7 @@ class StreamAccumulator:
 async def read_sse(reader, protocol, profile):
     """Bound first-progress/idle waits even if bytes or pings arrive continuously."""
     accumulator = StreamAccumulator(protocol)
+    accumulator.max_content_chars = profile.get('max_content_chars')
     loop = asyncio.get_running_loop()
     deadline = loop.time() + profile['first_timeout']
     buffer, event_lines, total = b'', [], 0
@@ -173,7 +180,7 @@ async def read_sse(reader, protocol, profile):
             break
         total += len(chunk)
         buffer += chunk
-        if total > 4 * 1024 * 1024 or len(buffer) > 256 * 1024:
+        if total > profile.get('max_stream_bytes', 4 * 1024 * 1024) or len(buffer) > 256 * 1024:
             raise IncompleteResponse('Provider stream exceeds its bounded size')
         while b'\n' in buffer:
             raw, buffer = buffer.split(b'\n', 1)
@@ -236,7 +243,7 @@ def response_parts(protocol, payload):
         if not choices:
             raise IncompleteResponse('Provider returned no assistant message')
         choice = choices[0]
-        if choice.get('finish_reason') in {'length', 'content_filter'}:
+        if choice.get('finish_reason') in {'length', 'content_filter', 'aborted', 'insufficient_system_resource'}:
             raise IncompleteResponse('Provider response was truncated')
         message = choice.get('message') or {}
         calls = [{'id': item['id'], 'name': item['function']['name'],
@@ -267,7 +274,7 @@ def response_parts(protocol, payload):
     return ''.join(block.get('text', '') for block in blocks if block.get('type') == 'text'), calls, assistant
 
 
-def validate_native_reply(protocol, payload, model, output_tokens):
+def validate_native_reply(protocol, payload, model, output_tokens, provider=None):
     """Reject acknowledged invalid replies without executing incomplete tool arguments."""
     from pb8_loop_ai import LoopAIResponseError
     usage = {'tokens': payload.get('usage'), 'usd': None}
@@ -284,6 +291,8 @@ def validate_native_reply(protocol, payload, model, output_tokens):
             reject(f'AI response reached the output limit ({output_tokens} tokens)')
         if any(item.get('finish_reason') == 'content_filter' for item in choices):
             reject('AI response was stopped by the provider content filter')
+        if provider == 'deepseek' and (not choices or any(not isinstance(item, dict) or item.get('finish_reason') not in {'stop', 'tool_calls'} for item in choices)):
+            reject('DeepSeek response was interrupted before completion')
         if any((item.get('message') or {}).get('function_call') for item in choices):
             reject('AI requested a tool outside the evidence contract')
     elif protocol == 'responses' and payload.get('status') not in {None, 'completed'}:
@@ -398,7 +407,7 @@ class OpenCodeDialog:
                                               error_type=type(exc).__name__) from exc
                         continue
                     await owned_thread(self.ledger.settle, call_id, payload.get('usage'))
-                    validate_native_reply(protocol, payload, self.settings['model'], output_tokens)
+                    validate_native_reply(protocol, payload, self.settings['model'], output_tokens, provider=self.settings.get('provider'))
                     if self.profile.get('streaming') is False:
                         body.pop('stream', None)
                         body.pop('stream_options', None)

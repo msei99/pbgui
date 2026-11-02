@@ -15,6 +15,7 @@
 <button class="sb-section" data-section="opencode" type="button">OpenCode</button>
 <button class="sb-section" data-section="claude-code" type="button">Claude Agent</button>
 <button class="sb-section" data-section="openrouter" type="button">OpenRouter / Jev</button>
+<button class="sb-section" data-section="deepseek" type="button">DeepSeek</button>
 <button class="sb-section" data-section="github" type="button">GitHub issues</button>
 </div><div id="sidebar-resize"></div></aside>
 <main id="main-content"><h1>AI Setup</h1><div id="setup-status" role="status" aria-live="polite"></div>
@@ -95,6 +96,15 @@
 <div class="connection-test-row"><label><span tabindex="0" data-tip="Send a fixed synthetic request to the displayed provider and model. This may consume provider credits. No conversation, page data or PBGui tools are used.">Test model</span><select id="openrouter-test-model" aria-label="openrouter connection test model" disabled></select></label><button id="openrouter-test" type="button" disabled>Test connection</button></div><p id="openrouter-test-result" role="status" hidden></p>
       <button id="openrouter-disconnect" class="danger" hidden>Disconnect</button>
     </section></section>
+<section data-view="deepseek" hidden><h2>DeepSeek</h2><section class="provider-card">
+<div class="provider-head"><span class="provider-name" tabindex="0" data-tip="Direct DeepSeek API connection. The key is stored privately for your PBGui account. Requests consume DeepSeek credits; see Guide for models and AI Loop limits.">DeepSeek</span><span id="deepseek-status" class="status">Checking</span></div>
+<div id="deepseek-connect-row" class="row">
+<input id="deepseek-key" type="password" autocomplete="new-password" placeholder="DeepSeek API key" aria-label="DeepSeek API key">
+<button id="deepseek-connect" class="primary" type="button">Connect</button>
+</div>
+<div class="connection-test-row"><label><span tabindex="0" data-tip="Send a fixed synthetic request to the displayed model. This may consume DeepSeek credits. No conversation, page data or PBGui tools are used.">Test model</span><select id="deepseek-test-model" aria-label="DeepSeek connection test model" disabled></select></label><button id="deepseek-test" type="button" disabled>Test connection</button></div><p id="deepseek-test-result" role="status" hidden></p>
+<button id="deepseek-disconnect" class="danger" type="button" hidden>Disconnect</button>
+</section></section>
 <section data-view="claude-code" hidden><h2>Claude Agent</h2><section class="provider-card">
 <div class="provider-head"><span class="provider-name" tabindex="0" data-tip="Sign in with your own Claude subscription through Anthropic. PBGui tools use the same permissions and reviewed actions as other providers. Account terms and usage limits remain your responsibility. See Guide for setup.">Claude Agent · Claude Code</span><span id="claude-code-status" class="status">Checking</span></div>
 <p id="claude-code-account"></p>
@@ -123,7 +133,7 @@ window.PBGUI_NAV_CONFIG = {subtitle:'AI SETUP',current:'info_ai_chat',authentica
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <script src="/app/js/sidebar_resize.js?v=3"></script>
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
-<script src="/app/js/ai_usage.js?v=2"></script>
+<script src="/app/js/ai_usage.js?v=3"></script>
 <script src="/app/js/data_tip.js?v=1"></script>
-<script src="/app/js/ai_setup.js?v=8"></script>
+<script src="/app/js/ai_setup.js?v=9"></script>
 </body></html>

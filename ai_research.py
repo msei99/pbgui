@@ -258,7 +258,7 @@ class ResearchService:
         """Validate selection and prepare immutable content without a model request."""
         if self.closed or not self.chat.accepting_turns:
             raise self._error('AI service is shutting down')
-        if provider not in {'chatgpt', 'opencode-go', 'opencode-zen'}:
+        if provider not in {'chatgpt', 'opencode-go', 'opencode-zen', 'deepseek'}:
             raise self._error('Web research is not supported by this provider connection. No model was changed or contacted.')
         if not prompt.strip() or len(prompt) > 12000:
             raise self._error('Enter a research prompt of 1 to 12000 characters')
@@ -274,7 +274,7 @@ class ResearchService:
         """Prepare a local approval record from a previously validated conversation selection."""
         if self.closed or not self.chat.accepting_turns:
             raise self._error('AI service is shutting down')
-        if provider not in {'chatgpt', 'opencode-go', 'opencode-zen'}:
+        if provider not in {'chatgpt', 'opencode-go', 'opencode-zen', 'deepseek'}:
             raise self._error('Web research is not supported by this provider connection. No model was changed or contacted.')
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 12000:
             raise self._error('Enter a research prompt of 1 to 12000 characters')
@@ -284,9 +284,9 @@ class ResearchService:
             raise self._error('Research capacity reached; reject an unused proposal')
         from ai_research_summary import SUMMARY_APPROVAL
         instructions = RESEARCH_INSTRUCTIONS + SUMMARY_APPROVAL
-        if provider in {'opencode-go', 'opencode-zen'}:
+        if provider in {'opencode-go', 'opencode-zen', 'deepseek'}:
             from ai_research_opencode import OPENCODE_RESEARCH_INSTRUCTIONS
-            instructions += OPENCODE_RESEARCH_INSTRUCTIONS
+            instructions += OPENCODE_RESEARCH_INSTRUCTIONS.replace('OpenCode Go/Zen research workflow', 'DeepSeek research workflow') if provider == 'deepseek' else OPENCODE_RESEARCH_INSTRUCTIONS
         research_id = uuid4().hex
         record = dict(id=research_id, owner=owner, provider=provider, model=model, profile=profile,
                       effort=effort, service_tier=service_tier, prompt=prompt,
@@ -326,9 +326,9 @@ class ResearchService:
             if record.get("auto_summary"):
                 from ai_research_summary import SUMMARY_APPROVAL
                 instructions += SUMMARY_APPROVAL
-            if record['provider'] in {'opencode-go', 'opencode-zen'}:
+            if record['provider'] in {'opencode-go', 'opencode-zen', 'deepseek'}:
                 from ai_research_opencode import OPENCODE_RESEARCH_INSTRUCTIONS
-                instructions += OPENCODE_RESEARCH_INSTRUCTIONS
+                instructions += OPENCODE_RESEARCH_INSTRUCTIONS.replace('OpenCode Go/Zen research workflow', 'DeepSeek research workflow') if record['provider'] == 'deepseek' else OPENCODE_RESEARCH_INSTRUCTIONS
             if record['instructions'] != instructions:
                 raise self._error('Research instructions changed; request a new proposal for review')
         if record.get('jev_questions'):
@@ -395,6 +395,10 @@ class ResearchService:
         """Reject disconnected/disconnecting credentials before starting approved work."""
         if provider == 'chatgpt':
             self.chat._require_profile(owner, profile)
+        elif provider == 'deepseek':
+            if (not self.chat.credentials.deepseek_configured(owner)
+                    or self.chat._provider_state_key(owner, 'deepseek') in self.chat.provider_disconnecting):
+                raise self._error('Connect DeepSeek before requesting web research')
         elif provider == 'openrouter':
             if (not self.chat.credentials.openrouter_configured(owner)
                     or (owner, 'openrouter') in self.chat.provider_disconnecting):
@@ -431,6 +435,12 @@ class ResearchService:
                 tasks.append(task)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def cancel_deepseek(self, owner: str) -> None:
+        """Revoke previews and await only this owner's DeepSeek research tasks."""
+        for _, record in self._owner_records(owner):
+            if record['provider'] == 'deepseek':
+                await self.cancel(owner, record['id'])
 
     async def cancel_opencode(self, owner: str) -> None:
         """Revoke Go and Zen approvals and stop their jobs before deleting the shared key."""
@@ -493,7 +503,7 @@ class ResearchService:
                                            self.chat.credentials.load_openrouter_key(record['owner']))
                 record['phase'] = 'web'
                 self._publish(record)
-            if record['provider'] in {'opencode-go', 'opencode-zen'}:
+            if record['provider'] in {'opencode-go', 'opencode-zen', 'deepseek'}:
                 from ai_research_opencode import run_opencode_research
                 record['answer'] = await run_opencode_research(self.chat, record, MAX_WEB_CALLS)
                 await self._run_jev(record)

@@ -310,6 +310,29 @@ async def disconnect_openrouter(session: SessionToken = Depends(require_auth)) -
         raise _provider_error("disconnect_openrouter", exc) from exc
 
 
+@router.post("/providers/deepseek/connect")
+async def connect_deepseek(
+    body: GoConnectRequest,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Verify and privately store the current user's DeepSeek API key."""
+    try:
+        await get_ai_chat_service().connect_deepseek(_owner(session), body.api_key)
+        return _json({"success": True})
+    except Exception as exc:
+        raise _provider_error("connect_deepseek", exc) from exc
+
+
+@router.delete("/providers/deepseek/connection")
+async def disconnect_deepseek(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+    """Remove only the current user's DeepSeek connection."""
+    try:
+        await get_ai_chat_service().disconnect_deepseek(_owner(session))
+        return _json({"success": True})
+    except Exception as exc:
+        raise _provider_error("disconnect_deepseek", exc) from exc
+
+
 @router.post("/providers/chatgpt/device-login")
 async def start_chatgpt_login(session: SessionToken = Depends(require_auth), profile: str = "default") -> JSONResponse:
     """Start the official ChatGPT device-code login flow."""

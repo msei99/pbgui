@@ -376,10 +376,15 @@ async def provider_request(ai, record, metadata, content, output_tokens):
         from pb8_loop_claude import claude_dialog
         return await claude_dialog(ai, record, content, output_tokens, active)
     from ai_chat import AIChatService, _OPENCODE_PROVIDERS
+    from ai_deepseek import DEEPSEEK_PROVIDER, MAX_CONTENT_CHARS, stream_limit
     chat = ai.service()
     protocol = metadata['protocol']
     endpoint = {'chat': 'chat/completions', 'messages': 'messages', 'responses': 'responses'}[protocol]
-    headers = AIChatService._opencode_request_headers(chat.credentials.load_go_key(record['owner']), record['id'], protocol)
+    deepseek = settings['provider'] == 'deepseek'
+    provider_config = DEEPSEEK_PROVIDER if deepseek else _OPENCODE_PROVIDERS[settings['provider']]
+    key = chat.credentials.load_deepseek_key(record['owner']) if deepseek else chat.credentials.load_go_key(record['owner'])
+    headers = ({'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'} if deepseek
+               else AIChatService._opencode_request_headers(key, record['id'], protocol))
     http = await chat._http_session()
     async def send(body, profile, remaining):
         """Apply finite hang protection without timing out a healthy streamed dialog."""
@@ -394,7 +399,7 @@ async def provider_request(ai, record, metadata, content, output_tokens):
             first_timeout = min(remaining, cap)
         response, context_manager = None, None
         try:
-            context_manager = http.post(_OPENCODE_PROVIDERS[settings['provider']]['base_url'] + '/' + endpoint,
+            context_manager = http.post(provider_config['base_url'] + '/' + endpoint,
                                       json=payload, headers=headers, allow_redirects=False, timeout=timeout)
             response = await asyncio.wait_for(context_manager.__aenter__(), first_timeout)
             if response.status != 200:
@@ -440,7 +445,10 @@ async def provider_request(ai, record, metadata, content, output_tokens):
                     cap = settings.get('model_call_timeout_seconds') or profile['call_timeout']
                     return await asyncio.wait_for(chat._read_json_response(
                         response, expected_status=200, max_bytes=2 * 1024 * 1024), min(remaining, cap))
-                return await read_sse(response.content, protocol, profile)
+                stream_profile = dict(profile)
+                if deepseek:
+                    stream_profile.update(max_stream_bytes=stream_limit(payload.get('max_tokens')), max_content_chars=MAX_CONTENT_CHARS)
+                return await read_sse(response.content, protocol, stream_profile)
             return await chat._read_json_response(response, expected_status=200, max_bytes=2 * 1024 * 1024)
         except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError) as exc:
             raise ConnectionError('Provider transport did not complete') from exc

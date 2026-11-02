@@ -77,8 +77,8 @@ def _run_host_resolution(result, lost):
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=87" in NAV
-    assert "/app/js/ai_usage.js?v=2" in NAV
+    assert "/app/js/ai_drawer.js?v=90" in NAV
+    assert "/app/js/ai_usage.js?v=3" in NAV
     assert "/app/js/jev_transfer_preview.js?v=1" in NAV
     assert "jev_preview_id: jevPreviewId || null" in DRAWER
     assert "PBGuiAIUsage.renderOpenRouter(container, usage)" in DRAWER
