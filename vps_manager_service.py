@@ -4162,7 +4162,7 @@ class VPSManagerService:
             blockers.append("PBGui virtualenv Python missing")
         if not systemctl_exists:
             blockers.append("systemctl missing")
-        migration_complete = bool(pbgui_exists and python_exists and systemctl_exists and user_manager_ok and units_ready and not processes and not cron_lines and not start_sh_exists)
+        migration_complete = bool(pbgui_exists and python_exists and systemctl_exists and user_manager_ok and bool(required_units) and not units_missing and not processes and not cron_lines and not start_sh_exists)
         state = "complete" if migration_complete else "blocked" if blockers else "needed"
         return {
             "state": state,
@@ -4217,6 +4217,20 @@ class VPSManagerService:
         status.setdefault("units", [])
         status.setdefault("checked_at", 0)
         status.setdefault("error", "")
+        # Older agents included enabled/running state in migration readiness.
+        # Evaluate their existing installation evidence with the current rules too.
+        evidence = ("pbgui_dir_exists", "python_exists", "systemctl_exists", "systemd_user_manager",
+                    "required_units", "legacy_process_count", "legacy_cron_count", "legacy_start_sh_exists")
+        if isinstance(raw_status, dict) and all(key in raw_status for key in evidence) and status.get("state") in {"needed", "complete"}:
+            required_units = status["required_units"]
+            complete = bool(
+                all(status[key] is True for key in evidence[:4])
+                and required_units and all(unit.get("exists") == "yes" for unit in required_units)
+                and status["legacy_process_count"] == 0 and status["legacy_cron_count"] == 0
+                and status["legacy_start_sh_exists"] is False
+            )
+            status.update(migration_complete=complete, migration_needed=not complete,
+                          state="complete" if complete else "needed")
         task_overlay = self._vps_systemd_migration_task_overlay(vps, status)
         if task_overlay is not None:
             return task_overlay
@@ -6242,9 +6256,6 @@ class VPSManagerService:
         start_sh_exists = values.get("start_sh_exists") == "yes"
         required_units = self._systemd_migration_required_units(units, values)
         units_missing = [item for item in required_units if item.get("exists") != "yes"]
-        units_not_enabled = [item for item in required_units if item.get("enabled") != "enabled"]
-        units_inactive = [item for item in required_units if item.get("active") != "active"]
-        units_ready = bool(required_units) and not units_missing and not units_not_enabled and not units_inactive
         blockers: list[str] = []
         if not pbgui_exists:
             blockers.append(f"PBGui directory not found: {pbgui_dir}")
@@ -6257,11 +6268,11 @@ class VPSManagerService:
         if not user_manager_ok:
             warnings.append("The systemd user manager is not active yet. Migration will enable linger and start it.")
 
-        migration_complete = bool(pbgui_exists and python_exists and systemctl_exists and user_manager_ok and units_ready and not processes and not cron_lines and not start_sh_exists)
+        migration_complete = bool(pbgui_exists and python_exists and systemctl_exists and user_manager_ok and bool(required_units) and not units_missing and not processes and not cron_lines and not start_sh_exists)
         required_unit_names = [item.get("unit") or "" for item in required_units if item.get("unit")]
         actions = [
             {"label": "Copy/update systemd setup helper", "needed": not migration_complete, "detail": f"{pbgui_dir}/setup/setup_systemd.sh"},
-            {"label": "Install/enable/start required systemd units", "needed": bool(units_missing or units_not_enabled or units_inactive), "detail": ", ".join(required_unit_names) or "No required units"},
+            {"label": "Install/enable/start required systemd units", "needed": bool(units_missing), "detail": ", ".join(required_unit_names) or "No required units"},
             {"label": "Stop legacy PBGui processes", "needed": bool(processes), "detail": f"{len(processes)} matching process(es)" if processes else "No matching legacy processes found"},
             {"label": "Remove legacy pbgui crontab", "needed": bool(cron_lines), "detail": f"{len(cron_lines)} matching crontab line(s)" if cron_lines else "No matching crontab lines found"},
             {"label": "Delete legacy start.sh", "needed": bool(start_sh_exists), "detail": f"{pbgui_dir}/start.sh"},

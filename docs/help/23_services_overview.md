@@ -1,5 +1,7 @@
 # PBGUI Services Overview
 
+A stopped service or disabled autostart does not mean systemd migration is pending. Manage these settings with the existing Start/Stop and Enable/Disable controls. Migration remains necessary for missing required units or legacy startup files.
+
 If PBData settings fail to load, the settings panel shows an error and a Retry button.
 
 The Services page shows and controls all PBGui background services in one place.

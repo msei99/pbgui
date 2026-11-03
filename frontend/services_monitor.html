@@ -1570,7 +1570,6 @@ window.PBGUI_NAV_CONFIG = {
 
     var warnings = data.warnings || [];
     var missing = data.missing_default_units || [];
-    var notReady = data.not_ready_default_units || [];
     var html = '<div class="migration-hero">'
       + '<div class="migration-title">Systemd user services migration</div>'
       + '<div class="migration-desc">Move this PBGui master from legacy autostart/process control to systemd user services. The migration keeps existing data and paths, removes legacy PBGui crontab autostarts when possible, and restarts PBGui daemons through systemd.</div>'
@@ -1589,9 +1588,6 @@ window.PBGUI_NAV_CONFIG = {
     html += data._restart_pending ? '<div class="migration-ok">Migration completed. API restart is in progress; retrying status automatically...</div>' : (data.migration_needed ? '<div class="migration-warn">' + esc(meta.text) + '</div>' : '<div class="migration-ok">' + esc(meta.text) + '</div>');
     if (missing.length) {
       html += '<div class="migration-warn">Missing required units: ' + esc(missing.map(function (row) { return row.unit || row.service; }).join(', ')) + '</div>';
-    }
-    if (notReady.length) {
-      html += '<div class="migration-warn">Not-ready required units: ' + esc(notReady.map(function (row) { return (row.unit || row.service) + ' (' + (row.enabled ? 'enabled' : 'disabled') + ', ' + (row.state || 'unknown') + ')'; }).join(', ')) + '</div>';
     }
     warnings.forEach(function (warning) { html += '<div class="migration-warn">' + esc(warning) + '</div>'; });
     html += '</div>';

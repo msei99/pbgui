@@ -4282,6 +4282,7 @@
           reboot_required: !!((st.summary_row || {}).reboot_required),
           host_key_error: !!st.host_key_error,
           ssh_host_key_status: String(((st.summary_row || {}).ssh_host_key_status) || ''),
+          systemd_migration: getVpsSystemdMigrationButtonModel(store.hostname, detail, {}),
           package_checking: (store.packageCheckHosts || []).indexOf(store.hostname) >= 0
         });
       }
@@ -6723,7 +6724,7 @@
         : `<div class='field-help'>No matching legacy PBGui processes found.</div>`;
       return `
         <div style='display:grid;gap:14px'>
-          <div class='notice info'>Preview for <strong>${esc(data.hostname || '')}</strong>. Migration will remove legacy VPS autostart files and switch PBGui services to systemd user units.</div>
+          <div class='notice info'>Preview for <strong>${esc(data.hostname || '')}</strong>. ${data.migration_complete ? 'Systemd migration is complete. Running state and autostart are managed in Services.' : 'Migration will remove legacy VPS autostart files and switch PBGui services to systemd user units.'}</div>
           ${blockers.length ? `<div class='notice error'><strong>Migration blocked:</strong><br>${blockers.map(esc).join('<br>')}</div>` : ''}
           ${warnings.length ? `<div class='notice warning'><strong>Warnings:</strong><br>${warnings.map(esc).join('<br>')}</div>` : ''}
           ${section('Checks', rows(checks, 'No checks available.'))}

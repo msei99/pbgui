@@ -1,5 +1,7 @@
 # VPS Manager
 
+Installierte systemd-Dienste gelten auch dann als migriert, wenn sie gestoppt sind oder ihr Autostart deaktiviert ist. Diese Zustände werden über die vorhandenen Start/Stop- und Enable/Disable-Aktionen unter Services verwaltet und erfordern keine erneute Migration. Fehlende erforderliche Units oder verbliebene alte Startdateien erfordern weiterhin eine Migration.
+
 Update Linux und andere VPS-Befehle speichern benötigte Einstellungen vorher nur lokal. Dabei werden weder Firewall noch Swap automatisch geändert. Apply VPS Config darf nur über die ausdrückliche Aktion zum Anwenden/Speichern der VPS-Konfiguration starten.
 
 

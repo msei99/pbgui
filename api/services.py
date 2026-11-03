@@ -939,7 +939,7 @@ def _migration_status_payload() -> dict[str, Any]:
         "legacy_crontab": {k: v for k, v in crontab.items() if k != "lines"},
         "legacy_start_sh": {"path": str(legacy_start_sh), "exists": legacy_start_sh_exists},
         "processes": processes,
-        "migration_needed": bool(missing_default_units or not_ready_default_units or legacy_entries or legacy_start_sh_exists),
+        "migration_needed": bool(missing_default_units or legacy_entries or legacy_start_sh_exists),
         "warnings": warnings,
     }
 

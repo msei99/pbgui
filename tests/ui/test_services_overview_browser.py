@@ -9,7 +9,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_overview_uses_fast_worker_summary_and_displays_restart() -> None:
+@pytest.mark.parametrize('pbdata_enabled', [True, False])
+def test_overview_uses_fast_worker_summary_and_displays_restart(pbdata_enabled) -> None:
     """Overview loads current cards without requesting expensive worker queue details."""
     browser_api = __import__('browser_driver')
     html = (ROOT / 'frontend/services_monitor.html').read_text()
@@ -38,7 +39,10 @@ def test_overview_uses_fast_worker_summary_and_displays_restart() -> None:
                 else:
                     route.fulfill(status=404, body='')
             elif path == '/api/services/status':
-                route.fulfill(json={name: {'running': True, 'enabled': True, 'can_enable': True} for name in services})
+                route.fulfill(json={name: {'running': True, 'enabled': pbdata_enabled if name == 'pbdata' else True, 'can_enable': True} for name in services})
+            elif path == '/api/services/migration/status':
+                route.fulfill(json={'migration_needed': False, 'warnings': [],
+                                    'not_ready_default_units': [] if pbdata_enabled else [{'service': 'pbdata', 'unit': 'pbgui-pbdata.service', 'enabled': False, 'active': True, 'state': 'active'}]})
             elif path == '/api/services/workers/summary':
                 route.fulfill(json={'counts': {'total': 7, 'running': 7}})
             elif path == '/api/server-status':
@@ -56,6 +60,11 @@ def test_overview_uses_fast_worker_summary_and_displays_restart() -> None:
         browser_api.expect(page.locator('#pbgui-restart-btn')).to_be_visible(timeout=1000)
         assert '/api/services/workers/summary' in requests
         assert '/api/services/workers/status' not in requests
+        browser_api.expect(page.locator('#sl-migration')).to_have_text('Ready')
+        page.locator('[data-panel="migration"]').click()
+        browser_api.expect(page.locator('#migration-wrap')).to_contain_text('already managed by systemd')
+        browser_api.expect(page.locator('#migration-wrap')).not_to_contain_text('Not-ready required units')
+        browser_api.expect(page.locator('#migration-run-btn')).to_be_disabled()
         assert not errors
         browser.close()
 

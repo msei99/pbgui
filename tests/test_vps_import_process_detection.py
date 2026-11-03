@@ -4364,3 +4364,59 @@ def test_instance_alert_comparison_retains_reading_and_limit_precision(metric, r
     assert float(displayed_reading) == expected_reading
     assert float(displayed_limit) == limit
     assert float(displayed_reading) > float(displayed_limit)
+
+
+@pytest.mark.parametrize('case', ['enabled', 'disabled', 'inactive', 'disabled-inactive', 'missing', 'legacy'])
+def test_systemd_preview_and_status_ignore_optional_service_runtime_state(monkeypatch, case):
+    """Installation, not enabled/running state, determines migration in preview and status."""
+    from unittest.mock import Mock
+    service = object.__new__(VPSManagerService)
+    service._require_vps = lambda host: SimpleNamespace(hostname='fixture', user='fixture', ip='192.0.2.1', remote_pbgui_dir='/home/fixture/pbgui')
+    service._store_session_secrets = lambda *args: None
+    service._session_secret_value = lambda *args: ''
+    service._get_monitor_state = lambda: {}
+    service._get_host_telemetry = lambda *args: {}
+    service._credential_capability_metadata = lambda *args: {'credential_active': False}
+    values = {key: 'yes' for key in ['pbgui_dir_exists', 'python_exists', 'systemctl_exists', 'systemd_user_manager', 'pbdata_configured']}
+    values['start_sh_exists'] = 'yes' if case == 'legacy' else 'no'
+    unit = {'unit': 'pbgui-pbdata.service', 'exists': 'no' if case == 'missing' else 'yes',
+            'enabled': 'disabled' if 'disabled' in case else 'enabled',
+            'active': 'inactive' if 'inactive' in case else 'active'}
+    out = '\n'.join('KV\t'+key+'\t'+value for key, value in values.items())
+    out += '\nSECTION\tunits\tBEGIN\npbgui-pbcluster.service\tyes\tenabled\tactive\n'
+    out += '\t'.join(unit[key] for key in ['unit', 'exists', 'enabled', 'active'])+'\nSECTION\tunits\tEND\n'
+    ssh = Mock()
+    output = Mock()
+    output.read.return_value = out.encode()
+    output.channel.recv_exit_status.return_value = 0
+    ssh.exec_command.return_value = (None, output, io.BytesIO())
+    monkeypatch.setattr(service_mod, '_strict_ssh_client', lambda: ssh)
+    result = service.preview_vps_systemd_migration('fixture-token', 'fixture', {})
+    complete = case not in ['missing', 'legacy']
+    assert result['migration_complete'] is complete
+    assert result['can_migrate'] is (not complete)
+    if complete:
+        assert not any(action['needed'] for action in result['actions'])
+    status = service._build_vps_systemd_migration_status_from_preview(service._parse_vps_systemd_migration_preview(out))
+    assert status['migration_complete'] is complete
+    assert status['migration_needed'] is (not complete)
+    ssh.close.assert_called_once()
+
+
+@pytest.mark.parametrize('case', ['disabled', 'missing', 'legacy', 'unknown'])
+def test_migration_reinterprets_existing_agent_evidence_without_autostart_requirement(case):
+    """Existing agents' old needed status is normalized without changing host services."""
+    service = object.__new__(VPSManagerService)
+    service._vps_systemd_migration_status_cache = {}
+    service._vps_systemd_migration_task_overlay = lambda *args: None
+    raw = {'state': 'needed', 'migration_complete': False, 'migration_needed': True,
+           'pbgui_dir_exists': True, 'python_exists': True, 'systemctl_exists': True,
+           'systemd_user_manager': True, 'legacy_process_count': 0,
+           'legacy_cron_count': int(case == 'legacy'), 'legacy_start_sh_exists': False,
+           'required_units': [{'unit': 'pbgui-pbdata.service', 'exists': 'no' if case == 'missing' else 'yes', 'enabled': 'disabled', 'active': 'inactive'}]}
+    if case == 'unknown': del raw['systemd_user_manager']
+    service._host_meta = lambda state: {'systemd_migration': raw}
+    result = service._get_vps_systemd_migration_status(SimpleNamespace(hostname='fixture'), {}, quick=True)
+    assert result['migration_complete'] is (case == 'disabled')
+    assert result['migration_needed'] is (case != 'disabled')
+    assert raw['migration_complete'] is False

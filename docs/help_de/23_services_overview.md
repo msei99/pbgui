@@ -1,5 +1,7 @@
 # PBGUI Services Übersicht
 
+Ein gestoppter Dienst oder deaktivierter Autostart bedeutet nicht, dass die systemd-Migration aussteht. Dafür sind die vorhandenen Start/Stop- und Enable/Disable-Aktionen zuständig. Fehlende erforderliche Units oder alte Startdateien erfordern weiterhin eine Migration.
+
 Schlägt das Laden der PBData-Einstellungen fehl, zeigt das Panel einen Fehler und einen Retry-Button.
 
 Die Services-Seite zeigt und steuert alle PBGui-Hintergrunddienste an einem Ort.

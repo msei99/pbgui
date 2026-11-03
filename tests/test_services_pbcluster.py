@@ -561,8 +561,9 @@ def test_migration_status_requires_start_sh_cleanup(monkeypatch, tmp_path) -> No
     assert status["legacy_start_sh"] == {"path": str(pbgui_dir / "start.sh"), "exists": True}
 
 
-def test_migration_status_requires_not_ready_default_unit(monkeypatch, tmp_path) -> None:
-    """Disabled or inactive default systemd units keep migration available."""
+@pytest.mark.parametrize('enabled,active,exists', [(True, True, True), (True, False, True), (False, True, True), (False, False, True), (False, False, False)])
+def test_migration_status_separates_service_state_from_installation(monkeypatch, tmp_path, enabled, active, exists) -> None:
+    """Disabled/stopped installed units are migrated; missing required units still need setup."""
 
     pbgui_dir = tmp_path / "pbgui"
     pbgui_dir.mkdir()
@@ -573,7 +574,7 @@ def test_migration_status_requires_not_ready_default_unit(monkeypatch, tmp_path)
         services,
         "_migration_systemd_units",
         lambda: [
-            {"service": service, "unit": unit, "exists": True, "enabled": service != "pbdata", "active": service != "pbdata", "state": "inactive" if service == "pbdata" else "active"}
+            {"service": service, "unit": unit, "exists": exists if service == "pbdata" else True, "enabled": enabled if service == "pbdata" else True, "active": active if service == "pbdata" else True, "state": "inactive" if service == "pbdata" and not active else "active"}
             for service, unit in services._SYSTEMD_SERVICE_UNITS.items()
         ],
     )
@@ -583,8 +584,9 @@ def test_migration_status_requires_not_ready_default_unit(monkeypatch, tmp_path)
 
     status = services._migration_status_payload()
 
-    assert status["migration_needed"] is True
-    assert [row["service"] for row in status["not_ready_default_units"]] == ["pbdata"]
+    assert status["migration_needed"] is (not exists)
+    assert [row["service"] for row in status["not_ready_default_units"]] == (["pbdata"] if exists and not (enabled and active) else [])
+    assert [row["service"] for row in status["missing_default_units"]] == ([] if exists else ["pbdata"])
 
 
 def test_migration_status_ignores_not_ready_unrequired_units(monkeypatch, tmp_path) -> None:

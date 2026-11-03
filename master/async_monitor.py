@@ -3645,7 +3645,8 @@ def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configure
         and python_bin.exists()
         and systemctl_exists
         and user_manager_ok
-        and units_ready
+        and bool(required_units)
+        and not units_missing
         and not legacy_processes
         and not legacy_cron_count
         and not start_sh_exists
