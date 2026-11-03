@@ -669,7 +669,7 @@ class WorkerConnection:
                 yield
 
     @snapshot_method
-    def collect(self, final: bool, timeout: int) -> Path:
+    def collect(self, final: bool, timeout: int, *, ignore_quota: bool = False) -> Path:
         """Download and verify a bounded snapshot before replacing the last copy."""
         state = self.store.read(self.identifier)
         if state.get('final_collected'):
@@ -683,12 +683,15 @@ class WorkerConnection:
                 raise VastError('Result collection deadline reached; last verified snapshot retained')
             return seconds
         action = "final" if final else "partial"
+        skip = set() if final else self._existing_pareto_names()
+        if skip:
+            self._request_pareto_delta(skip, remaining)
         metadata = self.operation(action, timeout=remaining())
         size = metadata.get("bytes")
         if type(size) is not int or not 0 < size <= 2 * 1024**3 or not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("sha256"))):
             raise VastError("Invalid result snapshot metadata")
         state = self.store.read(self.identifier)
-        if check_work() is not None and not final and int(state.get("downloaded_bytes", 0)) + size > 1024**3:
+        if check_work() is not None and not final and not ignore_quota and int(state.get("downloaded_bytes", 0)) + size > 1024**3:
             raise VastError('Partial transfer allowance reached; final collection reserve retained', 409)
         if int(state.get("downloaded_bytes", 0)) + size > 2 * 1024**3:
             raise VastError("Job transfer limit reached; collection cannot exceed 2 GB")
@@ -708,7 +711,7 @@ class WorkerConnection:
                 self.store.update(self.identifier, downloaded_bytes=int(state.get("downloaded_bytes", 0)) + size)
         finally:
             temporary.unlink(missing_ok=True)
-        extracted = extract_results(destination, self.directory, action, check=remaining)
+        extracted = extract_results(destination, self.directory, action, check=remaining, merge=bool(skip))
         log = extracted / "optimizer.log"
         if log.is_file():
             log_root = ensure_private_directory(PROJECT / "data/logs/optimizes_v8")
@@ -720,8 +723,22 @@ class WorkerConnection:
             self.store.update(self.identifier, last_backup_at=time.time(), final_collected=final or state.get("final_collected", False))
         return extracted
 
+    def _existing_pareto_names(self) -> set[str]:
+        """Names of Pareto files already verified in the local partial snapshot."""
+        root = self.directory / 'partial-results' / 'optimize_results'
+        return {path.name for path in root.glob('*/pareto/*.json')
+                if path.is_file() and not path.is_symlink()}
 
-def extract_results(archive_path: Path, directory: Path, name: str, *, check=lambda: None) -> Path:
+    def _request_pareto_delta(self, names: set[str], remaining) -> None:
+        """Ask the worker to skip already-present Pareto files for a partial sync."""
+        request = {'skip': sorted(names)}
+        with tempfile.TemporaryFile() as source:
+            source.write(json.dumps(request).encode()); source.seek(0)
+            self.command('mkdir -p ' + self.remote_root + ' && cat > ' + self.remote_root + '/partial-skip.json',
+                         stdin=source, stdout=subprocess.DEVNULL, timeout=remaining())
+
+
+def extract_results(archive_path: Path, directory: Path, name: str, *, check=lambda: None, merge: bool = False) -> Path:
     """Extract only regular expected result files and validate their manifest."""
     destination = directory / (name + "-results")
     with tempfile.TemporaryDirectory(dir=directory) as temporary:
@@ -760,9 +777,18 @@ def extract_results(archive_path: Path, directory: Path, name: str, *, check=lam
             raise VastError("Result manifest does not match the archive")
         if destination.is_symlink():
             raise VastError("Invalid snapshot destination")
-        if destination.exists():
-            shutil.rmtree(destination)  # Only the owned replaceable snapshot cache.
-        os.replace(stage, destination)
+        if merge:
+            # Delta sync: keep the previously verified Pareto cache and add only
+            # the files this snapshot actually transferred.
+            for path in stage.rglob('*'):
+                if path.is_file() and not path.is_symlink():
+                    target = destination / path.relative_to(stage)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(path, target)
+        else:
+            if destination.exists():
+                shutil.rmtree(destination)  # Only the owned replaceable snapshot cache.
+            os.replace(stage, destination)
     return destination
 
 

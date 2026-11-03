@@ -812,6 +812,21 @@ def status() -> dict:
     return result
 
 
+def _partial_skip_names() -> set[str]:
+    """Names of content-addressed Pareto files the controller already verified."""
+    request = ROOT / "partial-skip.json"
+    if not request.is_file() or request.is_symlink():
+        return set()
+    try:
+        raw = json.loads(request.read_text())
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(raw, dict) or not isinstance(raw.get("skip"), list):
+        return set()
+    return {name for name in raw["skip"]
+            if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_-]+\.json", name)}
+
+
 def snapshot(final: bool) -> dict:
     """Archive immutable Pareto copies; include complete native files only at finish."""
     if final and not (ROOT / "finished.json").exists():
@@ -820,7 +835,9 @@ def snapshot(final: bool) -> dict:
         stage = Path(temporary)
         files = []
         source_root = ROOT / "output"
-        candidates = list(source_root.glob("optimize_results/*/pareto/*.json"))
+        skip = _partial_skip_names() if not final else set()
+        candidates = [source for source in source_root.glob("optimize_results/*/pareto/*.json")
+                      if source.name not in skip]
         if final:
             candidates += list(source_root.glob("optimize_results/*/all_results.bin"))
             candidates += list(source_root.glob("optimize_results/*/checkpoint.pkl"))
