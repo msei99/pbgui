@@ -474,7 +474,8 @@ class LoopAI:
     async def jev(self, record, candidates):
         """Reuse typed JEV transport for one exact optimizer-run candidate comparison."""
         from pb8_loop_controller import owned_thread
-        from ai_openrouter import JEV_MODEL, check_jev_budget, prepare_user_jev_payload, _send_structured_jev_request
+        from ai_jev import JEV_MODEL, check_jev_budget, prepare_user_jev_payload, _send_structured_jev_request
+        from ai_openrouter import OpenRouterJevTransport
         chat = self.service()
         if len(candidates) < 2 or not chat.credentials.openrouter_configured(record['owner']):
             return None
@@ -493,10 +494,9 @@ class LoopAI:
                                       'criteria': {row['id']: 'Candidate ' + row['id'] + '; compare its goal metrics in state.candidates using state.rubric.'
                                                    for row in comparison}}}}
         request = prepare_user_jev_payload(JEV_MODEL, spec)
-        session = await chat._http_session()
-        key = chat.credentials.load_openrouter_key(record['owner'])
+        transport = OpenRouterJevTransport(await chat._http_session(), chat.credentials.load_openrouter_key(record['owner']))
         estimate = min(record['settings'].get('jev_max_cost_usd', 0.01), remaining)
-        await check_jev_budget(session, key, [request], estimate)
+        await check_jev_budget(transport, [request], estimate)
         def reserve(current):
             if current['status'] != 'running' or current['control_generation'] != record['control_generation']:
                 raise ValueError('Loop was paused or stopped')
@@ -504,4 +504,4 @@ class LoopAI:
                 raise ValueError('JEV budget reached')
             current['jev_usd_reserved'] += estimate
         await owned_thread(self.store.update, record['owner'], record['id'], reserve)
-        return await _send_structured_jev_request(session, key, request)
+        return await _send_structured_jev_request(transport, request)

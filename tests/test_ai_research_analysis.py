@@ -20,7 +20,7 @@ def chat(tmp_path, monkeypatch):
     """Keep credentials, journals, histories and provider requests entirely isolated."""
     caps = AICapabilityService(tmp_path / 'caps')
     monkeypatch.setattr('ai_chat.get_ai_capability_service', lambda: caps)
-    monkeypatch.setattr('ai_openrouter.check_jev_connection', AsyncMock())
+    monkeypatch.setattr('ai_jev.check_jev_connection', AsyncMock())
     monkeypatch.setattr('ai_research_summary.summarize_research', AsyncMock(return_value='Final risk table'))
     service = AIChatService(tmp_path / 'chat')
     monkeypatch.setattr('ai_chat.get_ai_chat_service', lambda: service)
@@ -104,7 +104,7 @@ def test_only_completed_owned_reports_can_be_read(chat):
 def test_jev_transfer_is_approved_exact_and_tool_free(chat, monkeypatch):
     """Saved evidence is sent only once, with typed questions and the tighter cost ceiling."""
     decision = AsyncMock(return_value='Risk uncertain')
-    monkeypatch.setattr('ai_openrouter.decide_user_jev_request', decision)
+    monkeypatch.setattr('ai_jev.decide_user_jev_request', decision)
     async def run():
         item = await chat.research.propose_jev(OWNER, CID, RID, QUESTIONS)
         assert item['prompt'] == EVIL
@@ -118,8 +118,8 @@ def test_jev_transfer_is_approved_exact_and_tool_free(chat, monkeypatch):
         chat.research.start(OWNER, item['id'], item['digest'])
         decision.assert_awaited_once()
         args, kwargs = decision.call_args
-        assert args[3]['state']['untrusted_research_report'] == EVIL
-        assert args[3]['questions'] == QUESTIONS
+        assert args[2]['state']['untrusted_research_report'] == EVIL
+        assert args[2]['questions'] == QUESTIONS
         assert kwargs == {'max_cost_usd': 0.005}
         assert chat.research.get(OWNER, item['id'])['jev_answer'] == 'Risk uncertain'
         assert not chat.conversations[CID].messages
@@ -132,7 +132,7 @@ def test_jev_transfer_is_approved_exact_and_tool_free(chat, monkeypatch):
 def test_combined_approval_runs_jev_automatically_but_not_chat(chat, monkeypatch):
     """One reviewed request chains public search to Jev, with no ordinary chat continuation."""
     decision = AsyncMock(return_value='Do not infer safety from missing evidence')
-    monkeypatch.setattr('ai_openrouter.decide_user_jev_request', decision)
+    monkeypatch.setattr('ai_jev.decide_user_jev_request', decision)
     monkeypatch.setattr('ai_research_opencode.run_opencode_research', AsyncMock(return_value=EVIL))
     async def run():
         item = await chat.research.propose(OWNER, CID, 'Research BTC', jev_questions=QUESTIONS)
@@ -150,8 +150,8 @@ def test_combined_approval_runs_jev_automatically_but_not_chat(chat, monkeypatch
 
 def test_jev_failure_preserves_report_and_never_calls_actions(chat, monkeypatch):
     """Provider errors leave the report available instead of invoking a fallback tool."""
-    from ai_openrouter import OpenRouterDecisionError
-    monkeypatch.setattr('ai_openrouter.decide_user_jev_request', AsyncMock(side_effect=OpenRouterDecisionError('Budget exceeded')))
+    from ai_jev import OpenRouterDecisionError
+    monkeypatch.setattr('ai_jev.decide_user_jev_request', AsyncMock(side_effect=OpenRouterDecisionError('Budget exceeded')))
     async def run():
         item = await chat.research.propose_jev(OWNER, CID, RID, QUESTIONS)
         chat.research.start(OWNER, item['id'], item['digest'])
@@ -166,12 +166,12 @@ def test_jev_failure_preserves_report_and_never_calls_actions(chat, monkeypatch)
 
 def test_combined_39_coin_proposal_waits_for_approval(chat, monkeypatch):
     """A complete per-coin plan survives preview and cannot call Jev before approval."""
-    from ai_openrouter import research_jev_question_schema
+    from ai_jev import research_jev_question_schema
     source = {f'coin_{i}': {'type': 'choice', 'instructions': f'Classify asset {i} risk',
               'criteria': {'low': 'Low risk', 'high': 'High risk', 'unknown': 'Insufficient evidence'}}
               for i in range(39)}
     decide = AsyncMock(return_value='All classifications')
-    monkeypatch.setattr('ai_openrouter.decide_user_jev_request', decide)
+    monkeypatch.setattr('ai_jev.decide_user_jev_request', decide)
     preview = asyncio.run(chat.research.propose(OWNER, CID, 'Research public coin risks', jev_questions=source))
     assert preview['status'] == 'preview'
     assert preview['jev_questions'] == source
@@ -181,8 +181,8 @@ def test_combined_39_coin_proposal_waits_for_approval(chat, monkeypatch):
     asyncio.run(chat.research._run_jev(record))
     assert record['jev_answer'] == 'All classifications'
     decide.assert_awaited_once()
-    assert decide.call_args.args[3]['state']['untrusted_research_report'] == EVIL
-    assert decide.call_args.args[3]['questions'] == source
+    assert decide.call_args.args[2]['state']['untrusted_research_report'] == EVIL
+    assert decide.call_args.args[2]['questions'] == source
     assert decide.call_args.kwargs['max_cost_usd'] == .01
     assert chat.conversations[CID].messages == []
     specs = {tool['name']: tool for tool in chat.capabilities._tool_specs()}
@@ -191,9 +191,9 @@ def test_combined_39_coin_proposal_waits_for_approval(chat, monkeypatch):
 
 def test_higher_cost_pauses_and_requires_new_exact_approval(chat, monkeypatch):
     """No higher-budget retry, report alteration or replay occurs without a real new approval."""
-    from ai_openrouter import JevBudgetExceeded
+    from ai_jev import JevBudgetExceeded
     decide = AsyncMock(side_effect=[JevBudgetExceeded(.0200001), 'Typed result'])
-    monkeypatch.setattr('ai_openrouter.decide_user_jev_request', decide)
+    monkeypatch.setattr('ai_jev.decide_user_jev_request', decide)
     async def run():
         preview = await chat.research.propose_jev(OWNER, CID, RID, QUESTIONS)
         chat.research.start(OWNER, preview['id'], preview['digest'])
@@ -227,11 +227,11 @@ def test_higher_cost_pauses_and_requires_new_exact_approval(chat, monkeypatch):
 
 def test_cost_approval_resumes_jev_without_repeating_research(chat, monkeypatch):
     """An approved higher Jev ceiling reuses the existing completed web report."""
-    from ai_openrouter import JevBudgetExceeded
+    from ai_jev import JevBudgetExceeded
     research = AsyncMock(return_value='Public evidence')
     decide = AsyncMock(side_effect=[JevBudgetExceeded(.02), 'Typed result'])
     monkeypatch.setattr('ai_research_opencode.run_opencode_research', research)
-    monkeypatch.setattr('ai_openrouter.decide_user_jev_request', decide)
+    monkeypatch.setattr('ai_jev.decide_user_jev_request', decide)
     async def run():
         preview = await chat.research.propose(OWNER, CID, 'Public asset research', jev_questions=QUESTIONS)
         chat.research.start(OWNER, preview['id'], preview['digest'])
@@ -251,13 +251,13 @@ def test_cost_approval_resumes_jev_without_repeating_research(chat, monkeypatch)
 
 def test_failed_jev_preflight_prevents_web_research(chat, monkeypatch):
     """A known Jev connection failure stops a combined job before the costly web stage."""
-    from ai_openrouter import OpenRouterDecisionError
+    from ai_jev import OpenRouterDecisionError
     check = AsyncMock(side_effect=OpenRouterDecisionError('Jev preflight timed out; research not started'))
     research = AsyncMock()
     decide = AsyncMock()
-    monkeypatch.setattr('ai_openrouter.check_jev_connection', check)
+    monkeypatch.setattr('ai_jev.check_jev_connection', check)
     monkeypatch.setattr('ai_research_opencode.run_opencode_research', research)
-    monkeypatch.setattr('ai_openrouter.decide_user_jev_request', decide)
+    monkeypatch.setattr('ai_jev.decide_user_jev_request', decide)
     async def run():
         preview = await chat.research.propose(OWNER, CID, 'Public coin risks', jev_questions=QUESTIONS)
         check.assert_not_awaited()

@@ -113,7 +113,7 @@ def balances(payload):
     return {'is_available': payload['is_available'], 'balances': rows}
 
 
-def input_reserve(body):
+def input_reserve(body, image_reserve=1024):
     """Budget text conservatively and images at the documented 1024-token maximum.
 
     Base64 bytes are transport overhead, not text tokens:
@@ -126,7 +126,7 @@ def input_reserve(body):
         if isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get('type') == 'image_url':
-                    image_tokens += 1024
+                    image_tokens += image_reserve
                     part.clear()
                     part.update(type='text', text='')
     return len(json.dumps(projection, ensure_ascii=False, allow_nan=False).encode('utf-8')) + 1024 + image_tokens
@@ -143,59 +143,12 @@ async def _read_json(response):
 
 async def _read_stream(reader, on_text=None, on_reasoning=None, *, max_bytes=None):
     """Require a terminal finish before exposing complete tool arguments to callers."""
-    from pb8_loop_dialog import StreamAccumulator, IncompleteResponse
+    from ai_chat_stream import read_chat_stream
+    from pb8_loop_dialog import StreamAccumulator
     accumulator = StreamAccumulator('chat')
     accumulator.max_content_chars = MAX_CONTENT_CHARS
-    max_bytes = max_bytes or stream_limit()
-    buffer, lines, total = b'', [], 0
-    while not accumulator.done:
-        chunk = await reader.readany()
-        if not chunk:
-            break
-        total += len(chunk)
-        buffer += chunk
-        if total > max_bytes or len(buffer) > 256 * 1024:
-            raise _error('DeepSeek response is too large')
-        while b'\n' in buffer:
-            raw, buffer = buffer.split(b'\n', 1)
-            try:
-                line = raw.rstrip(b'\r').decode('utf-8')
-            except UnicodeDecodeError as exc:
-                raise _error('DeepSeek returned invalid stream text') from exc
-            if line.startswith('data:'):
-                lines.append(line[5:].lstrip())
-                if sum(len(part) for part in lines) > 256 * 1024:
-                    raise _error('DeepSeek stream event is too large')
-            elif not line and lines:
-                event, lines = '\n'.join(lines), []
-                if event == '[DONE]':
-                    if not getattr(accumulator, 'finish_reason', None):
-                        raise _error('DeepSeek stream ended before completing its response')
-                    accumulator.done = True
-                    break
-                try:
-                    payload = json.loads(event)
-                    if not isinstance(payload, dict) or payload.get('error'):
-                        raise ValueError('Invalid event')
-                    accumulator.feed(payload)
-                    for choice in (payload.get('choices') or [])[:1]:
-                        delta = choice.get('delta') or {}
-                        if on_text and delta.get('content'):
-                            await on_text(delta['content'])
-                        if on_reasoning and delta.get('reasoning_content'):
-                            await on_reasoning(delta['reasoning_content'])
-                except IncompleteResponse as exc:
-                    if 'bounded size' in str(exc):
-                        raise _error('DeepSeek decoded response is too large') from exc
-                    raise _error('DeepSeek stream ended before completing its response') from exc
-                except (ValueError, TypeError, KeyError, AttributeError) as exc:
-                    raise _error('DeepSeek API returned an error or invalid stream event') from exc
-    try:
-        return accumulator.finish()
-    except IncompleteResponse as exc:
-        raise _error('DeepSeek stream ended before completing its response') from exc
-    except (TypeError, AttributeError) as exc:
-        raise _error('DeepSeek API returned invalid stream data') from exc
+    return await read_chat_stream(reader, accumulator, 'DeepSeek', max_bytes=max_bytes or stream_limit(),
+                                  on_text=on_text, on_reasoning=on_reasoning)
 
 
 async def request(session, api_key, body, *, on_text=None, on_reasoning=None):

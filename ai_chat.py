@@ -22,7 +22,10 @@ import aiohttp
 from ai_claude_code import ClaudeCodeError, ClaudeRuntime
 from ai_deepseek import DEEPSEEK_PROVIDER, MAX_REASONING_CHARS, models as deepseek_models, request as deepseek_request
 
-from ai_openrouter import DEFAULT_JEV_BUDGET_USD, JEV_MODEL, OPENROUTER_API, OpenRouterDecisionError, _user_options, decide_backtest_candidates, decide_backtest_results, decide_general_choice, decide_user_jev_request, parse_structured_jev_request, prepare_user_jev_payload
+from ai_jev import DEFAULT_JEV_BUDGET_USD, JEV_MODEL, OpenRouterDecisionError, _user_options, decide_backtest_candidates, decide_backtest_results, decide_general_choice, decide_user_jev_request, parse_structured_jev_request, prepare_user_jev_payload
+from ai_model_routing import DECISION_ADAPTER, is_decision_model, model_adapter
+from ai_openrouter import OPENROUTER_API, OpenRouterJevTransport
+from ai_openrouter_chat import CATALOG_MAX_BYTES, CHAT_BASE_URL as OPENROUTER_CHAT_BASE_URL, IMAGE_TOKEN_RESERVE, ModelCatalog, apply_reasoning as apply_openrouter_reasoning, assistant_turn as openrouter_assistant_turn, models as openrouter_models, request as openrouter_request, run_tool_probe as run_openrouter_tool_probe, validate_tool_calls as validate_openrouter_tool_calls, with_tool_status as openrouter_tool_status
 
 from ai_capabilities import (
     AICapabilityError,
@@ -427,6 +430,119 @@ class AICredentialStore:
         """Delete only the selected owner's OpenRouter key."""
         with advisory_file_lock(self.lock_target):
             self._openrouter_path(owner).unlink(missing_ok=True)
+
+    @staticmethod
+    def _openrouter_key_fingerprint(api_key: str) -> str:
+        """Bind tool approvals to one key without storing the key in a second file."""
+        return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+    def _read_openrouter_tool_approvals(self, owner: str, api_key: str) -> dict[str, dict[str, Any]]:
+        """Read approvals under the caller's lock; another key's approvals do not exist."""
+        path = self._openrouter_tools_path(owner)
+        if not path.is_file() or path.is_symlink():
+            return {}
+        try:
+            payload = json.loads(read_regular_file_nofollow(path, self.root).decode("utf-8"))
+        except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, dict) or payload.get("key_fingerprint") != self._openrouter_key_fingerprint(api_key):
+            return {}
+        return {str(key): value for key, value in list(models.items())[-500:] if isinstance(value, dict)}
+
+    def load_openrouter_tool_approvals(self, owner: str, api_key: str) -> dict[str, dict[str, Any]]:
+        """Return synthetic-probe approvals valid for this owner and exact key."""
+        with advisory_file_lock(self.lock_target):
+            return self._read_openrouter_tool_approvals(owner, api_key)
+
+    def _write_openrouter_tool_approvals(self, owner: str, api_key: str, models: dict[str, dict[str, Any]]) -> None:
+        """Replace one owner's approvals atomically under the caller's lock."""
+        atomic_write_private_text(
+            self._openrouter_tools_path(owner),
+            json.dumps({"key_fingerprint": self._openrouter_key_fingerprint(api_key),
+                        "models": dict(list(models.items())[-500:])}, indent=4) + "\n",
+        )
+
+    def save_openrouter_tool_approval(self, owner: str, api_key: str, model: str, canonical_slug: str) -> None:
+        """Record one successful synthetic roundtrip for one exact model version."""
+        with advisory_file_lock(self.lock_target):
+            models = self._read_openrouter_tool_approvals(owner, api_key)
+            models[model] = {"canonical_slug": canonical_slug, "validated_at": time.time()}
+            self._write_openrouter_tool_approvals(owner, api_key, models)
+
+    def revoke_openrouter_tool_approval(self, owner: str, api_key: str, model: str) -> None:
+        """Remove one model's approval after a failed probe for the same key."""
+        with advisory_file_lock(self.lock_target):
+            models = self._read_openrouter_tool_approvals(owner, api_key)
+            if models.pop(model, None) is not None:
+                self._write_openrouter_tool_approvals(owner, api_key, models)
+
+    def delete_openrouter_tool_approvals(self, owner: str) -> None:
+        """Invalidate every approval when the owner's connection changes."""
+        with advisory_file_lock(self.lock_target):
+            self._openrouter_tools_path(owner).unlink(missing_ok=True)
+
+    def _openrouter_tools_path(self, owner: str) -> Path:
+        """Resolve one owner's nonsecret OpenRouter tool approvals."""
+        return self._openrouter_path(owner).with_name(f"{owner}.openrouter-tools.json")
+
+    def _openrouter_privacy_path(self, owner: str) -> Path:
+        """Resolve explicit model privacy exceptions beside this owner's credentials."""
+        return self._openrouter_path(owner).with_name(f"{owner}.openrouter-privacy.json")
+
+    def _read_openrouter_privacy(self, owner: str, api_key: str) -> dict[str, str]:
+        """Read bounded key-bound exceptions under the caller's credential lock."""
+        path = self._openrouter_privacy_path(owner)
+        if not path.is_file() or path.is_symlink():
+            return {}
+        try:
+            raw = read_regular_file_nofollow(path, self.root)
+            if len(raw) > 256 * 1024:
+                raise ValueError("Oversized OpenRouter privacy settings")
+            payload = json.loads(raw.decode("utf-8"))
+            if (not isinstance(payload, dict)
+                    or payload.get("key_fingerprint") != self._openrouter_key_fingerprint(api_key)
+                    or not isinstance(payload.get("models"), dict)):
+                return {}
+            return {model: slug for model, slug in list(payload["models"].items())[-500:]
+                    if isinstance(model, str) and 0 < len(model) <= 128
+                    and isinstance(slug, str) and 0 < len(slug) <= 200}
+        except (OSError, RuntimeError, UnicodeDecodeError, ValueError):
+            _log(SERVICE, "Ignoring unreadable OpenRouter privacy settings; data collection stays disabled", level="WARNING")
+            return {}
+
+    def load_openrouter_privacy(self, owner: str, api_key: str) -> dict[str, str]:
+        """Return this owner's explicit exceptions for this exact API key."""
+        with advisory_file_lock(self.lock_target):
+            return self._read_openrouter_privacy(owner, api_key)
+
+    def save_openrouter_privacy(self, owner: str, api_key: str, model: str, canonical_slug: str, allow: bool) -> None:
+        """Atomically add or revoke one model-version exception without losing other models."""
+        if type(allow) is not bool:
+            raise AIChatError("Invalid data collection permission")
+        with advisory_file_lock(self.lock_target):
+            models = self._read_openrouter_privacy(owner, api_key)
+            if allow:
+                models[model] = canonical_slug
+            else:
+                models.pop(model, None)
+            atomic_write_private_text(self._openrouter_privacy_path(owner), json.dumps({
+                "key_fingerprint": self._openrouter_key_fingerprint(api_key),
+                "models": dict(list(models.items())[-500:]),
+            }, indent=4) + "\n")
+
+    def delete_openrouter_privacy(self, owner: str) -> None:
+        """Remove exceptions when this owner's OpenRouter connection changes."""
+        with advisory_file_lock(self.lock_target):
+            self._openrouter_privacy_path(owner).unlink(missing_ok=True)
+
+    def openrouter_privacy_revision(self, owner: str) -> str:
+        """Expose only a change marker so other browser tabs update their policy display."""
+        path = self._openrouter_privacy_path(owner)
+        try:
+            return str(path.lstat().st_mtime_ns) if not path.is_symlink() else ""
+        except FileNotFoundError:
+            return ""
 
     def _openrouter_path(self, owner: str) -> Path:
         """Resolve a separate credential file below the approved root."""
@@ -1386,6 +1502,8 @@ class AIChatService:
         self.claude = ClaudeRuntime(self.root / "claude")
         self.claude_live: dict[str, list[dict[str, Any]]] = {}
         self.deepseek_live: dict[str, list[dict[str, Any]]] = {}
+        self.openrouter_live: dict[str, list[dict[str, Any]]] = {}
+        self.openrouter_catalog = ModelCatalog()
         self.conversations: dict[str, Conversation] = {}
         self.active_tasks: dict[str, asyncio.Task] = {}
         self.jev_previews: dict[str, dict[str, Any]] = {}
@@ -1441,6 +1559,8 @@ class AIChatService:
         await self.claude.close()
         self.claude_live.clear()
         self.deepseek_live.clear()
+        self.openrouter_live.clear()
+        self.openrouter_catalog.clear()
         if self.http is not None:
             await self.http.close()
             self.http = None
@@ -1549,7 +1669,8 @@ class AIChatService:
                 "chatgpt": {"available": codex_available, "profiles": profiles, "profile": profile, **codex_status},
                 "opencode-zen": {"available": True, "connected": self.credentials.configured(owner)},
                 "opencode-go": {"available": True, "connected": self.credentials.configured(owner)},
-                "openrouter": {"available": True, "connected": self.credentials.openrouter_configured(owner)},
+                "openrouter": {"available": True, "connected": self.credentials.openrouter_configured(owner),
+                               "privacy_revision": self.credentials.openrouter_privacy_revision(owner)},
                 "deepseek": {"available": True, "connected": self.credentials.deepseek_configured(owner)},
                 "claude-code": await self.claude.status(owner),
             },
@@ -1675,6 +1796,8 @@ class AIChatService:
             except Exception as exc:
                 raise AIChatError("Could not verify OpenRouter connection") from exc
             self.credentials.save_openrouter_key(owner, key)
+            self.credentials.delete_openrouter_tool_approvals(owner)
+            self.credentials.delete_openrouter_privacy(owner)
 
     async def disconnect_openrouter(self, owner: str) -> None:
         """Cancel OpenRouter turns and remove only its credential."""
@@ -1685,6 +1808,8 @@ class AIChatService:
                 await self.research.cancel_openrouter(owner)
                 await self._cancel_provider(owner, "openrouter")
                 self.credentials.delete_openrouter_key(owner)
+                self.credentials.delete_openrouter_tool_approvals(owner)
+                self.credentials.delete_openrouter_privacy(owner)
             finally:
                 self.provider_disconnecting.discard(state_key)
 
@@ -1811,8 +1936,7 @@ class AIChatService:
         if provider == "openrouter":
             if not self.credentials.openrouter_configured(owner):
                 raise AIChatError("OpenRouter is not connected")
-            return [{"id": JEV_MODEL, "name": "Jev 1.13 · Structured decisions", "default": True,
-                     "tools": False, "decision": True, "retention": "See OpenRouter and TypeSafe terms"}]
+            return await self._openrouter_models(owner)
         if provider == "chatgpt":
             self._ensure_reaper()
             await self._close_idle_codex_runtimes()
@@ -2089,6 +2213,8 @@ class AIChatService:
                                 lambda: self._claude_chat(owner, model, provider_history, conversation.id, clean_effort)
                                 if provider == "claude-code" else self._openrouter_jev_chat(
                                     owner, model, clean_message, conversation.context, conversation.id, _jev_payload
+                                ) if model_adapter(provider, model) == DECISION_ADAPTER else self._openrouter_chat(
+                                    owner, model, provider_history, conversation.id, clean_effort,
                                 ) if provider == "openrouter" else self._deepseek_chat(
                                     owner, model, provider_history, conversation.id, clean_effort,
                                 ) if provider == "deepseek" else self._go_chat(
@@ -2155,6 +2281,7 @@ class AIChatService:
                 self.active_tasks.pop(conversation.id, None)
                 self.claude_live.pop(conversation.id, None)
                 self.deepseek_live.pop(conversation.id, None)
+                self.openrouter_live.pop(conversation.id, None)
                 runtime_stopped = runtime is not None and (
                     runtime.process is None
                     or getattr(runtime.process, "returncode", None) is not None
@@ -2595,14 +2722,14 @@ class AIChatService:
                 result["instruction"] = "The browser has not confirmed this action. Do not claim it executed or issue dependent actions based on the old page context."
 
     async def preview_jev_transfer(
-        self, owner: str, conversation_id: str, message: str, model: str,
+        self, owner: str, conversation_id: str, message: str, model: str, provider: str,
     ) -> dict[str, Any]:
         """Resolve bounded read-only PBGui sources for one explicit transfer review."""
         if not self.accepting_turns:
             raise AIChatError("AI runtime is shutting down")
         await self._ensure_owner_loaded(owner)
         clean_message = self._validate_message(message)
-        if model != JEV_MODEL:
+        if not is_decision_model(provider, model):
             raise AIChatError("Select Jev before reviewing PBGui data")
         try:
             spec = parse_structured_jev_request(clean_message)
@@ -2643,7 +2770,7 @@ class AIChatService:
             if len(self.jev_previews) >= 20:
                 raise AIChatError("Too many pending Jev previews")
             self.jev_previews[token] = {
-                "owner": owner, "conversation_id": conversation_id, "model": model,
+                "owner": owner, "conversation_id": conversation_id, "provider": provider, "model": model,
                 "message_hash": hashlib.sha256(clean_message.encode("utf-8")).hexdigest(),
                 "payload": payload, "expires_at": expires_at,
             }
@@ -2682,18 +2809,24 @@ class AIChatService:
             decoded_screenshots({"screenshots": images or []})
         except ValueError as exc:
             raise AIChatError(str(exc)) from exc
-        if selected_provider == "openrouter" and (images or any(item.get("images") for item in existing.messages)):
-            raise AIChatError("Jev does not accept images. Select ChatGPT or an image-capable OpenCode model.")
         provider_changed = selected_provider != existing.provider
         if provider_changed and not str(model or "").strip():
             raise AIChatError("Select a model when changing AI provider")
         selected_model_id = str(model or existing.model).strip()
         model_changed = selected_model_id != existing.model
+        decision_turn = is_decision_model(selected_provider, selected_model_id)
+        has_images = bool(images or any(item.get("images") for item in existing.messages))
+        if decision_turn and has_images:
+            raise AIChatError("Jev does not accept images. Select ChatGPT or an image-capable OpenCode model.")
         selected_model = None
         if provider_changed or model_changed or effort is not None or service_tier is not None or selected_provider == "claude-code":
             selected_model = await self._validate_provider_model(
                 owner, selected_provider, selected_model_id, **({"profile": existing.chatgpt_profile} if existing.chatgpt_profile != "default" else {})
             )
+        if selected_provider == "openrouter" and has_images and not decision_turn:
+            selected_model = selected_model or await self._validate_provider_model(owner, selected_provider, selected_model_id)
+            if selected_model.get("image_input") is not True:
+                raise AIChatError("Selected OpenRouter model does not accept images. Select an image-capable model.")
         clean_effort = self._validate_effort(effort) if effort is not None else ("" if provider_changed else None)
         if clean_effort is not None:
             self._validate_model_effort(selected_model or {}, clean_effort)
@@ -2706,9 +2839,11 @@ class AIChatService:
         if (provider_changed or model_changed) and existing.provider == "chatgpt" and existing.codex_thread_id:
             await self._release_codex_thread(existing)
         try:
-            jev_spec = parse_structured_jev_request(clean_message) if selected_provider == "openrouter" else None
+            jev_spec = parse_structured_jev_request(clean_message) if decision_turn else None
         except OpenRouterDecisionError as exc:
             raise AIChatError(str(exc)) from exc
+        if jev_preview_id and not decision_turn:
+            raise AIChatError("Jev preview expired or no longer matches this turn")
         has_jev_sources = bool(jev_spec and jev_spec.get("sources"))
         if has_jev_sources != bool(jev_preview_id):
             raise AIChatError("Jev PBGui data needs a reviewed preview for this turn")
@@ -2734,6 +2869,7 @@ class AIChatService:
             if jev_preview_id:
                 pending = self.jev_previews.get(jev_preview_id)
                 if (not pending or pending["owner"] != owner or pending["conversation_id"] != conversation_id
+                    or pending["provider"] != selected_provider
                     or pending["model"] != selected_model_id or pending["expires_at"] <= time.time()
                     or pending["message_hash"] != hashlib.sha256(clean_message.encode("utf-8")).hexdigest()):
                     raise AIChatError("Jev preview expired or no longer matches this turn")
@@ -3264,6 +3400,8 @@ class AIChatService:
             live_messages = self.claude_live.get(conversation.id, [])
         if conversation.busy and conversation.provider == "deepseek":
             live_messages = self.deepseek_live.get(conversation.id, [])
+        if conversation.busy and conversation.provider == "openrouter":
+            live_messages = self.openrouter_live.get(conversation.id, [])
         payload = {
             "conversation_id": conversation.id,
             "title": conversation.title,
@@ -3626,11 +3764,15 @@ class AIChatService:
         """Require a selected model currently advertised by the connected provider."""
         if not model:
             raise AIChatError("AI model is required")
-        selected = next(
-            (item for item in await self.models(owner, provider, **({"profile": profile} if profile != "default" else {})) if item["id"] == model), None
-        )
+        if provider == "openrouter" and is_decision_model(provider, model):
+            if not self.credentials.openrouter_configured(owner):
+                raise AIChatError("OpenRouter is not connected")
+            return self._jev_model()
+        models = await self.models(owner, provider, **({"profile": profile} if profile != "default" else {}))
+        selected = next((item for item in models if item["id"] == model), None)
         if selected is None:
-            raise AIChatError("Selected AI model is unavailable")
+            catalog_error = next((item["catalog_error"] for item in models if item.get("catalog_error")), "")
+            raise AIChatError(catalog_error or "Selected AI model is unavailable")
         return selected
 
     @staticmethod
@@ -3730,14 +3872,13 @@ class AIChatService:
     ) -> str:
         """Ask Jev to choose backtest candidates using managed Optimize results."""
         try:
-            session = await self._http_session()
-            api_key = self.credentials.load_openrouter_key(owner)
+            transport = OpenRouterJevTransport(await self._http_session(), self.credentials.load_openrouter_key(owner))
             budget = min(self.get_preferences(owner)["jev_max_cost_usd"], budget_override) if budget_override is not None else self.get_preferences(owner)["jev_max_cost_usd"]
             if self.analysis_policy.analysis_only(owner, conversation_id) and expected_payload_digest:
                 self.analysis_policy.require_action_context(owner, conversation_id)
             if expected_payload_digest:
                 return await decide_backtest_candidates(
-                    self.capabilities, session, api_key, owner, conversation_id, model,
+                    self.capabilities, transport, owner, conversation_id, model,
                     message, context,
                     capture_selection=lambda result: self._capture_ui_action(owner, conversation_id, result),
                     max_cost_usd=budget,
@@ -3746,30 +3887,185 @@ class AIChatService:
                 )
             structured = parse_structured_jev_request(message)
             if structured is not None:
-                return await decide_user_jev_request(session, api_key, model, structured, approved_payload, budget)
+                return await decide_user_jev_request(transport, model, structured, approved_payload, budget)
             if approved_payload is not None:
                 raise AIChatError("Jev preview no longer matches a structured request")
             options = _user_options(message)
             if options:
-                return await decide_general_choice(session, api_key, model, message, options, context, max_cost_usd=budget)
+                return await decide_general_choice(transport, model, message, options, context, max_cost_usd=budget)
             if self.analysis_policy.analysis_only(owner, conversation_id):
                 raise AIChatError("Research analysis requires typed Jev questions; PBGui selection actions are disabled.")
             entities = context.get("entities", []) if isinstance(context, dict) else []
             if any(isinstance(entity, dict) and entity.get("kind") == "optimizer_run" for entity in entities) or re.search(r"\b(pareto|optimi[sz]e|optimier)\w*\b", message, re.I):
                 return await decide_backtest_candidates(
-                    self.capabilities, session, api_key, owner, conversation_id, model, message, context,
+                    self.capabilities, transport, owner, conversation_id, model, message, context,
                     capture_selection=lambda result: self._capture_ui_action(owner, conversation_id, result),
                     max_cost_usd=budget,
                     expected_payload_digest=expected_payload_digest,
                     selection_limit=selection_limit,
                 )
             if re.search(r"\b(backtest|backtests|backtest-resultat|backtest-ergebnis)\w*\b", message, re.I):
-                return await decide_backtest_results(self.capabilities, session, api_key, owner, conversation_id, model, message, context, budget)
+                return await decide_backtest_results(self.capabilities, transport, owner, conversation_id, model, message, context, budget)
             return ("Jev trifft strukturierte Entscheidungen. Nenne ein Ziel und 2 bis 20 Alternativen unter 'Optionen:' als nummerierte Liste; oder frage nach Pareto- bzw. Backtest-Resultaten in PBGui."
                     if re.search(r"\b(welche|welcher|soll|kann|bewerte)\b", message.casefold()) else
                     "Jev makes structured decisions. Give a goal and 2 to 20 numbered alternatives under 'Options:', or ask about PBGui Pareto or backtest results.")
         except (OpenRouterDecisionError, AICapabilityError) as exc:
             raise AIChatError(str(exc)) from exc
+
+    @staticmethod
+    def _jev_model() -> dict[str, Any]:
+        """Describe Jev from explicit configuration, never from a provider catalog."""
+        return {"id": JEV_MODEL, "name": "Jev 1.13 · Structured decisions", "default": True,
+                "tools": False, "decision": True, "retention": "See OpenRouter and TypeSafe terms"}
+
+    async def _openrouter_models(self, owner: str) -> list[dict[str, Any]]:
+        """List Jev plus current chat models; catalog failures never remove Jev."""
+        try:
+            key = self.credentials.load_openrouter_key(owner)
+            rows = await self.openrouter_catalog.get(lambda: self._fetch_openrouter_catalog(key))
+            approvals = self.credentials.load_openrouter_tool_approvals(owner, key)
+        except AIChatError as exc:
+            return [{**self._jev_model(), "catalog_error": str(exc)}]
+        rows = openrouter_tool_status(rows, approvals)
+        privacy = self.credentials.load_openrouter_privacy(owner, key)
+        for row in rows:
+            row["data_collection_allowed"] = privacy.get(row["id"]) == row["canonical_slug"]
+            if row["data_collection_allowed"]:
+                row["retention"] = "Provider may store data and use it for training (explicitly allowed)"
+        return [self._jev_model(), *rows]
+
+    async def set_openrouter_privacy(self, owner: str, model: str, allow: bool) -> dict[str, Any]:
+        """Save explicit consent for one current chat model, never for Jev or another owner."""
+        async with self._provider_lock(owner, "openrouter"):
+            metadata = await self._validate_provider_model(owner, "openrouter", model)
+            if metadata.get("decision"):
+                raise AIChatError("This privacy exception is available only for OpenRouter chat models")
+            key = self.credentials.load_openrouter_key(owner)
+            self.credentials.save_openrouter_privacy(owner, key, model, metadata["canonical_slug"], allow)
+            self.credentials.revoke_openrouter_tool_approval(owner, key, model)
+        return {"model": model, "data_collection_allowed": allow}
+
+    def _openrouter_data_collection(self, owner: str, key: str, metadata: dict[str, Any]) -> str:
+        """Recheck consent before each outbound request, including probe/tool follow-ups."""
+        if self.credentials.load_openrouter_key(owner) != key:
+            raise AIChatError("The OpenRouter connection changed; test the model again")
+        allowed = self.credentials.load_openrouter_privacy(owner, key)
+        slug = metadata.get("canonical_slug")
+        return "allow" if slug and allowed.get(metadata["id"]) == slug else "deny"
+
+    async def _fetch_openrouter_catalog(self, key: str) -> list[dict[str, Any]]:
+        """Read the provider catalog once without a guessed fallback model."""
+        session = await self._http_session()
+        try:
+            async with session.get(
+                f"{OPENROUTER_CHAT_BASE_URL}/models",
+                headers={"Authorization": f"Bearer {key}"}, allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                payload = await self._read_json_response(response, expected_status=200, max_bytes=CATALOG_MAX_BYTES)
+            return openrouter_models(payload)
+        except AIChatError:
+            raise
+        except Exception as exc:
+            _log(SERVICE, f"OpenRouter model discovery failed: {type(exc).__name__}", level="WARNING")
+            raise AIChatError("Could not load OpenRouter models") from exc
+
+    def _require_openrouter_tools(self, owner: str, metadata: dict[str, Any], api_key: str) -> None:
+        """Enforce the owner's probe for this key and model version on the server."""
+        approval = self.credentials.load_openrouter_tool_approvals(owner, api_key).get(metadata["id"]) or {}
+        if not metadata.get("tool_capable") or approval.get("canonical_slug") != metadata.get("canonical_slug"):
+            raise AIChatError("PBGui tools are not validated for this OpenRouter model and key; run its test in AI Setup")
+
+    async def validate_openrouter_tools(self, owner: str, model: str, effort: str = "") -> dict[str, str]:
+        """Bind one synthetic roundtrip to this owner, key and exact model version."""
+        metadata = await self._validate_provider_model(owner, "openrouter", model)
+        if not metadata.get("tool_capable"):
+            return {"status": "unsupported", "message": "This model does not advertise tool calling; it stays Chat only."}
+        key = self.credentials.load_openrouter_key(owner)
+        try:
+            await run_openrouter_tool_probe(await self._http_session(), key, metadata, effort,
+                                            self._apply_opencode_output_budget,
+                                            data_collection=lambda: self._openrouter_data_collection(owner, key, metadata))
+        except AIChatError as exc:
+            self.credentials.revoke_openrouter_tool_approval(owner, key, model)
+            return {"status": "failed", "message": str(exc).replace("OpenCode", "OpenRouter")}
+        async with self._provider_lock(owner, "openrouter"):
+            if (self._provider_state_key(owner, "openrouter") in self.provider_disconnecting
+                    or not self.credentials.openrouter_configured(owner)
+                    or self.credentials.load_openrouter_key(owner) != key):
+                return {"status": "failed", "message": "The OpenRouter connection changed during the test; PBGui tools stay disabled."}
+            self.credentials.save_openrouter_tool_approval(owner, key, model, metadata["canonical_slug"])
+        return {"status": "validated", "message": "Synthetic tool roundtrip passed; PBGui tools are enabled for this model version."}
+
+    async def _openrouter_chat(self, owner, model, history, conversation_id="", effort=""):
+        """Normalize shared-adapter errors to the selected provider name."""
+        try:
+            return await self._openrouter_chat_inner(owner, model, history, conversation_id, effort)
+        except AIChatError as exc:
+            raise AIChatError(str(exc).replace("OpenCode", "OpenRouter")) from exc
+
+    async def _openrouter_chat_inner(self, owner, model, history, conversation_id="", effort=""):
+        """Serve ordinary chat; PBGui tools exist only after this owner's successful probe."""
+        metadata = await self._validate_provider_model(owner, "openrouter", model)
+        if metadata.get("decision"):
+            raise AIChatError("Structured decision models do not use the chat adapter")
+        self._validate_model_effort(metadata, effort)
+        key = self.credentials.load_openrouter_key(owner)
+        history = history[-_MAX_HISTORY_MESSAGES:]
+        if sum(len(item.get("content", "")) for item in history) > _MAX_HISTORY_CHARS:
+            raise AIChatError("Conversation context exceeds the supported provider payload")
+        if any(item.get("images") for item in history):
+            if metadata.get("image_input") is not True:
+                raise AIChatError("Selected OpenRouter model does not accept images. Select an image-capable model.")
+            if any(item.get("images") and item.get("role") != "user" for item in history):
+                raise AIChatError("OpenRouter accepts images only in user messages")
+            try:
+                history = self.image_store.native_history(owner, conversation_id, history, "chat")
+            except (OSError, ValueError) as exc:
+                raise AIChatError("Chat images are unavailable or invalid") from exc
+        session = await self._http_session()
+        if conversation_id and metadata.get("tools") is True:
+            self.openrouter_live[conversation_id] = []
+            return await self._go_chat_completion_agent(
+                owner, conversation_id, OPENROUTER_CHAT_BASE_URL, model, key, history, effort, metadata,
+            )
+        body = {"model": model, "messages": [
+            {"role": "system", "content": _go_instructions(model)},
+            *copy.deepcopy(history),
+        ]}
+        apply_openrouter_reasoning(body, effort)
+        budget = self._apply_opencode_output_budget(body, "chat", metadata)
+        if conversation_id:
+            self.openrouter_live[conversation_id] = []
+            payload = await self._openrouter_stream_request(owner, conversation_id, session, key, body, metadata)
+        else:
+            payload = await openrouter_request(session, key, body, metadata,
+                                              data_collection=lambda: self._openrouter_data_collection(owner, key, metadata))
+        self._validate_opencode_completion(payload, "chat", budget)
+        if payload["choices"][0]["message"].get("tool_calls"):
+            raise AIChatError("OpenRouter returned a capability call although PBGui tools are disabled; nothing was run")
+        text = self._chat_completion_text(payload)
+        if not text or len(text) > _MAX_REPLY_CHARS:
+            raise AIChatError("OpenRouter returned an empty or oversized answer")
+        return text
+
+    async def _openrouter_stream_request(self, owner, conversation_id, session, key, body, metadata):
+        """Project answer deltas; partial text is never accepted as a completed answer."""
+        entries = self.openrouter_live.setdefault(conversation_id, [])
+        entry = {"timestamp": time.time(), "content": ""}
+        entries.append(entry)
+        thinking = False
+        async def on_text(text):
+            """Bound partial display text without accepting it as a completed answer."""
+            entry["content"] = (entry["content"] + text)[:_MAX_REPLY_CHARS]
+        async def on_reasoning(_text):
+            """Show reasoning activity, not raw private model chain-of-thought."""
+            nonlocal thinking
+            if not thinking:
+                thinking = True
+                await self._set_activity(owner, conversation_id, "The model is reasoning")
+        return await openrouter_request(session, key, body, metadata, on_text=on_text, on_reasoning=on_reasoning,
+                                        data_collection=lambda: self._openrouter_data_collection(owner, key, metadata))
 
     async def _deepseek_chat(self, owner, model, history, conversation_id="", effort=""):
         """Normalize shared-adapter errors to the selected provider name."""
@@ -4370,7 +4666,7 @@ class AIChatService:
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """Run one provider tool loop under a hard total time budget."""
-        deepseek = (metadata or {}).get("provider") == "deepseek"
+        direct_label = {"deepseek": "DeepSeek", "openrouter": "OpenRouter"}.get((metadata or {}).get("provider"))
         from ai_deepseek import REQUEST_TIMEOUT
         try:
             return await asyncio.wait_for(
@@ -4384,10 +4680,10 @@ class AIChatService:
                     effort,
                     metadata,
                 ),
-                timeout=REQUEST_TIMEOUT if deepseek else 180,
+                timeout=REQUEST_TIMEOUT if direct_label else 180,
             )
         except asyncio.TimeoutError as exc:
-            raise AIChatError(("DeepSeek" if deepseek else "OpenCode") + " agent capability turn timed out") from exc
+            raise AIChatError((direct_label or "OpenCode") + " agent capability turn timed out") from exc
 
     async def _go_chat_completion_agent_inner(
         self,
@@ -4408,6 +4704,8 @@ class AIChatService:
         tools = _tools_for_openrouter_connection(
             self.capabilities.chat_completion_tools(), self.credentials.openrouter_configured(owner)
         )
+        openrouter = (metadata or {}).get("provider") == "openrouter"
+        allowed_tools = {item["function"]["name"] for item in tools}
         session = await self._http_session()
         total_calls = 0
         total_result_bytes = 0
@@ -4438,13 +4736,21 @@ class AIChatService:
                 "model": model,
                 "messages": messages,
             }
-            if effort:
+            if openrouter:
+                self._require_openrouter_tools(owner, metadata, api_key)
+                apply_openrouter_reasoning(request_body, effort)
+            elif effort:
                 request_body["reasoning_effort"] = effort
-            if not final_round:
+            if not final_round or openrouter:
+                # OpenRouter validates the tool schema on every follow-up request.
                 request_body["tools"] = tools
+            if final_round and openrouter and metadata.get("tool_choice"):
+                request_body["tool_choice"] = "none"
             output_budget = self._apply_opencode_output_budget(request_body, "chat", metadata)
             if (metadata or {}).get("provider") == "deepseek":
                 payload = await self._deepseek_stream_request(owner, conversation_id, session, api_key, request_body)
+            elif openrouter:
+                payload = await self._openrouter_stream_request(owner, conversation_id, session, api_key, request_body, metadata)
             else:
                 try:
                     async with session.post(
@@ -4483,8 +4789,15 @@ class AIChatService:
                 "content": assistant.get("content"),
                 "tool_calls": calls,
             }
+            if openrouter:
+                # Validate the whole set first: one bad call must not follow an executed one.
+                parsed_calls = validate_openrouter_tool_calls(assistant, allowed_tools, _MAX_TOOL_ARGUMENT_BYTES)
+                if any(identifier in seen_calls for identifier, _name, _arguments in parsed_calls):
+                    raise AIChatError("OpenRouter agent repeated a capability call ID; no tool from this round was run")
+                self._require_openrouter_tools(owner, metadata, api_key)
+                assistant_message = openrouter_assistant_turn(assistant)
             reasoning_content = assistant.get("reasoning_content")
-            if isinstance(reasoning_content, str):
+            if isinstance(reasoning_content, str) and not openrouter:
                 reasoning_limit = MAX_REASONING_CHARS if (metadata or {}).get("provider") == "deepseek" else _MAX_REPLY_CHARS
                 if len(reasoning_content) > reasoning_limit:
                     raise AIChatError("AI provider reasoning is too large")
@@ -4517,6 +4830,8 @@ class AIChatService:
                         "error": "PBGui capability budget exhausted; answer using the results already provided.",
                     }
                 else:
+                    if openrouter:
+                        self._require_openrouter_tools(owner, metadata, api_key)
                     output = await self._agent_capability_result(
                         owner, conversation_id, name, arguments, seen_requests
                     )
@@ -4542,7 +4857,8 @@ class AIChatService:
         limits = metadata or {}
         advertised = limits.get("output_limit")
         budget = advertised if type(advertised) is int and advertised > 0 else 32768
-        if limits.get("provider") == "deepseek":
+        direct = limits.get("provider") in {"deepseek", "openrouter"}
+        if direct:
             from ai_deepseek import MAX_OUTPUT_TOKENS
             budget = min(budget, MAX_OUTPUT_TOKENS)
         # Never count an old output setting as input or send competing limit fields.
@@ -4551,9 +4867,9 @@ class AIChatService:
         context = limits.get("context")
         if type(context) is int and context > 0:
             reserve = len(json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")) + 1024
-            if limits.get("provider") == "deepseek" and protocol == "chat":
+            if direct and protocol == "chat":
                 from ai_deepseek import input_reserve
-                reserve = input_reserve(body)
+                reserve = input_reserve(body) if limits["provider"] == "deepseek" else input_reserve(body, IMAGE_TOKEN_RESERVE)
             budget = min(budget, context - reserve)
         thinking = body.get("thinking") or {}
         thinking_budget = thinking.get("budget_tokens", 0)

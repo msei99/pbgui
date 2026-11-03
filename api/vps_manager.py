@@ -894,12 +894,17 @@ async def ws_vps_manager(websocket: WebSocket):
                 elif cmd == "prepare_import":
                     data = await asyncio.to_thread(service.prepare_import, msg.get("hostname") or "")
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "repair_vps_swap_startup":
+                    data = await asyncio.to_thread(service.repair_vps_swap_startup, token,
+                                                   str(msg.get("hostname") or ""), msg.get("form") or {})
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "save_vps_config":
                     data = await asyncio.to_thread(
                         service.save_vps_config,
                         token,
                         str(msg.get("hostname") or ""),
                         msg.get("form") or {},
+                        apply_remote=msg.get("apply_remote", False),
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "probe_vps_host_key":

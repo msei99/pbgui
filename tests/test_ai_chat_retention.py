@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from ai_chat import AIChatService, Conversation, owner_key
-from ai_openrouter import JEV_MODEL
+from ai_jev import JEV_MODEL
 
 
 class _Capabilities:

@@ -224,7 +224,7 @@ async function main() {
     b.assets.at(-1).onerror();
     assert.equal(c.location.href, app + '/app/help.html?v=1780');
     b.nodes['pbgui-ai-btn'].click();
-    assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=28');
+    assert.equal(b.assets.at(-2).href, prefix + '/app/css/ai_drawer.css?v=30');
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/pbgui_dialogs.js?v=12');
     b.assets.at(-1).onload();
     // Follow the current local dependency chain before the drawer's usage module.
@@ -238,13 +238,16 @@ async function main() {
       c[global] = {};
       b.assets.at(-1).onload();
     }
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_usage.js?v=2');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_usage.js?v=3');
     c.PBGuiAIUsage = {render() {}};
     b.assets.at(-1).onload();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/jev_transfer_preview.js?v=1');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/jev_transfer_preview.js?v=2');
     c.PBGuiJevTransferPreview = {review() {}};
     b.assets.at(-1).onload();
-    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=84');
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_model_search.js?v=15');
+    c.PBGuiAIModelSearch = {attach() {}};
+    b.assets.at(-1).onload();
+    assert.equal(b.assets.at(-1).src, prefix + '/app/js/ai_drawer.js?v=101');
     b.nodes['pbgui-notify-btn'].click();
     assert.equal(b.assets.at(-1).src, prefix + '/app/js/log_viewer_panel.js?v=50');
     let viewerOptions;

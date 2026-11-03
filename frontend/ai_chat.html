@@ -14,18 +14,20 @@
 <button class="sb-section" data-section="chatgpt" type="button">ChatGPT</button>
 <button class="sb-section" data-section="opencode" type="button">OpenCode</button>
 <button class="sb-section" data-section="claude-code" type="button">Claude Agent</button>
-<button class="sb-section" data-section="openrouter" type="button">OpenRouter / Jev</button>
+<button class="sb-section" data-section="openrouter" type="button">OpenRouter</button>
 <button class="sb-section" data-section="deepseek" type="button">DeepSeek</button>
 <button class="sb-section" data-section="github" type="button">GitHub issues</button>
 </div><div id="sidebar-resize"></div></aside>
 <main id="main-content"><h1>AI Setup</h1><div id="setup-status" role="status" aria-live="polite"></div>
 <section data-view="models"><h2>Models and tests</h2>
-<div class="provider-card"><div class="setup-grid">
+<div class="provider-card">
+<div class="setup-grid">
 <label>Provider<select id="provider-select" disabled aria-label="AI provider"></select></label>
-<label><span tabindex="0" data-tip="Tests send a fixed synthetic request to the selected provider and may consume credits. No conversation, page context, diagnostics or PBGui tools are included.">Model</span><select id="model-select" disabled aria-label="AI model"></select></label>
+<label><span tabindex="0" data-tip="Tests send a fixed synthetic request to the selected provider and may consume credits. No conversation, page context, diagnostics or PBGui tools are included. OpenRouter chat models also run a synthetic tool call that unlocks PBGui tools for this model version.">Model</span><input id="model-search" type="search" placeholder="Search models" aria-label="Search models" hidden><select id="model-select" disabled aria-label="AI model"></select></label>
 <label id="effort-label" hidden>Effort<select id="effort-select" aria-label="Reasoning effort"></select></label>
 <label id="speed-label" hidden>Speed<select id="speed-select" aria-label="Model speed"></select></label>
 </div><p id="model-info" class="provider-help"></p>
+<div id="model-privacy" class="row" hidden><span id="model-privacy-status" role="status"></span><button id="model-privacy-toggle" type="button"></button></div>
 <div class="provider-actions"><button id="save-model" class="primary" type="button" disabled>Use for new chats</button>
 <button id="test-model" type="button" disabled>Test model</button></div>
 
@@ -76,9 +78,9 @@
       <div id="go-usage" class="provider-help"></div>
 <div class="connection-test-row"><label><span tabindex="0" data-tip="Send a fixed synthetic request to the displayed provider and model. This may consume provider credits. No conversation, page data or PBGui tools are used.">Test model</span><select id="opencode-test-model" aria-label="opencode connection test model" disabled></select></label><button id="opencode-test" type="button" disabled>Test connection</button></div><p id="opencode-test-result" role="status" hidden></p>
       <button id="go-disconnect" class="danger" hidden>Disconnect</button>
-    </section></section><section data-view="openrouter" hidden><h2>OpenRouter / Jev</h2><section class="provider-card">
+    </section></section><section data-view="openrouter" hidden><h2>OpenRouter</h2><section class="provider-card">
       <div class="provider-head">
-        <span class="provider-name" tabindex="0" data-tip="Jev can choose, rate, or answer yes/no questions from data you enter. It also compares recent PBGui backtests and prioritizes Pareto candidates from an open Optimize result. Requests are billed by OpenRouter.">OpenRouter</span>
+        <span class="provider-name" tabindex="0" data-tip="Connects OpenRouter chat models and Jev structured decisions. Jev can choose, rate, or answer yes/no questions from data you enter. It also compares recent PBGui backtests and prioritizes Pareto candidates from an open Optimize result. Requests are billed by OpenRouter.">OpenRouter</span>
         <span id="openrouter-status" class="status">Checking</span>
       </div>
 
@@ -93,7 +95,8 @@
         <input id="openrouter-key" type="password" autocomplete="new-password" placeholder="OpenRouter API key" aria-label="OpenRouter API key">
         <button id="openrouter-connect" class="primary">Connect</button>
       </div>
-<div class="connection-test-row"><label><span tabindex="0" data-tip="Send a fixed synthetic request to the displayed provider and model. This may consume provider credits. No conversation, page data or PBGui tools are used.">Test model</span><select id="openrouter-test-model" aria-label="openrouter connection test model" disabled></select></label><button id="openrouter-test" type="button" disabled>Test connection</button></div><p id="openrouter-test-result" role="status" hidden></p>
+      <div class="connection-test-row"><label><span tabindex="0" data-tip="Send a fixed synthetic request to the displayed model. This may consume provider credits. No conversation, page data or PBGui tools are used. Chat models also run a synthetic tool call that unlocks PBGui tools for this model version.">Test model</span><input id="openrouter-test-search" type="search" placeholder="Search models" aria-label="Search test models" hidden><select id="openrouter-test-model" aria-label="openrouter connection test model" disabled></select></label><button id="openrouter-test" type="button" disabled>Test connection</button></div><p id="openrouter-model-cost" class="provider-help" role="status" hidden></p><p id="openrouter-test-result" role="status" hidden></p>
+      <div id="openrouter-privacy" class="row" hidden><span id="openrouter-privacy-status" role="status"></span><button id="openrouter-privacy-toggle" type="button"></button></div>
       <button id="openrouter-disconnect" class="danger" hidden>Disconnect</button>
     </section></section>
 <section data-view="deepseek" hidden><h2>DeepSeek</h2><section class="provider-card">
@@ -135,5 +138,6 @@ window.PBGUI_NAV_CONFIG = {subtitle:'AI SETUP',current:'info_ai_chat',authentica
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
 <script src="/app/js/ai_usage.js?v=3"></script>
 <script src="/app/js/data_tip.js?v=1"></script>
-<script src="/app/js/ai_setup.js?v=9"></script>
+<script src="/app/js/ai_model_search.js?v=15"></script>
+<script src="/app/js/ai_setup.js?v=25"></script>
 </body></html>

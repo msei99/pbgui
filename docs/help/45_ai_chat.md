@@ -41,6 +41,30 @@ DeepSeek requests are capped at 32,768 output tokens (including reasoning), inde
 
 AI Loops account for acknowledged interrupted replies before entering the existing repair path and clear the pending call reservation. Truncated research reports remain available as incomplete inspection results; they are not accepted as complete or forwarded to Jev.
 
+### OpenRouter — chat models and Jev
+
+In the model browser's **Table** view, click **Model name**, **Input / 1M**, **Output / 1M**, **Context** or **Released** to sort by that column. Click again to reverse the direction; the arrow shows the active order. Prices and context sort numerically, and unavailable values stay last. The sort menu and List view use the same order, which survives reload without changing the selected model.
+
+Filters affect all result rows, including the selected model. If it does not match, its selection remains visible above the results without adding an out-of-order row. Changing the sort order returns to the start of the results.
+
+New models start with provider data collection blocked; an existing saved model-scoped permission is reused. If OpenRouter explicitly rejects a test because of its privacy/data-policy filters, PBGui asks whether to allow collection for that model. **Keep blocked** sends no retry and saves no permission. **Allow and test again** saves consent and retries the fixed test once; it may consume credits. Permission allows providers to store future chat content, images and tool results and potentially use them for training. It is scoped to your owner, current key and exact model version. Account privacy restrictions still apply. After approval, **Disable provider data collection** remains available to revoke it. No catalog-wide checks, endpoint privacy column or background probes are used. Hidden search fields do not filter small catalogs when switching providers. If only the tool probe fails and you decline data collection, the successful chat result remains available with tools disabled.
+
+**OpenRouter** is one connection with two kinds of models. **Jev** remains the structured decision model with its reviewed transfers and USD limit. All other models listed there are ordinary chat models and use your OpenRouter credits directly. PBGui's Jev USD limit does not apply to them; use the spending limit of your OpenRouter key.
+
+The model list comes from OpenRouter's current catalog and is searchable once it is long. PBGui hides automatic routers, aliases, batch variants, expired models and models without bounded text output, so a selected model is never replaced by another one. Provider, authentication, credit, rate-limit and availability errors are shown without switching model or provider. If the catalog cannot be loaded, Jev stays available.
+
+Every new model starts as **Chat only**. Choose **Test model** or **Test connection** to run a fixed chat request and a synthetic tool roundtrip; neither uses PBGui data, tools or a conversation, and both consume credits. Only after that roundtrip succeeds can PBGui tools be sent to or run for this model. The result applies to your account, your current key and the exact model version. Replacing the key, **Disconnect** or a new model version removes it. A passed test proves compatibility at that moment, not for every later provider route: each response is still validated, and the usual approval rules and limits apply.
+
+**Effort** lists only values the model reports. **Off** appears only if reasoning can be disabled; **Standard** keeps the model default. A chosen setting is only sent to providers that support it, otherwise the request fails instead of ignoring it. Images require a model that reports image input.
+
+Replies stream in the chat and **Stop** closes the request. Some upstream providers keep processing and bill the full response after a cancelled request. PBGui accepts a reply only after the stream has finished completely. If it fails after partial output, that output is discarded and no tool runs. Chat requests use the existing limits for history, output (32,768 tokens including reasoning), 15 minutes per turn, tool rounds and tool results; there is no automatic context summary.
+
+By default PBGui asks OpenRouter to use only providers that do not collect prompts (`data_collection: deny`). This can make some models unavailable, and it is **not Zero Data Retention**. Check the provider terms before sending sensitive data.
+
+After an explicitly rejected model test, confirming **Allow and test again** permits providers to store submitted chat content, images and tool results and potentially use them for training (`data_collection: allow`). The visible permission applies only to your PBGui account, current OpenRouter key and exact model version. It survives reload and API restart; reconnecting, disconnecting or changing the model version ends it. **Disable provider data collection** revokes it without another confirmation. Requests recheck the permission before sending, including tool/probe follow-ups; requests already sent cannot be recalled. Changing this permission clears the model's tool approval: run **Test connection** again. Jev is unaffected. OpenRouter account privacy and guardrail restrictions still apply and may need to be changed at OpenRouter; this option cannot override them. Saving permission does not itself send a model request; the explicitly approved retry may consume credits.
+
+For endpoint failures, PBGui classifies OpenRouter's reported cause when recognized: privacy/data-policy restrictions, missing tool support, unsupported parameters or missing model endpoints. Privacy errors point to OpenRouter Settings → Privacy; PBGui does not automatically weaken its policy. An unrecognized error remains explicitly unconfirmed. Raw provider messages are not displayed because they may contain prompt data.
+
 ### Claude Agent — Claude subscription
 
 Claude can also drive **AI Loops** using the same selected model and effort. Loop decisions use an isolated SDK dialog with the read-only `loop_evidence` tool and the SDK format tool for submitting the final structured decision. Normal chat actions and approval tools are unavailable there. Queuing, starting and rental limits still require the existing reviewed user approval. Model context must be at least 256,000 tokens; PBGui reads the actual native metadata instead of assuming a model's capacity. Stop/shutdown cancels the owned process and preserves uncertain requests for the normal recovery workflow.
@@ -57,7 +81,7 @@ Choose **Test model → Test connection** for a fixed synthetic request without 
 
 ### Other connections and shared controls
 
-The **ChatGPT**, **OpenCode** and **OpenRouter / Jev** connection cards each offer **Test connection** with a visible test-model picker and an inline result. ChatGPT uses the profile selected in that card; OpenCode lists Zen and Go separately. These buttons make the same isolated fixed-input request as **Test model**, using default reasoning/speed, without changing your default model or any conversation. Tests may consume provider credits; Jev retains its configured cost guard. Provider errors are shown without falling back to another model/provider.
+The **ChatGPT**, **OpenCode** and **OpenRouter** connection cards each offer **Test connection** with a visible test-model picker and an inline result. ChatGPT uses the profile selected in that card; OpenCode lists Zen and Go separately. These buttons make the same isolated fixed-input request as **Test model**, using default reasoning/speed, without changing your default model or any conversation. Tests may consume provider credits; Jev retains its configured cost guard. Provider errors are shown without falling back to another model/provider.
 
 Short explanations appear as tooltips on dotted-underlined field labels: hover, focus with the keyboard or tap to read them; Escape closes them. For connection tests, use the **Test model** label above the selector. Action buttons do not open help. Longer instructions are in Guide. There are no inline help expanders.
 
@@ -71,7 +95,7 @@ The sidebar switches between setup areas. Browser reload restores the selected a
 
 Paste a screenshot into the message field (Ctrl+V / Cmd+V), or drag PNG, JPEG or WebP files onto the chat. There is no upload button. Up to five images of 4 MiB each can be attached per message. Check the previews and remove unwanted images before Send. Images alone can also be sent.
 
-Sending shares the images with the selected AI provider so it can inspect the actual screenshot. Use ChatGPT, Claude or an image-capable OpenCode/DeepSeek model; Jev does not accept images. Unsupported models fail explicitly instead of continuing without the images. Images stay in the private, owner-scoped chat history across navigation and API restarts, with a 20 MiB image limit per conversation. Deleting or automatically pruning a conversation removes its stored images. Unsent images stay only in the current browser tab. They are not automatically published on GitHub.
+Sending shares the images with the selected AI provider so it can inspect the actual screenshot. Use ChatGPT, Claude or an image-capable OpenCode/DeepSeek/OpenRouter chat model; Jev does not accept images. Unsupported models fail explicitly instead of continuing without the images. Images stay in the private, owner-scoped chat history across navigation and API restarts, with a 20 MiB image limit per conversation. Deleting or automatically pruning a conversation removes its stored images. Unsent images stay only in the current browser tab. They are not automatically published on GitHub.
 
 ## Debugging and GitHub issues
 
@@ -227,6 +251,12 @@ Models with advertised reasoning variants show an **Effort** selector. **Standar
 Models labeled **Chat only** cannot inspect installed Passivbot documentation, source, or current PBGui data. They receive no capability rules or tool names and answer directly from general knowledge. Select a model labeled **PBGui tools** when the answer requires local or installed-runtime evidence. Responses and Messages models can now carry installed version, documentation, and source results back through their native function-result formats without exposing unrestricted filesystem access.
 
 ## OpenRouter and Jev
+
+After a successful Setup model test, an empty chat selects the tested model automatically. Existing conversations and drafts keep their selection; **New** uses the tested model. Testing does not change the saved default for new sessions.
+
+Browse OpenRouter models in List or Table view. Search names, IDs and descriptions, choose a model type or available variant, and sort by release date, pricing or context. Star models to save them under **Pinned**. Descriptions, release dates and prices come from the API; unavailable popularity, weekly traffic and latency metrics are omitted. In Chat, open **Browse models**. View, search, filters, sorting and pinned models survive reload.
+
+OpenRouter model selections in Setup and Chat show catalog prices in USD per million input and output tokens. These are unit rates, not the total charge for a chat. Missing prices are shown as unavailable.
 
 You can also stay in a normal ChatGPT or OpenCode conversation and ask, “Use Jev to analyze the Pareto candidates in this Optimize result. Prioritize low drawdown and stable returns; explain the ten candidates to backtest.” The assistant resolves the exact optimizer run and creates a **Jev analysis** proposal showing the exact outbound Jev requests, run, question, and USD budget. Review and approve it in PBGui. Only then does PBGui call Jev; the normal assistant receives Jev's result and explains it. The Jev decision may mark Pareto rows but does not queue backtests. The drawer shows when Jev is unavailable because this PBGui account has no connected OpenRouter key. When an OpenRouter key is connected, the assistant may also suggest a reviewable Jev proposal when you did not name Jev. Only your approval starts a billable Jev request. A stated maximum number of candidates is carried into the proposal; otherwise Jev’s own yes/no decisions determine which candidates are marked.
 

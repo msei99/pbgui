@@ -202,7 +202,7 @@ def test_confirmed_review_hides_while_approval_response_is_pending(review_page, 
     expect(page.get_by_role('button', name='Review changes', exact=True)).not_to_be_visible()
     expect(page.locator('.pai-proposal')).not_to_be_visible()
     expect(page.locator('.pai-compose textarea')).to_have_value('Keep this draft')
-    assert page.locator('link[href$="/app/css/ai_drawer.css?v=28"]').count() == 1
+    assert page.locator('link[href$="/app/css/ai_drawer.css?v=30"]').count() == 1
     if outcome == 'executed':
         page.route('**/api/ai/proposals?**', lambda route: route.fulfill(json={'proposals': []}))
         pending_requests[0].fulfill(json={'status': 'executed', 'action': 'run_ai_loop'})

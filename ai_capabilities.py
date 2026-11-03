@@ -2933,7 +2933,7 @@ class AICapabilityService:
     ) -> dict[str, Any]:
         """Offer one owner-approved Jev decision about an exact optimizer run."""
         from ai_chat import get_ai_chat_service
-        from ai_openrouter import JEV_MODEL, OpenRouterDecisionError, decide_backtest_candidates
+        from ai_jev import JEV_MODEL, OpenRouterDecisionError, decide_backtest_candidates
 
         version = self._version(args)
         resource = self._resource_uri(args.get("run_resource"), "optimizer-run", version)
@@ -2956,7 +2956,7 @@ class AICapabilityService:
                                  "name": name, "result_id": str(raw.get("result") or "")} ]}
         try:
             outbound = await decide_backtest_candidates(
-                self, None, "", owner, conversation_id, JEV_MODEL, question.strip(),
+                self, None, owner, conversation_id, JEV_MODEL, question.strip(),
                 context, preview_only=True, selection_limit=selection_limit,
             )
         except OpenRouterDecisionError as exc:
@@ -2985,7 +2985,7 @@ class AICapabilityService:
     async def _execute_jev_analysis(self, proposal: ActionProposal) -> dict[str, Any]:
         """Consult Jev once after approval, bounded by the approved and current budgets."""
         from ai_chat import get_ai_chat_service
-        from ai_openrouter import JEV_MODEL
+        from ai_jev import JEV_MODEL
 
         config = proposal.config or {}
         version = self._version(config)
@@ -4892,7 +4892,7 @@ class AICapabilityService:
 
     def _tool_specs(self) -> list[dict[str, Any]]:
         """Return the dynamic model-visible capability catalog."""
-        from ai_openrouter import research_jev_question_schema
+        from ai_jev import research_jev_question_schema
         from ai_loop_tools import tool_specs as loop_tool_specs
         from ai_bot_log_tools import tool_specs as bot_log_tool_specs
         from ai_support_tools import tool_specs as support_tool_specs

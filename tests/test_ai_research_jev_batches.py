@@ -4,7 +4,8 @@ import json
 from unittest.mock import Mock
 
 import pytest
-import ai_openrouter as jev
+import ai_jev as jev
+from ai_openrouter import OpenRouterJevTransport
 from ai_token_budget import estimate_jev_input_tokens, JEV_CONTEXT_TOKENS
 
 
@@ -57,7 +58,7 @@ def test_39_assets_use_one_price_check_and_one_decision():
     """All questions and the shared report are transferred once, without slicing."""
     client = session()
     spec = {'state': 'Untrusted evidence', 'questions': questions()}
-    result = asyncio.run(jev.decide_user_jev_request(client, 'test-only', jev.JEV_MODEL, spec, max_cost_usd=.01))
+    result = asyncio.run(jev.decide_user_jev_request(OpenRouterJevTransport(client, 'test-only'), jev.JEV_MODEL, spec, max_cost_usd=.01))
     client.get.assert_called_once()
     client.post.assert_called_once()
     assert client.post.call_args.kwargs['json'] == dict(model=jev.JEV_MODEL, **spec)
@@ -87,7 +88,7 @@ def test_budget_failure_sends_no_decision():
     """Pricing failure blocks the complete request before any evidence is sent."""
     client = session(price='1')
     with pytest.raises(jev.OpenRouterDecisionError, match='budget'):
-        asyncio.run(jev.decide_user_jev_request(client, 'test-only', jev.JEV_MODEL,
+        asyncio.run(jev.decide_user_jev_request(OpenRouterJevTransport(client, 'test-only'), jev.JEV_MODEL,
             {'state': 'Evidence', 'questions': questions()}, max_cost_usd=.01))
     client.get.assert_called_once()
     client.post.assert_not_called()
@@ -99,7 +100,7 @@ def test_invalid_last_question_sends_nothing():
     source = questions()
     source['coin_38']['criteria'] = ['low', 'high']
     with pytest.raises(jev.OpenRouterDecisionError):
-        asyncio.run(jev.decide_user_jev_request(client, 'test-only', jev.JEV_MODEL,
+        asyncio.run(jev.decide_user_jev_request(OpenRouterJevTransport(client, 'test-only'), jev.JEV_MODEL,
             {'state': 'Evidence', 'questions': source}))
     client.get.assert_not_called()
     client.post.assert_not_called()
@@ -120,7 +121,7 @@ def test_150_assets_split_only_by_size_and_share_one_cost_check():
     assert all(request['state'] == 'Shared full evidence' for request in requests)
     assert all(estimate_jev_input_tokens(request) <= JEV_CONTEXT_TOKENS for request in requests)
     client = session()
-    result = asyncio.run(jev.decide_research_jev_requests(client, 'test-only', requests, .01))
+    result = asyncio.run(jev.decide_research_jev_requests(OpenRouterJevTransport(client, 'test-only'), requests, .01))
     client.get.assert_called_once()
     assert client.post.call_count == len(requests)
     assert all(f'coin_{i} —' in result for i in range(150))
@@ -141,7 +142,7 @@ def test_split_plan_over_budget_sends_nothing():
     requests = jev.prepare_research_jev_payloads('Evidence', source)
     client = session()
     with pytest.raises(jev.JevBudgetExceeded) as exc:
-        asyncio.run(jev.decide_research_jev_requests(client, 'test-only', requests, .000001))
+        asyncio.run(jev.decide_research_jev_requests(OpenRouterJevTransport(client, 'test-only'), requests, .000001))
     assert exc.value.estimated_cost_usd > .000001
     client.post.assert_not_called()
 
@@ -151,7 +152,7 @@ def test_adaptive_requests_cancel_owned_workers(monkeypatch):
     async def run():
         started, closed = [], []
         gate = asyncio.Event()
-        async def send(session, key, request):
+        async def send(transport, request):
             started.append(request)
             if len(started) == 2:
                 gate.set()
@@ -165,7 +166,7 @@ def test_adaptive_requests_cancel_owned_workers(monkeypatch):
             question['instructions'] = 'Check liquidity, concentration and security evidence. ' * 18
             question['criteria'] = {key: 'Evidence supports this risk category. ' * 13 for key in question['criteria']}
         requests = jev.prepare_research_jev_payloads('Evidence', source)
-        task = asyncio.create_task(jev.decide_research_jev_requests(session(), 'test-only', requests, .01))
+        task = asyncio.create_task(jev.decide_research_jev_requests(OpenRouterJevTransport(session(), 'test-only'), requests, .01))
         await asyncio.wait_for(gate.wait(), 1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -178,7 +179,7 @@ def test_invalid_price_cannot_create_nonfinite_approval():
     """A malformed extreme provider price cannot poison a persisted cost proposal."""
     client = session(price='1e308')
     with pytest.raises(jev.OpenRouterDecisionError, match='cannot be verified'):
-        asyncio.run(jev.decide_user_jev_request(client, 'test-only', jev.JEV_MODEL,
+        asyncio.run(jev.decide_user_jev_request(OpenRouterJevTransport(client, 'test-only'), jev.JEV_MODEL,
             {'state': 'Evidence', 'questions': questions()}))
     client.post.assert_not_called()
 
@@ -188,6 +189,6 @@ def test_cost_check_uses_tokens_instead_of_bytes():
     client = session()
     spec = {'state': 'Public evidence about liquidity and volatility. ' * 1000,
             'questions': questions(1)}
-    result = asyncio.run(jev.decide_user_jev_request(client, 'test-only', jev.JEV_MODEL, spec, max_cost_usd=.001))
+    result = asyncio.run(jev.decide_user_jev_request(OpenRouterJevTransport(client, 'test-only'), jev.JEV_MODEL, spec, max_cost_usd=.001))
     assert 'coin_0' in result
     client.post.assert_called_once()

@@ -146,6 +146,7 @@
     var provider = el('select');
     provider.id = 'pai-provider';
     provider.addEventListener('change', function () {
+      state.pendingSetupSelection = null;delete window.PBGuiAI.pendingTestedSelection;
       var profile = selectedProfile();
       if (selectedProvider() === 'chatgpt' && profile !== state.profile) {
         stopPoll();
@@ -159,10 +160,18 @@
       selectionReady = loadModels().then(function (loaded) { if (loaded) return persistSelection(); });
     });
     toolbar.appendChild(provider);
+    var modelFilter = el('input');
+    modelFilter.id = 'pai-model-search';
+    modelFilter.type = 'search';
+    modelFilter.placeholder = 'Search models';
+    modelFilter.setAttribute('aria-label', 'Search models');
+    modelFilter.hidden = true;
+    toolbar.appendChild(modelFilter);
     var model = el('select');
     model.id = 'pai-model';
-    model.addEventListener('change', function () { state.selectionDirty = true; rebuildEfforts(); rebuildSpeeds(); persistSelection(); });
+    model.addEventListener('change', function () { state.pendingSetupSelection = null;delete window.PBGuiAI.pendingTestedSelection;state.selectionDirty = true; rebuildEfforts(); rebuildSpeeds(); persistSelection(); });
     toolbar.appendChild(model);
+    if (window.PBGuiAIModelSearch) state.modelSearch = window.PBGuiAIModelSearch.attach(model, modelFilter, 'pbgui.ai.modelSearch');
     var effort = el('select');
     effort.id = 'pai-effort';
     effort.addEventListener('change', function () { state.selectionDirty = true; persistSelection(); });
@@ -177,8 +186,11 @@
     var fresh = el('button', 'pai-new', 'New');
     fresh.type = 'button';
     fresh.addEventListener('click', newConversation);
-    toolbar.appendChild(fresh);
+    var providerRow = el('div', 'pai-provider-row');
+    providerRow.append(provider, fresh);
+    toolbar.prepend(providerRow);
     root.appendChild(toolbar);
+    var price = el('div', 'pai-usage');price.id='pai-model-cost';price.hidden=true;root.appendChild(price);
     var usage = el('div', 'pai-usage');
     usage.id = 'pai-usage';
     root.appendChild(usage);
@@ -263,7 +275,11 @@
     document.body.appendChild(root);
     document.body.appendChild(buildReviewOverlay());
     renderContext(collectDisplayContext());
-    selectionReady = refreshAll();
+    if (window.PBGuiAI.pendingTestedSelection) state.pendingSetupSelection = window.PBGuiAI.pendingTestedSelection;
+    selectionReady = refreshAll().then(function () {
+      if (emptyChatForTestSelection()) return applyPendingSetupSelection();
+      if (state.pendingSetupSelection) setStatus('Tested model is ready for New chat.', false);
+    });
   }
 
   function readChatImage(file) {
@@ -277,7 +293,9 @@
 
   function addChatImages(files) {
     if (state.busy || state.sending) { setStatus('Wait for this response before adding images.', true); return; }
-    if (selectedProvider() === 'openrouter') { setStatus('Jev does not accept images. Select ChatGPT or an image-capable OpenCode model.', true); return; }
+    var imageModel = selectedModelInfo();
+    if (imageModel.decision) { setStatus('Jev does not accept images. Select ChatGPT or an image-capable OpenCode model.', true); return; }
+    if (imageModel.provider === 'openrouter' && !imageModel.image_input) { setStatus('Selected OpenRouter model does not accept images. Select an image-capable model.', true); return; }
     var key = state.current, epoch = state.imageEpochs[key] || 0;
     state.imageReads = state.imageReads.then(async function () {
       if ((state.imageEpochs[key] || 0) !== epoch) return;
@@ -558,7 +576,7 @@
     meter.title = available ? 'Context: ' + usage.used_tokens.toLocaleString() + ' / ' + usage.limit_tokens.toLocaleString() + ' tokens (last reported)' : 'Context usage unavailable from this provider';
     meter.setAttribute('aria-label', meter.title);
     root.querySelector('.primary').hidden = busy;
-    root.querySelector('.primary').disabled = !busy && (state.sending || claudeBlocked);
+    root.querySelector('.primary').disabled = !busy && (state.sending || claudeBlocked || state.modelsLoading);
     root.querySelector('.danger').hidden = !busy;
     root.querySelector('textarea').disabled = busy;
     renderChatImageDrafts();
@@ -567,7 +585,7 @@
     root.querySelector('#pai-model').disabled = busy || state.modelsLoading || !Object.keys(state.models).length;
     root.querySelector('#pai-effort').disabled = busy || state.modelsLoading || root.querySelector('#pai-effort').hidden;
     root.querySelector('#pai-speed').disabled = busy || state.modelsLoading || root.querySelector('#pai-speed').hidden;
-    root.querySelector('.pai-new').disabled = busy || claudeBlocked;
+    root.querySelector('.pai-new').disabled = busy || claudeBlocked || state.modelsLoading;
   }
 
   async function refreshAll() {
@@ -753,9 +771,6 @@
   async function loadModels(preferred, strictModel) {
     var provider = selectedProvider();
     var profile = selectedProfile();
-    root.querySelector('.pai-compose textarea').placeholder = provider === 'openrouter'
-      ? 'Ask Jev to choose, rate, or judge yes/no from supplied data.'
-      : 'Type a message, paste an image, or drop images here...';
     refreshUsage();
     var select = root.querySelector('#pai-model');
     var current = preferred || select.value;
@@ -795,7 +810,7 @@
       (data.models || []).forEach(function (model) {
         state.models[model.id] = model;
         var healthStatus = model.health && model.health.status ? ' - ' + String(model.health.status).replace(/_/g, ' ') : '';
-        var option = el('option', '', model.name + (model.decision ? ' - Decision' : model.tools ? ' - PBGui tools' : ' - Chat only') + healthStatus);
+        var option = el('option', '', model.name + (model.free ? ' - Free' : '') + (model.decision ? ' - Decision' : '') + (model.provider === 'openrouter' && model.image_input ? ' - Images' : '') + healthStatus);
         option.value = model.id;
         if (model.default) option.selected = true;
         select.appendChild(option);
@@ -807,7 +822,7 @@
         select.appendChild(empty);
       }
       if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
-      else if (strictModel && current) {
+      else if (current && (strictModel || (provider === 'openrouter' && preferred))) {
         var missing = el('option', '', 'Unavailable model: ' + current);
         missing.value = current;
         select.appendChild(missing);
@@ -818,6 +833,8 @@
       rebuildSpeeds();
       state.modelsLoading = false;
       setBusy(state.busy);
+      var catalogProblem = (data.models || []).find(function (model) { return model.catalog_error; });
+      if (catalogProblem) setStatus(catalogProblem.catalog_error, true);
       return true;
     } catch (error) {
       if (generation !== state.modelGeneration || provider !== selectedProvider() || profile !== selectedProfile()) return;
@@ -833,8 +850,19 @@
     }
   }
 
+  function selectedModelInfo() {
+    return state.models[root.querySelector('#pai-model').value] || {};
+  }
+
   function rebuildEfforts(preferred) {
-    var model = state.models[root.querySelector('#pai-model').value] || {};
+    var model = selectedModelInfo();
+    var price = root.querySelector('#pai-model-cost');
+    if (state.modelSearch) state.modelSearch.refresh(state.models);
+    price.hidden = selectedProvider() !== 'openrouter' || root.querySelector('#pai-model').hidden;
+    price.textContent = selectedProvider() === 'openrouter' ? window.PBGuiAIModelSearch.priceText(model) : '';
+    root.querySelector('.pai-compose textarea').placeholder = model.decision
+      ? 'Ask Jev to choose, rate, or judge yes/no from supplied data.'
+      : 'Type a message, paste an image, or drop images here...';
     var select = root.querySelector('#pai-effort');
     var current = preferred == null ? select.value : preferred;
     select.textContent = '';
@@ -1549,14 +1577,27 @@
     }
   }
 
+  function emptyChatForTestSelection() {
+    return root && !state.busy && !state.sending && !root.querySelector('.pai-messages .pai-message') &&
+      !root.querySelector('textarea').value.trim() && !(state.imageDrafts[state.current || ''] || []).length;
+  }
+
+  async function applyPendingSetupSelection() {
+    var setup = state.pendingSetupSelection;
+    if (!setup) return true;
+    state.profile = setup.profile || 'default';state.selectionDirty = true;
+    var loaded = await rebuildProviders(setup.provider === 'chatgpt' ? 'chatgpt:' + state.profile : setup.provider, setup.model, true);
+    if (!loaded || setup !== state.pendingSetupSelection) return false;
+    if (!state.models[setup.model]) { setStatus('The tested model is no longer available. Select another model.', true);return false; }
+    rebuildEfforts(setup.effort || '');rebuildSpeeds(setup.service_tier || '');
+    state.pendingSetupSelection = null;
+    if (window.PBGuiAI.pendingTestedSelection === setup) delete window.PBGuiAI.pendingTestedSelection;
+    return true;
+  }
+
   async function newConversation(sendGeneration) {
     if (typeof sendGeneration !== 'number') sendGeneration = null;
-    if (state.pendingSetupSelection) {
-      var setup = state.pendingSetupSelection; state.pendingSetupSelection = null;
-      state.profile = setup.profile || 'default'; state.selectionDirty = true;
-      await rebuildProviders(setup.provider === 'chatgpt' ? 'chatgpt:' + state.profile : setup.provider, setup.model);
-      rebuildEfforts(setup.effort || ''); rebuildSpeeds(setup.service_tier || '');
-    }
+    if (sendGeneration == null && state.pendingSetupSelection && !await applyPendingSetupSelection()) return;
     var provider = selectedProvider();
     var profile = selectedProfile();
     var model = root.querySelector('#pai-model').value;
@@ -1582,7 +1623,7 @@
   }
 
   async function sendMessage(override, retryImages) {
-    if (state.busy || state.sending) return;
+    if (state.busy || state.sending || state.modelsLoading) return;
     if (selectedProvider() === 'claude-code' && !(state.providers['claude-code'] || {}).connected) { setStatus('Claude is not connected', true); return; }
     state.sending = true;
     var sendGeneration = ++state.sendGeneration, submitted = false;
@@ -1644,10 +1685,10 @@
     setStatus('Starting model...', false);
     var jevPreviewId = '';
     try {
-      if (turnProvider === 'openrouter' && window.PBGuiJevTransferPreview) {
+      if ((state.models[turnModel] || {}).decision && window.PBGuiJevTransferPreview) {
         var review = await window.PBGuiJevTransferPreview.review({
           api: api, confirm: confirmAction, conversationId: conversationId,
-          provider: turnProvider, model: turnModel, message: message
+          provider: turnProvider, model: turnModel, message: message, decision: true
         });
         if (review.cancelled) {
           if (conversationId === state.current) {
@@ -1830,6 +1871,26 @@
   facade.close = closeDrawer;
   facade.toggle = function () { state.open ? closeDrawer() : openDrawer(); };
   window.PBGuiAI = facade;
+  window.addEventListener('pbgui:ai-models-changed', function () {
+    if (!root || selectedProvider() !== 'openrouter' || state.busy) return;
+    var selectedModel = root.querySelector('#pai-model').value;
+    var selectedEffort = root.querySelector('#pai-effort').value;
+    loadModels(selectedModel).then(function (loaded) { if (loaded) rebuildEfforts(selectedEffort); });
+  });
+
+  window.addEventListener('pbgui:ai-model-tested', function (event) {
+    var value = event.detail;
+    if (!value || typeof value.provider !== 'string' || typeof value.model !== 'string') return;
+    state.pendingSetupSelection = value;
+    if (!root) return;
+    selectionReady = selectionReady.then(async function () {
+      if (value !== state.pendingSetupSelection) return;
+      if (emptyChatForTestSelection()) {
+        await applyPendingSetupSelection();
+      } else setStatus('Tested model is ready for New chat.', false);
+    }).catch(function (error) { setStatus(error.message, true); });
+  });
+
   window.addEventListener('pbgui:ai-setup-saved', function (event) {
     var value = event.detail;
     if (value && typeof value.provider === 'string' && typeof value.model === 'string') state.pendingSetupSelection = Object.assign({}, value);

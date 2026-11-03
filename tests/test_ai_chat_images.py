@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from ai_chat import AIChatError, AIChatService, CodexRuntime
+from ai_jev import JEV_MODEL
 from ai_chat_images import ChatImageStore
 from api.ai import TurnCreateRequest
 
@@ -124,7 +125,7 @@ def test_images_survive_turn_reload_retry_and_delete(tmp_path, monkeypatch):
         with pytest.raises(AIChatError):
             await restored.get_conversation('c' * 32, conversation.id)
         with pytest.raises(AIChatError, match='Jev does not accept images'):
-            await restored.start_turn(OWNER, conversation.id, 'Choose', provider='openrouter', model='jev', images=[IMAGE])
+            await restored.start_turn(OWNER, conversation.id, 'Choose', provider='openrouter', model=JEV_MODEL, images=[IMAGE])
         await restored.delete_conversation(OWNER, conversation.id)
         assert not path.exists()
         await restored.shutdown()

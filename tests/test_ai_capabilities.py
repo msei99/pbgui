@@ -2459,7 +2459,7 @@ def test_jev_optimizer_tool_proposes_without_spending_until_approval(tmp_path: P
         return {"requests": [{"model": "typesafe/jev-1.13", "state": {"candidate": "A"},
                               "questions": {"c1": {"type": "noul", "instructions": "Select?"}}}],
                 "sha256": "d" * 64, "candidate_count": 1, "metric_count": 2}
-    monkeypatch.setattr("ai_openrouter.decide_backtest_candidates", fake_preview)
+    monkeypatch.setattr("ai_jev.decide_backtest_candidates", fake_preview)
     args = {"version": "v8", "run_resource": resource, "question": "Which candidates should I backtest?", "max_candidates": 5}
 
     async def exercise():

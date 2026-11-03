@@ -568,7 +568,7 @@ class LoopController:
                         answer = await self.ai.jev(await owned_thread(self.store.read, record['owner'], record['id']),
                                                    [{'id': row['id'], 'metrics': row['metrics']} for row in record['bootstrap_candidates']])
                     except Exception as exc:
-                        from ai_openrouter import OpenRouterDecisionError
+                        from ai_jev import OpenRouterDecisionError
                         detail = str(exc)[:500] if isinstance(exc, OpenRouterDecisionError) else type(exc).__name__
                         _log(SERVICE, f'Optional initial JEV failed: {detail}', level='WARNING')
                         answer = 'JEV request failed: ' + detail + '; primary model continues'
@@ -719,7 +719,7 @@ class LoopController:
                         if answer:
                             jev_answers.append(answer)
                     except Exception as exc:
-                        from ai_openrouter import OpenRouterDecisionError
+                        from ai_jev import OpenRouterDecisionError
                         detail = str(exc)[:500] if isinstance(exc, OpenRouterDecisionError) else type(exc).__name__
                         _log(SERVICE, f'Optional JEV failed: {detail}', level='WARNING')
                         jev_answers.append('JEV request failed: ' + detail + '; primary model continues')

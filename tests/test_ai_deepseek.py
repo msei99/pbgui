@@ -520,14 +520,14 @@ def test_deepseek_existing_effort_selectors_in_native_browser():
     root = Path(__file__).resolve().parents[1]
     setup = (root / 'frontend/js/ai_setup.js').read_text()
     drawer = (root / 'frontend/js/ai_drawer.js').read_text()
-    setup_fn = 'function modelDetails()' + setup.split('function modelDetails()', 1)[1].split('  async function loadModels()', 1)[0]
-    drawer_fn = 'function rebuildEfforts(preferred)' + drawer.split('function rebuildEfforts(preferred)', 1)[1].split('  function rebuildSpeeds(', 1)[0]
+    setup_fn = 'function modelDetails()' + setup.split('function modelDetails()', 1)[1].split('  async function loadModels(', 1)[0]
+    drawer_fn = 'function selectedModelInfo()' + drawer.split('function selectedModelInfo()', 1)[1].split('  function rebuildSpeeds(', 1)[0]
     script = """
     const assert=browserAssert, model=MODEL;
-    document.body.innerHTML='<div id="model-info"></div><label id="effort-label"></label><select id="effort-select"></select><label id="speed-label"></label><select id="speed-select"></select><select id="pai-model"></select><select id="pai-effort"></select>';
+    document.body.innerHTML='<div id="model-info"></div><label id="effort-label"></label><select id="effort-select"></select><label id="speed-label"></label><select id="speed-select"></select><select id="pai-model"></select><select id="pai-effort"></select><div id="pai-model-cost"></div><div class="pai-compose"><textarea></textarea></div>';
     const $=id=>document.getElementById(id), root=document;
     const state={models:{[model.id]:model},model:model.id,effort:'none',speed:''};
-    const provider=()=> 'deepseek', controls=()=>{};
+    const provider=()=> 'deepseek', selectedProvider=provider, controls=()=>{};
     function option(select,value,label){const o=document.createElement('option');o.value=value;o.textContent=label;select.appendChild(o);return o;}
     function el(tag,cls,text){const e=document.createElement(tag);e.textContent=text;return e;}
     SETUP

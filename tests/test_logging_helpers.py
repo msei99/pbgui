@@ -15,7 +15,7 @@ from file_lock import advisory_file_lock
 
 
 TIER_3_SERVICES = {
-    "AIChat",
+    "AIChat", "AIOpenRouterChat",
     "ApiLogging", "ApiKeys", "BalanceCalc", "CoinDataUI", "Dashboard",
     "ProfitSweep", "Services", "V7Instances", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",
 }

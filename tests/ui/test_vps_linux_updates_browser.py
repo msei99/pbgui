@@ -836,3 +836,29 @@ def test_all_deferred_updates_show_zero_counts_with_hover_details(manager, defer
     page.locator('#alertModalClose').click()
     publish_state(page, upgrades=5, deferred_updates=0, classification_complete=True, security_updates=3)
     expect(page.locator('[data-vps-action="package-updates"]')).to_have_text('3 / 2')
+
+
+def test_swap_startup_repair_uses_existing_password_dialog_from_real_menu(detail_manager):
+    """Change VPS repairs through its dedicated protected command without config-apply or bot tasks."""
+    page,fixture=detail_manager
+    page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
+    page.wait_for_function("store.detail && store.detail.hostname==='test-host' && !store.detail.provisional")
+    page.evaluate("store.state.config={swap_options:['0','6G']}")
+    page.locator('#sidebar-actions').get_by_role('button',name='Change VPS',exact=True).click()
+    button=page.locator('[data-vps-action="repair-swap-startup"]')
+    expect(button).to_be_visible()
+    page.evaluate('''window.repairCommands=[];store.ws.send=raw=>repairCommands.push(JSON.parse(raw));''')
+    button.click()
+    expect(page.locator('#alertModalTitle')).to_have_text('Repair swap startup')
+    expect(page.locator('#pw-prompt-input')).to_have_attribute('type','password')
+    assert page.evaluate('repairCommands.length')==0
+    page.locator('#pw-prompt-input').fill('synthetic-repair-password')
+    page.locator('#pw-prompt-confirm').click()
+    page.wait_for_function('repairCommands.some(row=>row.cmd==="repair_vps_swap_startup")')
+    assert page.evaluate('repairCommands.map(row=>row.cmd)')==['repair_vps_swap_startup']
+    assert page.evaluate('repairCommands[0].hostname')=='test-host'
+    assert page.evaluate('repairCommands[0].form.user_pw')=='synthetic-repair-password'
+    assert page.evaluate('JSON.stringify({...localStorage,...sessionStorage}).includes("synthetic-repair-password")') is False
+    page.evaluate('''handleMessage({type:'result',cmd:'repair_vps_swap_startup',success:true,
+      data:{hostname:'test-host',changed:true,message:'Swap startup entry restored.'}})''')
+    assert page.evaluate('store.swapRepairHost')==''

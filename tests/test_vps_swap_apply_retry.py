@@ -37,7 +37,7 @@ def test_apply_rechecks_remote_swap_even_when_target_is_already_saved(remote_swa
     service._build_vps_config = lambda token, obj: {"swap": obj.swap}
     service._start_vps_config_apply = lambda *args, **kwargs: starts.append(kwargs) or {"started": True}
 
-    result = service.save_vps_config("session", "test-vps", {"swap": "2G", "check_remote_swap": True})
+    result = service.save_vps_config("session", "test-vps", {"swap": "2G", "check_remote_swap": True}, apply_remote=True)
 
     assert reads == [True]
     assert vps.user_pw is None
@@ -102,3 +102,76 @@ def test_remote_swap_read_distinguishes_no_swap_from_command_failure(monkeypatch
     else:
         assert vps.fetch_vps_info()["swap"] == expected
     assert closed == [True]
+
+
+@pytest.mark.parametrize('kwargs', [{}, {'apply_remote': False}])
+def test_command_presave_cannot_apply_remote_settings(kwargs):
+    """Default and explicitly local saves never probe or alter remote swap/firewall."""
+    service = object.__new__(VPSManagerService)
+    vps = SimpleNamespace(hostname='fixture',swap='6G',firewall=False,firewall_ssh_port=22,firewall_ssh_ips='',save=lambda:None)
+    service._require_vps=lambda host:vps
+    service._build_vps_config=lambda *args:{'swap':vps.swap}
+    def apply_form(token,obj,form):
+        """Persist a changed form in isolated memory only."""
+        obj.swap=form['swap'];obj.firewall=form['firewall']
+    service._apply_vps_setup_form=apply_form
+    def forbidden(*args,**kwargs):
+        """No remote IO or task may occur from an implicit save."""
+        pytest.fail('Implicit save attempted remote work')
+    vps.fetch_vps_info=forbidden
+    service._start_vps_config_apply=forbidden
+    result=service.save_vps_config('fixture-token','fixture',{'swap':'0','firewall':True,'check_remote_swap':True},**kwargs)
+    assert result['remote_apply']['started'] is False
+    assert result['swap_changed'] and result['firewall_changed']
+
+
+@pytest.mark.parametrize('value', [None,0,1,'false','true'])
+def test_remote_apply_requires_boolean(value):
+    """Malformed websocket flags cannot turn a save into a remote apply."""
+    service=object.__new__(VPSManagerService)
+    with pytest.raises(ValueError,match='boolean'):
+        service.save_vps_config('fixture','fixture',{},apply_remote=value)
+
+
+@pytest.mark.parametrize('existing', [False,True,'inactive','conflict','duplicate','symlink'])
+def test_swap_startup_repair_runs_only_on_scratch_files(tmp_path,existing,monkeypatch):
+    """The exact repair script restores one entry atomically and is idempotent without swap commands."""
+    import json
+    import subprocess
+    monkeypatch.setattr('vps_manager_service._log',lambda *args,**kwargs:None)
+    service=object.__new__(VPSManagerService)
+    vps=SimpleNamespace(hostname='fixture')
+    service._require_vps=lambda host:vps
+    service._raise_if_vps_task_active=lambda *args:None
+    service._store_session_secrets=lambda *args:None
+    service._require_user_password=lambda *args:'synthetic-password'
+    fstab=tmp_path/'fstab';swaps=tmp_path/'swaps';swapfile=tmp_path/'swapfile'
+    swapfile.write_bytes(b'active fixture')
+    entry=f'{swapfile} none swap sw 0 0\n'
+    fstab.write_text('# existing unrelated configuration\n'+(entry if existing else ''))
+    swaps.write_text(f'Filename Type Size Used Priority\n{swapfile} file 6144000 500000 -2\n')
+    def execute(host,script,password,timeout):
+        """Replace only the three fixed system paths before executing the real script."""
+        assert host=='fixture' and password=='synthetic-password'
+        assert 'swapoff' not in script and 'systemctl' not in script and 'mkswap' not in script
+        script=script.replace('/etc/fstab',str(fstab)).replace('/proc/swaps',str(swaps)).replace('/swapfile',str(swapfile))
+        proc=subprocess.run(['bash','-c',script],capture_output=True,text=True,timeout=timeout)
+        return proc.returncode,proc.stdout,proc.stderr
+    service._run_remote_sudo_shell=execute
+    if existing=='inactive':swaps.write_text('Filename Type Size Used Priority\n')
+    if existing=='conflict':fstab.write_text(f'{swapfile} none ext4 defaults 0 0\n')
+    if existing=='duplicate':fstab.write_text(entry+entry)
+    if existing=='symlink':
+        target=tmp_path/'symlink-target';target.write_text(fstab.read_text());fstab.unlink();fstab.symlink_to(target)
+    if isinstance(existing,str):
+        original=fstab.read_bytes()
+        with pytest.raises(ValueError,match='Could not repair'):
+            service.repair_vps_swap_startup('fixture-token','fixture',{})
+        assert fstab.read_bytes()==original
+        assert swapfile.read_bytes()==b'active fixture'
+        return
+    result=service.repair_vps_swap_startup('fixture-token','fixture',{})
+    assert result['changed'] is (not existing)
+    assert fstab.read_text()=='# existing unrelated configuration\n'+entry
+    assert service.repair_vps_swap_startup('fixture-token','fixture',{})['changed'] is False
+    assert swapfile.read_bytes()==b'active fixture'

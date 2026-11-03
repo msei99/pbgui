@@ -2117,7 +2117,7 @@
       _aiDrawerLoading = true;
       var link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = _appPath('/app/css/ai_drawer.css?v=28');
+      link.href = _appPath('/app/css/ai_drawer.css?v=30');
       document.head.appendChild(link);
       function loadDrawerScript() {
         var dependencies = [
@@ -2152,14 +2152,22 @@
         }
         if (!window.PBGuiJevTransferPreview) {
           var transfer = document.createElement('script');
-          transfer.src = _appPath('/app/js/jev_transfer_preview.js?v=1');
+          transfer.src = _appPath('/app/js/jev_transfer_preview.js?v=2');
           transfer.onload = loadDrawerScript;
           transfer.onerror = function () { _aiDrawerLoading = false; };
           document.head.appendChild(transfer);
           return;
         }
+        if (!window.PBGuiAIModelSearch) {
+          var modelSearch = document.createElement('script');
+          modelSearch.src = _appPath('/app/js/ai_model_search.js?v=15');
+          modelSearch.onload = loadDrawerScript;
+          modelSearch.onerror = function () { _aiDrawerLoading = false; };
+          document.head.appendChild(modelSearch);
+          return;
+        }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=90');
+        script.src = _appPath('/app/js/ai_drawer.js?v=101');
         script.onload = function () { _aiDrawerLoading = false; if (show && window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); window.dispatchEvent(new Event('pbgui:ai-ready')); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);

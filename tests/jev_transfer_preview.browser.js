@@ -15,7 +15,7 @@ const api = async (path, options) => {
   return options.method === 'POST' ? { preview_id: 'a'.repeat(32), payload } : {};
 };
 (async () => {
-  const options = { api, conversationId: 'conversation', provider: 'openrouter', model: 'jev', message };
+  const options = { api, conversationId: 'conversation', provider: 'openrouter', model: 'jev', message, decision: true };
   const denied = await helper.review({ ...options, confirm: async info => {
     assert.strictEqual(info.detail, JSON.stringify(payload, null, 2));
     return false;
@@ -26,4 +26,8 @@ const api = async (path, options) => {
   const allowed = await helper.review({ ...options, confirm: async () => true });
   assert.strictEqual(allowed.previewId, 'a'.repeat(32));
   assert.deepStrictEqual(calls.map(x => x.method), ['POST']);
+  calls.length = 0;
+  const chat = await helper.review({ ...options, decision: false, confirm: async () => assert.fail('Chat models need no Jev review') });
+  assert.strictEqual(chat.previewId, '');
+  assert.deepStrictEqual(calls, []);
 })().catch(error => { console.error(error); testResult.exitCode = 1; });

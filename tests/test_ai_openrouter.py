@@ -10,7 +10,8 @@ import pytest
 from ai_token_budget import estimate_jev_input_tokens, JEV_CONTEXT_TOKENS
 
 from ai_chat import AICredentialStore, AIChatService, AIChatError, owner_key
-from ai_openrouter import JEV_MODEL, OpenRouterDecisionError, check_jev_budget, _noul_answers, _user_options, decide_backtest_candidates, decide_backtest_results, decide_general_choice, decide_user_jev_request, parse_structured_jev_request
+from ai_jev import JEV_MODEL, OpenRouterDecisionError, check_jev_budget, _noul_answers, _user_options, decide_backtest_candidates, decide_backtest_results, decide_general_choice, decide_user_jev_request, parse_structured_jev_request
+from ai_openrouter import OpenRouterJevTransport
 
 
 @pytest.fixture(autouse=True)
@@ -19,7 +20,7 @@ def _stub_pricing_for_existing_decision_contracts(monkeypatch):
     async def accepted(*args, **kwargs):
         """Accept a request already covered by the dedicated pricing tests."""
         return None
-    monkeypatch.setattr("ai_openrouter.check_jev_budget", accepted)
+    monkeypatch.setattr("ai_jev.check_jev_budget", accepted)
 
 
 class _PricingResponse:
@@ -70,17 +71,17 @@ def test_jev_usd_budget_checks_current_model_price_before_send() -> None:
     request = {"model": JEV_MODEL, "state": {"data": "x" * 10000},
                "questions": {"q": {"type": "noul", "instructions": "Choose"}}}
     with pytest.raises(OpenRouterDecisionError, match="configured USD budget"):
-        asyncio.run(check_jev_budget(session, "test-key", [request], 0.000001))
+        asyncio.run(check_jev_budget(OpenRouterJevTransport(session, "test-key"), [request], 0.000001))
     assert len(session.requests) == 1
     assert session.requests[0][0].endswith("/v1/model/typesafe/jev-1.13")
-    asyncio.run(check_jev_budget(session, "test-key", [request], 0.01))
+    asyncio.run(check_jev_budget(OpenRouterJevTransport(session, "test-key"), [request], 0.01))
 
 
 def test_jev_budget_fails_closed_when_price_is_not_verified() -> None:
     """A missing or nonzero output price never authorizes a decision call."""
     session = _PricingSession("invalid")
     with pytest.raises(OpenRouterDecisionError, match="pricing could not be checked"):
-        asyncio.run(check_jev_budget(session, "test-key", [{"state": "x"}], 0.01))
+        asyncio.run(check_jev_budget(OpenRouterJevTransport(session, "test-key"), [{"state": "x"}], 0.01))
 
 
 class _FakeCapabilities:
@@ -201,7 +202,7 @@ def test_jev_profiles_all_candidates_with_bounded_payloads() -> None:
         """Record the trusted browser selection action."""
         selected.append(result)
 
-    reply = asyncio.run(decide_backtest_candidates(capabilities, session, "test-key-123456789", "owner", "conversation", JEV_MODEL, "Which ten should I backtest?", _run_context(204), capture, selection_limit=10))
+    reply = asyncio.run(decide_backtest_candidates(capabilities, OpenRouterJevTransport(session, "test-key-123456789"), "owner", "conversation", JEV_MODEL, "Which ten should I backtest?", _run_context(204), capture, selection_limit=10))
     assert "all 204 Pareto candidates" in reply
     assert "214" not in reply
     assert "1. pareto-203" in reply
@@ -231,7 +232,7 @@ def test_jev_respects_model_supplied_maximum_of_five() -> None:
         captured.append(result)
 
     reply = asyncio.run(decide_backtest_candidates(
-        capabilities, _FakeSession(), "test-key-123456789", "owner", "conversation",
+        capabilities, OpenRouterJevTransport(_FakeSession(), "test-key-123456789"), "owner", "conversation",
         JEV_MODEL, "Which candidates should I backtest?", _run_context(),
         capture_selection=capture, selection_limit=5,
     ))
@@ -262,7 +263,7 @@ def test_jev_without_limit_uses_its_yes_no_decisions() -> None:
         captured.append(result)
 
     reply = asyncio.run(decide_backtest_candidates(
-        capabilities, DecisiveSession(), "test-key-123456789", "owner", "conversation",
+        capabilities, OpenRouterJevTransport(DecisiveSession(), "test-key-123456789"), "owner", "conversation",
         JEV_MODEL, "Which candidates should I backtest?", _run_context(),
         capture_selection=capture,
     ))
@@ -282,7 +283,7 @@ def test_jev_high_dimension_run_has_small_preflighted_requests() -> None:
         })
     session = _FakeSession()
     reply = asyncio.run(decide_backtest_candidates(
-        capabilities, session, "test-key-123456789", "owner", "conversation",
+        capabilities, OpenRouterJevTransport(session, "test-key-123456789"), "owner", "conversation",
         JEV_MODEL, "Which ten should I backtest?", _run_context(204),
     ))
     assert "212 metrics" in reply
@@ -303,7 +304,7 @@ def test_jev_total_transfer_uses_usd_budget_instead_of_old_byte_ceiling() -> Non
             for column in range(208)
         })
     preview = asyncio.run(decide_backtest_candidates(
-        capabilities, None, '', 'owner', 'conversation', JEV_MODEL,
+        capabilities, OpenRouterJevTransport(None, ''), 'owner', 'conversation', JEV_MODEL,
         'Which candidates should I backtest?', _run_context(500), preview_only=True,
     ))
     requests = preview['requests']
@@ -316,7 +317,7 @@ def test_jev_total_transfer_uses_usd_budget_instead_of_old_byte_ceiling() -> Non
     assert all(estimate_jev_input_tokens(request) <= JEV_CONTEXT_TOKENS for request in requests)
     pricing = _PricingSession()
     with pytest.raises(OpenRouterDecisionError, match='configured USD budget'):
-        asyncio.run(check_jev_budget(pricing, 'test-key', requests, 0.00001))
+        asyncio.run(check_jev_budget(OpenRouterJevTransport(pricing, 'test-key'), requests, 0.00001))
     assert len(pricing.requests) == 1  # Only the model-price lookup occurred.
 
 
@@ -328,7 +329,7 @@ def test_jev_skips_indistinguishable_candidates_without_provider_cost() -> None:
         candidate["metrics"] = dict(shared)
     session = _FakeSession()
     reply = asyncio.run(decide_backtest_candidates(
-        capabilities, session, "test-key-123456789", "owner", "conversation",
+        capabilities, OpenRouterJevTransport(session, "test-key-123456789"), "owner", "conversation",
         JEV_MODEL, "Which ten should I backtest?", _run_context(12),
     ))
     assert "same numeric metrics" in reply
@@ -340,7 +341,7 @@ def test_jev_rejects_oversized_question_before_provider_call() -> None:
     session = _FakeSession()
     with pytest.raises(OpenRouterDecisionError, match="no data was sent"):
         asyncio.run(decide_backtest_candidates(
-            _FakeCapabilities(count=12), session, "test-key-123456789",
+            _FakeCapabilities(count=12), OpenRouterJevTransport(session, "test-key-123456789"),
             "owner", "conversation", JEV_MODEL, "X" * 20_000, _run_context(12),
         ))
     assert not session.requests
@@ -376,7 +377,7 @@ def test_jev_provider_rejection_does_not_multiply_requests() -> None:
 
     with pytest.raises(OpenRouterDecisionError, match="could not complete"):
         asyncio.run(decide_backtest_candidates(
-            _FakeCapabilities(count=12), session, "test-key-123456789",
+            _FakeCapabilities(count=12), OpenRouterJevTransport(session, "test-key-123456789"),
             "owner", "conversation", JEV_MODEL, "Which ten should I backtest?",
             _run_context(12), capture,
         ))
@@ -394,14 +395,14 @@ def test_jev_single_candidate_http_400_reports_safe_category() -> None:
             return _FakeResponse({"error": {"message": "Context length exceeded: secret-prompt"}}, 400)
 
     with pytest.raises(OpenRouterDecisionError, match="could not complete") as error:
-        asyncio.run(decide_backtest_candidates(_FakeCapabilities(count=1), RejectingSession(), "test-key-123456789", "owner", "conversation", JEV_MODEL, "Which should I backtest?", _run_context(1)))
+        asyncio.run(decide_backtest_candidates(_FakeCapabilities(count=1), OpenRouterJevTransport(RejectingSession(), "test-key-123456789"), "owner", "conversation", JEV_MODEL, "Which should I backtest?", _run_context(1)))
     assert "secret-prompt" not in str(error.value)
 
 
 def test_jev_rejects_ambiguous_display_name_without_run_id() -> None:
     """Duplicate names do not silently select the one-candidate run."""
     session = _FakeSession()
-    reply = asyncio.run(decide_backtest_candidates(_FakeCapabilities(), session, "test-key-123456789", "owner", "conversation", JEV_MODEL, "Which should I backtest?", {"entities": [{"kind": "optimizer_run", "version": "v8", "name": "backtests"}]}))
+    reply = asyncio.run(decide_backtest_candidates(_FakeCapabilities(), OpenRouterJevTransport(session, "test-key-123456789"), "owner", "conversation", JEV_MODEL, "Which should I backtest?", {"entities": [{"kind": "optimizer_run", "version": "v8", "name": "backtests"}]}))
     assert "Several Optimize runs match" in reply
     assert not session.requests
 
@@ -419,7 +420,7 @@ def test_openrouter_lists_jev_as_decision_model(tmp_path: Path) -> None:
 
 def test_jev_explains_a_german_question_in_german() -> None:
     """The local decision explanation follows the user's German question."""
-    reply = asyncio.run(decide_backtest_candidates(_FakeCapabilities(), _FakeSession(), "test-key-123456789", "owner", "conversation", JEV_MODEL, "Welche Resultate sollte ich backtesten?", _run_context(), selection_limit=5))
+    reply = asyncio.run(decide_backtest_candidates(_FakeCapabilities(), OpenRouterJevTransport(_FakeSession(), "test-key-123456789"), "owner", "conversation", JEV_MODEL, "Welche Resultate sollte ich backtesten?", _run_context(), selection_limit=5))
     assert "fuer einen Validierungs-Backtest markiert" in reply
     assert "1. pareto-011" in reply
 
@@ -435,7 +436,7 @@ def test_stale_selected_run_does_not_contact_openrouter() -> None:
     capabilities = _FakeCapabilities()
     session = _FakeSession()
     context = {"entities": [{"kind": "optimizer_run", "version": "v8", "name": "deleted", "result_id": "deleted"}]}
-    reply = asyncio.run(decide_backtest_candidates(capabilities, session, "test-key-123456789", "owner", "conversation", JEV_MODEL, "Which should I backtest?", context))
+    reply = asyncio.run(decide_backtest_candidates(capabilities, OpenRouterJevTransport(session, "test-key-123456789"), "owner", "conversation", JEV_MODEL, "Which should I backtest?", context))
     assert "no longer available" in reply
     assert not session.requests
 
@@ -588,7 +589,7 @@ def test_jev_chooses_user_supplied_options_without_optimizer_data() -> None:
     options = _user_options(question)
     assert options == ["Bot A mit 20% Drawdown", "Bot B mit 8% Drawdown"]
     session = _ChoiceSession()
-    reply = asyncio.run(decide_general_choice(session, "test-key", JEV_MODEL, question, options))
+    reply = asyncio.run(decide_general_choice(OpenRouterJevTransport(session, "test-key"), JEV_MODEL, question, options))
     assert "Option 2" in reply
     assert "Konfidenz 90%" in reply
     request = session.requests[0][1]["json"]
@@ -601,7 +602,7 @@ def test_jev_rejects_incomplete_choice_probabilities() -> None:
     session = _ChoiceSession({"type": "choice", "choice": "option_2",
                               "probabilities": {"option_2": 1}, "confidence": 0.9})
     with pytest.raises(OpenRouterDecisionError, match="invalid choice"):
-        asyncio.run(decide_general_choice(session, "test-key", JEV_MODEL, "Choose", ["A", "B"]))
+        asyncio.run(decide_general_choice(OpenRouterJevTransport(session, "test-key"), JEV_MODEL, "Choose", ["A", "B"]))
 
 
 class _BacktestCapabilities:
@@ -625,7 +626,7 @@ def test_jev_compares_managed_backtests() -> None:
     """Backtest questions fetch server projections and leave PBGui unchanged."""
     capabilities = _BacktestCapabilities()
     session = _ChoiceSession()
-    reply = asyncio.run(decide_backtest_results(capabilities, session, "test-key", "owner", "chat", JEV_MODEL,
+    reply = asyncio.run(decide_backtest_results(capabilities, OpenRouterJevTransport(session, "test-key"), "owner", "chat", JEV_MODEL,
                                                 "Welche Backtests sind besser?", {"entities": [{"kind": "backtest_archive", "version": "v8"}]}))
     assert "2 aktuelle Backtest-Resultate" in reply
     assert "Option 2" in reply
@@ -664,7 +665,7 @@ def test_jev_accepts_all_three_user_supplied_question_types() -> None:
                      "probabilities": {"0": 0, "1": 0.8, "2": 0.2}, "confidence": 0.7},
         "blocked": {"type": "noul", "noul": 0.15},
     })
-    reply = asyncio.run(decide_user_jev_request(session, "test-key", JEV_MODEL, spec))
+    reply = asyncio.run(decide_user_jev_request(OpenRouterJevTransport(session, "test-key"), JEV_MODEL, spec))
     assert "technical" in reply and "1.20" in reply and "15%" in reply
     timeout = session.requests[0][1]["timeout"]
     assert timeout.total is None and timeout.sock_read == 180 and timeout.connect == 30
@@ -680,7 +681,7 @@ def test_jev_user_json_cannot_select_pb_gui_tools() -> None:
             "sources": [{"tool": "get_optimizer_config", "args": {"version": "v8", "name": "private"}}]}
     session = _StructuredSession({})
     with pytest.raises(OpenRouterDecisionError, match="approved preview"):
-        asyncio.run(decide_user_jev_request(session, "test-key", JEV_MODEL, spec))
+        asyncio.run(decide_user_jev_request(OpenRouterJevTransport(session, "test-key"), JEV_MODEL, spec))
     assert not session.requests
 
 
@@ -693,7 +694,7 @@ def test_jev_rejects_invalid_structured_answers(answer) -> None:
     """Incomplete and non-finite provider answers are never presented."""
     spec = {"state": "case", "questions": {"ok": {"type": "noul", "instructions": "Is this okay?"}}}
     with pytest.raises(OpenRouterDecisionError):
-        asyncio.run(decide_user_jev_request(_StructuredSession({"ok": answer}), "test-key", JEV_MODEL, spec))
+        asyncio.run(decide_user_jev_request(OpenRouterJevTransport(_StructuredSession({"ok": answer}), "test-key"), JEV_MODEL, spec))
 
 
 def test_jev_chat_structured_turn_does_not_read_pb_gui(tmp_path: Path) -> None:
@@ -748,7 +749,7 @@ def test_jev_noul_can_include_true_false_criteria() -> None:
         "criteria": {"true": "No job can run", "false": "At least one job can run"},
     }}}
     session = _StructuredSession({"blocked": {"type": "noul", "noul": 0.1}})
-    asyncio.run(decide_user_jev_request(session, "test-key", JEV_MODEL, spec))
+    asyncio.run(decide_user_jev_request(OpenRouterJevTransport(session, "test-key"), JEV_MODEL, spec))
     assert session.requests[0][1]["json"]["questions"]["blocked"]["criteria"] == spec["questions"]["blocked"]["criteria"]
 
 
@@ -757,7 +758,7 @@ def test_jev_approved_optimizer_payload_cannot_change_before_billing() -> None:
     session = _FakeSession()
     with pytest.raises(OpenRouterDecisionError, match="changed after Jev approval"):
         asyncio.run(decide_backtest_candidates(
-            _FakeCapabilities(count=2), session, "test-key", "owner", "conversation",
+            _FakeCapabilities(count=2), OpenRouterJevTransport(session, "test-key"), "owner", "conversation",
             JEV_MODEL, "Which Pareto candidate should I backtest?", _run_context(2),
             expected_payload_digest="0" * 64,
         ))

@@ -21,12 +21,12 @@
   }
 
   async function review(options) {
-    if (options.provider !== 'openrouter' || !requestedSources(options.message)) return { previewId: '' };
+    if (!options.decision || !requestedSources(options.message)) return { previewId: '' };
     var path = '/conversations/' + encodeURIComponent(options.conversationId) + '/jev-preview';
     var preview = await options.api(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: options.message, model: options.model })
+      body: JSON.stringify({ message: options.message, provider: options.provider, model: options.model })
     });
     var previewId = String(preview.preview_id || '');
     var confirmed = false;

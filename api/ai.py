@@ -8,7 +8,7 @@ import traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from ai_chat import AIChatError, get_ai_chat_service, owner_key
 from ai_capabilities import AICapabilityError, get_ai_capability_service
@@ -92,6 +92,14 @@ class AIPreferencesRequest(BaseModel):
     drawer_pinned: bool | None = None
     jev_max_cost_usd: float | None = Field(default=None, ge=0.000001, le=1.0)
     selection: dict[str, str] | None = Field(default=None, max_length=5)
+
+
+class OpenRouterPrivacyRequest(BaseModel):
+    """Explicit consent or revocation for one OpenRouter chat model."""
+
+    model_config = ConfigDict(extra="forbid")
+    model: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+    allow_data_collection: StrictBool
 
 
 class ConversationRewindRequest(BaseModel):
@@ -310,6 +318,19 @@ async def disconnect_openrouter(session: SessionToken = Depends(require_auth)) -
         raise _provider_error("disconnect_openrouter", exc) from exc
 
 
+@router.put("/providers/openrouter/privacy")
+async def save_openrouter_privacy(
+    body: OpenRouterPrivacyRequest,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Bind one model's data collection consent to the authenticated owner's connection."""
+    try:
+        return _json(await get_ai_chat_service().set_openrouter_privacy(
+            _owner(session), body.model, body.allow_data_collection))
+    except Exception as exc:
+        raise _provider_error("save_openrouter_privacy", exc) from exc
+
+
 @router.post("/providers/deepseek/connect")
 async def connect_deepseek(
     body: GoConnectRequest,
@@ -477,9 +498,10 @@ async def get_conversation(
 
 
 class JevPreviewRequest(BaseModel):
-    """Explicit message and model for one PBGui data-transfer preview."""
+    """Explicit message, connection and model for one PBGui data-transfer preview."""
 
     message: str = Field(min_length=1, max_length=12_000)
+    provider: str = Field(min_length=1, max_length=32)
     model: str = Field(min_length=1, max_length=128)
 
 
@@ -492,7 +514,7 @@ async def preview_jev_transfer(
     """Show the bounded provider payload before a Jev transfer."""
     try:
         result = await get_ai_chat_service().preview_jev_transfer(
-            _owner(session), conversation_id, body.message, body.model
+            _owner(session), conversation_id, body.message, body.model, body.provider
         )
         return _json(result)
     except Exception as exc:

@@ -147,6 +147,7 @@ def test_existing_conversation_survives_open_reopen_and_poll(busy,provider):
         assert prompt.bounding_box()['height'] == 44
         handle.press('End')
         page.set_viewport_size({'width': 700, 'height': 500})
+        expect(handle).to_have_attribute('aria-valuemax', '225')
         assert prompt.bounding_box()['height'] <= 225
         assert not errors
         browser.close()

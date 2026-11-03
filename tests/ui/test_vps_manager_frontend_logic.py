@@ -3120,3 +3120,51 @@ def test_apply_button_allows_swap_change_without_password() -> None:
             assert.equal(sent[0].form.check_remote_swap, true);
         """,
     )
+
+
+def test_vps_command_presave_has_no_remote_apply_intent():
+    """Update Linux and other commands persist local settings without starting a second playbook."""
+    _run_node_assertions(['runVps'],bootstrap="""
+        const store={detail:null}; const sent=[];
+        const ui={form:{swap:'0',firewall:true},debug:false};
+        function ensureVpsUi(){return ui;}
+        function buildSecretAwareForm(host,form){return {...form};}
+        function send(message){sent.push(message);}
+    """,assertions="""
+        runVps('fixture','vps-update','Update Linux');
+        assert.equal(sent.length,2);
+        assert.equal(sent[0].cmd,'save_vps_config');
+        assert.equal(sent[0].apply_remote,false);
+        assert.equal(sent[0].form.check_remote_swap,undefined);
+        assert.equal(sent[1].cmd,'run_vps_command');
+        assert.equal(sent[1].command,'vps-update');
+        sent.length=0;
+        runVps('fixture','vps-reboot','Reboot VPS',null,false);
+        assert.equal(sent.length,1);
+    """)
+
+
+def test_swap_startup_repair_uses_password_dialog_without_starting_playbook():
+    """Repair uses the existing secret-aware dialog and sends only the dedicated repair command."""
+    _run_node_assertions(['repairVpsSwapStartup'],bootstrap="""
+        const store={detail:null};const sent=[];let approve;
+        const ui={form:{}};
+        function syncCurrentVpsSecretsFromDom(){}
+        function ensureVpsUi(){return ui;}
+        function getEffectiveVpsUserPw(){return '';}
+        function hasSessionSecret(){return false;}
+        function buildSecretAwareForm(host,form){return {...form};}
+        function openPasswordPrompt(host,callback,options){assert.equal(host,'fixture');approve=callback;}
+        function send(message){sent.push(message);}
+        function toast(){}
+    """,assertions="""
+        repairVpsSwapStartup('fixture');
+        assert.equal(sent.length,0);
+        assert.equal(typeof approve,'function');
+        approve();
+        assert.equal(sent.length,1);
+        assert.equal(sent[0].cmd,'repair_vps_swap_startup');
+        assert.equal(sent[0].hostname,'fixture');
+        approve();
+        assert.equal(sent.length,1);
+    """)

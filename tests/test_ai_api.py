@@ -240,7 +240,7 @@ def test_jev_preview_routes_are_owner_scoped_and_no_store(monkeypatch) -> None:
     class FakeService:
         """Record the explicit preview lifecycle."""
 
-        async def preview_jev_transfer(self, owner, conversation_id, message, model):
+        async def preview_jev_transfer(self, owner, conversation_id, message, model, provider):
             assert len(owner) == 32 and conversation_id == "a" * 32
             assert message == "request" and model == "typesafe/jev-1.13"
             return {"preview_id": "b" * 32, "payload": {"state": "request"}}
@@ -252,7 +252,7 @@ def test_jev_preview_routes_are_owner_scoped_and_no_store(monkeypatch) -> None:
     monkeypatch.setattr(ai_api, "get_ai_chat_service", lambda: FakeService())
     session = SimpleNamespace(user_id="owner")
     preview = asyncio_run(ai_api.preview_jev_transfer(
-        "a" * 32, ai_api.JevPreviewRequest(message="request", model="typesafe/jev-1.13"), session,
+        "a" * 32, ai_api.JevPreviewRequest(message="request", provider="openrouter", model="typesafe/jev-1.13"), session,
     ))
     discarded = asyncio_run(ai_api.discard_jev_preview("a" * 32, "b" * 32, session))
     assert preview.headers["cache-control"] == "no-store"

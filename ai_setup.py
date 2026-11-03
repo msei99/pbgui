@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from logging_helpers import _redact_text
 from ai_chat import AIChatError
+from ai_model_routing import is_decision_model
 from support_issue_ai import IssueDraftRequest, draft_for_request, provider_reply
 
 
@@ -27,14 +28,22 @@ async def test_model(chat, owner, selection, request):
     async def operation(service, user, unused_body):
         """Send only fixed synthetic input; never read source, logs or conversation history."""
         started=time.monotonic()
-        if selection.provider=='openrouter':
-            from ai_openrouter import decide_general_choice
+        tool_probe=None
+        if is_decision_model(selection.provider,selection.model):
+            from ai_jev import decide_general_choice
+            from ai_openrouter import OpenRouterJevTransport
             metadata=await service._validate_provider_model(user,selection.provider,selection.model,selection.profile)
             service._validate_model_effort(metadata,selection.effort)
             service._validate_model_service_tier(metadata,selection.provider,selection.service_tier)
-            reply=await decide_general_choice(await service._http_session(),service.credentials.load_openrouter_key(user),
+            reply=await decide_general_choice(OpenRouterJevTransport(await service._http_session(),service.credentials.load_openrouter_key(user)),
                 selection.model,'Connection test: select the option stating PBGui connection OK.',
                 ['PBGui connection OK','Unrelated option'],max_cost_usd=service.get_preferences(user)['jev_max_cost_usd'])
+        elif selection.provider=='openrouter':
+            metadata=await service._validate_provider_model(user,'openrouter',selection.model,selection.profile)
+            service._validate_model_effort(metadata,selection.effort)
+            service._validate_model_service_tier(metadata,'openrouter',selection.service_tier)
+            reply=await service._openrouter_chat(user,selection.model,[{'role':'user','content':'Reply PBGui connection OK.'}],effort=selection.effort)
+            tool_probe=await service.validate_openrouter_tools(user,selection.model,selection.effort)
         elif selection.provider=='deepseek':
             metadata=await service._validate_provider_model(user,'deepseek',selection.model,selection.profile)
             service._validate_model_effort(metadata,selection.effort)
@@ -46,5 +55,6 @@ async def test_model(chat, owner, selection, request):
                 content={'connection_test':'Reply PBGui connection OK.'})
         return {'provider':selection.provider,'model':selection.model,'profile':selection.profile,
                 'reply':_redact_text(reply)[:4000],'elapsed_seconds':round(time.monotonic()-started,2),
-                'tools_enabled':False,'conversation_created':False}
-    return await draft_for_request(chat,owner,body,request,operation=operation,timeout=90,selected_provider=selection.provider)
+                'tools_enabled':False,'conversation_created':False,**({'tool_probe':tool_probe} if tool_probe else {})}
+    timeout=180 if selection.provider=='openrouter' and not is_decision_model(selection.provider,selection.model) else 90
+    return await draft_for_request(chat,owner,body,request,operation=operation,timeout=timeout,selected_provider=selection.provider)

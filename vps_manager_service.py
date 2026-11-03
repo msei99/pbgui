@@ -7233,7 +7233,67 @@ done"""
             "message": "Imported VPS saved." if monitor_enabled else "Imported VPS saved. Live monitoring needs SSH key authentication.",
         }
 
-    def save_vps_config(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
+    def repair_vps_swap_startup(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
+        """Restore only an active /swapfile's boot entry; never resize swap or control bots."""
+        hostname = _validate_vps_hostname(hostname)
+        with self._host_task_start_lock(hostname):
+            vps = self._require_vps(hostname)
+            self._raise_if_vps_task_active(vps, "Repair swap startup")
+            self._store_session_secrets(token, hostname, form)
+            password = self._require_user_password(token, hostname)
+            script = r"""python3 - <<'PYREPAIR'
+import json, os, stat, tempfile
+from pathlib import Path
+path = Path('/etc/fstab')
+swap = Path('/swapfile')
+active = [line.split()[0] for line in Path('/proc/swaps').read_text().splitlines()[1:] if line.split()]
+if str(swap) not in active or not stat.S_ISREG(swap.lstat().st_mode):
+    raise RuntimeError('An active regular /swapfile is required')
+if not stat.S_ISREG(path.lstat().st_mode):
+    raise RuntimeError('fstab must be a regular file')
+original = path.read_bytes()
+rows = [line.split() for line in original.decode().splitlines() if line.strip() and not line.lstrip().startswith('#')]
+existing = [row for row in rows if row[0] == str(swap)]
+changed = not existing
+if existing:
+    if len(existing) != 1 or len(existing[0]) < 4 or existing[0][2] != 'swap' or 'noauto' in existing[0][3].split(','):
+        raise RuntimeError('Existing swap entry needs manual review')
+else:
+    info = path.stat()
+    fd, name = tempfile.mkstemp(prefix='.fstab.pbgui-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as out:
+            os.fchmod(out.fileno(), stat.S_IMODE(info.st_mode))
+            os.fchown(out.fileno(), info.st_uid, info.st_gid)
+            out.write(original + (b'' if not original or original.endswith(b'\n') else b'\n') + b'/swapfile none swap sw 0 0\n')
+            out.flush()
+            os.fsync(out.fileno())
+        if path.read_bytes() != original:
+            raise RuntimeError('fstab changed concurrently')
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+print(json.dumps({'changed': changed}))
+PYREPAIR"""
+            rc, stdout, _stderr = self._run_remote_sudo_shell(hostname, script, password, timeout=20)
+            if rc:
+                _log(SERVICE, f"Swap startup repair failed for {hostname} (exit {rc})", level="ERROR")
+                raise ValueError("Could not repair swap startup. Check the VPS password and that /swapfile is active; an existing conflicting fstab entry requires review.")
+            try:
+                result = json.loads(stdout.strip().splitlines()[-1])
+                if type(result.get("changed")) is not bool:
+                    raise ValueError("Invalid repair receipt")
+            except (ValueError, IndexError, AttributeError) as exc:
+                _log(SERVICE, f"Invalid swap repair receipt for {hostname}", level="ERROR")
+                raise ValueError("The repair receipt could not be verified; inspect swap startup before repeating.") from exc
+            return {"hostname": hostname, "changed": result["changed"],
+                    "message": "Swap startup entry restored; active swap and bot services were left unchanged." if result["changed"] else "Swap startup entry is already present; no changes were needed."}
+
+    def save_vps_config(self, token: str, hostname: str, form: dict[str, Any], *, apply_remote: bool = False) -> dict[str, Any]:
+        """Persist settings; remote firewall/swap changes require an explicit Apply action."""
+        if type(apply_remote) is not bool:
+            raise ValueError("apply_remote must be a boolean.")
         with self._host_task_start_lock(hostname):
             vps = self._require_vps(hostname)
             previous_firewall = {
@@ -7242,7 +7302,7 @@ done"""
                 "firewall_ssh_ips": str(getattr(vps, "firewall_ssh_ips", "") or "").strip(),
             }
             previous_swap = str(getattr(vps, "swap", "0") or "0")
-            if _truthy(form.get("check_remote_swap")):
+            if apply_remote and _truthy(form.get("check_remote_swap")):
                 if any(_status_running(getattr(vps, name, None)) for name in ("init_status", "setup_status", "update_status")):
                     raise ValueError("A VPS task is still running. Wait for it to finish before applying changes.")
                 self._store_session_secrets(token, hostname, form)
@@ -7266,7 +7326,7 @@ done"""
             firewall_changed = current_firewall != previous_firewall
             swap_changed = current_swap != previous_swap
             remote_apply = {"started": False, "command": COMMAND_VPS_APPLY_CONFIG, "command_text": "Apply VPS Config"}
-            if firewall_changed or swap_changed:
+            if apply_remote and (firewall_changed or swap_changed):
                 remote_apply = self._start_vps_config_apply(
                     token,
                     vps,

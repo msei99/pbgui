@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-import ai_openrouter as jev
+import ai_jev as jev
+from ai_openrouter import OpenRouterJevTransport
 
 
 class Response:
@@ -35,7 +36,7 @@ def test_fragmented_jev_json_is_read_to_eof():
     async def run():
         raw = json.dumps({'answers': {'risk': {'type': 'noul', 'noul': .5}}}).encode()
         session = Mock(post=Mock(return_value=Response(raw)))
-        result = await jev._send_structured_jev_request(session, 'test-key', {
+        result = await jev._send_structured_jev_request(OpenRouterJevTransport(session, 'test-key'), {
             'questions': {'risk': {'type': 'noul', 'instructions': 'Assess risk'}}})
         assert '50%' in result
         session.post.assert_called_once()
@@ -48,7 +49,7 @@ def test_invalid_or_oversized_jev_body_is_not_a_provider_outage(raw, message):
     async def run():
         session = Mock(post=Mock(return_value=Response(raw)))
         with pytest.raises(jev.OpenRouterDecisionError, match=message):
-            await jev._send_structured_jev_request(session, 'test-key', {'questions': {}})
+            await jev._send_structured_jev_request(OpenRouterJevTransport(session, 'test-key'), {'questions': {}})
         session.post.assert_called_once()
     asyncio.run(run())
 
@@ -70,9 +71,9 @@ def test_jev_preflight_checks_auth_quota_and_pricing_without_decision(status, re
         session = Mock(get=Mock(side_effect=get), post=Mock())
         if expected:
             with pytest.raises(jev.OpenRouterDecisionError, match=expected):
-                await jev.check_jev_connection(session, 'test-key')
+                await jev.check_jev_connection(OpenRouterJevTransport(session, 'test-key'))
         else:
-            await jev.check_jev_connection(session, 'test-key')
+            await jev.check_jev_connection(OpenRouterJevTransport(session, 'test-key'))
             assert session.get.call_count == 2
         session.post.assert_not_called()
     asyncio.run(run())

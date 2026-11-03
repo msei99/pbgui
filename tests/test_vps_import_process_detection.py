@@ -2424,6 +2424,7 @@ def test_save_vps_config_starts_remote_firewall_apply_without_optional_pending(
             "firewall_ssh_port": 22,
             "firewall_ssh_ips": "198.51.100.1",
         },
+        apply_remote=True,
     )
 
     assert captured["command"] == "vps-apply-config"
@@ -2489,6 +2490,7 @@ def test_save_vps_config_starts_remote_swap_apply(
             "firewall_ssh_port": 22,
             "firewall_ssh_ips": "",
         },
+        apply_remote=True,
     )
 
     assert captured["command"] == "vps-apply-config"

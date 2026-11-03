@@ -278,3 +278,13 @@ Use isolated data and intercept browser requests; never run production actions m
 Relevant test entry points include `tests/ui/test_sidebar_shared.py`, `tests/ui/test_help_sidebar_browser.py`, `tests/ui/test_help_request_generations.py` and `tests/test_help_coverage.py`. Extend focused tests for the affected page; observe the full-suite gate in AGENTS.md.
 
 PB8 Backtest and Optimize use `frontend/js/ohlcv_start_dates.js` for the shared start-date field and lookup lifecycle (start, progress polling, stop, timeout and stale-response cleanup). Pages supply only their editor collection, status and result-application adapters; keep the existing earliest/common-start semantics shared.
+
+### AI model catalogs
+
+`frontend/js/ai_model_search.js` and `frontend/css/ai_model_search.css` own the shared OpenRouter model browser. Follow the reference catalog structure: one search/sort/variant/pinned/view toolbar, separate type tabs, full-width descriptive list rows or a sticky-header comparison table. Keep internal PBGui tool-validation states out of catalog categories. Use API descriptions, creation timestamps, prices and context; omit unsupported popularity/traffic metrics. List and table share selection, pins, filters and reload state. Show only variants present in the supported catalog. Setup shows the catalog inline; Chat opens it through Browse models and keeps its composer accessible at short viewport heights. Other providers retain their existing selectors. Hidden search fields must never filter those selectors.
+
+The AI drawer keeps provider selection and New in one dedicated row above model browsing. Successful Setup tests prepare that exact selection for an empty chat or the next New chat; never switch an existing conversation or draft implicitly, create a conversation just for a test, or change the saved default.
+
+Model table headers are keyboard-accessible sort buttons with direction indicators and `aria-sort`. Header clicks and the sort menu share one persisted ordering across List/Table; numeric values sort numerically and unknowns stay last in both directions. Sorting preserves the selected model and filters.
+
+Model catalogs do not run background privacy probes or display inferred privacy classifications. An explicit privacy-policy rejection during a model test may offer model-scoped consent through the shared confirmation dialog and one retry; never relax the policy automatically.

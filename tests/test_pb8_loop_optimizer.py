@@ -1760,7 +1760,7 @@ def test_saved_results_use_optional_jev_once_before_adjustment(record,tmp_path):
 
 def test_jev_projection_preserves_goal_evidence_within_context(record, monkeypatch):
     """Large optimizer metric catalogs cannot prevent a goal-specific JEV consultation."""
-    import ai_openrouter
+    import ai_jev
     from ai_token_budget import estimate_jev_input_tokens, JEV_CONTEXT_TOKENS
     store, row = record
     row = store.update(OWNER, row['id'], lambda current: current.update(
@@ -1771,10 +1771,10 @@ def test_jev_projection_preserves_goal_evidence_within_context(record, monkeypat
     original = {'state': {'goals': row['settings']['goals'], 'candidates': candidates},
                 'questions': {'best': {'type': 'choice', 'instructions': 'Choose the best candidate',
                                       'criteria': {item['id']: json.dumps(item['metrics'])[:500] for item in candidates}}}}
-    with pytest.raises(ai_openrouter.OpenRouterDecisionError, match='context budget'):
-        ai_openrouter.prepare_user_jev_payload(ai_openrouter.JEV_MODEL, original)
+    with pytest.raises(ai_jev.OpenRouterDecisionError, match='context budget'):
+        ai_jev.prepare_user_jev_payload(ai_jev.JEV_MODEL, original)
     events = []
-    async def budget(session, key, requests, maximum):
+    async def budget(transport, requests, maximum):
         """Check the production payload before any reservation or dispatch."""
         assert store.read(OWNER, row['id'])['jev_usd_reserved'] == 0
         request = requests[0]
@@ -1785,13 +1785,13 @@ def test_jev_projection_preserves_goal_evidence_within_context(record, monkeypat
         assert set(request['questions']['best']['criteria']) == {item['id'] for item in candidates}
         assert maximum == row['settings']['jev_max_cost_usd']
         events.append('budget')
-    async def send(session, key, request):
+    async def send(transport, request):
         """Return a typed transport fixture after the durable cost reservation."""
         assert store.read(OWNER, row['id'])['jev_usd_reserved'] == row['settings']['jev_max_cost_usd']
         events.append('send')
         return 'Choice: ' + candidates[0]['id']
-    monkeypatch.setattr(ai_openrouter, 'check_jev_budget', budget)
-    monkeypatch.setattr(ai_openrouter, '_send_structured_jev_request', send)
+    monkeypatch.setattr(ai_jev, 'check_jev_budget', budget)
+    monkeypatch.setattr(ai_jev, '_send_structured_jev_request', send)
     chat = _loop_chat_for_payloads([])
     chat.credentials.openrouter_configured = lambda owner: True
     chat.credentials.load_openrouter_key = lambda owner: 'test-only-key'
@@ -1803,23 +1803,23 @@ def test_jev_projection_preserves_goal_evidence_within_context(record, monkeypat
 
 def test_jev_cost_rejection_does_not_reserve_or_dispatch(record, monkeypatch):
     """Projection cannot bypass the existing shared JEV consultation cost limit."""
-    import ai_openrouter
+    import ai_jev
     store, row = record
     row = store.update(OWNER, row['id'], lambda current: current.update(
         rubric=RULE, settings={**current['settings'], 'jev_budget_usd': .05, 'jev_max_cost_usd': .01}))
     candidates = [{'id': 'c_first', 'metrics': {'gain': 1}}, {'id': 'c_second', 'metrics': {'gain': 2}}]
     async def budget(*args):
         """Reject the cost estimate before a paid request."""
-        raise ai_openrouter.JevBudgetExceeded(.1)
+        raise ai_jev.JevBudgetExceeded(.1)
     async def send(*args):
         """No provider traffic is allowed after failed preflight."""
         pytest.fail('JEV must not dispatch after cost rejection')
-    monkeypatch.setattr(ai_openrouter, 'check_jev_budget', budget)
-    monkeypatch.setattr(ai_openrouter, '_send_structured_jev_request', send)
+    monkeypatch.setattr(ai_jev, 'check_jev_budget', budget)
+    monkeypatch.setattr(ai_jev, '_send_structured_jev_request', send)
     chat = _loop_chat_for_payloads([])
     chat.credentials.openrouter_configured = lambda owner: True
     chat.credentials.load_openrouter_key = lambda owner: 'test-only-key'
-    with pytest.raises(ai_openrouter.JevBudgetExceeded):
+    with pytest.raises(ai_jev.JevBudgetExceeded):
         asyncio.run(LoopAI(store, chat).jev(row, candidates))
     assert store.read(OWNER, row['id'])['jev_usd_reserved'] == 0
 
@@ -1827,7 +1827,7 @@ def test_jev_cost_rejection_does_not_reserve_or_dispatch(record, monkeypatch):
 @pytest.mark.parametrize('known_error', [True, False])
 def test_initial_jev_failure_retains_safe_reason_only(record, tmp_path, known_error):
     """Known JEV diagnostics survive without exposing arbitrary transport exception details."""
-    from ai_openrouter import OpenRouterDecisionError
+    from ai_jev import OpenRouterDecisionError
     store, row = record
     class AI(SavedResultAI):
         """Request optional JEV and reject it with a controlled diagnostic."""

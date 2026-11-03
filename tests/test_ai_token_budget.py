@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import ai_openrouter as jev
+import ai_jev as jev
 import ai_token_budget as budget
 
 

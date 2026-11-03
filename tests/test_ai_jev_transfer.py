@@ -10,7 +10,8 @@ import pytest
 
 from ai_capabilities import AICapabilityService
 from ai_chat import AIChatError, AIChatService, owner_key
-from ai_openrouter import JEV_MODEL, OpenRouterDecisionError, decide_user_jev_request, prepare_user_jev_payload
+from ai_jev import JEV_MODEL, OpenRouterDecisionError, decide_user_jev_request, prepare_user_jev_payload
+from ai_openrouter import OpenRouterJevTransport
 
 
 class _ReadCapabilities:
@@ -68,17 +69,17 @@ def test_jev_preview_is_exact_owner_bound_one_time_and_read_only(tmp_path: Path)
             await service.start_turn(owner, conversation_id, message)
         with pytest.raises(AIChatError, match="read-only capability"):
             await service.preview_jev_transfer(owner, conversation_id,
-                                               json.dumps(_spec("propose_queue_pb8_config")), JEV_MODEL)
+                                               json.dumps(_spec("propose_queue_pb8_config")), JEV_MODEL, "openrouter")
         assert service.capabilities.calls == []
         analysis = await service.preview_jev_transfer(
-            owner, conversation_id, json.dumps(_spec("get_optimizer_run_analysis")), JEV_MODEL,
+            owner, conversation_id, json.dumps(_spec("get_optimizer_run_analysis")), JEV_MODEL, "openrouter",
         )
         assert analysis["payload"]["state"]["pbgui"]["recent"]["backtests"][0]["name"] == "run-a"
         await service.discard_jev_preview(other, conversation_id, analysis["preview_id"])
         assert analysis["preview_id"] in service.jev_previews
         await service.discard_jev_preview(owner, conversation_id, analysis["preview_id"])
         assert analysis["preview_id"] not in service.jev_previews
-        preview = await service.preview_jev_transfer(owner, conversation_id, message, JEV_MODEL)
+        preview = await service.preview_jev_transfer(owner, conversation_id, message, JEV_MODEL, "openrouter")
         payload = preview["payload"]
         assert payload["state"]["pbgui"]["recent"]["backtests"][0] == {"name": "run-a", "drawdown": 0.12}
         assert payload == prepare_user_jev_payload(JEV_MODEL, _spec(), {"recent": {"backtests": [{"name": "run-a", "drawdown": 0.12}]}})
@@ -148,11 +149,11 @@ def test_jev_approved_payload_is_the_exact_provider_request() -> None:
             return Response()
     session = Session()
     with pytest.raises(OpenRouterDecisionError, match="approved preview"):
-        asyncio.run(decide_user_jev_request(session, "key", JEV_MODEL, spec))
+        asyncio.run(decide_user_jev_request(OpenRouterJevTransport(session, "key"), JEV_MODEL, spec))
     assert session.requests == []
     assert session.pricing_requests == []
     approved = prepare_user_jev_payload(JEV_MODEL, spec, {"recent": {"backtests": [{"name": "run-a"}]}})
-    answer = asyncio.run(decide_user_jev_request(session, "key", JEV_MODEL, spec, approved))
+    answer = asyncio.run(decide_user_jev_request(OpenRouterJevTransport(session, "key"), JEV_MODEL, spec, approved))
     assert "70%" in answer
     assert session.requests == [approved]
     assert len(session.pricing_requests) == 1

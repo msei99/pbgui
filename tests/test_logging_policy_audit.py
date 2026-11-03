@@ -15,6 +15,7 @@ DOCUMENTED_SCRIPT_DIRS = {
     "tools": "Developer audit and comparison tools intentionally report to stdout.",
 }
 PRINT_ALLOWLIST = {
+    "tools/code_impact.py": "Offline developer CLI emits the reviewed AST impact inventory as JSON on stdout.",
     "scripts/stress_inventory_cache_init.py": "Temporary-database concurrency stress CLI reports isolated trial results without production data.",
     "support_debug_crypto.py": "The operator-only decryption CLI prints a fixed completion message, never report contents or key material.",
     "setup/vast_gpu_benchmark/verify_fresh_population.py": "Offline worker-verification CLI emits its non-secret validation result as JSON.",
@@ -92,7 +93,7 @@ TIER_3_SERVICES = {
     "SupportDebug",
     "PB7Bridge",
     "TaskQueue",
-    "AIChat", "AIResearch", "PB8Loop", "PB8Config", "OptimizerWorkload",
+    "AIChat", "AIOpenRouterChat", "AIResearch", "PB8Loop", "PB8Config", "OptimizerWorkload",
     "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI",
     "BalanceCalc", "BitgetUTA", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",
