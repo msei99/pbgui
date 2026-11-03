@@ -3142,29 +3142,3 @@ def test_vps_command_presave_has_no_remote_apply_intent():
         runVps('fixture','vps-reboot','Reboot VPS',null,false);
         assert.equal(sent.length,1);
     """)
-
-
-def test_swap_startup_repair_uses_password_dialog_without_starting_playbook():
-    """Repair uses the existing secret-aware dialog and sends only the dedicated repair command."""
-    _run_node_assertions(['repairVpsSwapStartup'],bootstrap="""
-        const store={detail:null};const sent=[];let approve;
-        const ui={form:{}};
-        function syncCurrentVpsSecretsFromDom(){}
-        function ensureVpsUi(){return ui;}
-        function getEffectiveVpsUserPw(){return '';}
-        function hasSessionSecret(){return false;}
-        function buildSecretAwareForm(host,form){return {...form};}
-        function openPasswordPrompt(host,callback,options){assert.equal(host,'fixture');approve=callback;}
-        function send(message){sent.push(message);}
-        function toast(){}
-    """,assertions="""
-        repairVpsSwapStartup('fixture');
-        assert.equal(sent.length,0);
-        assert.equal(typeof approve,'function');
-        approve();
-        assert.equal(sent.length,1);
-        assert.equal(sent[0].cmd,'repair_vps_swap_startup');
-        assert.equal(sent[0].hostname,'fixture');
-        approve();
-        assert.equal(sent.length,1);
-    """)

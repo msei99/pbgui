@@ -2,7 +2,6 @@
 
 Starting Update Linux or another VPS command saves its required settings locally; it does not implicitly apply firewall or swap changes. Only the explicit Apply/Save configuration action may start Apply VPS Config.
 
-Under **Change VPS**, **Repair swap startup** restores a missing `/swapfile` boot entry through the existing VPS password dialog. It requires an active swapfile, is safe to repeat, and does not resize/disable swap or start/stop bots. Conflicting existing entries require review.
 
 **Guide** opens help above VPS Manager without changing the current view or unsaved inputs. If its topic or content request fails, a visible error alert replaces the loading state; details are logged in the browser console. After connectivity returns, select a topic again or close and reopen Guide.
 

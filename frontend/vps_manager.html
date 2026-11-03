@@ -7041,7 +7041,6 @@
       const ws = new WebSocket(url);
       store.ws = ws;
       ws.onopen = function () {
-        store.swapRepairHost = '';
         store.connected = true;
         renderSummaryBar();
         if (store._pendingView) {
@@ -7073,7 +7072,6 @@
       ws.onclose = function (event) {
         if (store.ws !== ws) return;
         store.connected = false;
-        store.swapRepairHost = '';
         interruptVpsLoggingSave('disconnect');
         clearInterruptedSettingsReads();
         store.packageCheckHosts = [];
@@ -7495,7 +7493,6 @@
         return;
       }
       if (msg.type === 'error') {
-        if (msg.cmd === 'repair_vps_swap_startup') store.swapRepairHost = '';
         if (msg.cmd === 'save_vps_logging_config') {
           finishVpsLoggingSave(msg.request_id, 'error');
           return;
@@ -7775,9 +7772,6 @@
           scheduleVpsDetailFetch(store.hostname);
           needsForceView = true;
         }
-      } else if (cmd === 'repair_vps_swap_startup') {
-        store.swapRepairHost = '';
-        toast(String((msg.data || {}).hostname || '') + ': ' + String((msg.data || {}).message || 'Swap startup checked.'), 'success');
       } else if (cmd === 'save_vps_config') {
         const remoteApply = (msg.data || {}).remote_apply || {};
         if (remoteApply.started) {
@@ -9925,22 +9919,6 @@
       }
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
       return !!ui.updateReboot;
-    }
-
-    function repairVpsSwapStartup(hostname) {
-      if (store.swapRepairHost) return;
-      syncCurrentVpsSecretsFromDom();
-      const execute = function () {
-        if (store.swapRepairHost) return;
-        const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
-        store.swapRepairHost = hostname;
-        send({cmd: 'repair_vps_swap_startup', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form)});
-        toast('Repairing swap startup on ' + hostname + '...', 'info');
-      };
-      if (getEffectiveVpsUserPw(hostname) || hasSessionSecret(hostname, 'user_pw')) execute();
-      else openPasswordPrompt(hostname, execute, {title: 'Repair swap startup',
-        message: 'Restore the startup entry for the active /swapfile. Swap size and bot services stay unchanged. Enter the VPS user password:',
-        confirmLabel: 'Repair swap startup'});
     }
 
     function updateLinuxVpsAction(hostname) {
@@ -13186,7 +13164,6 @@
             </div>
             <div class='button-row'>
               <button class='btn ghost' type='button' ${readSettingsLoading ? 'disabled' : ''} data-vps-action='refresh-settings' data-host='${escAttr(detail.hostname)}'>${readSettingsLoading ? 'Reading...' : 'Read VPS settings'}</button>
-              <button class='btn' type='button' data-vps-action='repair-swap-startup' data-host='${escAttr(detail.hostname)}'>Repair swap startup</button>
               <button class='btn ok' id='vps-save-btn' type='button' ${canSave ? '' : 'disabled'} data-vps-action='save-config' data-host='${escAttr(detail.hostname)}'>Apply VPS Changes</button>
               ${setupPending ? `<button class='btn' id='vps-setup-btn' type='button' ${canSetup ? '' : 'disabled'} data-vps-action='setup-vps' data-host='${escAttr(detail.hostname)}'>Initial Setup VPS</button>` : ''}
             </div>
@@ -13886,8 +13863,6 @@
         confirmDeleteVps(host);
       } else if (action === 'run-command') {
         runVpsWithLog(host, String(trigger.getAttribute('data-command') || ''), String(trigger.getAttribute('data-command-text') || ''));
-      } else if (action === 'repair-swap-startup') {
-        repairVpsSwapStartup(host);
       } else if (action === 'update-linux') {
         updateLinuxVpsAction(host);
       } else if (action === 'check-package') {

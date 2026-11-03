@@ -737,25 +737,3 @@ def test_config_websocket_requires_explicit_remote_apply(monkeypatch,intent):
     monkeypatch.setattr(api,'_push_loop',AsyncMock())
     asyncio.run(api.ws_vps_manager(Socket()))
     save.assert_called_once_with('fixture-token','fixture',{'swap':'0'},apply_remote=(intent is True))
-
-
-def test_swap_repair_websocket_passes_session_and_no_playbook(monkeypatch):
-    """The protected RPC invokes only the targeted repair and returns its bounded receipt."""
-    import api.vps_manager as api
-    message={'cmd':'repair_vps_swap_startup','hostname':'fixture','form':{'user_pw':'synthetic-password'}}
-    class Socket:
-        """One isolated repair request."""
-        def __init__(self):
-            """Capture responses without real sockets."""
-            self.send_json=AsyncMock()
-        async def iter_text(self):
-            """Emit a synthetic password only to the service body."""
-            yield json.dumps(message)
-    repair=Mock(return_value={'hostname':'fixture','changed':True,'message':'restored'})
-    monkeypatch.setattr(api,'authenticate_websocket',AsyncMock(return_value=SimpleNamespace(token='fixture-token')))
-    monkeypatch.setattr(api,'_get_service',lambda:SimpleNamespace(repair_vps_swap_startup=repair))
-    monkeypatch.setattr(api,'_push_loop',AsyncMock())
-    socket=Socket()
-    asyncio.run(api.ws_vps_manager(socket))
-    repair.assert_called_once_with('fixture-token','fixture',message['form'])
-    assert 'synthetic-password' not in json.dumps(socket.send_json.call_args.args[0])
