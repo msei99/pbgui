@@ -25,6 +25,7 @@ SERVICE = "VastRunner"
 RUNNER_CODE_SERIAL = (PROJECT / "api/serial.txt").read_text().strip()
 UPLOAD_RECOVERY_SECONDS = 15 * 60
 UPLOAD_FINISH_RESERVE_SECONDS = 180
+COLLECT_TEARDOWN_GRACE_SECONDS = 240
 
 
 def schedule_upload_retry(store: JobStore, identifier: str, exc: Exception, deadline: float) -> None:
@@ -291,6 +292,21 @@ def _create_and_observe(store, identifier, client, intent, registry_token, now):
     return _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state)
 
 
+def _collection_outstanding(state: dict, now: float) -> bool:
+    """True while the supervisor's final collection may still be running.
+
+    The final collection owns the instance until it publishes (final_collected)
+    or fails into a terminal status. Its own allowance is bounded, so the grace
+    window below can never leak a rental indefinitely.
+    """
+    if state.get('final_collected') or state.get('status') in {'completed', 'failed', 'cancelled'}:
+        return False
+    if state.get('status') != 'collecting' and not state.get('stop_rpc_at') and not state.get('final_collection_at'):
+        return False
+    anchor = float(state.get('final_collection_at') or state.get('stop_rpc_at') or 0)
+    return anchor <= 0 or now - anchor <= COLLECT_TEARDOWN_GRACE_SECONDS
+
+
 def _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state):
     """Only fresh provider absence can release a rental authorization."""
     try:
@@ -303,6 +319,11 @@ def _observe_rental(store, identifier, client, intent, now, ending, observed, ma
         if state.get("instance_id") and row["id"] != state["instance_id"]:
             store.update(identifier, absent_checks=0)
             raise VastError("Instance ID does not match the rental authorization")
+        if ending and _collection_outstanding(state, now):
+            # The final collection owns this instance until it finishes or its
+            # bounded allowance passes; never destroy under an in-flight collect.
+            store.update(identifier, provider_checked_at=now, cleanup_error=None)
+            return False
         store.update(identifier, instance_id=row["id"], rental_state="destroy_pending" if ending else "active",
                      provider_status=str(row.get("actual_status") or "unknown")[:50], absent_checks=0, cleanup_error=None, creation_error=None,
                      provider_seen_at=now, provider_checked_at=now,
@@ -653,7 +674,7 @@ def stop_and_collect(connection, store, identifier, intent, *, lease_id=None):
             current = store.read(identifier)
             final = current.get('final_collected') or bool(progress.get('finished'))
             if not current.get('stop_snapshot_collected') and not current.get('final_collected'):
-                connection.collect(final, timeout=remaining())
+                connection.collect(final, timeout=remaining(), ignore_quota=True)
                 store.update(identifier, stop_snapshot_collected=True)
             if not final:
                 sources = store.directory(identifier) / 'partial-results/optimize_results'
