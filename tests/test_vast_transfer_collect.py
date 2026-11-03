@@ -47,9 +47,10 @@ def test_collect_counts_only_verified_downloads(tmp_path, monkeypatch, outcome, 
 
     connection.command = command
     extracted = tmp_path / 'extracted'
-    def extract(*_args, check):
+    def extract(*_args, check=None, merge=False):
         """Verify extraction receives the same remaining collection deadline."""
         assert 0 < check() <= 30
+        assert merge is False
         return extracted
     monkeypatch.setattr(vast_transfer, 'extract_results', extract)
     destination = tmp_path / 'partial.tar.gz'
@@ -199,3 +200,77 @@ def test_manual_transfer_state_wait_obeys_budget_and_shutdown(tmp_path, monkeypa
         release.set()
         thread.join(3)
         vast_collect.startup()
+def test_partial_snapshot_skips_existing_pareto_files(tmp_path, monkeypatch):
+    """The worker omits content-addressed Pareto files the controller already has."""
+    from setup.vast_gpu_benchmark import cloud_worker
+    monkeypatch.setattr(cloud_worker, 'ROOT', tmp_path)
+    monkeypatch.setattr(cloud_worker, 'GUARD_ROOT', tmp_path)
+    pareto = tmp_path / 'output' / 'optimize_results' / 'run' / 'pareto'
+    pareto.mkdir(parents=True)
+    for name in ('a.json', 'b.json', 'c.json'):
+        (pareto / name).write_text('{}')
+    (tmp_path / 'partial-skip.json').write_text(json.dumps({'skip': ['a.json']}))
+    assert cloud_worker.snapshot(False)['final'] is False
+    with tarfile.open(tmp_path / 'partial.tar.gz', 'r:gz') as archive:
+        manifest = json.loads(archive.extractfile('manifest.json').read())
+    pareto_paths = {entry['path'] for entry in manifest['files'] if '/pareto/' in entry['path']}
+    assert pareto_paths == {'optimize_results/run/pareto/b.json', 'optimize_results/run/pareto/c.json'}
+
+
+def test_partial_collect_sends_skip_request_and_merges(tmp_path, monkeypatch):
+    """Partial collection skips already-verified Pareto files and merges the delta."""
+    from vast_snapshot import work_boundary
+    identifier = 'a' * 32
+    state = {'downloaded_bytes': 0}
+    connection = object.__new__(vast_transfer.WorkerConnection)
+    connection.identifier, connection.directory, connection.remote_root = identifier, tmp_path, '/work/pbgui/jobs/' + identifier
+    connection.store = SimpleNamespace(read=lambda _id: dict(state),
+        update=lambda _id, **changes: state.update(changes))
+    existing = tmp_path / 'partial-results' / 'optimize_results' / 'run' / 'pareto'
+    existing.mkdir(parents=True)
+    (existing / 'old.json').write_text('{}')
+    connection.operation = lambda *_args, **_kwargs: {'bytes': 4,
+        'sha256': hashlib.sha256(b'good').hexdigest()}
+    sent, downloads = {}, []
+    def command(cmd, *, stdin=None, stdout=None, **_kwargs):
+        if 'partial-skip.json' in cmd:
+            sent['skip'] = json.loads(stdin.read())['skip']
+        else:
+            downloads.append(True)
+            stdout.write(b'good')
+    connection.command = command
+    seen = {}
+    def extract(_destination, _directory, name, *, check, merge=False):
+        seen['merge'] = merge
+        return tmp_path / (name + '-results')
+    monkeypatch.setattr(vast_transfer, 'extract_results', extract)
+    with work_boundary(lambda: 30):
+        connection.collect(False, timeout=30)
+    assert sent['skip'] == ['old.json']
+    assert seen['merge'] is True
+    assert downloads
+
+
+def test_final_collection_ignores_partial_quota(tmp_path, monkeypatch):
+    """The final collection bypasses the 1 GiB partial allowance gate."""
+    from vast_snapshot import work_boundary
+    state = {'downloaded_bytes': 1024**3 + 100}
+    connection = object.__new__(vast_transfer.WorkerConnection)
+    connection.identifier, connection.directory = 'a'*32, tmp_path
+    connection.remote_root = '/work/pbgui/jobs/' + connection.identifier
+    connection.store = SimpleNamespace(read=lambda _id: dict(state),
+        update=lambda _id, **changes: state.update(changes))
+    connection.operation = lambda *_args, **_kwargs: {'bytes': 4,
+        'sha256': hashlib.sha256(b'good').hexdigest()}
+    downloads = []
+    def command(cmd, *, stdin=None, stdout=None, **_kwargs):
+        if 'partial-skip.json' not in cmd:
+            downloads.append(True)
+            stdout.write(b'good')
+    connection.command = command
+    monkeypatch.setattr(vast_transfer, 'extract_results', lambda *_args, **_kwargs: tmp_path / 'extracted')
+    with work_boundary(lambda: 30):
+        connection.collect(False, timeout=30, ignore_quota=True)
+    assert downloads
+    assert state['downloaded_bytes'] == 1024**3 + 104
+

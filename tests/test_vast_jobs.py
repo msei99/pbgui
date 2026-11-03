@@ -1845,3 +1845,31 @@ def test_gpu_constraint_safety_failure_explains_completion_boundary(tmp_path):
     assert 'Passivbot safety check' in row['error']
     assert 'strict completion limit 1.0' in row['error']
     assert 'secret' not in row['error']
+
+def test_guard_defers_destroy_while_collection_outstanding(job, monkeypatch):
+    """Teardown waits for an in-flight final collection instead of racing it."""
+    store, identifier, intent = job
+    store.update(identifier, status='collecting', rental_state='active', instance_id=123,
+                 uploaded=True, final_collection_at=1999.0, provider_seen_at=1990.0)
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    monkeypatch.setattr('vast_job_runner.owned_instance',
+                        lambda _client, _intent, *, fresh=False, expected_id=None: {'id': 123, 'label': intent['label']})
+    assert not guard_step(store, identifier, client, intent, '', now=2001)
+    assert client.calls == []
+    assert store.read(identifier)['rental_state'] == 'active'
+
+
+def test_guard_destroys_after_collection_grace_timeout(job, monkeypatch):
+    """A hung collection cannot leak the rental beyond its bounded allowance."""
+    from vast_job_runner import COLLECT_TEARDOWN_GRACE_SECONDS
+    store, identifier, intent = job
+    store.update(identifier, status='collecting', rental_state='active', instance_id=123,
+                 uploaded=True, final_collection_at=2001.0 - COLLECT_TEARDOWN_GRACE_SECONDS - 10,
+                 provider_seen_at=1990.0, destroy_requested_at=2001.0)
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    monkeypatch.setattr('vast_job_runner.owned_instance',
+                        lambda _client, _intent, *, fresh=False, expected_id=None: {'id': 123, 'label': intent['label']})
+    assert not guard_step(store, identifier, client, intent, '', now=2001)
+    assert store.read(identifier)['rental_state'] == 'destroy_pending'
+    assert client.calls == []
+
