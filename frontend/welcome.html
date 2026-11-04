@@ -213,6 +213,80 @@
             font-weight: 700;
         }
 
+        .system-tiles {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: var(--sp-md);
+            margin-top: 22px;
+        }
+
+        .system-tile {
+            display: grid;
+            gap: 6px;
+            align-content: start;
+            padding: 14px 16px;
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.92);
+            border: 1px solid rgba(148, 163, 184, 0.13);
+            color: inherit;
+            text-decoration: none;
+            min-width: 0;
+        }
+
+        .system-tile:hover,
+        .system-tile:focus-visible {
+            border-color: rgba(96, 165, 250, 0.45);
+        }
+
+        .system-tile strong {
+            color: #f8fafc;
+            font-size: var(--fs-lg);
+            font-weight: 700;
+            overflow-wrap: anywhere;
+        }
+
+        .tile-meter {
+            height: 6px;
+            border-radius: 3px;
+            background: #1e293b;
+            overflow: hidden;
+        }
+
+        .tile-meter > div {
+            height: 100%;
+            width: 0;
+            border-radius: 3px;
+            background: #60a5fa;
+        }
+
+        .tile-meter > div.warn { background: #f59e0b; }
+        .tile-meter > div.bad { background: #f87171; }
+
+        .storage-line {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: var(--sp-md);
+            padding: 8px 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            background: rgba(15, 23, 42, 0.9);
+            color: #cbd5e1;
+            font-size: var(--fs-sm);
+            text-decoration: none;
+        }
+
+        .storage-line:hover,
+        .storage-line:focus-visible {
+            border-color: rgba(96, 165, 250, 0.45);
+            color: #f8fafc;
+        }
+
+        .issue a {
+            color: inherit;
+            font-weight: 700;
+        }
+
         .summary-grid {
             display: grid;
             gap: var(--sp-md);
@@ -733,6 +807,37 @@
                                 <div class="meta-pill"><strong>Serial</strong> <span id="meta-serial">%%SERIAL%%</span></div>
                                 <div class="meta-pill"><strong>API</strong> <span id="meta-origin">local</span></div>
                             </div>
+                            <div class="system-tiles" id="system-tiles" hidden>
+                                <a class="system-tile" id="tile-cpu-link" href="#">
+                                    <span class="summary-label">CPU</span>
+                                    <strong id="tile-cpu">–</strong>
+                                    <div class="tile-meter"><div id="tile-cpu-bar"></div></div>
+                                    <span class="summary-copy" id="tile-cpu-copy"></span>
+                                </a>
+                                <a class="system-tile" id="tile-ram-link" href="#">
+                                    <span class="summary-label">Memory</span>
+                                    <strong id="tile-ram">–</strong>
+                                    <div class="tile-meter"><div id="tile-ram-bar"></div></div>
+                                    <span class="summary-copy" id="tile-ram-copy"></span>
+                                </a>
+                                <a class="system-tile" id="tile-disk-link" href="#">
+                                    <span class="summary-label">Disk</span>
+                                    <strong id="tile-disk">–</strong>
+                                    <div class="tile-meter"><div id="tile-disk-bar"></div></div>
+                                    <span class="summary-copy" id="tile-disk-copy"></span>
+                                </a>
+                                <a class="system-tile" id="tile-uptime-link" href="#">
+                                    <span class="summary-label">Uptime</span>
+                                    <strong id="tile-uptime">–</strong>
+                                    <span class="summary-copy" id="tile-uptime-copy"></span>
+                                </a>
+                            </div>
+                            <a class="storage-line" id="storage-line" href="#" hidden>
+                                <span aria-hidden="true">&#128190;</span>
+                                <span id="storage-line-text"></span>
+                                <span aria-hidden="true">&rarr;</span>
+                                <span>Storage &amp; Cleanup</span>
+                            </a>
                         </div>
                         <div class="summary-grid">
                             <div class="summary-card">
@@ -891,6 +996,9 @@
 
         var state = {
             bootstrap: null,
+            systemSummary: null,
+            systemSummaryRequest: 0,
+            systemSummaryTimer: null,
             bootstrapLoading: false,
             passwordOpen: false,
             activeSection: "overview",
@@ -1186,6 +1294,16 @@
                     issues.appendChild(item);
                 });
             }
+            ((state.systemSummary && state.systemSummary.warnings) || []).forEach(function (warning) {
+                var item = document.createElement("div");
+                item.className = "issue " + (warning.level === "critical" ? "error" : "warning");
+                item.appendChild(document.createTextNode(String(warning.text || "") + " · "));
+                var link = document.createElement("a");
+                link.href = storagePageUrl("overview");
+                link.textContent = "Open Storage";
+                item.appendChild(link);
+                issues.appendChild(item);
+            });
             if (!issues.childElementCount) {
                 var item = document.createElement("div");
                 item.className = "issue warning";
@@ -1375,9 +1493,123 @@
             renderSummary(auth, setup);
             renderAuth(auth, setup);
             renderStatus(auth, setup);
+            if (auth.authenticated) {
+                if (!state.systemSummaryTimer && !state.systemSummary) loadSystemSummary();
+            } else {
+                stopSystemSummary();
+            }
             syncUrl();
             updateActiveSectionFromScroll();
         }
+
+        function storagePageUrl(view) {
+            return API_ORIGIN + "/api/storage/main_page#" + encodeURIComponent(view);
+        }
+
+        function formatBytes(value) {
+            var n = Number(value) || 0;
+            var units = ["B", "KB", "MB", "GB", "TB"];
+            var i = 0;
+            while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+            return (i === 0 ? String(Math.round(n)) : n.toFixed(n >= 100 ? 0 : 1)) + " " + units[i];
+        }
+
+        function formatUptime(seconds) {
+            var s = Math.max(0, Math.round(Number(seconds) || 0));
+            var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+            return d ? d + "d " + h + "h" : (h ? h + "h " + m + "m" : m + "m");
+        }
+
+        function setTileMeter(id, percent) {
+            var bar = document.getElementById(id);
+            var value = Math.max(0, Math.min(100, Number(percent) || 0));
+            bar.style.width = value.toFixed(1) + "%";
+            bar.className = value >= 95 ? "bad" : (value >= 85 ? "warn" : "");
+        }
+
+        function renderSystemSummary() {
+            var data = state.systemSummary;
+            var tiles = document.getElementById("system-tiles");
+            var line = document.getElementById("storage-line");
+            if (!data) {
+                tiles.hidden = true;
+                line.hidden = true;
+                return;
+            }
+            var system = data.system || {};
+            var memory = system.memory || {};
+            var disk = data.disk || {};
+            tiles.hidden = false;
+            document.getElementById("tile-cpu").textContent = Math.round(system.cpu_percent || 0) + " %";
+            setTileMeter("tile-cpu-bar", system.cpu_percent);
+            document.getElementById("tile-cpu-copy").textContent = (system.cpu_logical || "?") + " threads" +
+                (system.load && system.load.length ? " · load " + system.load[0] : "");
+            document.getElementById("tile-ram").textContent = formatBytes(memory.used) + " / " + formatBytes(memory.total);
+            setTileMeter("tile-ram-bar", memory.percent);
+            document.getElementById("tile-ram-copy").textContent = "PBGui " + formatBytes((data.processes || {}).rss) +
+                " in " + ((data.processes || {}).count || 0) + " processes";
+            document.getElementById("tile-disk").textContent = disk.total ? Math.round(disk.percent) + " %" : "–";
+            setTileMeter("tile-disk-bar", disk.percent);
+            document.getElementById("tile-disk-copy").textContent = disk.total ? formatBytes(disk.free) + " free of " + formatBytes(disk.total) : "";
+            document.getElementById("tile-uptime").textContent = formatUptime(system.uptime_s);
+            var swap = system.swap || {};
+            document.getElementById("tile-uptime-copy").textContent = swap.total ? "Swap " + Math.round(swap.percent || 0) + " % used" : "No swap";
+            ["tile-cpu-link", "tile-ram-link", "tile-uptime-link"].forEach(function (id) {
+                document.getElementById(id).href = storagePageUrl("system");
+            });
+            document.getElementById("tile-disk-link").href = storagePageUrl("overview");
+            var reclaim = data.reclaimable || {};
+            var text;
+            if (data.scanned_at) {
+                text = formatBytes(disk.free) + " free · " + formatBytes(reclaim.safe || 0) + " safe to clean";
+                if (reclaim.optional) text += " · " + formatBytes(reclaim.optional) + " optional";
+            } else {
+                text = data.busy ? "Measuring folders…" : "Folder sizes are measured in the background";
+            }
+            document.getElementById("storage-line-text").textContent = text;
+            line.href = storagePageUrl("overview");
+            line.hidden = false;
+        }
+
+        function stopSystemSummary() {
+            clearTimeout(state.systemSummaryTimer);
+            state.systemSummaryTimer = null;
+            state.systemSummaryRequest += 1;
+            if (state.systemSummary) {
+                state.systemSummary = null;
+                renderSystemSummary();
+            }
+        }
+
+        async function loadSystemSummary() {
+            clearTimeout(state.systemSummaryTimer);
+            state.systemSummaryTimer = null;
+            var requestId = ++state.systemSummaryRequest;
+            var previousWarnings = JSON.stringify((state.systemSummary && state.systemSummary.warnings) || []);
+            try {
+                var data = await fetchJson(API_ORIGIN + "/api/storage/summary");
+                if (requestId !== state.systemSummaryRequest) return;
+                state.systemSummary = data;
+                renderSystemSummary();
+                if (JSON.stringify(data.warnings || []) !== previousWarnings && state.bootstrap) {
+                    renderIssues(state.bootstrap.auth || {}, state.bootstrap.setup || {});
+                }
+            } catch (error) {
+                if (requestId !== state.systemSummaryRequest) return;
+            }
+            if (requestId === state.systemSummaryRequest && !document.hidden) {
+                state.systemSummaryTimer = setTimeout(loadSystemSummary, 10000);
+            }
+        }
+
+        document.addEventListener("visibilitychange", function () {
+            if (document.hidden) {
+                clearTimeout(state.systemSummaryTimer);
+                state.systemSummaryTimer = null;
+            } else if (state.bootstrap && (state.bootstrap.auth || {}).authenticated) {
+                loadSystemSummary();
+            }
+        });
 
         async function loadBootstrap(message, kind) {
             if (state.bootstrapLoading) return;

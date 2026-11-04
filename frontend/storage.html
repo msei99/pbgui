@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <link rel="stylesheet" href="/app/css/data_tip.css?v=1">
+  <style>
+    :root {
+      --bg: #0e1117; --bg2: #131b2b; --bg3: #111827; --panel: #0f1724;
+      --border: #1e2736; --border2: #2d3748;
+      --text: #e2e8f0; --muted: #94a3b8; --faint: #64748b; --accent: #63b3ed;
+      --safe: #4ade80; --optional: #fbbf24; --review: #f87171; --protected: #94a3b8;
+      --warn: #f59e0b; --bad: #f87171; --good: #4ade80;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 16px; --fs-lg: 20px;
+      --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 20px; --btn-h: 32px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; flex-direction: column; overflow: hidden; background: var(--bg); color: var(--text);
+           font: 400 var(--fs-base)/1.45 'Segoe UI', system-ui, sans-serif; }
+    #topnav { flex-shrink: 0; }
+    #page-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+    #main-content { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: var(--sp-lg); }
+    #sidebar .nav-size { margin-left: auto; color: var(--faint); font-size: var(--fs-xs); white-space: nowrap; }
+
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-md); flex-wrap: wrap; margin-bottom: var(--sp-md); }
+    .page-title { margin: 0; font-size: var(--fs-lg); font-weight: 800; }
+    .scan-state { color: var(--muted); font-size: var(--fs-sm); }
+    .view { display: none; min-width: 0; }
+    .view.is-active { display: grid; gap: var(--sp-lg); }
+
+    .panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; min-width: 0; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); flex-wrap: wrap;
+                  padding: var(--sp-md) var(--sp-lg); border-bottom: 1px solid var(--border); }
+    .panel-title { margin: 0; font-size: var(--fs-md); font-weight: 750; }
+    .panel-body { padding: var(--sp-lg); display: grid; gap: var(--sp-md); min-width: 0; }
+    .muted { color: var(--muted); }
+    .faint { color: var(--faint); }
+    .mono { font-family: var(--mono); font-size: var(--fs-sm); }
+    .empty { color: var(--muted); padding: var(--sp-md) 0; }
+
+    .btn { height: var(--btn-h); padding: 0 var(--sp-md); border-radius: 6px; border: 1px solid var(--border2);
+           background: #1a202c; color: var(--text); font: 600 var(--fs-sm) 'Segoe UI', system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
+    .btn:hover:not(:disabled) { background: #252d3d; border-color: #4a5568; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn.primary { background: #215f9b; border-color: #3182ce; color: #fff; }
+    .btn.danger { background: #7f1d1d; border-color: #b91c1c; color: #fecaca; }
+    .btn.small { height: 26px; padding: 0 var(--sp-sm); font-size: var(--fs-xs); }
+    .actions { display: flex; flex-wrap: wrap; gap: var(--sp-sm); align-items: center; }
+
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--sp-md); }
+    .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: var(--sp-md); min-width: 0; display: grid; gap: 4px; align-content: start; }
+    .stat-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+    .stat-value { font-size: var(--fs-lg); font-weight: 800; overflow-wrap: anywhere; }
+    .stat-detail { color: var(--muted); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+    .stat.safe { border-left: 3px solid var(--safe); }
+    .stat.optional { border-left: 3px solid var(--optional); }
+    .stat.review { border-left: 3px solid var(--review); }
+
+    .tier-list { display: grid; gap: 2px; margin: 4px 0; }
+    .tier-row { display: flex; justify-content: space-between; gap: var(--sp-sm); width: 100%; padding: 4px 6px; border: 1px solid transparent;
+                border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-sm); text-align: left; cursor: pointer; }
+    .tier-row:hover, .tier-row:focus-visible { background: rgba(99,179,237,.08); border-color: rgba(99,179,237,.25); color: var(--text); }
+    .tier-row-name { min-width: 0; overflow-wrap: anywhere; }
+    .tier-row-size { white-space: nowrap; color: var(--text); font-weight: 600; }
+    .meter { height: 8px; border-radius: 4px; background: #1a202c; overflow: hidden; }
+    .meter-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+    .meter-fill.warn { background: var(--warn); }
+    .meter-fill.bad { background: var(--bad); }
+
+    .composition { display: flex; height: 22px; border-radius: 6px; overflow: hidden; background: #1a202c; border: 1px solid var(--border); }
+    .composition > span { display: block; height: 100%; min-width: 2px; }
+    .legend { display: flex; flex-wrap: wrap; gap: var(--sp-sm) var(--sp-lg); font-size: var(--fs-sm); color: var(--muted); }
+    .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+    .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: var(--fs-xs); font-weight: 700; border: 1px solid; white-space: nowrap; }
+    .badge.safe { color: #bbf7d0; border-color: rgba(74,222,128,.35); background: rgba(74,222,128,.1); }
+    .badge.optional { color: #fde68a; border-color: rgba(251,191,36,.35); background: rgba(251,191,36,.1); }
+    .badge.review { color: #fecaca; border-color: rgba(248,113,113,.35); background: rgba(248,113,113,.1); }
+    .badge.protected { color: #cbd5e1; border-color: rgba(148,163,184,.35); background: rgba(148,163,184,.1); }
+
+    .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 8px; max-width: 100%; }
+    .table-wrap.tall { max-height: min(60vh, 640px); }
+    .tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-sm); }
+    .tbl th { position: sticky; top: 0; z-index: 2; background: var(--bg2); color: var(--muted); font-size: var(--fs-xs);
+              text-transform: uppercase; letter-spacing: .06em; font-weight: 700; text-align: left; padding: 8px 10px;
+              border-bottom: 2px solid var(--border2); white-space: nowrap; }
+    .tbl td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    .tbl td.num, .tbl th.num { text-align: right; white-space: nowrap; }
+    .tbl td.name { min-width: 220px; overflow-wrap: anywhere; }
+    .tbl tr:hover td { background: rgba(255,255,255,.03); }
+    .tbl.selectable tbody tr { cursor: pointer; user-select: none; }
+    .tbl tbody tr.selected td { background: rgba(77,166,255,.12); }
+    .tbl tbody tr.selected td:first-child { border-left: 3px solid var(--accent); }
+    .tbl tbody tr.is-blocked td { color: var(--faint); cursor: not-allowed; }
+    .tbl tbody tr.is-open td { background: rgba(99,179,237,.07); }
+    .tbl input[type="number"] { width: 72px; height: 26px; border: 1px solid var(--border2); border-radius: 6px; background: var(--panel); color: var(--text); padding: 0 6px; font: inherit; }
+    .filter-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; white-space: nowrap; }
+    .filter-cell label { color: var(--muted); font-size: var(--fs-xs); }
+
+    .tree-row td:first-child { white-space: nowrap; }
+    .tree-toggle { width: 18px; height: 18px; border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0; font-size: 11px; }
+    .tree-bar { display: inline-block; height: 6px; border-radius: 3px; background: var(--accent); opacity: .65; vertical-align: middle; }
+
+    .progress { display: none; gap: var(--sp-sm); padding: var(--sp-md) var(--sp-lg); }
+    .progress.visible { display: grid; }
+    .progress-line { display: flex; justify-content: space-between; gap: var(--sp-md); flex-wrap: wrap; font-size: var(--fs-sm); }
+    .result { padding: var(--sp-md) var(--sp-lg); font-size: var(--fs-sm); display: grid; gap: 4px; }
+    .result.err { color: #fecaca; }
+    .notice { border: 1px solid rgba(245,158,11,.4); background: rgba(245,158,11,.08); color: #fde68a; border-radius: 8px; padding: var(--sp-sm) var(--sp-md); font-size: var(--fs-sm); }
+
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--sp-md); }
+    .field { display: grid; gap: 6px; }
+    .field label, .field .label { color: var(--muted); font-size: var(--fs-sm); font-weight: 600; }
+    .field input[type="number"], .field select { height: var(--btn-h); border: 1px solid var(--border2); border-radius: 6px; background: var(--panel); color: var(--text); padding: 0 8px; font: inherit; }
+    .check { display: inline-flex; align-items: center; gap: 8px; min-height: var(--btn-h); }
+    #history-chart { width: 100%; height: 360px; }
+
+    @media (max-width: 760px) {
+      #main-content { padding: var(--sp-md); }
+      .panel-body { padding: var(--sp-md); }
+    }
+  </style>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+</head>
+<body>
+  <nav id="topnav"></nav>
+  <div id="page-body">
+    <aside id="sidebar" aria-label="Storage sections">
+      <div id="sidebar-sticky">
+        <div id="sidebar-header">
+          <span class="sb-title">Storage</span>
+          <span class="sb-count" id="sb-disk" hidden></span>
+        </div>
+      </div>
+      <div id="sidebar-inner">
+        <button class="sb-section active" type="button" data-view="overview">Overview</button>
+        <button class="sb-section" type="button" data-view="logs">Logs <span class="nav-size" data-group-size="logs"></span></button>
+        <button class="sb-section" type="button" data-view="results">Jobs &amp; Results <span class="nav-size" data-group-size="results"></span></button>
+        <button class="sb-section" type="button" data-view="caches">Caches &amp; Market Data <span class="nav-size" data-group-size="caches"></span></button>
+        <button class="sb-section" type="button" data-view="backups">Backups &amp; Leftovers <span class="nav-size" data-group-size="backups"></span></button>
+        <hr class="sb-sep">
+        <button class="sb-section" type="button" data-view="retention">Retention</button>
+        <button class="sb-section" type="button" data-view="history">History</button>
+        <button class="sb-section" type="button" data-view="system">System</button>
+      </div>
+      <div id="sidebar-resize"></div>
+    </aside>
+
+    <main id="main-content">
+      <div class="page-head">
+        <h1 class="page-title" id="view-title">Overview</h1>
+        <div class="scan-state" id="scan-state">Loading…</div>
+      </div>
+
+      <section class="panel progress" id="progress" aria-live="polite">
+        <div class="progress-line"><strong id="progress-title"></strong><span id="progress-meta" class="muted"></span></div>
+        <div class="meter"><div class="meter-fill" id="progress-fill" style="width:0%"></div></div>
+        <div class="progress-line"><span id="progress-current" class="muted mono"></span>
+          <button class="btn small" type="button" id="cancel-btn">Stop</button></div>
+      </section>
+
+      <div class="view" data-view-panel="overview">
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title">Disk</h2></div>
+          <div class="panel-body" id="disk-body"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title">Reclaimable</h2></div>
+          <div class="panel-body">
+            <div class="stat-grid" id="reclaim-grid"></div>
+            <div id="last-result"></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title">Largest folders</h2></div>
+          <div class="panel-body">
+            <div class="table-wrap tall"><table class="tbl" id="tree-table">
+              <thead><tr><th>Folder</th><th class="num">Size</th><th class="num">Files</th><th>Share</th><th>Last change</th></tr></thead>
+              <tbody></tbody>
+            </table></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="view" data-view-panel="group">
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title" id="group-title">Categories</h2></div>
+          <div class="panel-body">
+            <div class="table-wrap"><table class="tbl" id="category-table">
+              <thead><tr><th>Category</th><th>Tier</th><th class="num">Entries</th><th class="num">Size</th><th>Oldest</th><th>Filter</th><th class="num">Matching</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table></div>
+          </div>
+        </section>
+        <section class="panel" id="items-panel" hidden>
+          <div class="panel-head">
+            <h2 class="panel-title" id="items-title">Entries</h2>
+            <div class="actions" id="items-actions">
+              <span class="muted" id="items-selection"></span>
+              <button class="btn small" type="button" id="items-select-matching">Select matching</button>
+              <button class="btn small" type="button" id="items-clear">Clear selection</button>
+              <button class="btn primary small" type="button" id="items-preview" disabled>Preview selected</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div id="items-blocked"></div>
+            <div class="table-wrap tall"><table class="tbl selectable" id="items-table">
+              <thead><tr><th>Entry</th><th class="num">Size</th><th class="num">Files</th><th>Last change</th><th>Status</th></tr></thead>
+              <tbody></tbody>
+            </table></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="view" data-view-panel="preview">
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Cleanup preview</h2>
+            <div class="actions">
+              <button class="btn" type="button" id="preview-discard">Discard</button>
+              <button class="btn danger" type="button" id="preview-delete" disabled>Delete</button>
+            </div>
+          </div>
+          <div class="panel-body" id="preview-body"></div>
+        </section>
+      </div>
+
+      <div class="view" data-view-panel="retention">
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Automatic scan and cleanup</h2>
+            <div class="actions"><span class="muted" id="settings-state"></span>
+              <button class="btn primary" type="button" id="settings-save" disabled>Save</button></div>
+          </div>
+          <div class="panel-body">
+            <div class="form-grid">
+              <div class="field">
+                <label for="scan-interval"><span tabindex="0" data-tip="How often the folders are measured in the background. A scan also runs when this page is opened and the last scan is older than one hour.">Scan interval (hours)</span></label>
+                <input id="scan-interval" type="number" min="1" max="48" step="1">
+              </div>
+              <div class="field">
+                <span class="label"><span tabindex="0" data-tip="Runs the enabled rules once per day after the selected hour. Only categories listed below can be cleaned automatically.">Automatic cleanup</span></span>
+                <label class="check"><input id="auto-enabled" type="checkbox"> Enabled</label>
+              </div>
+              <div class="field">
+                <label for="auto-hour">Run after (hour)</label>
+                <input id="auto-hour" type="number" min="0" max="23" step="1">
+              </div>
+            </div>
+            <div class="table-wrap"><table class="tbl" id="rules-table">
+              <thead><tr><th>Category</th><th>Tier</th><th>Enabled</th><th>Older than (days)</th><th>Keep newest</th></tr></thead>
+              <tbody></tbody>
+            </table></div>
+            <div class="muted" id="auto-last"></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="view" data-view-panel="history">
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title">Usage over time</h2></div>
+          <div class="panel-body">
+            <div id="history-chart"></div>
+            <div class="table-wrap"><table class="tbl" id="growth-table">
+              <thead><tr><th>Area</th><th class="num">Now</th><th class="num">7 days</th><th class="num">30 days</th></tr></thead>
+              <tbody></tbody>
+            </table></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="view" data-view-panel="system">
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title">System</h2></div>
+          <div class="panel-body"><div class="stat-grid" id="system-grid"></div></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title">PBGui processes</h2></div>
+          <div class="panel-body">
+            <div class="table-wrap"><table class="tbl" id="process-table">
+              <thead><tr><th>Process</th><th class="num">PID</th><th class="num">Memory</th><th class="num">CPU</th></tr></thead>
+              <tbody></tbody>
+            </table></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    window.API_BASE = "%%API_BASE%%";
+    window.WS_BASE = "%%WS_BASE%%";
+    window.PBGUI_NAV_CONFIG = { subtitle: 'STORAGE', current: 'system_storage' };
+  </script>
+  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=12"></script>
+  <script src="/app/js/data_tip.js?v=1"></script>
+  <script src="/app/js/shared_help_overlay.js?v=12"></script>
+  <script src="/app/plotly.min.js?v=1"></script>
+  <script src="/app/js/storage_page.js?v=3"></script>
+</body>
+</html>

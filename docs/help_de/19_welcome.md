@@ -22,6 +22,10 @@ Der Standardbereich **Overview** fasst den aktuellen lokalen Zustand zusammen:
 - **Identity**: aktuelle Host-Rolle und konfigurierter Bot-Name
 - **Runtime Status**: detaillierte Readiness-Pruefungen aus dem Backend
 - **Login security**: aktive Login-Sperren und behaltene Brute-Force-Lockout-Historie
+- **CPU, Memory, Disk, Uptime** (nach dem Login): aktuelle Systemwerte, alle 10 Sekunden aktualisiert. Memory zeigt zusaetzlich, wie viel RAM die PBGui-eigenen Prozesse belegen. Ein Klick auf eine Kachel oeffnet **System -> Storage**.
+- **Speicherzeile**: freier Plattenplatz und wie viel sich laut dem letzten Hintergrund-Scan sicher aufraeumen laesst. Sie oeffnet die Storage-Uebersicht.
+
+Ist die Platte zu mindestens 85 % voll (kritisch ab 95 %), sind weniger als 10 % Arbeitsspeicher frei oder ist mehr als die Haelfte des Swap belegt, zeigt die Issue-Liste eine Warnung mit Link zu Storage.
 
 Dieser Bereich ist als schneller Kontrollpunkt nach dem ersten Start, nach Passwortwechseln oder nach Pfad-Anpassungen gedacht.
 

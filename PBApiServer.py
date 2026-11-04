@@ -102,6 +102,7 @@ from api.vps_manager import (
 )
 from api.vast import startup as vast_startup, shutdown as vast_shutdown
 from api.services import router as services_router
+from api.storage import router as storage_router, startup as storage_startup, shutdown as storage_shutdown
 from api.live import router as live_router, shutdown as live_shutdown
 from api.v7_instances import router as v7_router
 from api.v8_instances import router as v8_router
@@ -955,6 +956,7 @@ async def _lifespan(app: FastAPI):
         market_data_startup()
         strategy_explorer_v8_startup()
         profit_sweep_startup()
+        storage_startup()
         await ai_capabilities_startup()
         loop8_startup()
 
@@ -997,6 +999,7 @@ async def _lifespan(app: FastAPI):
             ("vast-input", vast_shutdown),
             ("cluster", cluster_shutdown),
             ("db-tools", db_tools_shutdown),
+            ("storage", storage_shutdown),
             ("backtest-v7", bt7_shutdown),
             ("backtest-v8", bt8_shutdown),
             ("optimize-v7", opt7_shutdown),
@@ -1123,6 +1126,7 @@ app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(dashboards_router, prefix="/api/dashboards", tags=["dashboards"])
 app.include_router(db_tools_router, prefix="/api/db-tools", tags=["db-tools"])
+app.include_router(storage_router, prefix="/api/storage", tags=["storage"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(logging_router, prefix="/api/logging", tags=["logging"])
 app.include_router(profit_sweep_router, prefix="/api/profit-sweep", tags=["profit-sweep"])

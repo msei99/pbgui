@@ -22,6 +22,10 @@ The default **Overview** section summarizes the current local state:
 - **Identity**: the current host role and configured bot name
 - **Runtime Status**: detailed readiness checks from the backend
 - **Login security**: active login blocks and retained brute-force lockout history
+- **CPU, Memory, Disk, Uptime** (after login): live system values, updated every 10 seconds. Memory also shows how much RAM PBGui's own processes use. Click a tile to open **System -> Storage**.
+- **Storage line**: free disk space and how much can be cleaned safely, from the latest background scan. It opens the Storage overview.
+
+When the disk is at least 85% full (critical from 95%), available memory falls below 10% or more than half of the swap is used, the issue list shows a warning with a link to Storage.
 
 This section is intended as a quick sanity check after first startup, password changes, or path updates.
 
