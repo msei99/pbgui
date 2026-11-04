@@ -296,15 +296,41 @@ def _collection_outstanding(state: dict, now: float) -> bool:
     """True while the supervisor's final collection may still be running.
 
     The final collection owns the instance until it publishes (final_collected)
-    or fails into a terminal status. Its own allowance is bounded, so the grace
-    window below can never leak a rental indefinitely.
+    or fails into a completed/failed terminal status. A cancelled job is only
+    collection-finished once final_collected is set: a cancel that arrives as
+    part of the stop/deadline path can precede the final collection, so it must
+    not release the teardown by itself. Its own allowance is bounded, so the
+    grace window below can never leak a rental indefinitely.
     """
-    if state.get('final_collected') or state.get('status') in {'completed', 'failed', 'cancelled'}:
+    if state.get('final_collected') or state.get('status') in {'completed', 'failed'}:
         return False
     if state.get('status') != 'collecting' and not state.get('stop_rpc_at') and not state.get('final_collection_at'):
         return False
     anchor = float(state.get('final_collection_at') or state.get('stop_rpc_at') or 0)
     return anchor <= 0 or now - anchor <= COLLECT_TEARDOWN_GRACE_SECONDS
+
+
+def _record_collection_outstanding(store, identifier, state, now):
+    """True while this record's own or bound-job collection may still run.
+
+    A worker/lease record carries no collection state itself; the jobs bound
+    to it (lease_id == identifier, or its active_job) own status, final_collected
+    and the collection anchors. A job record owns that state directly and is
+    checked as-is. Only the healthy inventory and the worker's own active_job
+    pointer are consulted, so an unreadable foreign record never blocks this
+    lease's teardown.
+    """
+    if state.get('kind') != 'worker':
+        return _collection_outstanding(state, now)
+    rows, _unreadable = store.list_with_errors()
+    active_id = state.get('active_job')
+    for row in rows:
+        if row.get('id') == identifier:
+            continue
+        if row.get('lease_id') == identifier or (active_id and row.get('id') == active_id):
+            if _collection_outstanding(row, now):
+                return True
+    return False
 
 
 def _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state):
@@ -319,7 +345,7 @@ def _observe_rental(store, identifier, client, intent, now, ending, observed, ma
         if state.get("instance_id") and row["id"] != state["instance_id"]:
             store.update(identifier, absent_checks=0)
             raise VastError("Instance ID does not match the rental authorization")
-        if ending and _collection_outstanding(state, now):
+        if ending and _record_collection_outstanding(store, identifier, state, now):
             # The final collection owns this instance until it finishes or its
             # bounded allowance passes; never destroy under an in-flight collect.
             store.update(identifier, provider_checked_at=now, cleanup_error=None)
