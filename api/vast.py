@@ -33,6 +33,10 @@ from vast_hosts import host_history, set_host_preference, search_host_offers, of
 from file_lock import advisory_file_lock
 from secure_files import ensure_private_directory
 
+# Upper bound for a rental/automation window. Vast.ai itself does not cap
+# instance lifetime; this is a pbgui guard rail and may be raised deliberately.
+MAX_RENTAL_HOURS = 168.0
+
 SERVICE = "Vast"
 router = APIRouter()
 CLOUD_LOG_ROOT = Path(__file__).resolve().parents[1] / "data/logs/optimizes_v8"
@@ -282,7 +286,7 @@ class GpuPreferences(BaseModel):
 
 class RentalPreferences(GpuPreferences):
     """Persist the shared rental limits alongside marketplace requirements."""
-    hours: float = Field(default=1, ge=.25, le=24)
+    hours: float = Field(default=1, ge=.25, le=MAX_RENTAL_HOURS)
     budget: float = Field(default=1, ge=.1, le=100)
     idle_seconds: int = Field(default=-1, ge=-1, strict=True)
     max_rentals: int = Field(default=1, ge=1, le=16, strict=True)
@@ -317,7 +321,7 @@ class CalibrationStartRequest(BaseModel):
     """Bind paid calibration consent to PBGui's canonical workload and exact offer."""
     model_config = ConfigDict(extra='forbid')
     offer: CalibrationOfferRequest
-    hours: float = Field(ge=.25, le=24, allow_inf_nan=False)
+    hours: float = Field(ge=.25, le=MAX_RENTAL_HOURS, allow_inf_nan=False)
     budget: float = Field(ge=.1, le=100, allow_inf_nan=False)
     allow_32768: bool = False
     accept_rental_and_cleanup: bool = False
@@ -326,7 +330,7 @@ class ConfigurableCalibrationRequest(BaseModel):
     """Authorize one explicit paid preset or immutable queued-job measurement."""
     model_config = ConfigDict(extra='forbid')
     offer: CalibrationOfferRequest
-    hours: float = Field(ge=.75, le=24, allow_inf_nan=False)
+    hours: float = Field(ge=.75, le=MAX_RENTAL_HOURS, allow_inf_nan=False)
     budget: float = Field(ge=.1, le=100, allow_inf_nan=False)
     preset: Literal['small', 'medium', 'large'] = 'small'
     source_job_id: str | None = None
@@ -353,7 +357,7 @@ class CalibrationWatchRequest(BaseModel):
     """Authorize one future paid test for frozen requirements until cancellation."""
     model_config = ConfigDict(extra='forbid')
     preferences: GpuPreferences
-    hours: float = Field(ge=.75, le=24, allow_inf_nan=False)
+    hours: float = Field(ge=.75, le=MAX_RENTAL_HOURS, allow_inf_nan=False)
     budget: float = Field(ge=.1, le=100, allow_inf_nan=False)
     accept_rental_and_cleanup: bool = False
 
@@ -396,7 +400,7 @@ class StartJobRequest(BaseModel):
     gpu_profile_override: RentalGpuProfile | None = None
     gpu_job_profile_overrides: dict[str, RentalGpuProfile] = Field(default_factory=dict)
     offer_id: int | None = Field(default=None, gt=0)
-    hours: float = Field(default=1, ge=.25, le=24)
+    hours: float = Field(default=1, ge=.25, le=MAX_RENTAL_HOURS)
     budget: float = Field(default=1, ge=.1, le=100)
     accept_rental_and_cleanup: bool = False
     idle_seconds: int = Field(default=-1, ge=-1, strict=True)
@@ -556,7 +560,7 @@ def offers(response: Response, max_price: float = Query(1, gt=0, le=100),
            min_reliability_pct: float = Query(0, ge=0, le=100),
            disk_gb: int = Query(40, ge=10, le=2000),
            verified_only: bool = True, gpu_name: str = Query("", max_length=80),
-           include_incompatible: bool = False, rental_hours: float = Query(1, ge=.25, le=24),
+           include_incompatible: bool = False, rental_hours: float = Query(1, ge=.25, le=MAX_RENTAL_HOURS),
            session: SessionToken = Depends(require_auth)) -> dict:
     """List live offers without renting or changing any provider resources."""
     response.headers["Cache-Control"] = "no-store"
