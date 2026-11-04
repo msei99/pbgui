@@ -782,8 +782,8 @@ class JobStore:
         """Persist authorization before starting independently supervised processes."""
         if not services_available():
             raise VastError("A working user systemd service manager and OpenSSH are required", 409)
-        if number(hours) is None or not .25 <= hours <= 24 or number(budget) is None or not .1 <= budget <= 100:
-            raise VastError("Choose 0.25–24 hours and a budget of $0.10–$100", 422)
+        if number(hours) is None or hours < .25 or number(budget) is None or budget < .1:
+            raise VastError("Choose at least 0.25 hours and a budget of at least $0.10", 422)
         positive_id(offer.get("id"))
         rate = number(offer.get("price_hour_usd"))
         if rate is None or rate <= 0 or (number(offer.get("cuda_max_good")) or 0) < 13:
