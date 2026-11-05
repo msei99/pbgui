@@ -105,7 +105,7 @@ def validate_intent(intent: dict, identifier: str) -> dict:
     if intent.get("label") != "pbgui-vast-" + identifier:
         raise VastError("Invalid cloud rental ownership")
     duration = float(intent["deadline"]) - float(intent["accepted_at"])
-    if not 0 < duration <= 86400 or not .1 <= float(intent["budget_usd"]) <= 100:
+    if duration <= 0 or not .1 <= float(intent["budget_usd"]) <= 100:
         raise VastError("Invalid cloud rental limits")
     positive_id(intent["offer"]["id"])
     return intent
