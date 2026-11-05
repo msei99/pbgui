@@ -844,7 +844,7 @@ class JobStore:
             if inbound is None or outbound is None:
                 raise VastError("Choose an offer with known transfer prices", 422)
             reserve = max(.05, 2 * intent["bundle_bytes"] / 1e9 * inbound + 3 * outbound * max(1, int(intent.get("job_count", 1))))
-            duration = min(hours * 3600, (budget - reserve) / rate * 3600)
+            duration = min(30 * 86400, hours * 3600, (budget - reserve) / rate * 3600)
             if duration < 900:
                 raise VastError("Budget must cover at least 15 minutes plus transfer reserve", 422)
             now = time.time()

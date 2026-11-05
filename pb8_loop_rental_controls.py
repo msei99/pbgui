@@ -8,7 +8,7 @@ import time
 
 from file_lock import advisory_file_lock
 from pb8_loop_store import identifier
-from vast_deadline import effective_intent, maximum_deadline, request_budget, request_deadline
+from vast_deadline import deadline_ceiling, effective_intent, maximum_deadline, request_budget, request_deadline
 from vast_provider import VastError
 
 SERVICE = 'PB8Loop'
@@ -65,7 +65,7 @@ def change_budget(store, queue, owner, loop_id, worker_id, expected_deadline, ex
             raise VastError('Rental deadline changed; review the current values', 409)
         intent = effective_intent(queue.store, worker_id, queue.store.read(worker_id, 'intent.json'))
         # Match the budget guard's deadline calculation before persisting a request.
-        target = intent['accepted_at'] + min(86400, (budget - intent['transfer_reserve_usd'])
+        target = intent['accepted_at'] + min(deadline_ceiling(intent), (budget - intent['transfer_reserve_usd'])
                                            / intent['offer']['price_hour_usd'] * 3600)
         if target < record['deadline']:
             raise VastError('Budget would end the rental before the current Loop deadline', 422)

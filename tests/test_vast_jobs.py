@@ -2003,7 +2003,8 @@ def test_http400_waits_for_absence_then_creates_refreshed_ask(tmp_path):
 
 
 @pytest.mark.parametrize('existing', [None, 'amendment', 'malformed'])
-def test_ssh_guard_without_onstart(tmp_path, monkeypatch, existing):
+@pytest.mark.parametrize('rental_hours', [1, 36])
+def test_ssh_guard_without_onstart(tmp_path, monkeypatch, existing, rental_hours):
     """Run the SSH payload locally: no onstart, no network, no rented worker."""
     import os
     import signal
@@ -2015,9 +2016,13 @@ def test_ssh_guard_without_onstart(tmp_path, monkeypatch, existing):
     root = tmp_path / 'worker'
     root.mkdir()
     (root / 'worker.py').write_text('# pinned worker fixture')
-    deadline = time.time() + 3600
-    intent = {'id': 'a' * 32, 'accepted_at': time.time(), 'deadline': deadline,
-              'budget_usd': 1, 'offer': {}}
+    accepted_at = time.time()
+    deadline = accepted_at + rental_hours * 3600
+    intent = {'id': 'a' * 32, 'accepted_at': accepted_at, 'deadline': deadline,
+              'budget_usd': 4, 'bundle_bytes': 318648953, 'job_count': 1,
+              'offer': {'price_hour_usd': 0.06844444444444443,
+                        'download_gb_usd': 0.0390625, 'upload_gb_usd': 0.0390625}}
+    # Exact failed Loop scenario: 3 runs x 12h, $4 budget, 36h rental.
     monkeypatch.setattr(runner, '_log', lambda *a, **kw: None)
     if existing == 'amendment':
         (root / 'deadline-request.json').write_text('{}')
