@@ -35,3 +35,16 @@ indexer or generated index bootstrap.
 
 See the [Node/npm removal audit](node_dependency_audit.md) and
 [browser test setup](../tests/README.md).
+
+### Vast worker startup readiness
+
+Vast `running` and the onstart host-key log are not guard-ready signals.
+The independently bootstrapped deadline guard publishes `/work/pbgui/guard.json`
+asynchronously. Before `worker_ready`, the controller retries only this exact
+missing-file preflight error and the categorized SSH authentication failure on
+its existing five-second control-aware cycle, bounded by 300 seconds from the
+persisted `setup_started_at` (and the unchanged rental deadline). Restarting a
+controller does not reset that window. Expiry is fatal; malformed guard records,
+CUDA/runtime failures and guard identity/deadline mismatches are not relaxed.
+Successful health must still match the pinned PB8 revision, provider instance,
+lease/job identity and authorized deadline, and meet the CPU allocation check.

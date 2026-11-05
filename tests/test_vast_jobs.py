@@ -1845,3 +1845,79 @@ def test_gpu_constraint_safety_failure_explains_completion_boundary(tmp_path):
     assert 'Passivbot safety check' in row['error']
     assert 'strict completion limit 1.0' in row['error']
     assert 'secret' not in row['error']
+
+
+@pytest.mark.parametrize('failures', [1, 3, 8, 100])
+@pytest.mark.parametrize('transient_auth', [False, True])
+def test_guard_readiness_missing_then_ready(job, monkeypatch, failures, transient_auth):
+    """Exercise controller retries without rentals, SSH, uploads or real sleeps."""
+    from types import SimpleNamespace
+    import vast_job_runner as runner
+    import vast_runtime_metrics
+    store, identifier, intent = job
+    store.update(identifier, workers=4)
+    monkeypatch.setattr(runner, '_log', lambda *args, **kwargs: None)
+    clock = [2001.0]
+    intent['deadline'] = 5000
+    write_json(store.directory(identifier)/'intent.json', intent)
+    monkeypatch.setattr(runner.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(runner.time, 'sleep', lambda _: clock.__setitem__(0, clock[0]+5))
+    monkeypatch.setattr(runner, 'VastCredentialStore', lambda _: SimpleNamespace(secrets=lambda: {'api_key':'fake'}))
+    monkeypatch.setattr(runner, 'VastClient', lambda _: object())
+    monkeypatch.setattr(runner, 'owned_instance', lambda *_: {'id':123, 'actual_status':'running'})
+    calls = []
+    def operation(action, **kwargs):
+        calls.append(action)
+        if len(calls) <= failures:
+            if transient_auth and (failures == 100 or len(calls) % 2):
+                raise VastError('SSH worker operation failed: authentication or permission denied')
+            raise VastError("Worker preflight failed: FileNotFoundError: [Errno 2] No such file or directory: '/work/pbgui/guard.json'", 422)
+        return {'revision':intent['pb8_revision'], 'guard':{'instance_id':123,
+                'job_id':identifier, 'deadline':5000}, 'cpu_cores':1000}
+    monkeypatch.setattr(runner, 'WorkerConnection', lambda *a, **kw: SimpleNamespace(bootstrap=lambda _:None, operation=operation))
+    class Ready(BaseException):
+        pass
+    def reached_ready(*args):
+        raise Ready()
+    monkeypatch.setattr(vast_runtime_metrics, 'sample_metrics', reached_ready)
+    if failures == 100:
+        runner.run_loop(store, identifier)
+        assert len(calls) == 61
+        assert store.read(identifier)['status'] == 'failed'
+        assert 'readiness timed out' in store.read(identifier)['error']
+        assert store.read(identifier, 'control.json')['cleanup']
+        return
+    with pytest.raises(Ready):
+        runner.run_loop(store, identifier)
+    assert len(calls) == failures + 1
+    assert store.read(identifier)['worker_ready'] is True
+    assert store.read(identifier)['status'] == 'uploading'
+    assert not store.read(identifier, 'control.json')['cleanup']
+
+
+@pytest.mark.parametrize('message', [
+    "Worker preflight failed: FileNotFoundError: [Errno 2] No such file or directory: '/work/pbgui/guard.json'",
+    'SSH worker operation failed: authentication or permission denied',
+])
+def test_guard_readiness_timeout_is_persisted_and_fatal(message):
+    from vast_job_runner import worker_readiness_error
+    error = VastError(message, 422 if 'preflight' in message else 400)
+    assert worker_readiness_error(error, {'setup_started_at':1000}, 1299).status != 422
+    for now in (1300, 2000):
+        result = worker_readiness_error(error, {'setup_started_at':1000}, now)
+        assert result.status == 422
+        assert 'timed out after 300 seconds' in str(result)
+    assert worker_readiness_error(error, {'setup_started_at':1000, 'worker_ready':True}, 1100) is error
+
+
+@pytest.mark.parametrize('message', [
+    'Worker identity or independent deadline guard mismatch',
+    'SSH worker operation failed: host identity verification failed',
+    'Worker preflight failed: CUDA is unavailable',
+    "Worker preflight failed: FileNotFoundError: [Errno 2] No such file or directory: '/opt/pb8-revision'",
+    'Worker preflight failed: JSONDecodeError: invalid guard',
+])
+def test_guard_readiness_never_retries_other_validation(message):
+    from vast_job_runner import worker_readiness_error
+    error = VastError(message, 422)
+    assert worker_readiness_error(error, {'setup_started_at':1000}, 1001) is error

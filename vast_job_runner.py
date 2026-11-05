@@ -714,6 +714,29 @@ def stop_and_collect(connection, store, identifier, intent, *, lease_id=None):
     return True
 
 
+WORKER_GUARD_READINESS_SECONDS = 300
+
+
+def worker_readiness_error(exc: Exception, state: dict, now: float) -> Exception:
+    """Retry only guard publication/key propagation within the persisted setup window.
+
+    Provider running/SSH host-key publication precede completion of onstart.
+    Missing guard is not an identity mismatch; all other preflight errors stay fatal.
+    """
+    if state.get('worker_ready') or not isinstance(exc, VastError):
+        return exc
+    message = str(exc)
+    missing_guard = (message.startswith('Worker preflight failed: FileNotFoundError:')
+                     and message.endswith("No such file or directory: '/work/pbgui/guard.json'"))
+    auth_pending = message == 'SSH worker operation failed: authentication or permission denied'
+    if not (missing_guard or auth_pending):
+        return exc
+    started = state.get('setup_started_at')
+    if started is not None and now - started < WORKER_GUARD_READINESS_SECONDS:
+        return VastError('Waiting for worker guard/SSH readiness: ' + message)
+    return VastError('Worker guard/SSH readiness timed out after 300 seconds: ' + message, 422)
+
+
 def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> None:
     """Reattach to a running worker and collect before the independent deadline."""
     from vast_convergence import DEFAULTS, observe
@@ -910,6 +933,7 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                                  convergence_snapshot_source='remote_pareto')
                 last_backup = time.time()
         except Exception as exc:
+            exc = worker_readiness_error(exc, store.read(identifier), time.time())
             safe_error = str(exc) if isinstance(exc, VastError) else "Worker operation failed; reconnecting"
             _log(SERVICE, safe_error, level="WARNING",
                  meta=None if isinstance(exc, VastError) else {'traceback': traceback.format_exc()})
