@@ -86,6 +86,10 @@ def guard() -> None:
     if not deadline <= maximum <= time.time() + 30 * 86400:
         raise ValueError("Invalid maximum deadline")
     hard_deadline = float(os.environ.get('PBGUI_HARD_DEADLINE', str(time.time() + 30 * 86400)))
+    import math
+    if (not all(math.isfinite(value) for value in (deadline, maximum, hard_deadline))
+            or not deadline <= maximum <= hard_deadline <= time.time() + 30 * 86400):
+        raise ValueError("Invalid hard deadline")
     state = {"instance_id": instance, "deadline": deadline, "job_id": os.environ["PBGUI_JOB_ID"],
              "max_deadline": maximum, "hard_deadline": hard_deadline, "deadline_protocol": 2, "guard_pid": os.getpid()}
     saved_path = ROOT / 'guard.json'

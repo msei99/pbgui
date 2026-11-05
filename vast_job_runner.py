@@ -112,19 +112,34 @@ def validate_intent(intent: dict, identifier: str) -> dict:
 
 
 def rental_payload(intent: dict, registry_token: str = "") -> dict:
-    """Use the pinned image worker without embedding code in provider arguments."""
+    """Keep the pinned optimizer worker, but bootstrap the locally versioned guard.
+
+    Input archives contain market data/config only. An image's baked-in guard
+    cannot enforce deadline protocols introduced after that image was built.
+    """
     from vast_deadline import maximum_deadline
     if intent.get("image") not in SUPPORTED_RENTAL_IMAGES:
         raise VastError("Invalid cloud rental image")
+    import inspect
+    from setup.vast_gpu_benchmark import cloud_worker
+    guard_source = ("import json, os, re, time, urllib.request\nfrom pathlib import Path\n"
+                    "ROOT = Path('/work/pbgui')\n"
+                    + "\n".join(inspect.getsource(function) for function in
+                                (cloud_worker.write_record, cloud_worker.apply_deadline_request, cloud_worker.guard))
+                    + "\nguard()\n")
+    hard = intent.get('accepted_at', time.time()) + 30 * 86400
+    maximum = min(maximum_deadline(intent), hard)
     startup = ("set -e\numask 077\nmkdir -p /work/pbgui\ntouch /root/.no_auto_tmux\n"
                "cp /opt/pbgui/worker.py /work/pbgui/worker.py\n"
+               "cat > /work/pbgui/deadline-guard-v2.py <<'PBGUI_GUARD_SOURCE'\n"
+               + guard_source + "PBGUI_GUARD_SOURCE\n"
                "ssh-keygen -A\n"
                f"printf 'PBGUI_HOST_KEY {job_id(intent['id'])} %s\\n' "
                "\"$(cat /etc/ssh/ssh_host_ed25519_key.pub)\" > /proc/1/fd/1\n"
-               "nohup /usr/local/bin/python /work/pbgui/worker.py guard > /work/pbgui/guard.log 2>&1 < /dev/null &\n")
+               "nohup /usr/local/bin/python /work/pbgui/deadline-guard-v2.py guard > /work/pbgui/guard.log 2>&1 < /dev/null &\n")
     return {"client_id": "me", "image": intent["image"], "disk": intent["offer"]["disk_gb"],
             "label": intent["label"], "runtype": "ssh_direct", "target_state": "running", "cancel_unavail": True,
-            "onstart": startup, "env": {"PBGUI_DEADLINE": str(intent["deadline"]), "PBGUI_JOB_ID": intent["id"], "PBGUI_MAX_DEADLINE": str(maximum_deadline(intent)), "PBGUI_HARD_DEADLINE": str(intent['accepted_at'] + 86400 if 'accepted_at' in intent else maximum_deadline(intent))}}
+            "onstart": startup, "env": {"PBGUI_DEADLINE": str(intent["deadline"]), "PBGUI_JOB_ID": intent["id"], "PBGUI_MAX_DEADLINE": str(maximum), "PBGUI_HARD_DEADLINE": str(hard)}}
 
 
 def owned_instance(client: VastClient, intent: dict, *, fresh: bool = False,

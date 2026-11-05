@@ -512,9 +512,13 @@ def test_public_payload_never_sends_registry_credentials():
                              'deadline':10000,'offer':{'disk_gb':40}}, 'legacy_private_token')
     assert 'image_login' not in payload
     assert 'legacy_private_token' not in json.dumps(payload)
-    assert len(payload['onstart'].encode()) < 1024
+    assert len(payload['onstart'].encode()) < 16384
     assert 'cp /opt/pbgui/worker.py /work/pbgui/worker.py' in payload['onstart']
     assert 'b64decode' not in payload['onstart']
+    assert 'deadline-guard-v2.py guard' in payload['onstart']
+    source = payload['onstart'].split("<<'PBGUI_GUARD_SOURCE'\n")[1].split('PBGUI_GUARD_SOURCE\n')[0]
+    compile(source, '<bootstrap-guard>', 'exec')
+    assert source.endswith('guard()\n')
 
 
 def test_cache_is_shared_and_revalidates_content(tmp_path, monkeypatch):
@@ -1191,3 +1195,41 @@ def test_worker_start_rejects_invalid_custom_idle_delay(queue,seconds):
     queue,_ = queue
     with pytest.raises(VastError,match='Idle timeout'):
         queue.start({'id':123},1,1,seconds)
+
+
+def test_bootstrap_guard_publishes_long_deadline_without_image(tmp_path):
+    """Execute the exact transmitted source; no CUDA/image or provider calls needed."""
+    import os
+    import subprocess
+    import sys
+    import time
+    now = time.time()
+    payload = rental_payload({'id': 'a' * 32, 'image': IMAGE,
+                              'label': 'pbgui-vast-' + 'a' * 32,
+                              'accepted_at': now, 'deadline': now + 36 * 3600,
+                              'offer': {'disk_gb': 40}})
+    source = payload['onstart'].split("<<'PBGUI_GUARD_SOURCE'\n")[1].split('PBGUI_GUARD_SOURCE\n')[0]
+    source = source.replace("ROOT = Path('/work/pbgui')", 'ROOT = Path(' + repr(str(tmp_path)) + ')')
+    script = tmp_path / 'guard.py'
+    script.write_text(source)
+    env = dict(os.environ, **payload['env'], CONTAINER_ID='123', CONTAINER_API_KEY='test-only')
+    process = subprocess.Popen([sys.executable, str(script), 'guard'], env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        until = time.monotonic() + 5
+        while not (tmp_path / 'guard.json').exists() and process.poll() is None and time.monotonic() < until:
+            time.sleep(.02)
+        state = json.loads((tmp_path / 'guard.json').read_text())
+        assert state['deadline'] == now + 36 * 3600
+        assert state['deadline'] <= state['max_deadline'] <= state['hard_deadline']
+        assert state['guard_pid'] == process.pid
+        assert state['deadline_protocol'] == 2
+    finally:
+        process.terminate()
+        process.communicate(timeout=5)
+    (tmp_path / 'guard.json').unlink()
+    env['PBGUI_HARD_DEADLINE'] = str(now + 3600)
+    result = subprocess.run([sys.executable, str(script), 'guard'], env=env, capture_output=True, timeout=5)
+    assert result.returncode != 0
+    assert b'Invalid hard deadline' in result.stderr
+    assert not (tmp_path / 'guard.json').exists()
