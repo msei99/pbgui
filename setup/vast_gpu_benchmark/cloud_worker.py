@@ -67,7 +67,7 @@ def apply_deadline_request(state: dict, request: dict, now: float) -> dict:
              and type(target) in (int, float) and math.isfinite(target)
              and type(requested_max) in (int, float) and math.isfinite(requested_max)
              and now + 300 < min(state['deadline'], target) and target <= requested_max
-             and requested_max <= state.get('hard_deadline', now + 86400))
+             and requested_max <= state.get('hard_deadline', state['max_deadline']))
     if request.get('id') == state.get('request_id'):
         return state
     if not valid:
@@ -80,23 +80,23 @@ def guard() -> None:
     deadline = float(os.environ["PBGUI_DEADLINE"])
     instance = int(os.environ["CONTAINER_ID"])
     key = os.environ["CONTAINER_API_KEY"]
-    if not 0 < deadline <= time.time() + 86400 or instance <= 0:
-        raise ValueError("Invalid guard authorization")
     maximum = float(os.environ.get("PBGUI_MAX_DEADLINE", str(deadline)))
-    if not deadline <= maximum <= time.time() + 86400:
-        raise ValueError("Invalid maximum deadline")
     hard_deadline = float(os.environ.get('PBGUI_HARD_DEADLINE', str(time.time() + 86400)))
+    import math
+    if (not all(math.isfinite(value) for value in (deadline, maximum, hard_deadline))
+            or not 0 < deadline <= maximum <= hard_deadline or instance <= 0):
+        raise ValueError('Invalid guard authorization')
     state = {"instance_id": instance, "deadline": deadline, "job_id": os.environ["PBGUI_JOB_ID"],
-             "max_deadline": maximum, "hard_deadline": hard_deadline, "deadline_protocol": 2, "guard_pid": os.getpid()}
+             "max_deadline": maximum, "hard_deadline": hard_deadline, "deadline_protocol": 3, "guard_pid": os.getpid()}
     saved_path = ROOT / 'guard.json'
     if saved_path.is_file() and not saved_path.is_symlink():
         saved = json.loads(saved_path.read_text())
         if (saved.get('instance_id') == instance and saved.get('job_id') == state['job_id']
-                and saved.get('deadline_protocol') in (1, 2)
+                and saved.get('deadline_protocol') in (1, 2, 3)
                 and type(saved.get('max_deadline')) in (int, float)
                 and type(saved.get('deadline')) in (int, float)
                 and 0 < saved['deadline'] <= saved['max_deadline'] <= hard_deadline):
-            state = dict(saved, deadline_protocol=2, guard_pid=os.getpid(), hard_deadline=min(hard_deadline, saved.get('hard_deadline', hard_deadline)))
+            state = dict(saved, deadline_protocol=3, guard_pid=os.getpid(), hard_deadline=min(hard_deadline, saved.get('hard_deadline', hard_deadline)))
             deadline = state['deadline']
     monotonic_deadline = time.monotonic() + max(0, deadline - time.time())
     write_record(ROOT / "guard.json", state)
@@ -812,6 +812,21 @@ def status() -> dict:
     return result
 
 
+def _partial_skip_names() -> set[str]:
+    """Names of content-addressed Pareto files the controller already verified."""
+    request = ROOT / "partial-skip.json"
+    if not request.is_file() or request.is_symlink():
+        return set()
+    try:
+        raw = json.loads(request.read_text())
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(raw, dict) or not isinstance(raw.get("skip"), list):
+        return set()
+    return {name for name in raw["skip"]
+            if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_-]+\.json", name)}
+
+
 def snapshot(final: bool) -> dict:
     """Archive immutable Pareto copies; include complete native files only at finish."""
     if final and not (ROOT / "finished.json").exists():
@@ -820,7 +835,9 @@ def snapshot(final: bool) -> dict:
         stage = Path(temporary)
         files = []
         source_root = ROOT / "output"
-        candidates = list(source_root.glob("optimize_results/*/pareto/*.json"))
+        skip = _partial_skip_names() if not final else set()
+        candidates = [source for source in source_root.glob("optimize_results/*/pareto/*.json")
+                      if source.name not in skip]
         if final:
             candidates += list(source_root.glob("optimize_results/*/all_results.bin"))
             candidates += list(source_root.glob("optimize_results/*/checkpoint.pkl"))

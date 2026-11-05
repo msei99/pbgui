@@ -8,6 +8,27 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize('maximum', [24, None])
+def test_rental_form_uses_server_duration_limit(cloud_page, maximum):
+    """Native validity follows published worker capability without discarding edits."""
+    page, _, calls, overrides, _ = cloud_page
+    overrides['/api/vast/settings'] = (200, json.dumps(dict(
+        configured=True, maximum_rental_hours=maximum)), {})
+    page.reload()
+    page.locator('[data-vast-view=rental]').click()
+    page.wait_for_function("document.getElementById('key-status').textContent === 'API key saved locally.'")
+    hours = page.locator('#job-hours')
+    assert hours.get_attribute('max') == ('24' if maximum else None)
+    hours.fill('120')
+    assert hours.evaluate('e => e.checkValidity()') is (maximum is None)
+    poll_cloud(page)
+    assert hours.input_value() == '120'
+    if maximum:
+        before = len([1 for method, url in calls if method == 'PATCH' and url.endswith('/gpu-preferences')])
+        page.locator('#save-rental-preferences').click()
+        assert len([1 for method, url in calls if method == 'PATCH' and url.endswith('/gpu-preferences')]) == before
+
+
 def poll_cloud(page):
     """Trigger the production return-to-view GET, without a manual refresh control."""
     with page.expect_request('**/api/vast/jobs'):
@@ -864,13 +885,14 @@ def test_assistant_block_invalidates_inflight_offer_response(cloud_page, blocked
     assert page.locator('#find-offers').is_enabled()
 
 
-def test_rental_edits_survive_poll_and_submit_entered_values(cloud_page):
+@pytest.mark.parametrize('protocol', [2, 3])
+def test_rental_edits_survive_poll_and_submit_entered_values(cloud_page, protocol):
     """Polling preserves unsaved amounts, minute steps and keyboard focus."""
     page, data, _, overrides, held = cloud_page
     lease = 'c'*32
-    data['worker'].update(id=lease, deadline_protocol=2)
+    data['worker'].update(id=lease, deadline_protocol=protocol)
     data['jobs'][0].update(lease_id=lease)
-    data['jobs'][0]['rental'].update(id=lease, deadline_protocol=2, deadline=2000000000, transfer_reserve_usd=.1)
+    data['jobs'][0]['rental'].update(id=lease, deadline_protocol=protocol, deadline=2000000000, transfer_reserve_usd=.1)
     page.reload()
     page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
     page.locator('[title="Open log"]').click()
@@ -897,6 +919,12 @@ def test_rental_edits_survive_poll_and_submit_entered_values(cloud_page):
     page.get_by_role('button', name='Extend deadline by entered minutes', exact=True).click()
     page.wait_for_timeout(100)
     assert json.loads(held[0].request.post_data)['minutes'] == 1
+    held.pop().fulfill(json={'pending':True})
+    page.wait_for_timeout(100)
+    overrides['/api/vast/queue/transfer-reserve'] = 'hold'
+    page.get_by_role('button', name='Save reserve', exact=True).click()
+    page.wait_for_timeout(100)
+    assert json.loads(held[0].request.post_data)['reserve_usd'] == .2
     held.pop().fulfill(json={'pending':True})
 
 
@@ -1423,13 +1451,14 @@ def test_upload_remaining_time(cloud_page, stage, speed, expected):
         assert 'Host-rate remaining' not in text
 
 
-def test_deadline_controls_wait_for_worker_confirmation(cloud_page):
+@pytest.mark.parametrize('protocol', [2, 3])
+def test_deadline_controls_wait_for_worker_confirmation(cloud_page, protocol):
     """Deadline buttons stay locked until the durable worker acknowledgement arrives."""
     page, data, calls, overrides, held = cloud_page
     lease = 'c'*32
-    data['worker'].update(id=lease, deadline_protocol=2)
+    data['worker'].update(id=lease, deadline_protocol=protocol)
     data['jobs'][0].update(lease_id=lease)
-    data['jobs'][0]['rental'].update(id=lease, deadline_protocol=2, deadline=2_000_000_000)
+    data['jobs'][0]['rental'].update(id=lease, deadline_protocol=protocol, deadline=2_000_000_000)
     page.reload()
     page.wait_for_function('window.PBGuiVast && PBGuiVast.queueItems().length === 1')
     page.locator('[title="Open log"]').click()

@@ -1,0 +1,8 @@
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1
+COPY cloud_worker.py /opt/pbgui/worker.py
+COPY verify_rental_protocol.py /opt/pbgui/verify_rental_protocol.py
+COPY worker_candidate_rental_protocol.json /opt/pbgui/worker_candidate_rental_protocol.json
+RUN test "$(cat /opt/pb8-revision)" = "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a" \
+    && PYTHONPATH=/opt/passivbot/src python /opt/pbgui/verify_fresh_population.py \
+    && python /opt/pbgui/verify_rental_protocol.py
+LABEL pbgui.worker.protocol="rental-protocol-v3"

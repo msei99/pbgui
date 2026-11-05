@@ -176,9 +176,11 @@ def test_deadline_preserves_already_reserved_transfer_budget(rental):
         request_deadline(queue, identifier, 8000, 30)
 
 
-def test_budget_request_recalculates_deadline_after_guard_confirmation(rental):
+@pytest.mark.parametrize('protocol', [2, 3])
+def test_budget_request_recalculates_deadline_after_guard_confirmation(rental, protocol):
     """Editing the active budget changes its acknowledged deadline without exceeding it."""
     queue, identifier, intent = rental
+    queue.store.update(identifier, deadline_protocol=protocol)
     result = request_budget(queue, identifier, 2, .7)
     assert result['pending'] and result['requested_deadline'] == pytest.approx(7700)
     request = queue.store.read(identifier)['deadline_request']

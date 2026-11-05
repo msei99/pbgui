@@ -8,7 +8,7 @@ import time
 
 from file_lock import advisory_file_lock
 from pb8_loop_store import identifier
-from vast_deadline import effective_intent, maximum_deadline, request_budget, request_deadline
+from vast_deadline import budget_deadline, effective_intent, maximum_deadline, request_budget, request_deadline
 from vast_provider import VastError
 
 SERVICE = 'PB8Loop'
@@ -43,10 +43,10 @@ def rental_snapshot(queue, record):
                 maximum_deadline=maximum_deadline(intent),
                 billing=public_billing(worker.get('billing')),
                 estimated_compute_usd=elapsed / 3600 * intent['offer'].get('price_hour_usd', 0),
-                can_edit_budget=controllable and worker.get('deadline_protocol') == 2,
+                can_edit_budget=controllable and worker.get('deadline_protocol') in (2, 3),
                 pending=bool(worker.get('deadline_request') or record.get('rental_extension')),
                 error=record.get('rental_extension_error') or worker.get('deadline_error'),
-                can_extend=controllable and worker.get('deadline_protocol') in (1, 2))
+                can_extend=controllable and worker.get('deadline_protocol') in (1, 2, 3))
 
 
 def change_budget(store, queue, owner, loop_id, worker_id, expected_deadline, expected_budget, budget):
@@ -64,9 +64,11 @@ def change_budget(store, queue, owner, loop_id, worker_id, expected_deadline, ex
         if rental['deadline'] != expected_deadline:
             raise VastError('Rental deadline changed; review the current values', 409)
         intent = effective_intent(queue.store, worker_id, queue.store.read(worker_id, 'intent.json'))
+        used = queue.worker_for(worker_id).get('transfer_reserved_used', 0)
+        if budget < max(intent['transfer_reserve_usd'], used):
+            raise VastError('Budget must cover the transfer reserve already allocated to this rental', 422)
         # Match the budget guard's deadline calculation before persisting a request.
-        target = intent['accepted_at'] + min(86400, (budget - intent['transfer_reserve_usd'])
-                                           / intent['offer']['price_hour_usd'] * 3600)
+        target = budget_deadline(intent, budget)
         if target < record['deadline']:
             raise VastError('Budget would end the rental before the current Loop deadline', 422)
         return request_budget(queue, worker_id, expected_budget, budget)

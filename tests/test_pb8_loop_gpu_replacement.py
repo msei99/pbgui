@@ -1581,9 +1581,10 @@ def test_stop_collection_has_shared_deadline_and_retains_available_artifacts(env
             operations.append((action, timeout))
             clock[0] += timeout
             return {}
-        def collect(self, final, timeout):
+        def collect(self, final, timeout, ignore_quota=False):
             """Partial metadata/download cannot obtain a second collection allowance."""
             assert not final
+            assert ignore_quota is True
             collections.append(timeout)
             clock[0] += timeout
             raise VastError('Transfer deadline reached')
@@ -1630,9 +1631,10 @@ def test_stop_publishes_last_verified_results_without_hiding_execution_failure(e
             """A running partial snapshot exhausts only the existing Stop wait."""
             clock[0] += timeout
             return {'finished': outcome != 'partial'}
-        def collect(self, final, timeout):
+        def collect(self, final, timeout, ignore_quota=False):
             """Model the verified output contract of WorkerConnection.collect."""
             collections.append(final)
+            assert ignore_quota is True
             assert final is (outcome != 'partial')
             root = directory / ('final-results' if final else 'partial-results')
             source = root / 'optimize_results/fixture'

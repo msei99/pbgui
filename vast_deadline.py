@@ -14,16 +14,32 @@ from vast_provider import VastError
 SERVICE = 'VastRunner'
 
 
+def budget_deadline(intent: dict, budget: float) -> float:
+    """Use the same reserve-aware budget bound for rental and Loop controls."""
+    from vast_worker_capabilities import supports
+    seconds = (budget - intent['transfer_reserve_usd']) / intent['offer']['price_hour_usd'] * 3600
+    if not math.isfinite(seconds):
+        raise VastError('Budget produces an invalid rental deadline', 422)
+    if not supports(intent.get('image', ''), 'multi_day'):
+        seconds = min(86400, seconds)
+    return intent['accepted_at'] + seconds
+
+
 def maximum_deadline(intent: dict) -> float:
-    """Retain the original budget and transfer allowance within the 24-hour ceiling."""
+    """Retain budget bounds and the legacy ceiling for older worker images."""
     offer = intent['offer']
     if any(type(offer.get(key)) not in (int, float) or not math.isfinite(offer[key]) or offer[key] < 0
            for key in ('download_gb_usd', 'upload_gb_usd', 'price_hour_usd')) or offer['price_hour_usd'] <= 0:
         return intent['deadline']  # Legacy leases without price metadata cannot be extended.
     reserve = max(.05, 2 * intent.get('bundle_bytes', 0) / 1e9 * offer['download_gb_usd']
                   + 3 * offer['upload_gb_usd'] * max(1, intent.get('job_count', 1)))
-    return intent['accepted_at'] + min(86400, max(0, intent['budget_usd'] - reserve)
-                                      / offer['price_hour_usd'] * 3600)
+    from vast_worker_capabilities import supports
+    seconds = max(0, intent['budget_usd'] - reserve) / offer['price_hour_usd'] * 3600
+    if not math.isfinite(seconds):
+        return intent['deadline']
+    if not supports(intent.get('image', ''), 'multi_day'):
+        seconds = min(86400, seconds)
+    return intent['accepted_at'] + seconds
 
 
 def effective_intent(store, identifier: str, intent: dict) -> dict:
@@ -58,7 +74,7 @@ def request_deadline(queue, identifier: str, expected: float, minutes: int) -> d
         control = queue.store.read(identifier, 'control.json')
         if control.get('stop') or control.get('cleanup'):
             raise VastError('Rental cleanup has already been requested', 409)
-        if worker.get('deadline_protocol') not in (1, 2):
+        if worker.get('deadline_protocol') not in (1, 2, 3):
             raise VastError('This worker requires an updated deadline guard; its deadline cannot be changed', 409)
         if worker.get('deadline_request'):
             raise VastError('A deadline change is awaiting worker confirmation', 409)
@@ -71,7 +87,7 @@ def request_deadline(queue, identifier: str, expected: float, minutes: int) -> d
             raise VastError('Keep at least 10 minutes for safe collection and cleanup', 409)
         rental_cost = (target - intent['accepted_at']) / 3600 * intent['offer']['price_hour_usd']
         if target > maximum_deadline(intent) or rental_cost + worker.get('transfer_reserved_used', 0) > intent['budget_usd']:
-            raise VastError('Deadline exceeds the existing budget or the 24-hour rental limit', 422)
+            raise VastError('Deadline exceeds the existing budget or this worker image\'s rental limit', 422)
         request = dict(id=uuid.uuid4().hex, expected=current, deadline=target, job_id=identifier)
         if worker.get('deadline_protocol') == 1 or worker.get('deadline_guard_upgraded_at'):
             from vast_guard_migration import apply_migrated_deadline
@@ -89,7 +105,7 @@ def request_transfer_reserve(queue, identifier: str, expected: float, reserve: f
         worker = queue.worker_for(identifier)
         if not worker or worker['id'] != identifier or worker.get('rental_state') != 'active':
             raise VastError('This rental is no longer active', 409)
-        if worker.get('deadline_protocol') != 2:
+        if worker.get('deadline_protocol') not in (2, 3):
             raise VastError('This worker needs the updated budget-control guard before changing its transfer reserve', 409)
         control = queue.store.read(identifier, 'control.json')
         if control.get('stop') or control.get('cleanup'):
@@ -127,7 +143,7 @@ def request_budget(queue, identifier: str, expected: float, budget: float) -> di
         worker = queue.worker_for(identifier)
         if not worker or worker['id'] != identifier or worker.get('rental_state') != 'active':
             raise VastError('This rental is no longer active', 409)
-        if worker.get('deadline_protocol') != 2:
+        if worker.get('deadline_protocol') not in (2, 3):
             raise VastError('This worker needs the updated budget-control guard before changing its budget', 409)
         control = queue.store.read(identifier, 'control.json')
         if control.get('stop') or control.get('cleanup'):
@@ -140,7 +156,7 @@ def request_budget(queue, identifier: str, expected: float, budget: float) -> di
         used = worker.get('transfer_reserved_used', 0)
         if budget < max(intent['transfer_reserve_usd'], used):
             raise VastError('Budget must cover the transfer reserve already allocated to this rental', 422)
-        target = intent['accepted_at'] + min(86400, (budget - intent['transfer_reserve_usd']) / intent['offer']['price_hour_usd'] * 3600)
+        target = budget_deadline(intent, budget)
         if target < time.time() + 600:
             raise VastError('Budget would leave less than 10 minutes for safe collection and cleanup', 422)
         request = dict(id=uuid.uuid4().hex, expected=intent['deadline'], deadline=target, job_id=identifier,
@@ -166,7 +182,7 @@ def reconcile_deadline(store, identifier: str, client, row: dict, intent: dict) 
         if guard.get('job_id') != identifier or guard.get('instance_id') != row['id']:
             raise VastError('Deadline guard identity mismatch', 422)
         protocol = guard.get('deadline_protocol')
-        supported = protocol in (1, 2)
+        supported = protocol in (1, 2, 3)
         store.update(identifier, deadline_protocol=protocol if supported else 0)
         if not request:
             return

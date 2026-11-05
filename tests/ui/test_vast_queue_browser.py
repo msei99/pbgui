@@ -82,7 +82,7 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide():
             page.locator('#collect-job').click()
             page.wait_for_function("document.getElementById('queue-message').textContent.includes('Pareto results collected')")
             assert sum(method == 'POST' and url.endswith('/collect') for method, url in calls) == 1
-            assert any('/app/js/vast.js?v=179' in url for _, url in calls)
+            assert any('/app/js/vast.js?v=181' in url for _, url in calls)
             location_before = page.url
             page.locator('#pbgui-guide-btn').click()
             page.wait_for_function("document.getElementById('pbgui-shared-help-ovl')?.getAttribute('aria-hidden')==='false'")

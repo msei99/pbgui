@@ -1,0 +1,25 @@
+{
+    "schema_version": 1,
+    "state": "unpublished_candidate",
+    "base_image": "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1",
+    "base_revision": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
+    "candidate_tag": "pbgui-pb8-worker:b9d6692-rental-protocol-v3-candidate",
+    "worker_source_sha256": "c559742d33c4cf21fe57530760ebba680784924b8826ef5fb81642b0d9b9aa9b",
+    "capabilities": [
+        "multi_day",
+        "pareto_delta"
+    ],
+    "activation": "Unpublished candidate. Build status is recorded separately in worker_build_rental_protocol.json. Keep IMAGE and published capabilities unchanged until image verification and registry digest verification pass.",
+    "retained_pb8": {
+        "gpu_source_sha256": "93a3ef0430d6e8664a3fbd48a10044e674faea58627da996d9209fbc827aec81",
+        "rust_source_fingerprint": "0f94231023292fcc96fd42c7301272509c963dfa45ec810e7b3a026cdf5a571e",
+        "checks": [
+            "published patched base image retained",
+            "fresh populations, explicit seeds and checkpoint restore",
+            "rolling HSL history and CPU prefix reuse",
+            "adaptive CUDA history memory and VRAM headroom",
+            "loaded Rust extension source stamp"
+        ],
+        "build_verifier": "/opt/pbgui/verify_fresh_population.py"
+    }
+}

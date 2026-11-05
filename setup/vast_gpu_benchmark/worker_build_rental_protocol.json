@@ -1,0 +1,41 @@
+{
+    "schema_version": 1,
+    "state": "locally_built_offline_verified",
+    "built_on": "2026-11-04",
+    "image_tag": "pbgui-pb8-worker:b9d6692-rental-protocol-v3-candidate",
+    "image_id": "sha256:1e3d1f7ba6767eb200caa268a3e1978c04c2cf44f040a5ef5549aef63a5ef486",
+    "base_image": "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1",
+    "base_revision": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
+    "input_sha256": {
+        "Dockerfile.rental-protocol": "24de3eaa9010f8d9ff34c0b55987c9baf89d440b54d869feef728a5e3f22e4ed",
+        "cloud_worker.py": "c559742d33c4cf21fe57530760ebba680784924b8826ef5fb81642b0d9b9aa9b",
+        "verify_rental_protocol.py": "fa5a50147fb300e61509c1a6ff02ca2c85466fe358f9abefbc2b96659cf6ec22",
+        "worker_candidate_rental_protocol.json": "f1220eae999845d101ef588f9085fbab6836c322a0c1bfe248b03911ffa15640"
+    },
+    "retained_base_layers": 38,
+    "added_layers": 4,
+    "base_layers_unchanged": true,
+    "validation": {
+        "docker_build": "passed",
+        "independent_network_disabled_container": "passed",
+        "pb8_offline": {
+            "random_population_seeds": 3,
+            "checkpoint_restore": true,
+            "explicit_seed_sampling": true,
+            "rust_fingerprint_preserved": true,
+            "gpu_source_sha256": "93a3ef0430d6e8664a3fbd48a10044e674faea58627da996d9209fbc827aec81",
+            "gpu_hardware_test": "pending",
+            "real_loop_test": "pending"
+        },
+        "rental_protocol": {
+            "source_hash_verified": true,
+            "guard_120_hours": "passed",
+            "pareto_delta_snapshot": "passed"
+        },
+        "gpu_hardware_test": "pending",
+        "real_optimizer_run": "pending"
+    },
+    "registry_publication": "not performed",
+    "active_image_changed": false,
+    "rental_started": false
+}

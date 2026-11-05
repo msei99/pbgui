@@ -782,8 +782,8 @@ class JobStore:
         """Persist authorization before starting independently supervised processes."""
         if not services_available():
             raise VastError("A working user systemd service manager and OpenSSH are required", 409)
-        if number(hours) is None or not .25 <= hours <= 24 or number(budget) is None or not .1 <= budget <= 100:
-            raise VastError("Choose 0.25–24 hours and a budget of $0.10–$100", 422)
+        if number(hours) is None or hours < .25 or number(budget) is None or not .1 <= budget <= 100:
+            raise VastError("Choose at least 0.25 hours and a budget of $0.10–$100", 422)
         positive_id(offer.get("id"))
         rate = number(offer.get("price_hour_usd"))
         if rate is None or rate <= 0 or (number(offer.get("cuda_max_good")) or 0) < 13:
@@ -826,6 +826,9 @@ class JobStore:
             authorized_revision = SUPPORTED_RENTAL_IMAGE_REVISIONS.get(image) if isinstance(image, str) else None
             if not authorized_revision or intent.get("pb8_revision") != authorized_revision:
                 raise VastError("Invalid cloud rental image/revision", 422)
+            from vast_worker_capabilities import supports
+            if hours > 24 and not supports(image, 'multi_day'):
+                raise VastError('Multi-day rentals require a verified multi-day worker image; the active image still supports at most 24 hours', 422)
             require_public_image(intent["image"])
             secrets = VastCredentialStore(self.root).secrets()
             if (intent.get('job_authorization') is not None
@@ -845,7 +848,7 @@ class JobStore:
                 raise VastError("Choose an offer with known transfer prices", 422)
             reserve = max(.05, 2 * intent["bundle_bytes"] / 1e9 * inbound + 3 * outbound * max(1, int(intent.get("job_count", 1))))
             duration = min(hours * 3600, (budget - reserve) / rate * 3600)
-            if duration < 900:
+            if number(duration) is None or duration < 900:
                 raise VastError("Budget must cover at least 15 minutes plus transfer reserve", 422)
             now = time.time()
             intent.update(offer=offer, budget_usd=budget, transfer_reserve_usd=max(reserve, budget - duration / 3600 * rate),

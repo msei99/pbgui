@@ -15,7 +15,7 @@ from typing import NamedTuple
 from file_lock import advisory_file_lock
 from secure_files import ensure_private_directory, read_regular_file_nofollow
 from vast_jobs import JobStore, IMAGE, PROJECT, REVISION, TERMINAL, IncompleteJobStore, job_id, write_json
-from vast_provider import VastError, positive_id, gpu_name_matches
+from vast_provider import VastError, positive_id, gpu_name_matches, number
 
 SERVICE = "VastRunner"
 
@@ -35,7 +35,7 @@ def validated_job_authorization(value: dict) -> dict:
         queue_pause_generation(value)
     job_id(value['id'])
     job_id(value['job_id'])
-    if (type(value['hours']) not in (int, float) or not .25 <= value['hours'] <= 24
+    if (type(value['hours']) not in (int, float) or number(value['hours']) is None or value['hours'] < .25
             or type(value['budget']) not in (int, float) or not .1 <= value['budget'] <= 100):
         raise VastError('Invalid single-job rental limits', 422)
     try:
@@ -1039,7 +1039,7 @@ def _worker_step_locked(queue: CloudQueue, identifier: str, *, now: float | None
                     from vast_deadline import request_transfer_reserve
                     target = max(.05, used + expected)
                     previous = worker.get('auto_reserve_target')
-                    if worker.get('deadline_protocol') == 2 and not (worker.get('deadline_error') and previous == target):
+                    if worker.get('deadline_protocol') in (2, 3) and not (worker.get('deadline_error') and previous == target):
                         try:
                             request_transfer_reserve(queue, identifier, intent['transfer_reserve_usd'], target)
                         except VastError as exc:

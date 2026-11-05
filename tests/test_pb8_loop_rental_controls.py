@@ -33,6 +33,21 @@ def extend(bound, minutes=30, **changes):
     return extend_rental(store, queue, **args)
 
 
+@pytest.mark.parametrize('allocated', [False, True])
+def test_budget_below_transfer_allowance_reports_reserve_error(bound, allocated):
+    """Reject insufficient transfer funding before the less specific Loop deadline check."""
+    store, queue, row, worker_id = bound
+    if allocated:
+        queue.store.update(worker_id, transfer_reserved_used=1)
+        budget = .9
+    else:
+        budget = .1
+    before = copy.deepcopy(queue.store.read(worker_id))
+    with pytest.raises(VastError, match='Budget must cover the transfer reserve'):
+        change_budget(store, queue, row['owner'], row['id'], worker_id, 8000, 2, budget)
+    assert queue.store.read(worker_id) == before
+
+
 def test_use_existing_rental_time_without_remote_request(bound):
     """An already longer rental needs only a Loop allowance update."""
     store, queue, row, worker_id = bound
@@ -43,9 +58,11 @@ def test_use_existing_rental_time_without_remote_request(bound):
     assert queue.store.read(worker_id, 'intent.json')['deadline'] == 8000
 
 
-def test_remote_confirmation_before_loop_extension(bound):
+@pytest.mark.parametrize('protocol', [2, 3])
+def test_remote_confirmation_before_loop_extension(bound, protocol):
     """Pending/rejected requests retain the old deadline; exact confirmation applies once."""
     store, queue, row, worker_id = bound
+    queue.store.update(worker_id, deadline_protocol=protocol)
     before = copy.deepcopy(row['settings'])
     pending = extend(bound)
     request = queue.store.read(worker_id)['deadline_request']
@@ -119,9 +136,23 @@ def test_snapshot_is_public_and_bound_to_owner(bound):
     assert rental_snapshot(queue, dict(row, owner='b' * 32)) is None
 
 
-def test_budget_edit_waits_for_confirmation_and_preserves_loop_deadline(bound):
+@pytest.mark.parametrize('protocol,can_edit_budget,can_extend', [
+    (0, False, False), (1, False, True), (2, True, True), (3, True, True),
+])
+def test_rental_snapshot_respects_guard_capabilities(bound, protocol, can_edit_budget, can_extend):
+    """The v3 guard exposes the same controls as v2 while old guards remain restricted."""
+    _store, queue, row, worker_id = bound
+    queue.store.update(worker_id, deadline_protocol=protocol)
+    snapshot = rental_snapshot(queue, row)
+    assert snapshot['can_edit_budget'] is can_edit_budget
+    assert snapshot['can_extend'] is can_extend
+
+
+@pytest.mark.parametrize('protocol', [2, 3])
+def test_budget_edit_waits_for_confirmation_and_preserves_loop_deadline(bound, protocol):
     """A larger budget changes the guard request, never the original intent or Loop time."""
     store, queue, row, worker_id = bound
+    queue.store.update(worker_id, deadline_protocol=protocol)
     result = change_budget(store, queue, row['owner'], row['id'], worker_id, 8000, 2, 3)
     assert result['pending']
     assert rental_snapshot(queue, row)['budget_usd'] == 2
@@ -133,6 +164,26 @@ def test_budget_edit_waits_for_confirmation_and_preserves_loop_deadline(bound):
     assert store.read(row['owner'], row['id'])['deadline'] == 7000
     assert queue.store.read(worker_id, 'intent.json')['budget_usd'] == 2
     assert effective_intent(queue.store, worker_id, queue.store.read(worker_id, 'intent.json'))['budget_usd'] == 3
+
+
+def test_multi_day_loop_budget_change_preserves_the_loop_allowance(bound, monkeypatch):
+    """A budget change on a multi-day v3 rental is not clipped to a 24-hour deadline."""
+    from vast_jobs import write_json
+    store, queue, row, worker_id = bound
+    monkeypatch.setattr('vast_worker_capabilities.supports', lambda image, feature: feature == 'multi_day')
+    intent = queue.store.read(worker_id, 'intent.json')
+    intent.update(deadline=intent['accepted_at'] + 120 * 3600)
+    intent['offer']['price_hour_usd'] = .01
+    write_json(queue.store.directory(worker_id) / 'intent.json', intent)
+    queue.store.update(worker_id, deadline_protocol=3, deadline=intent['deadline'])
+    row = store.update(row['owner'], row['id'], lambda current: current.update(deadline=intent['deadline'] - 600))
+    result = change_budget(store, queue, row['owner'], row['id'], worker_id, intent['deadline'], 2, 3)
+    assert result['pending']
+    request = queue.store.read(worker_id)['deadline_request']
+    assert request['deadline'] == intent['accepted_at'] + (3 - intent['transfer_reserve_usd']) / .01 * 3600
+    assert request['deadline'] > row['deadline']
+    assert store.read(row['owner'], row['id'])['deadline'] == row['deadline']
+    assert queue.store.read(worker_id, 'intent.json') == intent
 
 
 @pytest.mark.parametrize('problem', ['owner', 'worker', 'stale_budget', 'stale_deadline', 'cleanup', 'pending', 'protocol', 'too_low'])

@@ -48,9 +48,11 @@ def reserve_queue(queue, monkeypatch):
     return queue
 
 
-def test_reserve_rebalance_waits_for_guard_acknowledgement(reserve_queue, monkeypatch):
+@pytest.mark.parametrize('protocol', [2, 3])
+def test_reserve_rebalance_waits_for_guard_acknowledgement(reserve_queue, monkeypatch, protocol):
     """A later job can use unused time budget only after a shorter deadline is confirmed."""
     queue = reserve_queue
+    queue.store.update('a'*32, deadline_protocol=protocol)
     monkeypatch.setattr('vast_deadline.time.time', lambda: 1000)
     assert worker_step(queue, 'a'*32, now=1000) is None
     worker = queue.store.read('a'*32)
@@ -78,9 +80,11 @@ def test_old_guard_does_not_spend_unacknowledged_reserve(reserve_queue, protocol
     assert queue.store.read('b'*32)['status'] == 'ready'
 
 
-def test_rejected_auto_reserve_is_not_resubmitted_forever(reserve_queue, monkeypatch):
+@pytest.mark.parametrize('protocol', [2, 3])
+def test_rejected_auto_reserve_is_not_resubmitted_forever(reserve_queue, monkeypatch, protocol):
     """An explicit worker rejection remains actionable instead of resetting idle forever."""
     queue = reserve_queue
+    queue.store.update('a'*32, deadline_protocol=protocol)
     monkeypatch.setattr('vast_deadline.time.time', lambda: 1000)
     worker_step(queue, 'a'*32, now=1000)
     queue.store.update('a'*32, deadline_request=None, deadline_error='Worker rejected the deadline change')

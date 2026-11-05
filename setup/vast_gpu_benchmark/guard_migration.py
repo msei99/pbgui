@@ -40,7 +40,7 @@ def guard_state(root, request):
         raise ValueError('Invalid guard record')
     state = json.loads(path.read_text())
     if (state.get('job_id') != request['job_id'] or state.get('instance_id') != request['instance_id']
-            or state.get('deadline_protocol') not in (1, 2)):
+            or state.get('deadline_protocol') not in (1, 2, 3)):
         raise ValueError('Guard identity or protocol mismatch')
     deadline, maximum, hard = state.get('deadline'), state.get('max_deadline'), request['hard_deadline']
     if (any(type(value) not in (int, float) or not math.isfinite(value) for value in (deadline, maximum, hard))
@@ -117,7 +117,7 @@ def migrate(root, request):
         request_path = root / 'deadline-request.json'
         archive_path = root / '.deadline-request-before-upgrade.json'
         try:
-            if state['deadline_protocol'] == 2:
+            if state['deadline_protocol'] in (2, 3):
                 if state.get('guard_pid') != pid:
                     raise ValueError('Replacement guard identity cannot be verified')
                 return state
@@ -155,7 +155,7 @@ def migrate(root, request):
                 if child.poll() is not None:
                     raise ValueError('Replacement guard failed to start')
                 current = guard_state(root, request)
-                if current.get('deadline_protocol') == 2 and current.get('guard_pid') == child.pid:
+                if current.get('deadline_protocol') in (2, 3) and current.get('guard_pid') == child.pid:
                     signal.pidfd_send_signal(descriptor, signal.SIGKILL)
                     committed = True
                     if archived_request:

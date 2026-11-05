@@ -63,7 +63,7 @@ def test_live_handover_preserves_deadline_and_optimizer(rental_guard):
     original_worker = (root / 'worker.py').read_bytes()
     state = migration.migrate(root, request)
     new_pids.append(state['guard_pid'])
-    assert state['deadline_protocol'] == 2 and state['deadline'] == request['expected']
+    assert state['deadline_protocol'] == 3 and state['deadline'] == request['expected']
     assert state['max_deadline'] == request['expected'] + 3600
     old.wait(timeout=5)
     assert optimizer.poll() is None

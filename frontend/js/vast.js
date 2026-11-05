@@ -261,6 +261,11 @@
   }
 
   function renderSettings(data) {
+    if (Object.hasOwn(data, 'maximum_rental_hours')) {
+      const maximum = data.maximum_rental_hours;
+      if (Number.isFinite(maximum) && maximum > 0) el('job-hours').max = String(maximum);
+      else el('job-hours').removeAttribute('max');
+    }
     el('key-status').textContent = data.configured ? 'API key saved locally.' : 'No API key saved.';
     accountConfigured = !!data.configured;
     if (!accountConfigured && settingsVisible && settingsView === 'offers') showSettings('account');
@@ -2281,7 +2286,7 @@
         budgetInput.title = 'Budget target in USD'; budgetInput.setAttribute('aria-label', 'Budget target in USD');
         budgetInput = retainInput(budgetInput, 'Budget target in USD');
         const budgetButton = document.createElement('button'); budgetButton.type = 'button'; budgetButton.className = 'btn'; budgetButton.textContent = budgetChanging ? 'Saving…' : 'Save budget';
-        budgetButton.title = rental.deadline_protocol !== 2 ? 'Requires the updated budget-control worker guard' : 'Save budget target and recalculate deadline';
+        budgetButton.title = ![2, 3].includes(rental.deadline_protocol) ? 'Requires the updated budget-control worker guard' : 'Save budget target and recalculate deadline';
         budgetButton.disabled = rental.deadline_pending || budgetChanging;
         budgetButton.addEventListener('click', () => {
           const value = Number(budgetInput.value);
@@ -2306,7 +2311,7 @@
         for (const direction of [-1, 1]) {
           const button = document.createElement('button'); button.type = 'button'; button.className = 'btn';
           button.textContent = direction < 0 ? '−' : '+';
-          button.title = rental.deadline_protocol !== 1 && rental.deadline_protocol !== 2 ? 'Requires an updated worker deadline guard' : (direction < 0 ? 'Shorten' : 'Extend') + ' deadline by entered minutes';
+          button.title = ![1, 2, 3].includes(rental.deadline_protocol) ? 'Requires an updated worker deadline guard' : (direction < 0 ? 'Shorten' : 'Extend') + ' deadline by entered minutes';
           button.setAttribute('aria-label', button.title);
           button.disabled = rental.deadline_pending || deadlineChanging;
           button.addEventListener('click', () => {
@@ -2333,7 +2338,7 @@
         reserveInput.title = 'Transfer reserve in USD'; reserveInput.setAttribute('aria-label', 'Transfer reserve in USD');
         reserveInput = retainInput(reserveInput, 'Transfer reserve in USD');
         const reserveButton = document.createElement('button'); reserveButton.type = 'button'; reserveButton.className = 'btn'; reserveButton.textContent = reserveChanging ? 'Saving…' : 'Save reserve';
-        reserveButton.title = rental.deadline_protocol !== 2 ? 'Requires the updated budget-control worker guard' : 'Save transfer reserve and shorten deadline if needed';
+        reserveButton.title = ![2, 3].includes(rental.deadline_protocol) ? 'Requires the updated budget-control worker guard' : 'Save transfer reserve and shorten deadline if needed';
         reserveButton.disabled = rental.deadline_pending || reserveChanging;
         reserveButton.addEventListener('click', () => {
           const value = Number(reserveInput.value);
@@ -2350,7 +2355,7 @@
           if (!event.target.closest('button')) return;
           let reason = '';
           if (!active) reason = 'This rental is not active.';
-          else if (![1, 2].includes(rental.deadline_protocol)) reason = 'Worker is not ready for changes yet. Please try again after startup.';
+          else if (![1, 2, 3].includes(rental.deadline_protocol)) reason = 'Worker is not ready for changes yet. Please try again after startup.';
           else if (rental.deadline_protocol === 1 && label !== 'Deadline') reason = 'This worker version does not support changing this value.';
           if (reason) {
             event.stopPropagation();

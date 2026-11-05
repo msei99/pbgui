@@ -45,6 +45,24 @@ def armed(tmp_path, monkeypatch):
     return queue, watch
 
 
+def test_unsupported_persisted_duration_cancels_without_offer_search(armed, monkeypatch):
+    """A saved watch cannot endlessly retry a duration the current image cannot run."""
+    queue, watch = armed
+    watch.update(hours=25, budget=10)
+    queue.update(calibration_watch=watch)
+    monkeypatch.setattr('vast_worker_capabilities.supports', lambda *args: False)
+    def no_search(*args, **kwargs):
+        """Any marketplace access would violate the early capability check."""
+        pytest.fail('Unsupported watch must stop before offer search')
+    monkeypatch.setattr(watching, 'search_host_offers', no_search)
+    assert watching.watch_step(queue) is None
+    assert queue.read()['calibration_watch'] is None
+    job = queue.store.read(watch['job_id'])
+    assert job['status'] == 'cancelled'
+    assert 'active worker image supports at most 24' in job['error']
+    assert watching.watch_step(queue) is None
+
+
 def compatible_offer(**changes):
     """Return an offer that satisfies every frozen watch requirement."""
     return dict(id=42, machine_id=43, gpu_name='RTX 3090', num_gpus=1,

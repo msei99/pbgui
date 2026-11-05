@@ -949,6 +949,39 @@ def test_single_job_rechecks_child_after_account_preflight(job, monkeypatch, cha
         assert launched == []
 
 
+@pytest.mark.parametrize('supported', [False, True])
+def test_multi_day_start_requires_published_capability_and_keeps_budget(job, monkeypatch, supported):
+    """Long rental approval reaches durable start only on a verified capable image."""
+    from types import SimpleNamespace
+    import vast_jobs
+    store, identifier, intent = job
+    store.update(identifier, kind='worker', status='ready', rental_state='none', workers=4)
+    intent.pop('accepted_at')
+    intent.update(bundle_bytes=100)
+    write_json(store.directory(identifier) / 'intent.json', intent)
+    monkeypatch.setattr(vast_jobs, 'services_available', lambda: True)
+    monkeypatch.setattr('vast_worker_capabilities.supports', lambda *args: supported)
+    monkeypatch.setattr('vast_image.require_public_image', lambda image: None)
+    monkeypatch.setattr(vast_jobs, 'VastCredentialStore', lambda root: SimpleNamespace(
+        secrets=lambda: {'generation': 1, 'api_key': 'isolated-placeholder'}))
+    monkeypatch.setattr(vast_jobs, 'VastClient', lambda key: SimpleNamespace(
+        account=lambda: {'balance_usd': 100}))
+    launched = []
+    monkeypatch.setattr(store, 'launch_service', lambda identifier, mode: launched.append(mode))
+    offer = {'id': 123, 'price_hour_usd': .01, 'cuda_max_good': 13, 'disk_gb': 40,
+             'cpu_cores': 4, 'download_gb_usd': 0, 'upload_gb_usd': 0}
+    if not supported:
+        with pytest.raises(VastError, match='verified multi-day worker image'):
+            store.start(identifier, offer, 120, 2)
+        assert launched == [] and store.read(identifier)['rental_state'] == 'none'
+    else:
+        store.start(identifier, offer, 120, 2)
+        saved = store.read(identifier, 'intent.json')
+        assert saved['deadline'] - saved['accepted_at'] == 120 * 3600
+        assert saved['budget_usd'] == 2 and saved['transfer_reserve_usd'] >= .05
+        assert launched == ['run', 'guard']
+
+
 def test_large_input_manifest_keeps_control_record_limit(tmp_path):
     """Large shard manifests remain readable without widening mutable state records."""
     store = JobStore(tmp_path / 'vast')
@@ -1845,3 +1878,142 @@ def test_gpu_constraint_safety_failure_explains_completion_boundary(tmp_path):
     assert 'Passivbot safety check' in row['error']
     assert 'strict completion limit 1.0' in row['error']
     assert 'secret' not in row['error']
+
+def test_guard_defers_destroy_while_collection_outstanding(job, monkeypatch):
+    """Teardown waits for an in-flight final collection instead of racing it."""
+    store, identifier, intent = job
+    store.update(identifier, status='collecting', rental_state='active', instance_id=123,
+                 uploaded=True, final_collection_at=1999.0, provider_seen_at=1990.0)
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    monkeypatch.setattr('vast_job_runner.owned_instance',
+                        lambda _client, _intent, *, fresh=False, expected_id=None: {'id': 123, 'label': intent['label']})
+    assert not guard_step(store, identifier, client, intent, '', now=2001)
+    assert client.calls == []
+    assert store.read(identifier)['rental_state'] == 'active'
+
+
+def test_guard_destroys_after_collection_grace_timeout(job, monkeypatch):
+    """A hung collection cannot leak the rental beyond its bounded allowance."""
+    from vast_job_runner import COLLECT_TEARDOWN_GRACE_SECONDS
+    store, identifier, intent = job
+    store.update(identifier, status='collecting', rental_state='active', instance_id=123,
+                 uploaded=True, final_collection_at=2001.0 - COLLECT_TEARDOWN_GRACE_SECONDS - 10,
+                 provider_seen_at=1990.0, destroy_requested_at=2001.0)
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    monkeypatch.setattr('vast_job_runner.owned_instance',
+                        lambda _client, _intent, *, fresh=False, expected_id=None: {'id': 123, 'label': intent['label']})
+    assert not guard_step(store, identifier, client, intent, '', now=2001)
+    assert store.read(identifier)['rental_state'] == 'destroy_pending'
+    assert client.calls == []
+
+
+def _publish_worker_with_job(store, worker_id, job_id, *, job_status='collecting',
+                             final_collection_at=None, stop_rpc_at=None,
+                             final_collected=False, **job_extra):
+    """Create a worker/lease record bound to a job record for teardown-race tests."""
+    intent = {'id': worker_id, 'image': IMAGE, 'pb8_revision': REVISION,
+              'label': 'pbgui-vast-' + worker_id, 'accepted_at': 1000, 'deadline': 2000,
+              'budget_usd': 1, 'offer': {'id': 42, 'disk_gb': 40},
+              'results_root': 'unused', 'source_config_sha256': 'source'}
+    worker_dir = ensure_private_directory(store.root / 'jobs' / worker_id)
+    write_json(worker_dir / 'intent.json', intent)
+    write_json(worker_dir / 'control.json', {'stop': False, 'cleanup': False})
+    write_json(worker_dir / 'state.json', {'id': worker_id, 'kind': 'worker', 'status': 'ready',
+                                           'rental_state': 'active', 'active_job': job_id,
+                                           'instance_id': 123})
+    job_state = {'id': job_id, 'status': job_status, 'lease_id': worker_id}
+    if final_collected:
+        job_state['final_collected'] = True
+    if final_collection_at is not None:
+        job_state['final_collection_at'] = final_collection_at
+    if stop_rpc_at is not None:
+        job_state['stop_rpc_at'] = stop_rpc_at
+    job_state.update(job_extra)
+    job_dir = ensure_private_directory(store.root / 'jobs' / job_id)
+    write_json(job_dir / 'state.json', job_state)
+    return intent
+
+
+def test_guard_defers_worker_destroy_while_bound_job_collecting(job, monkeypatch):
+    """The lease teardown must consult its bound jobs, not its own absent collection state."""
+    store, _, _ = job
+    worker_id, job_id = 'b' * 32, 'c' * 32
+    intent = _publish_worker_with_job(store, worker_id, job_id, job_status='collecting',
+                                      final_collection_at=1999.0)
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    monkeypatch.setattr('vast_job_runner.owned_instance',
+                        lambda _client, _intent, *, fresh=False, expected_id=None: {'id': 123, 'label': intent['label']})
+    assert not guard_step(store, worker_id, client, intent, '', now=2001)
+    assert client.calls == []
+    assert store.read(worker_id)['rental_state'] == 'active'
+
+
+def test_guard_destroys_worker_after_bound_job_collected(job, monkeypatch):
+    """A finished collection releases the lease teardown immediately."""
+    store, _, _ = job
+    worker_id, job_id = 'b' * 32, 'c' * 32
+    intent = _publish_worker_with_job(store, worker_id, job_id, job_status='completed',
+                                      final_collected=True)
+    store.update(worker_id, destroy_requested_at=2001.0)
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    monkeypatch.setattr('vast_job_runner.owned_instance',
+                        lambda _client, _intent, *, fresh=False, expected_id=None: {'id': 123, 'label': intent['label']})
+    assert not guard_step(store, worker_id, client, intent, '', now=2001)
+    assert store.read(worker_id)['rental_state'] == 'destroy_pending'
+    assert client.calls == []
+
+
+def test_guard_destroys_worker_after_bound_collection_grace_timeout(job, monkeypatch):
+    """A hung bound collection cannot leak the lease beyond its bounded allowance."""
+    from vast_job_runner import COLLECT_TEARDOWN_GRACE_SECONDS
+    store, _, _ = job
+    worker_id, job_id = 'b' * 32, 'c' * 32
+    intent = _publish_worker_with_job(store, worker_id, job_id, job_status='collecting',
+                                      final_collection_at=2001.0 - COLLECT_TEARDOWN_GRACE_SECONDS - 10)
+    store.update(worker_id, destroy_requested_at=2001.0)
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    monkeypatch.setattr('vast_job_runner.owned_instance',
+                        lambda _client, _intent, *, fresh=False, expected_id=None: {'id': 123, 'label': intent['label']})
+    assert not guard_step(store, worker_id, client, intent, '', now=2001)
+    assert store.read(worker_id)['rental_state'] == 'destroy_pending'
+    assert client.calls == []
+
+
+def test_guard_defers_worker_destroy_for_cancelled_job_without_collection(job, monkeypatch):
+    """A cancel that precedes the final collection still blocks teardown within grace."""
+    store, _, _ = job
+    worker_id, job_id = 'b' * 32, 'c' * 32
+    intent = _publish_worker_with_job(store, worker_id, job_id, job_status='cancelled',
+                                      final_collection_at=1999.0, stop_rpc_at=1999.0)
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    monkeypatch.setattr('vast_job_runner.owned_instance',
+                        lambda _client, _intent, *, fresh=False, expected_id=None: {'id': 123, 'label': intent['label']})
+    assert not guard_step(store, worker_id, client, intent, '', now=2001)
+    assert client.calls == []
+    assert store.read(worker_id)['rental_state'] == 'active'
+
+
+@pytest.mark.parametrize('bound_worker', [False, True])
+def test_collection_without_stop_anchor_has_persisted_teardown_limit(job, monkeypatch, bound_worker):
+    """Normal collecting state cannot postpone teardown forever after supervisor failure."""
+    from vast_job_runner import COLLECT_TEARDOWN_GRACE_SECONDS
+    store, identifier, intent = job
+    collected_id = identifier
+    if bound_worker:
+        identifier, collected_id = 'b' * 32, 'c' * 32
+        intent = _publish_worker_with_job(store, identifier, collected_id, job_status='collecting')
+    else:
+        store.update(identifier, status='collecting', rental_state='active', instance_id=123)
+    client = Provider([{'id': 123, 'label': intent['label']}])
+    monkeypatch.setattr('vast_job_runner.owned_instance',
+                        lambda *args, **kwargs: {'id': 123, 'label': intent['label']})
+    assert not guard_step(store, identifier, client, intent, '', now=2001)
+    assert store.read(collected_id)['collection_teardown_started_at'] == 2001
+    # Status writes and a reconstructed guard must not renew the allowance.
+    store.update(collected_id, status='collecting')
+    assert not guard_step(store, identifier, client, intent, '', now=2002)
+    assert store.read(collected_id)['collection_teardown_started_at'] == 2001
+    store.update(identifier, destroy_requested_at=2001 + COLLECT_TEARDOWN_GRACE_SECONDS + 1)
+    assert not guard_step(store, identifier, client, intent, '',
+                          now=2001 + COLLECT_TEARDOWN_GRACE_SECONDS + 1)
+    assert store.read(identifier)['rental_state'] == 'destroy_pending'

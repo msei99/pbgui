@@ -46,7 +46,7 @@ def validated_watch(queue: CloudQueue) -> dict | None:
         hours, budget = number(watch['hours']), number(watch['budget'])
         accepted = number(watch['accepted_at'])
         if (hours is None or budget is None or accepted is None
-                or not .75 <= hours <= 24 or not .1 <= budget <= 100
+                or hours < .75 or not .1 <= budget <= 100
                 or hours * preferences['max_price'] > budget + 1e-6
                 or type(watch['credential_generation']) is not int
                 or watch['credential_generation'] < 0):
@@ -151,6 +151,12 @@ def watch_step(queue: CloudQueue) -> dict | None:
     """Retry verified-uncreated offers until one rental succeeds or cancellation."""
     watch = validated_watch(queue)
     if watch is None:
+        return None
+    from vast_worker_capabilities import maximum_rental_hours
+    maximum = maximum_rental_hours()
+    if maximum is not None and watch['hours'] > maximum:
+        cancel_watch(queue, watch['id'],
+                     f'The active worker image supports at most {maximum:g} rental hours')
         return None
     now = time.time()
     job = queue.store.read(watch['job_id'])

@@ -74,10 +74,10 @@ def upgrade_guard(store, identifier, intent):
         response = json.loads(raw)
         guard = response.get('guard', {})
         if (response.get('ok') is not True or guard.get('job_id') != identifier
-                or guard.get('instance_id') != row['id'] or guard.get('deadline_protocol') != 2
+                or guard.get('instance_id') != row['id'] or guard.get('deadline_protocol') not in (2, 3)
                 or guard.get('deadline') != intent['deadline'] or type(guard.get('guard_pid')) is not int):
             raise ValueError('Invalid guard migration acknowledgement')
-        store.update(identifier, deadline_protocol=2, deadline_guard_upgraded_at=time.time())
+        store.update(identifier, deadline_protocol=guard['deadline_protocol'], deadline_guard_upgraded_at=time.time())
         _log(SERVICE, 'Deadline guard upgraded without changing the rental deadline', level='INFO')
         return connection
     except Exception as exc:

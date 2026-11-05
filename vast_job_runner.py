@@ -25,6 +25,7 @@ SERVICE = "VastRunner"
 RUNNER_CODE_SERIAL = (PROJECT / "api/serial.txt").read_text().strip()
 UPLOAD_RECOVERY_SECONDS = 15 * 60
 UPLOAD_FINISH_RESERVE_SECONDS = 180
+COLLECT_TEARDOWN_GRACE_SECONDS = 240
 
 
 def schedule_upload_retry(store: JobStore, identifier: str, exc: Exception, deadline: float) -> None:
@@ -105,7 +106,11 @@ def validate_intent(intent: dict, identifier: str) -> dict:
     if intent.get("label") != "pbgui-vast-" + identifier:
         raise VastError("Invalid cloud rental ownership")
     duration = float(intent["deadline"]) - float(intent["accepted_at"])
-    if not 0 < duration <= 86400 or not .1 <= float(intent["budget_usd"]) <= 100:
+    from vast_worker_capabilities import supports
+    import math
+    if (not math.isfinite(duration) or duration <= 0
+            or (duration > 86400 and not supports(intent['image'], 'multi_day'))
+            or not .1 <= float(intent["budget_usd"]) <= 100):
         raise VastError("Invalid cloud rental limits")
     positive_id(intent["offer"]["id"])
     return intent
@@ -124,7 +129,16 @@ def rental_payload(intent: dict, registry_token: str = "") -> dict:
                "nohup /usr/local/bin/python /work/pbgui/worker.py guard > /work/pbgui/guard.log 2>&1 < /dev/null &\n")
     return {"client_id": "me", "image": intent["image"], "disk": intent["offer"]["disk_gb"],
             "label": intent["label"], "runtype": "ssh_direct", "target_state": "running", "cancel_unavail": True,
-            "onstart": startup, "env": {"PBGUI_DEADLINE": str(intent["deadline"]), "PBGUI_JOB_ID": intent["id"], "PBGUI_MAX_DEADLINE": str(maximum_deadline(intent)), "PBGUI_HARD_DEADLINE": str(intent['accepted_at'] + 86400 if 'accepted_at' in intent else maximum_deadline(intent))}}
+            "onstart": startup, "env": {"PBGUI_DEADLINE": str(intent["deadline"]), "PBGUI_JOB_ID": intent["id"], "PBGUI_MAX_DEADLINE": str(maximum_deadline(intent)), "PBGUI_HARD_DEADLINE": str(_guard_hard_deadline(intent))}}
+
+
+def _guard_hard_deadline(intent: dict) -> float:
+    """Bound the new guard by the maximum permitted budget; retain legacy limits."""
+    from vast_deadline import maximum_deadline
+    from vast_worker_capabilities import supports
+    if supports(intent.get('image', ''), 'multi_day'):
+        return maximum_deadline(dict(intent, budget_usd=100))
+    return intent['accepted_at'] + 86400 if 'accepted_at' in intent else maximum_deadline(intent)
 
 
 def owned_instance(client: VastClient, intent: dict, *, fresh: bool = False,
@@ -291,6 +305,63 @@ def _create_and_observe(store, identifier, client, intent, registry_token, now):
     return _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state)
 
 
+def _collection_outstanding(state: dict, now: float) -> bool:
+    """True while the supervisor's final collection may still be running.
+
+    The final collection owns the instance until it publishes (final_collected)
+    or fails into a completed/failed terminal status. A cancelled job is only
+    collection-finished once final_collected is set: a cancel that arrives as
+    part of the stop/deadline path can precede the final collection, so it must
+    not release the teardown by itself. Its own allowance is bounded, so the
+    grace window below can never leak a rental indefinitely.
+    """
+    if state.get('final_collected') or state.get('status') in {'completed', 'failed'}:
+        return False
+    if state.get('status') != 'collecting' and not state.get('stop_rpc_at') and not state.get('final_collection_at'):
+        return False
+    anchor = float(state.get('collection_teardown_started_at') or state.get('final_collection_at') or state.get('stop_rpc_at') or 0)
+    return anchor <= 0 or now - anchor <= COLLECT_TEARDOWN_GRACE_SECONDS
+
+
+def _record_collection_outstanding(store, identifier, state, now):
+    """True while this record's own or bound-job collection may still run.
+
+    A worker/lease record carries no collection state itself; the jobs bound
+    to it (lease_id == identifier, or its active_job) own status, final_collected
+    and the collection anchors. A job record owns that state directly and is
+    checked as-is. Only the healthy inventory and the worker's own active_job
+    pointer are consulted, so an unreadable foreign record never blocks this
+    lease's teardown.
+    """
+    def outstanding(row):
+        # Normal completion can enter collecting without a Stop RPC. Persist
+        # the first teardown observation once, so supervisor crashes and later
+        # status writes cannot renew the cleanup allowance.
+        if not _collection_outstanding(row, now):
+            return False
+        with advisory_file_lock(store.directory(row['id']) / '.state-lock'):
+            current = store.read(row['id'])
+            if not _collection_outstanding(current, now):
+                return False
+            if not current.get('collection_teardown_started_at'):
+                anchor = current.get('final_collection_at') or current.get('stop_rpc_at') or now
+                current = store.update(row['id'], collection_teardown_started_at=anchor)
+            return _collection_outstanding(current, now)
+
+    if state.get('kind') != 'worker':
+        return outstanding(state)
+    rows, _unreadable = store.list_with_errors()
+    active_id = state.get('active_job')
+    pending = False
+    for row in rows:
+        if row.get('id') == identifier:
+            continue
+        if row.get('lease_id') == identifier or (active_id and row.get('id') == active_id):
+            if outstanding(row):
+                pending = True
+    return pending
+
+
 def _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state):
     """Only fresh provider absence can release a rental authorization."""
     try:
@@ -303,6 +374,11 @@ def _observe_rental(store, identifier, client, intent, now, ending, observed, ma
         if state.get("instance_id") and row["id"] != state["instance_id"]:
             store.update(identifier, absent_checks=0)
             raise VastError("Instance ID does not match the rental authorization")
+        if ending and _record_collection_outstanding(store, identifier, state, now):
+            # The final collection owns this instance until it finishes or its
+            # bounded allowance passes; never destroy under an in-flight collect.
+            store.update(identifier, provider_checked_at=now, cleanup_error=None)
+            return False
         store.update(identifier, instance_id=row["id"], rental_state="destroy_pending" if ending else "active",
                      provider_status=str(row.get("actual_status") or "unknown")[:50], absent_checks=0, cleanup_error=None, creation_error=None,
                      provider_seen_at=now, provider_checked_at=now,
@@ -653,7 +729,7 @@ def stop_and_collect(connection, store, identifier, intent, *, lease_id=None):
             current = store.read(identifier)
             final = current.get('final_collected') or bool(progress.get('finished'))
             if not current.get('stop_snapshot_collected') and not current.get('final_collected'):
-                connection.collect(final, timeout=remaining())
+                connection.collect(final, timeout=remaining(), ignore_quota=True)
                 store.update(identifier, stop_snapshot_collected=True)
             if not final:
                 sources = store.directory(identifier) / 'partial-results/optimize_results'
