@@ -111,6 +111,84 @@ def validate_intent(intent: dict, identifier: str) -> dict:
     return intent
 
 
+def deadline_guard_source() -> str:
+    """Use the same guard and singleton lock for onstart and SSH publication."""
+    import inspect
+    from setup.vast_gpu_benchmark import cloud_worker
+    return ("import fcntl, json, os, re, time, urllib.request\nfrom pathlib import Path\n"
+            "ROOT = Path('/work/pbgui')\n"
+            + "\n".join(inspect.getsource(function) for function in
+                        (cloud_worker.write_record, cloud_worker.apply_deadline_request, cloud_worker.guard))
+            + "\nlock = (ROOT / '.guard-process.lock').open('a')\n"
+            + "try:\n    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            + "except BlockingIOError:\n    raise SystemExit(0)\n"
+            + "guard()\n")
+
+
+def publish_ssh_guard(connection, intent: dict) -> None:
+    """Publish through authenticated SSH, keeping credentials container-local."""
+    import tempfile
+    from vast_deadline import maximum_deadline
+    hard = intent['accepted_at'] + 30 * 86400
+    maximum = min(maximum_deadline(intent), hard)
+    if not intent['deadline'] <= maximum <= hard:
+        raise VastError('Invalid SSH guard deadline bounds', 422)
+    settings = {'PBGUI_DEADLINE': str(intent['deadline']), 'PBGUI_JOB_ID': intent['id'],
+                'PBGUI_MAX_DEADLINE': str(maximum), 'PBGUI_HARD_DEADLINE': str(hard)}
+    script = """import fcntl, json, os, pathlib, subprocess, time
+root = pathlib.Path('/work/pbgui')
+os.umask(0o077)
+root.mkdir(parents=True, exist_ok=True)
+with (root / '.guard-publication.lock').open('a') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    record = root / 'guard.json'
+    if record.is_symlink():
+        raise ValueError('Invalid guard record')
+    if record.exists():
+        print('existing guard retained')
+    else:
+        if any((root / name).exists() for name in ('deadline-request.json', 'guard-error.json')):
+            raise ValueError('Guard state missing with existing amendment state')
+        env = dict(os.environ)
+        initial = dict(item.split(b'=', 1) for item in pathlib.Path('/proc/1/environ').read_bytes().split(b'\\0') if b'=' in item)
+        for name in ('CONTAINER_ID', 'CONTAINER_API_KEY'):
+            value = env.get(name) or initial.get(name.encode(), b'').decode()
+            if not value:
+                raise ValueError('Missing container guard authorization')
+            env[name] = value
+        if int(env['CONTAINER_ID']) != INSTANCE:
+            raise ValueError('Container identity mismatch')
+        env.update(SETTINGS)
+        target = root / 'deadline-guard-v2.py'
+        temporary = root / 'deadline-guard-v2.py.tmp'
+        temporary.write_text(SOURCE)
+        os.replace(temporary, target)
+        worker = root / 'worker.py'
+        if not worker.exists():
+            import shutil
+            shutil.copyfile('/opt/pbgui/worker.py', worker)
+        with (root / 'guard.log').open('ab') as output:
+            subprocess.Popen(['/usr/local/bin/python', str(target)], env=env,
+                             stdin=subprocess.DEVNULL, stdout=output, stderr=output,
+                             start_new_session=True, close_fds=True)
+        for attempt in range(100):
+            if record.exists():
+                break
+            time.sleep(.1)
+        else:
+            raise ValueError('SSH guard publication timed out')
+        print('SSH guard published')
+"""
+    script = ('INSTANCE = ' + repr(connection.row['id']) + '\nSETTINGS = ' + repr(settings)
+              + '\nSOURCE = ' + repr(deadline_guard_source()) + '\n' + script)
+    with tempfile.TemporaryFile() as source:
+        source.write(script.encode()); source.seek(0)
+        result = connection.command('/usr/local/bin/python -', stdin=source, timeout=30, max_output=128)
+    if result.strip() not in (b'SSH guard published', b'existing guard retained'):
+        raise VastError('Invalid SSH guard publication response', 422)
+    _log(SERVICE, f"{connection.identifier}: SSH guard publication: {result.decode().strip()}", level='INFO')
+
+
 def rental_payload(intent: dict, registry_token: str = "") -> dict:
     """Keep the pinned optimizer worker, but bootstrap the locally versioned guard.
 
@@ -120,13 +198,7 @@ def rental_payload(intent: dict, registry_token: str = "") -> dict:
     from vast_deadline import maximum_deadline
     if intent.get("image") not in SUPPORTED_RENTAL_IMAGES:
         raise VastError("Invalid cloud rental image")
-    import inspect
-    from setup.vast_gpu_benchmark import cloud_worker
-    guard_source = ("import json, os, re, time, urllib.request\nfrom pathlib import Path\n"
-                    "ROOT = Path('/work/pbgui')\n"
-                    + "\n".join(inspect.getsource(function) for function in
-                                (cloud_worker.write_record, cloud_worker.apply_deadline_request, cloud_worker.guard))
-                    + "\nguard()\n")
+    guard_source = deadline_guard_source()
     hard = intent.get('accepted_at', time.time()) + 30 * 86400
     maximum = min(maximum_deadline(intent), hard)
     startup = ("set -e\numask 077\nmkdir -p /work/pbgui\ntouch /root/.no_auto_tmux\n"
@@ -891,6 +963,7 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
             if control["cleanup"]:
                 return
             if not state.get("worker_ready"):
+                publish_ssh_guard(connection, intent)
                 hardware = connection.operation("health", timeout=min(60, int(remaining)))
                 guard = hardware.get("guard") or {}
                 if hardware.get("revision") != intent["pb8_revision"] or guard.get("instance_id") != row["id"] or guard.get("job_id") != (lease_id or identifier) or guard.get("deadline") != intent["deadline"]:

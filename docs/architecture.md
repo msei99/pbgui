@@ -39,8 +39,16 @@ See the [Node/npm removal audit](node_dependency_audit.md) and
 ### Vast worker startup readiness
 
 Vast `running` and the onstart host-key log are not guard-ready signals.
-The independently bootstrapped deadline guard publishes `/work/pbgui/guard.json`
-asynchronously. Before `worker_ready`, the controller retries only this exact
+Before the health preflight, the controller now publishes and launches the same
+locally versioned deadline guard through the authenticated `root` SSH transport.
+It uses `/work/pbgui` consistently with the pinned image (no home fallback),
+and copies the pinned image worker only if absent. Container credentials are
+resolved inside the container from the SSH environment or PID 1 environment;
+no account credential is sent over SSH or included in commands/logs. Existing
+guard records and amendment state are never replaced by publication. A shared
+process lock serializes onstart and SSH guards; publication has its own lock,
+waits up to ten seconds for the initial record, and fails closed on errors.
+The subsequent health preflight retains all identity/revision checks. Before `worker_ready`, the controller retries only this exact
 missing-file preflight error and the categorized SSH authentication failure on
 its existing five-second control-aware cycle, bounded by 300 seconds from the
 persisted `setup_started_at` (and the unchanged rental deadline). Restarting a

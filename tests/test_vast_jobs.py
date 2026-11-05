@@ -1874,6 +1874,7 @@ def test_guard_readiness_missing_then_ready(job, monkeypatch, failures, transien
             raise VastError("Worker preflight failed: FileNotFoundError: [Errno 2] No such file or directory: '/work/pbgui/guard.json'", 422)
         return {'revision':intent['pb8_revision'], 'guard':{'instance_id':123,
                 'job_id':identifier, 'deadline':5000}, 'cpu_cores':1000}
+    monkeypatch.setattr(runner, 'publish_ssh_guard', lambda *a: None)
     monkeypatch.setattr(runner, 'WorkerConnection', lambda *a, **kw: SimpleNamespace(bootstrap=lambda _:None, operation=operation))
     class Ready(BaseException):
         pass
@@ -1999,3 +2000,93 @@ def test_http400_waits_for_absence_then_creates_refreshed_ask(tmp_path):
     assert client.calls[-1] == ('PUT', '/asks/2/')
     assert store.read(identifier)['rental_state'] == 'active'
     assert store.read(identifier)['instance_id'] == 123
+
+
+@pytest.mark.parametrize('existing', [None, 'amendment', 'malformed'])
+def test_ssh_guard_without_onstart(tmp_path, monkeypatch, existing):
+    """Run the SSH payload locally: no onstart, no network, no rented worker."""
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    from types import SimpleNamespace
+    import vast_job_runner as runner
+    root = tmp_path / 'worker'
+    root.mkdir()
+    (root / 'worker.py').write_text('# pinned worker fixture')
+    deadline = time.time() + 3600
+    intent = {'id': 'a' * 32, 'accepted_at': time.time(), 'deadline': deadline,
+              'budget_usd': 1, 'offer': {}}
+    monkeypatch.setattr(runner, '_log', lambda *a, **kw: None)
+    if existing == 'amendment':
+        (root / 'deadline-request.json').write_text('{}')
+    if existing == 'malformed':
+        (root / 'guard.json').write_text('invalid')
+    def command(command, stdin, **kwargs):
+        assert command == '/usr/local/bin/python -'
+        script = stdin.read().decode().replace('/work/pbgui', str(root)).replace('/usr/local/bin/python', sys.executable)
+        result = subprocess.run([sys.executable, '-'], input=script.encode(), capture_output=True,
+                                env=dict(os.environ, CONTAINER_ID='123', CONTAINER_API_KEY='fixture-not-a-key'), timeout=15)
+        if result.returncode:
+            raise VastError('SSH worker operation failed: remote command or connection failed')
+        return result.stdout
+    connection = SimpleNamespace(row={'id':123}, identifier=intent['id'], command=command)
+    if existing == 'amendment':
+        with pytest.raises(VastError):
+            runner.publish_ssh_guard(connection, intent)
+        assert not (root / 'guard.json').exists()
+        assert (root / 'deadline-request.json').read_text() == '{}'
+        return
+    if existing == 'malformed':
+        runner.publish_ssh_guard(connection, intent)
+        assert (root / 'guard.json').read_text() == 'invalid'
+        return
+    try:
+        runner.publish_ssh_guard(connection, intent)
+        first = (root / 'guard.json').read_bytes()
+        guard = json.loads(first)
+        assert guard['job_id'] == intent['id'] and guard['instance_id'] == 123
+        assert guard['deadline'] == deadline <= guard['max_deadline'] <= guard['hard_deadline']
+        assert guard['deadline_protocol'] == 2
+        # Exercise the real preflight reader with hardware/image dependencies mocked.
+        from setup.vast_gpu_benchmark import cloud_worker
+        revision = tmp_path / 'revision'
+        revision.write_text('pinned-test-revision')
+        monkeypatch.setattr(cloud_worker, 'GUARD_ROOT', root)
+        monkeypatch.setattr(cloud_worker, 'Path', lambda value: revision if value == '/opt/pb8-revision' else Path(value))
+        monkeypatch.setitem(sys.modules, 'torch', SimpleNamespace(cuda=SimpleNamespace(
+            is_available=lambda: True, get_device_name=lambda _: 'test-gpu',
+            get_device_properties=lambda _: SimpleNamespace(total_memory=1024, major=8, minor=0))))
+        monkeypatch.setitem(sys.modules, 'rust_utils', SimpleNamespace(verify_loaded_runtime_extension=lambda: {
+            'runtime_compiled_source_stamp':'test', 'expected_source_fingerprint':'test'}))
+        monkeypatch.setitem(sys.modules, 'passivbot_rust', SimpleNamespace())
+        health = cloud_worker.health()
+        assert health['revision'] == 'pinned-test-revision'
+        assert health['guard'] == guard
+        (root / 'deadline-request.json').write_text('{}')
+        runner.publish_ssh_guard(connection, intent)
+        assert (root / 'guard.json').read_bytes() == first
+        assert (root / 'deadline-request.json').read_text() == '{}'
+    finally:
+        record = root / 'guard.json'
+        if record.exists():
+            os.kill(json.loads(record.read_text())['guard_pid'], signal.SIGTERM)
+
+
+@pytest.mark.parametrize('kind', ['bounds', 'ssh'])
+def test_ssh_guard_publication_fails_closed(kind):
+    """Invalid bounds never reach SSH; transport failures cannot reach health."""
+    import time
+    from types import SimpleNamespace
+    from vast_job_runner import publish_ssh_guard
+    calls = []
+    def command(*args, **kwargs):
+        calls.append(args)
+        raise VastError('SSH worker operation failed: host identity verification failed')
+    intent = {'id': 'a' * 32, 'accepted_at': time.time(),
+              'deadline': time.time() + (40 * 86400 if kind == 'bounds' else 3600),
+              'budget_usd': 1, 'offer': {}}
+    with pytest.raises(VastError):
+        publish_ssh_guard(SimpleNamespace(row={'id':123}, identifier=intent['id'], command=command), intent)
+    assert bool(calls) == (kind == 'ssh')
