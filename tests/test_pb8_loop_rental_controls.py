@@ -236,3 +236,11 @@ def test_budget_endpoint_preserves_conflict_status(bound, monkeypatch):
         asyncio.run(api.loop_rental_budget(row['id'], body, session=None))
     assert error.value.status_code == 409
     assert not queue.store.read(worker_id).get('deadline_request')
+
+
+def test_budget_precheck_uses_same_24h_cap_as_guard_request(bound):
+    store, queue, row, worker_id = bound
+    store.update(row['owner'], row['id'], lambda current: current.update(deadline=90000))
+    with pytest.raises(VastError, match='before the current Loop deadline'):
+        change_budget(store, queue, row['owner'], row['id'], worker_id, 8000, 2, 100)
+    assert not queue.store.read(worker_id).get('deadline_request')

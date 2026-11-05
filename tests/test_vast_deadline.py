@@ -292,3 +292,20 @@ def test_migrated_confirmation_keeps_pending_on_transport_failure(rental, monkey
         assert confirm_migrated_request(queue.store, identifier, connection, request) == (response == 'confirmed')
         assert bool(queue.store.read(identifier)['deadline_request']) == (response != 'confirmed')
     assert effective_intent(queue.store, identifier, intent)['deadline'] == (8420 if response == 'confirmed' else 8000)
+
+
+@pytest.mark.parametrize('budget,seconds', [(1, 34200), (100, 86400)])
+def test_maximum_deadline_preserves_budget_and_24h_ceiling(rental, budget, seconds):
+    _, _, intent = rental
+    intent = dict(intent, budget_usd=budget)
+    assert maximum_deadline(intent) == pytest.approx(intent['accepted_at'] + seconds)
+
+
+def test_large_budget_request_caps_deadline_and_remote_maximum(rental):
+    queue, identifier, intent = rental
+    result = request_budget(queue, identifier, 2, 100)
+    request = queue.store.read(identifier)['deadline_request']
+    assert result['requested_deadline'] == intent['accepted_at'] + 86400
+    assert request['deadline'] == request['max_deadline'] == result['requested_deadline']
+    assert request['budget_usd'] == 100
+    assert effective_intent(queue.store, identifier, intent)['deadline'] == 8000
