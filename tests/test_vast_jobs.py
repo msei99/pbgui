@@ -1921,3 +1921,81 @@ def test_guard_readiness_never_retries_other_validation(message):
     from vast_job_runner import worker_readiness_error
     error = VastError(message, 422)
     assert worker_readiness_error(error, {'setup_started_at':1000}, 1001) is error
+
+
+@pytest.mark.parametrize('case', ['retry', 'cap', 'available', 'expensive', 'stopped', 'ambiguous'])
+def test_stale_create_refresh_is_bounded_and_conservative(tmp_path, case):
+    from vast_job_runner import refresh_rejected_offer
+    from types import SimpleNamespace
+    store = JobStore(tmp_path / 'vast')
+    identifier = 'a' * 32
+    offer = dict(id=1, gpu_name='RTX 3060', price_hour_usd=.1, vram_gb=12,
+                 ram_gb=32, cpu_cores=8, disk_gb=40, download_gb_usd=.01,
+                 upload_gb_usd=.01, verified=True)
+    intent = dict(offer=offer, deadline=10000)
+    state = dict(id=identifier, status='provisioning', rental_state='creation_pending',
+                 creation_error='Vast request failed (HTTP 400)')
+    if case == 'cap':
+        state['rejected_offer_ids'] = [2, 3]
+    if case == 'ambiguous':
+        state['creation_error'] = 'Vast could not be reached or returned invalid data'
+    store.publish(state, intent=intent)
+    if case == 'stopped':
+        store.control(identifier, 'stop')
+    marker = store.directory(identifier) / 'attempt.json'
+    write_json(marker, {'attempted_at': 0})
+    replacement = dict(offer, id=4, price_hour_usd=.11 if case == 'expensive' else .09)
+    calls = []
+    def offers(**kwargs):
+        calls.append(kwargs)
+        return [offer] if case == 'available' else [] if 'offer_id' in kwargs else [replacement]
+    client = SimpleNamespace(offers=offers)
+    result = refresh_rejected_offer(store, identifier, client, intent, state, marker, 200)
+    assert result == (case == 'retry')
+    assert marker.exists() != result
+    if result:
+        persisted = store.read(identifier)
+        assert persisted['creation_offer']['id'] == 4
+        assert persisted['rejected_offer_ids'] == [1]
+        assert persisted['creation_error'] is None
+        assert store.read(identifier, 'intent.json') == intent
+    if case in {'cap', 'ambiguous'}:
+        assert calls == []
+
+
+def test_http400_waits_for_absence_then_creates_refreshed_ask(tmp_path):
+    from vast_job_runner import guard_step
+    store = JobStore(tmp_path / 'vast')
+    identifier = 'd' * 32
+    offer = dict(id=1, gpu_name='RTX 3060', price_hour_usd=.1, vram_gb=12,
+                 ram_gb=32, cpu_cores=8, disk_gb=40, download_gb_usd=.01,
+                 upload_gb_usd=.01, verified=True)
+    replacement = dict(offer, id=2)
+    intent = dict(id=identifier, image=IMAGE, offer=offer, accepted_at=0,
+                  label='pbgui-vast-' + identifier, deadline=10000, budget_usd=4)
+    store.publish(dict(id=identifier, status='provisioning', rental_state='creation_pending',
+                       creation_error='Vast request failed (HTTP 400)'), intent=intent)
+    write_json(store.directory(identifier) / 'attempt.json', {'attempted_at': 0})
+    class Client:
+        created = False
+        calls = []
+        def instances(self, **kwargs):
+            return [dict(id=123, label=intent['label'], actual_status='running')] if self.created else []
+        def offers(self, **kwargs):
+            self.calls.append(('search', kwargs))
+            return [] if 'offer_id' in kwargs else [replacement]
+        def request(self, method, path, body):
+            self.calls.append((method, path))
+            self.created = True
+            return {'new_contract': 123}
+    client = Client()
+    assert not guard_step(store, identifier, client, intent, '', now=119)
+    assert not client.calls
+    assert not guard_step(store, identifier, client, intent, '', now=120)
+    assert not client.calls
+    assert not guard_step(store, identifier, client, intent, '', now=130)
+    assert not (store.directory(identifier) / 'attempt.json').exists()
+    assert not guard_step(store, identifier, client, intent, '', now=140)
+    assert client.calls[-1] == ('PUT', '/asks/2/')
+    assert store.read(identifier)['rental_state'] == 'active'
+    assert store.read(identifier)['instance_id'] == 123

@@ -17,7 +17,7 @@ from logging_helpers import human_log as _log
 from file_lock import advisory_file_lock
 from vast_credentials import VastCredentialStore
 from vast_jobs import SUPPORTED_RENTAL_IMAGES, SUPPORTED_RENTAL_IMAGE_REVISIONS, PROJECT, JobStore, digest, job_id, write_json
-from vast_provider import VastRateLimit, VastClient, VastError, positive_id
+from vast_provider import VastRateLimit, VastClient, VastError, positive_id, number
 from vast_transfer import WorkerConnection, import_results
 from vast_snapshot import snapshot, bounded_lock
 
@@ -195,6 +195,8 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
     directory = store.directory(identifier)
     control = store.read(identifier, "control.json")
     state = store.read(identifier)
+    if state.get("creation_offer"):
+        intent = dict(intent, offer=state["creation_offer"])
     ending = bool(control["cleanup"] or (control["stop"] and ((state.get("kind") != "worker" and not state.get("uploaded")) or (state.get("kind") == "worker" and not state.get("active_job"))))) or now >= intent["deadline"]
     marker = directory / "attempt.json"
     if state.get('rental_state') == 'deletion_verified':
@@ -306,6 +308,64 @@ def _create_and_observe(store, identifier, client, intent, registry_token, now):
     return _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state)
 
 
+def refresh_rejected_offer(store, identifier, client, intent, state, marker, now):
+    """Rearm only an unavailable ask after the existing two-minute absence proof.
+
+    Three paid attempts total, durable across restarts. Keep the authorization's
+    deadline, GPU, resources and price ceilings; never retry ambiguous failures.
+    """
+    if ('(HTTP 400)' not in str(state.get('creation_error', ''))
+            or intent.get('gpu_replacement') or intent.get('job_authorization')
+            or now >= intent['deadline'] - 900):
+        return False
+    rejected = list(state.get('rejected_offer_ids') or [])
+    old = intent['offer']
+    if old['id'] not in rejected:
+        rejected.append(old['id'])
+    if len(rejected) >= 3:
+        return False
+    required = ('price_hour_usd', 'vram_gb', 'ram_gb', 'cpu_cores',
+                'disk_gb', 'download_gb_usd', 'upload_gb_usd')
+    if any(number(old.get(key)) is None for key in required):
+        return False
+    limits = dict(max_price=old['price_hour_usd'], min_vram=old['vram_gb'],
+                  min_ram=old['ram_gb'], min_cpu=old['cpu_cores'],
+                  disk_gb=old['disk_gb'], min_cuda=13, gpu_name=old.get('gpu_name', ''),
+                  verified_only=bool(old.get('verified')), min_duration=intent['deadline'] - now)
+    # A still-rentable ask suggests payload/account validation, not a stale ask.
+    if client.offers(offer_id=old['id'], **limits):
+        return False
+    offers = client.offers(**limits)
+    candidates = [row for row in offers if row['id'] not in rejected
+                  and row.get('gpu_name') == old.get('gpu_name')
+                  and all(number(row.get(key)) is not None and row[key] <= old[key]
+                          for key in ('price_hour_usd', 'download_gb_usd', 'upload_gb_usd'))
+                  and all(number(row.get(key)) is not None and row[key] >= old[key]
+                          for key in ('vram_gb', 'ram_gb', 'cpu_cores', 'disk_gb'))]
+    if not candidates:
+        return False
+    candidates = [row for row in candidates
+                  if all(number(old.get(key)) is None or
+                         (number(row.get(key)) is not None and row[key] >= old[key])
+                         for key in ('cuda_max_good', 'reliability', 'tflops',
+                                     'gpu_max_power_watts'))]
+    if not candidates:
+        return False
+    offer = candidates[0]
+    with advisory_file_lock(store.directory(identifier) / '.control-lock'):
+        control = store.read(identifier, 'control.json')
+        if control.get('stop') or control.get('cleanup'):
+            return False
+        store.update(identifier, creation_offer=offer, rejected_offer_ids=rejected,
+                     creation_error=None, absent_checks=0, cleanup_wait_until=None,
+                     offer_id=offer['id'], price_hour_usd=offer['price_hour_usd'],
+                     allocated_cpus=min(64, int(offer['cpu_cores'])))
+        marker.unlink()
+    _log(SERVICE, f'Rental {identifier}: stale ask {old["id"]}; refreshed ask {offer["id"]}; '
+         f'next create attempt {len(rejected) + 1}/3', level='WARNING')
+    return True
+
+
 def _observe_rental(store, identifier, client, intent, now, ending, observed, marker, state):
     """Only fresh provider absence can release a rental authorization."""
     try:
@@ -349,6 +409,9 @@ def _observe_rental(store, identifier, client, intent, now, ending, observed, ma
                        provider_checked_at=now, rental_state="deletion_verified" if verified else
                        "destroy_pending" if ending else state['rental_state'],
                        provider_status="deleted" if verified else "not_found")
+        if (verified and not ending and not observed and uncreated_rental_message(state)
+                and refresh_rejected_offer(store, identifier, client, intent, state, marker, now)):
+            return False
         if verified and uncreated_rental_message(state):
             updates['rental_end_reason'] = 'provider_creation_failed'
             _log(SERVICE, "Rental " + identifier + ": Vast.ai confirmed no instance was created; releasing rental lock", level="WARNING")
