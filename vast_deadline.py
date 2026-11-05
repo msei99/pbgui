@@ -22,7 +22,7 @@ def maximum_deadline(intent: dict) -> float:
         return intent['deadline']  # Legacy leases without price metadata cannot be extended.
     reserve = max(.05, 2 * intent.get('bundle_bytes', 0) / 1e9 * offer['download_gb_usd']
                   + 3 * offer['upload_gb_usd'] * max(1, intent.get('job_count', 1)))
-    return intent['accepted_at'] + min(86400, max(0, intent['budget_usd'] - reserve)
+    return intent['accepted_at'] + (max(0, intent['budget_usd'] - reserve)
                                       / offer['price_hour_usd'] * 3600)
 
 
@@ -140,7 +140,7 @@ def request_budget(queue, identifier: str, expected: float, budget: float) -> di
         used = worker.get('transfer_reserved_used', 0)
         if budget < max(intent['transfer_reserve_usd'], used):
             raise VastError('Budget must cover the transfer reserve already allocated to this rental', 422)
-        target = intent['accepted_at'] + min(86400, (budget - intent['transfer_reserve_usd']) / intent['offer']['price_hour_usd'] * 3600)
+        target = intent['accepted_at'] + ((budget - intent['transfer_reserve_usd']) / intent['offer']['price_hour_usd'] * 3600)
         if target < time.time() + 600:
             raise VastError('Budget would leave less than 10 minutes for safe collection and cleanup', 422)
         request = dict(id=uuid.uuid4().hex, expected=intent['deadline'], deadline=target, job_id=identifier,

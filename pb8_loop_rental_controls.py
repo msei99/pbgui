@@ -65,7 +65,7 @@ def change_budget(store, queue, owner, loop_id, worker_id, expected_deadline, ex
             raise VastError('Rental deadline changed; review the current values', 409)
         intent = effective_intent(queue.store, worker_id, queue.store.read(worker_id, 'intent.json'))
         # Match the budget guard's deadline calculation before persisting a request.
-        target = intent['accepted_at'] + min(86400, (budget - intent['transfer_reserve_usd'])
+        target = intent['accepted_at'] + ((budget - intent['transfer_reserve_usd'])
                                            / intent['offer']['price_hour_usd'] * 3600)
         if target < record['deadline']:
             raise VastError('Budget would end the rental before the current Loop deadline', 422)

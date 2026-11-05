@@ -45,7 +45,7 @@ def guard_state(root, request):
     deadline, maximum, hard = state.get('deadline'), state.get('max_deadline'), request['hard_deadline']
     if (any(type(value) not in (int, float) or not math.isfinite(value) for value in (deadline, maximum, hard))
             or deadline != request['expected'] or not time.time() + 600 < deadline <= maximum <= hard
-            or hard > time.time() + 86400):
+            or hard > time.time() + 30 * 86400):
         raise ValueError('Guard deadline changed or handover window is too short')
     return state
 

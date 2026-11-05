@@ -67,7 +67,7 @@ def apply_deadline_request(state: dict, request: dict, now: float) -> dict:
              and type(target) in (int, float) and math.isfinite(target)
              and type(requested_max) in (int, float) and math.isfinite(requested_max)
              and now + 300 < min(state['deadline'], target) and target <= requested_max
-             and requested_max <= state.get('hard_deadline', now + 86400))
+             and requested_max <= state.get('hard_deadline', now + 30 * 86400))
     if request.get('id') == state.get('request_id'):
         return state
     if not valid:
@@ -80,12 +80,12 @@ def guard() -> None:
     deadline = float(os.environ["PBGUI_DEADLINE"])
     instance = int(os.environ["CONTAINER_ID"])
     key = os.environ["CONTAINER_API_KEY"]
-    if not 0 < deadline <= time.time() + 86400 or instance <= 0:
+    if not 0 < deadline <= time.time() + 30 * 86400 or instance <= 0:
         raise ValueError("Invalid guard authorization")
     maximum = float(os.environ.get("PBGUI_MAX_DEADLINE", str(deadline)))
-    if not deadline <= maximum <= time.time() + 86400:
+    if not deadline <= maximum <= time.time() + 30 * 86400:
         raise ValueError("Invalid maximum deadline")
-    hard_deadline = float(os.environ.get('PBGUI_HARD_DEADLINE', str(time.time() + 86400)))
+    hard_deadline = float(os.environ.get('PBGUI_HARD_DEADLINE', str(time.time() + 30 * 86400)))
     state = {"instance_id": instance, "deadline": deadline, "job_id": os.environ["PBGUI_JOB_ID"],
              "max_deadline": maximum, "hard_deadline": hard_deadline, "deadline_protocol": 2, "guard_pid": os.getpid()}
     saved_path = ROOT / 'guard.json'
